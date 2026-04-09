@@ -1,0 +1,1817 @@
+'use client';
+
+import dynamic from 'next/dynamic';
+import Link from 'next/link';
+import Image from 'next/image';
+import { usePathname, useRouter } from 'next/navigation';
+import {
+  useState, useEffect, useMemo, useRef, useCallback, memo, Suspense,
+} from 'react';
+import {
+  Search, Calendar, Menu, X, ChevronRight, LogOut, Bell,
+  ShoppingCart, ShieldCheck, Pill, UserRound, Hospital,
+  Gem, Microscope, WalletIcon, MapPin, Locate, Loader2, Navigation,
+  Pencil, User, Monitor, Moon, Sun,
+  LayoutDashboard, Truck, FlaskConical, Building2, HeartPulse,
+  BadgeDollarSign, UserCog, Package, Activity,
+} from 'lucide-react';
+import { useSelector, useDispatch } from 'react-redux';
+
+import Container from './Container';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
+import RoleNavLinks from '../RoleNavLinks';
+
+// ── Redux slices ─────────────────────────────────────────────────────────────
+import { fetchNotifications, selectUnreadCount } from '@/store/slices/notificationSlice';
+import { selectCartItems, fetchCart } from '@/store/slices/pharmacyOrderSlice';
+import { logout, getProfile, updateLocationByAddress, updateLocationByCoords, selectUser } from '@/store/slices/userSlice';
+import { fetchWalletDetails, selectWalletBalance } from '@/store/slices/walletSlice';
+import { useTheme } from 'next-themes';
+
+// ── Lazy-load framer-motion ──────────────────────────────────────────────────
+const MotionDiv = dynamic(
+  () => import('framer-motion').then((m) => ({ default: m.motion.div })),
+  { ssr: false, loading: () => <div /> }
+);
+const MotionButton = dynamic(
+  () => import('framer-motion').then((m) => ({ default: m.motion.button })),
+  { ssr: false, loading: () => <button /> }
+);
+const MotionSpan = dynamic(
+  () => import('framer-motion').then((m) => ({ default: m.motion.span })),
+  { ssr: false, loading: () => <span /> }
+);
+const MotionUl = dynamic(
+  () => import('framer-motion').then((m) => ({ default: m.motion.ul })),
+  { ssr: false, loading: () => <ul /> }
+);
+const MotionLi = dynamic(
+  () => import('framer-motion').then((m) => ({ default: m.motion.li })),
+  { ssr: false, loading: () => <li /> }
+);
+const AnimatePresence = dynamic(
+  () => import('framer-motion').then((m) => ({ default: m.AnimatePresence })),
+  { ssr: false, loading: () => null }
+);
+
+// ── Constants ────────────────────────────────────────────────────────────────
+const GOOGLE_MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
+
+// ── Customer nav links ───────────────────────────────────────────────────────
+// FIX: These still use hardcoded hex because each link intentionally has its
+//      own distinct brand colour (teal for pharmacy, indigo for doctors, etc.)
+//      that is NOT driven by the user's role theme. This is correct behaviour.
+const CUSTOMER_NAV_LINKS = [
+  {
+    name: 'Buy Medicines',
+    href: '/pharmacy/buy-medicines',
+    icon: Pill,
+    accent: '#0d9488',
+    bg: 'rgba(13,148,136,0.07)',
+    barGradient: 'linear-gradient(90deg,#0d9488,#06b6d4)',
+    pillBg: 'rgba(13,148,136,0.12)',
+    pillText: '#0d9488',
+    shadowColor: 'rgba(13,148,136,0.35)',
+    label: 'Pharmacy',
+  },
+  {
+    name: 'Find Doctors',
+    href: '/doctors',
+    icon: UserRound,
+    accent: '#4f46e5',
+    bg: 'rgba(79,70,229,0.07)',
+    barGradient: 'linear-gradient(90deg,#4f46e5,#818cf8)',
+    pillBg: 'rgba(79,70,229,0.12)',
+    pillText: '#4f46e5',
+    shadowColor: 'rgba(79,70,229,0.35)',
+    label: 'Doctors',
+  },
+  {
+    name: 'Find Hospitals',
+    href: '/hospitals',
+    icon: Hospital,
+    accent: '#dc2626',
+    bg: 'rgba(220,38,38,0.06)',
+    barGradient: 'linear-gradient(90deg,#dc2626,#f87171)',
+    pillBg: 'rgba(220,38,38,0.1)',
+    pillText: '#dc2626',
+    shadowColor: 'rgba(220,38,38,0.35)',
+    label: 'Hospitals',
+  },
+  {
+    name: 'Buy Membership',
+    href: '/membership',
+    icon: Gem,
+    accent: '#d97706',
+    bg: 'rgba(217,119,6,0.06)',
+    barGradient: 'linear-gradient(90deg,#d97706,#fbbf24)',
+    pillBg: 'rgba(217,119,6,0.12)',
+    pillText: '#b45309',
+    shadowColor: 'rgba(217,119,6,0.35)',
+    label: 'Membership',
+  },
+  {
+    name: 'Diagnostics',
+    href: '/diagnostics',
+    icon: Microscope,
+    accent: '#7c3aed',
+    bg: 'rgba(124,58,237,0.06)',
+    barGradient: 'linear-gradient(90deg,#7c3aed,#a78bfa)',
+    pillBg: 'rgba(124,58,237,0.12)',
+    pillText: '#7c3aed',
+    shadowColor: 'rgba(124,58,237,0.35)',
+    label: 'Diagnostics',
+  },
+];
+
+// ── Role-based theme palettes ─────────────────────────────────────────────────
+// FIX: All palette values now use CSS variables (var(--primary), etc.) instead
+//      of hardcoded hex strings. This means they respond correctly to:
+//        1. Light/dark mode toggle (next-themes adds/removes .dark on <html>)
+//        2. Role-specific data-theme on <header> (your globals.css selectors)
+//      The CSS cascade resolves var(--primary) against the nearest ancestor
+//      that declares it — which is the <header data-theme="doctor"> element.
+const ROLE_PALETTES = {
+  superadmin: {
+    accent: 'var(--primary)',
+    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
+    pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
+    label: 'Super Admin',
+    icon: ShieldCheck,
+    dataTheme: null, // uses default :root theme
+  },
+  admin: {
+    accent: 'var(--primary)',
+    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
+    pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
+    label: 'Admin',
+    icon: UserCog,
+    dataTheme: null,
+  },
+  doctor: {
+    accent: 'var(--primary)',
+    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
+    pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
+    label: 'Doctor',
+    icon: HeartPulse,
+    dataTheme: 'doctor',
+  },
+  transportpartner: {
+    accent: 'var(--primary)',
+    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
+    pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
+    label: 'Transport Partner',
+    icon: Truck,
+    dataTheme: 'transport',
+  },
+  driver: {
+    accent: 'var(--primary)',
+    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
+    pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
+    label: 'Driver',
+    icon: Truck,
+    dataTheme: 'transport',
+  },
+  solodriverpartner: {
+    accent: 'var(--primary)',
+    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
+    pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
+    label: 'Solo Driver',
+    icon: Navigation,
+    dataTheme: 'transport',
+  },
+  customer: null,
+  pharmacy: {
+    accent: 'var(--primary)',
+    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
+    pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
+    label: 'Pharmacy',
+    icon: Pill,
+    dataTheme: 'pharmacy',
+  },
+  'care assistant': {
+    accent: 'var(--primary)',
+    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
+    pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
+    label: 'Care Assistant',
+    icon: HeartPulse,
+    dataTheme: 'care-assistant',
+  },
+  finance: {
+    accent: 'var(--primary)',
+    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
+    pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
+    label: 'Finance',
+    icon: BadgeDollarSign,
+    dataTheme: null,
+  },
+  'lab partner': {
+    accent: 'var(--primary)',
+    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
+    pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
+    label: 'Lab Partner',
+    icon: FlaskConical,
+    dataTheme: 'lab',
+  },
+  hospital: {
+    accent: 'var(--primary)',
+    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
+    pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
+    label: 'Hospital',
+    icon: Building2,
+    dataTheme: 'hospital',
+  },
+};
+
+// Role-specific nav links shown in the bottom bar for non-customer roles
+const ROLE_NAV_LINKS = {
+  superadmin: [
+    { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutDashboard },
+    { name: 'Users', href: '/admin/users', icon: UserCog },
+    { name: 'Reports', href: '/admin/reports', icon: Activity },
+    { name: 'Finances', href: '/admin/finance', icon: BadgeDollarSign },
+  ],
+  admin: [
+    { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutDashboard },
+    { name: 'Orders', href: '/admin/orders', icon: Package },
+    { name: 'Reports', href: '/admin/reports', icon: Activity },
+  ],
+  doctor: [
+    { name: 'Dashboard', href: '/doctor/dashboard', icon: LayoutDashboard },
+    { name: 'Appointments', href: '/doctor/appointments', icon: Calendar },
+    { name: 'Patients', href: '/doctor/patients', icon: UserRound },
+  ],
+  transportpartner: [
+    { name: 'Dashboard', href: '/transport/dashboard', icon: LayoutDashboard },
+    { name: 'My Fleet', href: '/transport/fleet', icon: Truck },
+    { name: 'Earnings', href: '/transport/earnings', icon: BadgeDollarSign },
+  ],
+  driver: [
+    { name: 'Dashboard', href: '/driver/dashboard', icon: LayoutDashboard },
+    { name: 'My Trips', href: '/driver/trips', icon: Navigation },
+    { name: 'Earnings', href: '/driver/earnings', icon: BadgeDollarSign },
+  ],
+  solodriverpartner: [
+    { name: 'Dashboard', href: '/driver/dashboard', icon: LayoutDashboard },
+    { name: 'My Trips', href: '/driver/trips', icon: Navigation },
+    { name: 'Earnings', href: '/driver/earnings', icon: BadgeDollarSign },
+  ],
+  pharmacy: [
+    { name: 'Dashboard', href: '/pharmacy/dashboard', icon: LayoutDashboard },
+    { name: 'Inventory', href: '/pharmacy/inventory', icon: Package },
+    { name: 'Orders', href: '/pharmacy/orders', icon: ShoppingCart },
+  ],
+  'care assistant': [
+    { name: 'Dashboard', href: '/care-assistant/dashboard', icon: LayoutDashboard },
+    { name: 'Patients', href: '/care/patients', icon: UserRound },
+    { name: 'Schedule', href: '/care/schedule', icon: Calendar },
+  ],
+  finance: [
+    { name: 'Dashboard', href: '/finance/dashboard', icon: LayoutDashboard },
+    { name: 'Transactions', href: '/finance/transactions', icon: BadgeDollarSign },
+    { name: 'Reports', href: '/finance/reports', icon: Activity },
+  ],
+  'lab partner': [
+    { name: 'Dashboard', href: '/lab/dashboard', icon: LayoutDashboard },
+    { name: 'Tests', href: '/lab/tests', icon: FlaskConical },
+    { name: 'Reports', href: '/lab/reports', icon: Activity },
+  ],
+  hospital: [
+    { name: 'Dashboard', href: '/hospital/dashboard', icon: LayoutDashboard },
+    { name: 'Doctors', href: '/hospital/doctors', icon: UserRound },
+    { name: 'Patients', href: '/hospital/patients', icon: HeartPulse },
+  ],
+};
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const getActivePalette = (pathname) => {
+  let best = null;
+  let bestLen = 0;
+  for (const link of CUSTOMER_NAV_LINKS) {
+    if (pathname === link.href || pathname.startsWith(link.href + '/')) {
+      if (link.href.length > bestLen) { best = link; bestLen = link.href.length; }
+    }
+  }
+  return best;
+};
+
+const getRolePalette = (role) => {
+  if (!role) return null;
+  return ROLE_PALETTES[role] ?? null;
+};
+
+const buildAvatarUrl = (name) =>
+  `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'User')}&background=2563eb&color=fff`;
+
+function preconnectOrigins() {
+  if (typeof document === 'undefined') return;
+  const origins = [
+    'https://ui-avatars.com',
+    'https://maps.googleapis.com',
+    'https://maps.gstatic.com',
+  ];
+  origins.forEach((href) => {
+    if (document.querySelector(`link[rel="preconnect"][href="${href}"]`)) return;
+    const link = Object.assign(document.createElement('link'), {
+      rel: 'preconnect',
+      href,
+      crossOrigin: 'anonymous',
+    });
+    document.head.appendChild(link);
+  });
+}
+
+let _mapsLoadPromise = null;
+function loadGoogleMaps() {
+  if (typeof window === 'undefined') return Promise.resolve(false);
+  if (window.google?.maps?.places) return Promise.resolve(true);
+  if (_mapsLoadPromise) return _mapsLoadPromise;
+  _mapsLoadPromise = new Promise((resolve) => {
+    const existing = document.querySelector('script[src*="maps.googleapis.com"]');
+    if (existing) { existing.addEventListener('load', () => resolve(true)); return; }
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&libraries=places`;
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve(true);
+    script.onerror = () => { _mapsLoadPromise = null; resolve(false); };
+    document.head.appendChild(script);
+  });
+  return _mapsLoadPromise;
+}
+
+// ── Framer variants ──────────────────────────────────────────────────────────
+const DROPDOWN_VARIANTS = {
+  hidden: { opacity: 0, y: -8, scale: 0.96 },
+  show: { opacity: 1, y: 0, scale: 1, transition: { type: 'spring', damping: 25, stiffness: 300 } },
+  exit: { opacity: 0, y: -8, scale: 0.96, transition: { duration: 0.15, ease: 'easeInOut' } },
+};
+const LOCATION_DROPDOWN_VARIANTS = {
+  hidden: { opacity: 0, y: -6, scale: 0.97 },
+  show: { opacity: 1, y: 0, scale: 1, transition: { type: 'spring', damping: 28, stiffness: 320 } },
+  exit: { opacity: 0, y: -6, scale: 0.97, transition: { duration: 0.15, ease: 'easeInOut' } },
+};
+const MOBILE_MENU_VARIANTS = {
+  hidden: { opacity: 0, x: '100%' },
+  show: { opacity: 1, x: 0, transition: { type: 'spring', damping: 30, stiffness: 200, when: 'beforeChildren' } },
+  exit: { opacity: 0, x: '100%', transition: { duration: 0.3, ease: 'easeInOut' } },
+};
+const STAGGER = { show: { transition: { staggerChildren: 0.08 } } };
+const FADE_UP = { hidden: { opacity: 0, y: 15 }, show: { opacity: 1, y: 0, transition: { duration: 0.3 } } };
+const BELL_RING = {
+  ring: { rotate: [0, 15, -15, 10, -10, 5, -5, 0], transition: { duration: 1.5, repeat: Infinity, repeatDelay: 2 } },
+  idle: { rotate: 0 },
+};
+const CART_FLOAT = {
+  float: { y: [0, -3, 0], transition: { duration: 2, repeat: Infinity, ease: 'easeInOut' } },
+  idle: { y: 0 },
+};
+
+// ── ThemeToggle ───────────────────────────────────────────────────────────────
+const ThemeToggle = memo(function ThemeToggle() {
+  const { theme, setTheme, resolvedTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return <div className="w-10 h-10 rounded-xl border border-base-300 skeleton" aria-hidden="true" />;
+  const cycle = () => {
+    if (theme === 'system') setTheme('light');
+    else if (theme === 'light') setTheme('dark');
+    else setTheme('system');
+  };
+  const Icon = theme === 'system' ? Monitor : resolvedTheme === 'dark' ? Moon : Sun;
+  const label =
+    theme === 'system' ? 'System theme — click for Light'
+    : theme === 'light' ? 'Light theme — click for Dark'
+    : 'Dark theme — click for System';
+  return (
+    <button
+      onClick={cycle}
+      aria-label={label}
+      title={label}
+      className="p-2.5 rounded-xl border border-base-300 text-base-content/50 hover:bg-primary/5 hover:text-primary transition-all duration-200"
+    >
+      <Icon size={18} />
+    </button>
+  );
+});
+
+// ── Custom hook: Google Maps autocomplete ─────────────────────────────────────
+function useGoogleMapsAutocomplete() {
+  const autocompleteService = useRef(null);
+  const ensureService = useCallback(async () => {
+    if (autocompleteService.current) return true;
+    const loaded = await loadGoogleMaps();
+    if (loaded && window.google?.maps?.places) {
+      autocompleteService.current = new window.google.maps.places.AutocompleteService();
+      return true;
+    }
+    return false;
+  }, []);
+  const fetchSuggestions = useCallback(async (value, onResult) => {
+    if (!value?.trim()) { onResult([]); return; }
+    const ready = await ensureService();
+    if (!ready || !autocompleteService.current) { onResult([]); return; }
+    try {
+      autocompleteService.current.getPlacePredictions(
+        { input: value, componentRestrictions: { country: 'in' }, types: ['geocode', 'establishment'] },
+        (predictions, status) => {
+          onResult(status === window.google.maps.places.PlacesServiceStatus.OK ? predictions ?? [] : []);
+        }
+      );
+    } catch (err) {
+      if (process.env.NODE_ENV === 'development') console.error('Maps autocomplete error:', err);
+      onResult([]);
+    }
+  }, [ensureService]);
+  return { fetchSuggestions, ensureService };
+}
+
+// ── Custom hook: header data ──────────────────────────────────────────────────
+function useHeaderData() {
+  const dispatch = useDispatch();
+  const user = useSelector((s) => s.user?.user) ?? null;
+  const token = useSelector((s) => s.user?.token) ?? null;
+  const unreadCount = useSelector(selectUnreadCount) ?? 0;
+  const cartItems = useSelector(selectCartItems) ?? [];
+  const walletBalance = useSelector(selectWalletBalance) ?? 0;
+  const cartCount = useMemo(
+    () => (Array.isArray(cartItems) ? cartItems.reduce((a, i) => a + (i.quantity ?? 0), 0) : 0),
+    [cartItems]
+  );
+  useEffect(() => {
+    if (!token) return;
+    dispatch(getProfile());
+    dispatch(fetchNotifications());
+    dispatch(fetchWalletDetails());
+    dispatch(fetchCart());
+  }, [token, dispatch]);
+  return { user, token, unreadCount, cartCount, walletBalance };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUB-COMPONENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── WalletWidget ──────────────────────────────────────────────────────────────
+const WalletWidget = memo(function WalletWidget({ walletBalance, isMobile = false, accent }) {
+  // FIX: accent falls back to CSS var so it works in both themed and unthemed contexts
+  const accentColor = accent ?? 'var(--warning)';
+  return (
+    <Link href="/wallet" aria-label={`Wallet balance ₹${walletBalance}. Go to wallet.`}>
+      <MotionDiv
+        whileHover={{ scale: 1.02 }}
+        whileTap={{ scale: 0.98 }}
+        className={cn(
+          'flex items-center gap-2 rounded-full border transition-colors',
+          isMobile ? 'w-full px-4 py-3' : 'px-3 py-1.5'
+        )}
+        style={{
+          borderColor: `color-mix(in srgb, ${accentColor} 30%, transparent)`,
+          background: `color-mix(in srgb, ${accentColor} 8%, transparent)`,
+        }}
+      >
+        <div
+          className="p-1 rounded-full"
+          style={{
+            background: `color-mix(in srgb, ${accentColor} 25%, transparent)`,
+            color: accentColor,
+          }}
+          aria-hidden="true"
+        >
+          <WalletIcon size={isMobile ? 16 : 13} strokeWidth={2.5} />
+        </div>
+        <div className="flex flex-col items-start leading-none">
+          <span className="text-[8px] font-black uppercase tracking-tighter opacity-50">Balance</span>
+          <span
+            aria-live="polite"
+            className={cn('font-black tracking-tight', isMobile ? 'text-sm' : 'text-[11px]')}
+            style={{ color: accentColor }}
+          >
+            ₹{(walletBalance ?? 0).toLocaleString('en-IN')}
+          </span>
+        </div>
+      </MotionDiv>
+    </Link>
+  );
+});
+
+// ── SuggestionsList ───────────────────────────────────────────────────────────
+const SuggestionsList = memo(function SuggestionsList({ suggestions, onSelect, disabled, accent }) {
+  if (!suggestions.length) return null;
+  return (
+    <MotionUl
+      role="listbox"
+      aria-label="Location suggestions"
+      initial={{ opacity: 0, height: 0 }}
+      animate={{ opacity: 1, height: 'auto' }}
+      exit={{ opacity: 0, height: 0 }}
+      transition={{ duration: 0.18 }}
+      className="overflow-hidden rounded-xl border border-base-300 bg-base-100"
+    >
+      {suggestions.map((s, idx) => (
+        <MotionLi
+          key={s.place_id}
+          role="option"
+          aria-selected="false"
+          initial={{ opacity: 0, x: -8 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: idx * 0.035 }}
+        >
+          <button
+            type="button"
+            onClick={() => onSelect(s)}
+            disabled={disabled}
+            className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-base-200/80 transition-colors border-b border-base-300/50 last:border-0 focus-visible:outline-none focus-visible:bg-base-200/80"
+          >
+            <div
+              className="w-7 h-7 rounded-lg flex-shrink-0 flex items-center justify-center"
+              style={{
+                background: `color-mix(in srgb, ${accent} 15%, transparent)`,
+                color: accent,
+              }}
+              aria-hidden="true"
+            >
+              <MapPin size={12} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[12px] font-bold truncate leading-tight">
+                {s.structured_formatting?.main_text ?? s.description}
+              </p>
+              <p className="text-[10px] opacity-40 truncate leading-tight">
+                {s.structured_formatting?.secondary_text}
+              </p>
+            </div>
+          </button>
+        </MotionLi>
+      ))}
+    </MotionUl>
+  );
+});
+
+// ── LocationWidget ────────────────────────────────────────────────────────────
+const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) {
+  const dispatch = useDispatch();
+  const user = useSelector(selectUser);
+  const { fetchSuggestions, ensureService } = useGoogleMapsAutocomplete();
+
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [suggestions, setSuggestions] = useState([]);
+  const [fetchingGPS, setFetchingGPS] = useState(false);
+  const [savingAddress, setSavingAddress] = useState(false);
+
+  const wrapperRef = useRef(null);
+  const inputRef = useRef(null);
+  const debounceTimer = useRef(null);
+
+  const savedAddress = user?.lastKnownAddress ?? null;
+  const cityLabel = useMemo(() => {
+    if (!savedAddress) return 'Set Location';
+    const first = savedAddress.split(',')[0]?.trim() ?? savedAddress;
+    return first.length > 18 ? first.slice(0, 16) + '…' : first;
+  }, [savedAddress]);
+  const regionLabel = useMemo(() => {
+    if (!savedAddress) return null;
+    return savedAddress.split(',')[1]?.trim() ?? null;
+  }, [savedAddress]);
+  const nameInitial = useMemo(() => user?.name?.charAt(0).toUpperCase() ?? '?', [user?.name]);
+  const firstName = useMemo(() => user?.name?.split(' ')[0] ?? 'You', [user?.name]);
+
+  // FIX: fallback to CSS variables so location widget always looks correct
+  const accent = mood?.accent ?? 'var(--primary)';
+  const triggerBg = mood?.pillBg ?? 'color-mix(in srgb, var(--primary) 8%, transparent)';
+  const triggerGrad = mood?.barGradient ?? 'linear-gradient(135deg, var(--primary), var(--secondary))';
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) {
+        setOpen(false); setSuggestions([]); setQuery('');
+      }
+    };
+    document.addEventListener('mousedown', handler, { passive: true });
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    if (inputRef.current) setTimeout(() => inputRef.current?.focus(), 90);
+    ensureService();
+  }, [open, ensureService]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (e.key === 'Escape') { setOpen(false); setSuggestions([]); setQuery(''); }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [open]);
+
+  const handleQueryChange = useCallback((e) => {
+    const val = e.target.value;
+    setQuery(val);
+    clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => fetchSuggestions(val, setSuggestions), 280);
+  }, [fetchSuggestions]);
+
+  const geocodeAndDispatch = useCallback(async (address, lat, lng) => {
+    try {
+      if (lat && lng) {
+        await dispatch(updateLocationByCoords({ lat, lng, address }));
+      } else {
+        await dispatch(updateLocationByAddress(address));
+      }
+    } catch (err) {
+      if (process.env.NODE_ENV === 'development') console.error('Geocode dispatch error:', err);
+    }
+  }, [dispatch]);
+
+  const handleSelectSuggestion = useCallback(async (suggestion) => {
+    const address = suggestion.description;
+    setSavingAddress(true);
+    setQuery(suggestion.structured_formatting?.main_text ?? address);
+    setSuggestions([]);
+    try {
+      if (window.google?.maps) {
+        const geocoder = new window.google.maps.Geocoder();
+        geocoder.geocode({ address }, async (results, status) => {
+          if (status === 'OK' && results?.[0]) {
+            const loc = results[0].geometry.location;
+            await geocodeAndDispatch(address, loc.lat(), loc.lng());
+          } else {
+            await geocodeAndDispatch(address);
+          }
+          setSavingAddress(false); setOpen(false); setQuery('');
+        });
+      } else {
+        await geocodeAndDispatch(address);
+        setSavingAddress(false); setOpen(false); setQuery('');
+      }
+    } catch (err) {
+      if (process.env.NODE_ENV === 'development') console.error('Suggestion select error:', err);
+      setSavingAddress(false);
+    }
+  }, [geocodeAndDispatch]);
+
+  const handleUseCurrentLocation = useCallback(() => {
+    if (!navigator.geolocation) return;
+    setFetchingGPS(true);
+    navigator.geolocation.getCurrentPosition(
+      async ({ coords: { latitude: lat, longitude: lng } }) => {
+        try {
+          if (window.google?.maps) {
+            const geocoder = new window.google.maps.Geocoder();
+            geocoder.geocode({ location: { lat, lng } }, async (results, status) => {
+              const address = status === 'OK' && results?.[0] ? results[0].formatted_address : undefined;
+              await dispatch(updateLocationByCoords({ lat, lng, address }));
+              setFetchingGPS(false); setOpen(false);
+            });
+          } else {
+            await dispatch(updateLocationByCoords({ lat, lng }));
+            setFetchingGPS(false); setOpen(false);
+          }
+        } catch (err) {
+          if (process.env.NODE_ENV === 'development') console.error('GPS geocode error:', err);
+          setFetchingGPS(false);
+        }
+      },
+      () => setFetchingGPS(false),
+      { timeout: 10000 }
+    );
+  }, [dispatch]);
+
+  const searchInput = (
+    <div className="relative">
+      <label htmlFor="location-search" className="sr-only">Search location by area, city or pincode</label>
+      <Search size={13} className="absolute left-3.5 top-1/2 -translate-y-1/2 opacity-35 pointer-events-none" aria-hidden="true" />
+      <input
+        id="location-search"
+        ref={inputRef}
+        value={query}
+        onChange={handleQueryChange}
+        placeholder="Area, city or pincode…"
+        aria-label="Search location"
+        autoComplete="off"
+        className="w-full pl-9 pr-9 py-2.5 rounded-xl text-[12px] font-medium bg-base-200/60 border border-transparent focus:bg-base-100 focus:border-base-300 transition-all outline-none focus-visible:ring-2 focus-visible:ring-offset-1"
+      />
+      {savingAddress && (
+        <Loader2 size={13} className="absolute right-3.5 top-1/2 -translate-y-1/2 animate-spin opacity-40 pointer-events-none" aria-hidden="true" />
+      )}
+    </div>
+  );
+
+  // MOBILE
+  if (isMobile) {
+    return (
+      <div
+        className="rounded-2xl border overflow-hidden"
+        style={{ borderColor: `color-mix(in srgb, ${accent} 25%, transparent)` }}
+        aria-label="Location settings"
+      >
+        <div className="flex items-center gap-3 px-4 py-3" style={{ background: triggerBg }}>
+          <div
+            className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center text-sm font-black text-white shadow-sm"
+            style={{ background: triggerGrad }}
+            aria-hidden="true"
+          >
+            {nameInitial}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[10px] font-black uppercase tracking-widest opacity-40 leading-none mb-0.5">{firstName}'s Location</p>
+            <p className="text-[12px] font-black truncate leading-tight" style={{ color: accent }}>{cityLabel}</p>
+            {regionLabel && <p className="text-[10px] opacity-40 truncate leading-tight">{regionLabel}</p>}
+          </div>
+          <button
+            aria-label="Edit location"
+            className="w-8 h-8 rounded-lg flex items-center justify-center transition-all active:scale-90"
+            style={{ background: `color-mix(in srgb, ${accent} 15%, transparent)`, color: accent }}
+            onClick={() => inputRef.current?.focus()}
+          >
+            <Pencil size={13} strokeWidth={2.5} />
+          </button>
+        </div>
+        <div className="p-3 flex flex-col gap-2 bg-base-100">
+          <button
+            type="button"
+            onClick={handleUseCurrentLocation}
+            disabled={fetchingGPS}
+            aria-label="Use current GPS location"
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border font-bold text-[12px] transition-all active:scale-[0.98] disabled:opacity-60"
+            style={{ borderColor: `color-mix(in srgb, ${accent} 25%, transparent)`, color: accent, background: triggerBg }}
+          >
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `color-mix(in srgb, ${accent} 20%, transparent)` }} aria-hidden="true">
+              {fetchingGPS ? <Loader2 size={13} className="animate-spin" /> : <Locate size={13} />}
+            </div>
+            <div className="text-left">
+              <p className="font-black text-[12px] leading-none">{fetchingGPS ? 'Detecting…' : 'Use Current Location'}</p>
+              <p className="text-[10px] opacity-50 font-normal mt-0.5">GPS auto-detect</p>
+            </div>
+          </button>
+          {searchInput}
+          <AnimatePresence>
+            <SuggestionsList suggestions={suggestions} onSelect={handleSelectSuggestion} disabled={savingAddress} accent={accent} />
+          </AnimatePresence>
+        </div>
+      </div>
+    );
+  }
+
+  // DESKTOP
+  return (
+    <div className="relative flex-shrink-0" ref={wrapperRef}>
+      <MotionButton
+        whileHover={{ scale: 1.02 }}
+        whileTap={{ scale: 0.97 }}
+        onClick={() => setOpen((p) => !p)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={`Current location: ${cityLabel}. Click to change.`}
+        className="flex items-center gap-2 pl-1.5 pr-2.5 py-1 rounded-full border transition-all duration-200"
+        style={{
+          background: open ? triggerBg : 'var(--base-200)',
+          borderColor: open ? `color-mix(in srgb, ${accent} 50%, transparent)` : 'var(--base-300)',
+        }}
+      >
+        <div
+          className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-[10px] font-black text-white"
+          style={{ background: triggerGrad }}
+          aria-hidden="true"
+        >
+          {nameInitial}
+        </div>
+        <div className="flex flex-col items-start leading-none">
+          <span className="text-[8px] font-black uppercase tracking-[0.15em] opacity-40">{firstName}</span>
+          <span
+            className="text-[11px] font-black tracking-tight leading-tight max-w-[90px] truncate"
+            style={{ color: open ? accent : 'var(--base-content)' }}
+          >
+            {cityLabel}
+          </span>
+        </div>
+        <div className="flex items-center gap-1 ml-0.5" aria-hidden="true">
+          {fetchingGPS
+            ? <Loader2 size={11} className="animate-spin opacity-50" />
+            : <MapPin size={11} strokeWidth={2.5} style={{ color: accent, opacity: 0.7 }} />
+          }
+          <MotionDiv
+            initial={{ opacity: 0, width: 0 }}
+            animate={{ opacity: open ? 1 : 0, width: open ? 'auto' : 0 }}
+            className="overflow-hidden"
+          >
+            <Pencil size={10} strokeWidth={2.5} style={{ color: accent }} />
+          </MotionDiv>
+        </div>
+      </MotionButton>
+
+      <AnimatePresence>
+        {open && (
+          <MotionDiv
+            variants={LOCATION_DROPDOWN_VARIANTS}
+            initial="hidden"
+            animate="show"
+            exit="exit"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Change location"
+            className="absolute left-0 top-full mt-2 w-[320px] z-[120] rounded-2xl shadow-2xl border border-base-300 bg-base-100 overflow-hidden origin-top-left"
+          >
+            <div className="px-4 py-3 flex items-center gap-3 border-b border-base-300" style={{ background: triggerBg }}>
+              <div
+                className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center text-base font-black text-white shadow"
+                style={{ background: triggerGrad }}
+                aria-hidden="true"
+              >
+                {nameInitial}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-widest opacity-40 leading-none mb-0.5">{firstName}'s Location</p>
+                <p className="text-[13px] font-black truncate leading-tight" style={{ color: accent }}>{cityLabel}</p>
+                {regionLabel && <p className="text-[10px] opacity-40 truncate">{regionLabel}</p>}
+              </div>
+              <div className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black" style={{ background: `color-mix(in srgb, ${accent} 18%, transparent)`, color: accent }} aria-hidden="true">
+                <Pencil size={10} strokeWidth={2.5} />
+                <span>Edit</span>
+              </div>
+            </div>
+            <div className="p-3 flex flex-col gap-2.5">
+              <MotionButton
+                whileHover={{ scale: 1.01 }}
+                whileTap={{ scale: 0.98 }}
+                type="button"
+                onClick={handleUseCurrentLocation}
+                disabled={fetchingGPS}
+                aria-label="Detect my current location via GPS"
+                className="w-full flex items-center gap-3 px-3.5 py-3 rounded-xl border text-left transition-all disabled:opacity-60"
+                style={{ borderColor: `color-mix(in srgb, ${accent} 20%, transparent)`, background: triggerBg }}
+              >
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `color-mix(in srgb, ${accent} 20%, transparent)`, color: accent }} aria-hidden="true">
+                  {fetchingGPS ? <Loader2 size={15} className="animate-spin" /> : <Navigation size={15} />}
+                </div>
+                <div>
+                  <p className="text-[12px] font-black leading-tight" style={{ color: accent }}>
+                    {fetchingGPS ? 'Detecting your location…' : 'Use Current Location'}
+                  </p>
+                  <p className="text-[10px] opacity-50 font-normal">GPS auto-detect via browser</p>
+                </div>
+              </MotionButton>
+              <div className="flex items-center gap-2" role="separator" aria-hidden="true">
+                <div className="flex-1 h-px bg-base-300" />
+                <span className="text-[9px] font-black uppercase tracking-widest opacity-25">or search</span>
+                <div className="flex-1 h-px bg-base-300" />
+              </div>
+              {searchInput}
+              <AnimatePresence>
+                <SuggestionsList suggestions={suggestions} onSelect={handleSelectSuggestion} disabled={savingAddress} accent={accent} />
+              </AnimatePresence>
+            </div>
+          </MotionDiv>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+});
+
+// ── AvatarDropdown ────────────────────────────────────────────────────────────
+const AvatarDropdown = memo(function AvatarDropdown({ user, userAvatar, activePalette, mood, pathname, onLogout }) {
+  const [open, setOpen] = useState(false);
+  const dropdownRef = useRef(null);
+  const triggerRef = useRef(null);
+  const firstFocusableRef = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler, { passive: true });
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  useEffect(() => { setOpen(false); }, [pathname]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (e.key === 'Escape') { setOpen(false); triggerRef.current?.focus(); }
+    };
+    document.addEventListener('keydown', handler);
+    setTimeout(() => firstFocusableRef.current?.focus(), 60);
+    return () => document.removeEventListener('keydown', handler);
+  }, [open]);
+
+  // FIX: Use CSS var as fallback for border color
+  const accentColor = mood?.accent ?? 'var(--primary)';
+
+  return (
+    <div className="relative hidden md:block" ref={dropdownRef}>
+      <MotionButton
+        ref={triggerRef}
+        whileHover={{ scale: 1.05 }}
+        whileTap={{ scale: 0.95 }}
+        onClick={() => setOpen((p) => !p)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label={`Account menu for ${user.name}`}
+        className="relative h-10 w-10 rounded-full p-0 overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+        style={{ border: `2px solid ${accentColor}`, transition: 'border-color 0.3s' }}
+      >
+        <Image
+          src={userAvatar}
+          alt={`${user.name} profile picture`}
+          fill
+          className="rounded-full object-cover"
+          sizes="40px"
+          priority
+          unoptimized={userAvatar.includes('ui-avatars.com')}
+        />
+        <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5" aria-label="Online">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-60 bg-green-500" aria-hidden="true" />
+          <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-green-500 border-2 border-base-100" aria-hidden="true" />
+        </span>
+      </MotionButton>
+
+      <AnimatePresence>
+        {open && (
+          <MotionDiv
+            variants={DROPDOWN_VARIANTS}
+            initial="hidden"
+            animate="show"
+            exit="exit"
+            role="menu"
+            aria-label="Account options"
+            aria-orientation="vertical"
+            className="absolute right-0 mt-3 w-72 z-[110] md:w-sm rounded-xl shadow-2xl border border-base-300 bg-base-100 p-2.5 origin-top-right"
+          >
+            <div
+              className="py-3 px-4 rounded-lg mb-2"
+              style={{ background: activePalette?.pillBg ?? 'var(--base-200)' }}
+            >
+              <div className="flex items-center gap-3">
+                <Image
+                  src={userAvatar}
+                  alt=""
+                  width={40}
+                  height={40}
+                  className="rounded-lg object-cover flex-shrink-0"
+                  aria-hidden="true"
+                  unoptimized={userAvatar.includes('ui-avatars.com')}
+                />
+                <div className="min-w-0">
+                  <p className="text-sm font-black uppercase tracking-tight truncate">{user.name}</p>
+                  <p className="text-[10px] opacity-50 truncate">{user.email}</p>
+                  <span
+                    className="mt-1 inline-block px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest"
+                    style={{
+                      background: activePalette?.pillBg ?? 'var(--primary)',
+                      color: activePalette?.pillText ?? 'var(--primary-content)',
+                    }}
+                  >
+                    {user.role}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div className="py-1" role="none">
+              <RoleNavLinks ref={firstFocusableRef} user={user} currentPathname={pathname} onLinkClick={() => setOpen(false)} />
+            </div>
+            <div className="my-2 h-px bg-base-300" role="separator" aria-hidden="true" />
+            <button
+              role="menuitem"
+              onClick={() => { setOpen(false); onLogout(); }}
+              className="w-full flex items-center gap-3 cursor-pointer p-3 text-[13px] font-bold rounded-lg text-error hover:bg-error/10 transition-all focus-visible:outline-none focus-visible:bg-error/10"
+            >
+              <div className="w-8 h-8 rounded-lg bg-error/20 flex items-center justify-center" aria-hidden="true">
+                <LogOut className="w-4 h-4" />
+              </div>
+              Sign Out
+            </button>
+          </MotionDiv>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+});
+
+// ── NavLink (desktop — customer) ──────────────────────────────────────────────
+const NavLink = memo(function NavLink({ link, pathname, onHover, onLeave, isHovered }) {
+  const isActive = pathname === link.href || pathname.startsWith(link.href + '/');
+  return (
+    <Link
+      href={link.href}
+      onMouseEnter={() => onHover(link.name)}
+      onMouseLeave={onLeave}
+      aria-current={isActive ? 'page' : undefined}
+      className="relative px-5 py-3.5 flex items-center gap-2.5 text-[10px] uppercase tracking-[0.18em] font-black transition-all duration-200 rounded-md overflow-hidden focus-visible:outline-none focus-visible:ring-2"
+      style={{
+        color: (isActive || isHovered) ? link.accent : 'var(--base-content)',
+        opacity: (isActive || isHovered) ? 1 : 0.45,
+        '--tw-ring-color': link.accent,
+      }}
+    >
+      <MotionDiv
+        className="absolute inset-0 rounded-md"
+        animate={{ opacity: (isActive || isHovered) ? 1 : 0 }}
+        transition={{ duration: 0.2 }}
+        style={{ background: link.pillBg }}
+        aria-hidden="true"
+      />
+      <MotionDiv
+        animate={isHovered ? { y: -2, scale: 1.15 } : { y: 0, scale: 1 }}
+        transition={{ type: 'spring', stiffness: 340, damping: 20 }}
+        className="relative z-10 flex-shrink-0"
+        style={{ color: (isActive || isHovered) ? link.accent : 'var(--base-content)', opacity: (isActive || isHovered) ? 1 : 0.4 }}
+        aria-hidden="true"
+      >
+        <link.icon size={15} strokeWidth={2.2} />
+      </MotionDiv>
+      <span className="relative z-10">{link.name}</span>
+      <AnimatePresence>
+        {isActive && (
+          <MotionDiv
+            key="active-bar"
+            layoutId="active-bar"
+            initial={{ scaleX: 0 }}
+            animate={{ scaleX: 1 }}
+            exit={{ scaleX: 0 }}
+            className="absolute bottom-0 left-3 right-3 h-[3px] rounded-t-full"
+            style={{ background: link.barGradient }}
+            transition={{ type: 'spring', stiffness: 380, damping: 28 }}
+            aria-hidden="true"
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {isHovered && !isActive && (
+          <MotionDiv
+            key="hover-bar"
+            initial={{ opacity: 0, scaleX: 0 }}
+            animate={{ opacity: 0.5, scaleX: 1 }}
+            exit={{ opacity: 0, scaleX: 0 }}
+            className="absolute bottom-0 left-3 right-3 h-[2px] rounded-t-full"
+            style={{ background: link.barGradient }}
+            aria-hidden="true"
+          />
+        )}
+      </AnimatePresence>
+      {isActive && (
+        <MotionDiv
+          initial={{ scale: 0 }}
+          animate={{ scale: 1 }}
+          className="relative z-10 w-1.5 h-1.5 rounded-full flex-shrink-0"
+          style={{ background: link.accent, boxShadow: `0 0 6px ${link.accent}` }}
+          aria-hidden="true"
+        />
+      )}
+    </Link>
+  );
+});
+
+// ── RoleNavLink (desktop — non-customer roles bottom bar) ─────────────────────
+const RoleNavLink = memo(function RoleNavLink({ link, pathname, palette, onHover, onLeave, isHovered }) {
+  const isActive = pathname === link.href || pathname.startsWith(link.href + '/');
+  // FIX: fallback to CSS vars so it always works even if palette is null
+  const accent = palette?.accent ?? 'var(--primary)';
+  const pillBg = palette?.pillBg ?? 'color-mix(in srgb, var(--primary) 8%, transparent)';
+  const barGradient = palette?.barGradient ?? 'linear-gradient(90deg, var(--primary), var(--secondary))';
+
+  return (
+    <Link
+      href={link.href}
+      onMouseEnter={() => onHover(link.name)}
+      onMouseLeave={onLeave}
+      aria-current={isActive ? 'page' : undefined}
+      className="relative px-5 py-3.5 flex items-center gap-2.5 text-[10px] uppercase tracking-[0.18em] font-black transition-all duration-200 rounded-md overflow-hidden focus-visible:outline-none focus-visible:ring-2"
+      style={{
+        color: (isActive || isHovered) ? accent : 'var(--base-content)',
+        opacity: (isActive || isHovered) ? 1 : 0.45,
+        '--tw-ring-color': accent,
+      }}
+    >
+      <MotionDiv
+        className="absolute inset-0 rounded-md"
+        animate={{ opacity: (isActive || isHovered) ? 1 : 0 }}
+        transition={{ duration: 0.2 }}
+        style={{ background: pillBg }}
+        aria-hidden="true"
+      />
+      <MotionDiv
+        animate={isHovered ? { y: -2, scale: 1.15 } : { y: 0, scale: 1 }}
+        transition={{ type: 'spring', stiffness: 340, damping: 20 }}
+        className="relative z-10 flex-shrink-0"
+        style={{ color: (isActive || isHovered) ? accent : 'var(--base-content)', opacity: (isActive || isHovered) ? 1 : 0.4 }}
+        aria-hidden="true"
+      >
+        <link.icon size={15} strokeWidth={2.2} />
+      </MotionDiv>
+      <span className="relative z-10">{link.name}</span>
+      <AnimatePresence>
+        {isActive && (
+          <MotionDiv
+            key="role-active-bar"
+            layoutId="role-active-bar"
+            initial={{ scaleX: 0 }}
+            animate={{ scaleX: 1 }}
+            exit={{ scaleX: 0 }}
+            className="absolute bottom-0 left-3 right-3 h-[3px] rounded-t-full"
+            style={{ background: barGradient }}
+            transition={{ type: 'spring', stiffness: 380, damping: 28 }}
+            aria-hidden="true"
+          />
+        )}
+      </AnimatePresence>
+      {isActive && (
+        <MotionDiv
+          initial={{ scale: 0 }}
+          animate={{ scale: 1 }}
+          className="relative z-10 w-1.5 h-1.5 rounded-full flex-shrink-0"
+          style={{ background: accent, boxShadow: `0 0 6px ${accent}` }}
+          aria-hidden="true"
+        />
+      )}
+    </Link>
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN HEADER
+// ═══════════════════════════════════════════════════════════════════════════════
+const Header = () => {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [hoveredLink, setHoveredLink] = useState(null);
+
+  const pathname = usePathname();
+  const router = useRouter();
+  const dispatch = useDispatch();
+
+  const { user, unreadCount, cartCount, walletBalance } = useHeaderData();
+
+  const userRole = user?.role ?? null;
+  const isCustomer = !userRole || userRole === 'customer';
+
+  const rolePalette = useMemo(() => getRolePalette(userRole), [userRole]);
+  const activePalette = useMemo(() => getActivePalette(pathname), [pathname]);
+
+  const hoverPalette = useMemo(
+    () => (hoveredLink && isCustomer ? CUSTOMER_NAV_LINKS.find((l) => l.name === hoveredLink) ?? null : null),
+    [hoveredLink, isCustomer]
+  );
+
+  const mood = useMemo(() => {
+    if (!isCustomer && rolePalette) return rolePalette;
+    return hoverPalette ?? activePalette;
+  }, [isCustomer, rolePalette, hoverPalette, activePalette]);
+
+  const roleBottomLinks = useMemo(() => {
+    if (isCustomer) return null;
+    return ROLE_NAV_LINKS[userRole] ?? null;
+  }, [isCustomer, userRole]);
+
+  // FIX: Compute the data-theme value to apply to <header> so that the CSS
+  //      role-theme selectors in globals.css ([data-theme="doctor"] etc.)
+  //      activate correctly. This is the KEY fix — without this, var(--primary)
+  //      in ROLE_PALETTES just resolves to the global :root value, not the
+  //      role-specific one. With this, CSS cascade picks up the right theme.
+  const headerDataTheme = useMemo(() => {
+    if (isCustomer || !rolePalette) return undefined;
+    return rolePalette.dataTheme ?? undefined;
+  }, [isCustomer, rolePalette]);
+
+  useEffect(() => {
+    const warmup = () => preconnectOrigins();
+    if (typeof requestIdleCallback !== 'undefined') {
+      const id = requestIdleCallback(warmup, { timeout: 3000 });
+      return () => cancelIdleCallback(id);
+    }
+    const id = setTimeout(warmup, 2000);
+    return () => clearTimeout(id);
+  }, []);
+
+  useEffect(() => {
+    document.body.style.overflow = mobileOpen ? 'hidden' : '';
+    document.body.style.touchAction = mobileOpen ? 'none' : '';
+    return () => { document.body.style.overflow = ''; document.body.style.touchAction = ''; };
+  }, [mobileOpen]);
+
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const menu = document.getElementById('mobile-menu');
+    if (!menu) return;
+    const focusables = menu.querySelectorAll(
+      'a[href], button:not([disabled]), input, [tabindex]:not([tabindex="-1"])'
+    );
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const trap = (e) => {
+      if (e.key !== 'Tab') return;
+      if (e.shiftKey) {
+        if (document.activeElement === first) { e.preventDefault(); last?.focus(); }
+      } else {
+        if (document.activeElement === last) { e.preventDefault(); first?.focus(); }
+      }
+    };
+    const escHandler = (e) => { if (e.key === 'Escape') setMobileOpen(false); };
+    document.addEventListener('keydown', trap);
+    document.addEventListener('keydown', escHandler);
+    first?.focus();
+    return () => {
+      document.removeEventListener('keydown', trap);
+      document.removeEventListener('keydown', escHandler);
+    };
+  }, [mobileOpen]);
+
+  const handleLogout = useCallback(() => {
+    dispatch(logout());
+    setMobileOpen(false);
+    router.push('/');
+  }, [dispatch, router]);
+
+  const handleHover = useCallback((name) => setHoveredLink(name), []);
+  const handleLeave = useCallback(() => setHoveredLink(null), []);
+  const toggleMobile = useCallback(() => setMobileOpen((p) => !p), []);
+
+  const userAvatar = useMemo(
+    () => user?.avatar || buildAvatarUrl(user?.name),
+    [user?.avatar, user?.name]
+  );
+
+  // FIX: All style fallbacks use CSS variables, not hardcoded colors
+  const accentStripeStyle = useMemo(() => ({
+    background: mood?.barGradient ?? 'linear-gradient(90deg, var(--primary), var(--secondary))',
+    transition: 'background 0.4s ease',
+  }), [mood]);
+
+  const navBarStyle = useMemo(() => ({
+    background: mood?.bg ?? 'transparent',
+    transition: 'background 0.4s ease',
+    borderTop: '1px solid',
+    borderColor: mood ? `color-mix(in srgb, ${mood.accent} 22%, transparent)` : 'var(--base-300)',
+  }), [mood]);
+
+  const bookNowStyle = useMemo(() => ({
+    background: mood?.barGradient ?? 'var(--primary)',
+    boxShadow: mood ? `0 4px 18px ${mood.shadowColor}` : '0 4px 12px color-mix(in srgb, var(--primary) 30%, transparent)',
+  }), [mood]);
+
+  const mobileMenuAccentBorder = useMemo(() => ({
+    background: mood?.pillBg ?? 'var(--base-200)',
+    borderColor: mood ? `color-mix(in srgb, ${mood.accent} 25%, transparent)` : 'var(--base-300)',
+  }), [mood]);
+
+  const RoleIcon = mood?.icon ?? null;
+
+  return (
+    <>
+      {/* Skip to content */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[200] focus:px-4 focus:py-2 focus:rounded-lg focus:bg-base-100 focus:text-base-content focus:font-bold focus:shadow-xl"
+      >
+        Skip to main content
+      </a>
+
+      {/*
+       * FIX: data-theme applied to <header> so CSS selectors like
+       *      [data-theme="doctor"] { --primary: ... } in globals.css
+       *      take effect, making var(--primary) in ROLE_PALETTES
+       *      resolve to the correct role-specific colour.
+       *
+       *      The .dark class on <html> combined with [data-theme="doctor"]
+       *      on <header> triggers:  .dark [data-theme="doctor"] { ... }
+       *      which is exactly what globals.css dark role themes use.
+       */}
+      <header
+        data-theme={headerDataTheme}
+        className="sticky top-0 z-[100] w-full backdrop-blur-md border-b border-base-300 transition-all duration-300"
+        style={{ background: 'color-mix(in srgb, var(--base-100) 88%, transparent)' }}
+        role="banner"
+      >
+        {/* Accent stripe */}
+        <MotionDiv
+          className="h-0.5 w-full relative z-[101]"
+          style={accentStripeStyle}
+          layout
+          aria-hidden="true"
+        />
+
+        {/* ── TOP BAR ─────────────────────────────────────────────────── */}
+        <div className="py-2.5 md:py-3 relative z-[101]">
+          <Container className="flex items-center justify-between gap-4">
+
+            {/* Left: Logo + Location */}
+            <div className="flex items-center gap-3 flex-shrink-0">
+              <Link
+                href="/"
+                className="flex-shrink-0 group transition-transform active:scale-95"
+                aria-label="Likeson — go to homepage"
+              >
+                <span
+                  className="text-xl md:text-2xl font-black tracking-tighter transition-colors duration-300 block"
+                  style={{ color: mood?.accent ?? 'var(--primary)' }}
+                  aria-label="Likeson.in"
+                >
+                  Likeson<span style={{ color: 'var(--warning)' }}>.in</span>
+                </span>
+              </Link>
+              <div className="hidden lg:flex items-center">
+                <LocationWidget mood={mood} isMobile={false} />
+              </div>
+            </div>
+
+            {/* Centre: Search (desktop) — shown for customer/guest only */}
+            {isCustomer && (
+              <form
+                action="/search"
+                role="search"
+                className="hidden lg:flex flex-1 max-w-sm relative"
+                aria-label="Search doctors and services"
+              >
+                <label htmlFor="header-search" className="sr-only">Search services or doctors</label>
+                <Search
+                  className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
+                  style={{ color: mood?.accent ?? 'var(--base-content)', opacity: 0.5 }}
+                  aria-hidden="true"
+                />
+                <input
+                  id="header-search"
+                  type="search"
+                  name="q"
+                  placeholder="Search services or doctors…"
+                  aria-label="Search"
+                  className="input-field w-full pl-10 text-[13px] placeholder:text-base-content/40 transition-all duration-300 rounded-xl bg-base-200/50 border-transparent focus:bg-base-100"
+                  style={{ outlineColor: mood?.accent ?? 'var(--primary)' }}
+                />
+              </form>
+            )}
+
+            {/* Centre: Role title for non-customer */}
+            {!isCustomer && rolePalette && (
+              <div className="hidden lg:flex flex-1 items-center justify-center">
+                <div
+                  className="flex items-center gap-2.5 px-4 py-2 rounded-full border text-[11px] font-black uppercase tracking-widest"
+                  style={{
+                    background: rolePalette.pillBg,
+                    borderColor: `color-mix(in srgb, ${rolePalette.accent} 30%, transparent)`,
+                    color: rolePalette.pillText,
+                    boxShadow: `0 0 18px ${rolePalette.shadowColor}`,
+                  }}
+                  aria-label={`Logged in as ${rolePalette.label}`}
+                >
+                  {RoleIcon && <RoleIcon size={14} aria-hidden="true" />}
+                  {rolePalette.label} Portal
+                </div>
+              </div>
+            )}
+
+            {/* Right: Actions */}
+            <div className="flex items-center gap-2 md:gap-3" role="navigation" aria-label="Account actions">
+              {user ? (
+                <div className="flex items-center gap-2 lg:gap-3">
+
+                  {/* Superadmin badge */}
+                  {userRole === 'superadmin' && (
+                    <Link
+                      href="/admin/dashboard"
+                      aria-label="Go to admin terminal dashboard"
+                      className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wider border animate-pulse"
+                      style={{
+                        background: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+                        color: 'var(--primary)',
+                        borderColor: 'color-mix(in srgb, var(--primary) 20%, transparent)',
+                      }}
+                    >
+                      <ShieldCheck size={13} aria-hidden="true" /> Admin
+                    </Link>
+                  )}
+
+                  {/* Active section pill — customer only */}
+                  {isCustomer && (
+                    <AnimatePresence mode="wait">
+                      {activePalette && (
+                        <MotionDiv
+                          key={activePalette.href}
+                          initial={{ opacity: 0, scale: 0.8 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.8 }}
+                          aria-label={`Current section: ${activePalette.label}`}
+                          className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest border"
+                          style={{
+                            background: activePalette.pillBg,
+                            color: activePalette.pillText,
+                            borderColor: `${activePalette.accent}30`,
+                            boxShadow: `0 0 12px ${activePalette.shadowColor}`,
+                          }}
+                        >
+                          <activePalette.icon size={11} aria-hidden="true" />
+                          {activePalette.label}
+                        </MotionDiv>
+                      )}
+                    </AnimatePresence>
+                  )}
+
+                  {/* Wallet */}
+                  <div className="hidden md:flex">
+                    <WalletWidget walletBalance={walletBalance} accent={mood?.accent} />
+                  </div>
+
+                  {/* Cart — customer/pharmacy only */}
+                  {(isCustomer || userRole === 'pharmacy') && (
+                    <Link
+                      href="/pharmacy/cart"
+                      aria-label={`Shopping cart with ${cartCount} item${cartCount !== 1 ? 's' : ''}`}
+                    >
+                      <MotionDiv whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} className="relative">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="rounded-full text-base-content/60 hover:bg-base-200"
+                          tabIndex={-1}
+                          aria-hidden="true"
+                        >
+                          <MotionDiv variants={CART_FLOAT} animate={cartCount > 0 ? 'float' : 'idle'} aria-hidden="true">
+                            <ShoppingCart size={19} />
+                          </MotionDiv>
+                        </Button>
+                        {cartCount > 0 && (
+                          <MotionSpan
+                            initial={{ scale: 0 }}
+                            animate={{ scale: 1 }}
+                            aria-hidden="true"
+                            className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black text-white shadow-lg"
+                            style={{
+                              background: mood?.accent ?? 'var(--primary)',
+                              boxShadow: mood ? `0 2px 8px ${mood.shadowColor}` : 'none',
+                            }}
+                          >
+                            {cartCount > 99 ? '99+' : cartCount}
+                            <span
+                              className="absolute inset-0 rounded-full animate-ping opacity-40"
+                              style={{ background: mood?.accent ?? 'var(--primary)' }}
+                              aria-hidden="true"
+                            />
+                          </MotionSpan>
+                        )}
+                      </MotionDiv>
+                    </Link>
+                  )}
+
+                  <ThemeToggle />
+
+                  {/* Notifications */}
+                  <Link
+                    href="/notifications"
+                    aria-label={`Notifications${unreadCount > 0 ? `, ${unreadCount} unread` : ', none unread'}`}
+                  >
+                    <MotionDiv whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.92 }} className="relative">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="rounded-full text-base-content/60 hover:bg-base-200"
+                        tabIndex={-1}
+                        aria-hidden="true"
+                      >
+                        <MotionDiv variants={BELL_RING} animate={unreadCount > 0 ? 'ring' : 'idle'} aria-hidden="true">
+                          <Bell size={19} />
+                        </MotionDiv>
+                        {unreadCount > 0 && (
+                          <>
+                            <span
+                              aria-hidden="true"
+                              className="absolute top-2 right-2.5 w-2 h-2 rounded-full border-2 border-base-100 z-10"
+                              style={{ background: mood?.accent ?? 'var(--accent)' }}
+                            />
+                            <span
+                              aria-hidden="true"
+                              className="absolute top-2 right-2.5 w-2 h-2 rounded-full animate-ping"
+                              style={{ background: mood?.accent ?? 'var(--accent)', opacity: 0.6 }}
+                            />
+                          </>
+                        )}
+                      </Button>
+                    </MotionDiv>
+                  </Link>
+
+                  {/* Avatar Dropdown */}
+                  <AvatarDropdown
+                    user={user}
+                    userAvatar={userAvatar}
+                    activePalette={isCustomer ? activePalette : rolePalette}
+                    mood={mood}
+                    pathname={pathname}
+                    onLogout={handleLogout}
+                  />
+                </div>
+              ) : (
+                /* Guest */
+                <Link href="/login" className="hidden sm:block">
+                  <MotionButton
+                    whileHover={{ scale: 1.03 }}
+                    whileTap={{ scale: 0.96 }}
+                    aria-label="Sign in to your account"
+                    className="rounded-full text-[13px] font-extrabold h-10 px-6 text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2"
+                  >
+                    Login
+                  </MotionButton>
+                </Link>
+              )}
+
+              {/* Book Now CTA — customer/guest only */}
+              {isCustomer && (
+                <Link href="/book-appointment">
+                  <MotionButton
+                    whileHover={{ scale: 1.04, y: -1 }}
+                    whileTap={{ scale: 0.95 }}
+                    aria-label="Book a medical appointment"
+                    className="flex items-center h-10 px-4 md:px-6 gap-2 rounded-md text-[12px] font-black uppercase tracking-wide text-white transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+                    style={bookNowStyle}
+                  >
+                    <Calendar className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+                    <span className="hidden md:block">Book Now</span>
+                  </MotionButton>
+                </Link>
+              )}
+
+              {/* Mobile menu trigger */}
+              <MotionButton
+                whileTap={{ scale: 0.9 }}
+                onClick={toggleMobile}
+                aria-label={mobileOpen ? 'Close navigation menu' : 'Open navigation menu'}
+                aria-expanded={mobileOpen}
+                aria-controls="mobile-menu"
+                className="md:hidden h-10 w-10 rounded-full flex items-center justify-center bg-base-200 text-base-content z-[110] relative focus-visible:outline-none focus-visible:ring-2"
+                style={{ border: `1.5px solid ${mood ? `color-mix(in srgb, ${mood.accent} 40%, transparent)` : 'var(--base-300)'}` }}
+              >
+                <AnimatePresence mode="wait">
+                  {mobileOpen ? (
+                    <MotionSpan key="x" initial={{ rotate: -90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ opacity: 0 }} aria-hidden="true">
+                      <X size={20} />
+                    </MotionSpan>
+                  ) : (
+                    <MotionSpan key="menu" initial={{ rotate: 90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ opacity: 0 }} aria-hidden="true">
+                      <Menu size={20} />
+                    </MotionSpan>
+                  )}
+                </AnimatePresence>
+              </MotionButton>
+            </div>
+          </Container>
+        </div>
+
+        {/* ── DESKTOP NAV ──────────────────────────────────────────────── */}
+        <nav
+          className="hidden md:block py-0.5 transition-all duration-400 relative"
+          style={navBarStyle}
+          aria-label="Main navigation"
+        >
+          <Container className="flex items-center justify-center gap-0.5">
+            {isCustomer
+              ? CUSTOMER_NAV_LINKS.map((link) => (
+                  <NavLink
+                    key={link.name}
+                    link={link}
+                    pathname={pathname}
+                    onHover={handleHover}
+                    onLeave={handleLeave}
+                    isHovered={hoveredLink === link.name}
+                  />
+                ))
+              : roleBottomLinks?.map((link) => (
+                  <RoleNavLink
+                    key={link.name}
+                    link={link}
+                    pathname={pathname}
+                    palette={rolePalette}
+                    onHover={handleHover}
+                    onLeave={handleLeave}
+                    isHovered={hoveredLink === link.name}
+                  />
+                ))
+            }
+          </Container>
+        </nav>
+      </header>
+
+      {/* ── MOBILE FULLSCREEN MENU ───────────────────────────────────── */}
+      {/*
+       * FIX: data-theme also applied here so the mobile menu adopts the
+       *      same role colours as the desktop header.
+       */}
+      <AnimatePresence>
+        {mobileOpen && (
+          <MotionDiv
+            id="mobile-menu"
+            data-theme={headerDataTheme}
+            variants={MOBILE_MENU_VARIANTS}
+            initial="hidden"
+            animate="show"
+            exit="exit"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Mobile navigation menu"
+            className="fixed inset-0 w-full h-full bg-base-100 z-[90] md:hidden pt-[80px]"
+          >
+            <div className="h-full overflow-y-auto px-5 pb-32 pt-4 flex flex-col gap-6">
+
+              {/* Location widget */}
+              <LocationWidget mood={mood} isMobile />
+
+              {/* User profile */}
+              {user ? (
+                <div
+                  className="p-5 rounded-3xl border relative"
+                  style={mobileMenuAccentBorder}
+                >
+                  <div className="flex items-center gap-4 mb-6">
+                    <div className="relative flex-shrink-0">
+                      <Image
+                        src={userAvatar}
+                        alt={`${user.name} profile picture`}
+                        width={64}
+                        height={64}
+                        className="rounded-2xl object-cover shadow-lg"
+                        style={{ border: `3px solid ${mood?.accent ?? 'var(--primary)'}` }}
+                        unoptimized={userAvatar.includes('ui-avatars.com')}
+                      />
+                      <span className="absolute -bottom-1 -right-1 h-4 w-4 bg-green-500 border-2 border-base-100 rounded-full" aria-label="Online" />
+                    </div>
+                    <div>
+                      <p className="font-black text-xl tracking-tight leading-tight">{user.name}</p>
+                      <p className="text-xs opacity-50 mb-2">{user.email}</p>
+                      <span
+                        className="px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest text-white shadow-md"
+                        style={{ background: mood?.accent ?? 'var(--primary)' }}
+                      >
+                        {user.role}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-1">
+                    <RoleNavLinks user={user} currentPathname={pathname} onLinkClick={() => setMobileOpen(false)} />
+                  </div>
+                </div>
+              ) : (
+                <div className="p-6 rounded-3xl border border-dashed border-base-300 flex flex-col items-center text-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-base-200 flex items-center justify-center" aria-hidden="true">
+                    <User className="opacity-20" />
+                  </div>
+                  <p className="text-sm font-bold opacity-60">Sign in to manage your appointments and orders</p>
+                  <Link href="/login" onClick={() => setMobileOpen(false)} className="w-full">
+                    <Button className="w-full rounded-xl py-6 font-black uppercase tracking-widest">Sign In</Button>
+                  </Link>
+                </div>
+              )}
+
+              {/* Navigation links */}
+              <nav aria-label="Mobile service navigation">
+                <p className="text-[10px] font-black uppercase tracking-[0.4em] opacity-30 px-3 mb-2" aria-hidden="true">
+                  {isCustomer ? 'Main Services' : 'Navigation'}
+                </p>
+                <MotionUl variants={STAGGER} className="flex flex-col gap-2" role="list">
+                  {(isCustomer ? CUSTOMER_NAV_LINKS : (roleBottomLinks ?? [])).map((link) => {
+                    const isActive = pathname === link.href || pathname.startsWith(link.href + '/');
+                    // FIX: For role nav links, use mood.accent (which is a CSS var in context)
+                    //      For customer nav links, keep the hardcoded per-link accent
+                    const accent = isCustomer ? link.accent : (mood?.accent ?? 'var(--primary)');
+                    const shadowColor = isCustomer ? link.shadowColor : (mood?.shadowColor ?? 'color-mix(in srgb, var(--primary) 35%, transparent)');
+                    return (
+                      <MotionLi key={link.name} variants={FADE_UP}>
+                        <Link
+                          href={link.href}
+                          onClick={() => setMobileOpen(false)}
+                          aria-current={isActive ? 'page' : undefined}
+                          className="flex items-center justify-between p-4 rounded-2xl border transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2"
+                          style={
+                            isActive
+                              ? { background: 'var(--base-100)', borderColor: accent, boxShadow: `0 10px 25px -5px ${shadowColor}` }
+                              : { background: 'transparent', borderColor: 'var(--base-300)' }
+                          }
+                        >
+                          <div className="flex items-center gap-4">
+                            <div
+                              className="w-12 h-12 rounded-2xl flex items-center justify-center shadow-sm"
+                              style={{
+                                background: isActive ? accent : 'var(--base-100)',
+                                color: isActive ? 'var(--primary-content)' : accent,
+                                border: isActive ? 'none' : `1px solid color-mix(in srgb, ${accent} 20%, transparent)`,
+                              }}
+                              aria-hidden="true"
+                            >
+                              <link.icon size={22} strokeWidth={2.5} />
+                            </div>
+                            <div className="flex flex-col">
+                              <span
+                                className="font-black text-sm uppercase tracking-tight"
+                                style={{ color: isActive ? accent : 'var(--base-content)' }}
+                              >
+                                {link.name}
+                              </span>
+                              {isActive && (
+                                <span
+                                  className="text-[8px] font-bold uppercase tracking-widest text-green-500 animate-pulse"
+                                  aria-live="polite"
+                                >
+                                  Current Section
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <ChevronRight
+                            size={18}
+                            className={cn('transition-transform', isActive ? 'translate-x-1 opacity-100' : 'opacity-20')}
+                            style={{ color: isActive ? accent : 'inherit' }}
+                            aria-hidden="true"
+                          />
+                        </Link>
+                      </MotionLi>
+                    );
+                  })}
+                </MotionUl>
+              </nav>
+
+              {/* Action buttons */}
+              <div className="flex flex-col gap-3 mt-4">
+                {user && <WalletWidget walletBalance={walletBalance} isMobile accent={mood?.accent} />}
+
+                {/* Cart — customer/pharmacy only in mobile */}
+                {(isCustomer || userRole === 'pharmacy') && (
+                  <Link href="/pharmacy/cart" onClick={() => setMobileOpen(false)}>
+                    <MotionButton
+                      whileTap={{ scale: 0.97 }}
+                      aria-label={`View cart with ${cartCount} items`}
+                      className="w-full h-14 rounded-2xl font-black text-sm uppercase tracking-widest bg-base-200 border border-base-300 flex items-center justify-center gap-3 focus-visible:outline-none focus-visible:ring-2"
+                    >
+                      <ShoppingCart size={18} aria-hidden="true" /> My Cart ({cartCount})
+                    </MotionButton>
+                  </Link>
+                )}
+
+                {/* Book Now — customer only */}
+                {isCustomer && (
+                  <Link href="/book-appointment" onClick={() => setMobileOpen(false)}>
+                    <MotionButton
+                      whileTap={{ scale: 0.97 }}
+                      aria-label="Book a medical appointment"
+                      className="w-full h-16 rounded-2xl font-black text-sm uppercase tracking-widest text-white flex items-center justify-center gap-3 transition-all shadow-xl focus-visible:outline-none focus-visible:ring-2"
+                      style={{
+                        background: mood?.barGradient ?? 'var(--primary)',
+                        boxShadow: mood ? `0 8px 30px ${mood.shadowColor}` : '0 8px 20px color-mix(in srgb, var(--primary) 20%, transparent)',
+                      }}
+                    >
+                      <Calendar size={20} aria-hidden="true" /> Book Appointment
+                    </MotionButton>
+                  </Link>
+                )}
+
+                {user && (
+                  <button
+                    onClick={handleLogout}
+                    aria-label="Sign out of your account"
+                    className="w-full h-14 rounded-2xl font-black text-[11px] uppercase tracking-[0.2em] flex items-center justify-center gap-3 transition-all border border-red-500/20 text-red-500 bg-error/10 focus-visible:outline-none focus-visible:ring-2"
+                  >
+                    <LogOut size={16} aria-hidden="true" /> Sign Out
+                  </button>
+                )}
+              </div>
+            </div>
+          </MotionDiv>
+        )}
+      </AnimatePresence>
+    </>
+  );
+};
+
+export default memo(Header);

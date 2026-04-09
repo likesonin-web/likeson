@@ -1,0 +1,1126 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme {
+  --font-family-poppins:    var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
+  --font-family-montserrat: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
+
+  --font-sans:    var(--font-family-poppins);
+  --font-display: var(--font-family-montserrat);
+
+  --color-primary:           var(--primary);
+  --color-primary-content:   var(--primary-content);
+  --color-secondary:         var(--secondary);
+  --color-secondary-content: var(--secondary-content);
+  --color-accent:            var(--accent);
+  --color-accent-content:    var(--accent-content);
+  --color-neutral:           var(--neutral);
+  --color-neutral-content:   var(--neutral-content);
+
+  --color-base-100:          var(--base-100);
+  --color-base-200:          var(--base-200);
+  --color-base-300:          var(--base-300);
+  --color-base-content:      var(--base-content);
+
+  --color-info:              var(--info);
+  --color-info-content:      var(--info-content);
+  --color-success:           var(--success);
+  --color-success-content:   var(--success-content);
+  --color-warning:           var(--warning);
+  --color-warning-content:   var(--warning-content);
+  --color-error:             var(--error);
+  --color-error-content:     var(--error-content);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+
+  --radius-selector: var(--r-selector);
+  --radius-field:    var(--r-field);
+  --radius-box:      var(--r-box);
+
+  --shadow-depth: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  --bg-gradient-primary: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+  --bg-gradient-success: linear-gradient(135deg, var(--success) 0%, var(--accent) 100%);
+}
+
+
+/* ============================================================
+   DEFAULT LIGHT MODE
+   Clean blue-grey for general use
+   ============================================================ */
+:root {
+  --base-100:     oklch(99%   0       0);
+  --base-200:     oklch(97%   0.005 220);
+  --base-300:     oklch(94%   0.008 220);
+  --base-content: oklch(25%   0.01  240);
+
+  --primary:         oklch(55% 0.18 240);
+  --primary-content: oklch(98% 0.01 240);
+
+  --secondary:         oklch(65% 0.14 180);
+  --secondary-content: oklch(98% 0.01 180);
+
+  --accent:         oklch(70% 0.15  50);
+  --accent-content: oklch(98% 0.01  50);
+
+  --neutral:         oklch(30% 0.01 240);
+  --neutral-content: oklch(98% 0    0);
+
+  --info:    oklch(62% 0.16 230);
+  --success: oklch(65% 0.16 150);
+  --warning: oklch(75% 0.15  70);
+  --error:   oklch(62% 0.20  25);
+
+  --info-content:    oklch(98% 0.01 230);
+  --success-content: oklch(98% 0.01 150);
+  --warning-content: oklch(18% 0.03  70);
+  --error-content:   oklch(98% 0.01  25);
+
+  --chart-1: oklch(58% 0.18 240);
+  --chart-2: oklch(65% 0.14 180);
+  --chart-3: oklch(65% 0.16 150);
+  --chart-4: oklch(68% 0.15  50);
+  --chart-5: oklch(62% 0.16 280);
+  --chart-6: oklch(62% 0.20  25);
+
+  --r-selector:   0.5rem;
+  --r-field:      0.5rem;
+  --r-box:        1rem;
+  --border-width: 1px;
+
+  --shadow-depth: 0 10px 15px -3px rgba(0, 0, 0, 0.08);
+}
+
+/* ============================================================
+   DARK MODE
+   ============================================================ */
+.dark {
+  --base-100:     oklch(14%  0.015 240);
+  --base-200:     oklch(18%  0.016 240);
+  --base-300:     oklch(23%  0.018 240);
+  --base-content: oklch(92%  0.008 240);
+
+  --primary:         oklch(62%  0.20  240);
+  --primary-content: oklch(98%  0.01  240);
+
+  --secondary:         oklch(68%  0.16  180);
+  --secondary-content: oklch(98%  0.01  180);
+
+  --accent:         oklch(74%  0.16   50);
+  --accent-content: oklch(18%  0.04   50);
+
+  --neutral:         oklch(88%  0.008 240);
+  --neutral-content: oklch(14%  0.015 240);
+
+  --info:    oklch(65%  0.17  230);
+  --success: oklch(68%  0.17  150);
+  --warning: oklch(78%  0.15   70);
+  --error:   oklch(65%  0.21   25);
+
+  --info-content:    oklch(98%  0.01  230);
+  --success-content: oklch(98%  0.01  150);
+  --warning-content: oklch(15%  0.03   70);
+  --error-content:   oklch(98%  0.01   25);
+
+  --chart-1: oklch(64%  0.20  240);
+  --chart-2: oklch(70%  0.16  180);
+  --chart-3: oklch(70%  0.17  150);
+  --chart-4: oklch(74%  0.16   50);
+  --chart-5: oklch(67%  0.18  280);
+  --chart-6: oklch(67%  0.22   25);
+
+  --shadow-depth: 0 10px 25px -3px rgba(0, 0, 0, 0.45);
+}
+
+
+/* ============================================================
+   HEALTHCARE ROLE THEMES — LIGHT MODE
+   Apply via: [data-theme="doctor"] on <html> or a wrapper
+   ============================================================ */
+
+/* ------------------------------------------------------------------
+   DOCTOR  — Trustworthy deep blue + clean white
+   Represents authority, expertise, clinical precision
+   ------------------------------------------------------------------ */
+[data-theme="doctor"] {
+  --base-100:     oklch(99%   0       0);      /* Pure white — clinical cleanliness */
+  --base-200:     oklch(96%   0.005 230);      /* Faint sky tint */
+  --base-300:     oklch(91%   0.010 230);
+  --base-content: oklch(22%   0.015 240);      /* Near-black with blue undertone */
+
+  --primary:         oklch(48% 0.20 255);      /* Deep trustworthy blue */
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(60% 0.14 200);    /* Calm teal-blue */
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(65% 0.18 160);       /* Healing green */
+  --accent-content: oklch(99% 0    0);
+
+  --neutral:         oklch(28% 0.01 240);
+  --neutral-content: oklch(99% 0    0);
+
+  --info:    oklch(60% 0.16 230);
+  --success: oklch(62% 0.18 150);
+  --warning: oklch(72% 0.16  70);
+  --error:   oklch(60% 0.22  25);
+
+  --info-content:    oklch(99% 0 0);
+  --success-content: oklch(99% 0 0);
+  --warning-content: oklch(18% 0.03 70);
+  --error-content:   oklch(99% 0 0);
+
+  --chart-1: oklch(48% 0.20 255);
+  --chart-2: oklch(60% 0.14 200);
+  --chart-3: oklch(62% 0.18 150);
+  --chart-4: oklch(68% 0.16  50);
+  --chart-5: oklch(55% 0.18 280);
+  --chart-6: oklch(60% 0.22  25);
+
+  --r-selector: 0.375rem;
+  --r-field:    0.375rem;   /* Slightly tighter radius = more clinical */
+  --r-box:      0.75rem;
+  --border-width: 1px;
+  --shadow-depth: 0 8px 20px -4px rgba(30, 80, 180, 0.12);
+}
+
+/* ------------------------------------------------------------------
+   HOSPITAL — Sterile white + confident navy + safety orange accent
+   Represents large-scale institutions, operational clarity
+   ------------------------------------------------------------------ */
+[data-theme="hospital"] {
+  --base-100:     oklch(99%   0       0);
+  --base-200:     oklch(97%   0.004 220);
+  --base-300:     oklch(93%   0.007 220);
+  --base-content: oklch(20%   0.010 230);
+
+  --primary:         oklch(40% 0.18 250);      /* Strong navy — authority */
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(55% 0.10 220);    /* Steel blue */
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(68% 0.20  50);       /* Safety orange for alerts */
+  --accent-content: oklch(15% 0.03  50);
+
+  --neutral:         oklch(25% 0.01 230);
+  --neutral-content: oklch(99% 0    0);
+
+  --info:    oklch(58% 0.16 220);
+  --success: oklch(60% 0.18 148);
+  --warning: oklch(70% 0.18  60);
+  --error:   oklch(58% 0.24  20);
+
+  --info-content:    oklch(99% 0 0);
+  --success-content: oklch(99% 0 0);
+  --warning-content: oklch(15% 0.03 60);
+  --error-content:   oklch(99% 0 0);
+
+  --chart-1: oklch(40% 0.18 250);
+  --chart-2: oklch(55% 0.10 220);
+  --chart-3: oklch(60% 0.18 148);
+  --chart-4: oklch(68% 0.20  50);
+  --chart-5: oklch(52% 0.18 290);
+  --chart-6: oklch(58% 0.24  20);
+
+  --r-selector: 0.25rem;
+  --r-field:    0.25rem;   /* Square edges = institutional efficiency */
+  --r-box:      0.5rem;
+  --border-width: 1px;
+  --shadow-depth: 0 6px 16px -3px rgba(20, 50, 120, 0.14);
+}
+
+/* ------------------------------------------------------------------
+   CARE ASSISTANT — Warm lavender + rose + soft amber
+   Represents empathy, personal attention, emotional support
+   ------------------------------------------------------------------ */
+[data-theme="care-assistant"] {
+  --base-100:     oklch(99%   0.002  300);     /* Barely-there lavender white */
+  --base-200:     oklch(96%   0.008  300);
+  --base-300:     oklch(92%   0.014  300);
+  --base-content: oklch(28%   0.015  280);
+
+  --primary:         oklch(58% 0.18  300);     /* Warm lavender-purple */
+  --primary-content: oklch(99% 0     0);
+
+  --secondary:         oklch(65% 0.16  10);    /* Soft rose */
+  --secondary-content: oklch(99% 0     0);
+
+  --accent:         oklch(75% 0.14  80);       /* Warm amber — warmth & care */
+  --accent-content: oklch(18% 0.04  80);
+
+  --neutral:         oklch(35% 0.012 280);
+  --neutral-content: oklch(99% 0     0);
+
+  --info:    oklch(62% 0.15 240);
+  --success: oklch(63% 0.17 155);
+  --warning: oklch(73% 0.16  75);
+  --error:   oklch(62% 0.21  20);
+
+  --info-content:    oklch(99% 0 0);
+  --success-content: oklch(99% 0 0);
+  --warning-content: oklch(18% 0.03 75);
+  --error-content:   oklch(99% 0 0);
+
+  --chart-1: oklch(58% 0.18 300);
+  --chart-2: oklch(65% 0.16  10);
+  --chart-3: oklch(63% 0.17 155);
+  --chart-4: oklch(75% 0.14  80);
+  --chart-5: oklch(60% 0.17 340);
+  --chart-6: oklch(62% 0.21  20);
+
+  --r-selector: 1rem;
+  --r-field:    1rem;       /* Fully rounded = friendly & approachable */
+  --r-box:      1.5rem;
+  --border-width: 1px;
+  --shadow-depth: 0 10px 20px -4px rgba(140, 80, 180, 0.12);
+}
+
+/* ------------------------------------------------------------------
+   TRANSPORT PARTNER — Energetic teal + slate + amber signal
+   Represents mobility, speed, reliability, logistics
+   ------------------------------------------------------------------ */
+[data-theme="transport"] {
+  --base-100:     oklch(98%   0.004 200);      /* Faint teal-white */
+  --base-200:     oklch(95%   0.008 200);
+  --base-300:     oklch(90%   0.012 200);
+  --base-content: oklch(22%   0.014 210);
+
+  --primary:         oklch(55% 0.18 190);      /* Energetic teal */
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(42% 0.06 220);    /* Cool slate */
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(72% 0.18  65);       /* Amber signal — visibility */
+  --accent-content: oklch(15% 0.04  65);
+
+  --neutral:         oklch(30% 0.01 210);
+  --neutral-content: oklch(99% 0    0);
+
+  --info:    oklch(58% 0.17 215);
+  --success: oklch(62% 0.18 152);
+  --warning: oklch(72% 0.17  68);
+  --error:   oklch(60% 0.22  22);
+
+  --info-content:    oklch(99% 0 0);
+  --success-content: oklch(99% 0 0);
+  --warning-content: oklch(15% 0.03 68);
+  --error-content:   oklch(99% 0 0);
+
+  --chart-1: oklch(55% 0.18 190);
+  --chart-2: oklch(42% 0.06 220);
+  --chart-3: oklch(62% 0.18 152);
+  --chart-4: oklch(72% 0.18  65);
+  --chart-5: oklch(55% 0.16 265);
+  --chart-6: oklch(60% 0.22  22);
+
+  --r-selector: 0.375rem;
+  --r-field:    0.375rem;
+  --r-box:      0.75rem;
+  --border-width: 1px;
+  --shadow-depth: 0 8px 18px -3px rgba(0, 140, 150, 0.12);
+}
+
+/* ------------------------------------------------------------------
+   PHARMACY — Crisp green + white + gold accent
+   Represents precision, wellness, dispensing, safety
+   ------------------------------------------------------------------ */
+[data-theme="pharmacy"] {
+  --base-100:     oklch(99%   0       0);
+  --base-200:     oklch(97%   0.006 155);      /* Faint mint */
+  --base-300:     oklch(93%   0.012 155);
+  --base-content: oklch(22%   0.014 165);
+
+  --primary:         oklch(50% 0.20 155);      /* Pharmacy green — recognition */
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(64% 0.14 170);    /* Lighter mint-green */
+  --secondary-content: oklch(15% 0.02 170);
+
+  --accent:         oklch(70% 0.17  88);       /* Gold — premium/trust */
+  --accent-content: oklch(15% 0.04  88);
+
+  --neutral:         oklch(28% 0.01 165);
+  --neutral-content: oklch(99% 0    0);
+
+  --info:    oklch(60% 0.16 228);
+  --success: oklch(60% 0.20 152);
+  --warning: oklch(72% 0.17  72);
+  --error:   oklch(60% 0.22  22);
+
+  --info-content:    oklch(99% 0 0);
+  --success-content: oklch(99% 0 0);
+  --warning-content: oklch(15% 0.03 72);
+  --error-content:   oklch(99% 0 0);
+
+  --chart-1: oklch(50% 0.20 155);
+  --chart-2: oklch(64% 0.14 170);
+  --chart-3: oklch(60% 0.20 152);
+  --chart-4: oklch(70% 0.17  88);
+  --chart-5: oklch(55% 0.18 200);
+  --chart-6: oklch(60% 0.22  22);
+
+  --r-selector: 0.5rem;
+  --r-field:    0.5rem;
+  --r-box:      0.75rem;
+  --border-width: 1px;
+  --shadow-depth: 0 8px 18px -3px rgba(0, 140, 80, 0.10);
+}
+
+/* ------------------------------------------------------------------
+   LAB PARTNER — Electric violet + deep indigo + citrus accent
+   Represents precision science, analysis, data, discovery
+   ------------------------------------------------------------------ */
+[data-theme="lab"] {
+  --base-100:     oklch(99%   0.002 270);      /* Barely-violet white */
+  --base-200:     oklch(96%   0.008 270);
+  --base-300:     oklch(91%   0.014 270);
+  --base-content: oklch(22%   0.016 270);
+
+  --primary:         oklch(55% 0.22 275);      /* Vivid violet — science energy */
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(46% 0.18 260);    /* Deep indigo */
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(72% 0.20 100);       /* Citrus/lime — discovery moment */
+  --accent-content: oklch(15% 0.05 100);
+
+  --neutral:         oklch(28% 0.012 268);
+  --neutral-content: oklch(99% 0     0);
+
+  --info:    oklch(60% 0.17 235);
+  --success: oklch(62% 0.19 150);
+  --warning: oklch(72% 0.17  72);
+  --error:   oklch(62% 0.23  22);
+
+  --info-content:    oklch(99% 0 0);
+  --success-content: oklch(99% 0 0);
+  --warning-content: oklch(15% 0.03 72);
+  --error-content:   oklch(99% 0 0);
+
+  --chart-1: oklch(55% 0.22 275);
+  --chart-2: oklch(46% 0.18 260);
+  --chart-3: oklch(62% 0.19 150);
+  --chart-4: oklch(72% 0.20 100);
+  --chart-5: oklch(60% 0.17 235);
+  --chart-6: oklch(62% 0.23  22);
+
+  --r-selector: 0.25rem;
+  --r-field:    0.25rem;   /* Sharp = precision instruments */
+  --r-box:      0.5rem;
+  --border-width: 1px;
+  --shadow-depth: 0 8px 20px -4px rgba(100, 60, 200, 0.14);
+}
+
+
+/* ============================================================
+   HEALTHCARE ROLE THEMES — DARK MODE
+   Combine with: [data-theme="doctor"].dark  or  .dark[data-theme="doctor"]
+   ============================================================ */
+
+/* DOCTOR DARK */
+[data-theme="doctor"].dark,
+.dark [data-theme="doctor"] {
+  --base-100:     oklch(14%  0.018 250);
+  --base-200:     oklch(18%  0.020 250);
+  --base-300:     oklch(24%  0.022 250);
+  --base-content: oklch(93%  0.008 240);
+
+  --primary:         oklch(65% 0.22 250);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(70% 0.16 200);
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(72% 0.20 160);
+  --accent-content: oklch(99% 0    0);
+
+  --shadow-depth: 0 10px 28px -4px rgba(10, 40, 120, 0.50);
+}
+
+/* HOSPITAL DARK */
+[data-theme="hospital"].dark,
+.dark [data-theme="hospital"] {
+  --base-100:     oklch(12%  0.012 240);
+  --base-200:     oklch(16%  0.014 240);
+  --base-300:     oklch(22%  0.016 240);
+  --base-content: oklch(94%  0.006 230);
+
+  --primary:         oklch(58% 0.20 250);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(65% 0.12 220);
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(76% 0.22  55);
+  --accent-content: oklch(12% 0.04  55);
+
+  --shadow-depth: 0 8px 22px -3px rgba(0, 20, 80, 0.55);
+}
+
+/* CARE ASSISTANT DARK */
+[data-theme="care-assistant"].dark,
+.dark [data-theme="care-assistant"] {
+  --base-100:     oklch(15%  0.020 295);
+  --base-200:     oklch(20%  0.022 295);
+  --base-300:     oklch(26%  0.024 295);
+  --base-content: oklch(93%  0.008 290);
+
+  --primary:         oklch(68% 0.20 300);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(72% 0.18  12);
+  --secondary-content: oklch(99% 0     0);
+
+  --accent:         oklch(80% 0.16  82);
+  --accent-content: oklch(15% 0.04  82);
+
+  --shadow-depth: 0 10px 24px -4px rgba(120, 40, 180, 0.40);
+}
+
+/* TRANSPORT DARK */
+[data-theme="transport"].dark,
+.dark [data-theme="transport"] {
+  --base-100:     oklch(13%  0.016 205);
+  --base-200:     oklch(18%  0.018 205);
+  --base-300:     oklch(24%  0.020 205);
+  --base-content: oklch(93%  0.008 208);
+
+  --primary:         oklch(65% 0.20 190);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(58% 0.08 220);
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(78% 0.20  68);
+  --accent-content: oklch(12% 0.04  68);
+
+  --shadow-depth: 0 8px 20px -3px rgba(0, 100, 120, 0.45);
+}
+
+/* PHARMACY DARK */
+[data-theme="pharmacy"].dark,
+.dark [data-theme="pharmacy"] {
+  --base-100:     oklch(13%  0.018 160);
+  --base-200:     oklch(18%  0.020 160);
+  --base-300:     oklch(24%  0.022 160);
+  --base-content: oklch(93%  0.008 162);
+
+  --primary:         oklch(62% 0.22 155);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(72% 0.16 170);
+  --secondary-content: oklch(12% 0.02 170);
+
+  --accent:         oklch(76% 0.19  90);
+  --accent-content: oklch(12% 0.04  90);
+
+  --shadow-depth: 0 8px 22px -3px rgba(0, 100, 60, 0.42);
+}
+
+/* LAB DARK */
+[data-theme="lab"].dark,
+.dark [data-theme="lab"] {
+  --base-100:     oklch(13%  0.022 272);
+  --base-200:     oklch(18%  0.025 272);
+  --base-300:     oklch(25%  0.028 272);
+  --base-content: oklch(93%  0.008 268);
+
+  --primary:         oklch(68% 0.24 275);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(60% 0.20 260);
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(78% 0.22 102);
+  --accent-content: oklch(12% 0.05 102);
+
+  --shadow-depth: 0 10px 26px -4px rgba(60, 20, 180, 0.48);
+}
+
+
+/* ============================================================
+   BASE LAYER
+   ============================================================ */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    @apply border-base-300;
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    background-color: var(--base-100);
+    color: var(--base-content);
+    font-family: var(--font-family-poppins);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    line-height: 1.6;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklch, var(--primary), transparent 70%);
+    color: var(--primary-content);
+  }
+
+  ::-moz-selection {
+    background-color: color-mix(in oklch, var(--primary), transparent 70%);
+    color: var(--primary-content);
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-family-montserrat);
+    @apply font-black tracking-tight;
+    text-rendering: optimizeLegibility;
+    line-height: 1.15;
+    color: var(--base-content);
+    transition: color 0.3s ease;
+  }
+
+  h1 { @apply text-4xl md:text-5xl lg:text-6xl; }
+  h2 { @apply text-3xl md:text-4xl lg:text-5xl; }
+  h3 { @apply text-2xl md:text-3xl; }
+  h4 { @apply text-xl  md:text-2xl; }
+  h5 { @apply text-lg  md:text-xl; }
+  h6 { @apply text-base md:text-lg; font-weight: 700; }
+
+  p {
+    font-family: var(--font-family-poppins);
+    @apply text-base leading-relaxed;
+    color: var(--base-content);
+  }
+
+  span, li, td, th, dd, dt {
+    font-family: var(--font-family-poppins);
+  }
+
+  small, caption, figcaption {
+    font-family: var(--font-family-poppins);
+    @apply text-xs leading-normal;
+    color: color-mix(in oklch, var(--base-content) 65%, transparent);
+  }
+
+  label {
+    font-family: var(--font-family-poppins);
+    @apply text-sm font-semibold;
+    color: var(--base-content);
+  }
+
+  button, input, textarea, select, optgroup {
+    font-family: var(--font-family-poppins);
+  }
+
+  a {
+    font-family: inherit;
+    color: var(--primary);
+    @apply underline-offset-2 transition-colors duration-200;
+  }
+
+  a:hover {
+    color: color-mix(in oklch, var(--primary) 80%, var(--secondary));
+  }
+
+  blockquote {
+    font-family: var(--font-family-montserrat);
+    @apply italic border-l-4 border-primary pl-4 my-4;
+    color: color-mix(in oklch, var(--base-content) 75%, transparent);
+  }
+
+  code, kbd, samp, pre {
+    font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
+    @apply text-sm;
+  }
+
+  hr {
+    border-color: var(--base-300);
+    @apply my-6;
+  }
+}
+
+
+/* ============================================================
+   COMPONENTS
+   ============================================================ */
+@layer components {
+
+  /* ── Glass Card ─────────────────────────────────────────── */
+  .glass-card {
+    background: linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--base-100) 90%, var(--primary)   10%),
+      color-mix(in srgb, var(--base-100) 95%, var(--secondary)  5%)
+    );
+    backdrop-filter: blur(20px) saturate(180%);
+    border: var(--border-width) solid color-mix(in srgb, var(--base-content), transparent 88%);
+    border-radius: var(--r-box);
+    @apply shadow-sm;
+    transition: border-color 0.3s, box-shadow 0.3s, transform 0.3s, background 0.3s;
+  }
+
+  .glass-card:hover {
+    border-color: color-mix(in srgb, var(--primary), transparent 60%);
+    box-shadow: var(--shadow-depth);
+    transform: translateY(-2px);
+  }
+
+  /* ── Buttons ─────────────────────────────────────────────── */
+  .btn-primary-cta {
+    font-family: var(--font-family-poppins);
+    background: var(--bg-gradient-primary);
+    color: var(--primary-content);
+    border-radius: var(--r-field);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--primary), transparent 70%);
+    @apply px-6 py-3 font-bold text-sm uppercase tracking-wider
+           focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-primary focus-visible:ring-offset-2;
+    transition: filter 0.25s, transform 0.25s, box-shadow 0.25s;
+  }
+
+  .btn-primary-cta:hover {
+    filter: brightness(1.1);
+    transform: scale(1.05);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--primary), transparent 50%);
+  }
+
+  .btn-primary-cta:active { transform: scale(0.95); }
+
+  .btn-secondary {
+    font-family: var(--font-family-poppins);
+    background: none;
+    color: var(--primary);
+    border: 2px solid var(--primary);
+    border-radius: var(--r-field);
+    cursor: pointer;
+    @apply px-6 py-3 font-bold text-sm uppercase tracking-wider
+           focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-primary focus-visible:ring-offset-2;
+    transition: background-color 0.25s, color 0.25s, transform 0.25s;
+  }
+
+  .btn-secondary:hover {
+    background-color: var(--primary);
+    color: var(--primary-content);
+  }
+
+  .btn-secondary:active { transform: scale(0.95); }
+
+  .btn-success {
+    font-family: var(--font-family-poppins);
+    background: var(--bg-gradient-success);
+    color: var(--success-content);
+    border-radius: var(--r-field);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--success), transparent 70%);
+    @apply px-6 py-3 font-bold text-sm uppercase tracking-wider
+           focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-success focus-visible:ring-offset-2;
+    transition: filter 0.25s, transform 0.25s;
+  }
+
+  .btn-success:hover  { filter: brightness(1.1); transform: scale(1.05); }
+  .btn-success:active { transform: scale(0.95); }
+
+  /* ── Input ───────────────────────────────────────────────── */
+  .input-field {
+    font-family: var(--font-family-poppins);
+    border-radius: var(--r-field);
+    background-color: var(--base-200);
+    border: var(--border-width) solid var(--base-300);
+    color: var(--base-content);
+    @apply px-4 py-3 text-sm outline-none
+           focus:ring-2 focus:ring-primary/50 focus:border-primary
+           placeholder:text-base-content/40;
+    transition: border-color 0.2s, box-shadow 0.2s, background-color 0.3s;
+  }
+
+  .input-field:hover { border-color: var(--primary); }
+
+  /* ── Badges ──────────────────────────────────────────────── */
+  .badge {
+    font-family: var(--font-family-poppins);
+    @apply inline-flex items-center gap-1.5 px-3 py-1
+           text-xs font-bold uppercase tracking-wider;
+    border-radius: var(--r-selector);
+  }
+
+  .badge-primary {
+    background-color: color-mix(in srgb, var(--primary), transparent 85%);
+    color: var(--primary);
+    border: 1px solid color-mix(in srgb, var(--primary), transparent 70%);
+  }
+
+  .badge-success {
+    background-color: color-mix(in srgb, var(--success), transparent 85%);
+    color: var(--success);
+    border: 1px solid color-mix(in srgb, var(--success), transparent 70%);
+  }
+
+  .badge-warning {
+    background-color: color-mix(in srgb, var(--warning), transparent 85%);
+    color: var(--warning);
+    border: 1px solid color-mix(in srgb, var(--warning), transparent 70%);
+  }
+
+  .badge-error {
+    background-color: color-mix(in srgb, var(--error), transparent 85%);
+    color: var(--error);
+    border: 1px solid color-mix(in srgb, var(--error), transparent 70%);
+  }
+
+  .badge-info {
+    background-color: color-mix(in srgb, var(--info), transparent 85%);
+    color: var(--info);
+    border: 1px solid color-mix(in srgb, var(--info), transparent 70%);
+  }
+
+  /* ── Card ────────────────────────────────────────────────── */
+  .card {
+    background-color: var(--base-100);
+    border: var(--border-width) solid var(--base-300);
+    border-radius: var(--r-box);
+    @apply shadow-sm;
+    transition: box-shadow 0.3s, border-color 0.3s, background-color 0.3s, transform 0.3s;
+  }
+
+  .card:hover {
+    box-shadow: var(--shadow-depth);
+    border-color: var(--primary);
+    transform: translateY(-1px);
+  }
+
+  /* ── Alerts ──────────────────────────────────────────────── */
+  .alert {
+    @apply px-4 py-3 border-l-4 flex items-start gap-3;
+    border-radius: var(--r-field);
+    animation: slideIn 0.3s ease-out;
+  }
+
+  .alert-info    { background-color: color-mix(in srgb, var(--info),    transparent 90%); border-left-color: var(--info);    color: var(--base-content); }
+  .alert-success { background-color: color-mix(in srgb, var(--success), transparent 90%); border-left-color: var(--success); color: var(--base-content); }
+  .alert-warning { background-color: color-mix(in srgb, var(--warning), transparent 90%); border-left-color: var(--warning); color: var(--base-content); }
+  .alert-error   { background-color: color-mix(in srgb, var(--error),   transparent 90%); border-left-color: var(--error);   color: var(--base-content); }
+
+  /* ── Spinner ─────────────────────────────────────────────── */
+  .spinner {
+    @apply inline-block w-6 h-6 rounded-full;
+    border: 3px solid color-mix(in srgb, var(--primary), transparent 70%);
+    border-top-color: var(--primary);
+    animation: spin 0.8s linear infinite;
+  }
+
+  /* ── Skeleton / Divider ──────────────────────────────────── */
+  .skeleton { @apply bg-base-300 rounded animate-pulse; }
+  .divider  { @apply h-px bg-base-300 my-6; }
+
+  /* ── Section headings ────────────────────────────────────── */
+  .section-heading {
+    font-family: var(--font-family-montserrat);
+    @apply text-2xl md:text-3xl lg:text-4xl font-extrabold tracking-tight text-base-content mb-4;
+  }
+
+  .section-subheading {
+    font-family: var(--font-family-poppins);
+    @apply text-sm md:text-base mb-8;
+    color: color-mix(in oklch, var(--base-content) 70%, transparent);
+  }
+
+  /* ── Healthcare role icon badge ──────────────────────────── */
+  /*  Used in nav, headers, profile chips: [data-theme="doctor"] .role-badge, etc. */
+  .role-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.75rem;
+    border-radius: var(--r-selector);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    background-color: color-mix(in srgb, var(--primary), transparent 85%);
+    color: var(--primary);
+    border: 1px solid color-mix(in srgb, var(--primary), transparent 65%);
+    transition: background-color 0.2s, color 0.2s;
+  }
+
+  /* ── Status indicator dot ────────────────────────────────── */
+  .status-dot {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 9999px;
+  }
+
+  .status-dot-success { background-color: var(--success); animation: pulse-dot 2s ease-in-out infinite; }
+  .status-dot-warning { background-color: var(--warning); }
+  .status-dot-error   { background-color: var(--error);   animation: pulse-dot 1.2s ease-in-out infinite; }
+  .status-dot-info    { background-color: var(--info);    }
+
+  /* ── Progress bar ────────────────────────────────────────── */
+  .progress-bar {
+    width: 100%;
+    height: 0.5rem;
+    background-color: var(--base-300);
+    border-radius: 9999px;
+    overflow: hidden;
+  }
+
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--bg-gradient-primary);
+    border-radius: 9999px;
+    transition: width 0.5s ease;
+  }
+
+  /* ── Stat card ───────────────────────────────────────────── */
+  .stat-card {
+    background-color: var(--base-200);
+    border-radius: var(--r-box);
+    @apply p-5;
+    transition: background-color 0.3s, transform 0.2s;
+  }
+
+  .stat-card:hover { transform: translateY(-2px); }
+
+  .stat-card-value {
+    font-family: var(--font-family-montserrat);
+    font-size: 2rem;
+    font-weight: 800;
+    line-height: 1;
+    color: var(--primary);
+  }
+
+  .stat-card-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: color-mix(in oklch, var(--base-content) 60%, transparent);
+    margin-top: 0.25rem;
+  }
+}
+
+
+/* ============================================================
+   UTILITIES
+   ============================================================ */
+@layer utilities {
+  .font-poppins    { font-family: var(--font-family-poppins); }
+  .font-montserrat { font-family: var(--font-family-montserrat); }
+
+  .text-gradient-primary {
+    color: transparent;
+    -webkit-background-clip: text;
+    background-clip: text;
+    background-image: linear-gradient(135deg, var(--primary), var(--secondary));
+  }
+
+  .text-gradient-success {
+    color: transparent;
+    -webkit-background-clip: text;
+    background-clip: text;
+    background-image: linear-gradient(135deg, var(--success), var(--accent));
+  }
+
+  .backdrop-blur-strong { backdrop-filter: blur(20px) saturate(180%); }
+  .backdrop-blur-soft   { backdrop-filter: blur(10px) saturate(120%); }
+
+  .shadow-primary {
+    box-shadow: 0 10px 30px color-mix(in srgb, var(--primary), transparent 70%);
+  }
+
+  .shadow-success {
+    box-shadow: 0 10px 30px color-mix(in srgb, var(--success), transparent 70%);
+  }
+
+  .hover-glow-primary { transition: box-shadow 0.3s; }
+  .hover-glow-primary:hover {
+    box-shadow: 0 0 30px color-mix(in srgb, var(--primary), transparent 50%);
+  }
+
+  /* Theme-aware surface tint — useful for sidebar panels */
+  .surface-tint {
+    background-color: color-mix(in srgb, var(--base-200) 85%, var(--primary) 15%);
+  }
+
+  /* Responsive visibility helpers */
+  .show-mobile  { display: block; }
+  .hide-mobile  { display: none;  }
+
+  @media (min-width: 768px) {
+    .show-mobile { display: none;  }
+    .hide-mobile { display: block; }
+  }
+}
+
+
+/* ============================================================
+   SCROLLBAR
+   ============================================================ */
+::-webkit-scrollbar       { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--base-200); border-radius: var(--r-field); }
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  border-radius: var(--r-field);
+  border: 2px solid var(--base-200);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--primary), transparent 50%);
+}
+* { scrollbar-width: thin; scrollbar-color: var(--primary) var(--base-200); }
+
+
+/* ============================================================
+   FOCUS
+   ============================================================ */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--r-field);
+}
+
+
+/* ============================================================
+   ANIMATIONS
+   Organised: entrances → looping → interaction
+   ============================================================ */
+
+/* Entrance */
+@keyframes fadeIn    { from { opacity: 0; }                          to { opacity: 1; } }
+@keyframes slideUp   { from { opacity: 0; transform: translateY(20px);  } to { opacity: 1; transform: translateY(0); } }
+@keyframes slideDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slideIn   { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes scaleIn   { from { opacity: 0; transform: scale(0.92);  }      to { opacity: 1; transform: scale(1);    } }
+
+/* Looping */
+@keyframes spin      { to   { transform: rotate(360deg); } }
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1;   box-shadow: 0 0 20px color-mix(in srgb, var(--primary), transparent 70%); }
+  50%       { opacity: 0.8; box-shadow: 0 0 40px color-mix(in srgb, var(--primary), transparent 45%); }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1;   transform: scale(1);    }
+  50%       { opacity: 0.6; transform: scale(1.35); }
+}
+
+/* Heartbeat — great for care/health indicators */
+@keyframes heartbeat {
+  0%   { transform: scale(1);    }
+  14%  { transform: scale(1.12); }
+  28%  { transform: scale(1);    }
+  42%  { transform: scale(1.10); }
+  70%  { transform: scale(1);    }
+  100% { transform: scale(1);    }
+}
+
+/* Shimmer — skeleton loading */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+
+/* Float — for ambulance/transport icons, decorative elements */
+@keyframes float {
+  0%, 100% { transform: translateY(0);    }
+  50%       { transform: translateY(-6px); }
+}
+
+/* Count up — attach via JS for stats */
+@keyframes countUp {
+  from { opacity: 0; transform: translateY(8px);  }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+
+/* Utility animation classes */
+.animate-fade-in    { animation: fadeIn    0.5s ease-out both; }
+.animate-slide-up   { animation: slideUp   0.5s ease-out both; }
+.animate-slide-down { animation: slideDown 0.5s ease-out both; }
+.animate-slide-in   { animation: slideIn   0.4s ease-out both; }
+.animate-scale-in   { animation: scaleIn   0.4s ease-out both; }
+.animate-pulse-glow { animation: pulse-glow 2.5s ease-in-out infinite; }
+.animate-heartbeat  { animation: heartbeat  1.4s ease-in-out infinite; }
+.animate-float      { animation: float      3s   ease-in-out infinite; }
+.animate-count-up   { animation: countUp    0.6s ease-out both; }
+
+/* Shimmer skeleton override */
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--base-300) 25%,
+    color-mix(in srgb, var(--base-300) 60%, var(--base-200)) 50%,
+    var(--base-300) 75%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+/* Staggered entrance helpers (apply with animation-delay) */
+.delay-75  { animation-delay:  75ms; }
+.delay-150 { animation-delay: 150ms; }
+.delay-225 { animation-delay: 225ms; }
+.delay-300 { animation-delay: 300ms; }
+.delay-450 { animation-delay: 450ms; }
+.delay-600 { animation-delay: 600ms; }
+
+
+/* ============================================================
+   LAYOUT HELPERS
+   ============================================================ */
+.container-custom     { @apply mx-auto px-4 sm:px-6 w-full; }
+.text-responsive-sm   { @apply text-sm   md:text-base; }
+.text-responsive-base { @apply text-base md:text-lg; }
+.text-responsive-lg   { @apply text-lg   md:text-xl   lg:text-2xl; }
+.text-responsive-xl   { @apply text-xl   md:text-2xl  lg:text-3xl; }
+.text-responsive-2xl  { @apply text-2xl  md:text-3xl  lg:text-4xl; }
+
+.grid-responsive {
+  @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6;
+}
+
+/* Responsive flex stack — row on md+, column on mobile */
+.flex-responsive {
+  @apply flex flex-col md:flex-row gap-4;
+}
+
+/* Safe area insets for mobile notches */
+.safe-top    { padding-top:    env(safe-area-inset-top,    0px); }
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
+
+
+/* ============================================================
+   REDUCED MOTION — respect user preferences
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration:   0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration:  0.01ms !important;
+  }
+}
+
+
+/* ============================================================
+   PRINT
+   ============================================================ */
+@media print {
+  body        { background: white; color: black; }
+  .glass-card { border: 1px solid #e5e7eb; background: white; }
+  .no-print   { display: none !important; }
+}

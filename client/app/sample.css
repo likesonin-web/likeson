@@ -1,0 +1,529 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme {
+  --font-family-poppins:    var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
+  --font-family-montserrat: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
+
+  --font-sans:    var(--font-family-poppins);
+  --font-display: var(--font-family-montserrat);
+
+  --color-primary:           var(--primary);
+  --color-primary-content:   var(--primary-content);
+  --color-secondary:         var(--secondary);
+  --color-secondary-content: var(--secondary-content);
+  --color-accent:            var(--accent);
+  --color-accent-content:    var(--accent-content);
+  --color-neutral:           var(--neutral);
+  --color-neutral-content:   var(--neutral-content);
+
+  --color-base-100:          var(--base-100);
+  --color-base-200:          var(--base-200);
+  --color-base-300:          var(--base-300);
+  --color-base-content:      var(--base-content);
+
+  --color-info:              var(--info);
+  --color-info-content:      var(--info-content);
+  --color-success:           var(--success);
+  --color-success-content:   var(--success-content);
+  --color-warning:           var(--warning);
+  --color-warning-content:   var(--warning-content);
+  --color-error:             var(--error);
+  --color-error-content:     var(--error-content);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+
+  --radius-selector: var(--r-selector);
+  --radius-field:    var(--r-field);
+  --radius-box:      var(--r-box);
+
+  --shadow-depth: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  --bg-gradient-primary: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+  --bg-gradient-success: linear-gradient(135deg, var(--success) 0%, var(--accent) 100%);
+}
+
+/* ============================================================
+   LIGHT MODE (default)
+   ============================================================ */
+:root {
+  --base-100:     oklch(99%   0       0);
+  --base-200:     oklch(97%   0.005 220);
+  --base-300:     oklch(94%   0.008 220);
+  --base-content: oklch(25%   0.01  240);
+
+  --primary:         oklch(55% 0.18 240);
+  --primary-content: oklch(98% 0.01 240);
+
+  --secondary:         oklch(65% 0.14 180);
+  --secondary-content: oklch(98% 0.01 180);
+
+  --accent:         oklch(70% 0.15  50);
+  --accent-content: oklch(98% 0.01  50);
+
+  --neutral:         oklch(30% 0.01 240);
+  --neutral-content: oklch(98% 0    0);
+
+  --info:    oklch(62% 0.16 230);
+  --success: oklch(65% 0.16 150);
+  --warning: oklch(75% 0.15  70);
+  --error:   oklch(62% 0.20  25);
+
+  --info-content:    oklch(98% 0.01 230);
+  --success-content: oklch(98% 0.01 150);
+  --warning-content: oklch(18% 0.03  70);
+  --error-content:   oklch(98% 0.01  25);
+
+  --chart-1: oklch(58% 0.18 240);
+  --chart-2: oklch(65% 0.14 180);
+  --chart-3: oklch(65% 0.16 150);
+  --chart-4: oklch(68% 0.15  50);
+  --chart-5: oklch(62% 0.16 280);
+  --chart-6: oklch(62% 0.20  25);
+
+  --r-selector:   0.5rem;
+  --r-field:      0.5rem;
+  --r-box:        1rem;
+  --border-width: 1px;
+
+  --shadow-depth: 0 10px 15px -3px rgba(0, 0, 0, 0.08);
+}
+
+/* ============================================================
+   DARK MODE
+   Applied when <html data-theme="dark"> (next-themes class strategy)
+   ============================================================ */
+.dark {
+  /* Surfaces — deep navy-slate progression */
+  --base-100:     oklch(14%  0.015 240);
+  --base-200:     oklch(18%  0.016 240);
+  --base-300:     oklch(23%  0.018 240);
+  --base-content: oklch(92%  0.008 240);
+
+  /* Brand — slightly brighter so they pop on dark surfaces */
+  --primary:         oklch(62%  0.20  240);
+  --primary-content: oklch(98%  0.01  240);
+
+  --secondary:         oklch(68%  0.16  180);
+  --secondary-content: oklch(98%  0.01  180);
+
+  --accent:         oklch(74%  0.16   50);
+  --accent-content: oklch(18%  0.04   50);
+
+  --neutral:         oklch(88%  0.008 240);
+  --neutral-content: oklch(14%  0.015 240);
+
+  /* Semantic — same hue, tuned lightness for dark bg legibility */
+  --info:    oklch(65%  0.17  230);
+  --success: oklch(68%  0.17  150);
+  --warning: oklch(78%  0.15   70);
+  --error:   oklch(65%  0.21   25);
+
+  --info-content:    oklch(98%  0.01  230);
+  --success-content: oklch(98%  0.01  150);
+  --warning-content: oklch(15%  0.03   70);
+  --error-content:   oklch(98%  0.01   25);
+
+  /* Chart — bumped lightness so lines are visible on dark canvas */
+  --chart-1: oklch(64%  0.20  240);
+  --chart-2: oklch(70%  0.16  180);
+  --chart-3: oklch(70%  0.17  150);
+  --chart-4: oklch(74%  0.16   50);
+  --chart-5: oklch(67%  0.18  280);
+  --chart-6: oklch(67%  0.22   25);
+
+  /* Shadows deeper on dark backgrounds */
+  --shadow-depth: 0 10px 25px -3px rgba(0, 0, 0, 0.45);
+}
+
+/* ============================================================
+   BASE LAYER
+   ============================================================ */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    @apply border-base-300;
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    background-color: var(--base-100);
+    color: var(--base-content);
+    font-family: var(--font-family-poppins);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    line-height: 1.6;
+    /* smooth colour transitions when theme switches */
+    transition: background-color 0.25s ease, color 0.25s ease;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklch, var(--primary), transparent 70%);
+    color: var(--primary-content);
+  }
+
+  ::-moz-selection {
+    background-color: color-mix(in oklch, var(--primary), transparent 70%);
+    color: var(--primary-content);
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-family-montserrat);
+    @apply font-black tracking-tight;
+    text-rendering: optimizeLegibility;
+    line-height: 1.15;
+    color: var(--base-content);
+  }
+
+  h1 { @apply text-4xl md:text-5xl lg:text-6xl; }
+  h2 { @apply text-3xl md:text-4xl lg:text-5xl; }
+  h3 { @apply text-2xl md:text-3xl; }
+  h4 { @apply text-xl  md:text-2xl; }
+  h5 { @apply text-lg  md:text-xl;  }
+  h6 { @apply text-base md:text-lg; font-weight: 700; }
+
+  p {
+    font-family: var(--font-family-poppins);
+    @apply text-base leading-relaxed;
+    color: var(--base-content);
+  }
+
+  span, li, td, th, dd, dt {
+    font-family: var(--font-family-poppins);
+  }
+
+  small, caption, figcaption {
+    font-family: var(--font-family-poppins);
+    @apply text-xs leading-normal;
+    color: color-mix(in oklch, var(--base-content) 65%, transparent);
+  }
+
+  label {
+    font-family: var(--font-family-poppins);
+    @apply text-sm font-semibold;
+    color: var(--base-content);
+  }
+
+  button, input, textarea, select, optgroup {
+    font-family: var(--font-family-poppins);
+  }
+
+  a {
+    font-family: inherit;
+    color: var(--primary);
+    @apply underline-offset-2 transition-colors duration-200;
+  }
+
+  a:hover {
+    color: color-mix(in oklch, var(--primary) 80%, var(--secondary));
+  }
+
+  blockquote {
+    font-family: var(--font-family-montserrat);
+    @apply italic border-l-4 border-primary pl-4 my-4;
+    color: color-mix(in oklch, var(--base-content) 75%, transparent);
+  }
+
+  code, kbd, samp, pre {
+    font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
+    @apply text-sm;
+  }
+
+  hr {
+    border-color: var(--base-300);
+    @apply my-6;
+  }
+}
+
+/* ============================================================
+   COMPONENTS
+   ============================================================ */
+@layer components {
+
+  /* glass-card — adapts automatically: subtle tint on light, deeper on dark */
+  .glass-card {
+    background: linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--base-100) 90%, var(--primary)   10%),
+      color-mix(in srgb, var(--base-100) 95%, var(--secondary)  5%)
+    );
+    backdrop-filter: blur(20px) saturate(180%);
+    border: var(--border-width) solid color-mix(in srgb, var(--base-content), transparent 88%);
+    border-radius: var(--r-box);
+    @apply shadow-sm;
+    transition: border-color 0.3s, box-shadow 0.3s, transform 0.3s, background 0.25s;
+  }
+
+  .glass-card:hover {
+    border-color: color-mix(in srgb, var(--primary), transparent 60%);
+    box-shadow: var(--shadow-depth);
+    transform: translateY(-2px);
+  }
+
+  .btn-primary-cta {
+    font-family: var(--font-family-poppins);
+    background: var(--bg-gradient-primary);
+    color: var(--primary-content);
+    border-radius: var(--r-field);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--primary), transparent 70%);
+    @apply px-6 py-3 font-bold text-sm uppercase tracking-wider
+           focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-primary focus-visible:ring-offset-2;
+    transition: filter 0.3s, transform 0.3s, box-shadow 0.3s;
+  }
+
+  .btn-primary-cta:hover {
+    filter: brightness(1.1);
+    transform: scale(1.05);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--primary), transparent 50%);
+  }
+
+  .btn-primary-cta:active { transform: scale(0.95); }
+
+  .btn-secondary {
+    font-family: var(--font-family-poppins);
+    background: none;
+    color: var(--primary);
+    border: 2px solid var(--primary);
+    border-radius: var(--r-field);
+    cursor: pointer;
+    @apply px-6 py-3 font-bold text-sm uppercase tracking-wider
+           focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-primary focus-visible:ring-offset-2;
+    transition: background-color 0.3s, color 0.3s, transform 0.3s;
+  }
+
+  .btn-secondary:hover {
+    background-color: var(--primary);
+    color: var(--primary-content);
+  }
+
+  .btn-secondary:active { transform: scale(0.95); }
+
+  .btn-success {
+    font-family: var(--font-family-poppins);
+    background: var(--bg-gradient-success);
+    color: var(--success-content);
+    border-radius: var(--r-field);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--success), transparent 70%);
+    @apply px-6 py-3 font-bold text-sm uppercase tracking-wider
+           focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-success focus-visible:ring-offset-2;
+    transition: filter 0.3s, transform 0.3s;
+  }
+
+  .btn-success:hover    { filter: brightness(1.1); transform: scale(1.05); }
+  .btn-success:active   { transform: scale(0.95); }
+
+  .input-field {
+    font-family: var(--font-family-poppins);
+    border-radius: var(--r-field);
+    background-color: var(--base-200);
+    border: var(--border-width) solid var(--base-300);
+    color: var(--base-content);
+    @apply px-4 py-3 text-sm outline-none
+           focus:ring-2 focus:ring-primary/50 focus:border-primary
+           placeholder:text-base-content/40;
+    transition: border-color 0.2s, box-shadow 0.2s, background-color 0.25s;
+  }
+
+  .input-field:hover { border-color: var(--primary); }
+
+  .badge {
+    font-family: var(--font-family-poppins);
+    @apply inline-flex items-center gap-1.5 px-3 py-1
+           text-xs font-bold uppercase tracking-wider;
+    border-radius: var(--r-selector);
+  }
+
+  .badge-primary {
+    background-color: color-mix(in srgb, var(--primary), transparent 85%);
+    color: var(--primary);
+    border: 1px solid color-mix(in srgb, var(--primary), transparent 70%);
+  }
+
+  .badge-success {
+    background-color: color-mix(in srgb, var(--success), transparent 85%);
+    color: var(--success);
+    border: 1px solid color-mix(in srgb, var(--success), transparent 70%);
+  }
+
+  .badge-warning {
+    background-color: color-mix(in srgb, var(--warning), transparent 85%);
+    color: var(--warning);
+    border: 1px solid color-mix(in srgb, var(--warning), transparent 70%);
+  }
+
+  .badge-error {
+    background-color: color-mix(in srgb, var(--error), transparent 85%);
+    color: var(--error);
+    border: 1px solid color-mix(in srgb, var(--error), transparent 70%);
+  }
+
+  .badge-info {
+    background-color: color-mix(in srgb, var(--info), transparent 85%);
+    color: var(--info);
+    border: 1px solid color-mix(in srgb, var(--info), transparent 70%);
+  }
+
+  .card {
+    background-color: var(--base-100);
+    border: var(--border-width) solid var(--base-300);
+    border-radius: var(--r-box);
+    @apply shadow-sm;
+    transition: box-shadow 0.3s, border-color 0.3s, background-color 0.25s;
+  }
+
+  .card:hover {
+    box-shadow: var(--shadow-depth);
+    border-color: var(--primary);
+  }
+
+  .alert {
+    @apply px-4 py-3 border-l-4 flex items-start gap-3;
+    border-radius: var(--r-field);
+  }
+
+  .alert-info    { background-color: color-mix(in srgb, var(--info),    transparent 90%); border-left-color: var(--info);    color: var(--base-content); }
+  .alert-success { background-color: color-mix(in srgb, var(--success), transparent 90%); border-left-color: var(--success); color: var(--base-content); }
+  .alert-warning { background-color: color-mix(in srgb, var(--warning), transparent 90%); border-left-color: var(--warning); color: var(--base-content); }
+  .alert-error   { background-color: color-mix(in srgb, var(--error),   transparent 90%); border-left-color: var(--error);   color: var(--base-content); }
+
+  .spinner {
+    @apply inline-block w-6 h-6 rounded-full;
+    border: 3px solid color-mix(in srgb, var(--primary), transparent 70%);
+    border-top-color: var(--primary);
+    animation: spin 0.8s linear infinite;
+  }
+
+  .skeleton { @apply bg-base-300 rounded animate-pulse; }
+  .divider  { @apply h-px bg-base-300 my-6; }
+
+  .section-heading {
+    font-family: var(--font-family-montserrat);
+    @apply text-2xl md:text-3xl lg:text-4xl font-extrabold font-family-poppins tracking-tight text-base-content mb-4;
+  }
+
+  .section-subheading {
+    font-family: var(--font-family-poppins);
+    @apply text-sm md:text-[16px] mb-8;
+    color: color-mix(in oklch, var(--base-content) 70%, transparent);
+  }
+}
+
+/* ============================================================
+   UTILITIES
+   ============================================================ */
+@layer utilities {
+  .font-poppins    { font-family: var(--font-family-poppins); }
+  .font-montserrat { font-family: var(--font-family-montserrat); }
+
+  .text-gradient-primary {
+    color: transparent;
+    -webkit-background-clip: text;
+    background-clip: text;
+    background-image: linear-gradient(135deg, var(--primary), var(--secondary));
+  }
+
+  .text-gradient-success {
+    color: transparent;
+    -webkit-background-clip: text;
+    background-clip: text;
+    background-image: linear-gradient(135deg, var(--success), var(--accent));
+  }
+
+  .backdrop-blur-strong { backdrop-filter: blur(20px) saturate(180%); }
+  .backdrop-blur-soft   { backdrop-filter: blur(10px) saturate(120%); }
+
+  .shadow-primary {
+    box-shadow: 0 10px 30px color-mix(in srgb, var(--primary), transparent 70%);
+  }
+
+  .shadow-success {
+    box-shadow: 0 10px 30px color-mix(in srgb, var(--success), transparent 70%);
+  }
+
+  .hover-glow-primary { transition: box-shadow 0.3s; }
+  .hover-glow-primary:hover {
+    box-shadow: 0 0 30px color-mix(in srgb, var(--primary), transparent 50%);
+  }
+}
+
+/* ============================================================
+   SCROLLBAR
+   ============================================================ */
+::-webkit-scrollbar       { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--base-200); border-radius: var(--r-field); }
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  border-radius: var(--r-field);
+  border: 2px solid var(--base-200);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--primary), transparent 50%);
+}
+* { scrollbar-width: thin; scrollbar-color: var(--primary) var(--base-200); }
+
+/* ============================================================
+   FOCUS
+   ============================================================ */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--r-field);
+}
+
+/* ============================================================
+   ANIMATIONS
+   ============================================================ */
+@keyframes spin        { to { transform: rotate(360deg); } }
+@keyframes fadeIn      { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp     { from { opacity: 0; transform: translateY(20px);  } to { opacity: 1; transform: translateY(0);  } }
+@keyframes slideDown   { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0);  } }
+@keyframes scaleIn     { from { opacity: 0; transform: scale(0.9);        } to { opacity: 1; transform: scale(1);        } }
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; box-shadow: 0 0 20px color-mix(in srgb, var(--primary), transparent 70%); }
+  50%       { opacity: 0.8; box-shadow: 0 0 40px color-mix(in srgb, var(--primary), transparent 50%); }
+}
+
+.animate-fade-in    { animation: fadeIn    0.5s ease-out; }
+.animate-slide-up   { animation: slideUp   0.5s ease-out; }
+.animate-slide-down { animation: slideDown 0.5s ease-out; }
+.animate-scale-in   { animation: scaleIn   0.5s ease-out; }
+.animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+
+/* ============================================================
+   LAYOUT HELPERS
+   ============================================================ */
+.container-custom     { @apply mx-auto px-4 sm:px-6 w-full; }
+.text-responsive-sm   { @apply text-sm   md:text-base; }
+.text-responsive-base { @apply text-base md:text-lg; }
+.text-responsive-lg   { @apply text-lg   md:text-xl   lg:text-2xl; }
+.text-responsive-xl   { @apply text-xl   md:text-2xl  lg:text-3xl; }
+.text-responsive-2xl  { @apply text-2xl  md:text-3xl  lg:text-4xl; }
+
+.grid-responsive {
+  @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6;
+}
+
+/* ============================================================
+   PRINT
+   ============================================================ */
+@media print {
+  body        { background: white; color: black; }
+  .glass-card { border: 1px solid #e5e7eb; background: white; }
+  .no-print   { display: none !important; }
+}

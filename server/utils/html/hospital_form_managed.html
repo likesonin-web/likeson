@@ -1,0 +1,715 @@
+
+<!-- file: utils/html/hospital_form_managed.html -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hospital Registration Form – Likeson Healthcare</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --navy:   #0f3460;
+    --accent: #e94560;
+    --light:  #eef4ff;
+    --border: #c8d8f0;
+    --text:   #1a1a2e;
+    --muted:  #7a8cb0;
+    --white:  #ffffff;
+    --bg:     #f5f8ff;
+    --dash:   #b0c4e8;
+  }
+
+  body {
+    font-family: 'Poppins', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .page {
+    width: 794px;
+    min-height: 1123px;
+    margin: 0 auto;
+    background: var(--white);
+    padding: 28px 32px 36px;
+    position: relative;
+  }
+
+  /* ── HEADER ── */
+  .header {
+    background: var(--navy);
+    border-radius: 10px;
+    padding: 0;
+    display: flex;
+    align-items: stretch;
+    overflow: hidden;
+    margin-bottom: 14px;
+  }
+  .header-left {
+    flex: 1;
+    padding: 18px 22px;
+  }
+  .brand-name {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--white);
+    letter-spacing: 0.5px;
+  }
+  .brand-tagline {
+    font-size: 8.5px;
+    color: #99bbdd;
+    margin-top: 2px;
+    font-weight: 300;
+  }
+  .form-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent);
+    margin-top: 10px;
+  }
+  .form-subtitle {
+    font-size: 8px;
+    color: #88aacc;
+    margin-top: 3px;
+    font-weight: 400;
+  }
+  .header-right {
+    width: 90px;
+    background: rgba(255,255,255,0.06);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+    border-left: 1px solid rgba(255,255,255,0.1);
+  }
+  .qr-box {
+    width: 62px;
+    height: 62px;
+    background: var(--white);
+    border: 2px solid var(--accent);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .qr-box img { width: 100%; height: 100%; }
+  .qr-label {
+    font-size: 7px;
+    color: #aac4e0;
+    margin-top: 5px;
+    text-align: center;
+    font-weight: 500;
+  }
+
+  /* ── INSTRUCTION ── */
+  .instr {
+    background: var(--light);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 8.5px;
+    color: #3a4a6a;
+    margin-bottom: 14px;
+    font-weight: 400;
+  }
+  .instr strong { font-weight: 600; }
+
+  /* ── SECTION HEADER ── */
+  .section {
+    margin-bottom: 12px;
+    break-inside: avoid;
+  }
+  .section-title {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--navy);
+    background: var(--light);
+    padding: 6px 10px;
+    border-radius: 5px 5px 0 0;
+    border-bottom: 2px solid var(--accent);
+    letter-spacing: 0.2px;
+  }
+  .section-body {
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    padding: 10px 10px 6px;
+    background: var(--white);
+  }
+
+  /* ── FIELD ROW ── */
+  .row { display: flex; gap: 8px; margin-bottom: 8px; }
+  .row.single { display: block; }
+
+  .field {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  .field-full { width: 100%; display: flex; flex-direction: column; margin-bottom: 8px; }
+
+  .field-label {
+    font-size: 8.5px;
+    font-weight: 600;
+    color: var(--navy);
+    margin-bottom: 4px;
+  }
+  .field-label .req { color: var(--accent); margin-left: 2px; }
+
+  .field-input {
+    border: none;
+    border-bottom: 1.5px dashed var(--dash);
+    height: 16px;
+    background: transparent;
+    font-family: 'Poppins', sans-serif;
+    font-size: 10px;
+  }
+
+  .field-input-tall {
+    border: 1.5px dashed var(--dash);
+    border-radius: 4px;
+    min-height: 44px;
+    background: transparent;
+  }
+
+  .field-note {
+    font-size: 7.5px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  /* ── CHECKBOX GROUP ── */
+  .checkbox-label {
+    font-size: 8.5px;
+    font-weight: 600;
+    color: var(--navy);
+    margin-bottom: 5px;
+  }
+  .checkbox-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px 8px;
+    border: 1.5px dashed var(--dash);
+    border-radius: 4px;
+    padding: 6px 8px;
+    margin-bottom: 8px;
+  }
+  .checkbox-grid.cols3 { grid-template-columns: repeat(3, 1fr); }
+  .checkbox-grid.cols6 { grid-template-columns: repeat(6, 1fr); }
+  .check-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 8.5px;
+    color: var(--text);
+  }
+  .check-box {
+    width: 11px;
+    height: 11px;
+    border: 1.5px solid var(--border);
+    border-radius: 2px;
+    flex-shrink: 0;
+    background: var(--bg);
+  }
+
+  /* ── TABLE ── */
+  .tbl {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 8.5px;
+    margin-bottom: 8px;
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .tbl th {
+    background: var(--navy);
+    color: var(--white);
+    font-weight: 600;
+    padding: 6px 8px;
+    text-align: left;
+    font-size: 8px;
+  }
+  .tbl td {
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border);
+    font-size: 8.5px;
+  }
+  .tbl tr:nth-child(even) td { background: var(--bg); }
+  .tbl tr:nth-child(odd)  td { background: var(--white); }
+  .tbl .write-line {
+    border-bottom: 1.5px dashed var(--dash);
+    min-width: 70px;
+    display: block;
+    height: 16px;
+  }
+  .tbl .cb { text-align: center; }
+
+  /* ── DECLARATION ── */
+  .decl {
+    background: var(--light);
+    border: 1px dashed var(--border);
+    border-radius: 5px;
+    padding: 9px 12px;
+    font-size: 8px;
+    color: #3a4a6a;
+    margin-bottom: 10px;
+    line-height: 1.6;
+  }
+
+  /* ── SIGNATURE ── */
+  .sig-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .sig-box {
+    flex: 1;
+    border: 1.5px dashed var(--dash);
+    border-radius: 5px;
+    height: 56px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    padding: 5px 8px;
+    background: var(--bg);
+    position: relative;
+  }
+  .sig-title {
+    font-size: 7.5px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+
+  /* ── INFO NOTE ── */
+  .info-note {
+    background: #fff8e6;
+    border: 1px solid #f5d98b;
+    border-left: 3px solid #f0a500;
+    border-radius: 4px;
+    padding: 7px 10px;
+    font-size: 8px;
+    color: #5a4000;
+    margin-bottom: 8px;
+    line-height: 1.6;
+  }
+
+  /* ── FOOTER ── */
+  .footer {
+    border-top: 1px solid var(--border);
+    margin-top: 20px;
+    padding-top: 8px;
+    text-align: center;
+    font-size: 7.5px;
+    color: var(--muted);
+  }
+
+  /* ── PAGE BREAK ── */
+  .page-break { page-break-before: always; }
+
+  @media print {
+    body { background: white; }
+    .page { box-shadow: none; margin: 0; }
+    @page { margin: 0; size: A4; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-left">
+      <div class="brand-name">LIKESON HEALTHCARE</div>
+      <div class="brand-tagline">Advanced Healthcare Logistics Platform · likeson.in</div>
+      <div class="form-title">Hospital Registration Form</div>
+      <div class="form-subtitle">Management Type: Multi-Specialty / Super-Specialty / Trust / Government &nbsp;·&nbsp; Model: hospital-manager</div>
+    </div>
+    <div class="header-right">
+      <div class="qr-box">
+        <img src="https://api.qrserver.com/v1/create-qr-code/?size=60x60&data=https://likeson.in" alt="QR Code">
+      </div>
+      <div class="qr-label">Scan to register<br>online</div>
+    </div>
+  </div>
+
+  <!-- INSTRUCTION -->
+  <div class="instr">
+    <strong>Instructions:</strong> Complete all fields marked <strong style="color:var(--accent)">*</strong>. Write in block letters. Attach self-attested document copies. Submit to your assigned Likeson Healthcare representative or scan the QR code to register online.
+  </div>
+
+  <!-- SECTION 1: HOSPITAL IDENTITY -->
+  <div class="section">
+    <div class="section-title">1. Hospital Identity</div>
+    <div class="section-body">
+      <div class="field-full">
+        <div class="field-label">Hospital Name <span class="req">*</span></div>
+        <div class="field-input"></div>
+        <div class="field-note">Full legal name as per registration certificate</div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <div class="field-label">Hospital Type <span class="req">*</span></div>
+          <div class="field-input"></div>
+          <div class="field-note">Multi-Specialty / Super-Specialty / Trust / Government</div>
+        </div>
+        <div class="field">
+          <div class="field-label">Year Established</div>
+          <div class="field-input"></div>
+          <div class="field-note">e.g. 2005</div>
+        </div>
+      </div>
+      <div class="field-full">
+        <div class="field-label">Description / Tagline</div>
+        <div class="field-input-tall"></div>
+        <div class="field-note">Brief summary of services (max 200 characters) — shown on patient-facing pages</div>
+      </div>
+     
+    </div>
+  </div>
+
+  <!-- SECTION 2: CONTACT DETAILS -->
+  <div class="section">
+    <div class="section-title">2. Contact Details</div>
+    <div class="section-body">
+      <div class="row">
+        <div class="field">
+          <div class="field-label">Primary Phone <span class="req">*</span></div>
+          <div class="field-input"></div>
+          <div class="field-note">Include country code: +91XXXXXXXXXX</div>
+        </div>
+        <div class="field">
+          <div class="field-label">Emergency Phone</div>
+          <div class="field-input"></div>
+          <div class="field-note">24×7 emergency line (if different)</div>
+        </div>
+        <div class="field">
+          <div class="field-label">WhatsApp Number</div>
+          <div class="field-input"></div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <div class="field-label">Email Address</div>
+          <div class="field-input"></div>
+          <div class="field-note">Official hospital email</div>
+        </div>
+        <div class="field">
+          <div class="field-label">Website URL</div>
+          <div class="field-input"></div>
+          <div class="field-note">https://...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 3: ADDRESS -->
+  <div class="section">
+    <div class="section-title">3. Address</div>
+    <div class="section-body">
+      <div class="field-full">
+        <div class="field-label">Address Line 1 <span class="req">*</span></div>
+        <div class="field-input"></div>
+        <div class="field-note">Building/plot number and street</div>
+      </div>
+      <div class="field-full">
+        <div class="field-label">Address Line 2</div>
+        <div class="field-input"></div>
+        <div class="field-note">Area / Colony / Landmark</div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <div class="field-label">City <span class="req">*</span></div>
+          <div class="field-input"></div>
+          <div class="field-note">Default: Vijayawada</div>
+        </div>
+        <div class="field">
+          <div class="field-label">State <span class="req">*</span></div>
+          <div class="field-input"></div>
+          <div class="field-note">Default: Andhra Pradesh</div>
+        </div>
+        <div class="field">
+          <div class="field-label">PIN Code <span class="req">*</span></div>
+          <div class="field-input"></div>
+          <div class="field-note">6-digit Indian PIN code</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 4: LEGAL -->
+  <div class="section">
+    <div class="section-title">4. Registration &amp; Legal Documents</div>
+    <div class="section-body">
+      <div class="row">
+        <div class="field">
+          <div class="field-label">License Number <span class="req">*</span></div>
+          <div class="field-input"></div>
+          <div class="field-note">State health authority registration number (must be unique)</div>
+        </div>
+        <div class="field">
+          <div class="field-label">License Expiry Date</div>
+          <div class="field-input"></div>
+          <div class="field-note">DD / MM / YYYY</div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <div class="field-label">GST Number</div>
+          <div class="field-input"></div>
+          <div class="field-note">15-digit GSTIN (if applicable)</div>
+        </div>
+        <div class="field">
+          <div class="field-label">PAN Number</div>
+          <div class="field-input"></div>
+          <div class="field-note">Format: AAAAA9999A — required for settlement payouts</div>
+        </div>
+      </div>
+      <div class="field-full">
+        <div class="field-label">Document URL / Attachment</div>
+        <div class="field-input"></div>
+        <div class="field-note">Share a Google Drive / Dropbox link OR attach physical copy</div>
+      </div>
+      <div class="checkbox-label">Accreditations (☑ all that apply)</div>
+      <div class="checkbox-grid cols6">
+        <div class="check-item"><div class="check-box"></div>NABH</div>
+        <div class="check-item"><div class="check-box"></div>NABL</div>
+        <div class="check-item"><div class="check-box"></div>JCI</div>
+        <div class="check-item"><div class="check-box"></div>ISO</div>
+        <div class="check-item"><div class="check-box"></div>AHPI</div>
+        <div class="check-item"><div class="check-box"></div>Other</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 5: SERVICES -->
+  <div class="section">
+    <div class="section-title">5. Services &amp; Facilities</div>
+    <div class="section-body">
+      <div class="field-full">
+        <div class="field-label">Specialties Offered</div>
+        <div class="field-input-tall"></div>
+        <div class="field-note">Comma-separated: Cardiology, Neurology, Orthopedics...</div>
+      </div>
+      <div class="field-full">
+        <div class="field-label">Facilities Available</div>
+        <div class="field-input-tall"></div>
+        <div class="field-note">e.g. MRI, CT Scan, Blood Bank, Pharmacy, ICU, NICU...</div>
+      </div>
+      <div class="field-full">
+        <div class="field-label">Accepted Government Schemes</div>
+        <div class="field-input"></div>
+        <div class="field-note">e.g. PMJAY, Aarogyasri, ESI, CGHS, ECHS...</div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <div class="field-label">Total Bed Count</div>
+          <div class="field-input"></div>
+          <div class="field-note">bedCount.total</div>
+        </div>
+        <div class="field">
+          <div class="field-label">ICU Bed Count</div>
+          <div class="field-input"></div>
+          <div class="field-note">bedCount.icu — sets hasICU flag automatically</div>
+        </div>
+      </div>
+      <div class="checkbox-label">Facility Flags (☑ all that apply)</div>
+      <div class="checkbox-grid cols3">
+        <div class="check-item"><div class="check-box"></div>Emergency Ready</div>
+        <div class="check-item"><div class="check-box"></div>ICU</div>
+        <div class="check-item"><div class="check-box"></div>Blood Bank</div>
+        <div class="check-item"><div class="check-box"></div>Pharmacy</div>
+        <div class="check-item"><div class="check-box"></div>Diagnostics / Lab</div>
+        <div class="check-item"><div class="check-box"></div>Ambulance</div>
+        <div class="check-item"><div class="check-box"></div>Wheelchair Access</div>
+        <div class="check-item"><div class="check-box"></div>24×7 Operations (is24x7)</div>
+        <div class="check-item"><div class="check-box"></div>NABL Lab Available</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 6: OPERATING HOURS -->
+  <div class="section">
+    <div class="section-title">6. Operating Hours</div>
+    <div class="section-body">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th style="width:18%">Day</th>
+            <th style="width:24%">Open Time (HH:MM)</th>
+            <th style="width:24%">Close Time (HH:MM)</th>
+            <th style="width:17%" class="cb">24 Hrs?</th>
+            <th style="width:17%" class="cb">Closed?</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Monday</td><td><span class="write-line"></span></td><td><span class="write-line"></span></td><td class="cb">☐</td><td class="cb">☐</td></tr>
+          <tr><td>Tuesday</td><td><span class="write-line"></span></td><td><span class="write-line"></span></td><td class="cb">☐</td><td class="cb">☐</td></tr>
+          <tr><td>Wednesday</td><td><span class="write-line"></span></td><td><span class="write-line"></span></td><td class="cb">☐</td><td class="cb">☐</td></tr>
+          <tr><td>Thursday</td><td><span class="write-line"></span></td><td><span class="write-line"></span></td><td class="cb">☐</td><td class="cb">☐</td></tr>
+          <tr><td>Friday</td><td><span class="write-line"></span></td><td><span class="write-line"></span></td><td class="cb">☐</td><td class="cb">☐</td></tr>
+          <tr><td>Saturday</td><td><span class="write-line"></span></td><td><span class="write-line"></span></td><td class="cb">☐</td><td class="cb">☐</td></tr>
+          <tr><td>Sunday</td><td><span class="write-line"></span></td><td><span class="write-line"></span></td><td class="cb">☐</td><td class="cb">☐</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- SECTION 7: CONSULTATION PRICING (hospital-manager only) -->
+  <div class="section">
+    <div class="section-title">7. Consultation Pricing &nbsp;<span style="font-size:8px;font-weight:400;color:var(--accent)">(Hospital-Manager Type — fees set at hospital level)</span></div>
+    <div class="section-body">
+      <div class="info-note">
+        <strong>Note:</strong> For hospital-manager hospitals, ALL doctor consultation fees are set at the hospital level. Individual doctors cannot override these prices. The platform fee within this section can only be set/overridden by Superadmin. <em>(Schema: Hospital.consultationPricing)</em>
+      </div>
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th style="width:28%">Consultation Type</th>
+            <th style="width:24%">Charge to Patient (₹)</th>
+            <th style="width:24%">Doctor Honorarium (₹)</th>
+            <th style="width:24%" class="cb">Offered?</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>In-Person</td><td><span class="write-line"></span></td><td><span class="write-line"></span></td><td class="cb">☐</td></tr>
+          <tr><td>Video / Tele</td><td><span class="write-line"></span></td><td><span class="write-line"></span></td><td class="cb">☐</td></tr>
+          <tr><td>Home Visit</td><td><span class="write-line"></span></td><td><span class="write-line"></span></td><td class="cb">☐</td></tr>
+        </tbody>
+      </table>
+      <div class="row">
+        <div class="field">
+          <div class="field-label">Follow-Up Fee (₹)</div>
+          <div class="field-input"></div>
+          <div class="field-note">0 = free follow-up within validity window</div>
+        </div>
+        <div class="field">
+          <div class="field-label">Follow-Up Discount (%)</div>
+          <div class="field-input"></div>
+          <div class="field-note">e.g. 20 — % off from full fee (0–100)</div>
+        </div>
+        <div class="field">
+          <div class="field-label">Follow-Up Valid Days</div>
+          <div class="field-input"></div>
+          <div class="field-note">1–90 days after first consultation</div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <div class="field-label">Settlement Cycle</div>
+          <div class="field-input"></div>
+          <div class="field-note">Select: Weekly / Bi-weekly / Monthly</div>
+        </div>
+        <div class="field"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 8: HOSPITAL MANAGER ACCOUNT -->
+  <div class="section">
+    <div class="section-title">8. Hospital Manager Account Details &nbsp;<span style="font-size:8px;font-weight:400;color:var(--muted)">(Role: "hospital" — managed hospital types only)</span></div>
+    <div class="section-body">
+      <div class="info-note">Login credentials will be emailed automatically. <strong>User.role = "hospital"</strong> — only for Multi-Specialty / Super-Specialty / Trust / Government hospitals.</div>
+      <div class="field-full">
+        <div class="field-label">Full Name <span class="req">*</span></div>
+        <div class="field-input"></div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <div class="field-label">Email Address <span class="req">*</span></div>
+          <div class="field-input"></div>
+          <div class="field-note">Login credentials will be sent here</div>
+        </div>
+        <div class="field">
+          <div class="field-label">Phone Number</div>
+          <div class="field-input"></div>
+          <div class="field-note">+91XXXXXXXXXX</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 9: BANK & SETTLEMENT -->
+  <div class="section">
+    <div class="section-title">9. Bank &amp; Settlement Details</div>
+    <div class="section-body">
+      <div class="field-full">
+        <div class="field-label">Account Holder Name <span class="req">*</span></div>
+        <div class="field-input"></div>
+        <div class="field-note">As per bank records</div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <div class="field-label">Bank Account Number <span class="req">*</span></div>
+          <div class="field-input"></div>
+          <div class="field-note">Will be masked after submission (accountLast4 stored)</div>
+        </div>
+        <div class="field">
+          <div class="field-label">IFSC Code <span class="req">*</span></div>
+          <div class="field-input"></div>
+          <div class="field-note">Format: ABCD0123456</div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <div class="field-label">Bank Name</div>
+          <div class="field-input"></div>
+        </div>
+        <div class="field">
+          <div class="field-label">Branch Name</div>
+          <div class="field-input"></div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <div class="field-label">UPI ID</div>
+          <div class="field-input"></div>
+          <div class="field-note">Optional — for instant payouts</div>
+        </div>
+        <div class="field">
+          <div class="field-label">GST Number</div>
+          <div class="field-input"></div>
+          <div class="field-note">If registered under GST</div>
+        </div>
+      </div>
+      <div class="field-full">
+        <div class="field-label">Cancelled Cheque / Bank Document</div>
+        <div class="field-input"></div>
+        <div class="field-note">Attach scanned copy or share a secure URL</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DECLARATION -->
+  <div class="section">
+    <div class="section-title">Declaration &amp; Signature</div>
+    <div class="section-body">
+      <div class="decl">
+        I / We hereby certify that the information provided in this form is true, accurate, and complete to the best of my / our knowledge. I authorise Likeson Healthcare to verify all details and documents submitted. I agree to the Likeson Healthcare Partner Terms &amp; Conditions available at <strong>likeson.in/terms</strong>.
+      </div>
+      <div class="sig-row">
+        <div class="sig-box"><div class="sig-title">Authorised Signatory Name</div></div>
+        <div class="sig-box"><div class="sig-title">Designation</div></div>
+        <div class="sig-box"><div class="sig-title">Date (DD/MM/YYYY)</div></div>
+      </div>
+      <div class="sig-row">
+        <div class="sig-box" style="height:64px"><div class="sig-title">Signature</div></div>
+        <div class="sig-box" style="height:64px"><div class="sig-title">Hospital Seal / Stamp</div></div>
+        <div class="sig-box" style="height:64px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div class="footer">
+    Likeson Healthcare &nbsp;·&nbsp; likeson.in &nbsp;·&nbsp; support@likeson.in &nbsp;·&nbsp; Hospital Onboarding Form v1.0 &nbsp;·&nbsp; Model: hospital-manager
+  </div>
+
+</div>
+</body>
+</html>
