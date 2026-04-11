@@ -591,10 +591,10 @@ transportPartnerSchema.pre('save', function () {
 transportPartnerSchema.index({ partnershipStatus: 1, isAvailable: 1 });
 transportPartnerSchema.index({ 'serviceZones.city': 1, 'serviceZones.state': 1 });
 transportPartnerSchema.index({ 'vehicles.registrationNumber': 1 }, { sparse: true });
-transportPartnerSchema.index({ 'vehicles.lastKnownLocation': '2dsphere' });
-transportPartnerSchema.index({ gstNumber: 1 }, { sparse: true });
-transportPartnerSchema.index({ user: 1 });
-transportPartnerSchema.index({ 'ownerKyc.kycStatus': 1 });
+// transportPartnerSchema.index({ 'vehicles.lastKnownLocation': '2dsphere' });
+// transportPartnerSchema.index({ gstNumber: 1 }, { sparse: true });
+// transportPartnerSchema.index({ user: 1 });
+// transportPartnerSchema.index({ 'ownerKyc.kycStatus': 1 });
 
 const TransportPartner = mongoose.model('TransportPartner', transportPartnerSchema);
 export default TransportPartner;

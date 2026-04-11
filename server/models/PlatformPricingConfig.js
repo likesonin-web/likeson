@@ -172,7 +172,14 @@ const doctorPricingSchema = new Schema(
 // ─────────────────────────────────────────────────────────────────────────────
 const hospitalSchema = new Schema(
   {
-    platformFee:       { type: platformFeeSchema, required: true },
+    platformFee: { type: platformFeeSchema, required: true },
+
+    /**
+     * hospitalOverrides — per-hospital fee overrides.
+     * Key: HospitalPartnerProfile._id (string)
+     * Value: platformFeeSchema  { type, value }
+     * Overrides the global platformFee for that specific hospital.
+     */
     hospitalOverrides: { type: Map, of: platformFeeSchema, default: {} },
     settlementCycle:   { type: String, enum: ['weekly', 'biweekly', 'monthly'], default: 'monthly' },
   },
@@ -184,7 +191,29 @@ const hospitalSchema = new Schema(
 // ─────────────────────────────────────────────────────────────────────────────
 const diagnosticsSchema = new Schema(
   {
-    platformFee:                { type: platformFeeSchema, required: true },
+    /**
+     * platformFee — global default fee applied to all lab bookings.
+     * type: 'fixed'      → flat ₹ amount per booking
+     * type: 'percentage' → % of the test / package value
+     */
+    platformFee: { type: platformFeeSchema, required: true },
+
+    /**
+     * labOverrides — per-lab platform fee overrides.
+     * Key:   LabPartnerProfile._id (string)
+     * Value: platformFeeSchema  { type, value }
+     *
+     * Resolution priority:
+     *   1. LabPartnerProfile.platformFee          (lab-level, set on the lab doc itself)
+     *   2. diagnostics.labOverrides[labId]        (global config, per-lab slot)
+     *   3. diagnostics.platformFee                (global default — this field)
+     */
+    labOverrides: {
+      type: Map,
+      of:   platformFeeSchema,
+      default: {},
+    },
+
     homeSampleCollectionCharge: { type: Number, default: 75 },
     homeSamplePlatformFee:      { type: platformFeeSchema, required: true },
     physicalReportFee:          { type: Number, default: 50 },
@@ -398,6 +427,56 @@ platformPricingConfigSchema.statics.resolveCareAssistantTier = function (config,
         (t.maxHours === null || durationHours < t.maxHours)
     ) || null
   );
+};
+
+/**
+ * Resolve the effective platform fee for a lab booking.
+ *
+ * Resolution priority:
+ *   1. labPlatformFee     — set directly on LabPartnerProfile.platformFee
+ *   2. labOverrides[id]   — per-lab slot in PlatformPricingConfig.diagnostics.labOverrides
+ *   3. global default     — PlatformPricingConfig.diagnostics.platformFee
+ *
+ * Usage:
+ *   const config = await PlatformPricingConfig.getGlobal();
+ *   const fee    = PlatformPricingConfig.resolveLabPlatformFee(config, lab);
+ *   // → { type: 'percentage', value: 10 }
+ */
+platformPricingConfigSchema.statics.resolveLabPlatformFee = function (config, lab) {
+  // 1. Lab-level override stored on the lab document itself
+  if (lab?.platformFee?.type && lab.platformFee.value != null) {
+    return lab.platformFee;
+  }
+
+  // 2. Per-lab slot inside global config
+  const overrides = config?.diagnostics?.labOverrides;
+  const labId     = lab?._id?.toString();
+  if (overrides && labId && overrides.has(labId)) {
+    return overrides.get(labId);
+  }
+
+  // 3. Global default
+  return config?.diagnostics?.platformFee ?? null;
+};
+
+/**
+ * Resolve the effective platform fee for a hospital booking.
+ *
+ * Resolution priority:
+ *   1. hospitalOverrides[id]  — per-hospital slot in PlatformPricingConfig.hospital.hospitalOverrides
+ *   2. global default         — PlatformPricingConfig.hospital.platformFee
+ *
+ * Usage:
+ *   const config = await PlatformPricingConfig.getGlobal();
+ *   const fee    = PlatformPricingConfig.resolveHospitalPlatformFee(config, hospital);
+ */
+platformPricingConfigSchema.statics.resolveHospitalPlatformFee = function (config, hospital) {
+  const overrides    = config?.hospital?.hospitalOverrides;
+  const hospitalId   = hospital?._id?.toString();
+  if (overrides && hospitalId && overrides.has(hospitalId)) {
+    return overrides.get(hospitalId);
+  }
+  return config?.hospital?.platformFee ?? null;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

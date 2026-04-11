@@ -28,6 +28,7 @@ import pharmacyStoreReducer from "./slices/pharmacy/pharmacyStoreSlice";
  import platformPricingReducer from './slices/platformPricingSlice';
  import soloDriverReducer  from './slices/soloDriverSlice';
  import careAssistantReducer from './slices/careAssistantSlice';
+import labReducer from './slices/labSlice';
 export const store = configureStore({
   reducer: {
     user: userReducer,
@@ -59,7 +60,9 @@ export const store = configureStore({
 soloDriver: soloDriverReducer,
     //  pharmacy slices
     pharmacyStore: pharmacyStoreReducer,
-    careAssistant: careAssistantReducer
+    careAssistant: careAssistantReducer,
+
+    labs: labReducer,
   },
   devTools: process.env.NODE_ENV !== "production",
 });

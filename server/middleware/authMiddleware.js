@@ -4,138 +4,114 @@ import DeviceDetector from 'device-detector-js';
 import User             from '../models/User.js';
 import PharmacyProfile  from '../models/PharmacyProfile.js';
 import TransportPartner from '../models/TransportPartner.js';
+import asyncHandler from '../utils/asyncHandler.js';
 // NOTE: TransportPartnerProfile removed.
 //       attachTransportPartnerAgency now queries TransportPartner directly
 //       using the user field, since User.profile virtual points to it.
 
 const detector = new DeviceDetector();
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DEVICE INFO
-// ─────────────────────────────────────────────────────────────────────────────
-
+ 
+// ── getDeviceInfo middleware ──────────────────────────────────────────────────
 export const getDeviceInfo = (req, _res, next) => {
-  const userAgentString = req.headers['user-agent'] || 'Unknown';
-  const device          = detector.parse(userAgentString);
-
-  let platform  = 'web';
-  const osName  = device.os?.name?.toLowerCase()     || '';
-  const devType = device.device?.type?.toLowerCase() || '';
-
-  if (osName.includes('android')) {
-    platform = 'android';
-  } else if (
-    osName.includes('ios') || osName.includes('iphone') || osName.includes('ipad')
-  ) {
-    platform = 'ios';
-  } else if (
-    osName.includes('windows') || osName.includes('mac') ||
-    osName.includes('linux')   || osName.includes('ubuntu') ||
-    osName.includes('debian')  || devType === 'desktop'
-  ) {
-    platform = 'desktop';
-  }
-
-  const ip =
-    req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-    req.socket?.remoteAddress ||
-    'Unknown';
-
-  let deviceName = 'Unknown Device';
-  if (device.device?.brand && device.device?.model) {
-    deviceName = `${device.device.brand} ${device.device.model}`;
-  } else if (device.os?.name) {
-    deviceName = device.os.version
-      ? `${device.os.name} ${device.os.version}`
-      : device.os.name;
-  } else if (device.client?.name) {
-    deviceName = device.client.name;
-  }
-
+  const ua     = req.headers['user-agent'] ?? '';
+  const parsed = detector.parse(ua);
+ 
   req.deviceInfo = {
-    userAgent: userAgentString,
-    ipAddress: ip,
-    deviceName,
-    platform,
-    _raw: {
-      os:     device.os,
-      client: device.client,
-      device: device.device,
-      bot:    device.bot,
-    },
+    userAgent:  ua,
+    ipAddress:  (
+      req.headers['x-forwarded-for']?.split(',')[0]?.trim() ??
+      req.socket?.remoteAddress ??
+      'Unknown'
+    ),
+    deviceName: [
+      parsed.device?.brand,
+      parsed.device?.model,
+      parsed.os?.name,
+    ].filter(Boolean).join(' ') || 'Unknown Device',
+    platform: (() => {
+      const os = (parsed.os?.name ?? '').toLowerCase();
+      if (os.includes('android'))                          return 'android';
+      if (os.includes('ios') || os.includes('mac'))        return 'ios';
+      if (os.includes('windows') || os.includes('linux'))  return 'desktop';
+      return 'web';
+    })(),
+    _raw: parsed,
   };
-
   next();
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PROTECT — JWT verification
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const protect = async (req, res, next) => {
-  try {
-    const token =
-      req.headers.authorization?.startsWith('Bearer ')
-        ? req.headers.authorization.slice(7)
-        : null;
-
-    if (!token) {
-      return res.status(401).json({
-        success: false,
-        message: 'Not authorized to access this route',
-      });
-    }
-
-    let decoded;
-    try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET);
-    } catch {
-      return res.status(401).json({
-        success: false,
-        message: 'Token is invalid or expired',
-      });
-    }
-
-    const user = await User.findById(decoded.id);
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'User associated with token no longer exists',
-      });
-    }
-
-    if (user.isCurrentlyBlocked) {
-      return res.status(403).json({
-        success:     false,
-        message:     'Your account is currently blocked',
-        blockReason: user.blockReason,
-        unblockAt:   user.unblockAt,
-      });
-    }
-
-    req.user = user;
-    next();
-  } catch (error) {
-    console.error('[protect] error:', error);
-    res.status(500).json({ success: false, message: 'Authentication failed' });
+ 
+// ── protect middleware ────────────────────────────────────────────────────────
+/**
+ * FIX: Now extracts sessionId from JWT and validates it against
+ * user.auditSessions. If the session no longer exists (was removed),
+ * returns 401 so the client is forced to re-login.
+ *
+ * req.user is augmented with:
+ *   req.user.sessionId  — the auditSession _id string from the JWT
+ */
+export const protect = asyncHandler(async (req, res, next) => {
+  // 1. Extract token
+  let token;
+  if (req.headers.authorization?.startsWith('Bearer ')) {
+    token = req.headers.authorization.split(' ')[1];
+  } else if (req.cookies?.jwt) {
+    token = req.cookies.jwt;
   }
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// AUTHORIZE — Role guard
-// ─────────────────────────────────────────────────────────────────────────────
-
+ 
+  if (!token) {
+    return res.status(401).json({ message: 'Not authenticated. Please log in.' });
+  }
+ 
+  // 2. Verify JWT
+  let decoded;
+  try {
+    decoded = jwt.verify(token, process.env.JWT_SECRET);
+  } catch {
+    return res.status(401).json({ message: 'Token invalid or expired. Please log in again.' });
+  }
+ 
+  // 3. Load user — select auditSessions to check session validity
+  const user = await User.findById(decoded.id).select('+auditSessions');
+  if (!user) {
+    return res.status(401).json({ message: 'User no longer exists.' });
+  }
+ 
+  // 4. FIX: Validate sessionId if present in the JWT
+  //    Old tokens (without sessionId) bypass this check for backward compatibility.
+  const sessionId = decoded.sessionId;
+  if (sessionId) {
+    const sessionExists = (user.auditSessions ?? []).some(
+      (s) => s._id.toString() === sessionId
+    );
+    if (!sessionExists) {
+      return res.status(401).json({
+        message: 'Session has been revoked. Please log in again.',
+        code:    'SESSION_REVOKED',
+      });
+    }
+  }
+ 
+  // 5. Check block status
+  if (user.isCurrentlyBlocked) {
+    return res.status(403).json({
+      message:   'Account suspended.',
+      reason:    user.blockReason,
+      unblockAt: user.unblockAt,
+    });
+  }
+ 
+  // 6. Attach user + sessionId to request
+  req.user           = user;
+  req.user.sessionId = sessionId ?? null;
+ 
+  next();
+});
+ 
+// ── authorize middleware ──────────────────────────────────────────────────────
 export const authorize = (...roles) =>
   (req, res, next) => {
-    if (!req.user) {
-      return res.status(401).json({ success: false, message: 'Authentication required' });
-    }
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({
-        success:  false,
-        message:  `Access denied. Required roles: ${roles.join(', ')}`,
-        userRole: req.user.role,
-      });
+    if (!roles.includes(req.user?.role)) {
+      return res.status(403).json({ message: `Access denied. Required role: ${roles.join(' or ')}.` });
     }
     next();
   };

@@ -449,9 +449,9 @@ const PharmacyDashboard = ({ children }) => {
         {isSidebarOpen && (
           <div className="mx-3 mb-3 p-3 rounded-xl bg-base-300/60 border border-base-300 grid grid-cols-3 gap-2">
             {[
-              { label: "Low Stock",  icon: <TrendingDown size={13} />, href: "/pharmacy/inventory/low-stock",    color: "text-error"   },
-              { label: "Expiring",   icon: <AlertTriangle size={13} />, href: "/pharmacy/inventory/expiry-alerts", color: "text-warning" },
-              { label: "Orders",     icon: <ShoppingCart size={13} />,  href: "/pharmacy/orders",                  color: "text-primary" },
+              { label: "Low Stock",  icon: <TrendingDown size={13} />, href: "/pharmacy-store/inventory/low-stock",    color: "text-error"   },
+              { label: "Expiring",   icon: <AlertTriangle size={13} />, href: "/pharmacy-store/inventory/expiry-alerts", color: "text-warning" },
+              { label: "Orders",     icon: <ShoppingCart size={13} />,  href: "/pharmacy-store/orders",                  color: "text-primary" },
             ].map((s, i) => (
               <Link
                 key={i}
@@ -529,7 +529,7 @@ const PharmacyDashboard = ({ children }) => {
             <ThemeToggle />
 
             {/* Notifications */}
-            <Link href="/pharmacy/notifications">
+            <Link href="/pharmacy-store/notifications">
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.93 }}
@@ -596,7 +596,7 @@ const PharmacyDashboard = ({ children }) => {
         </header>
 
         {/* ── Page body ───────────────────────────────────────────────── */}
-        <div className="flex-1 w-full max-w-[1700px] mx-auto px-4 lg:px-8 py-5">
+        <div className="flex-1 w-full max-w-[1700px] mx-auto px-4   py-5">
 
           {/* Breadcrumb */}
           <nav className="mb-5 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-base-content/25">
@@ -620,7 +620,7 @@ const PharmacyDashboard = ({ children }) => {
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.35, ease: "easeOut" }}
-            className="relative rounded-3xl border border-base-300 bg-base-200/35 min-h-[76vh] p-5 shadow-inner overflow-hidden backdrop-blur-sm"
+            className="relative rounded-3xl border border-base-300 bg-base-200/35 min-h-[76vh]  p-5 shadow-inner overflow-hidden backdrop-blur-sm"
           >
             {/* Decorative pharmacy cross watermark */}
             <div
@@ -633,7 +633,7 @@ const PharmacyDashboard = ({ children }) => {
             {/* Mint glow */}
             <div
               aria-hidden="true"
-              className="absolute top-0 right-0 w-[500px] h-[500px] bg-primary/5 blur-[120px] rounded-full pointer-events-none"
+              className="absolute top-0 right-0 w-full h-full bg-primary/5 blur-[120px] rounded-full pointer-events-none"
             />
             {children}
           </motion.div>
@@ -652,7 +652,7 @@ const PharmacyDashboard = ({ children }) => {
                   Likeson Rx Portal
                 </p>
                 <p className="text-[9px] font-bold text-base-content/25 uppercase">
-                  v2.1.0 — Pharmacy Edition
+                  &copy; {new Date().getFullYear()} Likeson Pharmaceuticals
                 </p>
               </div>
             </div>
@@ -660,10 +660,10 @@ const PharmacyDashboard = ({ children }) => {
             {/* Quick footer links */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full xl:w-auto">
               {[
-                { name: "Orders",     icon: <ShoppingCart size={16} />,  href: "/pharmacy/orders"                  },
-                { name: "Inventory",  icon: <Warehouse size={16} />,     href: "/pharmacy/medicines"               },
-                { name: "Analytics",  icon: <AreaChart size={16} />,     href: "/pharmacy/analytics/overview"      },
-                { name: "Financials", icon: <CircleDollarSign size={16} />, href: "/pharmacy/financials/daily"  },
+                { name: "Orders",     icon: <ShoppingCart size={16} />,  href: "/pharmacy-store/orders"                  },
+                { name: "Inventory",  icon: <Warehouse size={16} />,     href: "/pharmacy-store/medicines"               },
+                { name: "Analytics",  icon: <AreaChart size={16} />,     href: "/pharmacy-store/analytics/overview"      },
+                { name: "Financials", icon: <CircleDollarSign size={16} />, href: "/pharmacy-store/financials/daily"  },
               ].map((item, idx) => (
                 <Link
                   key={idx}

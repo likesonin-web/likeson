@@ -406,13 +406,13 @@ hospitalSchema.index({ location: '2dsphere' });
 hospitalSchema.index({ 'address.city': 1, isActive: 1 });
 hospitalSchema.index({ hospitalType: 1, isActive: 1 });
 hospitalSchema.index({ managementModel: 1, isActive: 1 });
-hospitalSchema.index({ managedBy: 1 });
+// hospitalSchema.index({ managedBy: 1 });
 hospitalSchema.index({ 'rating.averageRating': -1 });
 hospitalSchema.index(
   { 'registrationDetails.licenseNumber': 1 },
   { unique: true, sparse: true }
 );
-hospitalSchema.index({ slug: 1 });
+// hospitalSchema.index({ slug: 1 });
 hospitalSchema.index({ linkedDoctors: 1 });
 hospitalSchema.index({ isVerified: 1, isActive: 1 });
 

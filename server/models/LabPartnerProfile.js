@@ -416,7 +416,7 @@ labPartnerProfileSchema.virtual('bookings', {
 /**
  * Pre-save: recalculate averageRating whenever reviews change.
  */
-labPartnerProfileSchema.pre('save', function (next) {
+labPartnerProfileSchema.pre('save', async function () {
   if (this.isModified('reviews')) {
     const visible = this.reviews.filter(r => r.isVisible);
     this.totalReviews = visible.length;
@@ -425,14 +425,14 @@ labPartnerProfileSchema.pre('save', function (next) {
         ? +(visible.reduce((sum, r) => sum + r.rating, 0) / visible.length).toFixed(2)
         : 0;
   }
-  next();
+ 
 });
 
 /**
  * Pre-save: auto-generate a unique labCode if not set.
  * Format: LAB-XXXXXXXX (8 uppercase alphanumeric chars)
  */
-labPartnerProfileSchema.pre('save', async function (next) {
+labPartnerProfileSchema.pre('save', async function () {
   if (this.isNew && !this.labCode) {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     const generate = (len) =>
@@ -446,7 +446,7 @@ labPartnerProfileSchema.pre('save', async function (next) {
 
     this.labCode = code;
   }
-  next();
+ 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

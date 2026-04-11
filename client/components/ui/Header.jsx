@@ -112,8 +112,8 @@ const CUSTOMER_NAV_LINKS = [
     label: 'Membership',
   },
   {
-    name: 'Diagnostics',
-    href: '/diagnostics',
+    name: 'Top Labitories',
+    href: '/labs',
     icon: Microscope,
     accent: '#7c3aed',
     bg: 'rgba(124,58,237,0.06)',
@@ -306,9 +306,9 @@ const ROLE_NAV_LINKS = {
     { name: 'Reports', href: '/finance/reports', icon: Activity },
   ],
   'lab partner': [
-    { name: 'Dashboard', href: '/lab/dashboard', icon: LayoutDashboard },
-    { name: 'Tests', href: '/lab/tests', icon: FlaskConical },
-    { name: 'Reports', href: '/lab/reports', icon: Activity },
+    { name: 'Dashboard', href: '/lab-partner/dashboard', icon: LayoutDashboard },
+    { name: 'Tests', href: '/lab-partner/tests', icon: FlaskConical },
+    { name: 'Reports', href: '/lab-partner/reports', icon: Activity },
   ],
   hospital: [
     { name: 'Dashboard', href: '/hospital/dashboard', icon: LayoutDashboard },

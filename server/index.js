@@ -146,6 +146,9 @@ app.use("/api/solo-driver",           soloDriverRouter);
 app.use("/api/care-assistant",           careAssistantRouter);
  
 
+import labRoutes from './routes/labRoutes.js';
+app.use('/api/labs', labRoutes);
+
 // Health check — also exposes Redis status
 app.get("/", async (_req, res) => {
   const redisStatus = redisClient.isReady ? "connected" : "disconnected";

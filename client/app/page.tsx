@@ -13,7 +13,7 @@ import Subscription from "@/app/(page)/Subscription";
 import Banner from "@/components/Banner";
 import Ads from "@/components/Ads";
 import Faq from "@/components/Faq";
-
+import LabHero from "@/app/lab-partner/Hero";
 
 import CareAssistant from "@/components/Careassistanthero";
 
@@ -28,7 +28,7 @@ const Home: React.FC = () => {
           <Hero />
 
           {/* 2. Popup Ad */}
-          <Ads page="Global" slot="Popup" />
+          {/* <Ads page="Global" slot="Popup" /> */}
 
           {/* 3. Core Navigation / Action Hub */}
           <Services />
@@ -39,18 +39,24 @@ const Home: React.FC = () => {
           </section>
 
           {/* 5. Trust & Provider Discovery */}
-          <HospitalPage />
+          {/* <HospitalPage /> */}
 
           {/* 6. Retention & Commitment */}
-          <Subscription />
+          {/* <Subscription /> */}
 
           {/* 7. FAQ */}
-          <Faq />
+          {/* <Faq /> */}
         </Container>
       )}
 
       {user?.role === "care assistant" && (
         <CareAssistant />
+      )}
+
+      {user?.role=== 'lab partner' && (
+         
+          <LabHero/>
+         
       )}
     </main>
   );

@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "tw-animate-css";
 
 @theme {
   --font-family-poppins:    var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
@@ -144,21 +143,20 @@
 
 /* ------------------------------------------------------------------
    DOCTOR  — Trustworthy deep blue + clean white
-   Represents authority, expertise, clinical precision
    ------------------------------------------------------------------ */
 [data-theme="doctor"] {
-  --base-100:     oklch(99%   0       0);      /* Pure white — clinical cleanliness */
-  --base-200:     oklch(96%   0.005 230);      /* Faint sky tint */
+  --base-100:     oklch(99%   0       0);
+  --base-200:     oklch(96%   0.005 230);
   --base-300:     oklch(91%   0.010 230);
-  --base-content: oklch(22%   0.015 240);      /* Near-black with blue undertone */
+  --base-content: oklch(22%   0.015 240);
 
-  --primary:         oklch(48% 0.20 255);      /* Deep trustworthy blue */
+  --primary:         oklch(48% 0.20 255);
   --primary-content: oklch(99% 0    0);
 
-  --secondary:         oklch(60% 0.14 200);    /* Calm teal-blue */
+  --secondary:         oklch(60% 0.14 200);
   --secondary-content: oklch(99% 0    0);
 
-  --accent:         oklch(65% 0.18 160);       /* Healing green */
+  --accent:         oklch(65% 0.18 160);
   --accent-content: oklch(99% 0    0);
 
   --neutral:         oklch(28% 0.01 240);
@@ -182,7 +180,7 @@
   --chart-6: oklch(60% 0.22  25);
 
   --r-selector: 0.375rem;
-  --r-field:    0.375rem;   /* Slightly tighter radius = more clinical */
+  --r-field:    0.375rem;
   --r-box:      0.75rem;
   --border-width: 1px;
   --shadow-depth: 0 8px 20px -4px rgba(30, 80, 180, 0.12);
@@ -190,7 +188,6 @@
 
 /* ------------------------------------------------------------------
    HOSPITAL — Sterile white + confident navy + safety orange accent
-   Represents large-scale institutions, operational clarity
    ------------------------------------------------------------------ */
 [data-theme="hospital"] {
   --base-100:     oklch(99%   0       0);
@@ -198,13 +195,13 @@
   --base-300:     oklch(93%   0.007 220);
   --base-content: oklch(20%   0.010 230);
 
-  --primary:         oklch(40% 0.18 250);      /* Strong navy — authority */
+  --primary:         oklch(40% 0.18 250);
   --primary-content: oklch(99% 0    0);
 
-  --secondary:         oklch(55% 0.10 220);    /* Steel blue */
+  --secondary:         oklch(55% 0.10 220);
   --secondary-content: oklch(99% 0    0);
 
-  --accent:         oklch(68% 0.20  50);       /* Safety orange for alerts */
+  --accent:         oklch(68% 0.20  50);
   --accent-content: oklch(15% 0.03  50);
 
   --neutral:         oklch(25% 0.01 230);
@@ -228,7 +225,7 @@
   --chart-6: oklch(58% 0.24  20);
 
   --r-selector: 0.25rem;
-  --r-field:    0.25rem;   /* Square edges = institutional efficiency */
+  --r-field:    0.25rem;
   --r-box:      0.5rem;
   --border-width: 1px;
   --shadow-depth: 0 6px 16px -3px rgba(20, 50, 120, 0.14);
@@ -236,21 +233,20 @@
 
 /* ------------------------------------------------------------------
    CARE ASSISTANT — Warm lavender + rose + soft amber
-   Represents empathy, personal attention, emotional support
    ------------------------------------------------------------------ */
 [data-theme="care-assistant"] {
-  --base-100:     oklch(99%   0.002  300);     /* Barely-there lavender white */
+  --base-100:     oklch(99%   0.002  300);
   --base-200:     oklch(96%   0.008  300);
   --base-300:     oklch(92%   0.014  300);
   --base-content: oklch(28%   0.015  280);
 
-  --primary:         oklch(58% 0.18  300);     /* Warm lavender-purple */
+  --primary:         oklch(58% 0.18  300);
   --primary-content: oklch(99% 0     0);
 
-  --secondary:         oklch(65% 0.16  10);    /* Soft rose */
+  --secondary:         oklch(65% 0.16  10);
   --secondary-content: oklch(99% 0     0);
 
-  --accent:         oklch(75% 0.14  80);       /* Warm amber — warmth & care */
+  --accent:         oklch(75% 0.14  80);
   --accent-content: oklch(18% 0.04  80);
 
   --neutral:         oklch(35% 0.012 280);
@@ -274,7 +270,7 @@
   --chart-6: oklch(62% 0.21  20);
 
   --r-selector: 1rem;
-  --r-field:    1rem;       /* Fully rounded = friendly & approachable */
+  --r-field:    1rem;
   --r-box:      1.5rem;
   --border-width: 1px;
   --shadow-depth: 0 10px 20px -4px rgba(140, 80, 180, 0.12);
@@ -282,21 +278,20 @@
 
 /* ------------------------------------------------------------------
    TRANSPORT PARTNER — Energetic teal + slate + amber signal
-   Represents mobility, speed, reliability, logistics
    ------------------------------------------------------------------ */
 [data-theme="transport"] {
-  --base-100:     oklch(98%   0.004 200);      /* Faint teal-white */
+  --base-100:     oklch(98%   0.004 200);
   --base-200:     oklch(95%   0.008 200);
   --base-300:     oklch(90%   0.012 200);
   --base-content: oklch(22%   0.014 210);
 
-  --primary:         oklch(55% 0.18 190);      /* Energetic teal */
+  --primary:         oklch(55% 0.18 190);
   --primary-content: oklch(99% 0    0);
 
-  --secondary:         oklch(42% 0.06 220);    /* Cool slate */
+  --secondary:         oklch(42% 0.06 220);
   --secondary-content: oklch(99% 0    0);
 
-  --accent:         oklch(72% 0.18  65);       /* Amber signal — visibility */
+  --accent:         oklch(72% 0.18  65);
   --accent-content: oklch(15% 0.04  65);
 
   --neutral:         oklch(30% 0.01 210);
@@ -328,21 +323,20 @@
 
 /* ------------------------------------------------------------------
    PHARMACY — Crisp green + white + gold accent
-   Represents precision, wellness, dispensing, safety
    ------------------------------------------------------------------ */
 [data-theme="pharmacy"] {
   --base-100:     oklch(99%   0       0);
-  --base-200:     oklch(97%   0.006 155);      /* Faint mint */
+  --base-200:     oklch(97%   0.006 155);
   --base-300:     oklch(93%   0.012 155);
   --base-content: oklch(22%   0.014 165);
 
-  --primary:         oklch(50% 0.20 155);      /* Pharmacy green — recognition */
+  --primary:         oklch(50% 0.20 155);
   --primary-content: oklch(99% 0    0);
 
-  --secondary:         oklch(64% 0.14 170);    /* Lighter mint-green */
+  --secondary:         oklch(64% 0.14 170);
   --secondary-content: oklch(15% 0.02 170);
 
-  --accent:         oklch(70% 0.17  88);       /* Gold — premium/trust */
+  --accent:         oklch(70% 0.17  88);
   --accent-content: oklch(15% 0.04  88);
 
   --neutral:         oklch(28% 0.01 165);
@@ -374,21 +368,20 @@
 
 /* ------------------------------------------------------------------
    LAB PARTNER — Electric violet + deep indigo + citrus accent
-   Represents precision science, analysis, data, discovery
    ------------------------------------------------------------------ */
 [data-theme="lab"] {
-  --base-100:     oklch(99%   0.002 270);      /* Barely-violet white */
+  --base-100:     oklch(99%   0.002 270);
   --base-200:     oklch(96%   0.008 270);
   --base-300:     oklch(91%   0.014 270);
   --base-content: oklch(22%   0.016 270);
 
-  --primary:         oklch(55% 0.22 275);      /* Vivid violet — science energy */
+  --primary:         oklch(55% 0.22 275);
   --primary-content: oklch(99% 0    0);
 
-  --secondary:         oklch(46% 0.18 260);    /* Deep indigo */
+  --secondary:         oklch(46% 0.18 260);
   --secondary-content: oklch(99% 0    0);
 
-  --accent:         oklch(72% 0.20 100);       /* Citrus/lime — discovery moment */
+  --accent:         oklch(72% 0.20 100);
   --accent-content: oklch(15% 0.05 100);
 
   --neutral:         oklch(28% 0.012 268);
@@ -412,7 +405,7 @@
   --chart-6: oklch(62% 0.23  22);
 
   --r-selector: 0.25rem;
-  --r-field:    0.25rem;   /* Sharp = precision instruments */
+  --r-field:    0.25rem;
   --r-box:      0.5rem;
   --border-width: 1px;
   --shadow-depth: 0 8px 20px -4px rgba(100, 60, 200, 0.14);
@@ -421,7 +414,6 @@
 
 /* ============================================================
    HEALTHCARE ROLE THEMES — DARK MODE
-   Combine with: [data-theme="doctor"].dark  or  .dark[data-theme="doctor"]
    ============================================================ */
 
 /* DOCTOR DARK */
@@ -805,7 +797,6 @@
   .alert {
     @apply px-4 py-3 border-l-4 flex items-start gap-3;
     border-radius: var(--r-field);
-    animation: slideIn 0.3s ease-out;
   }
 
   .alert-info    { background-color: color-mix(in srgb, var(--info),    transparent 90%); border-left-color: var(--info);    color: var(--base-content); }
@@ -818,11 +809,10 @@
     @apply inline-block w-6 h-6 rounded-full;
     border: 3px solid color-mix(in srgb, var(--primary), transparent 70%);
     border-top-color: var(--primary);
-    animation: spin 0.8s linear infinite;
   }
 
   /* ── Skeleton / Divider ──────────────────────────────────── */
-  .skeleton { @apply bg-base-300 rounded animate-pulse; }
+  .skeleton { @apply bg-base-300 rounded; }
   .divider  { @apply h-px bg-base-300 my-6; }
 
   /* ── Section headings ────────────────────────────────────── */
@@ -838,7 +828,6 @@
   }
 
   /* ── Healthcare role icon badge ──────────────────────────── */
-  /*  Used in nav, headers, profile chips: [data-theme="doctor"] .role-badge, etc. */
   .role-badge {
     display: inline-flex;
     align-items: center;
@@ -863,9 +852,9 @@
     border-radius: 9999px;
   }
 
-  .status-dot-success { background-color: var(--success); animation: pulse-dot 2s ease-in-out infinite; }
+  .status-dot-success { background-color: var(--success); }
   .status-dot-warning { background-color: var(--warning); }
-  .status-dot-error   { background-color: var(--error);   animation: pulse-dot 1.2s ease-in-out infinite; }
+  .status-dot-error   { background-color: var(--error);   }
   .status-dot-info    { background-color: var(--info);    }
 
   /* ── Progress bar ────────────────────────────────────────── */
@@ -950,12 +939,10 @@
     box-shadow: 0 0 30px color-mix(in srgb, var(--primary), transparent 50%);
   }
 
-  /* Theme-aware surface tint — useful for sidebar panels */
   .surface-tint {
     background-color: color-mix(in srgb, var(--base-200) 85%, var(--primary) 15%);
   }
 
-  /* Responsive visibility helpers */
   .show-mobile  { display: block; }
   .hide-mobile  { display: none;  }
 
@@ -969,7 +956,7 @@
 /* ============================================================
    SCROLLBAR
    ============================================================ */
-::-webkit-scrollbar       { width: 10px; height: 10px; }
+::-webkit-scrollbar       { width: 1px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--base-200); border-radius: var(--r-field); }
 ::-webkit-scrollbar-thumb {
   background: linear-gradient(135deg, var(--primary), var(--secondary));
@@ -994,91 +981,6 @@
 
 
 /* ============================================================
-   ANIMATIONS
-   Organised: entrances → looping → interaction
-   ============================================================ */
-
-/* Entrance */
-@keyframes fadeIn    { from { opacity: 0; }                          to { opacity: 1; } }
-@keyframes slideUp   { from { opacity: 0; transform: translateY(20px);  } to { opacity: 1; transform: translateY(0); } }
-@keyframes slideDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes slideIn   { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: translateX(0); } }
-@keyframes scaleIn   { from { opacity: 0; transform: scale(0.92);  }      to { opacity: 1; transform: scale(1);    } }
-
-/* Looping */
-@keyframes spin      { to   { transform: rotate(360deg); } }
-
-@keyframes pulse-glow {
-  0%, 100% { opacity: 1;   box-shadow: 0 0 20px color-mix(in srgb, var(--primary), transparent 70%); }
-  50%       { opacity: 0.8; box-shadow: 0 0 40px color-mix(in srgb, var(--primary), transparent 45%); }
-}
-
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1;   transform: scale(1);    }
-  50%       { opacity: 0.6; transform: scale(1.35); }
-}
-
-/* Heartbeat — great for care/health indicators */
-@keyframes heartbeat {
-  0%   { transform: scale(1);    }
-  14%  { transform: scale(1.12); }
-  28%  { transform: scale(1);    }
-  42%  { transform: scale(1.10); }
-  70%  { transform: scale(1);    }
-  100% { transform: scale(1);    }
-}
-
-/* Shimmer — skeleton loading */
-@keyframes shimmer {
-  0%   { background-position: -400px 0; }
-  100% { background-position:  400px 0; }
-}
-
-/* Float — for ambulance/transport icons, decorative elements */
-@keyframes float {
-  0%, 100% { transform: translateY(0);    }
-  50%       { transform: translateY(-6px); }
-}
-
-/* Count up — attach via JS for stats */
-@keyframes countUp {
-  from { opacity: 0; transform: translateY(8px);  }
-  to   { opacity: 1; transform: translateY(0);    }
-}
-
-/* Utility animation classes */
-.animate-fade-in    { animation: fadeIn    0.5s ease-out both; }
-.animate-slide-up   { animation: slideUp   0.5s ease-out both; }
-.animate-slide-down { animation: slideDown 0.5s ease-out both; }
-.animate-slide-in   { animation: slideIn   0.4s ease-out both; }
-.animate-scale-in   { animation: scaleIn   0.4s ease-out both; }
-.animate-pulse-glow { animation: pulse-glow 2.5s ease-in-out infinite; }
-.animate-heartbeat  { animation: heartbeat  1.4s ease-in-out infinite; }
-.animate-float      { animation: float      3s   ease-in-out infinite; }
-.animate-count-up   { animation: countUp    0.6s ease-out both; }
-
-/* Shimmer skeleton override */
-.skeleton-shimmer {
-  background: linear-gradient(
-    90deg,
-    var(--base-300) 25%,
-    color-mix(in srgb, var(--base-300) 60%, var(--base-200)) 50%,
-    var(--base-300) 75%
-  );
-  background-size: 800px 100%;
-  animation: shimmer 1.6s linear infinite;
-}
-
-/* Staggered entrance helpers (apply with animation-delay) */
-.delay-75  { animation-delay:  75ms; }
-.delay-150 { animation-delay: 150ms; }
-.delay-225 { animation-delay: 225ms; }
-.delay-300 { animation-delay: 300ms; }
-.delay-450 { animation-delay: 450ms; }
-.delay-600 { animation-delay: 600ms; }
-
-
-/* ============================================================
    LAYOUT HELPERS
    ============================================================ */
 .container-custom     { @apply mx-auto px-4 sm:px-6 w-full; }
@@ -1092,18 +994,16 @@
   @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6;
 }
 
-/* Responsive flex stack — row on md+, column on mobile */
 .flex-responsive {
   @apply flex flex-col md:flex-row gap-4;
 }
 
-/* Safe area insets for mobile notches */
 .safe-top    { padding-top:    env(safe-area-inset-top,    0px); }
 .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
 
 
 /* ============================================================
-   REDUCED MOTION — respect user preferences
+   REDUCED MOTION
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {
   *,

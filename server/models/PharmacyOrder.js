@@ -410,13 +410,13 @@ pharmacyOrderSchema.pre('save', async function () {
 // §6  INDEXES
 // ══════════════════════════════════════════════════════════════════════════════
 
-pharmacyOrderSchema.index({ orderId: 1 }, { unique: true });
+// pharmacyOrderSchema.index({ orderId: 1 }, { unique: true });
 pharmacyOrderSchema.index({ customer: 1, createdAt: -1 });
 pharmacyOrderSchema.index({ store: 1,    createdAt: -1 });
 pharmacyOrderSchema.index({ store: 1, 'delivery.status': 1, createdAt: -1 });
 pharmacyOrderSchema.index({ store: 1, isArchived: 1,        createdAt: -1 });
-pharmacyOrderSchema.index({ 'payment.razorpayOrderId':   1 }, { sparse: true });
-pharmacyOrderSchema.index({ 'payment.razorpayPaymentId': 1 }, { sparse: true });
+// pharmacyOrderSchema.index({ 'payment.razorpayOrderId':   1 }, { sparse: true });
+// pharmacyOrderSchema.index({ 'payment.razorpayPaymentId': 1 }, { sparse: true });
 pharmacyOrderSchema.index({ store: 1, 'payment.status': 1 });
 pharmacyOrderSchema.index({ store: 1, 'cancellation.refundStatus': 1 });
 pharmacyOrderSchema.index({ store: 1, 'cancellation.isReturnRequested': 1 });

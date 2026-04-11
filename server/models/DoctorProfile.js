@@ -589,7 +589,7 @@ doctorProfileSchema.statics.resolveEffectivePricing = async function (doctorProf
 doctorProfileSchema.index({ specialization: 1 });
 doctorProfileSchema.index({ primaryHospital: 1 });
 doctorProfileSchema.index({ otherHospitals: 1 });
-doctorProfileSchema.index({ kycStatus: 1 });
+// doctorProfileSchema.index({ kycStatus: 1 });
 doctorProfileSchema.index({ partnershipStatus: 1, isActive: 1 });
 doctorProfileSchema.index({ 'rating.averageRating': -1 });
 doctorProfileSchema.index({ createdAt: -1 });

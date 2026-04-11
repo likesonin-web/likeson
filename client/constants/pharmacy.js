@@ -39,16 +39,7 @@ export const PHARMACY_DASHBOARD_LINKS = [
     icon: <ShoppingCart />,
     links: [
       { name: "All Orders",              href: "/pharmacy-store/orders",                         icon: <ClipboardList size={18} />      },
-      { name: "Verify Prescription",     href: "/pharmacy-store/orders/verify-prescription",     icon: <CheckCircle size={18} />        },
-      { name: "Confirm Order",           href: "/pharmacy-store/orders/confirm",                 icon: <UserCheck size={18} />          },
-      { name: "Update Status",           href: "/pharmacy-store/orders/status",                  icon: <RefreshCw size={18} />          },
-      { name: "Accept Return",           href: "/pharmacy-store/orders/return-accept",           icon: <RotateCcw size={18} />          },
-      { name: "Process Refund",          href: "/pharmacy-store/orders/process-refund",          icon: <Undo2 size={18} />              },
-      { name: "Admin Notes",             href: "/pharmacy-store/orders/notes",                   icon: <StickyNote size={18} />         },
-      { name: "Assign Delivery Partner", href: "/pharmacy-store/orders/assign-delivery-partner", icon: <MapPin size={18} />             },
-      { name: "Pickup Verification",     href: "/pharmacy-store/orders/pickup-verify",           icon: <Package size={18} />            },
-      { name: "Order Invoice",           href: "/pharmacy-store/orders/invoice",                 icon: <ReceiptIndianRupee size={18} /> },
-      { name: "Delivery Label",          href: "/pharmacy-store/orders/label",                   icon: <Printer size={18} />            },
+                 
     ],
   },
 

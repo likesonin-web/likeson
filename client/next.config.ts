@@ -1,9 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-   experimental: {
-    optimizeCss: true, // Uses critters to inline critical CSS
-  },
+  /* config options here */
 };
 
 export default nextConfig;

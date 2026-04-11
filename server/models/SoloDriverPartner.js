@@ -680,13 +680,13 @@ soloDriverPartnerSchema.pre('save', async function () {
 soloDriverPartnerSchema.index({ partnershipStatus: 1, isAvailable: 1 });
 soloDriverPartnerSchema.index({ 'serviceZones.city': 1, 'serviceZones.state': 1 });
 soloDriverPartnerSchema.index({ 'vehicle.registrationNumber': 1 }, { sparse: true });
-soloDriverPartnerSchema.index({ 'vehicle.lastKnownLocation': '2dsphere' });
+// soloDriverPartnerSchema.index({ 'vehicle.lastKnownLocation': '2dsphere' });
 soloDriverPartnerSchema.index({ 'kyc.verificationStatus': 1 });
 soloDriverPartnerSchema.index({ 'kyc.drivingLicenceExpiry': 1 });
 soloDriverPartnerSchema.index({ 'medicalFitness.expiryDate': 1 });
-soloDriverPartnerSchema.index({ driverProfile: 1 });
-soloDriverPartnerSchema.index({ user: 1 }, { unique: true });
-soloDriverPartnerSchema.index({ partnerCode: 1 });
+// soloDriverPartnerSchema.index({ driverProfile: 1 });
+// soloDriverPartnerSchema.index({ user: 1 }, { unique: true });
+// soloDriverPartnerSchema.index({ partnerCode: 1 });
 
 const SoloDriverPartner = mongoose.model('SoloDriverPartner', soloDriverPartnerSchema);
 export default SoloDriverPartner;

@@ -58,19 +58,29 @@ const roleModelMap = {
 
 const auditSessionSchema = new Schema(
   {
-    userAgent:    { type: String, default: 'Unknown' },
-    ipAddress:    { type: String, default: 'Unknown' },
-    deviceName:   { type: String, default: 'Unknown Device' },
-    platform:     { type: String, enum: ['android', 'ios', 'web', 'desktop'], default: 'web' },
-    createdAt:    { type: Date, default: Date.now },
-    lastActiveAt: { type: Date, default: Date.now },
+    userAgent:     { type: String, default: 'Unknown' },
+    ipAddress:     { type: String, default: 'Unknown' },
+    deviceName:    { type: String, default: 'Unknown Device' },
+    platform:      { type: String, enum: ['android', 'ios', 'web', 'desktop'], default: 'web' },
+ 
+    /**
+     * FIX: References the _id of the paired deviceToken subdocument.
+     * Set by upsertDeviceToken + upsertAuditSession in userRoutes.
+     * Used by DELETE /sessions/:sessionId to remove the exact device token.
+     * Null when the session has no associated push token (e.g. web session
+     * without FCM registration).
+     */
+    deviceTokenId: { type: Schema.Types.ObjectId, default: null },
+ 
+    createdAt:     { type: Date, default: Date.now },
+    lastActiveAt:  { type: Date, default: Date.now },
   },
   { _id: true }
 );
 
 const deviceTokenSchema = new Schema(
   {
-    platform:   { type: String, enum: ['android', 'ios', 'web'], required: true },
+    platform:   { type: String, enum: ['android', 'ios', 'web','desktop'], required: true },
     token:      { type: String, required: true },
     lastUsedAt: { type: Date, default: Date.now },
     deviceName: { type: String, default: 'Unknown' },
@@ -300,7 +310,7 @@ userSchema.pre('save', async function () {
 userSchema.index({ email: 1, role: 1 });
 userSchema.index({ unblockAt: 1 });
 userSchema.index({ location: '2dsphere' });
-userSchema.index({ referralCode: 1 });
+// userSchema.index({ referralCode: 1 });
 
 const User = mongoose.model('User', userSchema);
 export default User;

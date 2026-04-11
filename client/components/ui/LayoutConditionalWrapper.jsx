@@ -12,6 +12,7 @@ import SoloDriverDashboard from'@/components/dashboard/SoloDriverDashboard'
 import DoctorDashboard from '@/components/dashboard/DoctorDashboard'
 import CareDashboard from '@/components/dashboard/Caredashboard'
 import Marquee from '@/components/Marquee'
+import LabPartnerDashboard from "@/components/dashboard/LabPartnerDashboard";
 export default function LayoutConditionalWrapper({ children }) {
   const { user } = useSelector((state) => state.user);
   const [isClient, setIsClient] = useState(false);
@@ -52,12 +53,15 @@ export default function LayoutConditionalWrapper({ children }) {
   if (user?.role === 'doctor') {
     return <DoctorDashboard>{children}</DoctorDashboard>;
   }
+  if (user?.role === 'labpartner') {
+    return <LabPartnerDashboard>{children}</LabPartnerDashboard>;
+  }
   
 
   // 4. Standard Consumer Layout (Patient/Guest/NRI)
   return (
     <>
-       {user &&    <Marquee/>}
+       {/* {user &&    <Marquee/>} */}
       <Header />
       <main className="min-h-screen transition-all duration-300">
         {children}

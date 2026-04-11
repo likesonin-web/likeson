@@ -217,12 +217,12 @@ const ini      = (s = "") => s.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.to
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const INP  = "w-full px-3.5 py-2.5 rounded-xl border border-base-300 bg-base-200 text-sm text-base-content placeholder:text-base-content/30 focus:outline-none focus:ring-2 focus:ring-primary/25 focus:border-primary transition-all duration-200";
-const BTN  = "inline-flex items-center justify-center gap-2 rounded-xl text-sm font-semibold transition-all duration-150 active:scale-95 disabled:opacity-50 disabled:pointer-events-none";
+const BTN  = "inline-flex items-center justify-center gap-2 rounded-xl text-xs font-semibold transition-all duration-150 active:scale-95 disabled:opacity-50 disabled:pointer-events-none";
 const btnP = `${BTN} bg-primary text-primary-content hover:brightness-110 shadow-sm px-4 py-2.5`;
-const btnS = `${BTN} bg-base-200 text-base-content hover:bg-base-300 px-4 py-2.5`;
+const btnS = `${BTN} bg-base-200 text-base-content hover:bg-base-200 px-4 py-2.5`;
 const btnE = `${BTN} bg-error/10 text-error border border-error/30 hover:bg-error/20 px-4 py-2.5`;
 const btnG = `${BTN} bg-success/10 text-success border border-success/30 hover:bg-success/20 px-4 py-2.5`;
-const btnW = `${BTN} bg-warning/10 text-warning border border-warning/30 hover:bg-warning/20 px-4 py-2.5`;
+const btnW = `${BTN} bg-warning/10 text-warning border border-warning/30 hover:bg-warning/20 px-4 text-sm py-2.5`;
 const btnO = `${BTN} bg-warning/15 text-warning border border-warning/40 hover:bg-warning/25 px-4 py-2.5`;
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -357,7 +357,7 @@ function Modal({ open, onClose, title, children, wide }) {
           {/* Modal */}
           <motion.div
             variants={scaleModal} initial="hidden" animate="visible" exit="exit"
-            className={`relative z-10 bg-base-300 w-full ${wide ? "sm:max-w-2xl" : "sm:max-w-md"}
+            className={`relative z-10 bg-base-200  h-full max-h-[600px]    w-full ${wide ? "sm:max-w-2xl" : "sm:max-w-md"}
               max-h-[92vh] flex flex-col rounded-t-2xl pb-20 sm:rounded-2xl shadow-2xl overflow-hidden`}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-base-200 shrink-0 bg-base-100/50">
               <h3 className="text-sm font-extrabold text-base-content">{title}</h3>
@@ -367,7 +367,7 @@ function Modal({ open, onClose, title, children, wide }) {
               </button>
             </div>
       
-<div className="overflow-y-auto flex-1 p-5 flex flex-col justify-start">
+<div className="overflow-y-auto absolute w-full h-full mt-10 flex-1 p-5 py-10 pb-20 flex flex-col justify-start">
   {children}
 </div>
           </motion.div>
@@ -411,7 +411,7 @@ function Section({ id, title, icon: Icon, badge, expanded, onToggle, children, a
             initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
             className="overflow-hidden border-t border-base-200">
-            <div className="p-4 bg-base-300">{children}</div>
+            <div className="p-4 bg-base-200">{children}</div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -440,12 +440,12 @@ function OrderCard({ order, selected, onClick, index }) {
       onClick={onClick}
       className={`w-full text-left rounded-2xl border-2 p-3.5 transition-all duration-200 relative overflow-hidden group
         ${selected
-          ? " border border-primary shadow-md"
-          : "  bg-base-300 hover:border-primary/20 hover:shadow-sm"}`}
+          ? " border border-primary shadow-md bg-base-100"
+          : "  bg-base-200 hover:border-primary/20 hover:shadow-sm"}`}
       >
 
       {/* Colored left strip */}
-      <div className={`absolute left-0 inset-y-0 w-1 rounded-l-2xl transition-all duration-300 ${selected ? cfg.dot : "bg-transparent group-hover:bg-base-200"}`} />
+      
 
       <div className="flex items-start justify-between gap-2 mb-2 pl-2">
         <div className="min-w-0 flex-1">
@@ -598,7 +598,7 @@ function ActionModalBody({ action, order, onSubmit, onClose, isLoading }) {
         <button key={String(opt.val)} type="button"
           onClick={() => onChange(opt.val)}
           className={`flex-1 py-2.5 rounded-xl text-xs font-bold border-2 transition-all
-            ${value === opt.val ? opt.active : "border-base-300 text-base-content/40 hover:border-base-400 bg-base-300"}`}>
+            ${value === opt.val ? opt.active : "border-base-300 text-base-content/40 hover:border-base-400 bg-base-200"}`}>
           {opt.val === true  && <Check size={11} className="inline mr-1" />}
           {opt.val === false && <X size={11} className="inline mr-1" />}
           {opt.label}
@@ -1053,7 +1053,7 @@ function OrderDetail({ order, onAction, loadingAction }) {
     <div className="space-y-3.5">
 
       {/* ── HEADER ────────────────────────────────────────────────────────── */}
-      <div className="flex items-start justify-between gap-3 pb-4 border-b border-base-200">
+      <div className="flex items-start justify-between   gap-3 pb-4 border-b border-base-200">
         <div className="min-w-0 flex-1">
           <p className="text-[10px] font-mono text-primary/50 mb-1 truncate">
             Order #{order.orderId}
@@ -1579,7 +1579,7 @@ function OrderDetail({ order, onAction, loadingAction }) {
 function StatCard({ label, value, icon: Icon, color, sub, index }) {
   return (
     <motion.div custom={index} variants={fadeUp} initial="hidden" animate="visible"
-      className="bg-base-300 rounded-2xl border border-base-200 p-4 shadow-sm">
+      className="bg-base-200 rounded-2xl border border-base-200 p-4 shadow-sm">
       <div className="flex items-start justify-between mb-3">
         <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${STAT_COLORS[color] || STAT_COLORS.primary}`}>
           <Icon size={17} />
@@ -1838,7 +1838,7 @@ export default function PharmacyOrderManagement() {
       </Modal>
 
       {/* ── TOP NAV ─────────────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-40 border-b border-base-300 bg-base-300/96 backdrop-blur-md">
+      <header className="sticky top-0 z-40 border-b border-base-300 bg-base-200/96 backdrop-blur-md">
         <div className="max-w-[1680px] mx-auto px-4 h-14 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center shadow-sm">
@@ -1859,7 +1859,7 @@ export default function PharmacyOrderManagement() {
               <button key={t.id} onClick={() => setActiveTab(t.id)}
                 className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold capitalize transition-all
                   ${activeTab === t.id
-                    ? "bg-base-300 text-primary shadow-sm"
+                    ? "bg-base-200 text-primary shadow-sm"
                     : "text-base-content/50 hover:text-base-content"}`}>
                 <t.icon size={12} />
                 {t.label}
@@ -1873,7 +1873,7 @@ export default function PharmacyOrderManagement() {
               <span className="text-[10px] text-base-content/50 font-semibold">Store Open</span>
             </div>
             <button onClick={handleRefresh} disabled={loading.orders}
-              className="w-8 h-8 rounded-xl flex items-center justify-center bg-base-200 hover:bg-base-300 text-base-content/50 transition">
+              className="w-8 h-8 rounded-xl flex items-center justify-center bg-base-200 hover:bg-base-200 text-base-content/50 transition">
               <RefreshCw size={14} className={loading.orders ? "animate-spin" : ""} />
             </button>
           </div>
@@ -1965,7 +1965,7 @@ export default function PharmacyOrderManagement() {
                     className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-all
                       ${statusFilter === t.value
                         ? "bg-primary text-primary-content border-primary shadow-sm"
-                        : "bg-base-300 border-base-200 text-base-content/60 hover:border-primary/30 hover:text-base-content"}`}>
+                        : "bg-base-200 border-base-200 text-base-content/60 hover:border-primary/30 hover:text-base-content"}`}>
                     <t.icon size={10} />
                     {t.label}
                     {count > 0 && (
@@ -2054,7 +2054,7 @@ export default function PharmacyOrderManagement() {
                   <motion.div key="loading-detail"
                     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                     className="hidden lg:flex flex-col items-center justify-center gap-3
-                      bg-base-300 rounded-2xl border border-base-200 min-h-[500px] text-base-content/30">
+                      bg-base-200 rounded-2xl border border-base-200 min-h-[500px] text-base-content/30">
                     <Spin size={28} />
                     <p className="text-xs font-semibold">Loading order details…</p>
                   </motion.div>
@@ -2062,7 +2062,7 @@ export default function PharmacyOrderManagement() {
                   <motion.div
                     key={currentOrder._id || currentOrder.orderId}
                     variants={slideRight} initial="hidden" animate="visible" exit="exit"
-                    className="bg-base-300 rounded-2xl border border-base-200 shadow-sm p-5
+                    className="bg-base-100 rounded-2xl border border-base-200 shadow-sm p-5
                       lg:max-h-[calc(100vh-130px)] lg:overflow-y-auto">
                     <OrderDetail
                       order={currentOrder}
@@ -2074,7 +2074,7 @@ export default function PharmacyOrderManagement() {
                   <motion.div key="empty-detail"
                     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                     className="hidden lg:flex flex-col items-center justify-center gap-3
-                      bg-base-300 rounded-2xl border-2 border-dashed border-base-200 min-h-[500px] text-base-content/20">
+                      bg-base-200 rounded-2xl border-2 border-dashed border-base-200 min-h-[500px] text-base-content/20">
                     <Eye size={48} strokeWidth={1} />
                     <div className="text-center">
                       <p className="text-sm font-semibold mb-1">No order selected</p>
@@ -2102,7 +2102,7 @@ export default function PharmacyOrderManagement() {
             </div>
 
             {/* Revenue trend */}
-            <div className="bg-base-300 rounded-2xl border border-base-200 p-5 shadow-sm">
+            <div className="bg-base-200 rounded-2xl border border-base-200 p-5 shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <h3 className="text-sm font-extrabold text-base-content">Revenue Trend</h3>
@@ -2141,7 +2141,7 @@ export default function PharmacyOrderManagement() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               {/* Status distribution */}
-              <div className="bg-base-300 rounded-2xl border border-base-200 p-5 shadow-sm">
+              <div className="bg-base-200 rounded-2xl border border-base-200 p-5 shadow-sm">
                 <h3 className="text-sm font-extrabold text-base-content mb-0.5">Status Distribution</h3>
                 <p className="text-[10px] text-base-content/40 mb-4">Current orders by delivery status</p>
                 {statusDistribution.length > 0 ? (
@@ -2164,7 +2164,7 @@ export default function PharmacyOrderManagement() {
               </div>
 
               {/* Payment method breakdown */}
-              <div className="bg-base-300 rounded-2xl border border-base-200 p-5 shadow-sm">
+              <div className="bg-base-200 rounded-2xl border border-base-200 p-5 shadow-sm">
                 <h3 className="text-sm font-extrabold text-base-content mb-0.5">Payment Methods</h3>
                 <p className="text-[10px] text-base-content/40 mb-4">Order count by payment method</p>
                 {(() => {
@@ -2193,7 +2193,7 @@ export default function PharmacyOrderManagement() {
             </div>
 
             {/* Order lifecycle reference */}
-            <div className="bg-base-300 rounded-2xl border border-base-200 p-5 shadow-sm">
+            <div className="bg-base-200 rounded-2xl border border-base-200 p-5 shadow-sm">
               <h3 className="text-sm font-extrabold text-base-content mb-0.5">Order Lifecycle Reference</h3>
               <p className="text-[10px] text-base-content/40 mb-5">
                 Every action maps 1:1 to a Redux thunk + Express route on /pharmacy-store

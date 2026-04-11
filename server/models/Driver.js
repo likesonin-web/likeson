@@ -420,10 +420,10 @@ const driverSchema = new Schema(
 driverSchema.index({ location: '2dsphere' });
 driverSchema.index({ ownerAgency: 1, status: 1 });
 driverSchema.index({ ownerAgency: 1, isActive: 1 });
-driverSchema.index({ soloPartner: 1 });
-driverSchema.index({ user: 1 }, { unique: true });
-driverSchema.index({ driverCode: 1 });
-driverSchema.index({ assignedVehicleId: 1 });
+// driverSchema.index({ soloPartner: 1 });
+// driverSchema.index({ user: 1 }, { unique: true });
+// driverSchema.index({ driverCode: 1 });
+// driverSchema.index({ assignedVehicleId: 1 });
 driverSchema.index({ 'kyc.verificationStatus': 1 });
 driverSchema.index({ 'kyc.drivingLicenceExpiry': 1 });
 driverSchema.index({ 'medicalFitness.expiryDate': 1 });

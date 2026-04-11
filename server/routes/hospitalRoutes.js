@@ -18,7 +18,6 @@ import {
 } from '../utils/cacheInvalidation.js';
 
  
-import { generateHospitalForm, generateDoctorForm } from '../utils/generateForms.js';
  
 const router = express.Router();
 
@@ -591,148 +590,7 @@ const searchHospitals = asyncHandler(async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
  
-/**
- * Stream a generated PDF to the client and delete the temp file afterwards.
- *
- * @param {import('express').Response} res
- * @param {string} filePath   – absolute path to the temp PDF on disk
- * @param {string} fileName   – Content-Disposition filename shown to the browser
- */
-const streamAndCleanup = (res, filePath, fileName) => {
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
  
-  const stream = fs.createReadStream(filePath);
- 
-  stream.on('end', () => {
-    try {
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    } catch (err) {
-      console.error(`[streamAndCleanup] Error deleting temp file: ${err.message}`);
-    }
-  });
- 
-  stream.on('error', (err) => {
-    console.error(`[streamAndCleanup] Stream error: ${err.message}`);
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, message: 'Error streaming file' });
-    }
-  });
- 
-  stream.pipe(res);
-};
- 
-/**
- * @route   GET /api/hospitals/forms/hospital?type=hospital-manager|doctor-owner
- * @desc    Generate and download the Hospital registration form PDF via Puppeteer.
- * @access  Public
- */
-export const downloadHospitalForm = asyncHandler(async (req, res) => {
-  // 'doctor-owner' → Clinic/Nursing Home form; anything else → managed hospital form
-  const model    = req.query.type === 'doctor-owner' ? 'doctor-owner' : 'hospital-manager';
-  const tmpFile  = path.join('/tmp', `hospital_form_${model}_${Date.now()}.pdf`);
-  const label    = model === 'hospital-manager' ? 'Managed-Hospital' : 'Doctor-Owner-Hospital';
-  const fileName = `Likeson_${label}_Registration_Form.pdf`;
- 
-  try {
-    await generateHospitalForm(tmpFile, model);
-    streamAndCleanup(res, tmpFile, fileName);
-  } catch (err) {
-    console.error('[downloadHospitalForm] PDF generation error:', err);
- 
-    // Fallback: serve a pre-built PDF if one exists
-    const fallback = path.join(process.cwd(), 'utils/forms', `hospital_form_${model}.pdf`);
-    if (fs.existsSync(fallback)) {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-      return fs.createReadStream(fallback).pipe(res);
-    }
- 
-    return res.status(500).json({
-      success: false,
-      message: 'Form generation failed. Please contact support.',
-    });
-  }
-});
- 
-/**
- * @route   GET /api/hospitals/forms/doctor?type=doctor-owner|hospital-manager
- * @desc    Generate and download the Doctor registration form PDF via Puppeteer.
- * @access  Public
- */
-export const downloadDoctorForm = asyncHandler(async (req, res) => {
-  // 'hospital-manager' → affiliated-doctor form; anything else → doctor-owner form
-  const model    = req.query.type === 'hospital-manager' ? 'hospital-manager' : 'doctor-owner';
-  const tmpFile  = path.join('/tmp', `doctor_form_${model}_${Date.now()}.pdf`);
-  const label    = model === 'doctor-owner' ? 'Doctor-Owner' : 'Affiliated-Doctor';
-  const fileName = `Likeson_${label}_Registration_Form.pdf`;
- 
-  try {
-    await generateDoctorForm(tmpFile, model);
-    streamAndCleanup(res, tmpFile, fileName);
-  } catch (err) {
-    console.error('[downloadDoctorForm] PDF generation error:', err);
- 
-    const fallback = path.join(process.cwd(), 'utils/forms', `doctor_form_${model}.pdf`);
-    if (fs.existsSync(fallback)) {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-      return fs.createReadStream(fallback).pipe(res);
-    }
- 
-    return res.status(500).json({
-      success: false,
-      message: 'Form generation failed. Please try again later.',
-    });
-  }
-});
-
-
-/**
- * @route   GET /api/hospitals/forms/list
- * @desc    List all available forms with download URLs.
- * @access  Public
- */
-const listAvailableForms = asyncHandler(async (req, res) => {
-  const base = process.env.API_BASE_URL || 'https://api.likeson.in';
-  res.json({
-    success: true,
-    forms: [
-      {
-        id:          'hospital-managed',
-        name:        'Hospital Registration Form — Managed Type',
-        description: 'For Multi-Specialty, Super-Specialty, Trust, and Government hospitals. '
-                   + 'Hospital manager controls consultation pricing for all linked doctors.',
-        managementModel: 'hospital-manager',
-        downloadUrl: `${base}/api/hospitals/forms/hospital?type=hospital-manager`,
-      },
-      {
-        id:          'hospital-owner',
-        name:        'Hospital Registration Form — Doctor-Owner Type',
-        description: 'For Clinics and Nursing Homes owned by a doctor. '
-                   + 'The owner-doctor controls their own pricing.',
-        managementModel: 'doctor-owner',
-        downloadUrl: `${base}/api/hospitals/forms/hospital?type=doctor-owner`,
-      },
-      {
-        id:          'doctor-owner',
-        name:        'Doctor Registration Form — Owner / Independent',
-        description: 'For doctors who own and operate their own Clinic or Nursing Home. '
-                   + 'Full control over consultation fees and availability.',
-        managementModel: 'doctor-owner',
-        downloadUrl: `${base}/api/hospitals/forms/doctor?type=doctor-owner`,
-      },
-      {
-        id:          'doctor-affiliated',
-        name:        'Doctor Registration Form — Hospital-Affiliated',
-        description: 'For doctors practicing under a managed hospital. '
-                   + 'Consultation fees are set at the hospital level.',
-        managementModel: 'hospital-manager',
-        downloadUrl: `${base}/api/hospitals/forms/doctor?type=hospital-manager`,
-      },
-    ],
-  });
-});
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2816,11 +2674,7 @@ const getHospitalEffectivePricing = asyncHandler(async (req, res) => {
 //  RULE: Static / named paths MUST be declared BEFORE dynamic /:id paths.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ── FORM DOWNLOAD ROUTES (completely public, no auth) ─────────────────────────
-router.get('/forms/list',     listAvailableForms);
-router.get('/forms/hospital', downloadHospitalForm);
-router.get('/forms/doctor',   downloadDoctorForm);
-
+ 
 // ── A. PUBLIC HOSPITAL ROUTES ─────────────────────────────────────────────────
 router.get('/nearby', cache(120, () => 'hospitals:nearby'), getNearbyHospitals);
 router.get('/search', cache(60,  (req) => `hospitals:search:${req.query.q || ''}:${req.query.city || ''}:${req.query.page || 1}`), searchHospitals);

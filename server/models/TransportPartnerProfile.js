@@ -173,7 +173,7 @@ transportPartnerProfileSchema.pre('save', async function () {
 
 // ── Indexes ───────────────────────────────────────────────────────────────────
 
-transportPartnerProfileSchema.index({ kycStatus: 1 });
+// transportPartnerProfileSchema.index({ kycStatus: 1 });
 transportPartnerProfileSchema.index({ transportPartner: 1 });
 
 const TransportPartnerProfile = mongoose.model(
