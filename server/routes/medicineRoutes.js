@@ -1445,6 +1445,198 @@ router.post(
   })
 );
 
+
+
+/**
+ * [M9] POST /api/v1/medicines/sync-inventory/all
+ * No change needed in route logic — was already correct.
+ * Just ensure syncInventoryAllStores returns a number (fixed above).
+ */
+router.post(
+  '/sync-inventory/all',
+  authorize('superadmin'),
+  asyncHandler(async (req, res) => {
+    const medicines = await Medicine.find({ isDiscontinued: false });
+
+    let totalAdded      = 0;
+    let medicinesSynced = 0;
+    const errors        = [];
+
+    for (const medicine of medicines) {
+      try {
+        const added = await syncInventoryAllStores(medicine, req.user._id);
+        if (added > 0) {
+          medicine.updatedBy = req.user._id;
+          await medicine.save();
+          totalAdded      += added;
+          medicinesSynced += 1;
+        }
+      } catch (err) {
+        errors.push({ medicineId: medicine._id.toString(), error: err.message });
+      }
+    }
+
+    auditLog('MEDICINE_INVENTORY_BULK_SYNC', req.user._id, {
+      totalMedicines: medicines.length,
+      medicinesSynced,
+      totalAdded,
+      errors:         errors.length,
+    });
+
+    res.status(errors.length > 0 ? 207 : 200).json({
+      success:           true,
+      totalMedicines:    medicines.length,
+      medicinesSynced,
+      totalEntriesAdded: totalAdded,
+      errors,
+    });
+  })
+);
+
+/**
+ * [INV6] GET /api/v1/medicines/inventory/low-stock
+ */
+router.get(
+  '/inventory/low-stock',
+  authorize('superadmin', 'admin', 'pharmacy'),
+  asyncHandler(async (req, res) => {
+    const { storeId, page = 1, limit = 20 } = req.query;
+
+    let filterStoreId = storeId;
+
+    if (req.user.role === 'pharmacy') {
+      const profile = await PharmacyProfile.findOne({ user: req.user._id }).lean();
+      if (!profile?.assignedStore) {
+        return res.status(403).json({ success: false, message: 'No store assigned to this account.' });
+      }
+      filterStoreId = profile.assignedStore.toString();
+    }
+
+    const matchStage = {
+      'inventory.isLowStock': true,
+      'inventory.isActive':   true,
+      isDiscontinued:         false,
+    };
+    if (filterStoreId) matchStage['inventory.storeId'] = new mongoose.Types.ObjectId(filterStoreId);
+
+    const pageNum  = Math.max(1, parseInt(page, 10));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
+
+    const [results, totalDocs] = await Promise.all([
+      Medicine.aggregate([
+        { $unwind: '$inventory' },
+        { $match: matchStage },
+        {
+          $project: {
+            name:        1,
+            brandName:   1,
+            genericName: 1,
+            mrp:         1,
+            images:      1,
+            packaging:   1,
+            inventory:   1,
+          },
+        },
+        { $sort:  { 'inventory.stockQuantity': 1 } },
+        { $skip:  (pageNum - 1) * limitNum },
+        { $limit: limitNum },
+      ]),
+      Medicine.aggregate([
+        { $unwind: '$inventory' },
+        { $match:  matchStage },
+        { $count:  'total' },
+      ]),
+    ]);
+
+    const total = totalDocs[0]?.total ?? 0;
+
+    res.status(200).json({
+      success: true,
+      total,
+      metadata: {
+        currentPage: pageNum,
+        totalPages:  Math.ceil(total / limitNum),
+        pageSize:    limitNum,
+      },
+      data: results,
+    });
+  })
+);
+
+/**
+ * [INV7] GET /api/v1/medicines/inventory/expiry-alerts
+ */
+router.get(
+  '/inventory/expiry-alerts',
+  authorize('superadmin', 'admin', 'pharmacy'),
+  asyncHandler(async (req, res) => {
+    const { days = 30, storeId, page = 1, limit = 20 } = req.query;
+    const daysNum = Math.max(1, parseInt(days, 10));
+
+    let filterStoreId = storeId;
+
+    if (req.user.role === 'pharmacy') {
+      const profile = await PharmacyProfile.findOne({ user: req.user._id }).lean();
+      if (!profile?.assignedStore) {
+        return res.status(403).json({ success: false, message: 'No store assigned to this account.' });
+      }
+      filterStoreId = profile.assignedStore.toString();
+    }
+
+    const now       = new Date();
+    const threshold = new Date(now.getTime() + daysNum * 24 * 60 * 60 * 1000);
+
+    const matchStage = {
+      'inventory.isActive':   true,
+      'inventory.expiryDate': { $gte: now, $lte: threshold },
+      isDiscontinued:         false,
+    };
+    if (filterStoreId) matchStage['inventory.storeId'] = new mongoose.Types.ObjectId(filterStoreId);
+
+    const pageNum  = Math.max(1, parseInt(page, 10));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
+
+    const [results, totalDocs] = await Promise.all([
+      Medicine.aggregate([
+        { $unwind: '$inventory' },
+        { $match:  matchStage },
+        {
+          $project: {
+            name:      1,
+            brandName: 1,
+            mrp:       1,
+            images:    1,
+            inventory: 1,
+          },
+        },
+        { $sort:  { 'inventory.expiryDate': 1 } },
+        { $skip:  (pageNum - 1) * limitNum },
+        { $limit: limitNum },
+      ]),
+      Medicine.aggregate([
+        { $unwind: '$inventory' },
+        { $match:  matchStage },
+        { $count:  'total' },
+      ]),
+    ]);
+
+    const total = totalDocs[0]?.total ?? 0;
+
+    res.status(200).json({
+      success: true,
+      total,
+      withinDays: daysNum,
+      metadata: {
+        currentPage: pageNum,
+        totalPages:  Math.ceil(total / limitNum),
+        pageSize:    limitNum,
+      },
+      data: results,
+    });
+  })
+);
+
+
 /**
  * [M4] GET /api/v1/medicines/:slug
  */
@@ -1863,51 +2055,6 @@ router.delete(
 // SECTION 9b — MANUAL SYNC ROUTES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * [M9] POST /api/v1/medicines/sync-inventory/all
- * No change needed in route logic — was already correct.
- * Just ensure syncInventoryAllStores returns a number (fixed above).
- */
-router.post(
-  '/sync-inventory/all',
-  authorize('superadmin'),
-  asyncHandler(async (req, res) => {
-    const medicines = await Medicine.find({ isDiscontinued: false });
-
-    let totalAdded      = 0;
-    let medicinesSynced = 0;
-    const errors        = [];
-
-    for (const medicine of medicines) {
-      try {
-        const added = await syncInventoryAllStores(medicine, req.user._id);
-        if (added > 0) {
-          medicine.updatedBy = req.user._id;
-          await medicine.save();
-          totalAdded      += added;
-          medicinesSynced += 1;
-        }
-      } catch (err) {
-        errors.push({ medicineId: medicine._id.toString(), error: err.message });
-      }
-    }
-
-    auditLog('MEDICINE_INVENTORY_BULK_SYNC', req.user._id, {
-      totalMedicines: medicines.length,
-      medicinesSynced,
-      totalAdded,
-      errors:         errors.length,
-    });
-
-    res.status(errors.length > 0 ? 207 : 200).json({
-      success:           true,
-      totalMedicines:    medicines.length,
-      medicinesSynced,
-      totalEntriesAdded: totalAdded,
-      errors,
-    });
-  })
-);
 
 /**
  * [M10] POST /api/v1/medicines/:id/sync-inventory
@@ -1945,37 +2092,266 @@ router.post(
   })
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// INVENTORY ROUTES
+// All under /api/v1/medicines/:id/inventory
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * [M10] POST /api/v1/medicines/:id/sync-inventory
+ * [INV3] POST /api/v1/medicines/:id/inventory
  */
 router.post(
-  '/:id/sync-inventory',
+  '/:id/inventory',
   authorize('superadmin', 'admin'),
   asyncHandler(async (req, res) => {
-    const medicine = await Medicine.findById(req.params.id);
+    const { storeId, stockQuantity, expiryDate, batchNumber, pricePerUnit, location, reorderLevel } = req.body;
+
+    if (!storeId || !expiryDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'storeId and expiryDate are required.',
+      });
+    }
+
+    const [medicine, store] = await Promise.all([
+      Medicine.findById(req.params.id),
+      PharmacyStore.findById(storeId),
+    ]);
+
+    if (!medicine) return res.status(404).json({ success: false, message: 'Medicine not found.' });
+    if (!store)    return res.status(404).json({ success: false, message: `Store '${storeId}' not found.` });
+
+    const alreadyExists = medicine.inventory.some(
+      (inv) => inv.storeId.toString() === storeId.toString()
+    );
+    if (alreadyExists) {
+      return res.status(409).json({
+        success: false,
+        message: `Inventory entry for store '${storeId}' already exists. Use PATCH /:id/inventory/:storeId to update it.`,
+      });
+    }
+
+    medicine.inventory.push({
+      storeId,
+      addedBy:          req.user._id,
+      stockQuantity:    stockQuantity  ?? 0,
+      reservedQuantity: 0,
+      reorderLevel:     reorderLevel   ?? 10,
+      expiryDate,
+      batchNumber:      batchNumber    || 'INIT-BATCH',
+      pricePerUnit:     pricePerUnit   || medicine.mrp,
+      location:         location       || '',
+      isLowStock:       (stockQuantity ?? 0) <= (reorderLevel ?? 10),
+      isActive:         true,
+    });
+
+    medicine.updatedBy = req.user._id;
+    await medicine.save();
+
+    auditLog('INVENTORY_ENTRY_ADD', req.user._id, {
+      medicineId: medicine._id,
+      storeId,
+      stockQuantity,
+    });
+
+    const added = medicine.inventory.find((inv) => inv.storeId.toString() === storeId.toString());
+    res.status(201).json({ success: true, data: added });
+  })
+);
+/**
+ * [INV1] GET /api/v1/medicines/:id/inventory
+ */
+router.get(
+  '/:id/inventory',
+  authorize('superadmin', 'admin', 'pharmacy'),
+  asyncHandler(async (req, res) => {
+    const medicine = await Medicine.findById(req.params.id)
+      .populate('inventory.storeId', 'storeName address.city status priority')
+      .lean();
+
     if (!medicine) {
       return res.status(404).json({ success: false, message: 'Medicine not found.' });
     }
 
-    const addedCount = await syncInventoryAllStores(medicine, req.user._id);
+    let inventory = medicine.inventory;
 
-    if (addedCount > 0) {
-      medicine.updatedBy = req.user._id;
-      await medicine.save();
+    if (req.user.role === 'pharmacy') {
+      const profile = await PharmacyProfile.findOne({ user: req.user._id }).lean();
+      if (!profile?.assignedStore) {
+        return res.status(403).json({ success: false, message: 'No store assigned to this account.' });
+      }
+      inventory = inventory.filter(
+        (inv) => inv.storeId?._id?.toString() === profile.assignedStore.toString()
+      );
     }
 
-    auditLog('MEDICINE_INVENTORY_SYNC', req.user._id, {
+    res.status(200).json({
+      success: true,
+      count:   inventory.length,
+      data:    inventory,
+    });
+  })
+);
+
+/**
+ * [INV2] GET /api/v1/medicines/:id/inventory/:storeId
+ */
+router.get(
+  '/:id/inventory/:storeId',
+  authorize('superadmin', 'admin', 'pharmacy'),
+  asyncHandler(async (req, res) => {
+    if (req.user.role === 'pharmacy') {
+      const profile = await PharmacyProfile.findOne({ user: req.user._id }).lean();
+      if (!profile?.assignedStore) {
+        return res.status(403).json({ success: false, message: 'No store assigned to this account.' });
+      }
+      if (profile.assignedStore.toString() !== req.params.storeId) {
+        return res.status(403).json({ success: false, message: "Access denied to this store's inventory." });
+      }
+    }
+
+    const medicine = await Medicine.findById(req.params.id)
+      .populate('inventory.storeId', 'storeName address.city status')
+      .lean();
+
+    if (!medicine) {
+      return res.status(404).json({ success: false, message: 'Medicine not found.' });
+    }
+
+    const entry = medicine.inventory.find(
+      (inv) =>
+        inv.storeId?._id?.toString() === req.params.storeId ||
+        inv.storeId?.toString()      === req.params.storeId
+    );
+
+    if (!entry) {
+      return res.status(404).json({
+        success: false,
+        message: `No inventory entry found for store '${req.params.storeId}'.`,
+      });
+    }
+
+    res.status(200).json({ success: true, data: entry });
+  })
+);
+
+
+
+/**
+ * [INV4] PATCH /api/v1/medicines/:id/inventory/:storeId
+ */
+router.patch(
+  '/:id/inventory/:storeId',
+  authorize('superadmin', 'admin', 'pharmacy'),
+  asyncHandler(async (req, res) => {
+    const { storeId } = req.params;
+
+    if (req.user.role === 'pharmacy') {
+      const profile = await PharmacyProfile.findOne({ user: req.user._id }).lean();
+      if (!profile?.assignedStore) {
+        return res.status(403).json({ success: false, message: 'No store assigned to this account.' });
+      }
+      if (profile.assignedStore.toString() !== storeId) {
+        return res.status(403).json({ success: false, message: "You can only update your own store's inventory." });
+      }
+    }
+
+    const medicine = await Medicine.findById(req.params.id);
+    if (!medicine) return res.status(404).json({ success: false, message: 'Medicine not found.' });
+
+    const stockIndex = medicine.inventory.findIndex(
+      (inv) => inv.storeId.toString() === storeId
+    );
+    if (stockIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: `No inventory entry for store '${storeId}'. Use POST /:id/inventory to create one.`,
+      });
+    }
+
+    const inv = medicine.inventory[stockIndex];
+    const {
+      stockQuantity,
+      reservedQuantity,
+      reorderLevel,
+      expiryDate,
+      manufacturingDate,
+      batchNumber,
+      pricePerUnit,
+      location,
+      isActive,
+    } = req.body;
+
+    if (stockQuantity     !== undefined) inv.stockQuantity     = stockQuantity;
+    if (reservedQuantity  !== undefined) inv.reservedQuantity  = reservedQuantity;
+    if (reorderLevel      !== undefined) inv.reorderLevel      = reorderLevel;
+    if (expiryDate        !== undefined) inv.expiryDate        = expiryDate;
+    if (manufacturingDate !== undefined) inv.manufacturingDate = manufacturingDate;
+    if (batchNumber       !== undefined) inv.batchNumber       = batchNumber;
+    if (pricePerUnit      !== undefined) inv.pricePerUnit      = pricePerUnit;
+    if (location          !== undefined) inv.location          = location;
+    if (isActive          !== undefined) inv.isActive          = isActive;
+
+    inv.isLowStock = inv.stockQuantity <= inv.reorderLevel;
+    inv.isExpired  = inv.expiryDate ? inv.expiryDate < new Date() : false;
+    inv.updatedBy  = req.user._id;
+
+    medicine.updatedBy = req.user._id;
+    await medicine.save();
+
+    // If stock was replenished above threshold, no need for alert.
+    // If still low, the daily cron will catch it — no on-demand spam here.
+
+    auditLog('INVENTORY_ENTRY_UPDATE', req.user._id, {
       medicineId: medicine._id,
-      addedCount,
+      storeId,
+      changes:    req.body,
     });
 
+    res.status(200).json({ success: true, data: medicine.inventory[stockIndex] });
+  })
+);
+
+/**
+ * [INV5] DELETE /api/v1/medicines/:id/inventory/:storeId
+ */
+router.delete(
+  '/:id/inventory/:storeId',
+  authorize('superadmin', 'admin'),
+  asyncHandler(async (req, res) => {
+    const { storeId }  = req.params;
+    const hardDelete   = req.query.hard === 'true' && req.user.role === 'superadmin';
+
+    const medicine = await Medicine.findById(req.params.id);
+    if (!medicine) return res.status(404).json({ success: false, message: 'Medicine not found.' });
+
+    const stockIndex = medicine.inventory.findIndex(
+      (inv) => inv.storeId.toString() === storeId
+    );
+    if (stockIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: `No inventory entry for store '${storeId}'.`,
+      });
+    }
+
+    if (hardDelete) {
+      medicine.inventory.splice(stockIndex, 1);
+      auditLog('INVENTORY_ENTRY_HARD_DELETE', req.user._id, { medicineId: medicine._id, storeId });
+    } else {
+      medicine.inventory[stockIndex].isActive  = false;
+      medicine.inventory[stockIndex].updatedBy = req.user._id;
+      auditLog('INVENTORY_ENTRY_SOFT_DELETE', req.user._id, { medicineId: medicine._id, storeId });
+    }
+
+    medicine.updatedBy = req.user._id;
+    await medicine.save();
+
     res.status(200).json({
-      success:               true,
-      message:               addedCount > 0
-        ? `Synced ${addedCount} new store(s) with zero stock.`
-        : 'All stores already have inventory entries. Nothing to sync.',
-      addedCount,
-      totalInventoryEntries: medicine.inventory.length,
+      success: true,
+      message: hardDelete
+        ? `Inventory entry for store '${storeId}' permanently removed.`
+        : `Inventory entry for store '${storeId}' deactivated.`,
     });
   })
 );
@@ -2269,455 +2645,23 @@ router.post(
   })
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// INVENTORY ROUTES
-// All under /api/v1/medicines/:id/inventory
-// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * [INV1] GET /api/v1/medicines/:id/inventory
- */
-router.get(
-  '/:id/inventory',
-  authorize('superadmin', 'admin', 'pharmacy'),
-  asyncHandler(async (req, res) => {
-    const medicine = await Medicine.findById(req.params.id)
-      .populate('inventory.storeId', 'storeName address.city status priority')
-      .lean();
 
-    if (!medicine) {
-      return res.status(404).json({ success: false, message: 'Medicine not found.' });
-    }
-
-    let inventory = medicine.inventory;
-
-    if (req.user.role === 'pharmacy') {
-      const profile = await PharmacyProfile.findOne({ user: req.user._id }).lean();
-      if (!profile?.assignedStore) {
-        return res.status(403).json({ success: false, message: 'No store assigned to this account.' });
-      }
-      inventory = inventory.filter(
-        (inv) => inv.storeId?._id?.toString() === profile.assignedStore.toString()
-      );
-    }
-
-    res.status(200).json({
-      success: true,
-      count:   inventory.length,
-      data:    inventory,
-    });
-  })
-);
-
-/**
- * [INV2] GET /api/v1/medicines/:id/inventory/:storeId
- */
-router.get(
-  '/:id/inventory/:storeId',
-  authorize('superadmin', 'admin', 'pharmacy'),
-  asyncHandler(async (req, res) => {
-    if (req.user.role === 'pharmacy') {
-      const profile = await PharmacyProfile.findOne({ user: req.user._id }).lean();
-      if (!profile?.assignedStore) {
-        return res.status(403).json({ success: false, message: 'No store assigned to this account.' });
-      }
-      if (profile.assignedStore.toString() !== req.params.storeId) {
-        return res.status(403).json({ success: false, message: "Access denied to this store's inventory." });
-      }
-    }
-
-    const medicine = await Medicine.findById(req.params.id)
-      .populate('inventory.storeId', 'storeName address.city status')
-      .lean();
-
-    if (!medicine) {
-      return res.status(404).json({ success: false, message: 'Medicine not found.' });
-    }
-
-    const entry = medicine.inventory.find(
-      (inv) =>
-        inv.storeId?._id?.toString() === req.params.storeId ||
-        inv.storeId?.toString()      === req.params.storeId
-    );
-
-    if (!entry) {
-      return res.status(404).json({
-        success: false,
-        message: `No inventory entry found for store '${req.params.storeId}'.`,
-      });
-    }
-
-    res.status(200).json({ success: true, data: entry });
-  })
-);
-
-/**
- * [INV3] POST /api/v1/medicines/:id/inventory
- */
-router.post(
-  '/:id/inventory',
-  authorize('superadmin', 'admin'),
-  asyncHandler(async (req, res) => {
-    const { storeId, stockQuantity, expiryDate, batchNumber, pricePerUnit, location, reorderLevel } = req.body;
-
-    if (!storeId || !expiryDate) {
-      return res.status(400).json({
-        success: false,
-        message: 'storeId and expiryDate are required.',
-      });
-    }
-
-    const [medicine, store] = await Promise.all([
-      Medicine.findById(req.params.id),
-      PharmacyStore.findById(storeId),
-    ]);
-
-    if (!medicine) return res.status(404).json({ success: false, message: 'Medicine not found.' });
-    if (!store)    return res.status(404).json({ success: false, message: `Store '${storeId}' not found.` });
-
-    const alreadyExists = medicine.inventory.some(
-      (inv) => inv.storeId.toString() === storeId.toString()
-    );
-    if (alreadyExists) {
-      return res.status(409).json({
-        success: false,
-        message: `Inventory entry for store '${storeId}' already exists. Use PATCH /:id/inventory/:storeId to update it.`,
-      });
-    }
-
-    medicine.inventory.push({
-      storeId,
-      addedBy:          req.user._id,
-      stockQuantity:    stockQuantity  ?? 0,
-      reservedQuantity: 0,
-      reorderLevel:     reorderLevel   ?? 10,
-      expiryDate,
-      batchNumber:      batchNumber    || 'INIT-BATCH',
-      pricePerUnit:     pricePerUnit   || medicine.mrp,
-      location:         location       || '',
-      isLowStock:       (stockQuantity ?? 0) <= (reorderLevel ?? 10),
-      isActive:         true,
-    });
-
-    medicine.updatedBy = req.user._id;
-    await medicine.save();
-
-    auditLog('INVENTORY_ENTRY_ADD', req.user._id, {
-      medicineId: medicine._id,
-      storeId,
-      stockQuantity,
-    });
-
-    const added = medicine.inventory.find((inv) => inv.storeId.toString() === storeId.toString());
-    res.status(201).json({ success: true, data: added });
-  })
-);
-
-/**
- * [INV4] PATCH /api/v1/medicines/:id/inventory/:storeId
- */
-router.patch(
-  '/:id/inventory/:storeId',
-  authorize('superadmin', 'admin', 'pharmacy'),
-  asyncHandler(async (req, res) => {
-    const { storeId } = req.params;
-
-    if (req.user.role === 'pharmacy') {
-      const profile = await PharmacyProfile.findOne({ user: req.user._id }).lean();
-      if (!profile?.assignedStore) {
-        return res.status(403).json({ success: false, message: 'No store assigned to this account.' });
-      }
-      if (profile.assignedStore.toString() !== storeId) {
-        return res.status(403).json({ success: false, message: "You can only update your own store's inventory." });
-      }
-    }
-
-    const medicine = await Medicine.findById(req.params.id);
-    if (!medicine) return res.status(404).json({ success: false, message: 'Medicine not found.' });
-
-    const stockIndex = medicine.inventory.findIndex(
-      (inv) => inv.storeId.toString() === storeId
-    );
-    if (stockIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        message: `No inventory entry for store '${storeId}'. Use POST /:id/inventory to create one.`,
-      });
-    }
-
-    const inv = medicine.inventory[stockIndex];
-    const {
-      stockQuantity,
-      reservedQuantity,
-      reorderLevel,
-      expiryDate,
-      manufacturingDate,
-      batchNumber,
-      pricePerUnit,
-      location,
-      isActive,
-    } = req.body;
-
-    if (stockQuantity     !== undefined) inv.stockQuantity     = stockQuantity;
-    if (reservedQuantity  !== undefined) inv.reservedQuantity  = reservedQuantity;
-    if (reorderLevel      !== undefined) inv.reorderLevel      = reorderLevel;
-    if (expiryDate        !== undefined) inv.expiryDate        = expiryDate;
-    if (manufacturingDate !== undefined) inv.manufacturingDate = manufacturingDate;
-    if (batchNumber       !== undefined) inv.batchNumber       = batchNumber;
-    if (pricePerUnit      !== undefined) inv.pricePerUnit      = pricePerUnit;
-    if (location          !== undefined) inv.location          = location;
-    if (isActive          !== undefined) inv.isActive          = isActive;
-
-    inv.isLowStock = inv.stockQuantity <= inv.reorderLevel;
-    inv.isExpired  = inv.expiryDate ? inv.expiryDate < new Date() : false;
-    inv.updatedBy  = req.user._id;
-
-    medicine.updatedBy = req.user._id;
-    await medicine.save();
-
-    // If stock was replenished above threshold, no need for alert.
-    // If still low, the daily cron will catch it — no on-demand spam here.
-
-    auditLog('INVENTORY_ENTRY_UPDATE', req.user._id, {
-      medicineId: medicine._id,
-      storeId,
-      changes:    req.body,
-    });
-
-    res.status(200).json({ success: true, data: medicine.inventory[stockIndex] });
-  })
-);
-
-/**
- * [INV5] DELETE /api/v1/medicines/:id/inventory/:storeId
- */
-router.delete(
-  '/:id/inventory/:storeId',
-  authorize('superadmin', 'admin'),
-  asyncHandler(async (req, res) => {
-    const { storeId }  = req.params;
-    const hardDelete   = req.query.hard === 'true' && req.user.role === 'superadmin';
-
-    const medicine = await Medicine.findById(req.params.id);
-    if (!medicine) return res.status(404).json({ success: false, message: 'Medicine not found.' });
-
-    const stockIndex = medicine.inventory.findIndex(
-      (inv) => inv.storeId.toString() === storeId
-    );
-    if (stockIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        message: `No inventory entry for store '${storeId}'.`,
-      });
-    }
-
-    if (hardDelete) {
-      medicine.inventory.splice(stockIndex, 1);
-      auditLog('INVENTORY_ENTRY_HARD_DELETE', req.user._id, { medicineId: medicine._id, storeId });
-    } else {
-      medicine.inventory[stockIndex].isActive  = false;
-      medicine.inventory[stockIndex].updatedBy = req.user._id;
-      auditLog('INVENTORY_ENTRY_SOFT_DELETE', req.user._id, { medicineId: medicine._id, storeId });
-    }
-
-    medicine.updatedBy = req.user._id;
-    await medicine.save();
-
-    res.status(200).json({
-      success: true,
-      message: hardDelete
-        ? `Inventory entry for store '${storeId}' permanently removed.`
-        : `Inventory entry for store '${storeId}' deactivated.`,
-    });
-  })
-);
-
-/**
- * [INV6] GET /api/v1/medicines/inventory/low-stock
- */
-router.get(
-  '/inventory/low-stock',
-  authorize('superadmin', 'admin', 'pharmacy'),
-  asyncHandler(async (req, res) => {
-    const { storeId, page = 1, limit = 20 } = req.query;
-
-    let filterStoreId = storeId;
-
-    if (req.user.role === 'pharmacy') {
-      const profile = await PharmacyProfile.findOne({ user: req.user._id }).lean();
-      if (!profile?.assignedStore) {
-        return res.status(403).json({ success: false, message: 'No store assigned to this account.' });
-      }
-      filterStoreId = profile.assignedStore.toString();
-    }
-
-    const matchStage = {
-      'inventory.isLowStock': true,
-      'inventory.isActive':   true,
-      isDiscontinued:         false,
-    };
-    if (filterStoreId) matchStage['inventory.storeId'] = new mongoose.Types.ObjectId(filterStoreId);
-
-    const pageNum  = Math.max(1, parseInt(page, 10));
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
-
-    const [results, totalDocs] = await Promise.all([
-      Medicine.aggregate([
-        { $unwind: '$inventory' },
-        { $match: matchStage },
-        {
-          $project: {
-            name:        1,
-            brandName:   1,
-            genericName: 1,
-            mrp:         1,
-            images:      1,
-            packaging:   1,
-            inventory:   1,
-          },
-        },
-        { $sort:  { 'inventory.stockQuantity': 1 } },
-        { $skip:  (pageNum - 1) * limitNum },
-        { $limit: limitNum },
-      ]),
-      Medicine.aggregate([
-        { $unwind: '$inventory' },
-        { $match:  matchStage },
-        { $count:  'total' },
-      ]),
-    ]);
-
-    const total = totalDocs[0]?.total ?? 0;
-
-    res.status(200).json({
-      success: true,
-      total,
-      metadata: {
-        currentPage: pageNum,
-        totalPages:  Math.ceil(total / limitNum),
-        pageSize:    limitNum,
-      },
-      data: results,
-    });
-  })
-);
-
-/**
- * [INV7] GET /api/v1/medicines/inventory/expiry-alerts
- */
-router.get(
-  '/inventory/expiry-alerts',
-  authorize('superadmin', 'admin', 'pharmacy'),
-  asyncHandler(async (req, res) => {
-    const { days = 30, storeId, page = 1, limit = 20 } = req.query;
-    const daysNum = Math.max(1, parseInt(days, 10));
-
-    let filterStoreId = storeId;
-
-    if (req.user.role === 'pharmacy') {
-      const profile = await PharmacyProfile.findOne({ user: req.user._id }).lean();
-      if (!profile?.assignedStore) {
-        return res.status(403).json({ success: false, message: 'No store assigned to this account.' });
-      }
-      filterStoreId = profile.assignedStore.toString();
-    }
-
-    const now       = new Date();
-    const threshold = new Date(now.getTime() + daysNum * 24 * 60 * 60 * 1000);
-
-    const matchStage = {
-      'inventory.isActive':   true,
-      'inventory.expiryDate': { $gte: now, $lte: threshold },
-      isDiscontinued:         false,
-    };
-    if (filterStoreId) matchStage['inventory.storeId'] = new mongoose.Types.ObjectId(filterStoreId);
-
-    const pageNum  = Math.max(1, parseInt(page, 10));
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
-
-    const [results, totalDocs] = await Promise.all([
-      Medicine.aggregate([
-        { $unwind: '$inventory' },
-        { $match:  matchStage },
-        {
-          $project: {
-            name:      1,
-            brandName: 1,
-            mrp:       1,
-            images:    1,
-            inventory: 1,
-          },
-        },
-        { $sort:  { 'inventory.expiryDate': 1 } },
-        { $skip:  (pageNum - 1) * limitNum },
-        { $limit: limitNum },
-      ]),
-      Medicine.aggregate([
-        { $unwind: '$inventory' },
-        { $match:  matchStage },
-        { $count:  'total' },
-      ]),
-    ]);
-
-    const total = totalDocs[0]?.total ?? 0;
-
-    res.status(200).json({
-      success: true,
-      total,
-      withinDays: daysNum,
-      metadata: {
-        currentPage: pageNum,
-        totalPages:  Math.ceil(total / limitNum),
-        pageSize:    limitNum,
-      },
-      data: results,
-    });
-  })
-);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PHARMACY STORE ROUTES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * [S1] GET /api/v1/stores
- */
-router.get('/stores', protect, authorize('admin', 'superadmin'), asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10, status, storeType, search } = req.query;
-  const skip = (parseInt(page) - 1) * parseInt(limit);
-
-  const query = {};
-  if (status)    query.status    = status;
-  if (storeType) query.storeType = storeType;
-  if (search)    query.storeName = { $regex: search, $options: 'i' };
-
-  const [stores, total] = await Promise.all([
-    PharmacyStore.find(query)
-      .populate('managedBy', 'name email phone avatar')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean(),
-    PharmacyStore.countDocuments(query),
-  ]);
-
-  res.status(200).json({
-    success: true,
-    pagination: {
-      total,
-      page:  parseInt(page),
-      limit: parseInt(limit),
-      pages: Math.ceil(total / limit),
-    },
-    data: stores,
-  });
-}));
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 7b — PHARMACY STORE ROUTES
+// IMPORTANT: Must be declared BEFORE /:slug and /:id wildcard routes
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * [S2] GET /api/v1/stores/nearby
+ * [S2] GET /api/v1/medicines/stores/nearby
  */
 router.get(
-  '/nearby',
+  '/stores/nearby',
   asyncHandler(async (req, res) => {
     const { lat, lng, radiusKm = 5, limit = 10 } = req.query;
 
@@ -2747,52 +2691,49 @@ router.get(
 );
 
 /**
- * [S3] GET /api/v1/stores/:id
+ * [S1] GET /api/v1/medicines/stores
  */
 router.get(
-  '/:id',
+  '/stores',
   protect,
+  authorize('admin', 'superadmin'),
   asyncHandler(async (req, res) => {
-    const query = PharmacyStore.findById(req.params.id)
-      .populate('managedBy', 'name email phone');
+    const { page = 1, limit = 10, status, storeType, search } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    if (!['admin', 'superadmin'].includes(req.user.role)) {
-      query.select('-bankDetails');
-    }
+    const query = {};
+    if (status)    query.status    = status;
+    if (storeType) query.storeType = storeType;
+    if (search)    query.storeName = { $regex: search, $options: 'i' };
 
-    const store = await query.lean();
-    if (!store) {
-      return res.status(404).json({ success: false, message: 'Store not found.' });
-    }
+    const [stores, total] = await Promise.all([
+      PharmacyStore.find(query)
+        .populate('managedBy', 'name email phone avatar')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      PharmacyStore.countDocuments(query),
+    ]);
 
-    res.status(200).json({ success: true, data: store });
+    res.status(200).json({
+      success: true,
+      pagination: {
+        total,
+        page:  parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / limit),
+      },
+      data: stores,
+    });
   })
 );
 
 /**
- * [S4] GET /api/v1/stores/slug/:slug
+ * [S5] GET /api/v1/medicines/stores/my/store
  */
 router.get(
-  '/slug/:slug',
-  asyncHandler(async (req, res) => {
-    const store = await PharmacyStore.findOne({ slug: req.params.slug })
-      .select('-bankDetails')
-      .populate('managedBy', 'name email')
-      .lean();
-
-    if (!store) {
-      return res.status(404).json({ success: false, message: 'Store not found.' });
-    }
-
-    res.status(200).json({ success: true, data: store });
-  })
-);
-
-/**
- * [S5] GET /api/v1/stores/my/store
- */
-router.get(
-  '/my/store',
+  '/stores/my/store',
   protect,
   authorize('pharmacy'),
   asyncHandler(async (req, res) => {
@@ -2814,6 +2755,47 @@ router.get(
   })
 );
 
+/**
+ * [S4] GET /api/v1/medicines/stores/slug/:slug
+ */
+router.get(
+  '/stores/slug/:slug',
+  asyncHandler(async (req, res) => {
+    const store = await PharmacyStore.findOne({ slug: req.params.slug })
+      .select('-bankDetails')
+      .populate('managedBy', 'name email')
+      .lean();
+
+    if (!store) {
+      return res.status(404).json({ success: false, message: 'Store not found.' });
+    }
+
+    res.status(200).json({ success: true, data: store });
+  })
+);
+
+/**
+ * [S3] GET /api/v1/medicines/stores/:id
+ */
+router.get(
+  '/stores/:id',
+  protect,
+  asyncHandler(async (req, res) => {
+    const query = PharmacyStore.findById(req.params.id)
+      .populate('managedBy', 'name email phone');
+
+    if (!['admin', 'superadmin'].includes(req.user.role)) {
+      query.select('-bankDetails');
+    }
+
+    const store = await query.lean();
+    if (!store) {
+      return res.status(404).json({ success: false, message: 'Store not found.' });
+    }
+
+    res.status(200).json({ success: true, data: store });
+  })
+);
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 10 — CENTRALIZED ERROR HANDLER
 // ─────────────────────────────────────────────────────────────────────────────

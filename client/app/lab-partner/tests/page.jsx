@@ -50,7 +50,7 @@ function StatCard({ icon: Icon, label, value, color, delay }) {
       <div className="flex items-start justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-widest text-base-content/50 mb-1">{label}</p>
-          <p className="text-3xl font-black" style={{ color }}>{value}</p>
+          <p className="text-3xl font-extrabold" style={{ color }}>{value}</p>
         </div>
         <div className="p-2.5 rounded-xl" style={{ background: `${color}18` }}>
           <Icon size={20} style={{ color }} />
@@ -108,7 +108,7 @@ function TestCard({ test, index, onEdit, onToggle, onDelete, actionLoading }) {
 
             {/* Price */}
             <div className="text-right shrink-0">
-              <p className="text-lg font-black text-primary">₹{Number(test.mrpPrice).toLocaleString("en-IN")}</p>
+              <p className="text-lg font-extrabold text-primary">₹{Number(test.mrpPrice).toLocaleString("en-IN")}</p>
               {test.partnerPrice && (
                 <p className="text-xs text-base-content/40 line-through">₹{Number(test.partnerPrice).toLocaleString("en-IN")}</p>
               )}
@@ -221,7 +221,7 @@ function TestFormModal({ open, onClose, editTest, onSubmit, actionLoading }) {
         onClick={(e) => e.target === e.currentTarget && onClose()}
       >
         <motion.div variants={scaleIn} initial="hidden" animate="visible" exit="hidden"
-          className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-3xl border border-base-300 bg-base-100"
+          className="w-full max-w-2xl max-h-[600px] mt-auto overflow-y-auto rounded-3xl border border-base-300 bg-base-100"
           style={{ boxShadow: "0 40px 80px rgba(0,0,0,0.25)" }}
         >
           {/* Modal Header */}
@@ -231,7 +231,7 @@ function TestFormModal({ open, onClose, editTest, onSubmit, actionLoading }) {
                 <FlaskConical size={20} className="text-primary" />
               </div>
               <div>
-                <h2 className="text-lg font-black text-base-content">{editTest ? "Edit Test" : "Add New Test"}</h2>
+                <h2 className="text-lg font-extrabold text-base-content">{editTest ? "Edit Test" : "Add New Test"}</h2>
                 <p className="text-xs text-base-content/50">{editTest ? "Update test details" : "Fill in the test information"}</p>
               </div>
             </div>
@@ -370,7 +370,7 @@ function DeleteConfirm({ open, onClose, onConfirm, loading }) {
           <div className="w-16 h-16 rounded-full bg-error/10 flex items-center justify-center mx-auto mb-4">
             <Trash2 size={28} className="text-error" />
           </div>
-          <h3 className="text-lg font-black mb-2">Deactivate Test?</h3>
+          <h3 className="text-lg font-extrabold mb-2">Deactivate Test?</h3>
           <p className="text-sm text-base-content/60 mb-6">This will mark the test as inactive. It won't appear in public listings.</p>
           <div className="flex gap-3">
             <button onClick={onClose} className="flex-1 py-3 rounded-2xl border-2 border-base-300 font-bold text-sm hover:bg-base-200 transition-all">Cancel</button>
@@ -454,7 +454,7 @@ export default function TestsPage() {
               <Microscope size={22} className="text-primary" />
             </div>
             <div>
-              <h1 className="text-xl font-black tracking-tight text-base-content">Tests Catalogue</h1>
+              <h1 className="text-xl font-extrabold tracking-tight text-base-content">Tests Catalogue</h1>
               <p className="text-xs text-base-content/50 font-medium">{stats.total} tests total</p>
             </div>
           </div>
@@ -512,7 +512,7 @@ export default function TestsPage() {
             }`}>
             <Filter size={15} />Filters
             {(filterCat || filterActive !== "all") && (
-              <span className="w-5 h-5 rounded-full bg-primary text-primary-content text-[10px] font-black flex items-center justify-center">!</span>
+              <span className="w-5 h-5 rounded-full bg-primary text-primary-content text-[10px] font-extrabold flex items-center justify-center">!</span>
             )}
           </button>
         </motion.div>

@@ -14,7 +14,7 @@ import Banner from "@/components/Banner";
 import Ads from "@/components/Ads";
 import Faq from "@/components/Faq";
 import LabHero from "@/app/lab-partner/Hero";
-
+import HeroSoloDriver from "@/components/hero/HeroSoloDriver";
 import CareAssistant from "@/components/Careassistanthero";
 
 const Home: React.FC = () => {
@@ -42,7 +42,7 @@ const Home: React.FC = () => {
           {/* <HospitalPage /> */}
 
           {/* 6. Retention & Commitment */}
-          {/* <Subscription /> */}
+          <Subscription />
 
           {/* 7. FAQ */}
           {/* <Faq /> */}
@@ -56,6 +56,11 @@ const Home: React.FC = () => {
       {user?.role=== 'lab partner' && (
          
           <LabHero/>
+         
+      )}
+      {user?.role=== 'solodriverpartner' && (
+         
+          <HeroSoloDriver/>
          
       )}
     </main>

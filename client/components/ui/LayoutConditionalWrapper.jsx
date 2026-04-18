@@ -8,10 +8,11 @@ import LikesonSuperAdminDashboard from "@/components/dashboard/LikesonSuperAdmin
 import AdminDashboard from "@/app/admin/AdminDashboard";
 import PharmacyDashboard from '@/components/dashboard/PharmacyDashboard'
 import TransportPartnerDashboard from '@/components/dashboard/Transportpartnerdashboard'
-import SoloDriverDashboard from'@/components/dashboard/SoloDriverDashboard'
+ import Marquee from "@/components/Marquee";
+ import HospitalMangerDashboard from "@/components/dashboard/HospitalMangerDashboard";
 import DoctorDashboard from '@/components/dashboard/DoctorDashboard'
-import CareDashboard from '@/components/dashboard/Caredashboard'
-import Marquee from '@/components/Marquee'
+ 
+ 
 import LabPartnerDashboard from "@/components/dashboard/LabPartnerDashboard";
 export default function LayoutConditionalWrapper({ children }) {
   const { user } = useSelector((state) => state.user);
@@ -47,9 +48,7 @@ export default function LayoutConditionalWrapper({ children }) {
   if (user?.role === 'transportpartner') {
     return <TransportPartnerDashboard>{children}</TransportPartnerDashboard>;
   }
-  if (user?.role === 'solodriverpartner') {
-    return <SoloDriverDashboard>{children}</SoloDriverDashboard>;
-  }
+ 
   if (user?.role === 'doctor') {
     return <DoctorDashboard>{children}</DoctorDashboard>;
   }
@@ -57,11 +56,14 @@ export default function LayoutConditionalWrapper({ children }) {
     return <LabPartnerDashboard>{children}</LabPartnerDashboard>;
   }
   
+  if (user?.role === 'hospital') {
+    return <HospitalMangerDashboard>{children}</HospitalMangerDashboard>;
+  }
 
   // 4. Standard Consumer Layout (Patient/Guest/NRI)
   return (
     <>
-       {/* {user &&    <Marquee/>} */}
+       {user &&    <Marquee/>}
       <Header />
       <main className="min-h-screen transition-all duration-300">
         {children}

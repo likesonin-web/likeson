@@ -50,7 +50,8 @@ const monthlyUsageSchema = new Schema(
 // ─── Sub-schema: plan member slot (Family / NRI multi-member plans) ──────────
 const memberSlotSchema = new Schema(
   {
-    memberId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    memberId: { type: Schema.Types.ObjectId, ref: 'User' }, // optional link to User collection (if the member has an account)
+    memberEmail: { type: String, required: true }, // denormalised for quick access
     relation: { type: String, trim: true }, // "Spouse", "Parent", "Child" …
     addedAt:  { type: Date, default: Date.now },
   },

@@ -344,7 +344,7 @@ function AddModal({ open, onClose, onSubmit, actionLoading }) {
         onClick={(e) => e.target === e.currentTarget && onClose()}
       >
         <motion.div variants={scaleIn} initial="hidden" animate="visible" exit="hidden"
-          className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl border border-base-300 bg-base-100"
+          className="w-full max-w-lg max-h-[600px] mt-auto overflow-y-auto rounded-3xl border border-base-300 bg-base-100"
           style={{ boxShadow: "0 40px 80px rgba(0,0,0,0.28)" }}
         >
           {/* Modal header */}

@@ -1,5 +1,5 @@
 'use client'
-
+// constants/Solodriverpartnerlinks.js
 import {
   // Profile & Identity
   UserRound,
@@ -50,13 +50,7 @@ import {
   LayoutDashboard,
 } from "lucide-react";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SOLO DRIVER PARTNER — SIDEBAR NAVIGATION
-// ─────────────────────────────────────────────────────────────────────────────
-// Mirrors the routes defined in soloDriverRouter.js
-// Base prefix: /api/solo-driver  (backend) → /partner/solo (frontend)
-// ─────────────────────────────────────────────────────────────────────────────
-
+ 
 export const SOLO_DRIVER_PARTNER_LINKS = [
 
   // ── 1. Dashboard ─────────────────────────────────────────────────────────
@@ -73,10 +67,7 @@ export const SOLO_DRIVER_PARTNER_LINKS = [
   },
 
   // ── 2. My Profile ─────────────────────────────────────────────────────────
-  // Personal details, contact info, address, professional background,
-  // emergency contact, training certificates.
-  // Routes: GET/PATCH /me, /me/contact, /me/address, /me/professional,
-  //         /me/emergency, /me/training-certificates
+ 
   {
     title: "My Profile",
     icons: <UserRound />,
@@ -91,9 +82,7 @@ export const SOLO_DRIVER_PARTNER_LINKS = [
   },
 
   // ── 3. KYC & Verification ─────────────────────────────────────────────────
-  // Document submission and verification workflow: Aadhaar, driving licence,
-  // PSV badge, medical fitness, PAN.
-  // Routes: GET/POST /kyc, POST /kyc/medical, POST /kyc/psv
+ 
   {
     title: "KYC & Verification",
     icons: <BadgeCheck />,
@@ -106,10 +95,7 @@ export const SOLO_DRIVER_PARTNER_LINKS = [
   },
 
   // ── 4. Vehicle ────────────────────────────────────────────────────────────
-  // Vehicle registration, documents (RC, insurance, pollution cert, permit),
-  // accessibility features, and live GPS location.
-  // Routes: GET/PUT /vehicle, PATCH /vehicle/documents,
-  //         PATCH /vehicle/features, PATCH /vehicle/location
+ 
   {
     title: "Vehicle",
     icons: <Car />,
@@ -122,8 +108,7 @@ export const SOLO_DRIVER_PARTNER_LINKS = [
   },
 
   // ── 5. Bank & Earnings ────────────────────────────────────────────────────
-  // Bank account management, settlement history, and pending balance.
-  // Routes: GET/POST /bank, GET /settlement
+   
   {
     title: "Bank & Earnings",
     icons: <Landmark />,
@@ -136,8 +121,7 @@ export const SOLO_DRIVER_PARTNER_LINKS = [
   },
 
   // ── 6. Availability & Zones ───────────────────────────────────────────────
-  // Toggle online/offline status and manage service zones.
-  // Routes: GET/PATCH /availability, GET/POST/DELETE /service-zones
+ 
   {
     title: "Availability & Zones",
     icons: <ToggleRight />,
@@ -149,8 +133,7 @@ export const SOLO_DRIVER_PARTNER_LINKS = [
   },
 
   // ── 7. Pricing ────────────────────────────────────────────────────────────
-  // View effective platform fee and configure own surcharge preferences.
-  // Routes: GET/PUT /pricing
+ 
   {
     title: "Pricing",
     icons: <CircleDollarSign />,
@@ -161,9 +144,7 @@ export const SOLO_DRIVER_PARTNER_LINKS = [
   },
 
   // ── 8. Compliance ─────────────────────────────────────────────────────────
-  // Expiry tracker for all critical documents — DL, PSV badge,
-  // medical fitness, insurance, pollution cert, fitness cert, permit.
-  // Route: GET /compliance
+  
   {
     title: "Compliance",
     icons: <ClipboardList />,
@@ -174,9 +155,7 @@ export const SOLO_DRIVER_PARTNER_LINKS = [
   },
 
   // ── 9. Security ───────────────────────────────────────────────────────────
-  // Active sessions, registered devices, and password management.
-  // Routes: GET/DELETE /security/sessions, GET/DELETE /security/devices,
-  //         POST /security/change-password
+ 
   {
     title: "Security",
     icons: <Lock />,
@@ -188,9 +167,7 @@ export const SOLO_DRIVER_PARTNER_LINKS = [
   },
 
   // ── 10. Notifications & Settings ─────────────────────────────────────────
-  // Notification inbox and preferences (SMS, email, push, WhatsApp),
-  // settlement cycle, and availability hours.
-  // Routes: GET/PATCH /notifications, GET/PATCH /me/settings
+ 
   {
     title: "Notifications & Settings",
     icons: <Bell />,

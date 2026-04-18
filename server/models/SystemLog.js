@@ -1,29 +1,7 @@
 import mongoose from 'mongoose';
 const { Schema } = mongoose;
 
-/**
- * SystemLog Model — Likeson.in
- *
- * Stores platform-wide administrative and operational event logs.
- *
- * DESIGN DECISIONS:
- *  - Immutable after creation (no update routes). Logs are append-only.
- *  - TTL index: logs older than 90 days auto-expire (configurable via SYSTEM_LOG_TTL_DAYS env).
- *  - actor is denormalised (name + role stored inline) so logs remain readable
- *    even after a User is soft-deleted.
- *  - relatedEntity is polymorphic (stores model name + ObjectId).
- *  - metadata is a flexible Map for arbitrary key-value pairs per event.
- *  - select: false on sensitivePayload — never returned in list queries.
- *
- * CATEGORIES:
- *  auth | user | security | payment | notification | kyc | system | api
- *
- * LEVELS:
- *  info | success | warning | error | debug
- */
-
-// ── Sub-schemas ───────────────────────────────────────────────────────────────
-
+ 
 const actorSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', default: null },

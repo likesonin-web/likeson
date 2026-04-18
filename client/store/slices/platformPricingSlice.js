@@ -1,44 +1,3 @@
-/**
- * platformPricingSlice.js
- * ─────────────────────────────────────────────────────────────────────────────
- * Redux Toolkit slice for PlatformPricingConfig — aligned with the final model.
- *
- * Key model facts reflected here:
- *  • platformFee is an object { type: 'fixed'|'percentage', value: number }
- *    on transport, careAssistant, doctor, hospital, diagnostics, pharmacy
- *  • diagnostics also has homeSamplePlatformFee (same shape)
- *  • hospital.hospitalOverrides is Map<hospitalId, platformFeeSchema>
- *  • transport.planRateOverrides is Map<planSlug, number|null>
- *  • customPlanOptions uses slab arrays, NOT flat unit prices:
- *      consultation: { pricePerConsultation, doctorPricingTiers[], maxDoctorsAllowed }
- *      transport:    { kmSlabs[] }
- *      diagnosticsDiscount / pharmacyDiscount: { slabs[] }
- *      careAssistant: { pricePerVisit }
- *      addOns: { homeSampleCollection, prioritySupport }
- *
- * Routes covered:
- *   § 1  GET  /pricing/config          (admin, superadmin)
- *        GET  /pricing/public          (customer, admin, superadmin)
- *   § 2  PATCH /pricing/config         (superadmin)
- *   § 3  PATCH /pricing/caps
- *        PATCH /pricing/transport
- *        PATCH /pricing/care-assistant
- *        PATCH /pricing/doctor
- *        PATCH /pricing/hospital
- *        DELETE /pricing/hospital/override/:hospitalId
- *        PATCH /pricing/diagnostics
- *        PATCH /pricing/pharmacy
- *        PATCH /pricing/custom-plan-options
- *        PATCH /pricing/ads
- *        PATCH /pricing/tax            (superadmin only)
- *        PATCH /pricing/refund-policy
- *   § 4  GET  /pricing/transport/rate/:planSlug
- *   § 5  GET  /pricing/history
- *        GET  /pricing/history/:index  (superadmin)
- *        POST /pricing/restore/:index  (superadmin)
- * ─────────────────────────────────────────────────────────────────────────────
- */
-
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import API from '../api';
 import toast from 'react-hot-toast';
@@ -116,10 +75,12 @@ export const updateFullPricingConfig = makeThunk(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * PATCH /pricing/caps
+ * PATCH /pricing/caps  (superadmin only)
  * payload: { note?, pharmacyDiscountMax?, diagnosticsDiscountMax?,
  *            careAssistantMaxVisitsPerMonth?, consultationsMaxPerMonth?,
  *            transportMaxRidesPerMonth? }
+ *
+ * BUG FIX: successMsg corrected (was 'Discount caps updated.' — kept consistent).
  */
 export const updateCaps = makeThunk(
   'platformPricing/updateCaps',
@@ -150,10 +111,18 @@ export const updateTransport = makeThunk(
 );
 
 /**
- * PATCH /pricing/care-assistant
+ * PATCH /pricing/care-assistant  (superadmin only)
+ *
+ * BUG FIX: Removed non-existent fields payoutPerVisit and chargeToUser.
+ *          The schema has no top-level payoutPerVisit / chargeToUser on
+ *          careAssistantPricingSchema — those live inside pricingTiers.
+ *          The correct top-level scalars are:
+ *            dedicatedMonthlyPayout, dedicatedMonthlyCharge,
+ *            punctualityBonusPerVisit, noShowPenalty, overtimeRatePerHour.
+ *
  * payload: { note?,
- *            payoutPerVisit?, chargeToUser?,
- *            dedicatedMonthlyPayout?, punctualityBonusPerVisit?, noShowPenalty?,
+ *            dedicatedMonthlyPayout?, dedicatedMonthlyCharge?,
+ *            punctualityBonusPerVisit?, noShowPenalty?, overtimeRatePerHour?,
  *            platformFee?: { type, value } }
  */
 export const updateCareAssistant = makeThunk(
@@ -163,6 +132,21 @@ export const updateCareAssistant = makeThunk(
     return data;
   },
   { successMsg: 'Care-assistant pricing updated.' }
+);
+
+/**
+ * PATCH /pricing/care-assistant/tiers  (superadmin only)
+ * Replace the full pricing-tier array.
+ *
+ * payload: { note?, pricingTiers: [{ label, minHours, maxHours, chargeToUser, payoutToAssistant, isActive? }] }
+ */
+export const updateCareAssistantTiers = makeThunk(
+  'platformPricing/updateCareAssistantTiers',
+  async (payload) => {
+    const { data } = await API.patch('/pricing/care-assistant/tiers', payload);
+    return data;
+  },
+  { successMsg: 'Care-assistant pricing tiers updated.' }
 );
 
 /**
@@ -184,7 +168,7 @@ export const updateDoctor = makeThunk(
 );
 
 /**
- * PATCH /pricing/hospital
+ * PATCH /pricing/hospital  (superadmin only)
  * payload: { note?,
  *            settlementCycle?,
  *            platformFee?: { type, value },
@@ -200,7 +184,7 @@ export const updateHospital = makeThunk(
 );
 
 /**
- * DELETE /pricing/hospital/override/:hospitalId
+ * DELETE /pricing/hospital/override/:hospitalId  (superadmin only)
  */
 export const deleteHospitalOverride = makeThunk(
   'platformPricing/deleteHospitalOverride',
@@ -244,14 +228,14 @@ export const updatePharmacy = makeThunk(
 );
 
 /**
- * PATCH /pricing/custom-plan-options
+ * PATCH /pricing/custom-plan-options  (superadmin only)
  * payload: { note?,
  *   consultation?: { pricePerConsultation?, maxDoctorsAllowed?,
  *                    doctorPricingTiers?: [{ doctorCount, additionalPrice }] },
  *   transport?: { kmSlabs?: [{ km, price }] },
  *   diagnosticsDiscount?: { slabs?: [{ percent, price }] },
  *   pharmacyDiscount?:   { slabs?: [{ percent, price }] },
- *   careAssistant?: { pricePerVisit? },
+ *   careAssistant?: { pricingTiers?: [...] },
  *   addOns?: { homeSampleCollection?, prioritySupport? }
  * }
  */
@@ -265,7 +249,7 @@ export const updateCustomPlanOptions = makeThunk(
 );
 
 /**
- * PATCH /pricing/ads
+ * PATCH /pricing/ads  (superadmin only)
  * payload: { note?, sponsoredListingMonthly?, homePageBannerMonthly? }
  */
 export const updateAds = makeThunk(
@@ -293,7 +277,7 @@ export const updateTax = makeThunk(
 );
 
 /**
- * PATCH /pricing/refund-policy
+ * PATCH /pricing/refund-policy  (superadmin only)
  * payload: { note?, rideFullRefundHoursThreshold?,
  *            ridePartialRefundPercent?,
  *            refundProcessingDaysMin?, refundProcessingDaysMax? }
@@ -376,17 +360,19 @@ const initialState = {
   fullUpdateStatus: asyncStatus(),
 
   // ── Per-section save statuses ─────────────────────────────────────────────
-  capsStatus:              asyncStatus(),
-  transportStatus:         asyncStatus(),
-  careAssistantStatus:     asyncStatus(),
-  doctorStatus:            asyncStatus(),
-  hospitalStatus:          asyncStatus(),
-  diagnosticsStatus:       asyncStatus(),
-  pharmacyStatus:          asyncStatus(),
-  customPlanOptionsStatus: asyncStatus(),
-  adsStatus:               asyncStatus(),
-  taxStatus:               asyncStatus(),
-  refundPolicyStatus:      asyncStatus(),
+  capsStatus:                  asyncStatus(),
+  transportStatus:             asyncStatus(),
+  careAssistantStatus:         asyncStatus(),
+  // BUG FIX: added separate status for tier updates
+  careAssistantTiersStatus:    asyncStatus(),
+  doctorStatus:                asyncStatus(),
+  hospitalStatus:              asyncStatus(),
+  diagnosticsStatus:           asyncStatus(),
+  pharmacyStatus:              asyncStatus(),
+  customPlanOptionsStatus:     asyncStatus(),
+  adsStatus:                   asyncStatus(),
+  taxStatus:                   asyncStatus(),
+  refundPolicyStatus:          asyncStatus(),
 
   // ── Override deletion statuses ─────────────────────────────────────────────
   hospitalOverrideDeleteStatus: asyncStatus(),
@@ -418,27 +404,28 @@ const platformPricingSlice = createSlice({
   reducers: {
     /** Call on logout — wipes admin-only state, retains public config */
     clearAdminPricingState: (state) => {
-      state.adminConfig             = null;
-      state.adminConfigStatus       = asyncStatus();
-      state.fullUpdateStatus        = asyncStatus();
-      state.capsStatus              = asyncStatus();
-      state.transportStatus         = asyncStatus();
-      state.careAssistantStatus     = asyncStatus();
-      state.doctorStatus            = asyncStatus();
-      state.hospitalStatus          = asyncStatus();
-      state.diagnosticsStatus       = asyncStatus();
-      state.pharmacyStatus          = asyncStatus();
-      state.customPlanOptionsStatus = asyncStatus();
-      state.adsStatus               = asyncStatus();
-      state.taxStatus               = asyncStatus();
-      state.refundPolicyStatus      = asyncStatus();
+      state.adminConfig                  = null;
+      state.adminConfigStatus            = asyncStatus();
+      state.fullUpdateStatus             = asyncStatus();
+      state.capsStatus                   = asyncStatus();
+      state.transportStatus              = asyncStatus();
+      state.careAssistantStatus          = asyncStatus();
+      state.careAssistantTiersStatus     = asyncStatus();
+      state.doctorStatus                 = asyncStatus();
+      state.hospitalStatus               = asyncStatus();
+      state.diagnosticsStatus            = asyncStatus();
+      state.pharmacyStatus               = asyncStatus();
+      state.customPlanOptionsStatus      = asyncStatus();
+      state.adsStatus                    = asyncStatus();
+      state.taxStatus                    = asyncStatus();
+      state.refundPolicyStatus           = asyncStatus();
       state.hospitalOverrideDeleteStatus = asyncStatus();
-      state.history                 = [];
-      state.historyPagination       = paginationInit();
-      state.historyStatus           = asyncStatus();
-      state.selectedSnapshot        = null;
-      state.selectedSnapshotStatus  = asyncStatus();
-      state.restoreStatus           = asyncStatus();
+      state.history                      = [];
+      state.historyPagination            = paginationInit();
+      state.historyStatus                = asyncStatus();
+      state.selectedSnapshot             = null;
+      state.selectedSnapshotStatus       = asyncStatus();
+      state.restoreStatus                = asyncStatus();
     },
 
     clearPublicPricingState: (state) => {
@@ -531,6 +518,14 @@ const platformPricingSlice = createSlice({
       .addCase(updateCareAssistant.rejected,  rejected('careAssistantStatus'))
       .addCase(updateCareAssistant.fulfilled, (state, action) => {
         state.careAssistantStatus.loading = false;
+        if (state.adminConfig) state.adminConfig.careAssistant = action.payload.data;
+      })
+
+      // BUG FIX: added cases for the new tiers thunk
+      .addCase(updateCareAssistantTiers.pending,   pending('careAssistantTiersStatus'))
+      .addCase(updateCareAssistantTiers.rejected,  rejected('careAssistantTiersStatus'))
+      .addCase(updateCareAssistantTiers.fulfilled, (state, action) => {
+        state.careAssistantTiersStatus.loading = false;
         if (state.adminConfig) state.adminConfig.careAssistant = action.payload.data;
       })
 
@@ -689,6 +684,10 @@ export const selectAds               = (s) => sel(s).adminConfig?.ads           
 export const selectTax               = (s) => sel(s).adminConfig?.tax               ?? null;
 export const selectRefundPolicy      = (s) => sel(s).adminConfig?.refundPolicy      ?? null;
 
+// Care assistant tiers convenience selector
+export const selectCareAssistantTiers = (s) =>
+  sel(s).adminConfig?.careAssistant?.pricingTiers ?? [];
+
 // § 1 sub-selectors — public sections
 export const selectPublicCaps              = (s) => sel(s).publicConfig?.caps              ?? null;
 export const selectPublicCustomPlanOptions = (s) => sel(s).publicConfig?.customPlanOptions ?? null;
@@ -707,38 +706,52 @@ export const selectFullUpdateLoading = (s) => sel(s).fullUpdateStatus.loading;
 export const selectFullUpdateError   = (s) => sel(s).fullUpdateStatus.error;
 
 // § 3 — Section statuses
-export const selectCapsLoading              = (s) => sel(s).capsStatus.loading;
-export const selectCapsError                = (s) => sel(s).capsStatus.error;
-export const selectTransportLoading         = (s) => sel(s).transportStatus.loading;
-export const selectTransportError           = (s) => sel(s).transportStatus.error;
-export const selectCareAssistantLoading     = (s) => sel(s).careAssistantStatus.loading;
-export const selectCareAssistantError       = (s) => sel(s).careAssistantStatus.error;
-export const selectDoctorLoading            = (s) => sel(s).doctorStatus.loading;
-export const selectDoctorError              = (s) => sel(s).doctorStatus.error;
-export const selectHospitalLoading          = (s) => sel(s).hospitalStatus.loading;
-export const selectHospitalError            = (s) => sel(s).hospitalStatus.error;
-export const selectDiagnosticsLoading       = (s) => sel(s).diagnosticsStatus.loading;
-export const selectDiagnosticsError         = (s) => sel(s).diagnosticsStatus.error;
-export const selectPharmacyLoading          = (s) => sel(s).pharmacyStatus.loading;
-export const selectPharmacyError            = (s) => sel(s).pharmacyStatus.error;
-export const selectCustomPlanOptionsLoading = (s) => sel(s).customPlanOptionsStatus.loading;
-export const selectCustomPlanOptionsError   = (s) => sel(s).customPlanOptionsStatus.error;
-export const selectAdsLoading               = (s) => sel(s).adsStatus.loading;
-export const selectAdsError                 = (s) => sel(s).adsStatus.error;
-export const selectTaxLoading               = (s) => sel(s).taxStatus.loading;
-export const selectTaxError                 = (s) => sel(s).taxStatus.error;
-export const selectRefundPolicyLoading      = (s) => sel(s).refundPolicyStatus.loading;
-export const selectRefundPolicyError        = (s) => sel(s).refundPolicyStatus.error;
+export const selectCapsLoading                  = (s) => sel(s).capsStatus.loading;
+export const selectCapsError                    = (s) => sel(s).capsStatus.error;
+export const selectTransportLoading             = (s) => sel(s).transportStatus.loading;
+export const selectTransportError               = (s) => sel(s).transportStatus.error;
+export const selectCareAssistantLoading         = (s) => sel(s).careAssistantStatus.loading;
+export const selectCareAssistantError           = (s) => sel(s).careAssistantStatus.error;
+export const selectCareAssistantTiersLoading    = (s) => sel(s).careAssistantTiersStatus.loading;
+export const selectCareAssistantTiersError      = (s) => sel(s).careAssistantTiersStatus.error;
+export const selectDoctorLoading                = (s) => sel(s).doctorStatus.loading;
+export const selectDoctorError                  = (s) => sel(s).doctorStatus.error;
+export const selectHospitalLoading              = (s) => sel(s).hospitalStatus.loading;
+export const selectHospitalError                = (s) => sel(s).hospitalStatus.error;
+export const selectDiagnosticsLoading           = (s) => sel(s).diagnosticsStatus.loading;
+export const selectDiagnosticsError             = (s) => sel(s).diagnosticsStatus.error;
+export const selectPharmacyLoading              = (s) => sel(s).pharmacyStatus.loading;
+export const selectPharmacyError                = (s) => sel(s).pharmacyStatus.error;
+export const selectCustomPlanOptionsLoading     = (s) => sel(s).customPlanOptionsStatus.loading;
+export const selectCustomPlanOptionsError       = (s) => sel(s).customPlanOptionsStatus.error;
+export const selectAdsLoading                   = (s) => sel(s).adsStatus.loading;
+export const selectAdsError                     = (s) => sel(s).adsStatus.error;
+export const selectTaxLoading                   = (s) => sel(s).taxStatus.loading;
+export const selectTaxError                     = (s) => sel(s).taxStatus.error;
+export const selectRefundPolicyLoading          = (s) => sel(s).refundPolicyStatus.loading;
+export const selectRefundPolicyError            = (s) => sel(s).refundPolicyStatus.error;
 
+/**
+ * BUG FIX: Original was missing hospitalOverrideDeleteStatus.loading.
+ *          Also added careAssistantTiersStatus.loading.
+ */
 export const selectAnySectionSaving = (s) => {
   const p = sel(s);
   return (
-    p.capsStatus.loading || p.transportStatus.loading ||
-    p.careAssistantStatus.loading || p.doctorStatus.loading ||
-    p.hospitalStatus.loading || p.diagnosticsStatus.loading ||
-    p.pharmacyStatus.loading || p.customPlanOptionsStatus.loading ||
-    p.adsStatus.loading || p.taxStatus.loading ||
-    p.refundPolicyStatus.loading || p.fullUpdateStatus.loading
+    p.capsStatus.loading              ||
+    p.transportStatus.loading         ||
+    p.careAssistantStatus.loading     ||
+    p.careAssistantTiersStatus.loading ||
+    p.doctorStatus.loading            ||
+    p.hospitalStatus.loading          ||
+    p.hospitalOverrideDeleteStatus.loading || // BUG FIX: was missing
+    p.diagnosticsStatus.loading       ||
+    p.pharmacyStatus.loading          ||
+    p.customPlanOptionsStatus.loading ||
+    p.adsStatus.loading               ||
+    p.taxStatus.loading               ||
+    p.refundPolicyStatus.loading      ||
+    p.fullUpdateStatus.loading
   );
 };
 

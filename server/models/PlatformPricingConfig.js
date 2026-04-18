@@ -23,60 +23,43 @@ const platformFeeSchema = new Schema(
 // ─────────────────────────────────────────────────────────────────────────────
 // CARE ASSISTANT: Duration-Based Pricing Tier
 //
-// Each tier defines a booking-duration window and what the platform:
-//   - charges the user  (chargeToUser)
-//   - pays the assistant (payoutToAssistant)
-//   - retains as fee    (platformFee — derived or explicit)
+// FIX: Schema previously used default { _id: true } which makes Mongoose expect
+//      an ObjectId for _id. Callers were sending custom strings like "tier001",
+//      "tier002" etc., causing BSONError cast failures.
 //
-// Tier matching rule:  minHours <= bookingHours < maxHours
-//                      maxHours: null  →  no upper limit (open-ended)
-//
-// Default tiers:
-//   Tier 1 :  0 –  4 hrs  →  user ₹400  / assistant ₹300
-//   Tier 2 :  4 –  8 hrs  →  user ₹700  / assistant ₹550
-//   Tier 3 :  8 – 12 hrs  →  user ₹1000 / assistant ₹800
-//   Tier 4 : 12 – 24 hrs  →  user ₹1400 / assistant ₹1100  (full-day / live-in)
+//      Changed to { _id: false } to disable auto _id generation entirely.
+//      The router's PATCH /care-assistant/tiers handler now strips any incoming
+//      _id fields before assigning, so Mongoose never sees a string where it
+//      expects an ObjectId. Mongo still assigns a generated ObjectId internally
+//      when _id: false is not set — with _id: false the subdoc simply has no
+//      _id, which is the cleanest approach for embedded tier arrays.
 // ─────────────────────────────────────────────────────────────────────────────
 const careAssistantPricingTierSchema = new Schema(
   {
-    label:             { type: String, trim: true, required: true }, // e.g. "0 – 4 Hours"
-    minHours:          { type: Number, required: true, min: 0 },     // inclusive
-    maxHours:          { type: Number, default: null },               // exclusive; null = open-ended
-    chargeToUser:      { type: Number, required: true, min: 0 },     // amount billed to patient/family
-    payoutToAssistant: { type: Number, required: true, min: 0 },     // amount paid to care assistant
+    label:             { type: String, trim: true, required: true },
+    minHours:          { type: Number, required: true, min: 0 },
+    maxHours:          { type: Number, default: null },
+    chargeToUser:      { type: Number, required: true, min: 0 },
+    payoutToAssistant: { type: Number, required: true, min: 0 },
     isActive:          { type: Boolean, default: true },
   },
-  { _id: true }
+  { _id: false }   // FIX: was { _id: true } — caused ObjectId cast error on string _id input
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CARE ASSISTANT PRICING (replaces flat payoutPerVisit / chargeToUser)
+// CARE ASSISTANT PRICING
 // ─────────────────────────────────────────────────────────────────────────────
 const careAssistantPricingSchema = new Schema(
   {
-    // Duration-based tiered pricing (primary pricing model)
     pricingTiers: {
       type: [careAssistantPricingTierSchema],
-      default: () => [
-        { label: '0 – 4 Hours',   minHours: 0,  maxHours: 4,   chargeToUser: 400,  payoutToAssistant: 300  },
-        { label: '4 – 8 Hours',   minHours: 4,  maxHours: 8,   chargeToUser: 700,  payoutToAssistant: 550  },
-        { label: '8 – 12 Hours',  minHours: 8,  maxHours: 12,  chargeToUser: 1000, payoutToAssistant: 800  },
-        { label: '12 – 24 Hours', minHours: 12, maxHours: null, chargeToUser: 1400, payoutToAssistant: 1100 },
-      ],
+      default: () => [],
     },
-
-    // Platform fee applied on top of / derived from each tier's margin
-    platformFee: { type: platformFeeSchema, required: true },
-
-    // Dedicated (full-time monthly) assistant — flat monthly payout
+    platformFee:              { type: platformFeeSchema, required: true },
     dedicatedMonthlyPayout:   { type: Number, default: 8000 },
-    dedicatedMonthlyCharge:   { type: Number, default: 10000 }, // charge to the family/user
-
-    // Incentives & penalties
+    dedicatedMonthlyCharge:   { type: Number, default: 10000 },
     punctualityBonusPerVisit: { type: Number, default: 25 },
     noShowPenalty:            { type: Number, default: 100 },
-
-    // Overtime rate beyond the last tier's maxHours limit (per extra hour)
     overtimeRatePerHour:      { type: Number, default: 120 },
   },
   { _id: false }
@@ -84,11 +67,15 @@ const careAssistantPricingSchema = new Schema(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VERSION HISTORY
+// FIX: Added `section` and `changeSource` fields that router writes but schema
+//      previously lacked — Mongoose was silently dropping them.
 // ─────────────────────────────────────────────────────────────────────────────
 const versionHistorySchema = new Schema(
   {
     changedBy:     { type: Schema.Types.ObjectId, ref: 'User', required: true },
     changedByRole: { type: String, enum: ['admin', 'superadmin'], required: true },
+    section:       { type: String, default: null },       // FIX: added
+    changeSource:  { type: String, default: 'manual' },   // FIX: added
     changeNote:    { type: String },
     snapshot:      { type: Schema.Types.Mixed },
     changedAt:     { type: Date, default: Date.now },
@@ -172,14 +159,7 @@ const doctorPricingSchema = new Schema(
 // ─────────────────────────────────────────────────────────────────────────────
 const hospitalSchema = new Schema(
   {
-    platformFee: { type: platformFeeSchema, required: true },
-
-    /**
-     * hospitalOverrides — per-hospital fee overrides.
-     * Key: HospitalPartnerProfile._id (string)
-     * Value: platformFeeSchema  { type, value }
-     * Overrides the global platformFee for that specific hospital.
-     */
+    platformFee:       { type: platformFeeSchema, required: true },
     hospitalOverrides: { type: Map, of: platformFeeSchema, default: {} },
     settlementCycle:   { type: String, enum: ['weekly', 'biweekly', 'monthly'], default: 'monthly' },
   },
@@ -191,29 +171,12 @@ const hospitalSchema = new Schema(
 // ─────────────────────────────────────────────────────────────────────────────
 const diagnosticsSchema = new Schema(
   {
-    /**
-     * platformFee — global default fee applied to all lab bookings.
-     * type: 'fixed'      → flat ₹ amount per booking
-     * type: 'percentage' → % of the test / package value
-     */
     platformFee: { type: platformFeeSchema, required: true },
-
-    /**
-     * labOverrides — per-lab platform fee overrides.
-     * Key:   LabPartnerProfile._id (string)
-     * Value: platformFeeSchema  { type, value }
-     *
-     * Resolution priority:
-     *   1. LabPartnerProfile.platformFee          (lab-level, set on the lab doc itself)
-     *   2. diagnostics.labOverrides[labId]        (global config, per-lab slot)
-     *   3. diagnostics.platformFee                (global default — this field)
-     */
     labOverrides: {
       type: Map,
       of:   platformFeeSchema,
       default: {},
     },
-
     homeSampleCollectionCharge: { type: Number, default: 75 },
     homeSamplePlatformFee:      { type: platformFeeSchema, required: true },
     physicalReportFee:          { type: Number, default: 50 },
@@ -239,6 +202,10 @@ const pharmacySchema = new Schema(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CUSTOM PLAN OPTIONS
+//
+// FIX: careAssistant.pricingTiers here also uses careAssistantPricingTierSchema
+//      which now has { _id: false }. Same fix applies — string _id inputs like
+//      "ctier001" no longer cause BSONError.
 // ─────────────────────────────────────────────────────────────────────────────
 const customPlanOptionPricingSchema = new Schema(
   {
@@ -280,12 +247,10 @@ const customPlanOptionPricingSchema = new Schema(
       ],
     },
 
-    // Custom plan care assistant uses the same tiered structure,
-    // but allows plan-specific price overrides per tier
     careAssistant: {
       pricingTiers: {
-        type: [careAssistantPricingTierSchema],
-        default: () => [],  // empty = fall back to global careAssistant.pricingTiers
+        type: [careAssistantPricingTierSchema],  // FIX: inherits { _id: false } fix
+        default: () => [],
       },
     },
 
@@ -373,7 +338,6 @@ platformPricingConfigSchema.pre('save', function () {
   if (!tiers?.length) return;
 
   const active = tiers.filter((t) => t.isActive);
-  // Sort by minHours ascending before validation
   active.sort((a, b) => a.minHours - b.minHours);
 
   for (let i = 0; i < active.length - 1; i++) {
@@ -409,14 +373,6 @@ platformPricingConfigSchema.statics.getGlobal = async function () {
   return config;
 };
 
-/**
- * Resolve the correct care assistant pricing tier for a given booking duration.
- *
- * Usage:
- *   const config = await PlatformPricingConfig.getGlobal();
- *   const tier   = PlatformPricingConfig.resolveCareAssistantTier(config, 6);
- *   // → { label: '4 – 8 Hours', chargeToUser: 700, payoutToAssistant: 550, … }
- */
 platformPricingConfigSchema.statics.resolveCareAssistantTier = function (config, durationHours) {
   const tiers = config?.careAssistant?.pricingTiers ?? [];
   return (
@@ -429,50 +385,21 @@ platformPricingConfigSchema.statics.resolveCareAssistantTier = function (config,
   );
 };
 
-/**
- * Resolve the effective platform fee for a lab booking.
- *
- * Resolution priority:
- *   1. labPlatformFee     — set directly on LabPartnerProfile.platformFee
- *   2. labOverrides[id]   — per-lab slot in PlatformPricingConfig.diagnostics.labOverrides
- *   3. global default     — PlatformPricingConfig.diagnostics.platformFee
- *
- * Usage:
- *   const config = await PlatformPricingConfig.getGlobal();
- *   const fee    = PlatformPricingConfig.resolveLabPlatformFee(config, lab);
- *   // → { type: 'percentage', value: 10 }
- */
 platformPricingConfigSchema.statics.resolveLabPlatformFee = function (config, lab) {
-  // 1. Lab-level override stored on the lab document itself
   if (lab?.platformFee?.type && lab.platformFee.value != null) {
     return lab.platformFee;
   }
-
-  // 2. Per-lab slot inside global config
   const overrides = config?.diagnostics?.labOverrides;
   const labId     = lab?._id?.toString();
   if (overrides && labId && overrides.has(labId)) {
     return overrides.get(labId);
   }
-
-  // 3. Global default
   return config?.diagnostics?.platformFee ?? null;
 };
 
-/**
- * Resolve the effective platform fee for a hospital booking.
- *
- * Resolution priority:
- *   1. hospitalOverrides[id]  — per-hospital slot in PlatformPricingConfig.hospital.hospitalOverrides
- *   2. global default         — PlatformPricingConfig.hospital.platformFee
- *
- * Usage:
- *   const config = await PlatformPricingConfig.getGlobal();
- *   const fee    = PlatformPricingConfig.resolveHospitalPlatformFee(config, hospital);
- */
 platformPricingConfigSchema.statics.resolveHospitalPlatformFee = function (config, hospital) {
-  const overrides    = config?.hospital?.hospitalOverrides;
-  const hospitalId   = hospital?._id?.toString();
+  const overrides  = config?.hospital?.hospitalOverrides;
+  const hospitalId = hospital?._id?.toString();
   if (overrides && hospitalId && overrides.has(hospitalId)) {
     return overrides.get(hospitalId);
   }
@@ -481,12 +408,20 @@ platformPricingConfigSchema.statics.resolveHospitalPlatformFee = function (confi
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INSTANCE METHODS
+//
+// FIX: saveWithAudit previously used positional args (adminUserId, adminRole, note).
+//      Router calls it with a named-options object. Mismatch caused the entire
+//      object to land in `adminUserId`, leaving `adminRole` undefined, which
+//      triggered the 'Unauthorized' guard on every save.
+//      Fixed: accept a single named-options object.
 // ─────────────────────────────────────────────────────────────────────────────
-platformPricingConfigSchema.methods.saveWithAudit = async function (
+platformPricingConfigSchema.methods.saveWithAudit = async function ({
   adminUserId,
   adminRole,
-  note = ''
-) {
+  section      = null,
+  note         = '',
+  changeSource = 'manual',
+} = {}) {
   if (!['admin', 'superadmin'].includes(adminRole)) {
     throw new Error('Unauthorized');
   }
@@ -494,6 +429,8 @@ platformPricingConfigSchema.methods.saveWithAudit = async function (
   this.versionHistory.push({
     changedBy:     adminUserId,
     changedByRole: adminRole,
+    section,
+    changeSource,
     changeNote:    note,
     snapshot:      this.toObject(),
     changedAt:     new Date(),

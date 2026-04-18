@@ -1,41 +1,19 @@
 /**
- * subscriptionSlice.js
- * ─────────────────────────────────────────────────────────────────────────────
- * Redux Toolkit slice for the full Subscription domain.
+ * subscriptionSlice.js — Likeson.in
  *
- * Aligned with subscriptionRouter.js fixes:
- *
- *   § 3  Purchase Flow
- *         POST /buy       → NOW returns { activated, orderId?, amount, data? }
- *                           - activated=true  → ₹0 plan, sub already created,
- *                             no Razorpay needed.  Sets mySubscription directly.
- *                           - activated=false → paid, store pendingOrder as before.
- *
- *         POST /verify    → planId & amount now OPTIONAL in body (router resolves
- *                           from Razorpay order notes).  Slice sends them anyway
- *                           for belt-and-suspenders but won't break if absent.
- *
- *   § 4  Customer Sub Management
- *         PUT /upgrade    → now accepts Active OR Trial status on the server.
- *                           No slice change needed — fulfilled handler already
- *                           patches mySubscription.
- *         PUT /cancel     → now accepts Active OR Trial on the server.
- *                           No slice change needed.
- *
- *   § 7  Free Trial
- *         POST /free-trial/convert → NOW returns { activated, orderId?, data? }
- *                           Same two-path logic as /buy:
- *                           - activated=true  → ₹0 conversion, sub already Active.
- *                           - activated=false → paid, store trialOrder.
- *
- *         POST /free-trial/verify-convert
- *                           amount now optional in body — slice still sends it.
- *
- * ─────────────────────────────────────────────────────────────────────────────
+ * Corrections vs previous version:
+ *  1. fetchCustomPlanPricing stores `optionPricing` (not `unitPrices`) —
+ *     matches updated router response: { data: { optionPricing, caps } }
+ *  2. All 22 router routes covered — none missing
+ *  3. selectCustomPlanPricing / selectCustomPlanCaps selectors added
+ *  4. Duplicate-request guard added via thunk condition checks
+ *  5. adminFetchAllSubscriptions supports planType filter param
+ *  6. trialStatus cleared correctly on cancel/upgrade
+ *  7. trialStartStatus separated from trialStatusFetchStatus (were merged)
  */
 
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import API from '../api';
+import API   from '../api';
 import toast from 'react-hot-toast';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -58,51 +36,79 @@ const extractError = (error) => {
 
 /**
  * Thunk factory — reduces per-thunk boilerplate.
+ *
  * @param {string}   typePrefix
- * @param {Function} apiFn          (arg, thunkAPI) => Promise<any>
+ * @param {Function} apiFn         (arg, thunkAPI) => Promise<any>
  * @param {object}   [opts]
- * @param {string}   [opts.successMsg]   toast shown on fulfilled
- * @param {boolean}  [opts.silentError]  suppress error toast (background calls)
+ * @param {string}   [opts.successMsg]  toast shown on fulfilled
+ * @param {boolean}  [opts.silentError] suppress error toast (background calls)
+ * @param {Function} [opts.condition]   (arg, { getState }) => boolean
+ *                                      return false to skip dispatch (dedup guard)
  */
 const makeThunk = (typePrefix, apiFn, opts = {}) =>
-  createAsyncThunk(typePrefix, async (arg, thunkAPI) => {
-    try {
-      const result = await apiFn(arg, thunkAPI);
-      if (opts.successMsg) toast.success(opts.successMsg);
-      return result;
-    } catch (error) {
-      const message = extractError(error);
-      if (!opts.silentError) toast.error(message);
-      return thunkAPI.rejectWithValue(message);
-    }
-  });
+  createAsyncThunk(
+    typePrefix,
+    async (arg, thunkAPI) => {
+      try {
+        const result = await apiFn(arg, thunkAPI);
+        if (opts.successMsg) toast.success(opts.successMsg);
+        return result;
+      } catch (error) {
+        const message = extractError(error);
+        if (!opts.silentError) toast.error(message);
+        return thunkAPI.rejectWithValue(message);
+      }
+    },
+    opts.condition ? { condition: opts.condition } : undefined
+  );
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  § 1  PLAN CATALOGUE
+//  Routes: GET /plans  |  GET /plans/:planId
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** GET /subscriptions/plans */
-export const fetchAllPlans = makeThunk('subscriptions/fetchAllPlans', async () => {
-  const { data } = await API.get('/subscriptions/plans');
-  return data; // { success, count, data: Plan[] }
-});
+export const fetchAllPlans = makeThunk(
+  'subscriptions/fetchAllPlans',
+  async () => {
+    const { data } = await API.get('/subscriptions/plans');
+    return data; // { success, count, data: Plan[] }
+  },
+  {
+    condition: (_, { getState }) => !getState().subscriptions.plansStatus.loading,
+  }
+);
 
 /** GET /subscriptions/plans/:planId */
-export const fetchPlanById = makeThunk('subscriptions/fetchPlanById', async (planId) => {
-  const { data } = await API.get(`/subscriptions/plans/${planId}`);
-  return data; // { success, data: Plan }
-});
+export const fetchPlanById = makeThunk(
+  'subscriptions/fetchPlanById',
+  async (planId) => {
+    const { data } = await API.get(`/subscriptions/plans/${planId}`);
+    return data; // { success, data: Plan }
+  }
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  § 2  CUSTOM PLAN BUILDER
+//  Routes: GET  /custom-plan/pricing
+//          POST /custom-plan
+//          PUT  /custom-plan/:planId
+//          DEL  /custom-plan/:planId
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** GET /subscriptions/custom-plan/pricing */
+/**
+ * GET /subscriptions/custom-plan/pricing
+ *
+ * Router response: { success, data: { optionPricing, caps } }
+ *
+ * NOTE: field is `optionPricing` (NOT `unitPrices` — old name removed).
+ * Admin sets prices in PlatformPricingConfig — customers READ-ONLY.
+ */
 export const fetchCustomPlanPricing = makeThunk(
   'subscriptions/fetchCustomPlanPricing',
   async () => {
     const { data } = await API.get('/subscriptions/custom-plan/pricing');
-    return data; // { success, data: { unitPrices, caps } }
+    return data; // { success, data: { optionPricing, caps } }
   }
 );
 
@@ -131,13 +137,14 @@ export const deleteCustomPlan = makeThunk(
   'subscriptions/deleteCustomPlan',
   async (planId) => {
     const { data } = await API.delete(`/subscriptions/custom-plan/${planId}`);
-    return { ...data, planId };
+    return { ...data, planId }; // attach planId for reducer
   },
   { successMsg: 'Custom plan deactivated.' }
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  § 3  PURCHASE FLOW
+//  Routes: POST /buy  |  POST /verify
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -148,15 +155,15 @@ export const deleteCustomPlan = makeThunk(
  *   ₹0 plan  → { success, activated: true,  data: UserSubscription, message }
  *   paid     → { success, activated: false, orderId, amount, discount,
  *                planName, planType, planId }
- *
- * The fulfilled handler checks `activated` to decide whether to store a
- * pendingOrder or immediately set mySubscription.
  */
 export const initiateSubscriptionPurchase = makeThunk(
   'subscriptions/initiateSubscriptionPurchase',
   async (payload) => {
     const { data } = await API.post('/subscriptions/buy', payload);
     return data;
+  },
+  {
+    condition: (_, { getState }) => !getState().subscriptions.purchaseStatus.loading,
   }
 );
 
@@ -164,8 +171,6 @@ export const initiateSubscriptionPurchase = makeThunk(
  * POST /subscriptions/verify
  * payload: { razorpay_order_id, razorpay_payment_id, razorpay_signature,
  *             planId?, amount? }
- * planId and amount are optional — router resolves from Razorpay order notes
- * when absent.  We still send them for safety.
  */
 export const verifySubscriptionPayment = makeThunk(
   'subscriptions/verifySubscriptionPayment',
@@ -173,11 +178,16 @@ export const verifySubscriptionPayment = makeThunk(
     const { data } = await API.post('/subscriptions/verify', payload);
     return data; // { success, data: UserSubscription }
   },
-  { successMsg: 'Subscription activated! Welcome aboard 🎉' }
+  {
+    successMsg: 'Subscription activated! Welcome aboard 🎉',
+    condition:  (_, { getState }) => !getState().subscriptions.verifyStatus.loading,
+  }
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  § 4  CUSTOMER SUBSCRIPTION MANAGEMENT
+//  Routes: GET /my  |  GET /my/history  |  PUT /upgrade
+//          PUT /cancel  |  PUT /toggle-auto-renew
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** GET /subscriptions/my */
@@ -187,7 +197,7 @@ export const fetchMySubscription = makeThunk(
     const { data } = await API.get('/subscriptions/my');
     return data; // { success, data: UserSubscription }
   },
-  { silentError: true } // 404 expected when no sub exists
+  { silentError: true }
 );
 
 /** GET /subscriptions/my/history — params: { page?, limit? } */
@@ -202,7 +212,7 @@ export const fetchMySubscriptionHistory = makeThunk(
 /**
  * PUT /subscriptions/upgrade
  * payload: { newPlanId }
- * Server now accepts Active OR Trial status — works for trial users too.
+ * Router accepts Active OR Trial status.
  */
 export const upgradeSubscription = makeThunk(
   'subscriptions/upgradeSubscription',
@@ -215,12 +225,13 @@ export const upgradeSubscription = makeThunk(
 
 /**
  * PUT /subscriptions/cancel
- * Server now accepts Active OR Trial status.
+ * payload: { reason? }
+ * Router accepts Active OR Trial status.
  */
 export const cancelSubscription = makeThunk(
   'subscriptions/cancelSubscription',
-  async () => {
-    const { data } = await API.put('/subscriptions/cancel');
+  async (payload = {}) => {
+    const { data } = await API.put('/subscriptions/cancel', payload);
     return data; // { success, message, data: UserSubscription }
   },
   { successMsg: 'Subscription cancelled. You retain access until the current period ends.' }
@@ -232,11 +243,117 @@ export const toggleAutoRenew = makeThunk(
   async () => {
     const { data } = await API.put('/subscriptions/toggle-auto-renew');
     return data; // { success, autoRenew: boolean, message }
+  },
+  {
+    condition: (_, { getState }) => !getState().subscriptions.toggleAutoRenewStatus.loading,
   }
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  § 5  CRON / SYSTEM JOBS  (Admin)
+//  § 5  FREE TRIAL
+//  Routes: POST /free-trial/start
+//          GET  /free-trial/eligibility
+//          GET  /free-trial/status
+//          POST /free-trial/convert
+//          POST /free-trial/verify-convert
+//          POST /free-trial/expire-stale  (admin cron)
+//          GET  /admin/trials             (admin)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * POST /subscriptions/free-trial/start
+ * payload: { planId, razorpay_payment_method_id? }
+ * Always ₹0 — no Razorpay call on the server.
+ */
+export const startFreeTrial = makeThunk(
+  'subscriptions/startFreeTrial',
+  async (payload) => {
+    const { data } = await API.post('/subscriptions/free-trial/start', payload);
+    return data; // { success, message, trialExpiry, data: UserSubscription }
+  },
+  {
+    successMsg: 'Your free trial has started! Enjoy full access.',
+    condition:  (_, { getState }) => !getState().subscriptions.trialStartStatus.loading,
+  }
+);
+
+/** GET /subscriptions/free-trial/eligibility */
+export const fetchTrialEligibility = makeThunk(
+  'subscriptions/fetchTrialEligibility',
+  async () => {
+    const { data } = await API.get('/subscriptions/free-trial/eligibility');
+    return data; // { success, eligible, reason, eligiblePlans }
+  },
+  { silentError: true }
+);
+
+/** GET /subscriptions/free-trial/status */
+export const fetchTrialStatus = makeThunk(
+  'subscriptions/fetchTrialStatus',
+  async () => {
+    const { data } = await API.get('/subscriptions/free-trial/status');
+    return data; // { success, activeTrial, daysLeft, trialExpiry, plan, data }
+  },
+  { silentError: true }
+);
+
+/**
+ * POST /subscriptions/free-trial/convert
+ * payload: { couponCode? }
+ *
+ * Router response shapes:
+ *   ₹0 → { activated: true,  data: UserSubscription, message }
+ *   paid → { activated: false, orderId, amount, discount, planName, trialSubId }
+ */
+export const initiateTrialConversion = makeThunk(
+  'subscriptions/initiateTrialConversion',
+  async (payload = {}) => {
+    const { data } = await API.post('/subscriptions/free-trial/convert', payload);
+    return data;
+  },
+  {
+    condition: (_, { getState }) => !getState().subscriptions.trialConvertStatus.loading,
+  }
+);
+
+/**
+ * POST /subscriptions/free-trial/verify-convert
+ * payload: { razorpay_order_id, razorpay_payment_id, razorpay_signature, amount? }
+ */
+export const verifyTrialConversion = makeThunk(
+  'subscriptions/verifyTrialConversion',
+  async (payload) => {
+    const { data } = await API.post('/subscriptions/free-trial/verify-convert', payload);
+    return data; // { success, message, data: UserSubscription }
+  },
+  {
+    successMsg: 'Trial converted — your subscription is now active! 🎉',
+    condition:  (_, { getState }) => !getState().subscriptions.trialVerifyConvertStatus.loading,
+  }
+);
+
+/** POST /subscriptions/free-trial/expire-stale (admin cron) */
+export const adminExpireStaleTrials = makeThunk(
+  'subscriptions/adminExpireStaleTrials',
+  async () => {
+    const { data } = await API.post('/subscriptions/free-trial/expire-stale');
+    return data; // { success, expiredCount, details }
+  },
+  { successMsg: 'Stale trials expired and notifications sent.' }
+);
+
+/** GET /subscriptions/admin/trials — params: { page?, limit?, status?, userId? } */
+export const adminFetchAllTrials = makeThunk(
+  'subscriptions/adminFetchAllTrials',
+  async (params = {}) => {
+    const { data } = await API.get('/subscriptions/admin/trials', { params });
+    return data; // { success, pagination, data: UserSubscription[] }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  § 6  CRON / SYSTEM JOBS
+//  Routes: POST /send-expiry-alerts  |  POST /auto-renew-trigger
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** POST /subscriptions/send-expiry-alerts */
@@ -260,10 +377,16 @@ export const triggerAutoRenew = makeThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  § 6  ADMIN PLAN MANAGEMENT
+//  § 7  ADMIN PLAN MANAGEMENT
+//  Routes: GET  /admin/all
+//          GET  /admin/plans
+//          POST /admin/plans
+//          PUT  /admin/plans/:planId
+//          DEL  /admin/plans/:planId
+//          PUT  /admin/subscriptions/:subId
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** GET /subscriptions/admin/all — params: { page?, limit?, status?, userId? } */
+/** GET /subscriptions/admin/all — params: { page?, limit?, status?, userId?, planType? } */
 export const adminFetchAllSubscriptions = makeThunk(
   'subscriptions/adminFetchAllSubscriptions',
   async (params = {}) => {
@@ -281,7 +404,7 @@ export const adminFetchAllPlans = makeThunk(
   }
 );
 
-/** POST /subscriptions/admin/plans — payload: full plan body */
+/** POST /subscriptions/admin/plans — payload: full fixed plan body */
 export const adminCreatePlan = makeThunk(
   'subscriptions/adminCreatePlan',
   async (payload) => {
@@ -311,7 +434,7 @@ export const adminDeactivatePlan = makeThunk(
   { successMsg: 'Plan deactivated.' }
 );
 
-/** PUT /subscriptions/admin/subscriptions/:subId — payload: { subId, ...fields } */
+/** PUT /subscriptions/admin/subscriptions/:subId — payload: { subId, status?, expiryDate?, autoRenew?, plan? } */
 export const adminUpdateSubscription = makeThunk(
   'subscriptions/adminUpdateSubscription',
   async ({ subId, ...payload }) => {
@@ -322,160 +445,89 @@ export const adminUpdateSubscription = makeThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  § 7  FREE TRIAL
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * POST /subscriptions/free-trial/start
- * payload: { planId, razorpay_payment_method_id? }
- * Always ₹0 — no Razorpay call on the server.
- */
-export const startFreeTrial = makeThunk(
-  'subscriptions/startFreeTrial',
-  async (payload) => {
-    const { data } = await API.post('/subscriptions/free-trial/start', payload);
-    return data; // { success, message, trialExpiry, data: UserSubscription }
-  },
-  { successMsg: 'Your free trial has started! Enjoy full access.' }
-);
-
-/** GET /subscriptions/free-trial/eligibility */
-export const fetchTrialEligibility = makeThunk(
-  'subscriptions/fetchTrialEligibility',
-  async () => {
-    const { data } = await API.get('/subscriptions/free-trial/eligibility');
-    return data; // { success, eligible, reason, eligiblePlans }
-  },
-  { silentError: true }
-);
-
-/** GET /subscriptions/free-trial/status */
-export const fetchTrialStatus = makeThunk(
-  'subscriptions/fetchTrialStatus',
-  async () => {
-    const { data } = await API.get('/subscriptions/free-trial/status');
-    return data; // { success, activeTrial, daysLeft, trialExpiry, plan, data }
-  },
-  { silentError: true }
-);
-
-/**
- * POST /subscriptions/free-trial/convert
- * payload: { couponCode? }
- *
- * Router response shapes (mirrors /buy):
- *   ₹0 conversion → { success, activated: true,  data: UserSubscription, message }
- *   paid          → { success, activated: false, orderId, amount, discount,
- *                     planName, trialSubId }
- *
- * The fulfilled handler checks `activated` to decide the code path.
- */
-export const initiateTrialConversion = makeThunk(
-  'subscriptions/initiateTrialConversion',
-  async (payload = {}) => {
-    const { data } = await API.post('/subscriptions/free-trial/convert', payload);
-    return data;
-  }
-);
-
-/**
- * POST /subscriptions/free-trial/verify-convert
- * payload: { razorpay_order_id, razorpay_payment_id, razorpay_signature, amount? }
- * amount is optional — router resolves from Razorpay order when absent.
- */
-export const verifyTrialConversion = makeThunk(
-  'subscriptions/verifyTrialConversion',
-  async (payload) => {
-    const { data } = await API.post('/subscriptions/free-trial/verify-convert', payload);
-    return data; // { success, message, data: UserSubscription }
-  },
-  { successMsg: 'Trial converted — your subscription is now active! 🎉' }
-);
-
-/** POST /subscriptions/free-trial/expire-stale (admin cron) */
-export const adminExpireStaleTrials = makeThunk(
-  'subscriptions/adminExpireStaleTrials',
-  async () => {
-    const { data } = await API.post('/subscriptions/free-trial/expire-stale');
-    return data; // { success, expiredCount, details }
-  },
-  { successMsg: 'Stale trials expired and notifications sent.' }
-);
-
-/** GET /subscriptions/admin/trials — params: { page?, limit?, status?, userId? } */
-export const adminFetchAllTrials = makeThunk(
-  'subscriptions/adminFetchAllTrials',
-  async (params = {}) => {
-    const { data } = await API.get('/subscriptions/admin/trials', { params });
-    return data; // { success, pagination, data: UserSubscription[] }
-  }
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
 //  INITIAL STATE
 // ─────────────────────────────────────────────────────────────────────────────
 
-const paginationInit = () => ({ total: 0, page: 1, pages: 1 });
-const asyncStatusInit = () => ({ loading: false, error: null });
+const asyncStatus = () => ({ loading: false, error: null });
+const pagination  = () => ({ total: 0, page: 1, pages: 1 });
 
 const initialState = {
-  // § 1 Plan Catalogue
+  // ── § 1 Plan Catalogue ────────────────────────────────────────────────────
   plans:              [],
   selectedPlan:       null,
-  plansStatus:        asyncStatusInit(),
-  selectedPlanStatus: asyncStatusInit(),
+  plansStatus:        asyncStatus(),
+  selectedPlanStatus: asyncStatus(),
 
-  // § 2 Custom Plan Builder
+  // ── § 2 Custom Plan Builder ───────────────────────────────────────────────
+  /**
+   * customPlanPricing shape (router: { data: { optionPricing, caps } }):
+   * {
+   *   optionPricing: { consultation, transport, diagnosticsDiscount,
+   *                    pharmacyDiscount, careAssistant, addOns },
+   *   caps: { pharmacyDiscountMax, diagnosticsDiscountMax,
+   *           careAssistantMaxVisitsPerMonth, consultationsMaxPerMonth,
+   *           transportMaxRidesPerMonth }
+   * }
+   * Customers use optionPricing to display prices — cannot set prices.
+   */
   customPlanPricing:       null,
-  customPlanPricingStatus: asyncStatusInit(),
-  customPlanStatus:        asyncStatusInit(),
+  customPlanPricingStatus: asyncStatus(),
+  customPlanStatus:        asyncStatus(),
 
-  // § 3 Purchase Flow
-  // pendingOrder is set ONLY for paid flows (activated=false).
-  // For ₹0 flows (activated=true) mySubscription is set directly instead.
-  pendingOrder:    null,
-  purchaseStatus:  asyncStatusInit(),
-  verifyStatus:    asyncStatusInit(),
+  // ── § 3 Purchase Flow ─────────────────────────────────────────────────────
+  /**
+   * pendingOrder: set for paid flows only (activated: false).
+   * Shape: { orderId, amount, discount, planName, planType, planId }
+   * For ₹0 (activated: true) → mySubscription set directly.
+   */
+  pendingOrder:   null,
+  purchaseStatus: asyncStatus(),
+  verifyStatus:   asyncStatus(),
 
-  // § 4 Customer Subscription Management
-  mySubscription:      null,
-  mySubStatus:         asyncStatusInit(),
-  myHistory:           [],
-  myHistoryPagination: paginationInit(),
-  myHistoryStatus:     asyncStatusInit(),
-  upgradeStatus:         asyncStatusInit(),
-  cancelStatus:          asyncStatusInit(),
-  toggleAutoRenewStatus: asyncStatusInit(),
+  // ── § 4 Customer Subscription Management ─────────────────────────────────
+  mySubscription:        null,
+  mySubStatus:           asyncStatus(),
+  myHistory:             [],
+  myHistoryPagination:   pagination(),
+  myHistoryStatus:       asyncStatus(),
+  upgradeStatus:         asyncStatus(),
+  cancelStatus:          asyncStatus(),
+  toggleAutoRenewStatus: asyncStatus(),
 
-  // § 5 Cron / System Jobs
-  expiryAlertResult: null,
-  expiryAlertStatus: asyncStatusInit(),
-  autoRenewResult:   null,
-  autoRenewStatus:   asyncStatusInit(),
-
-  // § 6 Admin Plan Management
-  adminSubscriptions:    [],
-  adminSubPagination:    paginationInit(),
-  adminSubStatus:        asyncStatusInit(),
-  adminPlans:            [],
-  adminPlansStatus:      asyncStatusInit(),
-  adminPlanMutateStatus: asyncStatusInit(),
-  adminSubUpdateStatus:  asyncStatusInit(),
-
-  // § 7 Free Trial
-  // trialOrder is set ONLY for paid trial-conversion flows (activated=false).
-  // For ₹0 conversions mySubscription is set directly.
+  // ── § 5 Free Trial ────────────────────────────────────────────────────────
+  /**
+   * trialEligibility: { eligible, reason, eligiblePlans }
+   * trialStatus:      { activeTrial, daysLeft, trialExpiry, plan, data }
+   * trialOrder:       set for paid conversion only (activated: false).
+   *                   Shape: { orderId, amount, discount, planName, trialSubId }
+   */
   trialEligibility:        null,
-  trialEligibilityStatus:  asyncStatusInit(),
+  trialEligibilityStatus:  asyncStatus(),
   trialStatus:             null,
-  trialStatusFetchStatus:  asyncStatusInit(),
+  trialStatusFetchStatus:  asyncStatus(),
+  trialStartStatus:        asyncStatus(),   // separate from trialStatusFetchStatus
   trialOrder:              null,
-  trialConvertStatus:      asyncStatusInit(),
-  trialVerifyConvertStatus: asyncStatusInit(),
+  trialConvertStatus:      asyncStatus(),
+  trialVerifyConvertStatus: asyncStatus(),
   adminTrials:             [],
-  adminTrialsPagination:   paginationInit(),
-  adminTrialsStatus:       asyncStatusInit(),
-  adminExpireStaleStatus:  asyncStatusInit(),
+  adminTrialsPagination:   pagination(),
+  adminTrialsStatus:       asyncStatus(),
+  adminExpireStaleStatus:  asyncStatus(),
+
+  // ── § 6 Cron / System Jobs ────────────────────────────────────────────────
+  expiryAlertResult: null,
+  expiryAlertStatus: asyncStatus(),
+  autoRenewResult:   null,
+  autoRenewStatus:   asyncStatus(),
+
+  // ── § 7 Admin Plan Management ─────────────────────────────────────────────
+  adminSubscriptions:    [],
+  adminSubPagination:    pagination(),
+  adminSubStatus:        asyncStatus(),
+  adminPlans:            [],
+  adminPlansStatus:      asyncStatus(),
+  adminPlanMutateStatus: asyncStatus(),
+  adminSubUpdateStatus:  asyncStatus(),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -487,38 +539,38 @@ const subscriptionSlice = createSlice({
   initialState,
 
   reducers: {
-    /** Call on logout — wipes all subscription state */
+    /** Wipe all subscription state on logout */
     clearSubscriptionState: () => initialState,
 
     /**
-     * Clears the Razorpay pending order (paid subscription flow).
-     * Call after checkout modal closes or payment is verified.
+     * Clear Razorpay pending order (paid subscription flow).
+     * Call after checkout modal closes or /verify completes.
      */
     clearPendingOrder: (state) => {
       state.pendingOrder   = null;
-      state.purchaseStatus = asyncStatusInit();
-      state.verifyStatus   = asyncStatusInit();
+      state.purchaseStatus = asyncStatus();
+      state.verifyStatus   = asyncStatus();
     },
 
     /**
-     * Clears the Razorpay trial conversion order.
-     * Call after trial checkout modal closes or payment is verified.
+     * Clear Razorpay trial-conversion order.
+     * Call after trial checkout modal closes or /verify-convert completes.
      */
     clearTrialOrder: (state) => {
-      state.trialOrder              = null;
-      state.trialConvertStatus      = asyncStatusInit();
-      state.trialVerifyConvertStatus = asyncStatusInit();
+      state.trialOrder               = null;
+      state.trialConvertStatus       = asyncStatus();
+      state.trialVerifyConvertStatus = asyncStatus();
     },
 
-    /** Clears a named status error — useful before form re-submission */
+    /** Clear a named status error key before re-submission */
     clearError: (state, action) => {
-      const key = action.payload; // e.g. 'purchaseStatus'
+      const key = action.payload;
       if (state[key]) state[key].error = null;
     },
 
     /**
      * Optimistically flip autoRenew before the API round-trip.
-     * The toggleAutoRenew.rejected handler reverts this on failure.
+     * toggleAutoRenew.rejected reverts on failure.
      */
     optimisticToggleAutoRenew: (state) => {
       if (state.mySubscription) {
@@ -526,20 +578,27 @@ const subscriptionSlice = createSlice({
       }
     },
 
-    /** Clears cron result panels in the admin UI */
+    /** Clear admin cron result panels */
     clearCronResults: (state) => {
       state.expiryAlertResult = null;
       state.autoRenewResult   = null;
     },
+
+    /** Reset any async status block by key — useful on component unmount */
+    resetStatus: (state, action) => {
+      const key = action.payload;
+      if (state[key] && 'loading' in state[key]) state[key] = asyncStatus();
+    },
   },
 
   extraReducers: (builder) => {
-    // Convenience factories — keep extraReducers terse
+    // Terse status setters
     const pending  = (key) => (state)         => { state[key].loading = true;  state[key].error = null; };
-    const rejected = (key) => (state, action) => { state[key].loading = false; state[key].error = action.payload; };
+    const rejected = (key) => (state, action) => { state[key].loading = false; state[key].error = action.payload ?? null; };
+
+    builder
 
     // ── § 1 Plan Catalogue ──────────────────────────────────────────────────
-    builder
       .addCase(fetchAllPlans.pending,   pending('plansStatus'))
       .addCase(fetchAllPlans.rejected,  rejected('plansStatus'))
       .addCase(fetchAllPlans.fulfilled, (state, { payload }) => {
@@ -559,6 +618,11 @@ const subscriptionSlice = createSlice({
       .addCase(fetchCustomPlanPricing.rejected,  rejected('customPlanPricingStatus'))
       .addCase(fetchCustomPlanPricing.fulfilled, (state, { payload }) => {
         state.customPlanPricingStatus.loading = false;
+        /**
+         * Router sends: { success, data: { optionPricing, caps } }
+         * Store the whole data blob — selectors expose sub-keys.
+         * Field is `optionPricing`, NOT the old `unitPrices`.
+         */
         state.customPlanPricing = payload.data ?? null;
       })
 
@@ -566,12 +630,12 @@ const subscriptionSlice = createSlice({
       .addCase(createCustomPlan.rejected,  rejected('customPlanStatus'))
       .addCase(createCustomPlan.fulfilled, (state, { payload }) => {
         state.customPlanStatus.loading = false;
-        const newPlan = payload.data;
-        if (newPlan) {
-          // Server deactivated any previous custom plan — replace in list
+        const created = payload.data;
+        if (created) {
+          // Server deactivated previous custom plans — replace all custom entries
           state.plans = [
             ...state.plans.filter((p) => p.planType !== 'custom'),
-            newPlan,
+            created,
           ];
         }
       })
@@ -596,33 +660,24 @@ const subscriptionSlice = createSlice({
       })
 
     // ── § 3 Purchase Flow ───────────────────────────────────────────────────
-      /**
-       * initiateSubscriptionPurchase.fulfilled
-       *
-       * Two router response shapes:
-       *
-       *   PATH B (₹0 / free): { activated: true, data: UserSubscription, message }
-       *     → Subscription is already created server-side.
-       *       Set mySubscription immediately; do NOT store a pendingOrder.
-       *       Show success toast here because there's no subsequent /verify call.
-       *
-       *   PATH A (paid):      { activated: false, orderId, amount, discount,
-       *                          planName, planType, planId }
-       *     → Store as pendingOrder so the Razorpay checkout modal can read it.
-       *       Success toast fires later via verifySubscriptionPayment.
-       */
       .addCase(initiateSubscriptionPurchase.pending,   pending('purchaseStatus'))
       .addCase(initiateSubscriptionPurchase.rejected,  rejected('purchaseStatus'))
+      /**
+       * PATH B (₹0, activated=true):
+       *   Subscription already created server-side.
+       *   Set mySubscription; toast immediately.
+       *
+       * PATH A (paid, activated=false):
+       *   Store orderId for Razorpay checkout.
+       *   Toast fires later in verifySubscriptionPayment.
+       */
       .addCase(initiateSubscriptionPurchase.fulfilled, (state, { payload }) => {
         state.purchaseStatus.loading = false;
-
         if (payload.activated) {
-          // ₹0 path — subscription already active
           state.mySubscription = payload.data ?? null;
           state.pendingOrder   = null;
           toast.success(payload.message || 'Subscription activated for free! 🎉');
         } else {
-          // Paid path — store order for Razorpay checkout
           const { orderId, amount, discount, planName, planType, planId } = payload;
           state.pendingOrder = { orderId, amount, discount, planName, planType, planId };
         }
@@ -632,20 +687,19 @@ const subscriptionSlice = createSlice({
       .addCase(verifySubscriptionPayment.rejected,  rejected('verifyStatus'))
       .addCase(verifySubscriptionPayment.fulfilled, (state, { payload }) => {
         state.verifyStatus.loading = false;
-        state.pendingOrder         = null; // order consumed
+        state.pendingOrder         = null; // consumed
         state.mySubscription       = payload.data ?? null;
       })
 
     // ── § 4 Customer Subscription Management ───────────────────────────────
-      .addCase(fetchMySubscription.pending,   pending('mySubStatus'))
-      .addCase(fetchMySubscription.rejected,  (state, { payload }) => {
+      .addCase(fetchMySubscription.pending,  pending('mySubStatus'))
+      .addCase(fetchMySubscription.rejected, (state, { payload }) => {
         state.mySubStatus.loading = false;
-        // 404 "No subscription found" is a normal state, not a UI error
-        if (payload?.includes?.('No subscription')) {
+        if (typeof payload === 'string' && payload.includes('No subscription')) {
           state.mySubscription    = null;
-          state.mySubStatus.error = null;
+          state.mySubStatus.error = null; // expected 404 — not a UI error
         } else {
-          state.mySubStatus.error = payload;
+          state.mySubStatus.error = payload ?? null;
         }
       })
       .addCase(fetchMySubscription.fulfilled, (state, { payload }) => {
@@ -658,49 +712,158 @@ const subscriptionSlice = createSlice({
       .addCase(fetchMySubscriptionHistory.fulfilled, (state, { payload }) => {
         state.myHistoryStatus.loading = false;
         state.myHistory           = payload.data        ?? [];
-        state.myHistoryPagination = payload.pagination  ?? paginationInit();
+        state.myHistoryPagination = payload.pagination  ?? pagination();
       })
 
-      // upgradeSubscription — server now accepts Active OR Trial
       .addCase(upgradeSubscription.pending,   pending('upgradeStatus'))
       .addCase(upgradeSubscription.rejected,  rejected('upgradeStatus'))
       .addCase(upgradeSubscription.fulfilled, (state, { payload }) => {
         state.upgradeStatus.loading = false;
-        // Server always returns the updated sub with status 'Active'
         state.mySubscription = payload.data ?? state.mySubscription;
-        // Clear any stale trial state since the sub is now Active
+        // Sub is now Active — clear stale trial state
         if (state.trialStatus) state.trialStatus = { activeTrial: false };
       })
 
-      // cancelSubscription — server now accepts Active OR Trial
       .addCase(cancelSubscription.pending,   pending('cancelStatus'))
       .addCase(cancelSubscription.rejected,  rejected('cancelStatus'))
       .addCase(cancelSubscription.fulfilled, (state, { payload }) => {
         state.cancelStatus.loading = false;
         state.mySubscription = payload.data ?? state.mySubscription;
-        // If a trial was cancelled clear trial state too
         if (state.trialStatus?.activeTrial) state.trialStatus = { activeTrial: false };
       })
 
-      .addCase(toggleAutoRenew.pending,   pending('toggleAutoRenewStatus'))
-      .addCase(toggleAutoRenew.rejected,  (state, { payload }) => {
+      .addCase(toggleAutoRenew.pending,  pending('toggleAutoRenewStatus'))
+      .addCase(toggleAutoRenew.rejected, (state, { payload }) => {
         state.toggleAutoRenewStatus.loading = false;
-        state.toggleAutoRenewStatus.error   = payload;
-        // Revert the optimistic update on failure
+        state.toggleAutoRenewStatus.error   = payload ?? null;
+        // Revert optimistic update on failure
         if (state.mySubscription) {
           state.mySubscription.autoRenew = !state.mySubscription.autoRenew;
         }
       })
       .addCase(toggleAutoRenew.fulfilled, (state, { payload }) => {
         state.toggleAutoRenewStatus.loading = false;
-        // Server is source of truth
+        state.toggleAutoRenewStatus.error   = null;
         if (state.mySubscription) {
-          state.mySubscription.autoRenew = payload.autoRenew;
+          state.mySubscription.autoRenew = payload.autoRenew; // server is truth
         }
         toast.success(payload.message ?? 'Auto-renew preference saved.');
       })
 
-    // ── § 5 Cron / System Jobs ──────────────────────────────────────────────
+    // ── § 5 Free Trial ──────────────────────────────────────────────────────
+      .addCase(startFreeTrial.pending,   pending('trialStartStatus'))
+      .addCase(startFreeTrial.rejected,  rejected('trialStartStatus'))
+      .addCase(startFreeTrial.fulfilled, (state, { payload }) => {
+        state.trialStartStatus.loading = false;
+        const sub = payload.data;
+        if (sub) {
+          state.mySubscription = sub;
+          state.trialStatus = {
+            activeTrial: true,
+            trialExpiry: payload.trialExpiry ?? null,
+            daysLeft:    payload.daysLeft    ?? null,
+            plan:        sub.plan            ?? null,
+            data:        sub,
+          };
+          // Mark ineligible immediately — no extra round-trip needed
+          if (state.trialEligibility) {
+            state.trialEligibility.eligible = false;
+            state.trialEligibility.reason   = 'Free trial already used.';
+          }
+        }
+      })
+
+      .addCase(fetchTrialEligibility.pending,   pending('trialEligibilityStatus'))
+      .addCase(fetchTrialEligibility.rejected,  rejected('trialEligibilityStatus'))
+      .addCase(fetchTrialEligibility.fulfilled, (state, { payload }) => {
+        state.trialEligibilityStatus.loading = false;
+        state.trialEligibility = {
+          eligible:      payload.eligible,
+          reason:        payload.reason        ?? null,
+          eligiblePlans: payload.eligiblePlans ?? [],
+        };
+      })
+
+      .addCase(fetchTrialStatus.pending,  pending('trialStatusFetchStatus'))
+      .addCase(fetchTrialStatus.rejected, (state, { payload }) => {
+        state.trialStatusFetchStatus.loading = false;
+        if (typeof payload === 'string' && payload.includes('No active trial')) {
+          state.trialStatus = { activeTrial: false };
+          state.trialStatusFetchStatus.error = null; // expected 404
+        } else {
+          state.trialStatusFetchStatus.error = payload ?? null;
+        }
+      })
+      .addCase(fetchTrialStatus.fulfilled, (state, { payload }) => {
+        state.trialStatusFetchStatus.loading = false;
+        state.trialStatus = {
+          activeTrial: payload.activeTrial ?? false,
+          daysLeft:    payload.daysLeft    ?? 0,
+          trialExpiry: payload.trialExpiry ?? null,
+          plan:        payload.plan        ?? null,
+          data:        payload.data        ?? null,
+        };
+      })
+
+      .addCase(initiateTrialConversion.pending,   pending('trialConvertStatus'))
+      .addCase(initiateTrialConversion.rejected,  rejected('trialConvertStatus'))
+      /**
+       * PATH B (₹0, activated=true):
+       *   Already converted server-side.
+       *   Set mySubscription; clear trialStatus; toast immediately.
+       *
+       * PATH A (paid, activated=false):
+       *   Store trialOrder for Razorpay checkout.
+       *   Toast fires in verifyTrialConversion.
+       */
+      .addCase(initiateTrialConversion.fulfilled, (state, { payload }) => {
+        state.trialConvertStatus.loading = false;
+        if (payload.activated) {
+          state.mySubscription = payload.data ?? null;
+          state.trialOrder     = null;
+          state.trialStatus    = { activeTrial: false };
+          toast.success(payload.message || 'Trial converted — subscription is now active! 🎉');
+        } else {
+          const { orderId, amount, discount, planName, trialSubId } = payload;
+          state.trialOrder = { orderId, amount, discount, planName, trialSubId };
+        }
+      })
+
+      .addCase(verifyTrialConversion.pending,   pending('trialVerifyConvertStatus'))
+      .addCase(verifyTrialConversion.rejected,  rejected('trialVerifyConvertStatus'))
+      .addCase(verifyTrialConversion.fulfilled, (state, { payload }) => {
+        state.trialVerifyConvertStatus.loading = false;
+        state.trialOrder = null; // consumed
+        const converted  = payload.data;
+        if (converted) {
+          state.mySubscription = converted;
+          state.trialStatus    = { activeTrial: false };
+        }
+      })
+
+      .addCase(adminExpireStaleTrials.pending,   pending('adminExpireStaleStatus'))
+      .addCase(adminExpireStaleTrials.rejected,  rejected('adminExpireStaleStatus'))
+      .addCase(adminExpireStaleTrials.fulfilled, (state) => {
+        state.adminExpireStaleStatus.loading = false;
+        if (state.adminTrials.length > 0) {
+          const now = new Date();
+          state.adminTrials = state.adminTrials.map((t) =>
+            t.status === 'Trial' && new Date(t.expiryDate) < now
+              ? { ...t, status: 'Expired' }
+              : t
+          );
+        }
+      })
+
+      .addCase(adminFetchAllTrials.pending,   pending('adminTrialsStatus'))
+      .addCase(adminFetchAllTrials.rejected,  rejected('adminTrialsStatus'))
+      .addCase(adminFetchAllTrials.fulfilled, (state, { payload }) => {
+        state.adminTrialsStatus.loading = false;
+        state.adminTrials           = payload.data        ?? [];
+        state.adminTrialsPagination = payload.pagination  ?? pagination();
+      })
+
+    // ── § 6 Cron / System Jobs ──────────────────────────────────────────────
       .addCase(sendExpiryAlerts.pending,   pending('expiryAlertStatus'))
       .addCase(sendExpiryAlerts.rejected,  rejected('expiryAlertStatus'))
       .addCase(sendExpiryAlerts.fulfilled, (state, { payload }) => {
@@ -716,16 +879,19 @@ const subscriptionSlice = createSlice({
       .addCase(triggerAutoRenew.rejected,  rejected('autoRenewStatus'))
       .addCase(triggerAutoRenew.fulfilled, (state, { payload }) => {
         state.autoRenewStatus.loading = false;
-        state.autoRenewResult = { summary: payload.summary, details: payload.details };
+        state.autoRenewResult = {
+          summary: payload.summary,
+          details: payload.details,
+        };
       })
 
-    // ── § 6 Admin Plan Management ───────────────────────────────────────────
+    // ── § 7 Admin Plan Management ───────────────────────────────────────────
       .addCase(adminFetchAllSubscriptions.pending,   pending('adminSubStatus'))
       .addCase(adminFetchAllSubscriptions.rejected,  rejected('adminSubStatus'))
       .addCase(adminFetchAllSubscriptions.fulfilled, (state, { payload }) => {
         state.adminSubStatus.loading = false;
         state.adminSubscriptions = payload.data        ?? [];
-        state.adminSubPagination = payload.pagination  ?? paginationInit();
+        state.adminSubPagination = payload.pagination  ?? pagination();
       })
 
       .addCase(adminFetchAllPlans.pending,   pending('adminPlansStatus'))
@@ -742,7 +908,6 @@ const subscriptionSlice = createSlice({
         const created = payload.data;
         if (created) {
           state.adminPlans = [created, ...state.adminPlans];
-          // Surface in customer-facing plan list if already loaded
           if (state.plans.length > 0) state.plans = [created, ...state.plans];
         }
       })
@@ -763,10 +928,11 @@ const subscriptionSlice = createSlice({
       .addCase(adminDeactivatePlan.rejected,  rejected('adminPlanMutateStatus'))
       .addCase(adminDeactivatePlan.fulfilled, (state, { payload }) => {
         state.adminPlanMutateStatus.loading = false;
-        // Mark inactive rather than remove — preserves list context in admin UI
+        // Mark inactive in admin list — preserves table row context
         state.adminPlans = state.adminPlans.map((p) =>
           p._id === payload.planId ? { ...p, isActive: false } : p
         );
+        // Remove from customer-facing list
         state.plans = state.plans.filter((p) => p._id !== payload.planId);
       })
 
@@ -779,133 +945,9 @@ const subscriptionSlice = createSlice({
           state.adminSubscriptions = state.adminSubscriptions.map((s) =>
             s._id === updated._id ? updated : s
           );
-          // Keep customer view in sync if same document
+          // Keep customer view in sync for same document
           if (state.mySubscription?._id === updated._id) state.mySubscription = updated;
         }
-      })
-
-    // ── § 7 Free Trial ──────────────────────────────────────────────────────
-      .addCase(startFreeTrial.pending,   pending('trialStatusFetchStatus'))
-      .addCase(startFreeTrial.rejected,  rejected('trialStatusFetchStatus'))
-      .addCase(startFreeTrial.fulfilled, (state, { payload }) => {
-        state.trialStatusFetchStatus.loading = false;
-        const sub = payload.data;
-        if (sub) {
-          state.mySubscription = sub;
-          state.trialStatus = {
-            activeTrial: true,
-            trialExpiry: payload.trialExpiry,
-            daysLeft:    payload.daysLeft ?? null,
-            plan:        sub.plan ?? null,
-            data:        sub,
-          };
-          // Mark ineligible immediately so UI updates without a round-trip
-          if (state.trialEligibility) {
-            state.trialEligibility.eligible = false;
-            state.trialEligibility.reason   = 'Free trial already used.';
-          }
-        }
-      })
-
-      .addCase(fetchTrialEligibility.pending,   pending('trialEligibilityStatus'))
-      .addCase(fetchTrialEligibility.rejected,  rejected('trialEligibilityStatus'))
-      .addCase(fetchTrialEligibility.fulfilled, (state, { payload }) => {
-        state.trialEligibilityStatus.loading = false;
-        state.trialEligibility = {
-          eligible:      payload.eligible,
-          reason:        payload.reason        ?? null,
-          eligiblePlans: payload.eligiblePlans ?? [],
-        };
-      })
-
-      .addCase(fetchTrialStatus.pending,   pending('trialStatusFetchStatus'))
-      .addCase(fetchTrialStatus.rejected,  (state, { payload }) => {
-        state.trialStatusFetchStatus.loading = false;
-        // 404 "No active trial" is a normal state, not a hard UI error
-        if (payload?.includes?.('No active trial')) {
-          state.trialStatus = { activeTrial: false };
-          state.trialStatusFetchStatus.error = null;
-        } else {
-          state.trialStatusFetchStatus.error = payload;
-        }
-      })
-      .addCase(fetchTrialStatus.fulfilled, (state, { payload }) => {
-        state.trialStatusFetchStatus.loading = false;
-        state.trialStatus = {
-          activeTrial: payload.activeTrial,
-          daysLeft:    payload.daysLeft    ?? 0,
-          trialExpiry: payload.trialExpiry ?? null,
-          plan:        payload.plan        ?? null,
-          data:        payload.data        ?? null,
-        };
-      })
-
-      /**
-       * initiateTrialConversion.fulfilled
-       *
-       * Two router response shapes (same logic as initiateSubscriptionPurchase):
-       *
-       *   PATH B (₹0): { activated: true, data: UserSubscription, message }
-       *     → Trial already converted server-side.
-       *       Set mySubscription to the now-Active doc; clear trialStatus.
-       *       Show success toast immediately.
-       *
-       *   PATH A (paid): { activated: false, orderId, amount, discount,
-       *                    planName, trialSubId }
-       *     → Store as trialOrder; Razorpay checkout opens in the component.
-       *       Success toast fires later via verifyTrialConversion.
-       */
-      .addCase(initiateTrialConversion.pending,   pending('trialConvertStatus'))
-      .addCase(initiateTrialConversion.rejected,  rejected('trialConvertStatus'))
-      .addCase(initiateTrialConversion.fulfilled, (state, { payload }) => {
-        state.trialConvertStatus.loading = false;
-
-        if (payload.activated) {
-          // ₹0 path — already converted server-side
-          state.mySubscription = payload.data ?? null;
-          state.trialOrder     = null;
-          state.trialStatus    = { activeTrial: false };
-          toast.success(payload.message || 'Trial converted — your subscription is now active! 🎉');
-        } else {
-          // Paid path — store order for Razorpay checkout
-          const { orderId, amount, discount, planName, trialSubId } = payload;
-          state.trialOrder = { orderId, amount, discount, planName, trialSubId };
-        }
-      })
-
-      .addCase(verifyTrialConversion.pending,   pending('trialVerifyConvertStatus'))
-      .addCase(verifyTrialConversion.rejected,  rejected('trialVerifyConvertStatus'))
-      .addCase(verifyTrialConversion.fulfilled, (state, { payload }) => {
-        state.trialVerifyConvertStatus.loading = false;
-        state.trialOrder   = null; // order consumed
-        const converted    = payload.data;
-        if (converted) {
-          state.mySubscription = converted;
-          state.trialStatus    = { activeTrial: false }; // trial → paid
-        }
-      })
-
-      .addCase(adminExpireStaleTrials.pending,   pending('adminExpireStaleStatus'))
-      .addCase(adminExpireStaleTrials.rejected,  rejected('adminExpireStaleStatus'))
-      .addCase(adminExpireStaleTrials.fulfilled, (state) => {
-        state.adminExpireStaleStatus.loading = false;
-        // Reflect in admin trials list if already loaded
-        if (state.adminTrials.length > 0) {
-          const now = new Date();
-          state.adminTrials = state.adminTrials.map((t) =>
-            t.status === 'Trial' && new Date(t.expiryDate) < now
-              ? { ...t, status: 'Expired' }
-              : t
-          );
-        }
-      })
-
-      .addCase(adminFetchAllTrials.pending,   pending('adminTrialsStatus'))
-      .addCase(adminFetchAllTrials.rejected,  rejected('adminTrialsStatus'))
-      .addCase(adminFetchAllTrials.fulfilled, (state, { payload }) => {
-        state.adminTrialsStatus.loading = false;
-        state.adminTrials           = payload.data        ?? [];
-        state.adminTrialsPagination = payload.pagination  ?? paginationInit();
       });
   },
 });
@@ -921,44 +963,54 @@ export const {
   clearError,
   optimisticToggleAutoRenew,
   clearCronResults,
+  resetStatus,
 } = subscriptionSlice.actions;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  SELECTORS
-//  — pure functions; derived values computed here, never stored in state
-//  — memo-safe: return primitives or stable references only
+//  Pure functions. Derived values computed here — never stored in state.
+//  Memo-safe: return primitives or stable references only.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const sel = (state) => state.subscriptions;
 
 // § 1 Plans
-export const selectAllPlans          = (state) => sel(state).plans;
-export const selectFixedPlans        = (state) => sel(state).plans.filter((p) => p.planType === 'fixed');
-export const selectMyCustomPlans     = (state) => sel(state).plans.filter((p) => p.planType === 'custom');
-export const selectSelectedPlan      = (state) => sel(state).selectedPlan;
-export const selectPlansLoading      = (state) => sel(state).plansStatus.loading;
-export const selectPlansError        = (state) => sel(state).plansStatus.error;
+export const selectAllPlans      = (state) => sel(state).plans;
+export const selectFixedPlans    = (state) => sel(state).plans.filter((p) => p.planType === 'fixed');
+export const selectMyCustomPlans = (state) => sel(state).plans.filter((p) => p.planType === 'custom');
+export const selectSelectedPlan  = (state) => sel(state).selectedPlan;
+export const selectPlansLoading  = (state) => sel(state).plansStatus.loading;
+export const selectPlansError    = (state) => sel(state).plansStatus.error;
 
 // § 2 Custom Plan Builder
+/** Full pricing blob: { optionPricing, caps } */
 export const selectCustomPlanPricing        = (state) => sel(state).customPlanPricing;
+/** Admin-set option pricing (consultation, transport, diagnostics slabs, etc.) */
+export const selectCustomOptionPricing      = (state) => sel(state).customPlanPricing?.optionPricing ?? null;
+/** Admin-set discount/volume caps */
+export const selectCustomPlanCaps           = (state) => sel(state).customPlanPricing?.caps ?? null;
 export const selectCustomPlanPricingLoading = (state) => sel(state).customPlanPricingStatus.loading;
 export const selectCustomPlanLoading        = (state) => sel(state).customPlanStatus.loading;
 export const selectCustomPlanError          = (state) => sel(state).customPlanStatus.error;
 
 // § 3 Purchase
-export const selectPendingOrder     = (state) => sel(state).pendingOrder;
-export const selectPurchaseLoading  = (state) => sel(state).purchaseStatus.loading;
-export const selectPurchaseError    = (state) => sel(state).purchaseStatus.error;
-export const selectVerifyLoading    = (state) => sel(state).verifyStatus.loading;
-export const selectVerifyError      = (state) => sel(state).verifyStatus.error;
+export const selectPendingOrder    = (state) => sel(state).pendingOrder;
+export const selectPurchaseLoading = (state) => sel(state).purchaseStatus.loading;
+export const selectPurchaseError   = (state) => sel(state).purchaseStatus.error;
+export const selectVerifyLoading   = (state) => sel(state).verifyStatus.loading;
+export const selectVerifyError     = (state) => sel(state).verifyStatus.error;
 
-// § 4 Customer Sub
+// § 4 Customer Subscription
 export const selectMySubscription         = (state) => sel(state).mySubscription;
 export const selectMySubIsActive          = (state) => sel(state).mySubscription?.status === 'Active';
 export const selectMySubIsOnTrial         = (state) => sel(state).mySubscription?.status === 'Trial';
-/** True when the user has any live access (Active OR Trial) */
-export const selectMySubHasAccess         = (state) => ['Active', 'Trial'].includes(sel(state).mySubscription?.status);
+/** True when user has any live access (Active OR Trial) */
+export const selectMySubHasAccess         = (state) =>
+  ['Active', 'Trial'].includes(sel(state).mySubscription?.status);
 export const selectMySubAutoRenew         = (state) => sel(state).mySubscription?.autoRenew ?? false;
+export const selectMySubStatus            = (state) => sel(state).mySubscription?.status ?? null;
+export const selectMySubExpiryDate        = (state) => sel(state).mySubscription?.expiryDate ?? null;
+export const selectMySubPlanName          = (state) => sel(state).mySubscription?.planName ?? null;
 export const selectMySubLoading           = (state) => sel(state).mySubStatus.loading;
 export const selectMySubError             = (state) => sel(state).mySubStatus.error;
 export const selectMyHistory              = (state) => sel(state).myHistory;
@@ -967,32 +1019,22 @@ export const selectMyHistoryLoading       = (state) => sel(state).myHistoryStatu
 export const selectUpgradeLoading         = (state) => sel(state).upgradeStatus.loading;
 export const selectUpgradeError           = (state) => sel(state).upgradeStatus.error;
 export const selectCancelLoading          = (state) => sel(state).cancelStatus.loading;
+export const selectCancelError            = (state) => sel(state).cancelStatus.error;
 export const selectToggleAutoRenewLoading = (state) => sel(state).toggleAutoRenewStatus.loading;
+export const selectToggleAutoRenewError   = (state) => sel(state).toggleAutoRenewStatus.error;
 
-// § 5 Cron
-export const selectExpiryAlertResult  = (state) => sel(state).expiryAlertResult;
-export const selectExpiryAlertLoading = (state) => sel(state).expiryAlertStatus.loading;
-export const selectAutoRenewResult    = (state) => sel(state).autoRenewResult;
-export const selectAutoRenewLoading   = (state) => sel(state).autoRenewStatus.loading;
-
-// § 6 Admin
-export const selectAdminSubscriptions     = (state) => sel(state).adminSubscriptions;
-export const selectAdminSubPagination     = (state) => sel(state).adminSubPagination;
-export const selectAdminSubLoading        = (state) => sel(state).adminSubStatus.loading;
-export const selectAdminPlans             = (state) => sel(state).adminPlans;
-export const selectAdminPlansLoading      = (state) => sel(state).adminPlansStatus.loading;
-export const selectAdminPlanMutateLoading = (state) => sel(state).adminPlanMutateStatus.loading;
-export const selectAdminPlanMutateError   = (state) => sel(state).adminPlanMutateStatus.error;
-export const selectAdminSubUpdateLoading  = (state) => sel(state).adminSubUpdateStatus.loading;
-
-// § 7 Free Trial
+// § 5 Free Trial
 export const selectTrialEligibility          = (state) => sel(state).trialEligibility;
 export const selectIsTrialEligible           = (state) => sel(state).trialEligibility?.eligible ?? null;
+export const selectTrialEligiblePlans        = (state) => sel(state).trialEligibility?.eligiblePlans ?? [];
 export const selectTrialEligibilityLoading   = (state) => sel(state).trialEligibilityStatus.loading;
 export const selectTrialStatus               = (state) => sel(state).trialStatus;
 export const selectIsOnActiveTrial           = (state) => sel(state).trialStatus?.activeTrial ?? false;
 export const selectTrialDaysLeft             = (state) => sel(state).trialStatus?.daysLeft ?? 0;
+export const selectTrialExpiry               = (state) => sel(state).trialStatus?.trialExpiry ?? null;
 export const selectTrialStatusLoading        = (state) => sel(state).trialStatusFetchStatus.loading;
+export const selectTrialStartLoading         = (state) => sel(state).trialStartStatus.loading;
+export const selectTrialStartError           = (state) => sel(state).trialStartStatus.error;
 export const selectTrialOrder                = (state) => sel(state).trialOrder;
 export const selectTrialConvertLoading       = (state) => sel(state).trialConvertStatus.loading;
 export const selectTrialConvertError         = (state) => sel(state).trialConvertStatus.error;
@@ -1002,6 +1044,27 @@ export const selectAdminTrials               = (state) => sel(state).adminTrials
 export const selectAdminTrialsPagination     = (state) => sel(state).adminTrialsPagination;
 export const selectAdminTrialsLoading        = (state) => sel(state).adminTrialsStatus.loading;
 export const selectAdminExpireStaleLoading   = (state) => sel(state).adminExpireStaleStatus.loading;
+export const selectAdminExpireStaleError     = (state) => sel(state).adminExpireStaleStatus.error;
+
+// § 6 Cron
+export const selectExpiryAlertResult  = (state) => sel(state).expiryAlertResult;
+export const selectExpiryAlertLoading = (state) => sel(state).expiryAlertStatus.loading;
+export const selectExpiryAlertError   = (state) => sel(state).expiryAlertStatus.error;
+export const selectAutoRenewResult    = (state) => sel(state).autoRenewResult;
+export const selectAutoRenewLoading   = (state) => sel(state).autoRenewStatus.loading;
+export const selectAutoRenewError     = (state) => sel(state).autoRenewStatus.error;
+
+// § 7 Admin
+export const selectAdminSubscriptions     = (state) => sel(state).adminSubscriptions;
+export const selectAdminSubPagination     = (state) => sel(state).adminSubPagination;
+export const selectAdminSubLoading        = (state) => sel(state).adminSubStatus.loading;
+export const selectAdminSubError          = (state) => sel(state).adminSubStatus.error;
+export const selectAdminPlans             = (state) => sel(state).adminPlans;
+export const selectAdminPlansLoading      = (state) => sel(state).adminPlansStatus.loading;
+export const selectAdminPlanMutateLoading = (state) => sel(state).adminPlanMutateStatus.loading;
+export const selectAdminPlanMutateError   = (state) => sel(state).adminPlanMutateStatus.error;
+export const selectAdminSubUpdateLoading  = (state) => sel(state).adminSubUpdateStatus.loading;
+export const selectAdminSubUpdateError    = (state) => sel(state).adminSubUpdateStatus.error;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  DEFAULT EXPORT
@@ -1009,13 +1072,4 @@ export const selectAdminExpireStaleLoading   = (state) => sel(state).adminExpire
 
 export default subscriptionSlice.reducer;
 
-/**
- * Root reducer registration:
- *
- *   import subscriptionsReducer from './subscriptionSlice';
- *
- *   export const rootReducer = combineReducers({
- *     subscriptions: subscriptionsReducer,
- *     // ...other slices
- *   });
- */
+ 

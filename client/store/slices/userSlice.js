@@ -1,4 +1,3 @@
- 
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import API   from '../api';
 import toast from 'react-hot-toast';
@@ -113,9 +112,8 @@ const initialState = {
   referralValidation: null, // { valid, referrerName, bonusCoins, bonusRupees }
 
   // ── Customer Settings ──────────────────────────────────────────────────────
-  settings: null,   // { profile, verification, coins, referralCode, activity, legal }
-  activity: null,   // { isOnline, lastLoginAt, lastLoginIp, loginCount, lastActiveAt,
-                    //   passwordChangedAt, activeSessions, registeredDevices }
+  settings: null,
+  activity: null,
 
   // ── Admin ──────────────────────────────────────────────────────────────────
   allUsers: {
@@ -125,8 +123,8 @@ const initialState = {
     currentPage: 1,
   },
 
-  adminUserCoins:    null,  // { name, email, referralCode, ... }
-  adminUserSessions: null,  // { isOnline, lastLoginAt, activeSessions, registeredDevices }
+  adminUserCoins:    null,
+  adminUserSessions: null,
 
   // ── Global async state ─────────────────────────────────────────────────────
   loading: false,
@@ -224,7 +222,7 @@ export const signup = createAsyncThunk(
       const baseMsg = 'Account created successfully!';
       const coinMsg = data.referral?.message ? ` ${data.referral.message}` : '';
       toast.success(baseMsg + coinMsg);
-      return data; // { status, token, user, referral? }
+      return data;
     } catch (err) {
       const msg = extractError(err, 'Signup failed.');
       toast.error(msg);
@@ -235,8 +233,8 @@ export const signup = createAsyncThunk(
 
 /**
  * POST /api/users/login
- * @body { identifier: email|phone|name, password }
- * Response: { status, token, user }
+ * @body { identifier: email|phone|name, password, fcmToken?, platform?, deviceName? }
+ * Response: { status, token, sessionId, user, expiresIn }
  */
 export const login = createAsyncThunk(
   'user/login',
@@ -246,7 +244,7 @@ export const login = createAsyncThunk(
       storage.saveAuth(data.token, data.user);
       const firstName = data.user?.name?.split(' ')[0] ?? 'back';
       toast.success(`Welcome back, ${firstName}!`);
-      return data; // { status, token, user }
+      return data;
     } catch (err) {
       const msg = extractError(err, 'Login failed. Check your credentials.');
       toast.error(msg);
@@ -273,7 +271,6 @@ export const logout = createAsyncThunk(
 /**
  * POST /api/users/otp-request
  * @body { email }
- * Response: { message }
  */
 export const requestOtp = createAsyncThunk(
   'user/requestOtp',
@@ -293,7 +290,6 @@ export const requestOtp = createAsyncThunk(
 /**
  * POST /api/users/request-otp-login
  * @body { identifier }
- * Response: { message }
  */
 export const requestOtpLogin = createAsyncThunk(
   'user/requestOtpLogin',
@@ -312,9 +308,8 @@ export const requestOtpLogin = createAsyncThunk(
 
 /**
  * POST /api/users/otp-login
- * @body { identifier, otp }
- * Response: { status, token, user: { _id, name, email, phone, role, avatar,
- *             isEmailVerified, isOnline, coins, coinsInRupees } }
+ * @body { identifier, otp, fcmToken?, platform?, deviceName? }
+ * Response: { status, token, sessionId, user }
  */
 export const otpLogin = createAsyncThunk(
   'user/otpLogin',
@@ -323,7 +318,7 @@ export const otpLogin = createAsyncThunk(
       const { data } = await API.post('/users/otp-login', payload);
       storage.saveAuth(data.token, data.user);
       toast.success('Logged in successfully!');
-      return data; // { status, token, user }
+      return data;
     } catch (err) {
       const msg = extractError(err, 'OTP login failed.');
       toast.error(msg);
@@ -335,7 +330,6 @@ export const otpLogin = createAsyncThunk(
 /**
  * POST /api/users/verify-email
  * @body { email, otp }
- * Response: { message }
  */
 export const verifyEmail = createAsyncThunk(
   'user/verifyEmail',
@@ -355,7 +349,6 @@ export const verifyEmail = createAsyncThunk(
 /**
  * POST /api/users/forgot-password
  * @body { identifier } or { email }
- * Response: { message }
  */
 export const forgotPassword = createAsyncThunk(
   'user/forgotPassword',
@@ -376,7 +369,6 @@ export const forgotPassword = createAsyncThunk(
 /**
  * POST /api/users/reset-password
  * @body { identifier, otp, newPassword }
- * Response: { message }
  * Side-effect: clears local auth (user must log in again).
  */
 export const resetPassword = createAsyncThunk(
@@ -409,9 +401,8 @@ export const loginWithGoogle = () => {
 
 /**
  * Handle token returned from GET /users/google/callback
- * → frontend lands on /auth-success?token=...&role=...
- * Call this from your OAuth success page component.
- * @param { token, user?, role }
+ * → frontend lands on /auth-success?token=...&sessionId=...&role=...
+ * @param { token, user?, role, sessionId? }
  */
 export const handleGoogleCallback = createAsyncThunk(
   'user/googleCallback',
@@ -419,7 +410,7 @@ export const handleGoogleCallback = createAsyncThunk(
     if (!payload?.token)
       return rejectWithValue('Google authentication failed. No token received.');
     storage.saveAuth(payload.token, payload.user ?? null);
-    return payload; // { token, user, role }
+    return payload;
   }
 );
 
@@ -437,7 +428,7 @@ export const getProfile = createAsyncThunk(
     try {
       const { data } = await API.get('/users/profile');
       if (data?.data) storage.patchUser(data.data);
-      return data; // { success, data: { ...userFields, profile } }
+      return data;
     } catch (err) {
       return rejectWithValue(extractError(err, 'Profile fetch failed.'));
     }
@@ -447,7 +438,6 @@ export const getProfile = createAsyncThunk(
 /**
  * PUT /api/users/profile
  * @body { name?, phone?, avatar?, roleProfileData? }
- * Response: { success, message, data: { user, profile } }
  */
 export const updateProfile = createAsyncThunk(
   'user/updateProfile',
@@ -456,7 +446,7 @@ export const updateProfile = createAsyncThunk(
       const { data } = await API.put('/users/profile', payload);
       if (data?.data?.user) storage.patchUser(data.data.user);
       toast.success('Profile updated successfully!');
-      return data.data; // { user, profile }
+      return data.data;
     } catch (err) {
       const msg = extractError(err, 'Profile update failed.');
       toast.error(msg);
@@ -468,7 +458,6 @@ export const updateProfile = createAsyncThunk(
 /**
  * PUT /api/users/change-password
  * @body { oldPassword, newPassword }
- * Response: { message }
  */
 export const changePassword = createAsyncThunk(
   'user/changePassword',
@@ -518,7 +507,7 @@ export const getActiveSessions = createAsyncThunk(
   async (_, { rejectWithValue }) => {
     try {
       const { data } = await API.get('/users/sessions');
-      return data; // { status, count, data: [...] }
+      return data;
     } catch (err) {
       return rejectWithValue(extractError(err, 'Session fetch failed.'));
     }
@@ -527,11 +516,8 @@ export const getActiveSessions = createAsyncThunk(
 
 /**
  * DELETE /api/users/sessions/:sessionId
- * @param sessionId  — Mongo ObjectId string
+ * @param sessionId — Mongo ObjectId string
  * Response: { message, sessionId, deviceSignedOut: true }
- *
- * The server also removes the device token for that session's IP address,
- * so this is a true "sign out this device" operation.
  */
 export const revokeSession = createAsyncThunk(
   'user/revokeSession',
@@ -539,7 +525,7 @@ export const revokeSession = createAsyncThunk(
     try {
       const { data } = await API.delete(`/users/sessions/${sessionId}`);
       toast.success('Device signed out successfully.');
-      return { sessionId, ...data }; // pass sessionId for state filter
+      return { sessionId, ...data };
     } catch (err) {
       const msg = extractError(err, 'Session revoke failed.');
       toast.error(msg);
@@ -550,7 +536,6 @@ export const revokeSession = createAsyncThunk(
 
 /**
  * DELETE /api/users/sessions  — revoke ALL sessions + ALL device tokens
- * Response: { message, devicesSignedOut: true }
  * Side-effect: clears local auth completely.
  */
 export const revokeAllSessions = createAsyncThunk(
@@ -575,14 +560,13 @@ export const revokeAllSessions = createAsyncThunk(
 
 /**
  * GET /api/users/device-tokens
- * Response: { status, count, data: [...tokens] }
  */
 export const getDeviceTokens = createAsyncThunk(
   'user/getDeviceTokens',
   async (_, { rejectWithValue }) => {
     try {
       const { data } = await API.get('/users/device-tokens');
-      return data; // { status, count, data: [...] }
+      return data;
     } catch (err) {
       return rejectWithValue(extractError(err, 'Device token fetch failed.'));
     }
@@ -591,8 +575,7 @@ export const getDeviceTokens = createAsyncThunk(
 
 /**
  * POST /api/users/device-tokens
- * @body { token, platform: 'android'|'ios'|'web', deviceName? }
- * Response: { message }
+ * @body { token, platform: 'android'|'ios'|'web'|'desktop', deviceName? }
  */
 export const registerDeviceToken = createAsyncThunk(
   'user/registerDeviceToken',
@@ -608,15 +591,14 @@ export const registerDeviceToken = createAsyncThunk(
 
 /**
  * DELETE /api/users/device-tokens/:token
- * @param token  — raw FCM/APNs token string
- * Response: { message }
+ * @param token — raw FCM/APNs token string
  */
 export const removeDeviceToken = createAsyncThunk(
   'user/removeDeviceToken',
   async (token, { rejectWithValue }) => {
     try {
       await API.delete(`/users/device-tokens/${encodeURIComponent(token)}`);
-      return token; // used to filter from state.deviceTokens
+      return token;
     } catch (err) {
       return rejectWithValue(extractError(err, 'Device token removal failed.'));
     }
@@ -651,7 +633,6 @@ export const sendHeartbeat = createAsyncThunk(
 /**
  * PATCH /api/users/update-location-by-address
  * @body { address: string }
- * Response: { status, data: { address, coordinates: { lat, lng }, user } }
  */
 export const updateLocationByAddress = createAsyncThunk(
   'user/updateLocationByAddress',
@@ -660,7 +641,7 @@ export const updateLocationByAddress = createAsyncThunk(
       const { data } = await API.patch('/users/update-location-by-address', { address });
       if (data?.data?.user) storage.patchUser(data.data.user);
       toast.success(`Location set: ${data?.data?.address ?? address}`);
-      return data.data; // { address, coordinates: { lat, lng }, user }
+      return data.data;
     } catch (err) {
       const msg = extractError(err, 'Location update failed.');
       toast.error(msg);
@@ -672,7 +653,6 @@ export const updateLocationByAddress = createAsyncThunk(
 /**
  * PATCH /api/users/update-location
  * @body { lat, lng, address? }
- * Response: { success, data: { coordinates: { lat, lng }, user } }
  */
 export const updateLocationByCoords = createAsyncThunk(
   'user/updateLocationByCoords',
@@ -680,7 +660,7 @@ export const updateLocationByCoords = createAsyncThunk(
     try {
       const { data } = await API.patch('/users/update-location', coords);
       if (data?.data?.user) storage.patchUser(data.data.user);
-      return data.data; // { coordinates, user }
+      return data.data;
     } catch (err) {
       return rejectWithValue(extractError(err, 'GPS location update failed.'));
     }
@@ -694,13 +674,6 @@ export const updateLocationByCoords = createAsyncThunk(
 /**
  * GET /api/users/wallet
  * @query { page?, limit? }
- * Response: {
- *   status, data: {
- *     balance, currency, isActive,
- *     withdrawableBalance, lockedBalance, availableBalance,
- *     transactions, pagination
- *   }
- * }
  */
 export const getWallet = createAsyncThunk(
   'user/getWallet',
@@ -716,16 +689,7 @@ export const getWallet = createAsyncThunk(
 
 /**
  * POST /api/users/wallet/redeem-coins
- * @body { coins: number }  — min 500 coins (₹5)
- * Response: {
- *   status, message,
- *   data: {
- *     coinsRedeemed, rupeesEarned, walletBalance,
- *     remainingCoins, remainingRupees, totalCoinsRedeemed
- *   }
- * }
- *
- * Note: purpose in wallet transaction is 'Coin_Conversion' (not 'Referral_Bonus').
+ * @body { coins: number }  — min 500 coins
  */
 export const redeemCoins = createAsyncThunk(
   'user/redeemCoins',
@@ -734,8 +698,6 @@ export const redeemCoins = createAsyncThunk(
       const { data } = await API.post('/users/wallet/redeem-coins', { coins });
       toast.success(data.message ?? `${coins} coins redeemed successfully!`);
       return data.data;
-      // { coinsRedeemed, rupeesEarned, walletBalance,
-      //   remainingCoins, remainingRupees, totalCoinsRedeemed }
     } catch (err) {
       const msg = extractError(err, 'Coin redemption failed.');
       toast.error(msg);
@@ -750,12 +712,6 @@ export const redeemCoins = createAsyncThunk(
 
 /**
  * GET /api/users/referral/my-code  (Protected)
- * Response: {
- *   success, data: {
- *     referralCode, totalReferrals, coins, coinsInRupees,
- *     coinsEarned, coinsRedeemed, referredBy, referralHistory
- *   }
- * }
  */
 export const getReferralCode = createAsyncThunk(
   'user/getReferralCode',
@@ -771,19 +727,15 @@ export const getReferralCode = createAsyncThunk(
 
 /**
  * GET /api/users/referral/validate?code=XYZ  (Public — no auth)
- * @param code  — referral code string (6–12 chars)
- * Response: {
- *   success, data: { valid, referrerName, bonusCoins, bonusRupees }
- * }
+ * @param code — referral code string (6–12 chars)
  */
 export const validateReferralCode = createAsyncThunk(
   'user/validateReferralCode',
   async (code, { rejectWithValue }) => {
     try {
       const { data } = await API.get(`/users/referral/validate?code=${encodeURIComponent(code)}`);
-      return data.data; // { valid, referrerName, bonusCoins, bonusRupees }
+      return data.data;
     } catch (err) {
-      // 404 means invalid code — not a toast-worthy error
       return rejectWithValue(extractError(err, 'Referral code validation failed.'));
     }
   }
@@ -792,10 +744,6 @@ export const validateReferralCode = createAsyncThunk(
 /**
  * POST /api/users/referral/apply  (Protected)
  * @body { referralCode: string }
- * Response: {
- *   success, message,
- *   data: { yourCoins, yourCoinsRupees, inviterRewarded }
- * }
  * One-time. Server blocks if referredBy is already set.
  */
 export const applyReferralCode = createAsyncThunk(
@@ -804,7 +752,7 @@ export const applyReferralCode = createAsyncThunk(
     try {
       const { data } = await API.post('/users/referral/apply', { referralCode });
       toast.success(data.message ?? 'Referral code applied successfully!');
-      return data.data; // { yourCoins, yourCoinsRupees, inviterRewarded }
+      return data.data;
     } catch (err) {
       const msg = extractError(err, 'Referral apply failed.');
       toast.error(msg);
@@ -819,16 +767,6 @@ export const applyReferralCode = createAsyncThunk(
 
 /**
  * GET /api/users/settings
- * Response: {
- *   success, data: {
- *     profile: { name, email, phone, avatar, role },
- *     verification: { isEmailVerified, isPhoneVerified, isGoogleLinked, googleVerified },
- *     coins: { balance, balanceRupees, earned, redeemed },
- *     referralCode,
- *     activity: { lastLoginAt, lastLoginIp, loginCount, lastActiveAt, memberSince },
- *     legal: { termsAcceptedAt, privacyPolicyAcceptedAt }
- *   }
- * }
  */
 export const getSettings = createAsyncThunk(
   'user/getSettings',
@@ -844,8 +782,6 @@ export const getSettings = createAsyncThunk(
 
 /**
  * POST /api/users/settings/verify-phone
- * Sends OTP to the user's registered phone number.
- * Response: { message }
  */
 export const verifyPhone = createAsyncThunk(
   'user/verifyPhone',
@@ -865,7 +801,6 @@ export const verifyPhone = createAsyncThunk(
 /**
  * POST /api/users/settings/verify-phone/confirm
  * @body { otp: string (6 digits) }
- * Response: { success, message }
  */
 export const confirmPhoneVerification = createAsyncThunk(
   'user/verifyPhoneConfirm',
@@ -885,8 +820,6 @@ export const confirmPhoneVerification = createAsyncThunk(
 /**
  * POST /api/users/settings/request-email-change
  * @body { newEmail: string }
- * Sends OTP to the CURRENT email to approve the change.
- * Response: { message }
  */
 export const requestEmailChange = createAsyncThunk(
   'user/requestEmailChange',
@@ -906,7 +839,6 @@ export const requestEmailChange = createAsyncThunk(
 /**
  * POST /api/users/settings/confirm-email-change
  * @body { otp: string (6 digits) }
- * Verifies OTP and commits the email change.
  * Response: { success, message, newEmail }
  */
 export const confirmEmailChange = createAsyncThunk(
@@ -915,7 +847,7 @@ export const confirmEmailChange = createAsyncThunk(
     try {
       const { data } = await API.post('/users/settings/confirm-email-change', { otp });
       toast.success('Email changed! Please verify your new email address.');
-      return data; // { success, message, newEmail }
+      return data;
     } catch (err) {
       const msg = extractError(err, 'Email change confirmation failed.');
       toast.error(msg);
@@ -926,8 +858,6 @@ export const confirmEmailChange = createAsyncThunk(
 
 /**
  * DELETE /api/users/settings/google-unlink
- * Requires a password to be set on the account first.
- * Response: { success, message }
  */
 export const unlinkGoogle = createAsyncThunk(
   'user/googleUnlink',
@@ -946,14 +876,6 @@ export const unlinkGoogle = createAsyncThunk(
 
 /**
  * GET /api/users/settings/activity
- * Response: {
- *   success, data: {
- *     isOnline, lastLoginAt, lastLoginIp, loginCount,
- *     lastActiveAt, passwordChangedAt,
- *     activeSessions: [...],
- *     registeredDevices: [...]
- *   }
- * }
  */
 export const getAccountActivity = createAsyncThunk(
   'user/getActivity',
@@ -970,7 +892,6 @@ export const getAccountActivity = createAsyncThunk(
 /**
  * PATCH /api/users/settings/legal
  * @body { acceptTerms?: boolean, acceptPrivacy?: boolean }
- * Response: { success, message, updated: { termsAcceptedAt?, privacyPolicyAcceptedAt? } }
  */
 export const acceptLegal = createAsyncThunk(
   'user/acceptLegal',
@@ -978,7 +899,7 @@ export const acceptLegal = createAsyncThunk(
     try {
       const { data } = await API.patch('/users/settings/legal', payload);
       toast.success('Legal acceptance recorded.');
-      return data; // { success, message, updated }
+      return data;
     } catch (err) {
       const msg = extractError(err, 'Could not record legal acceptance.');
       toast.error(msg);
@@ -990,9 +911,7 @@ export const acceptLegal = createAsyncThunk(
 /**
  * POST /api/users/settings/deactivate
  * @body { password: string }
- * Soft-deactivates the account. Clears all sessions.
- * Response: { success, message }
- * Side-effect: clears local auth — user is immediately signed out.
+ * Side-effect: clears local auth.
  */
 export const deactivateAccount = createAsyncThunk(
   'user/deactivate',
@@ -1017,7 +936,6 @@ export const deactivateAccount = createAsyncThunk(
 /**
  * GET /api/users/admin/users
  * @query { page?, limit?, role?, isBlocked?, search? }
- * Response: { data: [], total, pages, currentPage }
  */
 export const adminGetAllUsers = createAsyncThunk(
   'user/adminGetAllUsers',
@@ -1028,7 +946,7 @@ export const adminGetAllUsers = createAsyncThunk(
       if (isBlocked !== undefined) params.set('isBlocked', isBlocked);
       if (search)                  params.set('search',    search);
       const { data } = await API.get(`/users/admin/users?${params}`);
-      return data; // { data: [], total, pages, currentPage }
+      return data;
     } catch (err) {
       return rejectWithValue(extractError(err, 'User list fetch failed.'));
     }
@@ -1038,7 +956,6 @@ export const adminGetAllUsers = createAsyncThunk(
 /**
  * PATCH /api/users/admin/update-role/:id
  * @body { role: string }
- * Response: { success, message, user, newProfile }
  */
 export const adminUpdateRole = createAsyncThunk(
   'user/adminUpdateRole',
@@ -1046,7 +963,7 @@ export const adminUpdateRole = createAsyncThunk(
     try {
       const { data } = await API.patch(`/users/admin/update-role/${id}`, { role });
       toast.success(`Role changed to ${role}.`);
-      return data; // { success, user, newProfile }
+      return data;
     } catch (err) {
       const msg = extractError(err, 'Role update failed.');
       toast.error(msg);
@@ -1058,7 +975,6 @@ export const adminUpdateRole = createAsyncThunk(
 /**
  * PATCH /api/users/admin/suspend/:id
  * @body { reason?, durationDays? }
- * Response: { message, user }
  */
 export const adminSuspendUser = createAsyncThunk(
   'user/adminSuspendUser',
@@ -1066,7 +982,7 @@ export const adminSuspendUser = createAsyncThunk(
     try {
       const { data } = await API.patch(`/users/admin/suspend/${id}`, { reason, durationDays });
       toast.success('User suspended successfully.');
-      return data; // { message, user }
+      return data;
     } catch (err) {
       const msg = extractError(err, 'Suspension failed.');
       toast.error(msg);
@@ -1077,7 +993,6 @@ export const adminSuspendUser = createAsyncThunk(
 
 /**
  * PATCH /api/users/admin/unblock/:id
- * Response: { message, user }
  */
 export const adminUnblockUser = createAsyncThunk(
   'user/adminUnblockUser',
@@ -1085,7 +1000,7 @@ export const adminUnblockUser = createAsyncThunk(
     try {
       const { data } = await API.patch(`/users/admin/unblock/${id}`);
       toast.success('User unblocked successfully.');
-      return data; // { message, user }
+      return data;
     } catch (err) {
       const msg = extractError(err, 'Unblock failed.');
       toast.error(msg);
@@ -1096,7 +1011,6 @@ export const adminUnblockUser = createAsyncThunk(
 
 /**
  * POST /api/users/admin/reset-otp/:email
- * Response: { message }
  */
 export const adminResetOtp = createAsyncThunk(
   'user/adminResetOtp',
@@ -1115,12 +1029,6 @@ export const adminResetOtp = createAsyncThunk(
 
 /**
  * GET /api/users/admin/user/:id/coins
- * Response: {
- *   success, data: {
- *     name, email, referralCode, referredBy, totalReferrals,
- *     coins, coinsInRupees, coinsEarned, coinsRedeemed, referralHistory
- *   }
- * }
  */
 export const adminGetUserCoins = createAsyncThunk(
   'user/adminGetUserCoins',
@@ -1137,7 +1045,6 @@ export const adminGetUserCoins = createAsyncThunk(
 /**
  * POST /api/users/admin/credit-coins/:id  (superadmin only)
  * @body { coins: number, reason: string }
- * Response: { success, message, data: { userId, newBalance, reason } }
  */
 export const adminCreditCoins = createAsyncThunk(
   'user/adminCreditCoins',
@@ -1145,7 +1052,7 @@ export const adminCreditCoins = createAsyncThunk(
     try {
       const { data } = await API.post(`/users/admin/credit-coins/${id}`, { coins, reason });
       toast.success(data.message ?? `${coins} coins credited.`);
-      return data.data; // { userId, newBalance, reason }
+      return data.data;
     } catch (err) {
       const msg = extractError(err, 'Coin credit failed.');
       toast.error(msg);
@@ -1156,10 +1063,6 @@ export const adminCreditCoins = createAsyncThunk(
 
 /**
  * GET /api/users/admin/user/:id/sessions
- * Response: {
- *   success, isOnline, lastLoginAt, lastLoginIp,
- *   activeSessions: [...], registeredDevices: [...]
- * }
  */
 export const adminGetUserSessions = createAsyncThunk(
   'user/adminGetUserSessions',
@@ -1167,7 +1070,6 @@ export const adminGetUserSessions = createAsyncThunk(
     try {
       const { data } = await API.get(`/users/admin/user/${userId}/sessions`);
       return data;
-      // { success, isOnline, lastLoginAt, lastLoginIp, activeSessions, registeredDevices }
     } catch (err) {
       return rejectWithValue(extractError(err, 'User session fetch failed.'));
     }
@@ -1177,7 +1079,6 @@ export const adminGetUserSessions = createAsyncThunk(
 /**
  * DELETE /api/users/admin/user/:id/sessions
  * Force signs out ALL sessions for any user.
- * Response: { success, message }
  */
 export const adminForceSignOut = createAsyncThunk(
   'user/adminForceSignOut',
@@ -1214,7 +1115,11 @@ const PROFILE_FULFILLED = new Set([
   updateLocationByCoords.fulfilled.type,
 ]);
 
-/** Actions that fully wipe auth state */
+/**
+ * Actions that fully wipe auth state.
+ * autoLogout is handled separately (in reducers) so it can be dispatched
+ * synchronously by the api.js interceptor without going through createAsyncThunk.
+ */
 const CLEANUP_FULFILLED = new Set([
   logout.fulfilled.type,
   deleteAccount.fulfilled.type,
@@ -1304,6 +1209,21 @@ const getLoaderKey = (actionType) => {
   return LOADER_MAP[base] ?? null;
 };
 
+// ── Shared auth wipe helper (used by both autoLogout reducer and CLEANUP_FULFILLED) ──
+const wipeAuthState = (state) => {
+  state.user               = null;
+  state.token              = null;
+  state.profile            = null;
+  state.activeSessions     = [];
+  state.deviceTokens       = [];
+  state.referral           = initialState.referral;
+  state.settings           = null;
+  state.activity           = null;
+  state.referralValidation = null;
+  state.adminUserCoins     = null;
+  state.adminUserSessions  = null;
+};
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // § 6  SLICE
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1318,20 +1238,49 @@ const userSlice = createSlice({
       state.error = null;
     },
 
-    /** Full reset — used on hard logout or token expiry detected client-side */
+    /**
+     * Full reset — used on hard logout or token expiry detected client-side.
+     */
     resetAuthState: (state) => {
-      state.user               = null;
-      state.token              = null;
-      state.profile            = null;
-      state.activeSessions     = [];
-      state.deviceTokens       = [];
-      state.referral           = initialState.referral;
-      state.referralValidation = null;
-      state.settings           = null;
-      state.activity           = null;
-      state.adminUserCoins     = null;
-      state.adminUserSessions  = null;
-      state.error              = null;
+      wipeAuthState(state);
+      state.error = null;
+      storage.clearAuth();
+    },
+
+    /**
+     * autoLogout — dispatched by api.js interceptor when the server returns
+     * a 401 with one of the recognised auto-logout codes:
+     *
+     *   TOKEN_EXPIRED        — JWT has expired (12h default)
+     *   TOKEN_INVALID        — JWT malformed / wrong secret
+     *   SESSION_REVOKED      — session deleted via remote sign-out
+     *   USER_NOT_FOUND       — account deleted while token was valid
+     *   ACCOUNT_BLOCKED      — account suspended server-side
+     *
+     * This is a synchronous reducer so it fires immediately in the interceptor
+     * without needing to await a thunk, giving the fastest possible logout UX.
+     *
+     * @param action.payload — the error code string from the server
+     */
+    autoLogout: (state, action) => {
+      const code = action.payload ?? 'SESSION_EXPIRED';
+
+      // Show a contextual toast based on the reason
+      const messages = {
+        TOKEN_EXPIRED:      'Your session has expired. Please log in again.',
+        TOKEN_INVALID:      'Invalid session. Please log in again.',
+        SESSION_REVOKED:    'You were signed out from another device.',
+        USER_NOT_FOUND:     'Your account no longer exists.',
+        ACCOUNT_BLOCKED:    'Your account has been suspended.',
+      };
+
+      // Use setTimeout so the toast fires after the state update
+      setTimeout(() => {
+        toast.error(messages[code] ?? 'Session ended. Please log in again.');
+      }, 0);
+
+      wipeAuthState(state);
+      state.error = messages[code] ?? 'Session ended.';
       storage.clearAuth();
     },
 
@@ -1355,7 +1304,6 @@ const userSlice = createSlice({
 
     /**
      * Patch coin fields on the user object locally (e.g. real-time WS event).
-     * Keeps referral state in sync.
      * @payload { coins?, coinsEarned?, coinsRedeemed? }
      */
     patchCoins: (state, action) => {
@@ -1363,12 +1311,12 @@ const userSlice = createSlice({
         state.user = { ...state.user, ...action.payload };
         storage.patchUser(state.user);
       }
-      if (action.payload.coins           !== undefined) state.referral.coins           = action.payload.coins;
-      if (action.payload.coinsEarned     !== undefined) state.referral.coinsEarned     = action.payload.coinsEarned;
-      if (action.payload.coinsRedeemed   !== undefined) state.referral.coinsRedeemed   = action.payload.coinsRedeemed;
+      if (action.payload.coins         !== undefined) state.referral.coins         = action.payload.coins;
+      if (action.payload.coinsEarned   !== undefined) state.referral.coinsEarned   = action.payload.coinsEarned;
+      if (action.payload.coinsRedeemed !== undefined) state.referral.coinsRedeemed = action.payload.coinsRedeemed;
     },
 
-    /** Optimistically prepend a new audit session (e.g. right after login WS event) */
+    /** Optimistically prepend a new audit session */
     addLocalSession: (state, action) => {
       state.activeSessions = [action.payload, ...state.activeSessions];
     },
@@ -1378,22 +1326,18 @@ const userSlice = createSlice({
       state.wallet.balance = action.payload;
     },
 
-    /** Clear the admin single-user coin detail panel */
     clearAdminUserCoins: (state) => {
       state.adminUserCoins = null;
     },
 
-    /** Clear the admin single-user session detail panel */
     clearAdminUserSessions: (state) => {
       state.adminUserSessions = null;
     },
 
-    /** Clear referral validation result */
     clearReferralValidation: (state) => {
       state.referralValidation = null;
     },
 
-    /** Clear settings cache (force re-fetch) */
     clearSettings: (state) => {
       state.settings = null;
       state.activity = null;
@@ -1439,7 +1383,6 @@ const userSlice = createSlice({
           if (AUTH_FULFILLED.has(action.type)) {
             state.user  = action.payload?.user  ?? null;
             state.token = action.payload?.token ?? null;
-            // signup: optional referral block — coin balance already in state.user.coins
           }
 
           // ── 2. PROFILE: full sync ─────────────────────────────────────────
@@ -1447,7 +1390,6 @@ const userSlice = createSlice({
             const source = action.payload?.data ?? action.payload;
             if (source) {
               if (action.type === getProfile.fulfilled.type) {
-                // source IS the full user object with profile embedded
                 const { profile, ...userFields } = source;
                 state.user    = userFields;
                 state.profile = profile ?? null;
@@ -1461,32 +1403,21 @@ const userSlice = createSlice({
 
           // ── 3. CLEANUP: wipe all auth state ──────────────────────────────
           if (CLEANUP_FULFILLED.has(action.type)) {
-            state.user               = null;
-            state.token              = null;
-            state.profile            = null;
-            state.activeSessions     = [];
-            state.deviceTokens       = [];
-            state.referral           = initialState.referral;
-            state.settings           = null;
-            state.activity           = null;
-            state.referralValidation = null;
+            wipeAuthState(state);
           }
 
           // ── 4. SESSIONS ───────────────────────────────────────────────────
           if (action.type === getActiveSessions.fulfilled.type) {
-            // { status, count, data: [...sessions with hasPushToken] }
             state.activeSessions = action.payload?.data ?? [];
           }
 
           if (action.type === revokeSession.fulfilled.type) {
-            // Remove the revoked session from local state
             const sessionId = action.payload?.sessionId;
             if (sessionId) {
               state.activeSessions = state.activeSessions.filter(
                 (s) => s._id !== sessionId
               );
             }
-            // Also update the settings activity view if loaded
             if (state.activity?.activeSessions) {
               state.activity.activeSessions = state.activity.activeSessions.filter(
                 (s) => s._id !== action.payload?.sessionId
@@ -1494,22 +1425,15 @@ const userSlice = createSlice({
             }
           }
 
-          if (action.type === revokeAllSessions.fulfilled.type) {
-            // Handled by CLEANUP_FULFILLED above — sessions cleared there
-          }
-
           // ── 5. DEVICE TOKENS ──────────────────────────────────────────────
           if (action.type === getDeviceTokens.fulfilled.type) {
-            // { status, count, data: [...] }
             state.deviceTokens = action.payload?.data ?? [];
           }
 
           if (action.type === removeDeviceToken.fulfilled.type) {
-            // action.payload = raw token string
             state.deviceTokens = state.deviceTokens.filter(
               (t) => t.token !== action.payload
             );
-            // Also sync activity registered devices if loaded
             if (state.activity?.registeredDevices) {
               state.activity.registeredDevices = state.activity.registeredDevices.filter(
                 (d) => d.token !== action.payload
@@ -1530,15 +1454,11 @@ const userSlice = createSlice({
           }
 
           // ── 7. REDEEM COINS ───────────────────────────────────────────────
-          // Response: { coinsRedeemed, rupeesEarned, walletBalance,
-          //             remainingCoins, remainingRupees, totalCoinsRedeemed }
           if (action.type === redeemCoins.fulfilled.type && action.payload) {
             const p = action.payload;
 
-            // Update wallet balance
             state.wallet.balance = p.walletBalance ?? state.wallet.balance;
 
-            // Prepend optimistic transaction entry for instant UI feedback
             if (p.coinsRedeemed && p.rupeesEarned) {
               state.wallet.transactions = [
                 {
@@ -1554,7 +1474,6 @@ const userSlice = createSlice({
               ];
             }
 
-            // Update user coin fields
             if (state.user) {
               state.user = {
                 ...state.user,
@@ -1564,12 +1483,10 @@ const userSlice = createSlice({
               storage.patchUser(state.user);
             }
 
-            // Keep referral panel in sync
             state.referral.coins         = p.remainingCoins     ?? state.referral.coins;
             state.referral.coinsInRupees = p.remainingRupees    ?? state.referral.coinsInRupees;
             state.referral.coinsRedeemed = p.totalCoinsRedeemed ?? state.referral.coinsRedeemed;
 
-            // Keep settings coins block in sync
             if (state.settings?.coins) {
               state.settings.coins.balance       = p.remainingCoins     ?? state.settings.coins.balance;
               state.settings.coins.balanceRupees = p.remainingRupees    ?? state.settings.coins.balanceRupees;
@@ -1578,8 +1495,6 @@ const userSlice = createSlice({
           }
 
           // ── 8. REFERRAL: fetch my code ────────────────────────────────────
-          // Response: { referralCode, totalReferrals, coins, coinsInRupees,
-          //             coinsEarned, coinsRedeemed, referredBy, referralHistory }
           if (action.type === getReferralCode.fulfilled.type && action.payload) {
             const p = action.payload;
             state.referral = {
@@ -1592,7 +1507,6 @@ const userSlice = createSlice({
               referredBy:      p.referredBy      ?? null,
               referralHistory: p.referralHistory ?? [],
             };
-            // Keep user object coin fields in sync
             if (state.user) {
               state.user = {
                 ...state.user,
@@ -1606,25 +1520,22 @@ const userSlice = createSlice({
           }
 
           // ── 9. REFERRAL: validate (public) ───────────────────────────────
-          // Response: { valid, referrerName, bonusCoins, bonusRupees }
           if (action.type === validateReferralCode.fulfilled.type) {
             state.referralValidation = action.payload ?? null;
           }
 
           // ── 10. REFERRAL: apply a code post-signup ─────────────────────
-          // Response: { yourCoins, yourCoinsRupees, inviterRewarded }
           if (action.type === applyReferralCode.fulfilled.type && action.payload) {
             const p = action.payload;
             if (state.user) {
               state.user = { ...state.user, coins: p.yourCoins ?? state.user.coins };
               storage.patchUser(state.user);
             }
-            state.referral.coins         = p.yourCoins      ?? state.referral.coins;
+            state.referral.coins         = p.yourCoins       ?? state.referral.coins;
             state.referral.coinsInRupees = p.yourCoinsRupees ?? state.referral.coinsInRupees;
           }
 
           // ── 11. SETTINGS: full snapshot ───────────────────────────────────
-          // Response: { profile, verification, coins, referralCode, activity, legal }
           if (action.type === getSettings.fulfilled.type && action.payload) {
             state.settings = action.payload;
           }
@@ -1641,19 +1552,14 @@ const userSlice = createSlice({
           }
 
           // ── 13. SETTINGS: email change confirmed ──────────────────────────
-          // Response: { success, message, newEmail }
           if (action.type === confirmEmailChange.fulfilled.type && action.payload?.newEmail) {
             const newEmail = action.payload.newEmail;
             if (state.user) {
               state.user = { ...state.user, email: newEmail, isEmailVerified: false };
               storage.patchUser(state.user);
             }
-            if (state.settings?.profile) {
-              state.settings.profile.email = newEmail;
-            }
-            if (state.settings?.verification) {
-              state.settings.verification.isEmailVerified = false;
-            }
+            if (state.settings?.profile)      state.settings.profile.email                = newEmail;
+            if (state.settings?.verification) state.settings.verification.isEmailVerified = false;
           }
 
           // ── 14. SETTINGS: email verified (via verify-email route) ─────────
@@ -1678,7 +1584,6 @@ const userSlice = createSlice({
           }
 
           // ── 16. SETTINGS: legal acceptance ────────────────────────────────
-          // Response: { success, message, updated: { termsAcceptedAt?, privacyPolicyAcceptedAt? } }
           if (action.type === acceptLegal.fulfilled.type && action.payload?.updated) {
             const upd = action.payload.updated;
             if (state.settings?.legal) {
@@ -1692,8 +1597,6 @@ const userSlice = createSlice({
           }
 
           // ── 17. SETTINGS: activity snapshot ──────────────────────────────
-          // Response: { isOnline, lastLoginAt, lastLoginIp, loginCount,
-          //             lastActiveAt, passwordChangedAt, activeSessions, registeredDevices }
           if (action.type === getAccountActivity.fulfilled.type && action.payload) {
             state.activity = action.payload;
           }
@@ -1721,32 +1624,25 @@ const userSlice = createSlice({
             state.adminUserCoins = action.payload ?? null;
           }
 
-          // ── 21. ADMIN: credit coins → patch list entry if loaded ──────────
-          // Response: { userId, newBalance, reason }
+          // ── 21. ADMIN: credit coins → patch list entry ────────────────────
           if (action.type === adminCreditCoins.fulfilled.type && action.payload?.userId) {
             const { userId, newBalance } = action.payload;
             state.allUsers.data = state.allUsers.data.map((u) =>
               u._id === userId ? { ...u, coins: newBalance } : u
             );
-            // Update adminUserCoins panel if open for the same user
             if (state.adminUserCoins && state.adminUserCoins.userId === userId) {
               state.adminUserCoins.coins = newBalance;
             }
           }
 
           // ── 22. ADMIN: user sessions view ─────────────────────────────────
-          // Response: { success, isOnline, lastLoginAt, lastLoginIp,
-          //             activeSessions, registeredDevices }
           if (action.type === adminGetUserSessions.fulfilled.type) {
             state.adminUserSessions = action.payload ?? null;
           }
 
-          // ── 23. ADMIN: force sign-out → clear admin sessions panel ────────
-          // Response: { userId, success, message }
+          // ── 23. ADMIN: force sign-out ─────────────────────────────────────
           if (action.type === adminForceSignOut.fulfilled.type) {
-            // Clear the panel so it doesn't show stale sessions
             state.adminUserSessions = null;
-            // Patch isOnline flag in allUsers list if the user is there
             const userId = action.payload?.userId;
             if (userId) {
               state.allUsers.data = state.allUsers.data.map((u) =>
@@ -1757,7 +1653,7 @@ const userSlice = createSlice({
 
           // ── 24. isOnline sync after sign-out events ───────────────────────
           if (
-            action.type === logout.fulfilled.type           ||
+            action.type === logout.fulfilled.type            ||
             action.type === revokeAllSessions.fulfilled.type ||
             action.type === deactivateAccount.fulfilled.type
           ) {
@@ -1820,6 +1716,7 @@ export const selectLoader  = (key) => (s) => s.user.loaders[key] ?? false;
 export const {
   clearError,
   resetAuthState,
+  autoLogout,           // ← dispatched by api.js interceptor on TOKEN_EXPIRED / SESSION_REVOKED etc.
   patchUser,
   setOnlineStatus,
   patchCoins,

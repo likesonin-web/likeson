@@ -1,4 +1,4 @@
-"use client";
+ "use client";
 
 import React, { useEffect, useState, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
@@ -30,24 +30,24 @@ import {
 import { uploadSingleFile } from "@/store/slices/uploadSlice";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Route → Tab map  (mirrors SOLO_DRIVER_PARTNER_LINKS "My Profile" section)
+// Route → Tab map
 // ─────────────────────────────────────────────────────────────────────────────
 const ROUTE_TAB_MAP = {
-  "/partner/solo/profile":                   "personal",
-  "/partner/solo/profile/contact":           "contact",
-  "/partner/solo/profile/address":           "address",
-  "/partner/solo/profile/professional":      "professional",
-  "/partner/solo/profile/emergency":         "emergency",
-  "/partner/solo/profile/certificates":      "certificates",
+  "/partner/solo/profile":              "personal",
+  "/partner/solo/profile/contact":      "contact",
+  "/partner/solo/profile/address":      "address",
+  "/partner/solo/profile/professional": "professional",
+  "/partner/solo/profile/emergency":    "emergency",
+  "/partner/solo/profile/certificates": "certificates",
 };
 
 const TABS = [
-  { id: "personal",     label: "Personal Details",   icon: UserRound,  href: "/partner/solo/profile" },
-  { id: "contact",      label: "Contact Info",        icon: Contact2,   href: "/partner/solo/profile/contact" },
-  { id: "address",      label: "Address",             icon: MapPin,     href: "/partner/solo/profile/address" },
-  { id: "professional", label: "Professional Info",   icon: Briefcase,  href: "/partner/solo/profile/professional" },
-  { id: "emergency",    label: "Emergency Contact",   icon: ShieldAlert,href: "/partner/solo/profile/emergency" },
-  { id: "certificates", label: "Certificates",        icon: FileUser,   href: "/partner/solo/profile/certificates" },
+  { id: "personal",     label: "Personal",    icon: UserRound,   href: "/partner/solo/profile" },
+  { id: "contact",      label: "Contact",      icon: Contact2,    href: "/partner/solo/profile/contact" },
+  { id: "address",      label: "Address",      icon: MapPin,      href: "/partner/solo/profile/address" },
+  { id: "professional", label: "Professional", icon: Briefcase,   href: "/partner/solo/profile/professional" },
+  { id: "emergency",    label: "Emergency",    icon: ShieldAlert, href: "/partner/solo/profile/emergency" },
+  { id: "certificates", label: "Certificates", icon: FileUser,    href: "/partner/solo/profile/certificates" },
 ];
 
 // ─── Animation preset ────────────────────────────────────────────────────────
@@ -65,21 +65,21 @@ const fadeUp = {
 
 const StatusBadge = ({ status }) => {
   const map = {
-    active:           { cls: "badge-success", label: "Active" },
-    pending:          { cls: "badge-warning", label: "Pending" },
-    "under-review":   { cls: "badge-info",    label: "Under Review" },
-    suspended:        { cls: "badge-error",   label: "Suspended" },
-    rejected:         { cls: "badge-error",   label: "Rejected" },
+    active:         { cls: "badge-success", label: "Active" },
+    pending:        { cls: "badge-warning", label: "Pending" },
+    "under-review": { cls: "badge-info",    label: "Under Review" },
+    suspended:      { cls: "badge-error",   label: "Suspended" },
+    rejected:       { cls: "badge-error",   label: "Rejected" },
   };
   const { cls, label } = map[status] || { cls: "badge-info", label: status };
   return <span className={`badge ${cls}`}>{label}</span>;
 };
 
-/** Titled card with optional subtitle below the section heading */
+/** Titled card with optional subtitle */
 const SectionCard = ({ title, icon: Icon, subtitle, children, index = 0 }) => (
   <motion.div
     variants={fadeUp} initial="hidden" animate="visible" custom={index}
-    className="card p-6 space-y-5"
+    className="card p-4 sm:p-6 space-y-5"
   >
     <div className="flex items-start gap-3 border-b border-base-300 pb-4">
       <span className="p-2 rounded-xl bg-primary/10 text-primary shrink-0 mt-0.5">
@@ -96,7 +96,7 @@ const SectionCard = ({ title, icon: Icon, subtitle, children, index = 0 }) => (
   </motion.div>
 );
 
-/** Label + optional hint below an input */
+/** Label + optional hint */
 const Field = ({ label, hint, children }) => (
   <div className="space-y-1.5">
     <label className="text-[10px] font-black uppercase tracking-widest text-base-content/40">{label}</label>
@@ -143,10 +143,10 @@ const SaveButton = ({ onClick, loading }) => (
     <button
       onClick={onClick}
       disabled={loading}
-      className="btn-primary-cta flex items-center gap-2 px-6 py-2.5 text-xs disabled:opacity-60"
+      className="btn-primary-cta flex items-center gap-2 px-5 sm:px-6 py-2.5 text-xs disabled:opacity-60"
     >
       {loading ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-      {loading ? "Saving…" : "Save Changes"}
+      {loading ? "Saving..." : "Save Changes"}
     </button>
   </div>
 );
@@ -157,7 +157,7 @@ const CompletionRing = ({ percent }) => {
   const circ = 2 * Math.PI * r;
   const dash = ((percent || 0) / 100) * circ;
   return (
-    <div className="relative w-28 h-28 shrink-0">
+    <div className="relative w-20 h-20 sm:w-28 sm:h-28 shrink-0">
       <svg className="rotate-[-90deg] w-full h-full" viewBox="0 0 100 100">
         <circle cx="50" cy="50" r={r} fill="none" stroke="var(--base-300)" strokeWidth="8" />
         <circle
@@ -168,8 +168,8 @@ const CompletionRing = ({ percent }) => {
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-2xl font-black text-primary">{percent || 0}%</span>
-        <span className="text-[8px] uppercase tracking-widest text-base-content/40">Complete</span>
+        <span className="text-lg sm:text-2xl font-black text-primary">{percent || 0}%</span>
+        <span className="text-[7px] sm:text-[8px] uppercase tracking-widest text-base-content/40">Complete</span>
       </div>
     </div>
   );
@@ -183,14 +183,18 @@ export default function ProfilePage() {
   const dispatch    = useDispatch();
   const pathname    = usePathname();
 
+  // ── Selectors ─────────────────────────────────────────────────────────
+  // selectProfile should return the profile from the Redux store (data.data from API).
+  // The API returns: { success, data: { ...profileFields, profile: { ...nestedFields } } }
+  // We handle both flat (data.data) and nested (data.data.profile) shapes below.
   const profile     = useSelector(selectProfile);
-  const completion  = useSelector(selectProfileCompletion);
-  const status      = useSelector(selectPartnershipStatus);
+  const completion  = useSelector(selectProfileCompletion); // profileCompletionPercent
+  const status      = useSelector(selectPartnershipStatus); // partnershipStatus
   const isLoading   = useSelector(selectLoading("profile"));
   const isUpdating  = useSelector(selectLoading("updateProfile"));
   const isUploading = useSelector((s) => s.upload?.isUploading);
 
-  // Derive active tab purely from the current URL
+  // Derive active tab from URL
   const activeTab = ROUTE_TAB_MAP[pathname] ?? "personal";
 
   // ── Form state ─────────────────────────────────────────────────────────
@@ -205,36 +209,47 @@ export default function ProfilePage() {
 
   const LANGUAGES = ["Telugu", "Hindi", "English", "Tamil", "Kannada", "Other"];
 
-  // ── Fetch ──────────────────────────────────────────────────────────────
+  // ── Fetch profile on mount ─────────────────────────────────────────────
   useEffect(() => { dispatch(fetchMyProfile()); }, [dispatch]);
+
+  // ── Resolve the canonical profile object from either API shape ─────────
+  // Shape A (fetchMyProfile → solo partner): data.data  → flat object with all fields
+  // Shape B (fetchMyProfile → user endpoint): data.data → user object with data.data.profile nested
+  const resolvedProfile = profile?.profile ?? profile ?? {};
 
   // ── Sync profile → local form state ───────────────────────────────────
   useEffect(() => {
     if (!profile) return;
+    const p = profile.profile ?? profile;
+
     setBasic({
-      displayName:            profile.displayName            || "",
-      dateOfBirth:            profile.dateOfBirth ? profile.dateOfBirth.split("T")[0] : "",
-      gender:                 profile.gender                 || "",
-      bio:                    profile.bio                    || "",
-      yearsOfExperience:      profile.yearsOfExperience      ?? 0,
-      hasMedicalTransportExp: profile.hasMedicalTransportExp ?? false,
-      hasAmbulanceExp:        profile.hasAmbulanceExp        ?? false,
-      profilePhotoUrl:        profile.profilePhotoUrl        || "",
+      displayName:            p.displayName            || "",
+      dateOfBirth:            p.dateOfBirth ? p.dateOfBirth.split("T")[0] : "",
+      gender:                 p.gender                 || "",
+      bio:                    p.bio                    || "",
+      yearsOfExperience:      p.yearsOfExperience      ?? 0,
+      hasMedicalTransportExp: p.hasMedicalTransportExp ?? false,
+      hasAmbulanceExp:        p.hasAmbulanceExp        ?? false,
+      profilePhotoUrl:        p.profilePhotoUrl        || "",
     });
+
     setContact({
-      phone:          profile.phone          || "",
-      altPhone:       profile.altPhone       || "",
-      whatsappNumber: profile.whatsappNumber || "",
-      email:          profile.email          || "",
+      phone:          p.phone          || "",
+      altPhone:       p.altPhone       || "",
+      whatsappNumber: p.whatsappNumber || "",
+      email:          p.email          || "",
     });
-    setAddress(profile.address || {});
+
+    setAddress(p.address || {});
+
     setProfessional({
-      yearsOfExperience:      profile.yearsOfExperience      ?? 0,
-      hasMedicalTransportExp: profile.hasMedicalTransportExp ?? false,
-      hasAmbulanceExp:        profile.hasAmbulanceExp        ?? false,
-      languagesSpoken:        profile.languagesSpoken        || [],
+      yearsOfExperience:      p.yearsOfExperience      ?? 0,
+      hasMedicalTransportExp: p.hasMedicalTransportExp ?? false,
+      hasAmbulanceExp:        p.hasAmbulanceExp        ?? false,
+      languagesSpoken:        p.languagesSpoken        || [],
     });
-    setEmergency(profile.emergencyContact || {});
+
+    setEmergency(p.emergencyContact || {});
   }, [profile]);
 
   // ── Action handlers ────────────────────────────────────────────────────
@@ -274,20 +289,50 @@ export default function ProfilePage() {
       <div className="flex items-center justify-center h-[60vh]">
         <div className="flex flex-col items-center gap-4">
           <div className="spinner w-10 h-10" />
-          <p className="text-xs font-black uppercase tracking-widest text-base-content/40">Loading Profile…</p>
+          <p className="text-xs font-black uppercase tracking-widest text-base-content/40">Loading Profile...</p>
         </div>
       </div>
     );
   }
 
+  // ── Resolve display values from API data ───────────────────────────────
+  // Handles both API response shapes
+  const avatarUrl   = resolvedProfile.profilePhotoUrl
+                   || profile?.avatar
+                   || "";
+
+  const displayName = resolvedProfile.displayName
+                   || resolvedProfile.legalName
+                   || profile?.name
+                   || "Your Name";
+
+  const partnerCode = resolvedProfile.partnerCode || "—";
+
+  const bio         = resolvedProfile.bio
+                   || "No bio yet — add one under Personal Details.";
+
+  const avgRating   = resolvedProfile.rating?.averageRating?.toFixed(1)
+                   ?? resolvedProfile.driverProfile?.performance?.rating?.toFixed(1)
+                   ?? "0.0";
+
+  const totalRides  = resolvedProfile.stats?.totalRidesCompleted
+                   ?? resolvedProfile.rating?.totalRides
+                   ?? 0;
+
+  const kycStatus   = resolvedProfile.kyc?.verificationStatus ?? "Not Submitted";
+
+  const certificates = resolvedProfile.trainingCertificates || [];
+
+  const completionPct = completion ?? resolvedProfile.profileCompletionPercent ?? 0;
+
   // ══════════════════════════════════════════════════════════════════════
   return (
-    <div className="space-y-6">
+    <div  className="space-y-6 px-4 sm:space-y-6">
 
       {/* ── Hero Banner ─────────────────────────────────────────────────── */}
       <motion.div
         variants={fadeUp} initial="hidden" animate="visible"
-        className="relative rounded-3xl overflow-hidden border border-base-300 bg-gradient-to-br from-primary/10 via-base-200 to-secondary/10 p-6"
+        className="relative rounded-2xl sm:rounded-3xl overflow-hidden border border-base-300 bg-gradient-to-br from-primary/10 via-base-200 to-secondary/10 p-4 sm:p-6"
       >
         {/* Ambient blobs */}
         <div
@@ -300,19 +345,20 @@ export default function ProfilePage() {
           }}
         />
 
-        <div className="relative flex flex-col sm:flex-row items-center sm:items-start gap-6">
+        <div className="relative flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-6">
+
           {/* Avatar */}
           <div className="relative shrink-0">
-            <div className="w-24 h-24 rounded-2xl overflow-hidden border-2 border-primary/30 shadow-xl bg-base-300">
-              {basic.profilePhotoUrl || profile?.profilePhotoUrl ? (
+            <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden border-2 border-primary/30 shadow-xl bg-base-300">
+              {avatarUrl ? (
                 <img
-                  src={basic.profilePhotoUrl || profile?.profilePhotoUrl}
+                  src={avatarUrl}
                   alt="Profile"
                   className="w-full h-full object-cover"
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center">
-                  <Car size={36} className="text-primary/40" />
+                  <Car size={32} className="text-primary/40" />
                 </div>
               )}
             </div>
@@ -322,45 +368,45 @@ export default function ProfilePage() {
               title="Upload photo"
               className="absolute -bottom-2 -right-2 p-1.5 rounded-xl bg-primary text-primary-content shadow-lg hover:scale-110 transition-transform disabled:opacity-50"
             >
-              {isUploading ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
+              {isUploading ? <Loader2 size={13} className="animate-spin" /> : <Camera size={13} />}
             </button>
             <input ref={photoRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
           </div>
 
           {/* Name / bio */}
-          <div className="flex-1 text-center sm:text-left">
+          <div className="flex-1 text-center sm:text-left min-w-0">
             <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 mb-1">
-              <h1 className="text-2xl font-black tracking-tight text-base-content">
-                {profile?.displayName || profile?.legalName || "Your Name"}
+              <h1 className="text-xl sm:text-2xl font-black tracking-tight text-base-content truncate max-w-[200px] sm:max-w-none">
+                {displayName}
               </h1>
               {status && <StatusBadge status={status} />}
             </div>
-            <p className="text-xs text-base-content/40 font-mono uppercase tracking-widest">
-              {profile?.partnerCode || "—"}
+            <p className="text-[10px] sm:text-xs text-base-content/40 font-mono uppercase tracking-widest">
+              {partnerCode}
             </p>
-            <p className="text-sm text-base-content/60 mt-1 max-w-sm">
-              {profile?.bio || "No bio yet — add one under Personal Details."}
+            <p className="text-xs sm:text-sm text-base-content/60 mt-1 max-w-sm mx-auto sm:mx-0 line-clamp-2">
+              {bio}
             </p>
           </div>
 
           {/* Progress ring */}
-          <CompletionRing percent={completion} />
+          <CompletionRing percent={completionPct} />
         </div>
 
         {/* Stat chips */}
-        <div className="relative mt-5 flex flex-wrap gap-3">
+        <div className="relative mt-4 sm:mt-5 flex flex-wrap gap-2 sm:gap-3">
           {[
-            { icon: Star,       value: profile?.rating?.averageRating?.toFixed(1) ?? "0.0", label: "Rating" },
-            { icon: TrendingUp, value: profile?.stats?.totalRidesCompleted ?? 0,             label: "Rides"  },
-            { icon: BadgeCheck, value: profile?.kyc?.verificationStatus ?? "Not Submitted",  label: "KYC"    },
+            { icon: Star,       value: avgRating,  label: "Rating" },
+            { icon: TrendingUp, value: totalRides, label: "Rides"  },
+            { icon: BadgeCheck, value: kycStatus,  label: "KYC"    },
           ].map(({ icon: Icon, value, label }) => (
             <div
               key={label}
-              className="flex items-center gap-2 px-3 py-2 bg-base-100/60 border border-base-300 rounded-xl backdrop-blur-sm"
+              className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 sm:py-2 bg-base-100/60 border border-base-300 rounded-xl backdrop-blur-sm"
             >
-              <Icon size={14} className="text-primary" />
-              <span className="text-xs font-black text-base-content">{value}</span>
-              <span className="text-[9px] uppercase tracking-widest text-base-content/40">{label}</span>
+              <Icon size={12} className="text-primary" />
+              <span className="text-[11px] sm:text-xs font-black text-base-content">{value}</span>
+              <span className="text-[8px] sm:text-[9px] uppercase tracking-widest text-base-content/40">{label}</span>
             </div>
           ))}
         </div>
@@ -368,18 +414,22 @@ export default function ProfilePage() {
 
       {/* ── URL-driven Tab Nav ───────────────────────────────────────────── */}
       <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={1} className="space-y-2">
-        <div className="flex gap-1 bg-base-200 p-1 rounded-2xl overflow-x-auto custom-scrollbar">
+        {/* Scrollable tab strip — hides scrollbar but stays scrollable on mobile */}
+        <div
+          className="flex gap-1 bg-base-200 p-1 rounded-2xl overflow-x-auto"
+          style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+        >
           {TABS.map(({ id, label, icon: Icon, href }) => (
             <Link
               key={id}
               href={href}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest whitespace-nowrap transition-all ${
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest whitespace-nowrap transition-all ${
                 activeTab === id
                   ? "bg-primary text-primary-content shadow-md"
                   : "text-base-content/50 hover:text-base-content hover:bg-base-300"
               }`}
             >
-              <Icon size={13} />
+              <Icon size={11} />
               {label}
             </Link>
           ))}
@@ -403,7 +453,7 @@ export default function ProfilePage() {
           transition={{ duration: 0.28 }}
         >
 
-          {/* ══ /partner/solo/profile  →  Personal Details ══════════════ */}
+          {/* ══ Personal Details ══════════════════════════════════════════ */}
           {activeTab === "personal" && (
             <SectionCard
               title="Personal Details"
@@ -412,11 +462,11 @@ export default function ProfilePage() {
               index={0}
             >
               <InfoNote>
-                Fill in all fields to improve your <strong>profile completion score</strong>. 
+                Fill in all fields to improve your <strong>profile completion score</strong>.
                 A higher score increases your match priority for premium rides.
               </InfoNote>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <Field label="Display Name" hint="Shown to riders on the booking screen.">
                   <Input
                     value={basic.displayName}
@@ -446,7 +496,7 @@ export default function ProfilePage() {
                   <Input
                     type="number"
                     value={basic.yearsOfExperience}
-                    onChange={(e) => setBasic((p) => ({ ...p, yearsOfExperience: e.target.value }))}
+                    onChange={(e) => setBasic((p) => ({ ...p, yearsOfExperience: Number(e.target.value) }))}
                     placeholder="e.g. 5"
                   />
                 </Field>
@@ -476,7 +526,7 @@ export default function ProfilePage() {
                 <p className="text-[10px] text-base-content/30 leading-relaxed">
                   Toggle the service types you are trained and equipped for. These influence your ride-matching priority.
                 </p>
-                <div className="flex flex-wrap gap-3 pt-1">
+                <div className="flex flex-wrap gap-2 sm:gap-3 pt-1">
                   {[
                     { key: "hasMedicalTransportExp", label: "Medical Transport", icon: Stethoscope },
                     { key: "hasAmbulanceExp",         label: "Ambulance",         icon: Heart        },
@@ -484,15 +534,15 @@ export default function ProfilePage() {
                     <button
                       key={key}
                       onClick={() => setBasic((p) => ({ ...p, [key]: !p[key] }))}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-xs font-bold uppercase tracking-wide transition-all ${
+                      className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl border text-xs font-bold uppercase tracking-wide transition-all ${
                         basic[key]
                           ? "bg-primary/10 border-primary text-primary"
                           : "border-base-300 text-base-content/40 hover:border-primary/50"
                       }`}
                     >
-                      <Icon size={14} />
+                      <Icon size={13} />
                       {label}
-                      {basic[key] && <CheckCircle2 size={12} />}
+                      {basic[key] && <CheckCircle2 size={11} />}
                     </button>
                   ))}
                 </div>
@@ -502,7 +552,7 @@ export default function ProfilePage() {
             </SectionCard>
           )}
 
-          {/* ══ /partner/solo/profile/contact  →  Contact Info ══════════ */}
+          {/* ══ Contact Info ══════════════════════════════════════════════ */}
           {activeTab === "contact" && (
             <SectionCard
               title="Contact Info"
@@ -511,11 +561,11 @@ export default function ProfilePage() {
               index={0}
             >
               <InfoNote>
-                Your <strong>Primary Phone</strong> is tied to OTPs and ride alerts. 
+                Your <strong>Primary Phone</strong> is tied to OTPs and ride alerts.
                 If you need to change your login phone number, please contact support directly.
               </InfoNote>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <Field label="Primary Phone *" hint="10-digit Indian mobile number — used for OTPs and ride alerts.">
                   <Input
                     value={contact.phone}
@@ -551,7 +601,7 @@ export default function ProfilePage() {
               </div>
 
               <InfoNote variant="warning">
-                Changes to your phone number or email are reviewed by the operations team 
+                Changes to your phone number or email are reviewed by the operations team
                 and may require re-verification before taking effect.
               </InfoNote>
 
@@ -559,7 +609,7 @@ export default function ProfilePage() {
             </SectionCard>
           )}
 
-          {/* ══ /partner/solo/profile/address  →  Address ═══════════════ */}
+          {/* ══ Address ═══════════════════════════════════════════════════ */}
           {activeTab === "address" && (
             <SectionCard
               title="Residential Address"
@@ -568,11 +618,11 @@ export default function ProfilePage() {
               index={0}
             >
               <InfoNote>
-                Providing an accurate address speeds up your <strong>KYC approval</strong>. 
+                Providing an accurate address speeds up your <strong>KYC approval</strong>.
                 City and State are required fields.
               </InfoNote>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <Field label="Street / Door No." hint="Flat number, building name, street name, locality.">
                   <Input
                     value={address.street}
@@ -617,7 +667,7 @@ export default function ProfilePage() {
             </SectionCard>
           )}
 
-          {/* ══ /partner/solo/profile/professional  →  Professional Info ══ */}
+          {/* ══ Professional Info ══════════════════════════════════════════ */}
           {activeTab === "professional" && (
             <SectionCard
               title="Professional Info"
@@ -626,11 +676,11 @@ export default function ProfilePage() {
               index={0}
             >
               <InfoNote>
-                Enabling <strong>Medical Transport</strong> or <strong>Ambulance Experience</strong> qualifies you 
+                Enabling <strong>Medical Transport</strong> or <strong>Ambulance Experience</strong> qualifies you
                 for higher-priority healthcare rides with better payout rates on the Likeson platform.
               </InfoNote>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <Field
                   label="Years of Professional Driving Experience"
                   hint="Count only years actively working as a paid driver."
@@ -638,7 +688,7 @@ export default function ProfilePage() {
                   <Input
                     type="number"
                     value={professional.yearsOfExperience}
-                    onChange={(e) => setProfessional((p) => ({ ...p, yearsOfExperience: e.target.value }))}
+                    onChange={(e) => setProfessional((p) => ({ ...p, yearsOfExperience: Number(e.target.value) }))}
                     placeholder="e.g. 3"
                   />
                 </Field>
@@ -674,13 +724,13 @@ export default function ProfilePage() {
                 <div className="flex flex-col sm:flex-row gap-3 mt-2">
                   {[
                     {
-                      key:  "hasMedicalTransportExp",
+                      key:   "hasMedicalTransportExp",
                       label: "Medical Transport",
                       icon:  Stethoscope,
                       note:  "Trained in patient transport protocols",
                     },
                     {
-                      key:  "hasAmbulanceExp",
+                      key:   "hasAmbulanceExp",
                       label: "Ambulance Experience",
                       icon:  Heart,
                       note:  "Has operated or assisted in ambulance services",
@@ -717,7 +767,7 @@ export default function ProfilePage() {
             </SectionCard>
           )}
 
-          {/* ══ /partner/solo/profile/emergency  →  Emergency Contact ══ */}
+          {/* ══ Emergency Contact ══════════════════════════════════════════ */}
           {activeTab === "emergency" && (
             <SectionCard
               title="Emergency Contact"
@@ -726,11 +776,11 @@ export default function ProfilePage() {
               index={0}
             >
               <InfoNote variant="warning">
-                Please <strong>inform this person</strong> that they have been listed as your emergency contact on Likeson. 
+                Please <strong>inform this person</strong> that they have been listed as your emergency contact on Likeson.
                 They should be reachable 24/7 and ideally located in the same city as you.
               </InfoNote>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <Field label="Full Name *" hint="Legal name of your emergency contact.">
                   <Input
                     value={emergency.name}
@@ -768,7 +818,7 @@ export default function ProfilePage() {
             </SectionCard>
           )}
 
-          {/* ══ /partner/solo/profile/certificates  →  Certificates ══════ */}
+          {/* ══ Certificates ═══════════════════════════════════════════════ */}
           {activeTab === "certificates" && (
             <SectionCard
               title="Training Certificates"
@@ -777,14 +827,14 @@ export default function ProfilePage() {
               index={0}
             >
               <InfoNote>
-                Certificates like <strong>First Aid</strong>, <strong>EVTS</strong>, or 
-                <strong> Defensive Driving</strong> increase your match rate for specialised 
+                Certificates like <strong>First Aid</strong>, <strong>EVTS</strong>, or
+                <strong> Defensive Driving</strong> increase your match rate for specialised
                 medical rides. Expired certificates should be renewed and re-uploaded promptly.
               </InfoNote>
 
               {/* Certificate list */}
               <div className="space-y-2.5">
-                {(profile?.trainingCertificates || []).length === 0 ? (
+                {certificates.length === 0 ? (
                   <div className="flex flex-col items-center gap-3 py-10 text-center">
                     <Award size={36} className="text-base-content/20" />
                     <p className="text-sm font-bold text-base-content/40">No certificates added yet</p>
@@ -793,22 +843,22 @@ export default function ProfilePage() {
                     </p>
                   </div>
                 ) : (
-                  (profile?.trainingCertificates || []).map((cert) => {
+                  certificates.map((cert) => {
                     const isExpired = cert.expiresAt && new Date(cert.expiresAt) < new Date();
                     return (
                       <motion.div
                         key={cert._id}
                         initial={{ opacity: 0, x: -8 }}
                         animate={{ opacity: 1, x: 0 }}
-                        className={`flex items-center justify-between p-4 rounded-2xl border bg-base-200/50 group hover:border-primary/40 transition-all ${
+                        className={`flex items-center justify-between p-3 sm:p-4 rounded-2xl border bg-base-200/50 group hover:border-primary/40 transition-all ${
                           isExpired ? "border-error/40 bg-error/5" : "border-base-300"
                         }`}
                       >
-                        <div className="flex items-center gap-3">
-                          <div className={`p-2 rounded-xl ${isExpired ? "bg-error/10" : "bg-primary/10"}`}>
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`p-2 rounded-xl shrink-0 ${isExpired ? "bg-error/10" : "bg-primary/10"}`}>
                             <Award size={15} className={isExpired ? "text-error" : "text-primary"} />
                           </div>
-                          <div>
+                          <div className="min-w-0">
                             <p className="text-sm font-bold text-base-content flex items-center gap-2 flex-wrap">
                               {cert.name}
                               {isExpired && (
@@ -817,7 +867,7 @@ export default function ProfilePage() {
                                 </span>
                               )}
                             </p>
-                            <p className="text-[10px] text-base-content/40 mt-0.5">
+                            <p className="text-[10px] text-base-content/40 mt-0.5 truncate">
                               {cert.issuedBy || "—"}
                               {cert.issuedAt  && ` · Issued: ${new Date(cert.issuedAt).toLocaleDateString()}`}
                               {cert.expiresAt && ` · Expires: ${new Date(cert.expiresAt).toLocaleDateString()}`}
@@ -827,7 +877,7 @@ export default function ProfilePage() {
                         <button
                           onClick={() => dispatch(removeTrainingCertificate(cert._id))}
                           title="Remove certificate"
-                          className="p-2 rounded-xl text-error opacity-0 group-hover:opacity-100 hover:bg-error/10 transition-all"
+                          className="p-2 rounded-xl text-error opacity-0 group-hover:opacity-100 hover:bg-error/10 transition-all shrink-0 ml-2"
                         >
                           <Trash2 size={13} />
                         </button>
@@ -846,7 +896,7 @@ export default function ProfilePage() {
                     exit={{ opacity: 0, height: 0 }}
                     className="overflow-hidden"
                   >
-                    <div className="p-5 rounded-2xl border border-primary/30 bg-primary/5 space-y-4 mt-1">
+                    <div className="p-4 sm:p-5 rounded-2xl border border-primary/30 bg-primary/5 space-y-4 mt-1">
                       <div className="flex items-center justify-between">
                         <p className="text-xs font-black uppercase tracking-widest text-primary">New Certificate</p>
                         <button
@@ -886,7 +936,7 @@ export default function ProfilePage() {
                           />
                         </Field>
                       </div>
-                      <div className="flex gap-2 pt-1">
+                      <div className="flex flex-wrap gap-2 pt-1">
                         <button
                           onClick={handleAddCert}
                           disabled={!newCert.name.trim()}

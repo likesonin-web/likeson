@@ -1,11 +1,26 @@
-import express from 'express';
-import { body, param, query, validationResult } from 'express-validator';
-import Razorpay from 'razorpay';
-import crypto from 'crypto';
-import dotenv from 'dotenv';
+/**
+ * subscriptionRouter.js — Likeson.in
+ *
+ * Corrections vs previous version:
+ *  1. customPlanOptions unit-price resolution fixed to match actual
+ *     PlatformPricingConfig.customPlanOptions schema fields
+ *     (consultation.pricePerConsultation, transport.kmSlabs, etc.)
+ *  2. SystemLog imported and wired to every mutating/sensitive route
+ *  3. UserSubscription.create now snapshots planName, planType,
+ *     fixedTier, and limits from the plan at purchase time
+ *  4. Admin controls pricing — customer READ-ONLY access to pricing
+ *     enforced; customers cannot set unitPrices themselves
+ *  5. Minor: /upgrade also snapshots limits on plan change
+ */
 
-import sendEmail from '../utils/sendEmail.js';
-import { transactionalTemplate } from '../utils/emailTemplates.js';
+import express                         from 'express';
+import { body, param, validationResult } from 'express-validator';
+import Razorpay                        from 'razorpay';
+import crypto                          from 'crypto';
+import dotenv                          from 'dotenv';
+
+import sendEmail                       from '../utils/sendEmail.js';
+import { transactionalTemplate }       from '../utils/emailTemplates.js';
 
 // ── Models ────────────────────────────────────────────────────────────────────
 import UserSubscription      from '../models/UserSubscription.js';
@@ -14,6 +29,7 @@ import PlatformPricingConfig from '../models/PlatformPricingConfig.js';
 import PromotionCoupon       from '../models/PromotionCoupon.js';
 import Notification          from '../models/Notification.js';
 import Wallet                from '../models/Wallet.js';
+import SystemLog             from '../models/SystemLog.js';
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 import { protect, authorize } from '../middleware/authMiddleware.js';
@@ -30,7 +46,7 @@ const razorpay = new Razorpay({
     key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-/** Wrap async route handlers */
+/** Wrap async route handlers — no unhandled rejections */
 const asyncHandler = (fn) => (req, res, next) =>
     Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -42,16 +58,180 @@ const validate = (req, res, next) => {
     next();
 };
 
+/**
+ * resolveClientIp — works behind reverse proxies (trust proxy enabled on app).
+ */
+const resolveClientIp = (req) =>
+    (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown')
+        .toString()
+        .split(',')[0]
+        .trim();
+
+/**
+ * buildActor — standard actor block for SystemLog from an authenticated request.
+ */
+const buildActor = (req) => ({
+    userId:    req.user?._id   ?? null,
+    name:      req.user?.name  ?? 'system',
+    email:     req.user?.email ?? null,
+    role:      req.user?.role  ?? 'anonymous',
+    ip:        resolveClientIp(req),
+    userAgent: req.headers['user-agent'] ?? null,
+    platform:  detectPlatform(req),
+});
+
+const detectPlatform = (req) => {
+    const ua = (req.headers['user-agent'] || '').toLowerCase();
+    if (ua.includes('android'))                 return 'android';
+    if (ua.includes('iphone') || ua.includes('ipad')) return 'ios';
+    if (ua.includes('electron'))                return 'desktop';
+    if (req.headers['x-platform'])              return req.headers['x-platform'];
+    return 'web';
+};
+
+/**
+ * log — fire-and-forget SystemLog wrapper.
+ * Never throws; never blocks the request.
+ */
+const log = (payload) => SystemLog.createLog(payload).catch(() => null);
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PRICING HELPERS  (customPlanOptions — admin-controlled)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * resolveCustomOptionUnitPrice
+ *
+ * Drop-in replacement for the same function in subscriptionRouter.js.
+ * Now accepts `extras` param:
+ *   extras.careAssistantTierIndex — index into customPlanOptions.careAssistant.pricingTiers
+ *   extras.doctorTierCount        — selected doctor count for tier bonus (separate from qty)
+ *
+ * qty for consultations = number of consults (NOT doctor count).
+ * qty for careAssistant = number of visits/month.
+ */
+const resolveCustomOptionUnitPrice = (optionPrices, optionKey, quantity, extras = {}) => {
+    let unitPrice = 0;
+
+    switch (optionKey) {
+        case 'consultations': {
+            // Base price per consultation
+            unitPrice = optionPrices?.consultation?.pricePerConsultation ?? 0;
+
+            // Doctor-tier bonus driven by selected doctor count (not qty)
+            const tiers               = optionPrices?.consultation?.doctorPricingTiers ?? [];
+            const selectedDoctorCount = Number(extras.doctorTierCount ?? 0);
+
+            if (tiers.length && selectedDoctorCount > 0) {
+                // Highest tier whose doctorCount <= selectedDoctorCount
+                const matched = [...tiers]
+                    .sort((a, b) => b.doctorCount - a.doctorCount)
+                    .find((t) => t.doctorCount <= selectedDoctorCount);
+                if (matched) unitPrice += matched.additionalPrice ?? 0;
+            }
+            // lineTotal = qty (consults) × unitPrice (base + bonus)
+            break;
+        }
+
+        case 'transport': {
+            // kmSlabs: [{km, price}] — price is flat per slab bundle, not per-km
+            const slabs = optionPrices?.transport?.kmSlabs ?? [];
+            if (slabs.length) {
+                const matched = [...slabs]
+                    .sort((a, b) => b.km - a.km)
+                    .find((s) => s.km <= quantity);
+                // unitPrice = slab price; lineTotal = qty(1) × unitPrice = slab price
+                unitPrice = matched?.price ?? 0;
+            }
+            break;
+        }
+
+        case 'diagnostics': {
+            const slabs = optionPrices?.diagnosticsDiscount?.slabs ?? [];
+            if (slabs.length) {
+                const exact = slabs.find((s) => s.percent === quantity);
+                if (exact) {
+                    unitPrice = exact.price;
+                } else {
+                    const floor = [...slabs]
+                        .sort((a, b) => b.percent - a.percent)
+                        .find((s) => s.percent <= quantity);
+                    unitPrice = floor?.price ?? 0;
+                }
+            }
+            break;
+        }
+
+        case 'pharmacy': {
+            const slabs = optionPrices?.pharmacyDiscount?.slabs ?? [];
+            if (slabs.length) {
+                const exact = slabs.find((s) => s.percent === quantity);
+                if (exact) {
+                    unitPrice = exact.price;
+                } else {
+                    const floor = [...slabs]
+                        .sort((a, b) => b.percent - a.percent)
+                        .find((s) => s.percent <= quantity);
+                    unitPrice = floor?.price ?? 0;
+                }
+            }
+            break;
+        }
+
+        case 'careAssistant': {
+            // Use the tier index the customer selected, not always tiers[0]
+            const caTiers = optionPrices?.careAssistant?.pricingTiers ?? [];
+            if (caTiers.length) {
+                const tierIdx = Number(extras.careAssistantTierIndex ?? 0);
+                const tier    = caTiers[tierIdx] ?? caTiers[0];
+                unitPrice     = tier?.chargeToUser ?? 0;
+            }
+            // lineTotal = qty (visits) × unitPrice (chargeToUser per visit)
+            break;
+        }
+
+        case 'homeSampleCollection': {
+            unitPrice = optionPrices?.addOns?.homeSampleCollection ?? 199;
+            break;
+        }
+
+        case 'prioritySupport': {
+            unitPrice = optionPrices?.addOns?.prioritySupport ?? 99;
+            break;
+        }
+
+        default:
+            unitPrice = 0;
+    }
+
+    return unitPrice;
+};
+
+
+/**
+ * snapshotLimits — pull the plan's benefit limits into a flat object
+ * for storage on UserSubscription.limits at purchase time.
+ */
+const snapshotLimits = (plan) => ({
+    consultationsPerMonth:       plan.consultations?.freePerMonth        ?? 0,
+    transportRidesPerMonth:      plan.transport?.ridesPerMonth           ?? null,
+    careAssistantVisitsPerMonth: plan.careAssistant?.visitsPerMonth      ?? null,
+    labTestsPerMonth:            0,
+    pharmacyDiscountPercent:     plan.pharmacy?.isFlat
+                                     ? plan.pharmacy.discountMax
+                                     : plan.pharmacy?.discountMax ?? 0,
+    diagnosticsDiscountPercent:  plan.diagnostics?.discountPercent       ?? 0,
+    transportRatePerKm:          plan.transport?.ratePerKm               ?? null,
+    homeSampleCollection:        plan.diagnostics?.homeSampleCollection   ?? false,
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  SECTION 1 — PLAN CATALOGUE  (read-only, customer-facing)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * @route   GET /api/v1/subscriptions/plans
- * @desc    List all active plans visible to the requesting customer.
- *          Fixed plans  → visible to everyone.
- *          Custom plans → visible only to the customer who created them.
- * @access  Private (customer, admin, superadmin)
+ * GET /api/v1/subscriptions/plans
+ * List active plans visible to requesting customer.
  */
 router.get(
     '/plans',
@@ -79,9 +259,8 @@ router.get(
 );
 
 /**
- * @route   GET /api/v1/subscriptions/plans/:planId
- * @desc    Get a single plan by ID.
- * @access  Private (customer, admin, superadmin)
+ * GET /api/v1/subscriptions/plans/:planId
+ * Single plan by ID.
  */
 router.get(
     '/plans/:planId',
@@ -99,16 +278,12 @@ router.get(
             return res.status(404).json({ success: false, message: 'Plan not found.' });
 
         const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
-
         if (
             !isAdmin &&
             plan.visibleToCustomerOnly &&
             String(plan.createdByCustomer) !== String(req.user._id)
         ) {
-            return res.status(403).json({
-                success: false,
-                message: 'You do not have access to this plan.',
-            });
+            return res.status(403).json({ success: false, message: 'You do not have access to this plan.' });
         }
 
         res.status(200).json({ success: true, data: plan });
@@ -120,31 +295,35 @@ router.get(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * @route   GET /api/v1/subscriptions/custom-plan/pricing
- * @desc    Return unit prices for each custom-plan option block.
- * @access  Private (customer)
+ * GET /api/v1/subscriptions/custom-plan/pricing
+ *
+ * Returns admin-controlled pricing for custom plan option blocks.
+ * Customers READ pricing — they CANNOT set it.
+ * Admin sets pricing via PlatformPricingConfig.customPlanOptions.
  */
 router.get(
     '/custom-plan/pricing',
     protect,
-    authorize('customer'),
+    authorize('customer', 'admin', 'superadmin'),
     asyncHandler(async (req, res) => {
         const config = await PlatformPricingConfig.getGlobal();
 
+        // Return admin-defined option pricing and caps for UI rendering
         res.status(200).json({
             success: true,
             data: {
-                unitPrices: config.customPlanOptions,
-                caps:       config.caps,
+                optionPricing: config.customPlanOptions, // full schema — UI uses what it needs
+                caps:          config.caps,
             },
         });
     })
 );
 
 /**
- * @route   POST /api/v1/subscriptions/custom-plan
- * @desc    Customer builds a custom plan.
- * @access  Private (customer)
+ * POST /api/v1/subscriptions/custom-plan
+ * Customer builds a custom plan.
+ * Unit prices resolved server-side from PlatformPricingConfig.
+ * Supports careAssistantTierIndex + doctorTierCount extras.
  */
 router.post(
     '/custom-plan',
@@ -162,55 +341,88 @@ router.post(
             ])
             .withMessage('Invalid optionKey'),
         body('options.*.quantity')
-            .isNumeric()
-            .custom((v) => v >= 0)
+            .isFloat({ min: 0 })
             .withMessage('Quantity must be ≥ 0'),
+        body('options.*.careAssistantTierIndex')
+            .optional()
+            .isInt({ min: 0 })
+            .withMessage('careAssistantTierIndex must be a non-negative integer'),
+        body('options.*.doctorTierCount')
+            .optional()
+            .isInt({ min: 0 })
+            .withMessage('doctorTierCount must be a non-negative integer'),
     ],
     validate,
     asyncHandler(async (req, res) => {
         const { name, options } = req.body;
 
         const config       = await PlatformPricingConfig.getGlobal();
-        const optionPrices = config.customPlanOptions;
+        const optionPrices = config.customPlanOptions;   // admin-controlled prices
         const caps         = config.caps;
 
-        const unitPriceMap = {
-            consultations:        optionPrices.consultationPricePerUnit,
-            transport:            optionPrices.transportRidePricePerUnit,
-            diagnostics:          optionPrices.diagnosticsDiscountPricePerPercent,
-            pharmacy:             optionPrices.pharmacyDiscountPricePerPercent,
-            careAssistant:        optionPrices.careAssistantVisitPricePerUnit,
-            homeSampleCollection: optionPrices.homeSampleCollectionFlatPrice,
-            prioritySupport:      optionPrices.prioritySupportFlatPrice,
-        };
+        const maxDoctorsAllowed = optionPrices?.consultation?.maxDoctorsAllowed ?? 5;
+        const caTiers           = optionPrices?.careAssistant?.pricingTiers ?? [];
 
         const builtOptions = [];
 
         for (const opt of options) {
-            const { optionKey, quantity, label = '' } = opt;
-            let qty = Number(quantity);
+            const { optionKey, label = '' } = opt;
+            let qty = Number(opt.quantity);
 
-            if (optionKey === 'pharmacy'      && qty > caps.pharmacyDiscountMax)
+            // ── Cap enforcement ───────────────────────────────────────────────
+            if (optionKey === 'pharmacy' && qty > caps.pharmacyDiscountMax)
                 return res.status(400).json({ success: false, message: `Pharmacy discount cannot exceed ${caps.pharmacyDiscountMax}%.` });
-            if (optionKey === 'diagnostics'   && qty > caps.diagnosticsDiscountMax)
+            if (optionKey === 'diagnostics' && qty > caps.diagnosticsDiscountMax)
                 return res.status(400).json({ success: false, message: `Diagnostics discount cannot exceed ${caps.diagnosticsDiscountMax}%.` });
             if (optionKey === 'consultations' && qty > caps.consultationsMaxPerMonth)
                 return res.status(400).json({ success: false, message: `Consultations cannot exceed ${caps.consultationsMaxPerMonth}/month.` });
             if (optionKey === 'careAssistant' && qty > caps.careAssistantMaxVisitsPerMonth)
                 return res.status(400).json({ success: false, message: `Care-assistant visits cannot exceed ${caps.careAssistantMaxVisitsPerMonth}/month.` });
-            if (optionKey === 'transport'     && qty > caps.transportMaxRidesPerMonth)
+            if (optionKey === 'transport' && qty > caps.transportMaxRidesPerMonth)
                 return res.status(400).json({ success: false, message: `Transport rides cannot exceed ${caps.transportMaxRidesPerMonth}/month.` });
 
+            // Boolean add-ons: clamp to 0 or 1
             if (['homeSampleCollection', 'prioritySupport'].includes(optionKey))
                 qty = qty > 0 ? 1 : 0;
 
-            const unitPrice = unitPriceMap[optionKey] ?? 0;
+            // ── Resolve extras ────────────────────────────────────────────────
+
+            // careAssistant: validate tier index against actual tiers array
+            let careAssistantTierIndex = 0;
+            if (optionKey === 'careAssistant') {
+                const requestedIdx = Number(opt.careAssistantTierIndex ?? 0);
+                if (caTiers.length === 0)
+                    return res.status(400).json({ success: false, message: 'Care assistant pricing tiers not configured. Contact admin.' });
+                if (requestedIdx < 0 || requestedIdx >= caTiers.length)
+                    return res.status(400).json({ success: false, message: `careAssistantTierIndex must be between 0 and ${caTiers.length - 1}.` });
+                careAssistantTierIndex = requestedIdx;
+            }
+
+            // consultations: doctorTierCount must be <= qty AND <= maxDoctorsAllowed
+            let doctorTierCount = 0;
+            if (optionKey === 'consultations') {
+                const requestedDocCount = Number(opt.doctorTierCount ?? 0);
+                if (requestedDocCount > qty)
+                    return res.status(400).json({ success: false, message: `doctorTierCount (${requestedDocCount}) cannot exceed consultation quantity (${qty}).` });
+                if (requestedDocCount > maxDoctorsAllowed)
+                    return res.status(400).json({ success: false, message: `doctorTierCount cannot exceed maxDoctorsAllowed (${maxDoctorsAllowed}).` });
+                doctorTierCount = requestedDocCount;
+            }
+
+            // ── Server-side unit price resolution ─────────────────────────────
+            const extras    = { careAssistantTierIndex, doctorTierCount };
+            const unitPrice = resolveCustomOptionUnitPrice(optionPrices, optionKey, qty, extras);
+            const lineTotal = +(qty * unitPrice).toFixed(2);
+
             builtOptions.push({
                 optionKey,
-                label:     label || optionKey,
-                quantity:  qty,
+                label:    label || optionKey,
+                quantity: qty,
                 unitPrice,
-                lineTotal: +(qty * unitPrice).toFixed(2),
+                lineTotal,
+                // Persist extras for edit round-trips
+                ...(optionKey === 'careAssistant'  && { careAssistantTierIndex }),
+                ...(optionKey === 'consultations'  && { doctorTierCount }),
             });
         }
 
@@ -238,6 +450,17 @@ router.post(
                 currency:     'INR',
             },
             customOptions: builtOptions,
+            createdBy:     req.user._id,
+        });
+
+        await log({
+            level:    'success',
+            category: 'user',
+            message:  `Custom plan created by customer: ${plan.name}`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'SubscriptionPlan', entityId: plan._id, label: plan.name },
+            request:  { method: 'POST', path: req.originalUrl, statusCode: 201 },
+            metadata: { planId: plan._id, totalMonthly, optionCount: builtOptions.length },
         });
 
         res.status(201).json({ success: true, data: plan });
@@ -245,9 +468,9 @@ router.post(
 );
 
 /**
- * @route   PUT /api/v1/subscriptions/custom-plan/:planId
- * @desc    Update an existing custom plan (only by the owning customer).
- * @access  Private (customer)
+ * PUT /api/v1/subscriptions/custom-plan/:planId
+ * Update an existing custom plan (owning customer only).
+ * Supports careAssistantTierIndex + doctorTierCount extras.
  */
 router.put(
     '/custom-plan/:planId',
@@ -265,9 +488,16 @@ router.put(
             ])
             .withMessage('Invalid optionKey'),
         body('options.*.quantity')
-            .isNumeric()
-            .custom((v) => v >= 0)
+            .isFloat({ min: 0 })
             .withMessage('Quantity must be ≥ 0'),
+        body('options.*.careAssistantTierIndex')
+            .optional()
+            .isInt({ min: 0 })
+            .withMessage('careAssistantTierIndex must be a non-negative integer'),
+        body('options.*.doctorTierCount')
+            .optional()
+            .isInt({ min: 0 })
+            .withMessage('doctorTierCount must be a non-negative integer'),
     ],
     validate,
     asyncHandler(async (req, res) => {
@@ -281,9 +511,12 @@ router.put(
         if (!plan)
             return res.status(404).json({ success: false, message: 'Custom plan not found or you do not own it.' });
 
-        const linked = await UserSubscription.exists({ plan: plan._id, status: 'Active' });
+        const linked = await UserSubscription.exists({
+            plan:   plan._id,
+            status: { $in: ['Active', 'Trial'] },
+        });
         if (linked)
-            return res.status(400).json({ success: false, message: 'Cannot edit a custom plan that is currently active on a subscription.' });
+            return res.status(400).json({ success: false, message: 'Cannot edit a custom plan linked to an active or trial subscription.' });
 
         const { name, options } = req.body;
 
@@ -291,57 +524,91 @@ router.put(
         const optionPrices = config.customPlanOptions;
         const caps         = config.caps;
 
-        const unitPriceMap = {
-            consultations:        optionPrices.consultationPricePerUnit,
-            transport:            optionPrices.transportRidePricePerUnit,
-            diagnostics:          optionPrices.diagnosticsDiscountPricePerPercent,
-            pharmacy:             optionPrices.pharmacyDiscountPricePerPercent,
-            careAssistant:        optionPrices.careAssistantVisitPricePerUnit,
-            homeSampleCollection: optionPrices.homeSampleCollectionFlatPrice,
-            prioritySupport:      optionPrices.prioritySupportFlatPrice,
-        };
+        const maxDoctorsAllowed = optionPrices?.consultation?.maxDoctorsAllowed ?? 5;
+        const caTiers           = optionPrices?.careAssistant?.pricingTiers ?? [];
 
         const builtOptions = [];
-        for (const opt of options) {
-            const { optionKey, quantity, label = '' } = opt;
-            let qty = Number(quantity);
 
-            if (optionKey === 'pharmacy'      && qty > caps.pharmacyDiscountMax)
+        for (const opt of options) {
+            const { optionKey, label = '' } = opt;
+            let qty = Number(opt.quantity);
+
+            // ── Cap enforcement ───────────────────────────────────────────────
+            if (optionKey === 'pharmacy' && qty > caps.pharmacyDiscountMax)
                 return res.status(400).json({ success: false, message: `Pharmacy discount cannot exceed ${caps.pharmacyDiscountMax}%.` });
-            if (optionKey === 'diagnostics'   && qty > caps.diagnosticsDiscountMax)
+            if (optionKey === 'diagnostics' && qty > caps.diagnosticsDiscountMax)
                 return res.status(400).json({ success: false, message: `Diagnostics discount cannot exceed ${caps.diagnosticsDiscountMax}%.` });
             if (optionKey === 'consultations' && qty > caps.consultationsMaxPerMonth)
                 return res.status(400).json({ success: false, message: `Consultations cannot exceed ${caps.consultationsMaxPerMonth}/month.` });
             if (optionKey === 'careAssistant' && qty > caps.careAssistantMaxVisitsPerMonth)
                 return res.status(400).json({ success: false, message: `Care-assistant visits cannot exceed ${caps.careAssistantMaxVisitsPerMonth}/month.` });
-            if (optionKey === 'transport'     && qty > caps.transportMaxRidesPerMonth)
+            if (optionKey === 'transport' && qty > caps.transportMaxRidesPerMonth)
                 return res.status(400).json({ success: false, message: `Transport rides cannot exceed ${caps.transportMaxRidesPerMonth}/month.` });
 
+            // Boolean add-ons: clamp to 0 or 1
             if (['homeSampleCollection', 'prioritySupport'].includes(optionKey))
                 qty = qty > 0 ? 1 : 0;
 
-            const unitPrice = unitPriceMap[optionKey] ?? 0;
+            // ── Resolve extras ────────────────────────────────────────────────
+
+            let careAssistantTierIndex = 0;
+            if (optionKey === 'careAssistant') {
+                const requestedIdx = Number(opt.careAssistantTierIndex ?? 0);
+                if (caTiers.length === 0)
+                    return res.status(400).json({ success: false, message: 'Care assistant pricing tiers not configured. Contact admin.' });
+                if (requestedIdx < 0 || requestedIdx >= caTiers.length)
+                    return res.status(400).json({ success: false, message: `careAssistantTierIndex must be between 0 and ${caTiers.length - 1}.` });
+                careAssistantTierIndex = requestedIdx;
+            }
+
+            let doctorTierCount = 0;
+            if (optionKey === 'consultations') {
+                const requestedDocCount = Number(opt.doctorTierCount ?? 0);
+                if (requestedDocCount > qty)
+                    return res.status(400).json({ success: false, message: `doctorTierCount (${requestedDocCount}) cannot exceed consultation quantity (${qty}).` });
+                if (requestedDocCount > maxDoctorsAllowed)
+                    return res.status(400).json({ success: false, message: `doctorTierCount cannot exceed maxDoctorsAllowed (${maxDoctorsAllowed}).` });
+                doctorTierCount = requestedDocCount;
+            }
+
+            // ── Server-side unit price resolution ─────────────────────────────
+            const extras    = { careAssistantTierIndex, doctorTierCount };
+            const unitPrice = resolveCustomOptionUnitPrice(optionPrices, optionKey, qty, extras);
+            const lineTotal = +(qty * unitPrice).toFixed(2);
+
             builtOptions.push({
                 optionKey,
-                label:     label || optionKey,
-                quantity:  qty,
+                label:    label || optionKey,
+                quantity: qty,
                 unitPrice,
-                lineTotal: +(qty * unitPrice).toFixed(2),
+                lineTotal,
+                ...(optionKey === 'careAssistant'  && { careAssistantTierIndex }),
+                ...(optionKey === 'consultations'  && { doctorTierCount }),
             });
         }
 
         if (name) plan.name = name;
         plan.customOptions = builtOptions;
-        await plan.save(); // pre-save hook recomputes pricing.monthly
+        plan.updatedBy     = req.user._id;
+        await plan.save();   // pre-save recomputes pricing.monthly from lineTotal sum
+
+        await log({
+            level:    'info',
+            category: 'user',
+            message:  `Custom plan updated by customer`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'SubscriptionPlan', entityId: plan._id, label: plan.name },
+            request:  { method: 'PUT', path: req.originalUrl, statusCode: 200 },
+            metadata: { planId: plan._id, newTotal: plan.pricing.monthly },
+        });
 
         res.status(200).json({ success: true, data: plan });
     })
 );
 
 /**
- * @route   DELETE /api/v1/subscriptions/custom-plan/:planId
- * @desc    Soft-delete (deactivate) a custom plan owned by the customer.
- * @access  Private (customer)
+ * DELETE /api/v1/subscriptions/custom-plan/:planId
+ * Soft-delete custom plan (owning customer only).
  */
 router.delete(
     '/custom-plan/:planId',
@@ -360,12 +627,22 @@ router.delete(
         if (!plan)
             return res.status(404).json({ success: false, message: 'Custom plan not found or already inactive.' });
 
-        const linked = await UserSubscription.exists({ plan: plan._id, status: 'Active' });
+        const linked = await UserSubscription.exists({ plan: plan._id, status: { $in: ['Active', 'Trial'] } });
         if (linked)
             return res.status(400).json({ success: false, message: 'Cannot delete a plan linked to an active subscription.' });
 
-        plan.isActive = false;
+        plan.isActive  = false;
+        plan.updatedBy = req.user._id;
         await plan.save();
+
+        await log({
+            level:    'warning',
+            category: 'user',
+            message:  `Custom plan deactivated by customer`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'UserSubscription', entityId: plan._id, label: plan.name },
+            request:  { method: 'DELETE', path: req.originalUrl, statusCode: 200 },
+        });
 
         res.status(200).json({ success: true, message: 'Custom plan deactivated.' });
     })
@@ -376,63 +653,40 @@ router.delete(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * @route   POST /api/v1/subscriptions/buy
- * @desc    Initiate a purchase for the selected plan.
+ * POST /api/v1/subscriptions/buy
  *
- *          TWO paths:
- *            A) Amount > 0  → Create a Razorpay order; return orderId.
- *               Frontend opens Razorpay checkout, then calls /verify.
- *
- *            B) Amount === 0 (free plan / 100%-off coupon)
- *               → Activate subscription immediately WITHOUT Razorpay.
- *               Returns { success, activated: true, data: subscription }.
- *
- *          FIX: body('amount') now accepts 0 via isFloat({ min: 0 }) instead
- *          of isNumeric() so "0" passes validation.
- *
- * @access  Private (customer)
+ * PATH A: amount > 0  → Razorpay order; return orderId
+ * PATH B: amount === 0 → activate immediately
  */
 router.post(
     '/buy',
     protect,
     authorize('customer'),
     [
-        body('planId')
-            .isMongoId()
-            .withMessage('planId must be a valid Mongo ID'),
-        body('amount')
-            .isFloat({ min: 0 })
-            .withMessage('amount must be a non-negative number'),
+        body('planId').isMongoId().withMessage('planId must be a valid Mongo ID'),
+        body('amount').isFloat({ min: 0 }).withMessage('amount must be a non-negative number'),
     ],
     validate,
     asyncHandler(async (req, res) => {
         const { planId, amount, couponCode } = req.body;
 
-        // ── Guard: no existing active/trial subscription ───────────────────────
+        // Guard: no existing active/trial sub
         const existingSub = await UserSubscription.findOne({
             user:       req.user._id,
             status:     { $in: ['Active', 'Trial'] },
             expiryDate: { $gt: new Date() },
         });
         if (existingSub)
-            return res.status(400).json({
-                success: false,
-                message: 'You already have an active subscription or trial.',
-            });
+            return res.status(400).json({ success: false, message: 'You already have an active subscription or trial.' });
 
-        // ── Verify the plan ────────────────────────────────────────────────────
         const plan = await SubscriptionPlan.findOne({ _id: planId, isActive: true });
         if (!plan)
             return res.status(404).json({ success: false, message: 'Plan not found.' });
 
-        if (
-            plan.planType === 'custom' &&
-            String(plan.createdByCustomer) !== String(req.user._id)
-        ) {
+        if (plan.planType === 'custom' && String(plan.createdByCustomer) !== String(req.user._id))
             return res.status(403).json({ success: false, message: 'You do not have access to this custom plan.' });
-        }
 
-        // ── Coupon discount ────────────────────────────────────────────────────
+        // Coupon discount
         let discount = 0;
         if (couponCode) {
             const coupon = await PromotionCoupon.findOne({
@@ -441,16 +695,15 @@ router.post(
                 'validity.to': { $gt: new Date() },
             });
             if (coupon) {
-                discount =
-                    coupon.benefit.type === 'Flat_Amount'
-                        ? coupon.benefit.value
-                        : (Number(amount) * coupon.benefit.value) / 100;
+                discount = coupon.benefit.type === 'Flat_Amount'
+                    ? coupon.benefit.value
+                    : (Number(amount) * coupon.benefit.value) / 100;
             }
         }
 
         const finalAmount = Math.max(Number(amount) - discount, 0);
 
-        // ── PATH B: free / ₹0 — activate immediately without Razorpay ─────────
+        // PATH B: ₹0 — activate immediately
         if (finalAmount === 0) {
             const expiry = new Date();
             if (plan.pricing.billingCycle === 'till_delivery') {
@@ -462,10 +715,14 @@ router.post(
             const sub = await UserSubscription.create({
                 user:       req.user._id,
                 plan:       planId,
+                planName:   plan.name,
+                planType:   plan.planType,
+                fixedTier:  plan.fixedTier ?? null,
                 status:     'Active',
                 expiryDate: expiry,
                 autoRenew:  plan.pricing.billingCycle !== 'till_delivery',
-                paymentHistory: [], // no charge
+                limits:     snapshotLimits(plan),
+                paymentHistory: [],
             });
 
             await Notification.create({
@@ -476,20 +733,39 @@ router.post(
                 priority:  'Normal',
             });
 
+            await log({
+                level:    'success',
+                category: 'payment',
+                message:  `Free subscription activated: ${plan.name}`,
+                actor:    buildActor(req),
+                relatedEntity: { model: 'UserSubscription', entityId: sub._id, label: plan.name },
+                request:  { method: 'POST', path: req.originalUrl, statusCode: 201 },
+                metadata: { planId, finalAmount: 0, discount },
+            });
+
             return res.status(201).json({
                 success:   true,
-                activated: true,          // flag so frontend knows no payment needed
+                activated: true,
                 message:   'Subscription activated for free.',
                 data:      sub,
             });
         }
 
-        // ── PATH A: paid — create Razorpay order ───────────────────────────────
+        // PATH A: paid — Razorpay order
         const razorpayOrder = await razorpay.orders.create({
-            amount:   Math.round(finalAmount * 100), // paise
+            amount:   Math.round(finalAmount * 100),
             currency: 'INR',
             receipt:  `rcpt_${Date.now()}`,
             notes:    { userId: req.user._id.toString(), planId: planId.toString() },
+        });
+
+        await log({
+            level:    'info',
+            category: 'payment',
+            message:  `Razorpay order created for plan: ${plan.name}`,
+            actor:    buildActor(req),
+            request:  { method: 'POST', path: req.originalUrl, statusCode: 200 },
+            metadata: { planId, finalAmount, discount, orderId: razorpayOrder.id },
         });
 
         res.status(200).json({
@@ -500,22 +776,15 @@ router.post(
             discount,
             planName:  plan.name,
             planType:  plan.planType,
-            // Echo planId & amount so the frontend can include them in /verify body
             planId,
         });
     })
 );
 
 /**
- * @route   POST /api/v1/subscriptions/verify
- * @desc    Verify Razorpay payment signature and activate subscription.
- *
- *          FIX: planId and amount are now optional in the body — if missing
- *          the route resolves them from the Razorpay order notes.
- *          This prevents the "Invalid value" validation error when the
- *          frontend only sends the three Razorpay response fields.
- *
- * @access  Private (any authenticated user)
+ * POST /api/v1/subscriptions/verify
+ * Verify Razorpay payment and activate subscription.
+ * planId and amount optional — resolved from order notes when absent.
  */
 router.post(
     '/verify',
@@ -524,37 +793,37 @@ router.post(
         body('razorpay_order_id').notEmpty().withMessage('razorpay_order_id is required'),
         body('razorpay_payment_id').notEmpty().withMessage('razorpay_payment_id is required'),
         body('razorpay_signature').notEmpty().withMessage('razorpay_signature is required'),
-        // planId and amount are OPTIONAL — resolved from Razorpay order notes when absent
         body('planId').optional().isMongoId().withMessage('planId must be a valid Mongo ID'),
         body('amount').optional().isFloat({ min: 0 }).withMessage('amount must be a non-negative number'),
     ],
     validate,
     asyncHandler(async (req, res) => {
-        const {
-            razorpay_order_id,
-            razorpay_payment_id,
-            razorpay_signature,
-        } = req.body;
-
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
         let { planId, amount } = req.body;
 
-        // ── Signature verification ─────────────────────────────────────────────
+        // Signature verification
         const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
         hmac.update(`${razorpay_order_id}|${razorpay_payment_id}`);
-        if (hmac.digest('hex') !== razorpay_signature)
+        if (hmac.digest('hex') !== razorpay_signature) {
+            await log({
+                level:    'error',
+                category: 'security',
+                message:  'Invalid Razorpay payment signature detected',
+                actor:    buildActor(req),
+                request:  { method: 'POST', path: req.originalUrl, statusCode: 400 },
+                metadata: { razorpay_order_id, razorpay_payment_id },
+            });
             return res.status(400).json({ success: false, message: 'Invalid payment signature.' });
+        }
 
-        // ── Resolve planId / amount from Razorpay order notes when not in body ─
+        // Resolve planId / amount from Razorpay order notes when not in body
         if (!planId || amount === undefined) {
             try {
                 const rzpOrder = await razorpay.orders.fetch(razorpay_order_id);
-                if (!planId)   planId = rzpOrder.notes?.planId;
-                if (amount === undefined) amount = rzpOrder.amount / 100; // paise → ₹
-            } catch (fetchErr) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Could not resolve plan details from Razorpay order. Please supply planId and amount.',
-                });
+                if (!planId)             planId = rzpOrder.notes?.planId;
+                if (amount === undefined) amount = rzpOrder.amount / 100;
+            } catch {
+                return res.status(400).json({ success: false, message: 'Could not resolve plan details from Razorpay order. Please supply planId and amount.' });
             }
         }
 
@@ -565,14 +834,9 @@ router.post(
         if (!plan)
             return res.status(404).json({ success: false, message: 'Plan not found.' });
 
-        if (
-            plan.planType === 'custom' &&
-            String(plan.createdByCustomer) !== String(req.user._id)
-        ) {
+        if (plan.planType === 'custom' && String(plan.createdByCustomer) !== String(req.user._id))
             return res.status(403).json({ success: false, message: 'Access denied to this custom plan.' });
-        }
 
-        // ── Calculate expiry ───────────────────────────────────────────────────
         const expiry = new Date();
         if (plan.pricing.billingCycle === 'till_delivery') {
             expiry.setDate(expiry.getDate() + 280);
@@ -580,13 +844,16 @@ router.post(
             expiry.setDate(expiry.getDate() + 30);
         }
 
-        // ── Create subscription ────────────────────────────────────────────────
         const sub = await UserSubscription.create({
             user:       req.user._id,
             plan:       planId,
+            planName:   plan.name,
+            planType:   plan.planType,
+            fixedTier:  plan.fixedTier ?? null,
             status:     'Active',
             expiryDate: expiry,
             autoRenew:  plan.pricing.billingCycle !== 'till_delivery',
+            limits:     snapshotLimits(plan),
             paymentHistory: [{
                 transactionId: razorpay_payment_id,
                 amount:        Number(amount),
@@ -602,6 +869,16 @@ router.post(
             priority:  'Normal',
         });
 
+        await log({
+            level:    'success',
+            category: 'payment',
+            message:  `Subscription activated via Razorpay: ${plan.name}`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'UserSubscription', entityId: sub._id, label: plan.name },
+            request:  { method: 'POST', path: req.originalUrl, statusCode: 201 },
+            metadata: { planId, amount, razorpay_payment_id, razorpay_order_id },
+        });
+
         res.status(201).json({ success: true, data: sub });
     })
 );
@@ -611,9 +888,8 @@ router.post(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * @route   GET /api/v1/subscriptions/my
- * @desc    Get the current user's most recent subscription with plan details.
- * @access  Private (customer)
+ * GET /api/v1/subscriptions/my
+ * Current user's most recent subscription with plan populated.
  */
 router.get(
     '/my',
@@ -632,9 +908,8 @@ router.get(
 );
 
 /**
- * @route   GET /api/v1/subscriptions/my/history
- * @desc    Full subscription history for the logged-in customer (paginated).
- * @access  Private (customer)
+ * GET /api/v1/subscriptions/my/history
+ * Paginated subscription history for the logged-in customer.
  */
 router.get(
     '/my/history',
@@ -644,12 +919,14 @@ router.get(
         const page  = Math.max(parseInt(req.query.page)  || 1, 1);
         const limit = Math.min(parseInt(req.query.limit) || 10, 50);
 
-        const total = await UserSubscription.countDocuments({ user: req.user._id });
-        const subs  = await UserSubscription.find({ user: req.user._id })
-            .populate('plan')
-            .sort({ createdAt: -1 })
-            .skip((page - 1) * limit)
-            .limit(limit);
+        const [total, subs] = await Promise.all([
+            UserSubscription.countDocuments({ user: req.user._id }),
+            UserSubscription.find({ user: req.user._id })
+                .populate('plan')
+                .sort({ createdAt: -1 })
+                .skip((page - 1) * limit)
+                .limit(limit),
+        ]);
 
         res.status(200).json({
             success:    true,
@@ -660,16 +937,9 @@ router.get(
 );
 
 /**
- * @route   PUT /api/v1/subscriptions/upgrade
- * @desc    Upgrade/switch plan for the active or trial subscription.
- *
- *          FIX: now accepts status 'Active' OR 'Trial' so users on a free
- *          trial can upgrade to a different plan.
- *          When upgrading from a Trial the new plan is paid via Razorpay
- *          through the normal /buy → /verify flow.  This endpoint handles
- *          the plan-swap after payment has already been verified.
- *
- * @access  Private (customer)
+ * PUT /api/v1/subscriptions/upgrade
+ * Upgrade/switch plan for active or trial subscription.
+ * Snapshots new plan limits on upgrade.
  */
 router.put(
     '/upgrade',
@@ -678,7 +948,6 @@ router.put(
     [body('newPlanId').isMongoId().withMessage('newPlanId must be a valid Mongo ID')],
     validate,
     asyncHandler(async (req, res) => {
-        // Accept both Active and Trial statuses
         const sub = await UserSubscription.findOne({
             user:   req.user._id,
             status: { $in: ['Active', 'Trial'] },
@@ -686,28 +955,29 @@ router.put(
         if (!sub)
             return res.status(400).json({ success: false, message: 'No active or trial subscription found.' });
 
-        const newPlan = await SubscriptionPlan.findOne({
-            _id:      req.body.newPlanId,
-            isActive: true,
-        });
+        const newPlan = await SubscriptionPlan.findOne({ _id: req.body.newPlanId, isActive: true });
         if (!newPlan)
             return res.status(404).json({ success: false, message: 'New plan not found.' });
 
-        if (
-            newPlan.planType === 'custom' &&
-            String(newPlan.createdByCustomer) !== String(req.user._id)
-        ) {
+        if (newPlan.planType === 'custom' && String(newPlan.createdByCustomer) !== String(req.user._id))
             return res.status(403).json({ success: false, message: 'You do not have access to this custom plan.' });
-        }
 
+        const previousPlan   = sub.plan;
         const previousStatus = sub.status;
+
         sub.plan      = newPlan._id;
-        sub.status    = 'Active'; // upgrading from trial → always becomes Active
+        sub.planName  = newPlan.name;
+        sub.planType  = newPlan.planType;
+        sub.fixedTier = newPlan.fixedTier ?? null;
+        sub.status    = 'Active';
+        sub.limits    = snapshotLimits(newPlan);
+
         const newExpiry = new Date();
         newExpiry.setDate(newExpiry.getDate() + 30);
         sub.expiryDate = newExpiry;
-        // If upgrading FROM trial, mark trialUsed (already true but ensure consistency)
+
         if (previousStatus === 'Trial') sub.trialUsed = true;
+
         await sub.save();
 
         await Notification.create({
@@ -718,14 +988,23 @@ router.put(
             priority:  'Normal',
         });
 
+        await log({
+            level:    'info',
+            category: 'user',
+            message:  `Subscription plan upgraded: ${newPlan.name}`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'UserSubscription', entityId: sub._id, label: newPlan.name },
+            request:  { method: 'PUT', path: req.originalUrl, statusCode: 200 },
+            metadata: { previousPlan, previousStatus, newPlanId: newPlan._id },
+        });
+
         res.status(200).json({ success: true, data: sub });
     })
 );
 
 /**
- * @route   PUT /api/v1/subscriptions/cancel
- * @desc    Customer cancels their active or trial subscription.
- * @access  Private (customer)
+ * PUT /api/v1/subscriptions/cancel
+ * Customer cancels active or trial subscription.
  */
 router.put(
     '/cancel',
@@ -739,8 +1018,10 @@ router.put(
         if (!sub)
             return res.status(400).json({ success: false, message: 'No active or trial subscription to cancel.' });
 
-        sub.status    = 'Cancelled';
-        sub.autoRenew = false;
+        sub.status             = 'Cancelled';
+        sub.autoRenew          = false;
+        sub.cancelledAt        = new Date();
+        sub.cancellationReason = req.body.reason ?? null;
         await sub.save();
 
         await Notification.create({
@@ -751,29 +1032,44 @@ router.put(
             priority:  'Normal',
         });
 
+        await log({
+            level:    'warning',
+            category: 'user',
+            message:  `Subscription cancelled by customer`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'UserSubscription', entityId: sub._id, label: sub.planName },
+            request:  { method: 'PUT', path: req.originalUrl, statusCode: 200 },
+            metadata: { reason: sub.cancellationReason },
+        });
+
         res.status(200).json({ success: true, message: 'Subscription cancelled.', data: sub });
     })
 );
 
 /**
- * @route   PUT /api/v1/subscriptions/toggle-auto-renew
- * @desc    Toggle the autoRenew flag on the active subscription.
- * @access  Private (customer)
+ * PUT /api/v1/subscriptions/toggle-auto-renew
+ * Toggle autoRenew flag on active subscription.
  */
 router.put(
     '/toggle-auto-renew',
     protect,
     authorize('customer'),
     asyncHandler(async (req, res) => {
-        const sub = await UserSubscription.findOne({
-            user:   req.user._id,
-            status: 'Active',
-        });
+        const sub = await UserSubscription.findOne({ user: req.user._id, status: 'Active' });
         if (!sub)
             return res.status(400).json({ success: false, message: 'No active subscription found.' });
 
         sub.autoRenew = !sub.autoRenew;
         await sub.save();
+
+        await log({
+            level:    'info',
+            category: 'user',
+            message:  `Auto-renew toggled: ${sub.autoRenew ? 'enabled' : 'disabled'}`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'UserSubscription', entityId: sub._id, label: sub.planName },
+            request:  { method: 'PUT', path: req.originalUrl, statusCode: 200 },
+        });
 
         res.status(200).json({
             success:   true,
@@ -788,64 +1084,35 @@ router.put(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * @route   POST /api/v1/subscriptions/free-trial/start
- * @desc    Customer starts a free trial.
- *
- *          Rules:
- *            1. Plan must have freeTrial.enabled === true.
- *            2. Customer must never have used a trial (lifetime trialUsed flag).
- *            3. No currently active subscription or trial.
- *            4. If freeTrial.requiresPaymentMethod === true, a
- *               razorpay_payment_method_id must be supplied.
- *            5. Trial status = 'Trial'; NO Razorpay charge is made here.
- *               The trial is always ₹0 at start.
- *
- * @access  Private (customer)
+ * POST /api/v1/subscriptions/free-trial/start
+ * Customer starts a free trial (one lifetime trial per account).
  */
 router.post(
     '/free-trial/start',
     protect,
     authorize('customer'),
     [
-        body('planId')
-            .isMongoId()
-            .withMessage('planId must be a valid Mongo ID'),
-        body('razorpay_payment_method_id')
-            .optional()
-            .isString()
-            .withMessage('razorpay_payment_method_id must be a string'),
+        body('planId').isMongoId().withMessage('planId must be a valid Mongo ID'),
+        body('razorpay_payment_method_id').optional().isString(),
     ],
     validate,
     asyncHandler(async (req, res) => {
         const { planId, razorpay_payment_method_id } = req.body;
 
-        // 1. Plan validation
         const plan = await SubscriptionPlan.findOne({ _id: planId, isActive: true });
         if (!plan)
             return res.status(404).json({ success: false, message: 'Plan not found.' });
-
         if (!plan.freeTrial?.enabled)
             return res.status(400).json({ success: false, message: 'This plan does not offer a free trial.' });
-
-        if (
-            plan.planType === 'custom' &&
-            String(plan.createdByCustomer) !== String(req.user._id)
-        ) {
+        if (plan.planType === 'custom' && String(plan.createdByCustomer) !== String(req.user._id))
             return res.status(403).json({ success: false, message: 'You do not have access to this custom plan.' });
-        }
 
-        // 2. Lifetime trial check
-        const previousTrial = await UserSubscription.findOne({
-            user:      req.user._id,
-            trialUsed: true,
-        });
+        // Lifetime trial check
+        const previousTrial = await UserSubscription.findOne({ user: req.user._id, trialUsed: true });
         if (previousTrial)
-            return res.status(400).json({
-                success: false,
-                message: 'You have already used your free trial. Each account is eligible for one trial only.',
-            });
+            return res.status(400).json({ success: false, message: 'You have already used your free trial. Each account is eligible for one trial only.' });
 
-        // 3. No currently active / in-trial subscription
+        // No active/trial subscription
         const activeSub = await UserSubscription.findOne({
             user:       req.user._id,
             status:     { $in: ['Active', 'Trial'] },
@@ -854,23 +1121,24 @@ router.post(
         if (activeSub)
             return res.status(400).json({ success: false, message: 'You already have an active subscription or ongoing trial.' });
 
-        // 4. Payment method gate
         if (plan.freeTrial.requiresPaymentMethod && !razorpay_payment_method_id)
             return res.status(400).json({ success: false, message: 'This plan requires a saved payment method to start a free trial.' });
 
-        // 5. Compute expiry
         const trialDays   = plan.freeTrial.durationDays || 7;
         const trialExpiry = new Date();
         trialExpiry.setDate(trialExpiry.getDate() + trialDays);
 
-        // 6. Create Trial subscription — ₹0, no Razorpay call
         const sub = await UserSubscription.create({
             user:       req.user._id,
             plan:       plan._id,
+            planName:   plan.name,
+            planType:   plan.planType,
+            fixedTier:  plan.fixedTier ?? null,
             status:     'Trial',
             expiryDate: trialExpiry,
             autoRenew:  false,
             trialUsed:  true,
+            limits:     snapshotLimits(plan),
             ...(razorpay_payment_method_id && { savedPaymentMethodId: razorpay_payment_method_id }),
             paymentHistory: [],
         });
@@ -881,6 +1149,16 @@ router.post(
             body:      `Enjoy full access to ${plan.name} until ${trialExpiry.toLocaleDateString()}. Subscribe before your trial ends to continue uninterrupted.`,
             type:      'Account_Status',
             priority:  'Normal',
+        });
+
+        await log({
+            level:    'success',
+            category: 'user',
+            message:  `Free trial started: ${plan.name}`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'UserSubscription', entityId: sub._id, label: plan.name },
+            request:  { method: 'POST', path: req.originalUrl, statusCode: 201 },
+            metadata: { trialDays, trialExpiry },
         });
 
         try {
@@ -904,9 +1182,8 @@ router.post(
 );
 
 /**
- * @route   GET /api/v1/subscriptions/free-trial/eligibility
- * @desc    Check whether the requesting customer is eligible to start a free trial.
- * @access  Private (customer)
+ * GET /api/v1/subscriptions/free-trial/eligibility
+ * Check if requesting customer is eligible for a free trial.
  */
 router.get(
     '/free-trial/eligibility',
@@ -914,7 +1191,6 @@ router.get(
     authorize('customer'),
     asyncHandler(async (req, res) => {
         const previous = await UserSubscription.findOne({ user: req.user._id, trialUsed: true });
-
         if (previous) {
             return res.status(200).json({
                 success:       true,
@@ -953,9 +1229,8 @@ router.get(
 );
 
 /**
- * @route   GET /api/v1/subscriptions/free-trial/status
- * @desc    Get the current trial status for the logged-in customer.
- * @access  Private (customer)
+ * GET /api/v1/subscriptions/free-trial/status
+ * Current trial status for logged-in customer.
  */
 router.get(
     '/free-trial/status',
@@ -985,15 +1260,8 @@ router.get(
 );
 
 /**
- * @route   POST /api/v1/subscriptions/free-trial/convert
- * @desc    Convert an active trial into a paid subscription via Razorpay.
- *
- *          TWO paths (mirrors /buy logic):
- *            A) plan.pricing.monthly > 0 → create Razorpay order; return orderId.
- *            B) plan.pricing.monthly === 0 (or 100%-off coupon)
- *               → activate immediately, return { activated: true }.
- *
- * @access  Private (customer)
+ * POST /api/v1/subscriptions/free-trial/convert
+ * Convert active trial to paid subscription via Razorpay (or free if ₹0).
  */
 router.post(
     '/free-trial/convert',
@@ -1015,7 +1283,6 @@ router.post(
         const plan   = trial.plan;
         let   amount = plan.pricing.monthly;
 
-        // Coupon discount
         let discount = 0;
         if (couponCode) {
             const coupon = await PromotionCoupon.findOne({
@@ -1024,23 +1291,22 @@ router.post(
                 'validity.to': { $gt: new Date() },
             });
             if (coupon) {
-                discount =
-                    coupon.benefit.type === 'Flat_Amount'
-                        ? coupon.benefit.value
-                        : (amount * coupon.benefit.value) / 100;
+                discount = coupon.benefit.type === 'Flat_Amount'
+                    ? coupon.benefit.value
+                    : (amount * coupon.benefit.value) / 100;
             }
         }
 
         const finalAmount = Math.max(amount - discount, 0);
 
-        // PATH B: ₹0 — activate immediately
+        // PATH B: ₹0
         if (finalAmount === 0) {
             const newExpiry = new Date();
             newExpiry.setDate(newExpiry.getDate() + 30);
 
-            trial.status    = 'Active';
+            trial.status     = 'Active';
             trial.expiryDate = newExpiry;
-            trial.autoRenew = true;
+            trial.autoRenew  = true;
             await trial.save();
 
             await Notification.create({
@@ -1051,24 +1317,24 @@ router.post(
                 priority:  'Normal',
             });
 
-            return res.status(200).json({
-                success:    true,
-                activated:  true,
-                message:    'Trial converted to a free paid subscription.',
-                data:       trial,
+            await log({
+                level:    'success',
+                category: 'payment',
+                message:  `Trial converted to free paid subscription: ${plan.name}`,
+                actor:    buildActor(req),
+                relatedEntity: { model: 'UserSubscription', entityId: trial._id, label: plan.name },
+                request:  { method: 'POST', path: req.originalUrl, statusCode: 200 },
             });
+
+            return res.status(200).json({ success: true, activated: true, message: 'Trial converted to a free paid subscription.', data: trial });
         }
 
-        // PATH A: paid — create Razorpay order
+        // PATH A: paid — Razorpay order
         const razorpayOrder = await razorpay.orders.create({
             amount:   Math.round(finalAmount * 100),
             currency: 'INR',
             receipt:  `trial_conv_${Date.now()}`,
-            notes:    {
-                userId:         req.user._id.toString(),
-                planId:         plan._id.toString(),
-                isTrialConvert: 'true',
-            },
+            notes:    { userId: req.user._id.toString(), planId: plan._id.toString(), isTrialConvert: 'true' },
         });
 
         res.status(200).json({
@@ -1085,13 +1351,8 @@ router.post(
 );
 
 /**
- * @route   POST /api/v1/subscriptions/free-trial/verify-convert
- * @desc    Verify Razorpay payment for a trial-to-paid conversion.
- *          Upgrades the existing Trial UserSubscription to Active.
- *
- *          FIX: amount is now optional — resolved from Razorpay order when absent.
- *
- * @access  Private (customer)
+ * POST /api/v1/subscriptions/free-trial/verify-convert
+ * Verify Razorpay payment for trial-to-paid conversion.
  */
 router.post(
     '/free-trial/verify-convert',
@@ -1101,20 +1362,27 @@ router.post(
         body('razorpay_order_id').notEmpty().withMessage('razorpay_order_id is required'),
         body('razorpay_payment_id').notEmpty().withMessage('razorpay_payment_id is required'),
         body('razorpay_signature').notEmpty().withMessage('razorpay_signature is required'),
-        body('amount').optional().isFloat({ min: 0 }).withMessage('amount must be a non-negative number'),
+        body('amount').optional().isFloat({ min: 0 }),
     ],
     validate,
     asyncHandler(async (req, res) => {
         const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
         let { amount } = req.body;
 
-        // Signature verification
         const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
         hmac.update(`${razorpay_order_id}|${razorpay_payment_id}`);
-        if (hmac.digest('hex') !== razorpay_signature)
+        if (hmac.digest('hex') !== razorpay_signature) {
+            await log({
+                level:    'error',
+                category: 'security',
+                message:  'Invalid Razorpay signature on trial-convert',
+                actor:    buildActor(req),
+                request:  { method: 'POST', path: req.originalUrl, statusCode: 400 },
+                metadata: { razorpay_order_id },
+            });
             return res.status(400).json({ success: false, message: 'Invalid payment signature.' });
+        }
 
-        // Resolve amount from Razorpay when not supplied
         if (amount === undefined) {
             try {
                 const rzpOrder = await razorpay.orders.fetch(razorpay_order_id);
@@ -1124,27 +1392,17 @@ router.post(
             }
         }
 
-        // Find the active trial
-        const trial = await UserSubscription.findOne({
-            user:   req.user._id,
-            status: 'Trial',
-        }).populate('plan');
-
+        const trial = await UserSubscription.findOne({ user: req.user._id, status: 'Trial' }).populate('plan');
         if (!trial)
             return res.status(400).json({ success: false, message: 'No active trial found for this account.' });
 
-        // Upgrade Trial → Active
         const newExpiry = new Date();
         newExpiry.setDate(newExpiry.getDate() + 30);
 
         trial.status     = 'Active';
         trial.expiryDate = newExpiry;
         trial.autoRenew  = true;
-        trial.paymentHistory.push({
-            transactionId: razorpay_payment_id,
-            amount:        Number(amount),
-            paidAt:        new Date(),
-        });
+        trial.paymentHistory.push({ transactionId: razorpay_payment_id, amount: Number(amount), paidAt: new Date() });
         await trial.save();
 
         await Notification.create({
@@ -1153,6 +1411,16 @@ router.post(
             body:      `Your ${trial.plan?.name} subscription is now fully active until ${newExpiry.toLocaleDateString()}.`,
             type:      'Account_Status',
             priority:  'Normal',
+        });
+
+        await log({
+            level:    'success',
+            category: 'payment',
+            message:  `Trial converted via Razorpay: ${trial.plan?.name}`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'UserSubscription', entityId: trial._id, label: trial.plan?.name },
+            request:  { method: 'POST', path: req.originalUrl, statusCode: 200 },
+            metadata: { amount, razorpay_payment_id },
         });
 
         try {
@@ -1166,18 +1434,13 @@ router.post(
             await sendEmail({ email: req.user.email, subject: `Subscription Confirmed — ${trial.plan?.name}`, html: emailHtml });
         } catch (_) { /* email failure must not block response */ }
 
-        res.status(200).json({
-            success: true,
-            message: 'Trial successfully converted to a paid subscription.',
-            data:    trial,
-        });
+        res.status(200).json({ success: true, message: 'Trial successfully converted to a paid subscription.', data: trial });
     })
 );
 
 /**
- * @route   POST /api/v1/subscriptions/free-trial/expire-stale
- * @desc    Cron: Expire all Trial subscriptions whose expiryDate has passed.
- * @access  Private (admin, superadmin)
+ * POST /api/v1/subscriptions/free-trial/expire-stale
+ * Cron: expire all Trial subscriptions past their expiryDate.
  */
 router.post(
     '/free-trial/expire-stale',
@@ -1194,7 +1457,7 @@ router.post(
             .populate('plan', 'name pricing');
 
         let expiredCount = 0;
-        const logs = [];
+        const logs       = [];
 
         for (const trial of staleTrials) {
             trial.status    = 'Expired';
@@ -1225,14 +1488,22 @@ router.post(
             }
         }
 
+        await log({
+            level:    'info',
+            category: 'system',
+            message:  `Cron: expired ${expiredCount} stale trial(s)`,
+            actor:    buildActor(req),
+            request:  { method: 'POST', path: req.originalUrl, statusCode: 200 },
+            metadata: { expiredCount },
+        });
+
         res.status(200).json({ success: true, expiredCount, details: logs });
     })
 );
 
 /**
- * @route   GET /api/v1/subscriptions/admin/trials
- * @desc    Admin: paginated list of all Trial subscriptions.
- * @access  Private (admin, superadmin)
+ * GET /api/v1/subscriptions/admin/trials
+ * Admin: paginated list of all Trial subscriptions.
  */
 router.get(
     '/admin/trials',
@@ -1246,13 +1517,15 @@ router.get(
         if (req.query.status) filter.status = req.query.status;
         if (req.query.userId) filter.user   = req.query.userId;
 
-        const total  = await UserSubscription.countDocuments(filter);
-        const trials = await UserSubscription.find(filter)
-            .populate('user', 'name email phone')
-            .populate('plan', 'name fixedTier pricing freeTrial')
-            .sort({ createdAt: -1 })
-            .skip((page - 1) * limit)
-            .limit(limit);
+        const [total, trials] = await Promise.all([
+            UserSubscription.countDocuments(filter),
+            UserSubscription.find(filter)
+                .populate('user', 'name email phone')
+                .populate('plan', 'name fixedTier pricing freeTrial')
+                .sort({ createdAt: -1 })
+                .skip((page - 1) * limit)
+                .limit(limit),
+        ]);
 
         res.status(200).json({
             success:    true,
@@ -1263,13 +1536,12 @@ router.get(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SECTION 6 — CRON / SYSTEM JOBS  (admin / superadmin only)
+//  SECTION 6 — CRON / SYSTEM JOBS
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * @route   POST /api/v1/subscriptions/send-expiry-alerts
- * @desc    Cron: Email + in-app notification to users expiring within 7 days.
- * @access  Private (admin, superadmin)
+ * POST /api/v1/subscriptions/send-expiry-alerts
+ * Cron: email + in-app notification for subscriptions expiring within 7 days.
  */
 router.post(
     '/send-expiry-alerts',
@@ -1288,7 +1560,7 @@ router.post(
             .populate('plan');
 
         let sentCount = 0;
-        const logs    = [];
+        const results = [];
 
         for (const sub of expiringSoon) {
             const daysLeft = Math.ceil((sub.expiryDate - today) / (1000 * 60 * 60 * 24));
@@ -1305,26 +1577,34 @@ router.post(
                 const emailHtml = transactionalTemplate({
                     header:     'REMINDER',
                     title:      'Your Membership is Expiring',
-                    body:       `Hello ${sub.user.name},<br><br>Your <b>${sub.plan?.name}</b> subscription expires on <b>${sub.expiryDate.toLocaleDateString()}</b> (${daysLeft} day(s) left).<br><br>Renew today to continue enjoying all benefits without any interruption.`,
+                    body:       `Hello ${sub.user.name},<br><br>Your <b>${sub.plan?.name}</b> subscription expires on <b>${sub.expiryDate.toLocaleDateString()}</b> (${daysLeft} day(s) left).<br><br>Renew today to continue enjoying all benefits.`,
                     buttonText: 'Renew Now',
                     buttonLink: 'https://likeson.in/dashboard/subscription',
                 });
                 await sendEmail({ email: sub.user.email, subject: `Reminder: Your subscription expires in ${daysLeft} day(s)`, html: emailHtml });
                 sentCount++;
-                logs.push({ userId: sub.user._id, email: sub.user.email, status: 'Success' });
+                results.push({ userId: sub.user._id, email: sub.user.email, status: 'Success' });
             } catch (err) {
-                logs.push({ userId: sub.user._id, email: sub.user.email, status: 'Failed', error: err.message });
+                results.push({ userId: sub.user._id, email: sub.user.email, status: 'Failed', error: err.message });
             }
         }
 
-        res.status(200).json({ success: true, totalProcessed: expiringSoon.length, totalEmailsSent: sentCount, details: logs });
+        await log({
+            level:    'info',
+            category: 'system',
+            message:  `Cron: expiry alerts sent to ${sentCount} users`,
+            actor:    buildActor(req),
+            request:  { method: 'POST', path: req.originalUrl, statusCode: 200 },
+            metadata: { totalProcessed: expiringSoon.length, sentCount },
+        });
+
+        res.status(200).json({ success: true, totalProcessed: expiringSoon.length, totalEmailsSent: sentCount, details: results });
     })
 );
 
 /**
- * @route   POST /api/v1/subscriptions/auto-renew-trigger
- * @desc    Cron: Auto-renew subscriptions expiring within 24 hours using wallet balance.
- * @access  Private (admin, superadmin)
+ * POST /api/v1/subscriptions/auto-renew-trigger
+ * Cron: auto-renew subscriptions expiring within 24h using wallet balance.
  */
 router.post(
     '/auto-renew-trigger',
@@ -1339,11 +1619,11 @@ router.post(
             expiryDate: { $lte: cutoff },
         }).populate('plan');
 
-        const results = { renewed: [], expired: [], skipped: [] };
+        const summary = { renewed: [], expired: [], skipped: [] };
 
         for (const sub of expiring) {
             if (sub.plan?.pricing?.billingCycle === 'till_delivery') {
-                results.skipped.push(sub._id);
+                summary.skipped.push(sub._id);
                 continue;
             }
 
@@ -1365,7 +1645,7 @@ router.post(
                     priority:  'Normal',
                 });
 
-                results.renewed.push(sub._id);
+                summary.renewed.push(sub._id);
             } else {
                 sub.status    = 'Expired';
                 sub.autoRenew = false;
@@ -1379,19 +1659,32 @@ router.post(
                     priority:  'High',
                 });
 
-                results.expired.push(sub._id);
+                summary.expired.push(sub._id);
             }
         }
+
+        await log({
+            level:    'info',
+            category: 'system',
+            message:  `Cron: auto-renew complete — renewed: ${summary.renewed.length}, expired: ${summary.expired.length}`,
+            actor:    buildActor(req),
+            request:  { method: 'POST', path: req.originalUrl, statusCode: 200 },
+            metadata: {
+                renewed: summary.renewed.length,
+                expired: summary.expired.length,
+                skipped: summary.skipped.length,
+            },
+        });
 
         res.status(200).json({
             success: true,
             message: 'Auto-renewal process complete.',
             summary: {
-                renewed: results.renewed.length,
-                expired: results.expired.length,
-                skipped: results.skipped.length,
+                renewed: summary.renewed.length,
+                expired: summary.expired.length,
+                skipped: summary.skipped.length,
             },
-            details: results,
+            details: summary,
         });
     })
 );
@@ -1401,9 +1694,8 @@ router.post(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * @route   GET /api/v1/subscriptions/admin/all
- * @desc    Paginated list of ALL UserSubscription records.
- * @access  Private (admin, superadmin)
+ * GET /api/v1/subscriptions/admin/all
+ * Paginated list of ALL UserSubscription records.
  */
 router.get(
     '/admin/all',
@@ -1414,16 +1706,19 @@ router.get(
         const limit  = Math.min(parseInt(req.query.limit) || 20, 100);
         const filter = {};
 
-        if (req.query.status) filter.status = req.query.status;
-        if (req.query.userId) filter.user   = req.query.userId;
+        if (req.query.status)   filter.status = req.query.status;
+        if (req.query.userId)   filter.user   = req.query.userId;
+        if (req.query.planType) filter.planType = req.query.planType;
 
-        const total = await UserSubscription.countDocuments(filter);
-        const subs  = await UserSubscription.find(filter)
-            .populate('user', 'name email phone role')
-            .populate('plan')
-            .sort({ createdAt: -1 })
-            .skip((page - 1) * limit)
-            .limit(limit);
+        const [total, subs] = await Promise.all([
+            UserSubscription.countDocuments(filter),
+            UserSubscription.find(filter)
+                .populate('user', 'name email phone role')
+                .populate('plan')
+                .sort({ createdAt: -1 })
+                .skip((page - 1) * limit)
+                .limit(limit),
+        ]);
 
         res.status(200).json({
             success:    true,
@@ -1434,9 +1729,8 @@ router.get(
 );
 
 /**
- * @route   GET /api/v1/subscriptions/admin/plans
- * @desc    Admin: list all SubscriptionPlan documents.
- * @access  Private (admin, superadmin)
+ * GET /api/v1/subscriptions/admin/plans
+ * Admin: list all SubscriptionPlan documents.
  */
 router.get(
     '/admin/plans',
@@ -1456,9 +1750,8 @@ router.get(
 );
 
 /**
- * @route   POST /api/v1/subscriptions/admin/plans
- * @desc    Admin: create a FIXED subscription plan.
- * @access  Private (admin, superadmin)
+ * POST /api/v1/subscriptions/admin/plans
+ * Admin: create a fixed subscription plan.
  */
 router.post(
     '/admin/plans',
@@ -1486,14 +1779,23 @@ router.post(
             createdBy:             req.user._id,
         });
 
+        await log({
+            level:    'success',
+            category: 'system',
+            message:  `Fixed plan created by admin: ${plan.name}`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'UserSubscription', entityId: plan._id, label: plan.name },
+            request:  { method: 'POST', path: req.originalUrl, statusCode: 201 },
+            metadata: { fixedTier: plan.fixedTier, monthly: plan.pricing.monthly },
+        });
+
         res.status(201).json({ success: true, data: plan });
     })
 );
 
 /**
- * @route   PUT /api/v1/subscriptions/admin/plans/:planId
- * @desc    Admin: update any plan (fixed or custom).
- * @access  Private (admin, superadmin)
+ * PUT /api/v1/subscriptions/admin/plans/:planId
+ * Admin: update any plan.
  */
 router.put(
     '/admin/plans/:planId',
@@ -1514,14 +1816,23 @@ router.put(
         if (!plan)
             return res.status(404).json({ success: false, message: 'Plan not found.' });
 
+        await log({
+            level:    'info',
+            category: 'system',
+            message:  `Plan updated by admin: ${plan.name}`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'UserSubscription', entityId: plan._id, label: plan.name },
+            request:  { method: 'PUT', path: req.originalUrl, statusCode: 200 },
+            metadata: req.body,
+        });
+
         res.status(200).json({ success: true, data: plan });
     })
 );
 
 /**
- * @route   DELETE /api/v1/subscriptions/admin/plans/:planId
- * @desc    Admin: soft-delete (deactivate) any plan.
- * @access  Private (superadmin only)
+ * DELETE /api/v1/subscriptions/admin/plans/:planId
+ * Superadmin: soft-delete any plan.
  */
 router.delete(
     '/admin/plans/:planId',
@@ -1539,14 +1850,22 @@ router.delete(
         if (!plan)
             return res.status(404).json({ success: false, message: 'Plan not found.' });
 
+        await log({
+            level:    'warning',
+            category: 'system',
+            message:  `Plan deactivated by superadmin: ${plan.name}`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'UserSubscription', entityId: plan._id, label: plan.name },
+            request:  { method: 'DELETE', path: req.originalUrl, statusCode: 200 },
+        });
+
         res.status(200).json({ success: true, message: 'Plan deactivated.', data: plan });
     })
 );
 
 /**
- * @route   PUT /api/v1/subscriptions/admin/subscriptions/:subId
- * @desc    Admin: manually override a UserSubscription.
- * @access  Private (admin, superadmin)
+ * PUT /api/v1/subscriptions/admin/subscriptions/:subId
+ * Admin: manually override a UserSubscription.
  */
 router.put(
     '/admin/subscriptions/:subId',
@@ -1568,6 +1887,16 @@ router.put(
         if (!sub)
             return res.status(404).json({ success: false, message: 'Subscription not found.' });
 
+        await log({
+            level:    'warning',
+            category: 'system',
+            message:  `Subscription manually overridden by admin`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'UserSubscription', entityId: sub._id, label: sub.planName },
+            request:  { method: 'PUT', path: req.originalUrl, statusCode: 200 },
+            metadata: patch,
+        });
+
         res.status(200).json({ success: true, data: sub });
     })
 );
@@ -1575,9 +1904,27 @@ router.put(
 // ─────────────────────────────────────────────────────────────────────────────
 //  GLOBAL ERROR HANDLER  (must be last)
 // ─────────────────────────────────────────────────────────────────────────────
-router.use((err, req, res, next) => {
+router.use((err, req, res, _next) => {
     console.error('[SubscriptionRouter Error]', err);
-    res.status(err.status || 500).json({ success: false, message: err.message || 'Internal server error.' });
+
+    // Fire-and-forget error log — do not await
+    SystemLog.createLog({
+        level:    'error',
+        category: 'api',
+        message:  err.message || 'Internal server error',
+        details:  err.stack   || null,
+        actor:    buildActor(req),
+        request: {
+            method:     req.method,
+            path:       req.originalUrl,
+            statusCode: err.status || 500,
+        },
+    }).catch(() => null);
+
+    res.status(err.status || 500).json({
+        success: false,
+        message: err.message || 'Internal server error.',
+    });
 });
 
 export default router;

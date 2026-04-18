@@ -57,11 +57,32 @@ const customPlanOptionSchema = new Schema(
     /**
      * Unit price (₹) snapshotted from PlatformPricingConfig at plan-creation
      * time so historic plans are unaffected by future admin price changes.
+     *
+     * For consultations: unitPrice = base + doctorTier bonus (if any).
+     * For careAssistant: unitPrice = selectedTier.chargeToUser.
      */
     unitPrice: { type: Number, required: true, default: 0 },
 
     /** quantity × unitPrice — auto-recomputed in pre-save */
     lineTotal: { type: Number, required: true, default: 0 },
+
+    /**
+     * careAssistant only.
+     * Index into PlatformPricingConfig.customPlanOptions.careAssistant.pricingTiers[]
+     * that was selected by the customer at plan-creation time.
+     * Snapshotted so the tier label/price displayed stays consistent
+     * even if admin later reorders or adds tiers.
+     * Default 0 = first tier.
+     */
+    careAssistantTierIndex: { type: Number, default: 0, min: 0 },
+
+    /**
+     * consultations only.
+     * Number of doctors the customer selected to activate the tier-bonus pricing.
+     * Must be ≤ quantity (consult count) AND ≤ maxDoctorsAllowed.
+     * 0 = no tier bonus selected (only base price applied).
+     */
+    doctorTierCount: { type: Number, default: 0, min: 0 },
   },
   { _id: false }
 );
@@ -202,10 +223,6 @@ const subscriptionPlanSchema = new Schema(
       /**
        * Discount % on online medicine purchases (online booking only).
        * Admin hard-cap: max 25% (enforced via PlatformPricingConfig.caps.pharmacyDiscountMax).
-       *
-       * Fixed:   Basic 10–15 | Standard 15–20 | Premium flat 20
-       *          Family flat 20 | Pregnant flat 21 | NRI = intl. e-Rx
-       * Custom:  customer picks % up to admin cap (≤25%).
        */
       discountMin:  { type: Number, default: 0, min: 0, max: 25 },
       discountMax:  { type: Number, default: 0, min: 0, max: 25 },
@@ -228,10 +245,6 @@ const subscriptionPlanSchema = new Schema(
       /**
        * Discount % on diagnostic bookings.
        * Admin hard-cap: max 25% (PlatformPricingConfig.caps.diagnosticsDiscountMax).
-       *
-       * Fixed:   Basic 10 | Standard 10 | Premium 20 | Family 20 | Pregnant 21
-       *          NRI = not applicable
-       * Custom:  customer picks % up to admin cap (≤25%).
        */
       discountPercent:      { type: Number, default: 0, min: 0, max: 25 },
       isApplicable:         { type: Boolean, default: true },
@@ -242,7 +255,6 @@ const subscriptionPlanSchema = new Schema(
     transport: {
       /**
        * Per-km rate (₹) for this plan.
-       * Actual base rates set in PlatformPricingConfig.transport.planRateOverrides.
        * null = not applicable (NRI plan).
        */
       ratePerKm:    { type: Number, default: null },
@@ -277,12 +289,6 @@ const subscriptionPlanSchema = new Schema(
     support: {
       priorityAppointmentScheduling: { type: Boolean, default: false },
 
-      /**
-       * Standard          → No Plan / Basic Care
-       * Priority          → Standard Care
-       * Dedicated Executive → Premium / Family / Pregnant
-       * 24/7 Service      → NRI's Care
-       */
       tier: {
         type: String,
         enum: ['Standard', 'Priority', 'Dedicated Executive', '24/7 Service'],
@@ -316,10 +322,10 @@ const subscriptionPlanSchema = new Schema(
     idealFor:     { type: String },
     displayOrder: { type: Number, default: 0 },
     isFeatured:   { type: Boolean, default: false },
-    badgeLabel:   { type: String }, // "Most Popular", "Best Value", "Maternity Special" …
+    badgeLabel:   { type: String },
 
     // ── Audit ─────────────────────────────────────────────────────────────────
-    createdBy: { type: Schema.Types.ObjectId, ref: 'User' }, // admin who seeded fixed plans
+    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   {
@@ -336,18 +342,21 @@ subscriptionPlanSchema.virtual('priceLabel').get(function () {
   return `₹${this.pricing.monthly}/month`;
 });
 
-// ─── Pre-save: recompute custom plan total ────────────────────────────────────
+// ─── Pre-save: recompute custom plan total from option lineTotals ─────────────
 subscriptionPlanSchema.pre('save', function (next) {
   if (
     this.planType === 'custom' &&
     Array.isArray(this.customOptions) &&
     this.customOptions.length > 0
   ) {
-    this.customOptions.forEach(opt => {
+    // Recompute each lineTotal from stored unitPrice × quantity
+    this.customOptions.forEach((opt) => {
       opt.lineTotal = +(opt.quantity * opt.unitPrice).toFixed(2);
     });
+
+    // Sum all lineTotals → pricing.monthly
     const total = this.customOptions.reduce((sum, opt) => sum + opt.lineTotal, 0);
-    this.pricing.monthly = +total.toFixed(2);
+    this.pricing.monthly      = +total.toFixed(2);
     this.pricing.billingCycle = 'custom';
     this.pricing.billingLabel = '/month';
     this.visibleToCustomerOnly = true; // always private

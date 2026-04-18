@@ -1,5 +1,3 @@
- 
-
 import express   from 'express';
 import bcrypt    from 'bcryptjs';
 import passport  from 'passport';
@@ -98,11 +96,6 @@ const buildLoginFilter = (identifier) => {
   return { name: { $regex: `^${t}$`, $options: 'i' } };
 };
 
-/**
- * Builds an audit-session record from req.deviceInfo.
- * The optional deviceTokenId links this session to a specific deviceToken _id
- * so we can remove them together without relying on IP matching.
- */
 const buildSessionRecord = (req) => ({
   userAgent:    req.deviceInfo?.userAgent    ?? 'Unknown',
   ipAddress:    req.deviceInfo?.ipAddress    ?? 'Unknown',
@@ -113,7 +106,7 @@ const buildSessionRecord = (req) => ({
   createdAt:    new Date(),
   lastActiveAt: new Date(),
 });
- 
+
 const upsertAuditSession = (user, record) => {
   if (!Array.isArray(user.auditSessions)) user.auditSessions = [];
   const fp  = `${record.ipAddress}::${record.userAgent}`;
@@ -122,19 +115,24 @@ const upsertAuditSession = (user, record) => {
   );
   if (idx !== -1) {
     user.auditSessions[idx].lastActiveAt = new Date();
+    return user.auditSessions[idx]._id;
   } else {
     if (user.auditSessions.length >= 10) {
       user.auditSessions.sort((a, b) => new Date(a.lastActiveAt) - new Date(b.lastActiveAt));
       user.auditSessions.shift();
     }
     user.auditSessions.push(record);
+    return user.auditSessions[user.auditSessions.length - 1]._id;
   }
 };
- 
+
 const upsertDeviceToken = (user, { token, platform, deviceName, ipAddress }) => {
   if (!Array.isArray(user.deviceTokens)) user.deviceTokens = [];
   const existing = user.deviceTokens.find((t) => t.token === token);
-  if (existing) { existing.lastUsedAt = new Date(); return; }
+  if (existing) {
+    existing.lastUsedAt = new Date();
+    return existing._id;
+  }
   if (user.deviceTokens.length >= 10) {
     user.deviceTokens.sort((a, b) => new Date(a.lastUsedAt) - new Date(b.lastUsedAt));
     user.deviceTokens.shift();
@@ -146,29 +144,24 @@ const upsertDeviceToken = (user, { token, platform, deviceName, ipAddress }) => 
     ipAddress,
     lastUsedAt: new Date(),
   });
+  return user.deviceTokens[user.deviceTokens.length - 1]._id;
 };
-
 
 const upsertLoginDeviceToken = (user, req) => {
   const ipAddress  = req.deviceInfo?.ipAddress  ?? 'Unknown';
   const userAgent  = req.deviceInfo?.userAgent  ?? 'Unknown';
   const platform   = req.deviceInfo?.platform   ?? 'web';
   const deviceName = req.deviceInfo?.deviceName ?? 'Unknown Device';
- 
-  // Fingerprint token — unique per device/browser combination
+
   const fingerprintToken = `login:${Buffer.from(`${ipAddress}::${userAgent}`).toString('base64')}`;
- 
-  upsertDeviceToken(user, {
+
+  return upsertDeviceToken(user, {
     token:      fingerprintToken,
     platform,
     deviceName,
     ipAddress,
   });
 };
- 
- 
-
- 
 
 // ── Wallet helpers ────────────────────────────────────────────────────────────
 
@@ -206,23 +199,24 @@ const creditWallet = async ({
 // ── Token generation with sessionId ──────────────────────────────────────────
 
 /**
- * FIX: generateTokenWithSession embeds the auditSession._id in the JWT.
- * authMiddleware.protect must be updated to:
- *   1. Decode the token and extract sessionId.
- *   2. Verify that user.auditSessions contains a session with that _id.
- *   3. If not found → 401 (the session was revoked → auto-logout).
+ * generateTokenWithSession
  *
- * Update your generateToken utility or use this helper directly.
+ * Embeds auditSession._id in the JWT so protect middleware can validate
+ * that the session still exists (i.e. was not remotely revoked).
+ *
+ * When the JWT expires (TokenExpiredError), protect returns:
+ *   { message: '...', code: 'TOKEN_EXPIRED' }
+ * → api.js interceptor dispatches autoLogout → user is signed out client-side.
  */
 const generateTokenWithSession = (userId, sessionId) =>
   jwt.sign(
-    { id: userId, sessionId: sessionId.toString() },
+    { id: userId.toString(), sessionId: sessionId.toString() },
     process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN ?? '30d' }
+    { expiresIn: process.env.JWT_EXPIRES_IN ?? '12h' }
   );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// § 2  NOTIFICATION DISPATCHERS  (unchanged)
+// § 2  NOTIFICATION DISPATCHERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const dispatchOtp = async ({ user, otpCode, purpose = 'verification', subject }) => {
@@ -341,34 +335,32 @@ const validate = (req, res, next) => {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // § 4  SHARED LOGIN FINALISATION HELPER
-//
-// FIX: Extracted the repeated "post-auth" block into a single helper so
-// login, otp-login, and Google OAuth all follow exactly the same logic:
-//
-//   1. If the request body contains `fcmToken` + `platform` → upsert the
-//      device token and capture its _id.
-//   2. Build the session record referencing that device token _id.
-//   3. Upsert the audit session and capture its _id.
-//   4. Generate a JWT that embeds the session _id.
-//   5. Return the token + sessionId to the caller.
-//
-// The authMiddleware.protect function should be updated to:
-//   • Decode sessionId from the JWT.
-//   • Verify user.auditSessions has a doc with that _id.
-//   • Return 401 if missing (session was revoked → auto-logout).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * finaliseLogin — call after verifying credentials, before responding.
+ * finaliseLogin
  *
- * @param {object} user       — Mongoose User document (must be writable)
- * @param {object} req        — Express request (needs req.deviceInfo + req.body)
+ * Called after credentials are verified. Handles:
+ *   1. FCM device token upsert (if provided in body)
+ *   2. Audit session upsert — returns the session _id
+ *   3. Login metadata update (lastLoginAt, loginCount, isOnline)
+ *   4. JWT generation with embedded sessionId
+ *
+ * The sessionId in the JWT is validated by protect middleware on every request.
+ * If the session is deleted (remote sign-out), protect returns:
+ *   { code: 'SESSION_REVOKED' } → api.js interceptor → autoLogout
+ *
+ * If the JWT expires, protect returns:
+ *   { code: 'TOKEN_EXPIRED' } → api.js interceptor → autoLogout
+ *
+ * @param {object} user — Mongoose User document (writable)
+ * @param {object} req  — Express request
  * @returns {{ token: string, sessionId: string }}
  */
 const finaliseLogin = async (user, req) => {
- const { fcmToken, platform, deviceName } = req.body ?? {};
+  const { fcmToken, platform, deviceName } = req.body ?? {};
 
-  // ── 1. Upsert device token (only when client supplies one) ─────────────────
+  // ── 1. Upsert FCM device token (only when client supplies one) ─────────────
   let deviceTokenId = null;
   if (fcmToken && platform) {
     deviceTokenId = upsertDeviceToken(user, {
@@ -377,26 +369,19 @@ const finaliseLogin = async (user, req) => {
       deviceName: deviceName ?? req.deviceInfo?.deviceName ?? 'Unknown',
       ipAddress:  req.deviceInfo?.ipAddress,
     });
-    log.info('Device token upserted', { userId: user._id, deviceTokenId });
   }
 
-  // ── 2. Build + upsert audit session (linked to device token) ───────────────
-  const sessionRecord = buildSessionRecord(req, deviceTokenId);
+  // ── 2. Build + upsert audit session ───────────────────────────────────────
+  const sessionRecord = buildSessionRecord(req);
   const sessionId     = upsertAuditSession(user, sessionRecord);
 
-  // ── 3. New-device detection (BEFORE save so we check prior sessions) ────────
-  //       We check by fingerprint already handled inside upsertAuditSession;
-  //       isNew = the session _id we got back didn't exist before calling it.
-  //       Simple heuristic: check loginCount increment vs auditSessions length.
-  const isNewDev = user.auditSessions.length === 1 ||
-    !user.auditSessions.some(
-      (s) =>
-        s._id.toString() !== sessionId.toString() &&
-        `${s.ipAddress}::${s.userAgent}` ===
-          `${req.deviceInfo?.ipAddress}::${req.deviceInfo?.userAgent}`
-    );
+  // ── 3. New-device detection ────────────────────────────────────────────────
+  const fp       = `${req.deviceInfo?.ipAddress}::${req.deviceInfo?.userAgent}`;
+  const isNewDev = (user.auditSessions ?? []).filter(
+    (s) => `${s.ipAddress}::${s.userAgent}` === fp
+  ).length <= 1;
 
-  // ── 4. Update login metadata ────────────────────────────────────────────────
+  // ── 4. Update login metadata ───────────────────────────────────────────────
   user.lastLoginAt  = new Date();
   user.lastLoginIp  = req.deviceInfo?.ipAddress ?? 'Unknown';
   user.loginCount   = (user.loginCount ?? 0) + 1;
@@ -408,12 +393,12 @@ const finaliseLogin = async (user, req) => {
 
   if (isNewDev) dispatchLoginAlert({ user, req }).catch(() => {});
 
-  // ── 5. Issue JWT with sessionId embedded ────────────────────────────────────
+  // ── 5. Issue JWT with sessionId embedded ──────────────────────────────────
   const token = generateTokenWithSession(user._id, sessionId);
 
   log.info('Login finalised', {
-    userId: user._id,
-    sessionId: sessionId.toString(),
+    userId:         user._id,
+    sessionId:      sessionId.toString(),
     hasDeviceToken: !!deviceTokenId,
     isNewDev,
   });
@@ -426,7 +411,6 @@ const finaliseLogin = async (user, req) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ── POST /signup ──────────────────────────────────────────────────────────────
-// ── POST /signup ──────────────────────────────────────────────────────────────
 router.post(
   '/signup',
   [
@@ -437,10 +421,10 @@ router.post(
   ],
   asyncHandler(async (req, res) => {
     const { name, email, password, phone, role, referralCode } = req.body;
- 
+
     const session = await mongoose.startSession();
     session.startTransaction();
- 
+
     try {
       const conflict = await User.findOne({
         $or: [
@@ -448,14 +432,14 @@ router.post(
           ...(phone ? [{ phone }] : []),
         ],
       }).session(session);
- 
+
       if (conflict) {
         await session.abortTransaction();
         return res.status(409).json({ message: 'Account with this email or phone already exists.' });
       }
- 
+
       const hashedPassword = await bcrypt.hash(password, 12);
- 
+
       const [newUser] = await User.create(
         [{
           name,
@@ -466,21 +450,21 @@ router.post(
         }],
         { session }
       );
- 
+
       const ProfileModel = getProfileModel(newUser.role);
       if (ProfileModel) {
         await ProfileModel.create([{ user: newUser._id }], { session });
       }
- 
+
       await Wallet.create([{ user: newUser._id, balance: 0 }], { session });
- 
+
       let inviterRewarded = false;
       let inviterId       = null;
- 
+
       if (referralCode) {
         const code    = referralCode.trim().toUpperCase();
         const inviter = await User.findOne({ referralCode: code }).session(session);
- 
+
         if (inviter && !inviter._id.equals(newUser._id)) {
           inviter.coins       += REFERRAL_INVITER_COINS;
           inviter.coinsEarned += REFERRAL_INVITER_COINS;
@@ -489,26 +473,26 @@ router.post(
             coinsAwarded: REFERRAL_INVITER_COINS,
           });
           await inviter.save({ session });
- 
+
           newUser.referredBy   = inviter._id;
           newUser.coins       += REFERRAL_INVITEE_COINS;
           newUser.coinsEarned += REFERRAL_INVITEE_COINS;
           await newUser.save({ session });
- 
+
           inviterRewarded = true;
           inviterId       = inviter._id;
         }
       }
- 
+
       await session.commitTransaction();
- 
+
       if (inviterRewarded && inviterId) {
         await invalidateUserCache(inviterId);
       }
- 
+
       log.info('User signed up', { userId: newUser._id, role: newUser.role, referralApplied: inviterRewarded });
       dispatchWelcome({ user: newUser }).catch(() => {});
- 
+
       return res.status(201).json({
         status: 'success',
         token:  generateToken(newUser._id),
@@ -532,12 +516,14 @@ router.post(
 
 // ── POST /login ───────────────────────────────────────────────────────────────
 /**
- * FIX: Now calls finaliseLogin which handles device token + session together.
+ * Now calls finaliseLogin which handles device token + session + JWT together.
+ * JWT embeds sessionId → protect validates it on every request.
+ * When token expires → protect returns { code: 'TOKEN_EXPIRED' } → auto-logout.
  *
  * Request body may include:
  *   identifier  — email / phone / name  (required)
  *   password    — (required)
- *   fcmToken    — push notification token  (optional but recommended)
+ *   fcmToken    — push notification token  (optional)
  *   platform    — 'android' | 'ios' | 'web' | 'desktop'  (required when fcmToken sent)
  *   deviceName  — human-readable device label  (optional)
  */
@@ -550,19 +536,19 @@ router.post(
   ],
   asyncHandler(async (req, res) => {
     const { identifier, password } = req.body;
- 
+
     const filter = buildLoginFilter(identifier);
     if (!filter) return res.status(400).json({ message: 'Invalid identifier.' });
- 
-    const user = await User.findOne(filter).select('+password +otp +otpExpires');
+
+    const user = await User.findOne(filter).select('+password +otp +otpExpires +auditSessions');
     if (!user)  return res.status(401).json({ message: 'Invalid credentials.' });
- 
+
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       log.warn('Failed login', { filter, ip: req.deviceInfo?.ipAddress });
       return res.status(401).json({ message: 'Invalid credentials.' });
     }
- 
+
     if (user.isCurrentlyBlocked) {
       return res.status(403).json({
         message:   'Account suspended.',
@@ -570,31 +556,16 @@ router.post(
         unblockAt: user.unblockAt,
       });
     }
- 
-    const fp       = `${req.deviceInfo?.ipAddress}::${req.deviceInfo?.userAgent}`;
-    const isNewDev = !Array.isArray(user.auditSessions) ||
-                     !user.auditSessions.some((s) => `${s.ipAddress}::${s.userAgent}` === fp);
- 
-    user.lastLoginAt  = new Date();
-    user.lastLoginIp  = req.deviceInfo?.ipAddress ?? 'Unknown';
-    user.loginCount  += 1;
-    user.isOnline     = true;
-    user.lastActiveAt = new Date();
- 
-    // FIX: Upsert both the audit session AND the login-fingerprint device token
-    upsertAuditSession(user, buildSessionRecord(req));
-    upsertLoginDeviceToken(user, req);
- 
-    await user.save();
-    await invalidateUserCache(user._id);
- 
-    if (isNewDev) dispatchLoginAlert({ user, req }).catch(() => {});
- 
-    log.info('Login success', { userId: user._id, isNewDev });
- 
+
+    // finaliseLogin handles session upsert, device token, save, JWT generation
+    const { token, sessionId } = await finaliseLogin(user, req);
+
+    log.info('Login success', { userId: user._id });
+
     return res.json({
       status: 'success',
-      token:  generateToken(user._id),
+      token,
+      sessionId,
       user,
       expiresIn: process.env.JWT_EXPIRES_IN || '12h',
     });
@@ -603,39 +574,40 @@ router.post(
 
 // ── POST /logout ──────────────────────────────────────────────────────────────
 /**
- * FIX: Logout now uses the sessionId from the JWT (decoded by protect middleware
- * and available as req.user.sessionId) to remove the exact session record and
- * its paired device token.
- *
- * Falls back to IP-based removal if sessionId is not available (legacy tokens).
+ * Removes the exact session (by IP+UA) and its associated device tokens.
+ * Uses sessionId from JWT (via protect middleware) when available.
  */
 router.post(
   '/logout',
   protect,
   asyncHandler(async (req, res) => {
-    const ipAddress  = req.deviceInfo?.ipAddress  ?? 'Unknown';
-    const userAgent  = req.deviceInfo?.userAgent  ?? 'Unknown';
- 
-    // Remove this device's session AND its login-fingerprint device token.
-    // Also remove any real push tokens registered from the same IP.
+    const ipAddress = req.deviceInfo?.ipAddress ?? 'Unknown';
+    const userAgent = req.deviceInfo?.userAgent ?? 'Unknown';
+    const sessionId = req.user.sessionId;
+
     const userDoc   = await User.findById(req.user._id).select('auditSessions');
-    const remaining = (userDoc?.auditSessions ?? []).filter(
-      (s) => !(s.ipAddress === ipAddress && s.userAgent === userAgent)
-    );
+    const remaining = (userDoc?.auditSessions ?? []).filter((s) => {
+      if (sessionId) return s._id.toString() !== sessionId;
+      return !(s.ipAddress === ipAddress && s.userAgent === userAgent);
+    });
     const goOffline = remaining.length === 0;
- 
+
+    const pullFilter = sessionId
+      ? { auditSessions: { _id: new mongoose.Types.ObjectId(sessionId) } }
+      : { auditSessions: { ipAddress, userAgent } };
+
     await User.findByIdAndUpdate(req.user._id, {
       ...(goOffline && { $set: { isOnline: false, lastseen: new Date() } }),
       lastActiveAt: new Date(),
       $pull: {
-        auditSessions: { ipAddress, userAgent },
-        deviceTokens:  { ipAddress },
+        ...pullFilter,
+        deviceTokens: { ipAddress },
       },
     });
- 
+
     await invalidateUserCache(req.user._id);
- 
-    log.info('Logout', { userId: req.user._id });
+
+    log.info('Logout', { userId: req.user._id, sessionId });
     return res.json({ status: 'success', message: 'Logged out successfully.' });
   })
 );
@@ -699,7 +671,8 @@ router.post(
 
 // ── POST /otp-login ───────────────────────────────────────────────────────────
 /**
- * FIX: Now calls finaliseLogin — same device token + session flow as /login.
+ * Calls finaliseLogin — same device token + session + JWT flow as /login.
+ * JWT includes sessionId → auto-logout on expiry or session revocation.
  *
  * Request body may include fcmToken + platform for device token registration.
  */
@@ -717,7 +690,7 @@ router.post(
 
     const user = await User.findOne({
       ...filter, otp, otpExpires: { $gt: Date.now() },
-    }).select('+otp +otpExpires');
+    }).select('+otp +otpExpires +auditSessions');
 
     if (!user) return res.status(400).json({ message: 'Invalid or expired OTP.' });
     if (user.isCurrentlyBlocked)
@@ -728,7 +701,6 @@ router.post(
     user.otpExpires      = undefined;
     // Note: do NOT save yet — finaliseLogin will save after adding session
 
-    // FIX: finaliseLogin handles session + device token + save
     const { token, sessionId } = await finaliseLogin(user, req);
 
     log.info('OTP login', { userId: user._id });
@@ -913,29 +885,26 @@ router.get(
   asyncHandler(async (req, res) => {
     const user = await User.findById(req.user._id).select('auditSessions deviceTokens').lean();
     if (!user) return res.status(404).json({ message: 'User not found.' });
- 
+
     const sessions = (user.auditSessions ?? [])
       .slice()
       .sort((a, b) => new Date(b.lastActiveAt) - new Date(a.lastActiveAt));
- 
+
     const deviceTokenIPs = new Set((user.deviceTokens ?? []).map(t => t.ipAddress));
     const enriched = sessions.map((s) => ({
       ...s,
       hasPushToken: deviceTokenIPs.has(s.ipAddress),
     }));
- 
+
     return res.json({ status: 'success', count: enriched.length, data: enriched });
   })
 );
 
 // ── DELETE /sessions/:sessionId ───────────────────────────────────────────────
 /**
- * FIX: Uses session._id (not IP) to find the exact session and its paired
- * device token (via session.deviceTokenId). Both are removed atomically.
- *
- * If the removed session is the caller's own current session → effectively
- * a logout. All subsequent requests with that JWT will fail protect() because
- * the sessionId no longer exists in auditSessions.
+ * Removes a session by _id and all device tokens associated with that session's IP.
+ * If the removed session is the caller's own → effectively a logout.
+ * Subsequent requests with that JWT will fail protect() with SESSION_REVOKED.
  */
 router.delete(
   '/sessions/:sessionId',
@@ -943,46 +912,44 @@ router.delete(
   [param('sessionId').isMongoId().withMessage('Invalid session ID'), validate],
   asyncHandler(async (req, res) => {
     const sessionId = new mongoose.Types.ObjectId(req.params.sessionId);
- 
+
     const userDoc = await User.findById(req.user._id).select('auditSessions deviceTokens');
     if (!userDoc) return res.status(404).json({ message: 'User not found.' });
- 
+
     const targetSession = (userDoc.auditSessions ?? []).find(
       (s) => s._id.equals(sessionId)
     );
- 
+
     if (!targetSession) {
       return res.status(404).json({ message: 'Session not found.' });
     }
- 
-    const sessionIp      = targetSession.ipAddress;
+
+    const sessionIp         = targetSession.ipAddress;
     const remainingSessions = (userDoc.auditSessions ?? []).filter(
       (s) => !s._id.equals(sessionId)
     );
     const goOffline = remainingSessions.length === 0;
- 
+
     await User.findByIdAndUpdate(
       req.user._id,
       {
         $pull: {
           auditSessions: { _id: sessionId },
-          // FIX: Remove ALL device tokens from this IP — both login-fingerprint
-          // and real push tokens (FCM/APNs). The device is fully signed out.
           deviceTokens:  { ipAddress: sessionIp },
         },
         ...(goOffline && { $set: { isOnline: false, lastseen: new Date() } }),
       },
       { new: true }
     ).select('auditSessions');
- 
+
     await invalidateUserCache(req.user._id);
- 
-    log.info('Session + all device tokens for IP revoked', {
+
+    log.info('Session + device tokens revoked', {
       userId:    req.user._id,
       sessionId: req.params.sessionId,
       ip:        sessionIp,
     });
- 
+
     return res.json({
       message:         'Session revoked. Device has been signed out.',
       sessionId:       req.params.sessionId,
@@ -991,7 +958,7 @@ router.delete(
   })
 );
 
-// ── DELETE /sessions  (revoke all) ───────────────────────────────────────────
+// ── DELETE /sessions  (revoke all) ────────────────────────────────────────────
 router.delete(
   '/sessions',
   protect,
@@ -1004,27 +971,21 @@ router.delete(
         lastseen:      new Date(),
       },
     });
- 
+
     await invalidateUserCache(req.user._id);
- 
+
     return res.json({
-      message:         'All sessions revoked. You are signed out on all devices.',
+      message:          'All sessions revoked. You are signed out on all devices.',
       devicesSignedOut: true,
     });
   })
 );
 
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // § 8  DEVICE TOKEN MANAGEMENT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * POST /device-tokens
- * Registers or refreshes a push token for the current session.
- * FIX: Also updates the current session's deviceTokenId so future
- * session removal will correctly clean up this token.
- */
+// ── POST /device-tokens ───────────────────────────────────────────────────────
 router.post(
   '/device-tokens',
   protect,
@@ -1032,26 +993,26 @@ router.post(
     const { token, platform, deviceName } = req.body;
     if (!token || !platform)
       return res.status(400).json({ message: 'token and platform required.' });
-    if (!['android', 'ios', 'web'].includes(platform))
-      return res.status(400).json({ message: 'platform must be android | ios | web.' });
- 
+    if (!['android', 'ios', 'web', 'desktop'].includes(platform))
+      return res.status(400).json({ message: 'platform must be android | ios | web | desktop.' });
+
     const user = await User.findById(req.user._id).select('deviceTokens');
     if (!user) return res.status(404).json({ message: 'User not found.' });
- 
+
     upsertDeviceToken(user, {
       token,
       platform,
       deviceName: deviceName ?? req.deviceInfo?.deviceName ?? 'Unknown',
       ipAddress:  req.deviceInfo?.ipAddress,
     });
- 
+
     await user.save();
     await invalidateUserCache(req.user._id);
- 
+
     return res.json({ message: 'Device token registered.' });
   })
 );
- 
+
 // ── GET /device-tokens ────────────────────────────────────────────────────────
 router.get(
   '/device-tokens',
@@ -1060,24 +1021,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const user = await User.findById(req.user._id).select('deviceTokens').lean();
     if (!user) return res.status(404).json({ message: 'User not found.' });
- 
-    return res.json({
-      status: 'success',
-      count:  (user.deviceTokens ?? []).length,
-      data:   user.deviceTokens ?? [],
-    });
-  })
-);
- 
 
-router.get(
-  '/device-tokens',
-  protect,
-  cache(60, (req) => `user:${req.user._id}:device-tokens`),
-  asyncHandler(async (req, res) => {
-    const user = await User.findById(req.user._id).select('deviceTokens').lean();
-    if (!user) return res.status(404).json({ message: 'User not found.' });
- 
     return res.json({
       status: 'success',
       count:  (user.deviceTokens ?? []).length,
@@ -1085,6 +1029,8 @@ router.get(
     });
   })
 );
+
+// ── DELETE /device-tokens/:token ──────────────────────────────────────────────
 router.delete(
   '/device-tokens/:token',
   protect,
@@ -1110,7 +1056,6 @@ router.post(
     const update    = { isOnline: true, lastActiveAt: new Date() };
 
     if (sessionId) {
-      // Refresh lastActiveAt on the specific session too
       await User.findOneAndUpdate(
         { _id: req.user._id, 'auditSessions._id': new mongoose.Types.ObjectId(sessionId) },
         { $set: { ...update, 'auditSessions.$.lastActiveAt': new Date() } }
@@ -1133,9 +1078,9 @@ router.get(
 );
 
 /**
- * FIX: Google OAuth callback now also calls finaliseLogin.
- * The fcmToken/platform can't be passed via OAuth redirect so device token
- * registration for Google login must use POST /device-tokens after the redirect.
+ * Google OAuth callback — calls finaliseLogin for session + JWT generation.
+ * FCM device token registration must be done separately via POST /device-tokens
+ * after the redirect, since tokens can't be passed through OAuth redirect params.
  */
 router.get(
   '/google/callback',
@@ -1145,37 +1090,26 @@ router.get(
   }),
   asyncHandler(async (req, res) => {
     const user = req.user;
- 
+
     if (!user) {
       return res.redirect(`${process.env.FRONTEND_URL}/auth-error?reason=no_user`);
     }
- 
-    const fp       = `${req.deviceInfo?.ipAddress}::${req.deviceInfo?.userAgent}`;
-    const isNewDev = !Array.isArray(user.auditSessions) ||
-                     !user.auditSessions.some((s) => `${s.ipAddress}::${s.userAgent}` === fp);
- 
-    user.lastLoginAt  = new Date();
-    user.lastLoginIp  = req.deviceInfo?.ipAddress ?? 'Unknown';
-    user.loginCount   = (user.loginCount ?? 0) + 1;
-    user.isOnline     = true;
-    user.lastActiveAt = new Date();
- 
-    // FIX: Upsert both session AND login-fingerprint device token on Google login
-    upsertAuditSession(user, buildSessionRecord(req));
-    upsertLoginDeviceToken(user, req);
- 
-    await user.save();
-    await invalidateUserCache(user._id);
- 
-    if (isNewDev) dispatchLoginAlert({ user, req }).catch(() => {});
- 
-    log.info('Google OAuth login', { userId: user._id, isNewDev });
- 
-    const token = generateToken(user._id);
-    const url   = new URL(`${process.env.FRONTEND_URL}/auth-success`);
-    url.searchParams.set('token', token);
-    url.searchParams.set('role',  user.role);
- 
+
+    // Need auditSessions for finaliseLogin
+    const fullUser = await User.findById(user._id).select('+auditSessions +deviceTokens');
+    if (!fullUser) {
+      return res.redirect(`${process.env.FRONTEND_URL}/auth-error?reason=no_user`);
+    }
+
+    const { token, sessionId } = await finaliseLogin(fullUser, req);
+
+    log.info('Google OAuth login', { userId: fullUser._id });
+
+    const url = new URL(`${process.env.FRONTEND_URL}/auth-success`);
+    url.searchParams.set('token',     token);
+    url.searchParams.set('sessionId', sessionId);
+    url.searchParams.set('role',      fullUser.role);
+
     return res.redirect(url.toString());
   })
 );
@@ -1306,7 +1240,14 @@ router.post(
       return res.json({
         status: 'success',
         message: `${coinsToRedeem} coins redeemed successfully. ₹${rupeesEarned} added to your wallet.`,
-        data: { coinsRedeemed: coinsToRedeem, rupeesEarned, walletBalance: balanceAfter, remainingCoins: user.coins, remainingRupees: +(user.coins / COINS_PER_RUPEE).toFixed(2), totalCoinsRedeemed: user.coinsRedeemed },
+        data: {
+          coinsRedeemed:       coinsToRedeem,
+          rupeesEarned,
+          walletBalance:       balanceAfter,
+          remainingCoins:      user.coins,
+          remainingRupees:     +(user.coins / COINS_PER_RUPEE).toFixed(2),
+          totalCoinsRedeemed:  user.coinsRedeemed,
+        },
       });
     } catch (err) {
       await session.abortTransaction();
@@ -1336,10 +1277,14 @@ router.get(
     return res.json({
       success: true,
       data: {
-        referralCode: user.referralCode, totalReferrals: user.referralHistory.length,
-        coins: user.coins, coinsInRupees: +(user.coins / COINS_PER_RUPEE).toFixed(2),
-        coinsEarned: user.coinsEarned, coinsRedeemed: user.coinsRedeemed,
-        referredBy: user.referredBy ?? null, referralHistory: user.referralHistory,
+        referralCode:    user.referralCode,
+        totalReferrals:  user.referralHistory.length,
+        coins:           user.coins,
+        coinsInRupees:   +(user.coins / COINS_PER_RUPEE).toFixed(2),
+        coinsEarned:     user.coinsEarned,
+        coinsRedeemed:   user.coinsRedeemed,
+        referredBy:      user.referredBy ?? null,
+        referralHistory: user.referralHistory,
       },
     });
   })
@@ -1359,11 +1304,18 @@ router.get(
       return res.status(404).json({ success: false, data: { valid: false }, message: 'Referral code not found.' });
 
     const parts       = (inviter.name ?? '').trim().split(/\s+/);
-    const displayName = parts.length > 1 ? `${parts[0]} ${parts.at(-1).charAt(0).toUpperCase()}.` : (parts[0] ?? 'A friend');
+    const displayName = parts.length > 1
+      ? `${parts[0]} ${parts.at(-1).charAt(0).toUpperCase()}.`
+      : (parts[0] ?? 'A friend');
 
     return res.status(200).json({
       success: true,
-      data: { valid: true, referrerName: displayName, bonusCoins: REFERRAL_INVITEE_COINS, bonusRupees: `₹${(REFERRAL_INVITEE_COINS / COINS_PER_RUPEE).toFixed(2)}` },
+      data: {
+        valid:        true,
+        referrerName: displayName,
+        bonusCoins:   REFERRAL_INVITEE_COINS,
+        bonusRupees:  `₹${(REFERRAL_INVITEE_COINS / COINS_PER_RUPEE).toFixed(2)}`,
+      },
     });
   })
 );
@@ -1385,11 +1337,14 @@ router.post(
       if (!inviter) { await session.abortTransaction(); return res.status(404).json({ success: false, message: 'Invalid referral code.' }); }
       if (inviter._id.equals(newUser._id)) { await session.abortTransaction(); return res.status(400).json({ success: false, message: 'You cannot use your own referral code.' }); }
 
-      inviter.coins += REFERRAL_INVITER_COINS; inviter.coinsEarned += REFERRAL_INVITER_COINS;
+      inviter.coins       += REFERRAL_INVITER_COINS;
+      inviter.coinsEarned += REFERRAL_INVITER_COINS;
       inviter.referralHistory.push({ referredUser: newUser._id, coinsAwarded: REFERRAL_INVITER_COINS });
       await inviter.save({ session });
 
-      newUser.referredBy = inviter._id; newUser.coins += REFERRAL_INVITEE_COINS; newUser.coinsEarned += REFERRAL_INVITEE_COINS;
+      newUser.referredBy   = inviter._id;
+      newUser.coins       += REFERRAL_INVITEE_COINS;
+      newUser.coinsEarned += REFERRAL_INVITEE_COINS;
       await newUser.save({ session });
       await session.commitTransaction();
 
@@ -1399,7 +1354,11 @@ router.post(
       return res.status(200).json({
         success: true,
         message: `Referral applied! You received ${REFERRAL_INVITEE_COINS} coins (₹${+(REFERRAL_INVITEE_COINS / COINS_PER_RUPEE).toFixed(2)}).`,
-        data: { yourCoins: newUser.coins, yourCoinsRupees: +(newUser.coins / COINS_PER_RUPEE).toFixed(2), inviterRewarded: REFERRAL_INVITER_COINS },
+        data: {
+          yourCoins:       newUser.coins,
+          yourCoinsRupees: +(newUser.coins / COINS_PER_RUPEE).toFixed(2),
+          inviterRewarded: REFERRAL_INVITER_COINS,
+        },
       });
     } catch (err) {
       await session.abortTransaction();
@@ -1438,36 +1397,52 @@ router.get(
   })
 );
 
-router.post('/settings/verify-phone', protect, asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user._id).select('+otp +otpExpires');
-  if (!user)              return res.status(404).json({ message: 'User not found.' });
-  if (!user.phone)        return res.status(400).json({ message: 'No phone number on account.' });
-  if (user.isPhoneVerified) return res.status(400).json({ message: 'Phone is already verified.' });
+router.post(
+  '/settings/verify-phone',
+  protect,
+  asyncHandler(async (req, res) => {
+    const user = await User.findById(req.user._id).select('+otp +otpExpires');
+    if (!user)              return res.status(404).json({ message: 'User not found.' });
+    if (!user.phone)        return res.status(400).json({ message: 'No phone number on account.' });
+    if (user.isPhoneVerified) return res.status(400).json({ message: 'Phone is already verified.' });
 
-  const otp = generateOtp();
-  user.otp = otp; user.otpExpires = new Date(Date.now() + 10 * 60_000);
-  await user.save();
-  await sendSms({ to: user.phone, message: otpSms({ otpCode: otp, purpose: 'phone verification' }) }).catch((e) => log.warn('Phone verify SMS failed', { err: e.message }));
-  return res.json({ message: 'OTP sent to your registered phone number.' });
-}));
+    const otp = generateOtp();
+    user.otp        = otp;
+    user.otpExpires = new Date(Date.now() + 10 * 60_000);
+    await user.save();
+    await sendSms({ to: user.phone, message: otpSms({ otpCode: otp, purpose: 'phone verification' }) })
+      .catch((e) => log.warn('Phone verify SMS failed', { err: e.message }));
+    return res.json({ message: 'OTP sent to your registered phone number.' });
+  })
+);
 
-router.post('/settings/verify-phone/confirm', protect,
+router.post(
+  '/settings/verify-phone/confirm',
+  protect,
   [body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits'), validate],
   asyncHandler(async (req, res) => {
-    const user = await User.findOne({ _id: req.user._id, otp: req.body.otp, otpExpires: { $gt: Date.now() } }).select('+otp +otpExpires');
+    const user = await User.findOne({
+      _id: req.user._id, otp: req.body.otp, otpExpires: { $gt: Date.now() },
+    }).select('+otp +otpExpires');
     if (!user) return res.status(400).json({ message: 'Invalid or expired OTP.' });
-    user.isPhoneVerified = true; user.otp = undefined; user.otpExpires = undefined;
+
+    user.isPhoneVerified = true;
+    user.otp             = undefined;
+    user.otpExpires      = undefined;
     await user.save();
     await invalidateUserCache(user._id);
     return res.json({ success: true, message: 'Phone number verified successfully.' });
   })
 );
 
-router.post('/settings/request-email-change', protect,
+router.post(
+  '/settings/request-email-change',
+  protect,
   [body('newEmail').isEmail().normalizeEmail().withMessage('Valid new email required'), validate],
   asyncHandler(async (req, res) => {
     const { newEmail } = req.body;
     if (newEmail === req.user.email) return res.status(400).json({ message: 'New email is the same as your current email.' });
+
     const conflict = await User.findOne({ email: newEmail });
     if (conflict) return res.status(409).json({ message: 'That email address is already in use.' });
 
@@ -1475,86 +1450,184 @@ router.post('/settings/request-email-change', protect,
     if (!user) return res.status(404).json({ message: 'User not found.' });
 
     const otp = generateOtp();
-    user.otp = `${otp}|${newEmail}`; user.otpExpires = new Date(Date.now() + 15 * 60_000);
+    user.otp        = `${otp}|${newEmail}`;
+    user.otpExpires = new Date(Date.now() + 15 * 60_000);
     await user.save();
-    await sendEmail({ email: user.email, subject: 'Confirm Your Email Change — Likeson', html: otpTemplate({ header: 'EMAIL CHANGE', title: 'Confirm your email change request', body: `Enter this code to change your email to ${newEmail}. It expires in 15 minutes.`, otpCode: otp }) }).catch((e) => log.warn('Email change OTP send failed', { err: e.message }));
+
+    await sendEmail({
+      email:   user.email,
+      subject: 'Confirm Your Email Change — Likeson',
+      html:    otpTemplate({
+        header: 'EMAIL CHANGE',
+        title:  'Confirm your email change request',
+        body:   `Enter this code to change your email to ${newEmail}. It expires in 15 minutes.`,
+        otpCode: otp,
+      }),
+    }).catch((e) => log.warn('Email change OTP send failed', { err: e.message }));
+
     return res.json({ message: 'OTP sent to your current email address.' });
   })
 );
 
-router.post('/settings/confirm-email-change', protect,
+router.post(
+  '/settings/confirm-email-change',
+  protect,
   [body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits'), validate],
   asyncHandler(async (req, res) => {
-    const user = await User.findOne({ _id: req.user._id, otpExpires: { $gt: Date.now() } }).select('+otp +otpExpires');
+    const user = await User.findOne({
+      _id: req.user._id, otpExpires: { $gt: Date.now() },
+    }).select('+otp +otpExpires');
+
     if (!user || !user.otp) return res.status(400).json({ message: 'No pending email change request.' });
 
     const [storedOtp, newEmail] = (user.otp ?? '').split('|');
-    if (storedOtp !== req.body.otp || !newEmail) return res.status(400).json({ message: 'Invalid or expired OTP.' });
+    if (storedOtp !== req.body.otp || !newEmail)
+      return res.status(400).json({ message: 'Invalid or expired OTP.' });
 
     const conflict = await User.findOne({ email: newEmail, _id: { $ne: user._id } });
-    if (conflict) { user.otp = undefined; user.otpExpires = undefined; await user.save(); return res.status(409).json({ message: 'That email address is already in use.' }); }
+    if (conflict) {
+      user.otp        = undefined;
+      user.otpExpires = undefined;
+      await user.save();
+      return res.status(409).json({ message: 'That email address is already in use.' });
+    }
 
-    const oldEmail = user.email;
-    user.email = newEmail; user.isEmailVerified = false; user.otp = undefined; user.otpExpires = undefined;
+    const oldEmail    = user.email;
+    user.email        = newEmail;
+    user.isEmailVerified = false;
+    user.otp          = undefined;
+    user.otpExpires   = undefined;
     await user.save();
     await invalidateUserCache(user._id);
-    sendEmail({ email: oldEmail, subject: 'Your Likeson Email Address Was Changed', html: passwordChangedTemplate({ header: 'EMAIL CHANGED', title: 'Your email address has been updated', body: `Your account email was changed to ${newEmail}. If this wasn't you, contact support immediately.`, buttonText: 'Contact Support', buttonLink: `${process.env.FRONTEND_URL}/support` }) }).catch(() => {});
+
+    sendEmail({
+      email:   oldEmail,
+      subject: 'Your Likeson Email Address Was Changed',
+      html:    passwordChangedTemplate({
+        header:     'EMAIL CHANGED',
+        title:      'Your email address has been updated',
+        body:       `Your account email was changed to ${newEmail}. If this wasn't you, contact support immediately.`,
+        buttonText: 'Contact Support',
+        buttonLink: `${process.env.FRONTEND_URL}/support`,
+      }),
+    }).catch(() => {});
+
     log.info('Email changed', { userId: user._id, from: oldEmail, to: newEmail });
     return res.json({ success: true, message: 'Email changed successfully. Please verify your new email address.', newEmail });
   })
 );
 
-router.delete('/settings/google-unlink', protect, asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user._id).select('+password');
-  if (!user) return res.status(404).json({ message: 'User not found.' });
-  if (!user.googleAuth?.googleId) return res.status(400).json({ message: 'No Google account is linked.' });
-  if (!user.password) return res.status(400).json({ message: 'Cannot unlink Google — set a password first.' });
-  user.googleAuth = { googleId: undefined, isVerified: false };
-  await user.save();
-  await invalidateUserCache(user._id);
-  log.info('Google unlinked', { userId: user._id });
-  return res.json({ success: true, message: 'Google account unlinked successfully.' });
-}));
+router.delete(
+  '/settings/google-unlink',
+  protect,
+  asyncHandler(async (req, res) => {
+    const user = await User.findById(req.user._id).select('+password');
+    if (!user) return res.status(404).json({ message: 'User not found.' });
+    if (!user.googleAuth?.googleId) return res.status(400).json({ message: 'No Google account is linked.' });
+    if (!user.password) return res.status(400).json({ message: 'Cannot unlink Google — set a password first.' });
 
-router.get('/settings/activity', protect, cache(30, (req) => `user:${req.user._id}:activity`), asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user._id).select('auditSessions deviceTokens lastLoginAt lastLoginIp loginCount lastActiveAt isOnline passwordChangedAt').lean();
-  if (!user) return res.status(404).json({ message: 'User not found.' });
+    user.googleAuth = { googleId: undefined, isVerified: false };
+    await user.save();
+    await invalidateUserCache(user._id);
 
-  const sessions = (user.auditSessions ?? []).slice().sort((a, b) => new Date(b.lastActiveAt) - new Date(a.lastActiveAt)).slice(0, 10);
-  const devices  = (user.deviceTokens ?? []).map((t) => ({ _id: t._id, platform: t.platform, deviceName: t.deviceName, ipAddress: t.ipAddress, lastUsedAt: t.lastUsedAt }));
+    log.info('Google unlinked', { userId: user._id });
+    return res.json({ success: true, message: 'Google account unlinked successfully.' });
+  })
+);
 
-  return res.json({ success: true, data: { isOnline: user.isOnline, lastLoginAt: user.lastLoginAt, lastLoginIp: user.lastLoginIp, loginCount: user.loginCount, lastActiveAt: user.lastActiveAt, passwordChangedAt: user.passwordChangedAt ?? null, activeSessions: sessions, registeredDevices: devices } });
-}));
+router.get(
+  '/settings/activity',
+  protect,
+  cache(30, (req) => `user:${req.user._id}:activity`),
+  asyncHandler(async (req, res) => {
+    const user = await User.findById(req.user._id)
+      .select('auditSessions deviceTokens lastLoginAt lastLoginIp loginCount lastActiveAt isOnline passwordChangedAt')
+      .lean();
+    if (!user) return res.status(404).json({ message: 'User not found.' });
 
-router.patch('/settings/legal', protect,
-  [body('acceptTerms').optional().isBoolean(), body('acceptPrivacy').optional().isBoolean(), validate],
+    const sessions = (user.auditSessions ?? [])
+      .slice()
+      .sort((a, b) => new Date(b.lastActiveAt) - new Date(a.lastActiveAt))
+      .slice(0, 10);
+
+    const devices = (user.deviceTokens ?? []).map((t) => ({
+      _id:        t._id,
+      platform:   t.platform,
+      deviceName: t.deviceName,
+      ipAddress:  t.ipAddress,
+      lastUsedAt: t.lastUsedAt,
+    }));
+
+    return res.json({
+      success: true,
+      data: {
+        isOnline:          user.isOnline,
+        lastLoginAt:       user.lastLoginAt,
+        lastLoginIp:       user.lastLoginIp,
+        loginCount:        user.loginCount,
+        lastActiveAt:      user.lastActiveAt,
+        passwordChangedAt: user.passwordChangedAt ?? null,
+        activeSessions:    sessions,
+        registeredDevices: devices,
+      },
+    });
+  })
+);
+
+router.patch(
+  '/settings/legal',
+  protect,
+  [
+    body('acceptTerms').optional().isBoolean(),
+    body('acceptPrivacy').optional().isBoolean(),
+    validate,
+  ],
   asyncHandler(async (req, res) => {
     const { acceptTerms, acceptPrivacy } = req.body;
-    if (!acceptTerms && !acceptPrivacy) return res.status(400).json({ message: 'Provide acceptTerms and/or acceptPrivacy.' });
+    if (!acceptTerms && !acceptPrivacy)
+      return res.status(400).json({ message: 'Provide acceptTerms and/or acceptPrivacy.' });
+
     const $set = {};
     if (acceptTerms   === true) $set.termsAcceptedAt         = new Date();
     if (acceptPrivacy === true) $set.privacyPolicyAcceptedAt = new Date();
+
     await User.findByIdAndUpdate(req.user._id, { $set });
     await invalidateUserCache(req.user._id);
     return res.json({ success: true, message: 'Legal acceptance recorded.', updated: $set });
   })
 );
 
-router.post('/settings/deactivate', protect,
+router.post(
+  '/settings/deactivate',
+  protect,
   [body('password').exists().withMessage('Password confirmation required'), validate],
   asyncHandler(async (req, res) => {
     const user = await User.findById(req.user._id).select('+password');
     if (!user) return res.status(404).json({ message: 'User not found.' });
-    if (!(await bcrypt.compare(req.body.password, user.password))) return res.status(401).json({ message: 'Incorrect password.' });
+    if (!(await bcrypt.compare(req.body.password, user.password)))
+      return res.status(401).json({ message: 'Incorrect password.' });
 
-    user.isBlocked = true; user.blockReason = 'User requested deactivation.';
-    user.unblockAt = new Date('2099-01-01T00:00:00.000Z');
-    user.isOnline = false; user.lastseen = new Date();
-    user.auditSessions = []; user.deviceTokens = [];
+    user.isBlocked     = true;
+    user.blockReason   = 'User requested deactivation.';
+    user.unblockAt     = new Date('2099-01-01T00:00:00.000Z');
+    user.isOnline      = false;
+    user.lastseen      = new Date();
+    user.auditSessions = [];
+    user.deviceTokens  = [];
     await user.save();
     await invalidateUserCache(user._id);
+
     log.info('Account self-deactivated', { userId: user._id });
-    if (user.phone) sendSms({ to: user.phone, message: accountBlockedSms({ name: user.name, reason: 'Self-requested deactivation', unblockAt: 'Contact support to reactivate' }) }).catch(() => {});
+    if (user.phone) {
+      sendSms({
+        to:      user.phone,
+        message: accountBlockedSms({
+          name:      user.name,
+          reason:    'Self-requested deactivation',
+          unblockAt: 'Contact support to reactivate',
+        }),
+      }).catch(() => {});
+    }
     return res.json({ success: true, message: 'Account deactivated. Contact support to reactivate your account.' });
   })
 );
@@ -1563,23 +1636,45 @@ router.post('/settings/deactivate', protect,
 // § 15  ADMIN / SUPERADMIN ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-router.get('/admin/users', protect, authorize('superadmin', 'admin'), cache(60), asyncHandler(async (req, res) => {
-  const page  = Math.max(parseInt(req.query.page)  || 1, 1);
-  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-  const skip  = (page - 1) * limit;
-  const filter = {};
-  if (req.query.role)     filter.role      = req.query.role;
-  if (req.query.isBlocked !== undefined) filter.isBlocked = req.query.isBlocked === 'true';
-  if (req.query.search) filter.$or = [{ name: { $regex: req.query.search, $options: 'i' } }, { email: { $regex: req.query.search, $options: 'i' } }, { phone: { $regex: req.query.search, $options: 'i' } }];
+router.get(
+  '/admin/users',
+  protect,
+  authorize('superadmin', 'admin'),
+  cache(60),
+  asyncHandler(async (req, res) => {
+    const page  = Math.max(parseInt(req.query.page)  || 1, 1);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    const skip  = (page - 1) * limit;
+    const filter = {};
 
-  const [users, total] = await Promise.all([
-    User.find(filter).select('-password -otp -otpExpires').sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-    User.countDocuments(filter),
-  ]);
-  return res.json({ data: users, total, pages: Math.ceil(total / limit), currentPage: page });
-}));
+    if (req.query.role)                  filter.role      = req.query.role;
+    if (req.query.isBlocked !== undefined) filter.isBlocked = req.query.isBlocked === 'true';
+    if (req.query.search) {
+      filter.$or = [
+        { name:  { $regex: req.query.search, $options: 'i' } },
+        { email: { $regex: req.query.search, $options: 'i' } },
+        { phone: { $regex: req.query.search, $options: 'i' } },
+      ];
+    }
 
-router.patch('/admin/update-role/:id', protect, authorize('superadmin'),
+    const [users, total] = await Promise.all([
+      User.find(filter)
+        .select('-password -otp -otpExpires')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      User.countDocuments(filter),
+    ]);
+
+    return res.json({ data: users, total, pages: Math.ceil(total / limit), currentPage: page });
+  })
+);
+
+router.patch(
+  '/admin/update-role/:id',
+  protect,
+  authorize('superadmin'),
   [param('id').isMongoId().withMessage('Invalid user ID'), validate],
   asyncHandler(async (req, res) => {
     const { role: newRole } = req.body;
@@ -1588,100 +1683,235 @@ router.patch('/admin/update-role/:id', protect, authorize('superadmin'),
     try {
       const user = await User.findById(req.params.id).session(session);
       if (!user) { await session.abortTransaction(); return res.status(404).json({ message: 'User not found.' }); }
+
       const oldRole = user.role;
       if (oldRole === newRole) { await session.abortTransaction(); return res.status(400).json({ message: 'User already has this role.' }); }
-      user.role = newRole; await user.save({ session });
+
+      user.role = newRole;
+      await user.save({ session });
+
       const OldM = getProfileModel(oldRole);
       if (OldM) await OldM.findOneAndDelete({ user: user._id }).session(session);
+
       const NewM = getProfileModel(newRole);
       let newProfile = null;
       if (NewM) [newProfile] = await NewM.create([{ user: user._id }], { session });
+
       await session.commitTransaction();
       await invalidateUserCache(user._id);
       await invalidatePattern('GET:/api/users/admin/users*');
+
       log.info('Role changed', { userId: user._id, from: oldRole, to: newRole, by: req.user._id });
       return res.json({ success: true, message: `Role changed: ${oldRole} → ${newRole}.`, user, newProfile });
-    } catch (err) { await session.abortTransaction(); throw err; } finally { session.endSession(); }
+    } catch (err) {
+      await session.abortTransaction();
+      throw err;
+    } finally {
+      session.endSession();
+    }
   })
 );
 
-router.patch('/admin/suspend/:id', protect, authorize('superadmin', 'admin'),
+router.patch(
+  '/admin/suspend/:id',
+  protect,
+  authorize('superadmin', 'admin'),
   [param('id').isMongoId().withMessage('Invalid user ID'), validate],
   asyncHandler(async (req, res) => {
     const { reason, durationDays } = req.body;
     const unblockAt = new Date();
     unblockAt.setDate(unblockAt.getDate() + (parseInt(durationDays) || 30));
-    const user = await User.findByIdAndUpdate(req.params.id, { isBlocked: true, blockReason: reason || 'Violation of terms of service', unblockAt, isOnline: false, lastseen: new Date(), auditSessions: [], deviceTokens: [] }, { new: true });
+
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      {
+        isBlocked:     true,
+        blockReason:   reason || 'Violation of terms of service',
+        unblockAt,
+        isOnline:      false,
+        lastseen:      new Date(),
+        auditSessions: [],
+        deviceTokens:  [],
+      },
+      { new: true }
+    );
+
     if (!user) return res.status(404).json({ message: 'User not found.' });
-    if (user.phone) sendSms({ to: user.phone, message: accountBlockedSms({ name: user.name, reason: user.blockReason, unblockAt: unblockAt.toLocaleDateString('en-IN') }) }).catch(() => {});
+
+    if (user.phone) {
+      sendSms({
+        to:      user.phone,
+        message: accountBlockedSms({
+          name:      user.name,
+          reason:    user.blockReason,
+          unblockAt: unblockAt.toLocaleDateString('en-IN'),
+        }),
+      }).catch(() => {});
+    }
+
     await invalidateUserCache(user._id);
     await invalidatePattern('GET:/api/users/admin/users*');
+
     log.warn('User suspended', { userId: user._id, by: req.user._id });
     return res.json({ message: `Suspended until ${unblockAt.toISOString()}.`, user });
   })
 );
 
-router.patch('/admin/unblock/:id', protect, authorize('superadmin', 'admin'),
+router.patch(
+  '/admin/unblock/:id',
+  protect,
+  authorize('superadmin', 'admin'),
   [param('id').isMongoId().withMessage('Invalid user ID'), validate],
   asyncHandler(async (req, res) => {
-    const user = await User.findByIdAndUpdate(req.params.id, { isBlocked: false, blockReason: undefined, unblockAt: undefined }, { new: true });
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { isBlocked: false, blockReason: undefined, unblockAt: undefined },
+      { new: true }
+    );
+
     if (!user) return res.status(404).json({ message: 'User not found.' });
-    if (user.phone) sendSms({ to: user.phone, message: accountUnblockedSms({ name: user.name }) }).catch(() => {});
+
+    if (user.phone) {
+      sendSms({ to: user.phone, message: accountUnblockedSms({ name: user.name }) }).catch(() => {});
+    }
+
     await invalidateUserCache(user._id);
     await invalidatePattern('GET:/api/users/admin/users*');
+
     log.info('User unblocked', { userId: user._id, by: req.user._id });
     return res.json({ message: 'User unblocked.', user });
   })
 );
 
-router.post('/admin/reset-otp/:email', protect, authorize('admin', 'superadmin'), asyncHandler(async (req, res) => {
-  const user = await User.findOneAndUpdate({ email: req.params.email.toLowerCase() }, { $unset: { otp: 1, otpExpires: 1 } });
-  if (user) await invalidateUserCache(user._id);
-  return res.json({ message: 'OTP state cleared.' });
-}));
-
-router.get('/admin/user/:id/coins', protect, authorize('superadmin', 'admin'),
-  [param('id').isMongoId().withMessage('Invalid user ID'), validate],
-  cache(60, (req) => `admin:user:${req.params.id}:coins`),
+router.post(
+  '/admin/reset-otp/:email',
+  protect,
+  authorize('admin', 'superadmin'),
   asyncHandler(async (req, res) => {
-    const user = await User.findById(req.params.id).select('name email coins coinsEarned coinsRedeemed referralCode referralHistory referredBy').populate('referralHistory.referredUser', 'name email').populate('referredBy', 'name email');
-    if (!user) return res.status(404).json({ message: 'User not found.' });
-    return res.json({ success: true, data: { name: user.name, email: user.email, referralCode: user.referralCode, referredBy: user.referredBy ?? null, totalReferrals: user.referralHistory.length, coins: user.coins, coinsInRupees: +(user.coins / COINS_PER_RUPEE).toFixed(2), coinsEarned: user.coinsEarned, coinsRedeemed: user.coinsRedeemed, referralHistory: user.referralHistory } });
+    const user = await User.findOneAndUpdate(
+      { email: req.params.email.toLowerCase() },
+      { $unset: { otp: 1, otpExpires: 1 } }
+    );
+    if (user) await invalidateUserCache(user._id);
+    return res.json({ message: 'OTP state cleared.' });
   })
 );
 
-router.post('/admin/credit-coins/:id', protect, authorize('superadmin'),
-  [param('id').isMongoId().withMessage('Invalid user ID'), body('coins').isInt({ min: 1 }).withMessage('coins must be a positive integer'), body('reason').notEmpty().trim().withMessage('reason is required'), validate],
+router.get(
+  '/admin/user/:id/coins',
+  protect,
+  authorize('superadmin', 'admin'),
+  [param('id').isMongoId().withMessage('Invalid user ID'), validate],
+  cache(60, (req) => `admin:user:${req.params.id}:coins`),
+  asyncHandler(async (req, res) => {
+    const user = await User.findById(req.params.id)
+      .select('name email coins coinsEarned coinsRedeemed referralCode referralHistory referredBy')
+      .populate('referralHistory.referredUser', 'name email')
+      .populate('referredBy', 'name email');
+
+    if (!user) return res.status(404).json({ message: 'User not found.' });
+
+    return res.json({
+      success: true,
+      data: {
+        name:            user.name,
+        email:           user.email,
+        referralCode:    user.referralCode,
+        referredBy:      user.referredBy ?? null,
+        totalReferrals:  user.referralHistory.length,
+        coins:           user.coins,
+        coinsInRupees:   +(user.coins / COINS_PER_RUPEE).toFixed(2),
+        coinsEarned:     user.coinsEarned,
+        coinsRedeemed:   user.coinsRedeemed,
+        referralHistory: user.referralHistory,
+      },
+    });
+  })
+);
+
+router.post(
+  '/admin/credit-coins/:id',
+  protect,
+  authorize('superadmin'),
+  [
+    param('id').isMongoId().withMessage('Invalid user ID'),
+    body('coins').isInt({ min: 1 }).withMessage('coins must be a positive integer'),
+    body('reason').notEmpty().trim().withMessage('reason is required'),
+    validate,
+  ],
   asyncHandler(async (req, res) => {
     const { coins, reason } = req.body;
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found.' });
-    user.coins += coins; user.coinsEarned += coins;
+
+    user.coins       += coins;
+    user.coinsEarned += coins;
     await user.save();
     await invalidateUserCache(user._id);
+
     log.info('Admin credited coins', { userId: user._id, coins, reason, by: req.user._id });
-    return res.json({ success: true, message: `${coins} coins credited to ${user.name}.`, data: { userId: user._id, newBalance: user.coins, reason } });
+    return res.json({
+      success: true,
+      message: `${coins} coins credited to ${user.name}.`,
+      data:    { userId: user._id, newBalance: user.coins, reason },
+    });
   })
 );
 
-router.get('/admin/user/:id/sessions', protect, authorize('superadmin', 'admin'),
+router.get(
+  '/admin/user/:id/sessions',
+  protect,
+  authorize('superadmin', 'admin'),
   [param('id').isMongoId().withMessage('Invalid user ID'), validate],
   asyncHandler(async (req, res) => {
-    const user = await User.findById(req.params.id).select('auditSessions deviceTokens isOnline lastLoginAt lastLoginIp').lean();
+    const user = await User.findById(req.params.id)
+      .select('auditSessions deviceTokens isOnline lastLoginAt lastLoginIp')
+      .lean();
     if (!user) return res.status(404).json({ message: 'User not found.' });
-    const sessions = (user.auditSessions ?? []).slice().sort((a, b) => new Date(b.lastActiveAt) - new Date(a.lastActiveAt));
-    return res.json({ success: true, isOnline: user.isOnline, lastLoginAt: user.lastLoginAt, lastLoginIp: user.lastLoginIp, activeSessions: sessions, registeredDevices: user.deviceTokens ?? [] });
+
+    const sessions = (user.auditSessions ?? [])
+      .slice()
+      .sort((a, b) => new Date(b.lastActiveAt) - new Date(a.lastActiveAt));
+
+    return res.json({
+      success:           true,
+      isOnline:          user.isOnline,
+      lastLoginAt:       user.lastLoginAt,
+      lastLoginIp:       user.lastLoginIp,
+      activeSessions:    sessions,
+      registeredDevices: user.deviceTokens ?? [],
+    });
   })
 );
 
-router.delete('/admin/user/:id/sessions', protect, authorize('superadmin', 'admin'),
+router.delete(
+  '/admin/user/:id/sessions',
+  protect,
+  authorize('superadmin', 'admin'),
   [param('id').isMongoId().withMessage('Invalid user ID'), validate],
   asyncHandler(async (req, res) => {
-    const user = await User.findByIdAndUpdate(req.params.id, { $set: { auditSessions: [], deviceTokens: [], isOnline: false, lastseen: new Date() } }, { new: true }).select('name email');
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: {
+          auditSessions: [],
+          deviceTokens:  [],
+          isOnline:      false,
+          lastseen:      new Date(),
+        },
+      },
+      { new: true }
+    ).select('name email');
+
     if (!user) return res.status(404).json({ message: 'User not found.' });
+
     await invalidateUserCache(req.params.id);
+
     log.warn('Admin force sign-out', { targetUserId: req.params.id, by: req.user._id });
-    return res.json({ success: true, message: `All sessions cleared for ${user.name}. User has been signed out everywhere.` });
+    return res.json({
+      success: true,
+      message: `All sessions cleared for ${user.name}. User has been signed out everywhere.`,
+    });
   })
 );
 

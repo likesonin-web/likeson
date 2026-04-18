@@ -482,7 +482,7 @@ const SuperAdminDashboard = ({ children }) => {
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            className="rounded-[2.5rem] border border-base-300 bg-base-200/40 min-h-[75vh] p-4 shadow-inner relative overflow-hidden backdrop-blur-sm"
+            className="rounded-[0.5rem] pt-3 border border-base-300 bg-base-200/40 min-h-[75vh]  shadow-inner relative overflow-hidden backdrop-blur-sm"
           >
             {/* Decorative glow */}
             <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-primary/5 blur-[150px] rounded-full pointer-events-none" />

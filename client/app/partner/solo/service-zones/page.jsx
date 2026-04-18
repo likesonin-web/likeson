@@ -2,13 +2,13 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  MapPin, Radio, Power, PowerOff, Clock, Plus, Trash2,
+  MapPin, Power, PowerOff, Clock, Plus, Trash2,
   Globe, AlertTriangle, CheckCircle2, Loader2, Shield,
   Navigation, Wifi, WifiOff, TrendingUp, ChevronRight,
-  X, Info, ArrowLeft, Map, Layers, RefreshCw, Star,
+  X, Info, ArrowLeft, Map, Layers, Star,
   Activity, Zap
 } from "lucide-react";
 
@@ -27,6 +27,49 @@ import {
   selectIsDispatchReady,
   selectPartnershipStatus,
 } from "@/store/slices/soloDriverSlice";
+
+/**
+ * API shapes this component expects:
+ *
+ * GET /availability → {
+ *   success: true,
+ *   data: {
+ *     isAvailable: boolean,
+ *     availabilityHours: { start: string, end: string },
+ *     partnershipStatus: string,          // "active" | "pending" | "suspended" etc.
+ *     isOnboardingComplete: boolean,
+ *     driverDispatchStatus: string,       // "Offline" | "Online" | "Busy"
+ *     isDispatchReady: boolean,
+ *   }
+ * }
+ *
+ * GET /service-zones → {
+ *   success: true,
+ *   data: Array<{
+ *     _id: string,
+ *     city: string,
+ *     state: string,
+ *     pinCodes: string[],
+ *     radiusKm: number,
+ *     isActive: boolean,
+ *   }>
+ * }
+ *
+ * Redux slice must:
+ *   selectAvailability       → state.soloDriver.availability        (the data object above)
+ *   selectServiceZones       → state.soloDriver.serviceZones        (the array above)
+ *   selectIsOnline           → state.soloDriver.availability?.isAvailable  (boolean)
+ *   selectIsDispatchReady    → state.soloDriver.availability?.isDispatchReady (boolean)
+ *   selectPartnershipStatus  → state.soloDriver.availability?.partnershipStatus (string)
+ *
+ * If your slice stores the availability response differently, update
+ * these selectors in soloDriverSlice.js to point to the right paths.
+ *
+ * Example slice selectors that would match:
+ *   export const selectIsOnline          = (s) => s.soloDriver.availability?.isAvailable ?? false;
+ *   export const selectIsDispatchReady   = (s) => s.soloDriver.availability?.isDispatchReady ?? false;
+ *   export const selectPartnershipStatus = (s) => s.soloDriver.availability?.partnershipStatus ?? "pending";
+ */
 
 const GMAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
 
@@ -86,7 +129,6 @@ function ServiceZoneMap({ zones }) {
       center:    { lat: 20.5937, lng: 78.9629 },
       zoom:      5,
       mapTypeId: "roadmap",
-      // Light map styles — clean minimal look
       styles: [
         { featureType: "all",  elementType: "geometry",          stylers: [{ color: "#f1f5f9" }] },
         { featureType: "all",  elementType: "labels.text.fill",  stylers: [{ color: "#475569" }] },
@@ -132,13 +174,17 @@ function ServiceZoneMap({ zones }) {
     circles.current = [];
     markers.current = [];
 
+    // zones is already the array from API: data[]
     if (!zones?.length) return;
 
     const geocoder = new window.google.maps.Geocoder();
     const bounds   = new window.google.maps.LatLngBounds();
     const colors   = ["#0284c7","#059669","#d97706","#9333ea","#ea580c","#2563eb"];
 
-    zones.filter(z => z.isActive).forEach((zone, i) => {
+    // Only render isActive zones on the map
+    const activeZones = zones.filter(z => z.isActive);
+
+    activeZones.forEach((zone, i) => {
       const query = `${zone.city}, ${zone.state}, India`;
       geocoder.geocode({ address: query }, (results, status) => {
         if (status !== "OK" || !results?.[0]) return;
@@ -187,7 +233,7 @@ function ServiceZoneMap({ zones }) {
         });
         marker.addListener("click", () => info.open(mapInstance.current, marker));
 
-        if (zones.filter(z => z.isActive).length > 0) {
+        if (activeZones.length > 0) {
           mapInstance.current.fitBounds(bounds, { padding: 60 });
         }
       });
@@ -212,13 +258,13 @@ function ServiceZoneMap({ zones }) {
 // ── Status chip ───────────────────────────────────────────────────────────────
 function StatusChip({ status }) {
   const map = {
-    active:        { label: "Active",        cls: "bg-success/15 text-success border-success/30" },
-    pending:       { label: "Pending",       cls: "bg-warning/15 text-warning border-warning/30" },
-    suspended:     { label: "Suspended",     cls: "bg-error/15   text-error   border-error/30"   },
-    "under-review":{ label: "Under Review",  cls: "bg-info/15    text-info    border-info/30"    },
-    rejected:      { label: "Rejected",      cls: "bg-error/15   text-error   border-error/30"   },
+    active:          { label: "Active",        cls: "bg-success/15 text-success border-success/30" },
+    pending:         { label: "Pending",       cls: "bg-warning/15 text-warning border-warning/30" },
+    suspended:       { label: "Suspended",     cls: "bg-error/15   text-error   border-error/30"   },
+    "under-review":  { label: "Under Review",  cls: "bg-info/15    text-info    border-info/30"    },
+    rejected:        { label: "Rejected",      cls: "bg-error/15   text-error   border-error/30"   },
   };
-  const s = map[status] || { label: status, cls: "bg-base-300 text-base-content/60 border-base-300" };
+  const s = map[status] || { label: status || "—", cls: "bg-base-300 text-base-content/60 border-base-300" };
   return (
     <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border uppercase tracking-wider ${s.cls}`}>
       {s.label}
@@ -232,7 +278,6 @@ function ZoneCard({ zone, onRemove, removing }) {
   const idx    = zone._id?.slice(-1).charCodeAt(0) % colors.length || 0;
   const c      = colors[idx];
 
-  // Light-mode color map: borders/bg use lighter tints, text uses saturated color
   const colorMap = {
     sky:     { border: "border-sky-200",     bg: "bg-sky-50",     text: "text-sky-600",     dot: "bg-sky-500"     },
     emerald: { border: "border-emerald-200", bg: "bg-emerald-50", text: "text-emerald-600", dot: "bg-emerald-500" },
@@ -250,27 +295,27 @@ function ZoneCard({ zone, onRemove, removing }) {
       initial="hidden"
       animate="visible"
       exit="exit"
-      className={`relative group rounded-2xl border ${col.border} ${col.bg} p-4`}
+      className={`relative group rounded-2xl border  border-success/20 bg-success/10 p-4`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
-          <div className={`mt-0.5 flex-shrink-0 w-9 h-9 rounded-xl bg-white border ${col.border} flex items-center justify-center shadow-sm`}>
+          <div className={`mt-0.5 flex-shrink-0 w-9 h-9 rounded-xl bg-success/20 border ${col.border} flex items-center justify-center shadow-sm`}>
             <MapPin className={`w-4 h-4 ${col.text}`} />
           </div>
           <div className="min-w-0">
             <p className="font-bold text-base-content text-sm truncate">{zone.city}</p>
             <p className="text-xs text-base-content/60 mt-0.5">{zone.state}</p>
             <div className="flex flex-wrap gap-1.5 mt-2">
-              <span className={`text-xs px-2 py-0.5 rounded-full bg-white ${col.text} border ${col.border}`}>
+              <span className={`text-xs px-2 py-0.5 rounded-full bg-success/10  ${col.text} border ${col.border}`}>
                 {zone.radiusKm || 15} km radius
               </span>
               {zone.pinCodes?.length > 0 && (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-white text-base-content/60 border border-base-300">
+                <span className="text-xs px-2 py-0.5 rounded-full  text-base-content/60 border border-base-300">
                   {zone.pinCodes.length} pin{zone.pinCodes.length > 1 ? "s" : ""}
                 </span>
               )}
               {zone.isActive ? (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200">
+                <span className="text-xs px-2 py-0.5 rounded-full  bg-success/10 text-emerald-600 border border-emerald-200">
                   Active
                 </span>
               ) : (
@@ -440,7 +485,7 @@ function ToggleSwitch({ checked, onChange, disabled }) {
       <motion.span
         layout
         transition={{ type: "spring", stiffness: 700, damping: 30 }}
-        className="inline-block h-5 w-5 rounded-full bg-white shadow-lg"
+        className="inline-block h-5 w-5 rounded-full  shadow-lg"
         style={{ x: checked ? 30 : 4 }}
       />
     </button>
@@ -460,19 +505,33 @@ export default function AvailabilityServiceZones() {
   };
   const section = getSection();
 
-  const availability      = useSelector(selectAvailability);
-  const serviceZones      = useSelector(selectServiceZones);
-  const isOnline          = useSelector(selectIsOnline);
-  const isDispatchReady   = useSelector(selectIsDispatchReady);
-  const partnerStatus     = useSelector(selectPartnershipStatus);
+  /**
+   * Selectors — these must match what soloDriverSlice.js exposes.
+   *
+   * availability → the full data object from GET /availability:
+   *   { isAvailable, availabilityHours, partnershipStatus,
+   *     isOnboardingComplete, driverDispatchStatus, isDispatchReady }
+   *
+   * serviceZones → the array from GET /service-zones data[]
+   *
+   * selectIsOnline          → availability.isAvailable (boolean)
+   * selectIsDispatchReady   → availability.isDispatchReady (boolean)
+   * selectPartnershipStatus → availability.partnershipStatus (string)
+   *
+   * If your slice stores them differently, update the selectors there —
+   * the component always reads via these selector functions.
+   */
+  const availability    = useSelector(selectAvailability);
+  const serviceZones    = useSelector(selectServiceZones);   // Array<zone>
+  const isOnline        = useSelector(selectIsOnline);       // availability.isAvailable
+  const isDispatchReady = useSelector(selectIsDispatchReady);// availability.isDispatchReady
+  const partnerStatus   = useSelector(selectPartnershipStatus); // availability.partnershipStatus
 
   const loadingAvailability = useSelector(selectLoading("availability"));
   const loadingToggle       = useSelector(selectLoading("toggleAvailability"));
   const loadingZones        = useSelector(selectLoading("serviceZones"));
   const loadingAddZone      = useSelector(selectLoading("addZone"));
   const loadingRemoveZone   = useSelector(selectLoading("removeZone"));
-
-  const errorToggle = useSelector(selectError("toggleAvailability"));
 
   const [removingId,   setRemovingId]   = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -487,12 +546,24 @@ export default function AvailabilityServiceZones() {
     else setShowAddModal(false);
   }, [section]);
 
+  /**
+   * Toggle handler — sends the NEW desired state to the API.
+   * Uses optimistic update so the UI responds immediately,
+   * then re-fetches to sync with server truth.
+   *
+   * setAvailabilityOptimistic should update:
+   *   state.soloDriver.availability.isAvailable = val
+   */
   const handleToggle = async (val) => {
     dispatch(setAvailabilityOptimistic(val));
     await dispatch(toggleAvailability(val));
     dispatch(fetchAvailability());
   };
 
+  /**
+   * Add zone — on success close modal and refresh zones list.
+   * The API returns the new zone; fetchServiceZones re-syncs the full array.
+   */
   const handleAddZone = async (payload) => {
     const result = await dispatch(addServiceZone(payload));
     if (!result.error) {
@@ -502,10 +573,14 @@ export default function AvailabilityServiceZones() {
     }
   };
 
+  /**
+   * Remove zone — pass the zone's _id (from API response).
+   */
   const handleRemoveZone = async (zoneId) => {
     setRemovingId(zoneId);
     await dispatch(removeServiceZone(zoneId));
     setRemovingId(null);
+    dispatch(fetchServiceZones());
   };
 
   const handleCloseModal = () => {
@@ -515,8 +590,17 @@ export default function AvailabilityServiceZones() {
 
   const navTo = (path) => router.push(path);
 
-  const activeZones = serviceZones.filter(z => z.isActive).length;
-  const totalKm     = serviceZones.reduce((a, z) => a + (z.radiusKm || 15), 0);
+  // Derived stats from the zones array (data from API)
+  const activeZones = Array.isArray(serviceZones)
+    ? serviceZones.filter(z => z.isActive).length
+    : 0;
+  const totalKm = Array.isArray(serviceZones)
+    ? serviceZones.reduce((a, z) => a + (z.radiusKm || 15), 0)
+    : 0;
+
+  // Dispatch status label from availability data
+  // API returns driverDispatchStatus: "Offline" | "Online" | "Busy"
+  const dispatchStatusLabel = availability?.driverDispatchStatus || "—";
 
   return (
     <div className="min-h-screen bg-base-100 text-base-content font-[family-name:var(--font-family-poppins)]">
@@ -533,7 +617,6 @@ export default function AvailabilityServiceZones() {
         }}
       />
 
-      {/* Subtle glow blobs */}
       <div className="fixed top-0 left-1/4 w-96 h-96 bg-primary/5 rounded-full blur-3xl pointer-events-none" />
       <div className="fixed bottom-1/3 right-1/4 w-80 h-80 bg-success/5 rounded-full blur-3xl pointer-events-none" />
 
@@ -541,11 +624,11 @@ export default function AvailabilityServiceZones() {
 
         {/* ── Header ───────────────────────────────────────────────────────── */}
         <motion.div initial="hidden" animate="visible" variants={stagger} className="mb-8">
-          <motion.div variants={fadeUp} className="flex items-center gap-4 mb-6">
+          <motion.div variants={fadeUp} className="flex flex-col md:flex-row   items-center gap-4 mb-6">
             <div className="flex items-center gap-2.5">
               <button
                 onClick={() => navTo("/partner/solo/availability")}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-semibold transition-all
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs md:text-sm font-semibold transition-all
                   ${section === "availability"
                     ? "bg-primary/10 text-primary border border-primary/25"
                     : "text-base-content/40 hover:text-base-content/70"}`}
@@ -556,7 +639,7 @@ export default function AvailabilityServiceZones() {
               <ChevronRight className="w-3.5 h-3.5 text-base-content/30" />
               <button
                 onClick={() => navTo("/partner/solo/service-zones")}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-semibold transition-all
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs md:text-sm font-semibold transition-all
                   ${(section === "zones" || section === "add")
                     ? "bg-primary/10 text-primary border border-primary/25"
                     : "text-base-content/40 hover:text-base-content/70"}`}
@@ -575,7 +658,8 @@ export default function AvailabilityServiceZones() {
               )}
             </div>
 
-            <div className="ml-auto flex items-center gap-3">
+            <div className="  flex items-center gap-3">
+              {/* partnerStatus comes from availability.partnershipStatus */}
               <StatusChip status={partnerStatus} />
               {isOnline
                 ? <span className="flex items-center gap-1.5 text-xs font-bold text-success"><PulseDot color="#16a34a" />ONLINE</span>
@@ -612,7 +696,6 @@ export default function AvailabilityServiceZones() {
               {/* Main toggle card */}
               <motion.div variants={fadeUp}>
                 <div className="relative rounded-3xl border border-base-300 bg-base-100 shadow-sm overflow-hidden">
-                  {/* Animated bg when online */}
                   <AnimatePresence>
                     {isOnline && (
                       <motion.div
@@ -668,7 +751,12 @@ export default function AvailabilityServiceZones() {
                             : "You're not receiving any ride requests. Go online to start earning."}
                         </p>
 
-                        {/* Readiness flags */}
+                        {/*
+                          Readiness flags — sourced from availability object:
+                            isOnboardingComplete  → availability.isOnboardingComplete
+                            driverDispatchStatus  → availability.driverDispatchStatus ("Offline"|"Online"|"Busy")
+                            isDispatchReady       → availability.isDispatchReady
+                        */}
                         <div className="flex flex-wrap gap-2 mt-4">
                           <span className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border font-semibold
                             ${availability?.isOnboardingComplete
@@ -678,11 +766,11 @@ export default function AvailabilityServiceZones() {
                             Onboarding {availability?.isOnboardingComplete ? "Complete" : "Pending"}
                           </span>
                           <span className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border font-semibold
-                            ${availability?.driverDispatchStatus
+                            ${availability?.driverDispatchStatus && availability.driverDispatchStatus !== "Offline"
                               ? "bg-info/10 text-info border-info/25"
                               : "bg-base-200 text-base-content/40 border-base-300"}`}>
                             <Navigation className="w-3 h-3" />
-                            Dispatch {availability?.driverDispatchStatus ? "Ready" : "Not Set Up"}
+                            Dispatch: {dispatchStatusLabel}
                           </span>
                           <span className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border font-semibold
                             ${isDispatchReady
@@ -694,7 +782,7 @@ export default function AvailabilityServiceZones() {
                         </div>
                       </div>
 
-                      {/* Toggle */}
+                      {/* Toggle — disabled when partnerStatus !== "active" */}
                       <div className="flex-shrink-0 flex flex-col items-center gap-3">
                         {loadingToggle ? (
                           <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -711,7 +799,7 @@ export default function AvailabilityServiceZones() {
                       </div>
                     </div>
 
-                    {/* Warning if not active */}
+                    {/* Warning if partner is not active */}
                     {partnerStatus !== "active" && (
                       <motion.div
                         variants={fadeUp}
@@ -719,7 +807,7 @@ export default function AvailabilityServiceZones() {
                       >
                         <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0 mt-0.5" />
                         <p className="text-xs text-warning-content">
-                          Your account status is <strong>{partnerStatus}</strong>. Only active partners can go online. Complete verification to activate.
+                          Your account status is <strong className="capitalize">{partnerStatus || "unknown"}</strong>. Only active partners can go online. Complete verification to activate.
                         </p>
                       </motion.div>
                     )}
@@ -730,10 +818,33 @@ export default function AvailabilityServiceZones() {
               {/* Stats row */}
               <motion.div variants={stagger} className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 {[
-                  { label: "Availability Hours", value: `${availability?.availabilityHours?.start || "06:00"} – ${availability?.availabilityHours?.end || "22:00"}`, icon: Clock,      color: "primary" },
-                  { label: "Service Zones",       value: `${activeZones} active`,                   icon: Globe,      color: "success"  },
-                  { label: "Dispatch Status",     value: availability?.driverDispatchStatus || "—",  icon: Navigation, color: "info"     },
-                  { label: "Partnership",         value: partnerStatus || "—",                       icon: Shield,     color: "warning"  },
+                  {
+                    label: "Availability Hours",
+                    // availability.availabilityHours.start / .end
+                    value: `${availability?.availabilityHours?.start || "06:00"} – ${availability?.availabilityHours?.end || "22:00"}`,
+                    icon: Clock,
+                    color: "primary",
+                  },
+                  {
+                    label: "Service Zones",
+                    value: `${activeZones} active`,
+                    icon: Globe,
+                    color: "success",
+                  },
+                  {
+                    label: "Dispatch Status",
+                    // availability.driverDispatchStatus
+                    value: dispatchStatusLabel,
+                    icon: Navigation,
+                    color: "info",
+                  },
+                  {
+                    label: "Partnership",
+                    // availability.partnershipStatus
+                    value: partnerStatus || "—",
+                    icon: Shield,
+                    color: "warning",
+                  },
                 ].map((stat) => {
                   const colMap = {
                     primary: "border-primary/20  bg-primary/5  text-primary",
@@ -788,9 +899,25 @@ export default function AvailabilityServiceZones() {
               {/* Stats bar */}
               <motion.div variants={fadeUp} className="grid grid-cols-3 gap-4">
                 {[
-                  { label: "Total Zones",   value: serviceZones.length, icon: Layers,       color: "text-primary  bg-primary/5  border-primary/20" },
-                  { label: "Active Zones",  value: activeZones,         icon: CheckCircle2, color: "text-success  bg-success/5  border-success/20" },
-                  { label: "Total Coverage",value: `${totalKm} km`,     icon: TrendingUp,   color: "text-info     bg-info/5     border-info/20"    },
+                  {
+                    label: "Total Zones",
+                    // serviceZones is the array: data[]
+                    value: Array.isArray(serviceZones) ? serviceZones.length : 0,
+                    icon: Layers,
+                    color: "text-primary  bg-primary/5  border-primary/20",
+                  },
+                  {
+                    label: "Active Zones",
+                    value: activeZones,
+                    icon: CheckCircle2,
+                    color: "text-success  bg-success/5  border-success/20",
+                  },
+                  {
+                    label: "Total Coverage",
+                    value: `${totalKm} km`,
+                    icon: TrendingUp,
+                    color: "text-info     bg-info/5     border-info/20",
+                  },
                 ].map(s => (
                   <div key={s.label} className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm">
                     <div className={`w-8 h-8 rounded-xl border flex items-center justify-center mb-2 ${s.color}`}>
@@ -805,7 +932,7 @@ export default function AvailabilityServiceZones() {
               {/* Map + Zones list */}
               <motion.div variants={fadeUp} className="grid grid-cols-1 lg:grid-cols-5 gap-6">
 
-                {/* Map */}
+                {/* Map — receives zones array directly */}
                 <div className="lg:col-span-3 rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden" style={{ minHeight: 420 }}>
                   <div className="p-4 border-b border-base-300 flex items-center justify-between bg-base-100">
                     <div className="flex items-center gap-2">
@@ -818,7 +945,8 @@ export default function AvailabilityServiceZones() {
                     </div>
                   </div>
                   <div style={{ height: 380 }}>
-                    <ServiceZoneMap zones={serviceZones} />
+                    {/* Pass zones array (already the correct shape from API) */}
+                    <ServiceZoneMap zones={Array.isArray(serviceZones) ? serviceZones : []} />
                   </div>
                 </div>
 
@@ -828,7 +956,7 @@ export default function AvailabilityServiceZones() {
                     <h3 className="text-sm font-bold text-base-content">Your Zones</h3>
                     <button
                       onClick={() => { setShowAddModal(true); navTo("/partner/solo/service-zones/add"); }}
-                      disabled={serviceZones.length >= 10}
+                      disabled={Array.isArray(serviceZones) && serviceZones.length >= 10}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-primary/10 border border-primary/25
                                  text-primary text-xs font-bold hover:bg-primary/20 disabled:opacity-40 transition-all"
                     >
@@ -841,7 +969,7 @@ export default function AvailabilityServiceZones() {
                     <div className="flex items-center justify-center h-40">
                       <Loader2 className="w-6 h-6 animate-spin text-primary" />
                     </div>
-                  ) : serviceZones.length === 0 ? (
+                  ) : !Array.isArray(serviceZones) || serviceZones.length === 0 ? (
                     <motion.div
                       variants={scaleIn}
                       className="flex flex-col items-center justify-center gap-4 p-8 rounded-2xl border border-dashed border-base-300 bg-base-200/50"
@@ -870,6 +998,7 @@ export default function AvailabilityServiceZones() {
                             key={zone._id}
                             zone={zone}
                             onRemove={handleRemoveZone}
+                            // removingId tracks which _id is being deleted
                             removing={removingId === zone._id && loadingRemoveZone}
                           />
                         ))}
@@ -877,7 +1006,7 @@ export default function AvailabilityServiceZones() {
                     </div>
                   )}
 
-                  {serviceZones.length >= 10 && (
+                  {Array.isArray(serviceZones) && serviceZones.length >= 10 && (
                     <div className="flex items-center gap-2 p-3 rounded-xl bg-warning/10 border border-warning/20">
                       <Info className="w-3.5 h-3.5 text-warning flex-shrink-0" />
                       <p className="text-xs text-warning">Maximum 10 service zones reached</p>

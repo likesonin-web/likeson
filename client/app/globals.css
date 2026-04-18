@@ -138,8 +138,98 @@
 
 /* ============================================================
    HEALTHCARE ROLE THEMES — LIGHT MODE
-   Apply via: [data-theme="doctor"] on <html> or a wrapper
+   Apply via: [data-theme="..."] on <html> or a wrapper
    ============================================================ */
+
+/* ------------------------------------------------------------------
+   SUPERADMIN — Bold deep indigo + gold sovereign authority
+   ------------------------------------------------------------------ */
+[data-theme="superadmin"] {
+  --base-100:     oklch(99%   0.002  270);
+  --base-200:     oklch(96%   0.007  270);
+  --base-300:     oklch(91%   0.012  270);
+  --base-content: oklch(18%   0.018  270);
+
+  --primary:         oklch(42% 0.24 275);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(55% 0.20 260);
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(72% 0.20  88);
+  --accent-content: oklch(12% 0.05  88);
+
+  --neutral:         oklch(22% 0.014 270);
+  --neutral-content: oklch(99% 0     0);
+
+  --info:    oklch(60% 0.17 230);
+  --success: oklch(62% 0.19 150);
+  --warning: oklch(72% 0.17  70);
+  --error:   oklch(62% 0.23  22);
+
+  --info-content:    oklch(99% 0 0);
+  --success-content: oklch(99% 0 0);
+  --warning-content: oklch(15% 0.03 70);
+  --error-content:   oklch(99% 0 0);
+
+  --chart-1: oklch(42% 0.24 275);
+  --chart-2: oklch(55% 0.20 260);
+  --chart-3: oklch(62% 0.19 150);
+  --chart-4: oklch(72% 0.20  88);
+  --chart-5: oklch(60% 0.17 230);
+  --chart-6: oklch(62% 0.23  22);
+
+  --r-selector: 0.25rem;
+  --r-field:    0.25rem;
+  --r-box:      0.5rem;
+  --border-width: 1px;
+  --shadow-depth: 0 10px 28px -4px rgba(60, 20, 200, 0.16);
+}
+
+/* ------------------------------------------------------------------
+   ADMIN — Confident slate + cyan precision
+   ------------------------------------------------------------------ */
+[data-theme="admin"] {
+  --base-100:     oklch(99%   0.002  225);
+  --base-200:     oklch(96%   0.007  225);
+  --base-300:     oklch(92%   0.010  225);
+  --base-content: oklch(20%   0.014  230);
+
+  --primary:         oklch(46% 0.16 230);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(58% 0.18 195);
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(68% 0.16  55);
+  --accent-content: oklch(15% 0.04  55);
+
+  --neutral:         oklch(26% 0.010 225);
+  --neutral-content: oklch(99% 0     0);
+
+  --info:    oklch(60% 0.16 225);
+  --success: oklch(62% 0.18 150);
+  --warning: oklch(72% 0.16  68);
+  --error:   oklch(60% 0.22  22);
+
+  --info-content:    oklch(99% 0 0);
+  --success-content: oklch(99% 0 0);
+  --warning-content: oklch(15% 0.03 68);
+  --error-content:   oklch(99% 0 0);
+
+  --chart-1: oklch(46% 0.16 230);
+  --chart-2: oklch(58% 0.18 195);
+  --chart-3: oklch(62% 0.18 150);
+  --chart-4: oklch(68% 0.16  55);
+  --chart-5: oklch(55% 0.17 275);
+  --chart-6: oklch(60% 0.22  22);
+
+  --r-selector: 0.375rem;
+  --r-field:    0.375rem;
+  --r-box:      0.75rem;
+  --border-width: 1px;
+  --shadow-depth: 0 8px 20px -4px rgba(30, 70, 140, 0.12);
+}
 
 /* ------------------------------------------------------------------
    DOCTOR  — Trustworthy deep blue + clean white
@@ -232,54 +322,10 @@
 }
 
 /* ------------------------------------------------------------------
-   CARE ASSISTANT — Warm lavender + rose + soft amber
-   ------------------------------------------------------------------ */
-[data-theme="care-assistant"] {
-  --base-100:     oklch(99%   0.002  300);
-  --base-200:     oklch(96%   0.008  300);
-  --base-300:     oklch(92%   0.014  300);
-  --base-content: oklch(28%   0.015  280);
-
-  --primary:         oklch(58% 0.18  300);
-  --primary-content: oklch(99% 0     0);
-
-  --secondary:         oklch(65% 0.16  10);
-  --secondary-content: oklch(99% 0     0);
-
-  --accent:         oklch(75% 0.14  80);
-  --accent-content: oklch(18% 0.04  80);
-
-  --neutral:         oklch(35% 0.012 280);
-  --neutral-content: oklch(99% 0     0);
-
-  --info:    oklch(62% 0.15 240);
-  --success: oklch(63% 0.17 155);
-  --warning: oklch(73% 0.16  75);
-  --error:   oklch(62% 0.21  20);
-
-  --info-content:    oklch(99% 0 0);
-  --success-content: oklch(99% 0 0);
-  --warning-content: oklch(18% 0.03 75);
-  --error-content:   oklch(99% 0 0);
-
-  --chart-1: oklch(58% 0.18 300);
-  --chart-2: oklch(65% 0.16  10);
-  --chart-3: oklch(63% 0.17 155);
-  --chart-4: oklch(75% 0.14  80);
-  --chart-5: oklch(60% 0.17 340);
-  --chart-6: oklch(62% 0.21  20);
-
-  --r-selector: 1rem;
-  --r-field:    1rem;
-  --r-box:      1.5rem;
-  --border-width: 1px;
-  --shadow-depth: 0 10px 20px -4px rgba(140, 80, 180, 0.12);
-}
-
-/* ------------------------------------------------------------------
    TRANSPORT PARTNER — Energetic teal + slate + amber signal
    ------------------------------------------------------------------ */
-[data-theme="transport"] {
+[data-theme="transport"],
+[data-theme="transportpartner"] {
   --base-100:     oklch(98%   0.004 200);
   --base-200:     oklch(95%   0.008 200);
   --base-300:     oklch(90%   0.012 200);
@@ -319,6 +365,149 @@
   --r-box:      0.75rem;
   --border-width: 1px;
   --shadow-depth: 0 8px 18px -3px rgba(0, 140, 150, 0.12);
+}
+
+/* ------------------------------------------------------------------
+   DRIVER — Bold road orange + asphalt charcoal + white signal
+   ------------------------------------------------------------------ */
+[data-theme="driver"] {
+  --base-100:     oklch(99%   0.003  60);
+  --base-200:     oklch(96%   0.007  60);
+  --base-300:     oklch(92%   0.010  60);
+  --base-content: oklch(18%   0.012  50);
+
+  --primary:         oklch(62% 0.22  50);
+  --primary-content: oklch(99% 0     0);
+
+  --secondary:         oklch(32% 0.04 240);
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(60% 0.18 150);
+  --accent-content: oklch(99% 0    0);
+
+  --neutral:         oklch(25% 0.006 240);
+  --neutral-content: oklch(99% 0     0);
+
+  --info:    oklch(60% 0.16 228);
+  --success: oklch(62% 0.18 150);
+  --warning: oklch(72% 0.18  62);
+  --error:   oklch(60% 0.22  20);
+
+  --info-content:    oklch(99% 0 0);
+  --success-content: oklch(99% 0 0);
+  --warning-content: oklch(15% 0.03 62);
+  --error-content:   oklch(99% 0 0);
+
+  --chart-1: oklch(62% 0.22  50);
+  --chart-2: oklch(32% 0.04 240);
+  --chart-3: oklch(62% 0.18 150);
+  --chart-4: oklch(72% 0.18  62);
+  --chart-5: oklch(55% 0.17 270);
+  --chart-6: oklch(60% 0.22  20);
+
+  --r-selector: 0.375rem;
+  --r-field:    0.375rem;
+  --r-box:      0.75rem;
+  --border-width: 1px;
+  --shadow-depth: 0 8px 20px -4px rgba(200, 100, 0, 0.14);
+}
+
+/* ------------------------------------------------------------------
+   SOLO DRIVER PARTNER — Deep amber + dark graphite + lime accent
+   (Independent freelance driver — warmer, more personal tone)
+   ------------------------------------------------------------------ */
+[data-theme="solodriverpartner"] {
+  /* --- Base Colors (Clean Paper White) --- */
+  --base-100:     oklch(99%   0.002  240); /* Near white with a hint of cool */
+  --base-200:     oklch(97%   0.005  240); /* Soft gray for sections */
+  --base-300:     oklch(93%   0.01   240); /* Borders and dividers */
+  --base-content: oklch(25%   0.015  240); /* High-readability dark text */
+
+  /* --- Primary: Professional Trust Blue --- */
+  --primary:         oklch(55%   0.18   250); /* Strong, dependable blue */
+  --primary-content: oklch(100%  0      0);
+
+  /* --- Secondary: Deep Midnight --- */
+  --secondary:         oklch(35%   0.06   250); /* Darker navy for menus */
+  --secondary-content: oklch(98%   0.01   250);
+
+  /* --- Accent: Road Safety Amber --- */
+  --accent:         oklch(82%   0.16   85);  /* Clean, vibrant amber/yellow */
+  --accent-content: oklch(25%   0.05   85);  /* Dark contrast for readability */
+
+  /* --- Neutral: Graphite --- */
+  --neutral:         oklch(30%   0.02   240);
+  --neutral-content: oklch(98%   0      0);
+
+  /* --- Semantic Colors (Simplified & Clear) --- */
+  --info:    oklch(65% 0.14 240); /* Sky Blue */
+  --success: oklch(68% 0.16 155); /* Emerald */
+  --warning: oklch(75% 0.15 65);  /* Warm Orange */
+  --error:   oklch(62% 0.20 25);  /* Clean Red */
+
+  --info-content:    oklch(100% 0 0);
+  --success-content: oklch(20% 0.05 155);
+  --warning-content: oklch(20% 0.05 65);
+  --error-content:   oklch(100% 0 0);
+
+  /* --- Chart Colors (Distinct & Legible) --- */
+  --chart-1: oklch(55% 0.18 250); /* Primary Blue */
+  --chart-2: oklch(68% 0.16 155); /* Success Green */
+  --chart-3: oklch(82% 0.16 85);  /* Accent Amber */
+  --chart-4: oklch(60% 0.18 340); /* Soft Purple/Pink */
+  --chart-5: oklch(50% 0.12 200); /* Teal */
+
+  /* --- UI Specs --- */
+  --r-selector: 0.5rem;
+  --r-field:    0.5rem;
+  --r-box:      0.75rem;
+  --border-width: 1px;
+  --shadow-depth: 0 4px 12px -2px rgba(0, 0, 0, 0.08);
+}
+
+/* ------------------------------------------------------------------
+   CUSTOMER — Friendly sky blue + soft coral + warm cream base
+   ------------------------------------------------------------------ */
+[data-theme="customer"] {
+  --base-100:     #f2f4ff;
+  --base-200:     oklch(97%   0.006  80);
+  --base-300:     oklch(93%   0.009  80);
+  --base-content: oklch(24%   0.012 220);
+
+  --primary:         oklch(58% 0.18 215);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(68% 0.16  20);
+  --secondary-content: oklch(99% 0     0);
+
+  --accent:         oklch(75% 0.14  85);
+  --accent-content: oklch(16% 0.04  85);
+
+  --neutral:         oklch(32% 0.010 220);
+  --neutral-content: oklch(99% 0     0);
+
+  --info:    oklch(60% 0.16 220);
+  --success: oklch(63% 0.17 152);
+  --warning: oklch(73% 0.16  72);
+  --error:   oklch(62% 0.21  20);
+
+  --info-content:    oklch(99% 0 0);
+  --success-content: oklch(99% 0 0);
+  --warning-content: oklch(17% 0.03 72);
+  --error-content:   oklch(99% 0 0);
+
+  --chart-1: oklch(58% 0.18 215);
+  --chart-2: oklch(68% 0.16  20);
+  --chart-3: oklch(63% 0.17 152);
+  --chart-4: oklch(75% 0.14  85);
+  --chart-5: oklch(60% 0.16 280);
+  --chart-6: oklch(62% 0.21  20);
+
+  --r-selector: 1rem;
+  --r-field:    0.75rem;
+  --r-box:      1.25rem;
+  --border-width: 1px;
+  --shadow-depth: 0 8px 18px -4px rgba(0, 120, 200, 0.10);
 }
 
 /* ------------------------------------------------------------------
@@ -367,9 +556,100 @@
 }
 
 /* ------------------------------------------------------------------
+   CARE ASSISTANT — Warm lavender + rose + soft amber
+   ------------------------------------------------------------------ */
+[data-theme="care-assistant"] {
+  --base-100:     oklch(99%   0.002  300);
+  --base-200:     oklch(96%   0.008  300);
+  --base-300:     oklch(92%   0.014  300);
+  --base-content: oklch(28%   0.015  280);
+
+  --primary:         oklch(58% 0.18  300);
+  --primary-content: oklch(99% 0     0);
+
+  --secondary:         oklch(65% 0.16  10);
+  --secondary-content: oklch(99% 0     0);
+
+  --accent:         oklch(75% 0.14  80);
+  --accent-content: oklch(18% 0.04  80);
+
+  --neutral:         oklch(35% 0.012 280);
+  --neutral-content: oklch(99% 0     0);
+
+  --info:    oklch(62% 0.15 240);
+  --success: oklch(63% 0.17 155);
+  --warning: oklch(73% 0.16  75);
+  --error:   oklch(62% 0.21  20);
+
+  --info-content:    oklch(99% 0 0);
+  --success-content: oklch(99% 0 0);
+  --warning-content: oklch(18% 0.03 75);
+  --error-content:   oklch(99% 0 0);
+
+  --chart-1: oklch(58% 0.18 300);
+  --chart-2: oklch(65% 0.16  10);
+  --chart-3: oklch(63% 0.17 155);
+  --chart-4: oklch(75% 0.14  80);
+  --chart-5: oklch(60% 0.17 340);
+  --chart-6: oklch(62% 0.21  20);
+
+  --r-selector: 1rem;
+  --r-field:    1rem;
+  --r-box:      1.5rem;
+  --border-width: 1px;
+  --shadow-depth: 0 10px 20px -4px rgba(140, 80, 180, 0.12);
+}
+
+/* ------------------------------------------------------------------
+   FINANCE — Prestigious forest green + charcoal + gold accent
+   ------------------------------------------------------------------ */
+[data-theme="finance"] {
+  --base-100:     oklch(99%   0.002  155);
+  --base-200:     oklch(96%   0.006  155);
+  --base-300:     oklch(92%   0.009  155);
+  --base-content: oklch(16%   0.014  160);
+
+  --primary:         oklch(38% 0.16 158);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(26% 0.04 240);
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(68% 0.18  90);
+  --accent-content: oklch(12% 0.04  90);
+
+  --neutral:         oklch(22% 0.006 180);
+  --neutral-content: oklch(99% 0     0);
+
+  --info:    oklch(58% 0.16 228);
+  --success: oklch(58% 0.20 150);
+  --warning: oklch(70% 0.17  70);
+  --error:   oklch(58% 0.22  20);
+
+  --info-content:    oklch(99% 0 0);
+  --success-content: oklch(99% 0 0);
+  --warning-content: oklch(14% 0.03 70);
+  --error-content:   oklch(99% 0 0);
+
+  --chart-1: oklch(38% 0.16 158);
+  --chart-2: oklch(26% 0.04 240);
+  --chart-3: oklch(58% 0.20 150);
+  --chart-4: oklch(68% 0.18  90);
+  --chart-5: oklch(55% 0.15 200);
+  --chart-6: oklch(58% 0.22  20);
+
+  --r-selector: 0.25rem;
+  --r-field:    0.25rem;
+  --r-box:      0.5rem;
+  --border-width: 1px;
+  --shadow-depth: 0 8px 22px -4px rgba(0, 80, 40, 0.14);
+}
+
+/* ------------------------------------------------------------------
    LAB PARTNER — Electric violet + deep indigo + citrus accent
    ------------------------------------------------------------------ */
-[data-theme="lab"] {
+[data-theme="lab"],
+[data-theme="lab-partner"] {
   --base-100:     oklch(99%   0.002 270);
   --base-200:     oklch(96%   0.008 270);
   --base-300:     oklch(91%   0.014 270);
@@ -413,8 +693,48 @@
 
 
 /* ============================================================
-   HEALTHCARE ROLE THEMES — DARK MODE
+   ALL ROLE THEMES — DARK MODE
    ============================================================ */
+
+/* SUPERADMIN DARK */
+[data-theme="superadmin"].dark,
+.dark [data-theme="superadmin"] {
+  --base-100:     oklch(12%  0.022 272);
+  --base-200:     oklch(16%  0.026 272);
+  --base-300:     oklch(22%  0.030 272);
+  --base-content: oklch(93%  0.008 268);
+
+  --primary:         oklch(60% 0.26 275);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(68% 0.22 260);
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(78% 0.22  90);
+  --accent-content: oklch(10% 0.05  90);
+
+  --shadow-depth: 0 12px 32px -4px rgba(40, 0, 180, 0.55);
+}
+
+/* ADMIN DARK */
+[data-theme="admin"].dark,
+.dark [data-theme="admin"] {
+  --base-100:     oklch(13%  0.014 228);
+  --base-200:     oklch(18%  0.016 228);
+  --base-300:     oklch(24%  0.018 228);
+  --base-content: oklch(93%  0.007 225);
+
+  --primary:         oklch(62% 0.18 230);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(68% 0.20 195);
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(74% 0.18  58);
+  --accent-content: oklch(12% 0.04  58);
+
+  --shadow-depth: 0 10px 26px -3px rgba(10, 40, 120, 0.48);
+}
 
 /* DOCTOR DARK */
 [data-theme="doctor"].dark,
@@ -456,29 +776,11 @@
   --shadow-depth: 0 8px 22px -3px rgba(0, 20, 80, 0.55);
 }
 
-/* CARE ASSISTANT DARK */
-[data-theme="care-assistant"].dark,
-.dark [data-theme="care-assistant"] {
-  --base-100:     oklch(15%  0.020 295);
-  --base-200:     oklch(20%  0.022 295);
-  --base-300:     oklch(26%  0.024 295);
-  --base-content: oklch(93%  0.008 290);
-
-  --primary:         oklch(68% 0.20 300);
-  --primary-content: oklch(99% 0    0);
-
-  --secondary:         oklch(72% 0.18  12);
-  --secondary-content: oklch(99% 0     0);
-
-  --accent:         oklch(80% 0.16  82);
-  --accent-content: oklch(15% 0.04  82);
-
-  --shadow-depth: 0 10px 24px -4px rgba(120, 40, 180, 0.40);
-}
-
-/* TRANSPORT DARK */
+/* TRANSPORT / TRANSPORT PARTNER DARK */
 [data-theme="transport"].dark,
-.dark [data-theme="transport"] {
+.dark [data-theme="transport"],
+[data-theme="transportpartner"].dark,
+.dark [data-theme="transportpartner"] {
   --base-100:     oklch(13%  0.016 205);
   --base-200:     oklch(18%  0.018 205);
   --base-300:     oklch(24%  0.020 205);
@@ -494,6 +796,86 @@
   --accent-content: oklch(12% 0.04  68);
 
   --shadow-depth: 0 8px 20px -3px rgba(0, 100, 120, 0.45);
+}
+
+/* DRIVER DARK */
+[data-theme="driver"].dark,
+.dark [data-theme="driver"] {
+  --base-100:     oklch(13%  0.014  55);
+  --base-200:     oklch(18%  0.016  55);
+  --base-300:     oklch(24%  0.018  55);
+  --base-content: oklch(93%  0.007  58);
+
+  --primary:         oklch(72% 0.24  52);
+  --primary-content: oklch(12% 0.04  52);
+
+  --secondary:         oklch(48% 0.05 245);
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(68% 0.20 150);
+  --accent-content: oklch(99% 0    0);
+
+  --shadow-depth: 0 10px 26px -4px rgba(200, 100, 0, 0.42);
+}
+
+/* SOLO DRIVER PARTNER DARK */
+[data-theme="solodriverpartner"].dark,
+.dark [data-theme="solodriverpartner"] {
+  /* --- Base Colors (Deep Night) --- */
+  --base-100:     oklch(18%  0.02  250); /* Dark navy-tinted charcoal */
+  --base-200:     oklch(14%  0.02  250); /* Deeper background for contrast */
+  --base-300:     oklch(25%  0.03  250); /* Borders that stand out on dark */
+  --base-content: oklch(94%  0.01  250); /* Crisp, near-white text */
+
+  /* --- Primary: Professional Blue (Brighter for Dark Mode) --- */
+  --primary:         oklch(70%  0.14  250); /* Lifted lightness for glow on dark */
+  --primary-content: oklch(15%  0.05  250); /* Dark text on bright primary */
+
+  /* --- Secondary: Softened Midnight --- */
+  --secondary:         oklch(45%  0.08  250); 
+  --secondary-content: oklch(98%  0.01  250);
+
+  /* --- Accent: Road Safety Amber (High Visibility) --- */
+  --accent:         oklch(80%  0.18  85);   /* Vibrant safety yellow/amber */
+  --accent-content: oklch(20%  0.05  85);   /* High contrast for action buttons */
+
+  /* --- Neutral: Muted Slate --- */
+  --neutral:         oklch(35%  0.03  250);
+  --neutral-content: oklch(95%  0     0);
+
+  /* --- Semantic Colors (Optimized for Dark) --- */
+  --info:    oklch(72% 0.12 240);
+  --success: oklch(75% 0.14 155);
+  --warning: oklch(82% 0.14 75);
+  --error:   oklch(70% 0.18 25);
+
+  --info-content:    oklch(15% 0.05 240);
+  --success-content: oklch(15% 0.05 155);
+  --warning-content: oklch(15% 0.05 75);
+  --error-content:   oklch(15% 0.05 25);
+
+  /* --- UI Specs --- */
+  --shadow-depth: 0 10px 24px -4px rgba(0, 0, 0, 0.6); /* Darker, heavier shadow */
+}
+
+/* CUSTOMER DARK */
+[data-theme="customer"].dark,
+.dark [data-theme="customer"] {
+  --base-100:     oklch(14%  0.012  82);
+  --base-200:     oklch(19%  0.014  82);
+  --base-300:     oklch(25%  0.016  82);
+  --base-content: oklch(93%  0.007 215);
+
+  --primary:         oklch(68% 0.20 215);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(72% 0.18  22);
+  --secondary-content: oklch(99% 0     0);
+
+  --accent:         oklch(80% 0.15  88);
+  --accent-content: oklch(14% 0.04  88);
+
+  --shadow-depth: 0 8px 22px -3px rgba(0, 100, 180, 0.38);
 }
 
 /* PHARMACY DARK */
@@ -516,9 +898,51 @@
   --shadow-depth: 0 8px 22px -3px rgba(0, 100, 60, 0.42);
 }
 
-/* LAB DARK */
+/* CARE ASSISTANT DARK */
+[data-theme="care-assistant"].dark,
+.dark [data-theme="care-assistant"] {
+  --base-100:     oklch(15%  0.020 295);
+  --base-200:     oklch(20%  0.022 295);
+  --base-300:     oklch(26%  0.024 295);
+  --base-content: oklch(93%  0.008 290);
+
+  --primary:         oklch(68% 0.20 300);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(72% 0.18  12);
+  --secondary-content: oklch(99% 0     0);
+
+  --accent:         oklch(80% 0.16  82);
+  --accent-content: oklch(15% 0.04  82);
+
+  --shadow-depth: 0 10px 24px -4px rgba(120, 40, 180, 0.40);
+}
+
+/* FINANCE DARK */
+[data-theme="finance"].dark,
+.dark [data-theme="finance"] {
+  --base-100:     oklch(12%  0.014 158);
+  --base-200:     oklch(16%  0.016 158);
+  --base-300:     oklch(22%  0.018 158);
+  --base-content: oklch(93%  0.007 160);
+
+  --primary:         oklch(55% 0.18 156);
+  --primary-content: oklch(99% 0    0);
+
+  --secondary:         oklch(42% 0.05 242);
+  --secondary-content: oklch(99% 0    0);
+
+  --accent:         oklch(74% 0.20  92);
+  --accent-content: oklch(10% 0.04  92);
+
+  --shadow-depth: 0 10px 26px -4px rgba(0, 60, 30, 0.50);
+}
+
+/* LAB / LAB PARTNER DARK */
 [data-theme="lab"].dark,
-.dark [data-theme="lab"] {
+.dark [data-theme="lab"],
+[data-theme="lab-partner"].dark,
+.dark [data-theme="lab-partner"] {
   --base-100:     oklch(13%  0.022 272);
   --base-200:     oklch(18%  0.025 272);
   --base-300:     oklch(25%  0.028 272);

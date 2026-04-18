@@ -149,6 +149,9 @@ app.use("/api/care-assistant",           careAssistantRouter);
 import labRoutes from './routes/labRoutes.js';
 app.use('/api/labs', labRoutes);
 
+import hospitalManagerRouter from './routes/hospitalManagerRouter.js';
+app.use('/api/hospital-manager', hospitalManagerRouter);
+
 // Health check — also exposes Redis status
 app.get("/", async (_req, res) => {
   const redisStatus = redisClient.isReady ? "connected" : "disconnected";

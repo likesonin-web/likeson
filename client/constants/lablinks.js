@@ -1,7 +1,7 @@
 /**
  * LAB PARTNER NAVIGATION LINKS
  * Extracted from the Lab Partner Router — Likeson.in
- * All routes under /api/labs/partner/me/*
+ 
  *
  * Used by: LabPartnerDashboard, Sidebar, MobileNav
  */

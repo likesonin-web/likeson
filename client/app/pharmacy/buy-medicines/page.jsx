@@ -1459,7 +1459,7 @@ export default function MedicinePage({ router }) {
 
   return (
     <Container>
-      <div className="min-h-screen bg-base-100 mt-4 text-base-content">
+      <div  data-theme="customer" className="min-h-screen bg-base-100 mt-4 text-base-content">
 
         {/* ── Hero Ad Slot ── */}
         <Ads page="Medicine_Store" slot="Hero_Banner" />
