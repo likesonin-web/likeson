@@ -3,31 +3,24 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Generates a production-grade, print-ready HTML delivery label.
  *
- * Changes from v1:
- *  - Poppins font (Google Fonts loaded at generation time)
- *  - Reduced font sizes throughout — fits on one 100mm × 150mm page
- *  - Store phone removed from Ship From block
- *  - hsnCode rendered as plain string (not ObjectId) — must be pre-populated
- *    via Medicine.populate('hsnCode') before calling generateDeliveryLabel,
- *    then pass item.hsnCode?.hsnCode (the string) in each items entry
- *  - Prescription verified badge shown when prescription.isVerified === true
- *  - HTML includes auto-download trigger (JS blob download on load)
- *    Router must set Content-Disposition: attachment; filename="label-xxx.html"
+ * Changes from v2 (canvas removal):
+ *  - Removed `canvas` native dependency entirely
+ *  - Barcode now generated via `bwip-js` (pure JS, no native bindings)
+ *  - All other logic identical to v2
+ *
+ * Dependencies:
+ *   npm install qrcode bwip-js
  *
  * Usage:
  *   import { generateDeliveryLabel } from '../utils/deliveryLabel.utils.js';
  *   const { html, labelId } = await generateDeliveryLabel({ order, store, customer });
  *   res.setHeader('Content-Disposition', `attachment; filename="label-${order.orderId}.html"`);
  *   res.status(200).send(html);
- *
- * Dependencies:
- *   npm install qrcode jsbarcode canvas
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import QRCode    from 'qrcode';
-import JsBarcode from 'jsbarcode';
-import { createCanvas } from 'canvas';
+import QRCode from 'qrcode';
+import bwipjs from 'bwip-js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 1 — QR CODE GENERATOR
@@ -53,26 +46,24 @@ const generateQrDataUrl = async (text, size = 100) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 2 — BARCODE GENERATOR
+// SECTION 2 — BARCODE GENERATOR (bwip-js, no canvas)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const generateBarcodeDataUrl = (value) => {
+const generateBarcodeDataUrl = async (value) => {
   try {
-    const canvas = createCanvas(280, 48);
-    JsBarcode(canvas, value, {
-      format:       'CODE128',
-      width:        1.6,
-      height:       38,
-      displayValue: true,
-      fontSize:     9,
-      margin:       4,
-      background:   '#ffffff',
-      lineColor:    '#000000',
-      textAlign:    'center',
-      textPosition: 'bottom',
-      fontOptions:  'bold',
+    // bwip-js.toBuffer returns a PNG Buffer directly — no canvas needed
+    const png = await bwipjs.toBuffer({
+      bcid:        'code128',   // CODE128 barcode type
+      text:        value,
+      scale:       2,           // 2x scale for crisp output
+      height:      12,          // bar height in mm
+      includetext: true,        // show human-readable text below
+      textxalign:  'center',
+      textsize:    9,
+      backgroundcolor: 'ffffff',
+      barcolor:    '000000',
     });
-    return canvas.toDataURL('image/png');
+    return `data:image/png;base64,${png.toString('base64')}`;
   } catch {
     return `data:image/svg+xml;base64,${Buffer.from(
       `<svg xmlns="http://www.w3.org/2000/svg" width="280" height="48">
@@ -145,16 +136,15 @@ export const generateDeliveryLabel = async ({ order, store, customer }) => {
     items: (order.items || []).map((i) => ({
       name: i.name,
       qty:  i.quantity,
-      // hsnCode may be object (populated) or string
       hsn:  typeof i.hsnCode === 'object' ? (i.hsnCode?.hsnCode || '') : (i.hsnCode || ''),
     })),
     generatedAt,
   });
 
-  // ── Generate QR + Barcode concurrently ────────────────────────────────────
+  // ── Generate QR + Barcode concurrently (both async now) ───────────────────
   const [qrDataUrl, barcodeDataUrl] = await Promise.all([
     generateQrDataUrl(qrPayload, 100),
-    Promise.resolve(generateBarcodeDataUrl(order.orderId)),
+    generateBarcodeDataUrl(order.orderId),   // now truly async
   ]);
 
   // ── Address blocks ─────────────────────────────────────────────────────────
@@ -174,7 +164,6 @@ export const generateDeliveryLabel = async ({ order, store, customer }) => {
 
   // ── Medicine item rows ─────────────────────────────────────────────────────
   const itemRows = (order.items || []).map((item, idx) => {
-    // Resolve HSN string whether it's a populated object or raw string
     const hsnString = typeof item.hsnCode === 'object'
       ? (item.hsnCode?.hsnCode || '')
       : (item.hsnCode || '');
@@ -508,8 +497,7 @@ export const generateDeliveryLabel = async ({ order, store, customer }) => {
   <!--
     AUTO-DOWNLOAD SCRIPT
     When served from the router with Content-Disposition: attachment,
-    the browser will download directly. This script is a fallback for
-    any browser that opens the HTML in a tab instead of downloading.
+    the browser will download directly. This script is a fallback.
   -->
   <script>
     (function () {
@@ -525,7 +513,7 @@ export const generateDeliveryLabel = async ({ order, store, customer }) => {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
       } catch (e) {
-        // Silently ignore — the Content-Disposition header handles real downloads
+        // Silently ignore — Content-Disposition header handles real downloads
       }
     })();
   </script>
