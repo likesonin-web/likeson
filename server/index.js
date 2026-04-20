@@ -1,5 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
+dotenv.config();
+
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
@@ -10,15 +12,10 @@ import passport from "passport";
 import session from "express-session";
 import { createServer } from "http";
 
-// Configuration & Database
-dotenv.config();
 import connectDB from "./config/DB.js";
 import "./config/passport.js";
-import redisClient from "./config/redis.js";   // ← Redis client (connects on import)
-
-// Socket Service
+import redisClient from "./config/redis.js";
 import { initSocket } from "./services/socketService.js";
-
 // Import Routes
 import userRouter               from "./routes/userRoutes.js";
 import notificationRouter       from "./routes/notificationRoutes.js";
@@ -50,15 +47,20 @@ import pricingRouter            from './routes/Platformpricingroutes.js'
 import soloDriverRouter           from './routes/solordriverRoutes.js'
 import careAssistantRouter           from'./routes/careassistantRoutes.js'
 // ─────────────────────────────────────────────
-// APP & HTTP SERVER
-// ─────────────────────────────────────────────
-const app        = express();
-const httpServer = createServer(app);
-const PORT       = process.env.PORT || 5050;
-
+ 
 // ─────────────────────────────────────────────
 // 1. CORE MIDDLEWARES
 // ─────────────────────────────────────────────
+const app = express();
+const server = createServer(app);
+
+const PORT = process.env.PORT || 5050;
+const NODE_ENV = process.env.NODE_ENV || "development";
+
+app.set("trust proxy", 1);
+
+/* ---------------- Core Middleware ---------------- */
+
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser());
@@ -67,28 +69,51 @@ app.use(compression());
 // ─────────────────────────────────────────────
 // 2. SECURITY
 // ─────────────────────────────────────────────
-app.use(helmet({ crossOriginResourcePolicy: false }));
+/* ---------------- Security ---------------- */
 
 app.use(
-  cors({
-    origin:      process.env.FRONTEND_URL || "http://localhost:3000",
-    credentials: true,
-    methods:     ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  helmet({
+    crossOriginResourcePolicy: false,
   })
 );
 
-// ─────────────────────────────────────────────
-// 3. SESSION & PASSPORT
-// ─────────────────────────────────────────────
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  "http://localhost:3000",
+  "http://localhost:5173",
+].filter(Boolean);
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Blocked by CORS"));
+      }
+    },
+    credentials: true,
+  })
+);
+
+
+/* ---------------- Session ---------------- */
+
+if (NODE_ENV === "production" && !process.env.SESSION_SECRET) {
+  throw new Error("SESSION_SECRET missing in production");
+}
+
 app.use(
   session({
-    secret:            process.env.SESSION_SECRET || "likeson_production_secret",
-    resave:            false,
+    secret: process.env.SESSION_SECRET,
+    resave: false,
     saveUninitialized: false,
+    proxy: true,
     cookie: {
-      secure:   process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-      maxAge:   24 * 60 * 60 * 1000,
+      secure: NODE_ENV === "production",
+      httpOnly: true,
+      sameSite: NODE_ENV === "production" ? "none" : "lax",
+      maxAge: 86400000,
     },
   })
 );
@@ -151,64 +176,87 @@ app.use('/api/labs', labRoutes);
 
 import hospitalManagerRouter from './routes/hospitalManagerRouter.js';
 app.use('/api/hospital-manager', hospitalManagerRouter);
+/* ---------------- Logs ---------------- */
 
-// Health check — also exposes Redis status
-app.get("/", async (_req, res) => {
-  const redisStatus = redisClient.isReady ? "connected" : "disconnected";
+app.use(morgan(NODE_ENV === "development" ? "dev" : "combined"));
+
+/* ---------------- Rate Limit ---------------- */
+
+app.use(
+  "/api",
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 200,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      success: false,
+      message: "Too many requests",
+    },
+  })
+);
+
+/* ---------------- Health Check ---------------- */
+
+app.get("/", (_req, res) => {
   res.status(200).json({
-    status:  "success",
-    service: "Likeson Production API",
-    message: "System Online 🚀",
-    redis:   redisStatus,
+    success: true,
+    service: "Likeson API",
+    status: "Live",
+    redis: redisClient.isReady,
+    env: NODE_ENV,
   });
 });
 
-// ─────────────────────────────────────────────
-// 6. GLOBAL ERROR HANDLER
-// ─────────────────────────────────────────────
-app.use((err, _req, res, _next) => {
-  console.error("Global Error Handler:", err.stack);
-  const statusCode = res.statusCode === 200 ? 500 : res.statusCode;
-  res.status(statusCode).json({
+/* ---------------- Routes ---------------- */
+
+app.use("/api/users", userRouter);
+/* all your remaining routes */
+
+/* ---------------- Error Handler ---------------- */
+
+app.use((err, req, res, next) => {
+  console.error(err);
+
+  res.status(err.status || 500).json({
     success: false,
     message: err.message || "Internal Server Error",
   });
 });
 
-// ─────────────────────────────────────────────
-// 7. DATABASE → SOCKET.IO → START SERVER
-//
-// initSocket(httpServer) attaches Socket.IO to
-// the same HTTP server as Express so both share
-// a single port. The returned `io` instance is:
-//
-//   • exported as a named export so any REST route
-//     can do:  import { io } from '../app.js'
-//     and emit real-time events from HTTP handlers
-//     (e.g. order status change, push notification).
-//
-//   • stored on the Express app via app.set('io', io)
-//     so route handlers can also do:
-//     const io = req.app.get('io');
-// ─────────────────────────────────────────────
+/* ---------------- Boot Server ---------------- */
 
 export let io;
 
-connectDB()
-  .then(() => {
-    // ── Boot Socket.IO ──────────────────────────────────────────────────────
-    io = initSocket(httpServer);
+async function startServer() {
+  try {
+    await connectDB();
+
+    io = initSocket(server);
     app.set("io", io);
 
-    // ── Start listening ─────────────────────────────────────────────────────
-    httpServer.listen(PORT, () => {
-      console.log(`🚀 Likeson Backend running in ${process.env.NODE_ENV} mode on port ${PORT}`);
-      console.log(`🔌 Socket.IO active on ws://localhost:${PORT}`);
-      console.log(`🌐 REST API available at http://localhost:${PORT}/api`);
-      console.log(`🔴 Redis connected: ${redisClient.isReady}`);
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`🌍 Mode: ${NODE_ENV}`);
     });
-  })
-  .catch((error) => {
-    console.error("CRITICAL: Database connection failed.", error.message);
+  } catch (error) {
+    console.error("Startup failed:", error);
     process.exit(1);
+  }
+}
+
+startServer();
+
+/* ---------------- Graceful Shutdown ---------------- */
+
+process.on("SIGTERM", async () => {
+  console.log("SIGTERM received");
+
+  server.close(async () => {
+    try {
+      await redisClient.quit();
+    } catch {}
+
+    process.exit(0);
   });
+});
