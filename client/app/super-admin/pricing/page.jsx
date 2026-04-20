@@ -85,7 +85,7 @@ import {
 
 import { uploadSingleFile } from "@/store/slices/uploadSlice";
 
-// ─── User selector (correct path) ─────────────────────────────────────────────
+// ─── User selector ─────────────────────────────────────────────────────────────
 const selectUser = (s) => s.user.user;
 
 // ─── Section metadata ─────────────────────────────────────────────────────────
@@ -97,7 +97,7 @@ const SECTION_META = {
   hospital:          { label: "Hospital Commission",  icon: Building2,   color: "#06b6d4", superadminOnly: true,  desc: "Platform fee, per-hospital overrides, settlement cycle" },
   diagnostics:       { label: "Diagnostics",          icon: FlaskConical,color: "#ec4899", superadminOnly: false, desc: "Lab platform fee, home sample fee, physical report fee" },
   pharmacy:          { label: "Pharmacy",             icon: Pill,        color: "#f97316", superadminOnly: false, desc: "Partner fee, own-store margin, delivery charges" },
-  customPlanOptions: { label: "Custom Plan Prices",  icon: Layers,      color: "#6366f1", superadminOnly: true,  desc: "Slab-based pricing for consultation, transport, discounts" },
+  customPlanOptions: { label: "Custom Plan Prices",   icon: Layers,      color: "#6366f1", superadminOnly: true,  desc: "Slab-based pricing for consultation, transport, discounts" },
   ads:               { label: "Advertisements",       icon: Megaphone,   color: "#84cc16", superadminOnly: true,  desc: "Sponsored listing and homepage banner monthly fees" },
   tax:               { label: "GST / Tax",            icon: Receipt,     color: "#ef4444", superadminOnly: true,  desc: "GST rates by service type — regulatory, superadmin only" },
   refundPolicy:      { label: "Refund Policy",        icon: RotateCw,    color: "#14b8a6", superadminOnly: true,  desc: "Ride refund thresholds and processing day windows" },
@@ -121,7 +121,6 @@ const slide = {
 //  ATOMIC PRIMITIVES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Small note under a field */
 function FieldNote({ children }) {
   return (
     <p className="mt-1 text-[10px] font-medium leading-relaxed"
@@ -131,7 +130,6 @@ function FieldNote({ children }) {
   );
 }
 
-/** Unified label with optional superadmin lock badge */
 function FieldLabel({ children, superadminOnly, required }) {
   return (
     <label className="flex items-center gap-1.5 mb-1.5 text-[11px] font-bold uppercase tracking-widest"
@@ -148,7 +146,6 @@ function FieldLabel({ children, superadminOnly, required }) {
   );
 }
 
-/** Numeric field with label, prefix/suffix, note, placeholder */
 function NumericField({
   label, note, placeholder, value, onChange,
   min = 0, max, step = 1, suffix, prefix = "₹",
@@ -189,7 +186,6 @@ function NumericField({
   );
 }
 
-/** Select field */
 function SelectField({ label, note, value, onChange, options, superadminOnly }) {
   return (
     <div>
@@ -205,7 +201,6 @@ function SelectField({ label, note, value, onChange, options, superadminOnly }) 
   );
 }
 
-/** Platform fee sub-doc editor */
 function PlatformFeeField({ label, note, value = {}, onChange, superadminOnly }) {
   const type = value?.type ?? "percentage";
   const val  = value?.value ?? 0;
@@ -237,7 +232,6 @@ function PlatformFeeField({ label, note, value = {}, onChange, superadminOnly })
   );
 }
 
-/** Audit note field */
 function NoteField({ value, onChange }) {
   return (
     <div className="col-span-full">
@@ -251,7 +245,6 @@ function NoteField({ value, onChange }) {
   );
 }
 
-/** Inline error banner inside a section */
 function SectionError({ error, statusKey, dispatch }) {
   if (!error) return null;
   return (
@@ -265,7 +258,6 @@ function SectionError({ error, statusKey, dispatch }) {
   );
 }
 
-/** Save button */
 function SaveButton({ onClick, loading, disabled, color, label = "Save Changes" }) {
   return (
     <motion.button
@@ -306,7 +298,6 @@ function SopUploader({ sectionKey, existingDocs = [], color }) {
       "image/jpeg","image/png","image/webp"];
     if (!allowed.includes(file.type)) return alert("Only PDF, DOC, DOCX, JPG, PNG, WEBP");
     if (file.size > 10 * 1024 * 1024) return alert("Max 10MB");
-
     const res = await dispatch(uploadSingleFile({ file, folder: `sop/${sectionKey}` }));
     if (uploadSingleFile.fulfilled.match(res)) {
       setSessionDocs((p) => [...p, {
@@ -329,7 +320,6 @@ function SopUploader({ sectionKey, existingDocs = [], color }) {
           </span>
         )}
       </div>
-
       <div
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
@@ -354,7 +344,6 @@ function SopUploader({ sectionKey, existingDocs = [], color }) {
             </>
         }
       </div>
-
       {allDocs.length > 0 && (
         <div className="mt-2 space-y-1.5">
           {allDocs.map((doc, i) => (
@@ -413,21 +402,15 @@ function SectionCard({ sectionKey, isSuperadmin, children, loading, error, statu
         boxShadow: open ? `0 8px 40px ${meta.color}14` : "0 2px 8px rgba(0,0,0,.04)",
         transition: "all .3s ease",
       }}>
-
-      {/* Header row */}
       <button
         onClick={() => !blocked && setOpen((v) => !v)}
         disabled={blocked}
         className="w-full flex items-center gap-4 px-6 py-4 text-left group"
         style={{ cursor: blocked ? "not-allowed" : "pointer", opacity: blocked ? 0.45 : 1 }}>
-
-        {/* Icon box */}
         <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-transform group-hover:scale-105"
              style={{ background: `${meta.color}15` }}>
           <Icon size={18} style={{ color: meta.color }} />
         </div>
-
-        {/* Text */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <p className="text-sm font-black">{meta.label}</p>
@@ -442,14 +425,10 @@ function SectionCard({ sectionKey, isSuperadmin, children, loading, error, statu
           </div>
           <p className="text-[10px] font-medium mt-0.5" style={{ opacity: 0.4 }}>{meta.desc}</p>
         </div>
-
-        {/* Arrow */}
         <motion.div animate={{ rotate: open ? 180 : 0 }} transition={{ duration: .22 }}>
           <ChevronDown size={15} style={{ opacity: 0.4 }} />
         </motion.div>
       </button>
-
-      {/* Body */}
       <AnimatePresence initial={false}>
         {open && !blocked && (
           <motion.div
@@ -528,10 +507,10 @@ function TransportSection({ isSuperadmin }) {
   const loading   = useSelector(selectTransportLoading);
   const error     = useSelector(selectTransportError);
   const admin     = useSelector(selectAdminConfig);
-  const [form, setForm]         = useState({});
+  const [form, setForm]           = useState({});
   const [overrides, setOverrides] = useState({});
-  const [fee, setFee]           = useState({ type: "percentage", value: 0 });
-  const [note, setNote]         = useState("");
+  const [fee, setFee]             = useState({ type: "percentage", value: 0 });
+  const [note, setNote]           = useState("");
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   useEffect(() => {
@@ -617,10 +596,10 @@ function CareAssistantFullSection({ isSuperadmin }) {
   const error       = useSelector(selectCareAssistantError);
   const admin       = useSelector(selectAdminConfig);
 
-  const [form, setForm] = useState({});
-  const [fee, setFee]   = useState({ type: "percentage", value: 0 });
-  const [note, setNote] = useState("");
-  const [tiers, setTiers]     = useState([]);
+  const [form, setForm]           = useState({});
+  const [fee, setFee]             = useState({ type: "percentage", value: 0 });
+  const [note, setNote]           = useState("");
+  const [tiers, setTiers]         = useState([]);
   const [tiersNote, setTiersNote] = useState("");
   const [tiersOpen, setTiersOpen] = useState(false);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -641,7 +620,6 @@ function CareAssistantFullSection({ isSuperadmin }) {
   return (
     <SectionCard sectionKey="careAssistant" isSuperadmin={isSuperadmin} loading={loading || tiersLoad}
       error={error || tiersError} statusKey="careAssistantStatus" dispatch={dispatch}>
-      {/* Scalar fields */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-5 mt-5">
         <NumericField label="Dedicated Monthly Payout" value={form.dedicatedMonthlyPayout}
           onChange={(v) => set("dedicatedMonthlyPayout", v)} placeholder="e.g. 8000"
@@ -667,7 +645,6 @@ function CareAssistantFullSection({ isSuperadmin }) {
           loading={loading} color={SECTION_META.careAssistant.color} />
       </div>
 
-      {/* Info */}
       <div className="flex items-start gap-2 p-3 rounded-xl mt-5"
            style={{ background: "rgba(16,185,129,.06)", border: "1px solid rgba(16,185,129,.18)" }}>
         <Info size={12} style={{ color: "#10b981", flexShrink: 0, marginTop: 1 }} />
@@ -676,7 +653,6 @@ function CareAssistantFullSection({ isSuperadmin }) {
         </p>
       </div>
 
-      {/* Pricing Tiers sub-panel */}
       <div className="mt-4">
         <button onClick={() => setTiersOpen((v) => !v)}
           className="w-full flex items-center justify-between px-4 py-3 rounded-xl text-xs font-black"
@@ -696,7 +672,6 @@ function CareAssistantFullSection({ isSuperadmin }) {
                 <p className="text-[10px] font-medium mb-3" style={{ opacity: 0.45 }}>
                   Each tier defines a booking-duration window. The system picks the first tier where minHours ≤ bookingHours &lt; maxHours. Tiers must be contiguous — no gaps or overlaps. Last tier must have maxHours = null (open-ended).
                 </p>
-                {/* Column headers */}
                 <div className="grid grid-cols-12 gap-1 text-[9px] font-black uppercase tracking-widest px-1"
                      style={{ opacity: 0.35 }}>
                   <span className="col-span-3">Label</span>
@@ -780,17 +755,12 @@ function DoctorSection({ isSuperadmin }) {
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   useEffect(() => {
-    if (data) {
-      const { platformFee, sopDocuments, ...rest } = data;
-      setForm({ ...rest });
-      if (platformFee) setFee({ ...platformFee });
-    }
+    if (data) { const { platformFee, sopDocuments, ...rest } = data; setForm({ ...rest }); if (platformFee) setFee({ ...platformFee }); }
   }, [data]);
 
   return (
     <SectionCard sectionKey="doctor" isSuperadmin={isSuperadmin} loading={loading} error={error} statusKey="doctorStatus" dispatch={dispatch}>
       <div className="space-y-6 mt-5">
-        {/* In-person */}
         <div>
           <p className="text-[10px] font-black uppercase tracking-widest mb-4" style={{ opacity: 0.35 }}>In-Person Consultation</p>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-5">
@@ -804,7 +774,6 @@ function DoctorSection({ isSuperadmin }) {
               note="Swasthya's cut from each consultation booking." />
           </div>
         </div>
-        {/* Tele */}
         <div>
           <p className="text-[10px] font-black uppercase tracking-widest mb-4" style={{ opacity: 0.35 }}>Tele-Consultation</p>
           <div className="grid grid-cols-2 gap-5">
@@ -816,7 +785,6 @@ function DoctorSection({ isSuperadmin }) {
               note="Doctor's earnings per tele-consultation. Default ₹350." />
           </div>
         </div>
-        {/* Home visit */}
         <div>
           <p className="text-[10px] font-black uppercase tracking-widest mb-4" style={{ opacity: 0.35 }}>Home Visit</p>
           <div className="grid grid-cols-2 gap-5">
@@ -828,7 +796,6 @@ function DoctorSection({ isSuperadmin }) {
               note="Doctor's payout per home visit. Default ₹700." />
           </div>
         </div>
-        {/* Follow-up */}
         <div>
           <p className="text-[10px] font-black uppercase tracking-widest mb-4" style={{ opacity: 0.35 }}>Follow-Up Policy</p>
           <div className="grid grid-cols-2 gap-5">
@@ -863,12 +830,12 @@ function HospitalSection({ isSuperadmin }) {
   const error        = useSelector(selectHospitalError);
   const deleteLoad   = useSelector(selectHospitalOverrideDeleteLoading);
   const admin        = useSelector(selectAdminConfig);
-  const [form, setForm]         = useState({});
-  const [fee, setFee]           = useState({ type: "percentage", value: 0 });
+  const [form, setForm]           = useState({});
+  const [fee, setFee]             = useState({ type: "percentage", value: 0 });
   const [overrides, setOverrides] = useState({});
-  const [newId, setNewId]       = useState("");
-  const [newFee, setNewFee]     = useState({ type: "percentage", value: 0 });
-  const [note, setNote]         = useState("");
+  const [newId, setNewId]         = useState("");
+  const [newFee, setNewFee]       = useState({ type: "percentage", value: 0 });
+  const [note, setNote]           = useState("");
 
   useEffect(() => {
     if (data) {
@@ -896,7 +863,6 @@ function HospitalSection({ isSuperadmin }) {
             options={[{ value:"weekly",label:"Weekly" },{ value:"biweekly",label:"Bi-weekly" },{ value:"monthly",label:"Monthly" }]}
             note="How often the platform settles payments with hospital partners." />
         </div>
-
         <div>
           <p className="text-[10px] font-black uppercase tracking-widest mb-1" style={{ opacity: 0.35 }}>Per-Hospital Fee Overrides</p>
           <p className="text-[10px] font-medium mb-4" style={{ opacity: 0.45 }}>
@@ -920,7 +886,6 @@ function HospitalSection({ isSuperadmin }) {
               </button>
             </div>
           ))}
-          {/* Add override row */}
           <div className="flex gap-2 mt-4 flex-wrap">
             <input type="text" placeholder="Hospital ObjectId (24-char hex)" value={newId}
               onChange={(e) => setNewId(e.target.value)}
@@ -942,7 +907,6 @@ function HospitalSection({ isSuperadmin }) {
           </div>
           <FieldNote>Overrides are applied immediately on save. Remove with the trash icon (calls DELETE /hospital/override/:id).</FieldNote>
         </div>
-
         <SopUploader sectionKey="hospital" existingDocs={admin?.hospital?.sopDocuments} color={SECTION_META.hospital.color} />
         <div className="grid grid-cols-1"><NoteField value={note} onChange={setNote} /></div>
         <div className="flex justify-end">
@@ -963,10 +927,10 @@ function DiagnosticsSection({ isSuperadmin }) {
   const loading  = useSelector(selectDiagnosticsLoading);
   const error    = useSelector(selectDiagnosticsError);
   const admin    = useSelector(selectAdminConfig);
-  const [form, setForm]             = useState({});
-  const [fee, setFee]               = useState({ type:"percentage", value:0 });
+  const [form, setForm]                  = useState({});
+  const [fee, setFee]                    = useState({ type:"percentage", value:0 });
   const [homeSampleFee, setHomeSampleFee] = useState({ type:"fixed", value:0 });
-  const [note, setNote]             = useState("");
+  const [note, setNote]                  = useState("");
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   useEffect(() => {
@@ -1058,18 +1022,34 @@ function PharmacySection({ isSuperadmin }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  § 8  CUSTOM PLAN OPTIONS
+//
+//  CHANGE: SlabEditor for transport kmSlabs updated.
+//          keyA="pricePerKm" labelA="₹/km Rate" suffixA="₹/km"
+//          keyB="packagePrice" labelB="Package Price" suffixB="₹"
+//          Matches new schema: { pricePerKm, packagePrice } — no `km` field.
 // ─────────────────────────────────────────────────────────────────────────────
-function SlabEditor({ label, note, slabs = [], onChange, keyA, keyB, labelA, labelB, suffixA, suffixB }) {
+
+/**
+ * Generic slab editor.
+ * keyA / keyB = object keys to read/write on each slab.
+ * suffixA / suffixB = unit labels shown in the input suffix box.
+ * isPriceA / isPriceB = show ₹ prefix on left side of that input.
+ */
+function SlabEditor({ label, note, slabs = [], onChange, keyA, keyB, suffixA, suffixB, isPriceA = false, isPriceB = true }) {
   const update = (i, k, v) => onChange(slabs.map((s, idx) => idx === i ? { ...s, [k]: Number(v) } : s));
   const add    = () => onChange([...slabs, { [keyA]: 0, [keyB]: 0 }]);
   const remove = (i) => onChange(slabs.filter((_, idx) => idx !== i));
+
   return (
     <div>
       <p className="text-[10px] font-black uppercase tracking-widest mb-1" style={{ opacity: 0.35 }}>{label}</p>
       {note && <p className="text-[10px] font-medium mb-3" style={{ opacity: 0.45 }}>{note}</p>}
       {slabs.map((slab, i) => (
         <div key={i} className="flex items-center gap-2 mb-2">
-          {[{ k:keyA, suffix:suffixA, isPrice:false }, { k:keyB, suffix:suffixB, isPrice:true }].map(({ k, suffix, isPrice }) => (
+          {[
+            { k: keyA, suffix: suffixA, isPrice: isPriceA },
+            { k: keyB, suffix: suffixB, isPrice: isPriceB },
+          ].map(({ k, suffix, isPrice }) => (
             <div key={k} className="flex-1 flex items-center rounded-xl overflow-hidden"
                  style={{ border:"1.5px solid var(--base-300)", background:"var(--base-200)" }}>
               {isPrice && (
@@ -1177,18 +1157,36 @@ function CustomPlanOptionsSection({ isSuperadmin }) {
           </button>
         </div>
 
-        <SlabEditor label="Transport — KM Slabs"
-          note="Each slab maps a distance threshold (km) to its price. The system picks the slab matching the booking distance."
-          slabs={transport.kmSlabs ?? []} onChange={(s) => setTransport({ kmSlabs: s })}
-          keyA="km" keyB="price" suffixA="km" suffixB="₹" />
+        {/*
+          CHANGE: Transport kmSlabs now uses pricePerKm + packagePrice.
+          keyA="pricePerKm"   suffixA="₹/km"  isPriceA=false (no ₹ prefix — suffix already says ₹/km)
+          keyB="packagePrice" suffixB="₹"      isPriceB=true
+          Old fields `km` and `price` are gone from schema.
+        */}
+        <SlabEditor
+          label="Transport — KM Slabs"
+          note="Each slab sets a per-km rate and a flat package price. User selects a slab; service layer computes cost as actualKm × pricePerKm."
+          slabs={transport.kmSlabs ?? []}
+          onChange={(s) => setTransport({ kmSlabs: s })}
+          keyA="pricePerKm"
+          keyB="packagePrice"
+          suffixA="₹/km"
+          suffixB="₹"
+          isPriceA={false}
+          isPriceB={true}
+        />
+
         <SlabEditor label="Diagnostics Discount Slabs"
           note="Maps a discount percentage to the additional plan price required to unlock it."
           slabs={diagDiscount.slabs ?? []} onChange={(s) => setDiagDiscount({ slabs: s })}
-          keyA="percent" keyB="price" suffixA="%" suffixB="₹" />
+          keyA="percent" keyB="price" suffixA="%" suffixB="₹"
+          isPriceA={false} isPriceB={true} />
+
         <SlabEditor label="Pharmacy Discount Slabs"
           note="Maps a pharmacy discount percentage to its unlock price in the custom plan builder."
           slabs={pharmDiscount.slabs ?? []} onChange={(s) => setPharmDiscount({ slabs: s })}
-          keyA="percent" keyB="price" suffixA="%" suffixB="₹" />
+          keyA="percent" keyB="price" suffixA="%" suffixB="₹"
+          isPriceA={false} isPriceB={true} />
 
         {/* Care assistant plan tiers */}
         <div>
@@ -1255,10 +1253,13 @@ function CustomPlanOptionsSection({ isSuperadmin }) {
           <SaveButton
             onClick={() => {
               dispatch(updateCustomPlanOptions({
-                consultation, transport, diagnosticsDiscount:diagDiscount,
-                pharmacyDiscount:pharmDiscount,
+                consultation,
+                transport,
+                diagnosticsDiscount: diagDiscount,
+                pharmacyDiscount:    pharmDiscount,
                 careAssistant: { pricingTiers: caTiers.map(({_id,__v,...t}) => t) },
-                addOns, note,
+                addOns,
+                note,
               }));
               setNote("");
             }}
@@ -1424,7 +1425,7 @@ function VersionHistoryPanel({ isSuperadmin, onClose }) {
   const restoreLoading    = useSelector(selectRestoreLoading);
   const restoreError      = useSelector(selectRestoreError);
 
-  const [page, setPage]         = useState(1);
+  const [page, setPage]               = useState(1);
   const [restoreNote, setRestoreNote] = useState("");
   const [confirmIdx, setConfirmIdx]   = useState(null);
 
@@ -1452,7 +1453,6 @@ function VersionHistoryPanel({ isSuperadmin, onClose }) {
         style={{ background:"var(--base-100)", border:"1.5px solid var(--base-300)", borderRadius:"1.5rem", boxShadow:"0 40px 80px rgba(0,0,0,.4)", maxHeight:"88vh" }}
         onClick={(e) => e.stopPropagation()}>
 
-        {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 flex-shrink-0"
              style={{ borderBottom:"1px solid var(--base-300)", background:"var(--base-200)" }}>
           <div className="flex items-center gap-3">
@@ -1479,7 +1479,6 @@ function VersionHistoryPanel({ isSuperadmin, onClose }) {
           </div>
         )}
 
-        {/* List */}
         <div className="flex-1 overflow-y-auto p-6 space-y-2.5">
           {historyLoading && history.length === 0 ? (
             <div className="flex justify-center py-16"><RefreshCw size={18} className="animate-spin" style={{ opacity:.35 }} /></div>
@@ -1553,7 +1552,6 @@ function VersionHistoryPanel({ isSuperadmin, onClose }) {
           )}
         </div>
 
-        {/* Snapshot preview */}
         <AnimatePresence>
           {selectedSnapshot && (
             <motion.div initial={{ height:0, opacity:0 }} animate={{ height:"auto", opacity:1 }} exit={{ height:0, opacity:0 }} className="overflow-hidden">
@@ -1572,7 +1570,6 @@ function VersionHistoryPanel({ isSuperadmin, onClose }) {
         </AnimatePresence>
       </motion.div>
 
-      {/* Restore confirm */}
       <AnimatePresence>
         {confirmIdx !== null && (
           <motion.div initial={{ scale:.9, opacity:0 }} animate={{ scale:1, opacity:1 }} exit={{ scale:.9, opacity:0 }}
@@ -1621,7 +1618,7 @@ function PageSkeleton() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  STAT PILL  (header metrics)
+//  STAT PILL
 // ─────────────────────────────────────────────────────────────────────────────
 function StatPill({ label, value, color }) {
   return (
@@ -1640,17 +1637,17 @@ function StatPill({ label, value, color }) {
 //  MAIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 const sectionComponents = {
-  caps: CapsSection,
-  transport: TransportSection,
-  careAssistant: CareAssistantFullSection,
-  doctor: DoctorSection,
-  hospital: HospitalSection,
-  diagnostics: DiagnosticsSection,
-  pharmacy: PharmacySection,
+  caps:              CapsSection,
+  transport:         TransportSection,
+  careAssistant:     CareAssistantFullSection,
+  doctor:            DoctorSection,
+  hospital:          HospitalSection,
+  diagnostics:       DiagnosticsSection,
+  pharmacy:          PharmacySection,
   customPlanOptions: CustomPlanOptionsSection,
-  ads: AdsSection,
-  tax: TaxSection,
-  refundPolicy: RefundPolicySection,
+  ads:               AdsSection,
+  tax:               TaxSection,
+  refundPolicy:      RefundPolicySection,
 };
 
 export default function PlatformPricingManagement() {
@@ -1659,14 +1656,11 @@ export default function PlatformPricingManagement() {
   const configLoad   = useSelector(selectAdminConfigLoading);
   const configError  = useSelector(selectAdminConfigError);
   const anySaving    = useSelector(selectAnySectionSaving);
-
-  // ── Correct user selector ──────────────────────────────────────────────────
   const user         = useSelector(selectUser);
   const isSuperadmin = user?.role === "superadmin";
 
   const [showHistory, setShowHistory] = useState(false);
   const [search, setSearch]           = useState("");
-  const [openCount, setOpenCount]     = useState(0); // track via section events (optional)
 
   useEffect(() => { dispatch(fetchAdminPricingConfig()); }, [dispatch]);
 
@@ -1681,20 +1675,17 @@ export default function PlatformPricingManagement() {
 
   if (configLoad && !adminConfig) return <PageSkeleton />;
 
-  // Quick stats from config
-  const activeSections = Object.keys(SECTION_META).length;
+  const activeSections     = Object.keys(SECTION_META).length;
   const accessibleSections = Object.values(SECTION_META).filter((m) => !m.superadminOnly || isSuperadmin).length;
 
   return (
     <div className="min-h-screen" style={{ background:"var(--base-100)" }}>
       <div className="max-w-4xl mx-auto px-4 py-10 space-y-6">
 
-        {/* ── PAGE HEADER ─────────────────────────────────────────────────── */}
+        {/* PAGE HEADER */}
         <motion.div initial={{ opacity:0, y:-16 }} animate={{ opacity:1, y:0 }} transition={{ duration:.45, ease:[0.22,1,0.36,1] }}>
           <div className="relative overflow-hidden rounded-2xl"
                style={{ background:"var(--base-200)", border:"1.5px solid var(--base-300)" }}>
-
-            {/* Subtle dot grid texture */}
             <div className="absolute inset-0 pointer-events-none" style={{ opacity:.045 }}>
               <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
                 <defs>
@@ -1705,10 +1696,7 @@ export default function PlatformPricingManagement() {
                 <rect width="100%" height="100%" fill="url(#dots)" />
               </svg>
             </div>
-
-            {/* Colored stripe at top */}
             <div className="h-1 w-full" style={{ background:"linear-gradient(90deg,var(--primary),var(--secondary),var(--primary))", backgroundSize:"200% 100%", animation:"shimmer 3s linear infinite" }} />
-
             <div className="relative z-10 p-6">
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
@@ -1730,8 +1718,6 @@ export default function PlatformPricingManagement() {
                       : "Admin — access to transport, doctor, diagnostics, pharmacy"}
                   </p>
                 </div>
-
-                {/* Action buttons */}
                 <div className="flex items-center gap-2 flex-wrap">
                   {anySaving && (
                     <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black"
@@ -1751,8 +1737,6 @@ export default function PlatformPricingManagement() {
                   </button>
                 </div>
               </div>
-
-              {/* Stats row */}
               {adminConfig && (
                 <div className="flex items-center gap-2 mt-5 flex-wrap">
                   <StatPill label="Status" value="Active" color="#10b981" />
@@ -1767,7 +1751,6 @@ export default function PlatformPricingManagement() {
           </div>
         </motion.div>
 
-        {/* Config error */}
         {configError && (
           <div className="flex items-center gap-2 p-4 rounded-xl text-sm font-semibold"
                style={{ background:"rgba(239,68,68,.08)", color:"#ef4444", border:"1px solid rgba(239,68,68,.18)" }}>
@@ -1775,7 +1758,7 @@ export default function PlatformPricingManagement() {
           </div>
         )}
 
-        {/* ── SEARCH ──────────────────────────────────────────────────────── */}
+        {/* SEARCH */}
         <div className="relative">
           <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ opacity:.4 }}>
             <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
@@ -1791,7 +1774,7 @@ export default function PlatformPricingManagement() {
           )}
         </div>
 
-        {/* ── SECTION GRID ────────────────────────────────────────────────── */}
+        {/* SECTION GRID */}
         <div className="space-y-3">
           {filteredSections.map((key) => {
             const Comp = sectionComponents[key];
@@ -1809,18 +1792,15 @@ export default function PlatformPricingManagement() {
           </motion.div>
         )}
 
-        {/* Bottom padding */}
         <div className="h-8" />
       </div>
 
-      {/* ── HISTORY PANEL ───────────────────────────────────────────────── */}
       <AnimatePresence>
         {showHistory && (
           <VersionHistoryPanel isSuperadmin={isSuperadmin} onClose={() => setShowHistory(false)} />
         )}
       </AnimatePresence>
 
-      {/* shimmer keyframe */}
       <style>{`
         @keyframes shimmer { 0%{background-position:0% 0} 100%{background-position:200% 0} }
       `}</style>

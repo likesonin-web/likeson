@@ -22,17 +22,6 @@ const platformFeeSchema = new Schema(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CARE ASSISTANT: Duration-Based Pricing Tier
-//
-// FIX: Schema previously used default { _id: true } which makes Mongoose expect
-//      an ObjectId for _id. Callers were sending custom strings like "tier001",
-//      "tier002" etc., causing BSONError cast failures.
-//
-//      Changed to { _id: false } to disable auto _id generation entirely.
-//      The router's PATCH /care-assistant/tiers handler now strips any incoming
-//      _id fields before assigning, so Mongoose never sees a string where it
-//      expects an ObjectId. Mongo still assigns a generated ObjectId internally
-//      when _id: false is not set — with _id: false the subdoc simply has no
-//      _id, which is the cleanest approach for embedded tier arrays.
 // ─────────────────────────────────────────────────────────────────────────────
 const careAssistantPricingTierSchema = new Schema(
   {
@@ -43,7 +32,7 @@ const careAssistantPricingTierSchema = new Schema(
     payoutToAssistant: { type: Number, required: true, min: 0 },
     isActive:          { type: Boolean, default: true },
   },
-  { _id: false }   // FIX: was { _id: true } — caused ObjectId cast error on string _id input
+  { _id: false }
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -67,15 +56,13 @@ const careAssistantPricingSchema = new Schema(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VERSION HISTORY
-// FIX: Added `section` and `changeSource` fields that router writes but schema
-//      previously lacked — Mongoose was silently dropping them.
 // ─────────────────────────────────────────────────────────────────────────────
 const versionHistorySchema = new Schema(
   {
     changedBy:     { type: Schema.Types.ObjectId, ref: 'User', required: true },
     changedByRole: { type: String, enum: ['admin', 'superadmin'], required: true },
-    section:       { type: String, default: null },       // FIX: added
-    changeSource:  { type: String, default: 'manual' },   // FIX: added
+    section:       { type: String, default: null },
+    changeSource:  { type: String, default: 'manual' },
     changeNote:    { type: String },
     snapshot:      { type: Schema.Types.Mixed },
     changedAt:     { type: Date, default: Date.now },
@@ -203,9 +190,11 @@ const pharmacySchema = new Schema(
 // ─────────────────────────────────────────────────────────────────────────────
 // CUSTOM PLAN OPTIONS
 //
-// FIX: careAssistant.pricingTiers here also uses careAssistantPricingTierSchema
-//      which now has { _id: false }. Same fix applies — string _id inputs like
-//      "ctier001" no longer cause BSONError.
+// CHANGE 1: kmSlabs — dropped `km` field entirely.
+//           Each slab stores only:
+//             pricePerKm   = rate charged per km for this slab option
+//             packagePrice = flat plan add-on price when user selects this slab
+//           Service layer computes trip cost as: actualKm * pricePerKm
 // ─────────────────────────────────────────────────────────────────────────────
 const customPlanOptionPricingSchema = new Schema(
   {
@@ -223,8 +212,11 @@ const customPlanOptionPricingSchema = new Schema(
     transport: {
       kmSlabs: [
         {
-          km:    { type: Number, required: true },
-          price: { type: Number, required: true },
+          // CHANGE: removed `km` — no distance band / radius stored.
+          // pricePerKm   = per-km rate for this slab option.
+          // packagePrice = flat price of this slab in a custom plan.
+          pricePerKm:   { type: Number, required: true, min: 0 },
+          packagePrice: { type: Number, required: true, min: 0 },
         },
       ],
     },
@@ -249,7 +241,7 @@ const customPlanOptionPricingSchema = new Schema(
 
     careAssistant: {
       pricingTiers: {
-        type: [careAssistantPricingTierSchema],  // FIX: inherits { _id: false } fix
+        type: [careAssistantPricingTierSchema],
         default: () => [],
       },
     },
@@ -335,31 +327,67 @@ const platformPricingConfigSchema = new Schema(
 // ─────────────────────────────────────────────────────────────────────────────
 platformPricingConfigSchema.pre('save', function () {
   const tiers = this.careAssistant?.pricingTiers;
-  if (!tiers?.length) return;
+  if (tiers?.length) {
+    const active = tiers.filter((t) => t.isActive);
+    active.sort((a, b) => a.minHours - b.minHours);
 
-  const active = tiers.filter((t) => t.isActive);
-  active.sort((a, b) => a.minHours - b.minHours);
+    for (let i = 0; i < active.length - 1; i++) {
+      const curr = active[i];
+      const next = active[i + 1];
+      if (curr.maxHours === null) {
+        throw new Error(
+          `Pricing tier "${curr.label}" has maxHours: null but is not the last active tier.`
+        );
+      }
+      if (next.minHours !== curr.maxHours) {
+        throw new Error(
+          `Gap or overlap between care assistant pricing tiers ` +
+          `"${curr.label}" (maxHours: ${curr.maxHours}) and ` +
+          `"${next.label}" (minHours: ${next.minHours}).`
+        );
+      }
+      if (curr.payoutToAssistant > curr.chargeToUser) {
+        throw new Error(
+          `Tier "${curr.label}": payoutToAssistant (${curr.payoutToAssistant}) ` +
+          `cannot exceed chargeToUser (${curr.chargeToUser}).`
+        );
+      }
+    }
+  }
 
-  for (let i = 0; i < active.length - 1; i++) {
-    const curr = active[i];
-    const next = active[i + 1];
-    if (curr.maxHours === null) {
-      throw new Error(
-        `Pricing tier "${curr.label}" has maxHours: null but is not the last active tier.`
-      );
+  // ───────────────────────────────────────────────────────────────────────────
+  // PRE-SAVE: CAPS enforcement
+  //
+  // CHANGE 2: Block save if any discount slab percent exceeds cap value.
+  //           Correct flow: raise cap first → then set higher slab percent.
+  //           Guarded fields:
+  //             caps.pharmacyDiscountMax    → customPlanOptions.pharmacyDiscount.slabs[].percent
+  //             caps.diagnosticsDiscountMax → customPlanOptions.diagnosticsDiscount.slabs[].percent
+  // ───────────────────────────────────────────────────────────────────────────
+  const pharmacyCap    = this.caps?.pharmacyDiscountMax;
+  const diagnosticsCap = this.caps?.diagnosticsDiscountMax;
+
+  if (pharmacyCap != null) {
+    const slabs = this.customPlanOptions?.pharmacyDiscount?.slabs ?? [];
+    for (const slab of slabs) {
+      if (slab.percent > pharmacyCap) {
+        throw new Error(
+          `Pharmacy discount slab ${slab.percent}% exceeds cap ${pharmacyCap}%. ` +
+          `Raise caps.pharmacyDiscountMax first, then update the slab.`
+        );
+      }
     }
-    if (next.minHours !== curr.maxHours) {
-      throw new Error(
-        `Gap or overlap between care assistant pricing tiers ` +
-        `"${curr.label}" (maxHours: ${curr.maxHours}) and ` +
-        `"${next.label}" (minHours: ${next.minHours}).`
-      );
-    }
-    if (curr.payoutToAssistant > curr.chargeToUser) {
-      throw new Error(
-        `Tier "${curr.label}": payoutToAssistant (${curr.payoutToAssistant}) ` +
-        `cannot exceed chargeToUser (${curr.chargeToUser}).`
-      );
+  }
+
+  if (diagnosticsCap != null) {
+    const slabs = this.customPlanOptions?.diagnosticsDiscount?.slabs ?? [];
+    for (const slab of slabs) {
+      if (slab.percent > diagnosticsCap) {
+        throw new Error(
+          `Diagnostics discount slab ${slab.percent}% exceeds cap ${diagnosticsCap}%. ` +
+          `Raise caps.diagnosticsDiscountMax first, then update the slab.`
+        );
+      }
     }
   }
 });
@@ -408,12 +436,6 @@ platformPricingConfigSchema.statics.resolveHospitalPlatformFee = function (confi
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INSTANCE METHODS
-//
-// FIX: saveWithAudit previously used positional args (adminUserId, adminRole, note).
-//      Router calls it with a named-options object. Mismatch caused the entire
-//      object to land in `adminUserId`, leaving `adminRole` undefined, which
-//      triggered the 'Unauthorized' guard on every save.
-//      Fixed: accept a single named-options object.
 // ─────────────────────────────────────────────────────────────────────────────
 platformPricingConfigSchema.methods.saveWithAudit = async function ({
   adminUserId,

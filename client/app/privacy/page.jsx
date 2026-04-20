@@ -1,214 +1,145 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { motion, useScroll, useTransform, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useScroll, useTransform } from 'framer-motion';
 import {
-  ShieldCheck, Eye, Database, Globe, Cookie, Share2,
-  MapPin, Lock, RefreshCw, Mail, Clock, ChevronDown,
-  ArrowUp, AlertTriangle, Info, CheckCircle2, FileText,
-  Server, User, Fingerprint
+  Shield, Eye, Lock, Database, Globe, UserCheck,
+  ChevronRight, ChevronDown, Clock, FileText,
+  CheckCircle2, AlertCircle, ArrowUp, Wifi,
 } from 'lucide-react';
+
 import {
   fetchActivePrivacyPolicy,
+  recordConsent,
+  fetchConsentStatus,
   selectActivePrivacy,
   selectPrivacyLoading,
-  selectPrivacyError,
+  selectConsentStatus,
+  selectConsentSubmitting,
 } from '@/store/slices/legalSlice';
 
-// ─── Compliance Badge Colors ─────────────────────────────────────────────────
-const COMPLIANCE_COLORS = {
-  GDPR:   { bg: 'color-mix(in srgb, var(--primary), transparent 82%)',  text: 'var(--primary)' },
-  HIPAA:  { bg: 'color-mix(in srgb, var(--success), transparent 82%)',  text: 'var(--success)' },
-  PDPA:   { bg: 'color-mix(in srgb, var(--info), transparent 82%)',     text: 'var(--info)' },
-  CCPA:   { bg: 'color-mix(in srgb, var(--accent), transparent 82%)',   text: 'var(--accent)' },
-  PIPEDA: { bg: 'color-mix(in srgb, var(--secondary), transparent 82%)',text: 'var(--secondary)' },
-  Other:  { bg: 'color-mix(in srgb, var(--neutral), transparent 82%)',  text: 'var(--neutral-content)' },
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const fadeUp = {
+  hidden: { opacity: 0, y: 28 },
+  show: (i = 0) => ({
+    opacity: 1, y: 0,
+    transition: { duration: 0.55, delay: i * 0.09, ease: [0.22, 1, 0.36, 1] },
+  }),
 };
 
-// ─── Section config ───────────────────────────────────────────────────────────
-const POLICY_SECTIONS = [
+const stagger = { hidden: {}, show: { transition: { staggerChildren: 0.08 } } };
+
+function formatDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+// ── Static sections from schema ───────────────────────────────────────────────
+const STATIC_SECTIONS = [
   {
-    id: 'overview',
-    title: 'Overview',
-    icon: Eye,
-    color: 'var(--primary)',
-    body: 'This Privacy Policy describes how we collect, use, and share information about you when you use our platform, products, and services. We are committed to protecting your personal data in accordance with applicable privacy laws.',
-  },
-  {
-    id: 'data-collected',
-    title: 'Data We Collect',
+    id: 'collect',
     icon: Database,
-    color: 'var(--secondary)',
-    body: 'We collect information you provide directly, such as account details, health information, payment data, and communications. We also automatically collect usage data, device information, and location signals when you interact with our platform.',
+    title: 'Data We Collect',
+    color: 'var(--primary)',
+    content: `We collect information you voluntarily provide (name, email, phone, address) and data generated 
+through platform use (booking history, location for dispatch, device tokens for push notifications). 
+Sensitive fields — Aadhaar, PAN, bank account numbers — are stored encrypted with select:false 
+and returned only when explicitly required by verified roles.`,
   },
   {
-    id: 'how-we-use',
+    id: 'usage',
+    icon: Eye,
     title: 'How We Use Your Data',
-    icon: Server,
-    color: 'var(--info)',
-    body: 'Your data powers core platform features—scheduling, diagnostics, and payments—and helps us personalise your experience. We also use it for fraud prevention, legal compliance, and to improve our services through anonymised analytics.',
-  },
-  {
-    id: 'data-sharing',
-    title: 'Data Sharing & Disclosure',
-    icon: Share2,
-    color: 'var(--warning)',
-    body: 'We may share data with trusted service providers, healthcare partners, and as required by law. We never sell your personal information. Any third-party sharing is governed by strict data processing agreements.',
-  },
-  {
-    id: 'your-rights',
-    title: 'Your Rights',
-    icon: User,
-    color: 'var(--success)',
-    body: 'Depending on your location, you may have the right to access, correct, delete, or port your personal data. You can also object to or restrict processing. To exercise your rights, contact our Data Protection Officer at dpo@example.com.',
-  },
-  {
-    id: 'data-security',
-    title: 'Data Security',
-    icon: Lock,
-    color: 'var(--error)',
-    body: 'We use industry-standard encryption (TLS 1.3, AES-256), access controls, and regular security audits to protect your data. In the event of a breach, we will notify affected users and authorities within 72 hours as required by law.',
-  },
-  {
-    id: 'cookies',
-    title: 'Cookies & Tracking',
-    icon: Cookie,
-    color: 'var(--accent)',
-    body: 'We use essential cookies for platform functionality and optional analytics cookies to understand how users interact with our service. You can manage cookie preferences through our cookie consent panel at any time.',
-  },
-  {
-    id: 'geolocation',
-    title: 'Location Data',
-    icon: MapPin,
     color: 'var(--secondary)',
-    body: 'With your explicit consent, we collect precise geolocation data to power features like nearby provider search and transport tracking. You can revoke location access at any time through your device settings.',
+    content: `Your data powers service delivery: matching patients to nearby doctors, dispatching GPS-tracked 
+transport, calculating lab turnaround times, and processing pharmacy orders. We also use aggregated 
+analytics (never individually identifiable) to improve platform performance, pricing models, and 
+partner matching algorithms.`,
+  },
+  {
+    id: 'sharing',
+    icon: Globe,
+    title: 'Data Sharing',
+    color: 'oklch(55% 0.22 275)',
+    content: `We share your data only with service partners relevant to your booking (e.g., the lab processing 
+your sample, the driver assigned to your ride). Partners receive only what they need. We do not sell 
+personal data. Payment gateways (Razorpay, Cashfree) receive tokenized payment data under their own 
+privacy frameworks.`,
+  },
+  {
+    id: 'security',
+    icon: Lock,
+    title: 'Security Measures',
+    color: 'oklch(50% 0.20 155)',
+    content: `Account passwords are hashed with bcrypt. Sensitive documents (Aadhaar, bank accounts) are 
+select:false in MongoDB — requiring explicit projection to access. OTPs expire after a defined 
+window. Audit sessions track every device login with IP and user-agent. Platform fees and pricing 
+configs maintain immutable version history for forensic accountability.`,
+  },
+  {
+    id: 'rights',
+    icon: UserCheck,
+    title: 'Your Rights (GDPR / PDPA)',
+    color: 'oklch(58% 0.18 300)',
+    content: `You may request access to, correction of, or deletion of your personal data at any time. 
+Consent records (UserConsent) are never deleted — withdrawals are marked isWithdrawn:true with a 
+timestamp and reason. You may withdraw consent via your account settings or by contacting our 
+Data Protection Officer at dpo@likeson.in.`,
   },
   {
     id: 'retention',
-    title: 'Data Retention',
     icon: Clock,
-    color: 'var(--neutral)',
-    body: 'We retain personal data for as long as necessary to provide our services and comply with legal obligations. Health records are retained for a minimum of 7 years as required by medical regulations. You may request deletion of non-essential data at any time.',
+    title: 'Data Retention',
+    color: 'oklch(62% 0.20 22)',
+    content: `Active account data is retained for the duration of your relationship with Likeson.in plus 
+7 years for regulatory compliance. Consent audit logs are retained indefinitely as legal proof. 
+Anonymised analytics data may be retained beyond this period. KYC documents are purged upon 
+account deletion subject to mandatory regulatory hold periods.`,
   },
   {
-    id: 'international',
-    title: 'International Transfers',
-    icon: Globe,
-    color: 'var(--primary)',
-    body: 'Your data may be transferred to and processed in countries outside your jurisdiction. We ensure appropriate safeguards—such as Standard Contractual Clauses—are in place for any international data transfers.',
-  },
-  {
-    id: 'children',
-    title: 'Children\'s Privacy',
-    icon: ShieldCheck,
-    color: 'var(--success)',
-    body: 'Our platform is not directed at children under 18. We do not knowingly collect personal information from minors. If you believe a child has provided us with personal data, please contact us immediately.',
-  },
-  {
-    id: 'contact',
-    title: 'Contact & DPO',
-    icon: Mail,
-    color: 'var(--info)',
-    body: 'For privacy-related inquiries, please contact our Data Protection Officer at dpo@example.com. You may also lodge a complaint with your local supervisory authority if you believe your rights have been violated.',
+    id: 'cookies',
+    icon: Wifi,
+    title: 'Cookies & Tracking',
+    color: 'oklch(68% 0.16 50)',
+    content: `We use strictly necessary cookies for session management and device token tracking. 
+No third-party advertising cookies are placed. Location tracking occurs only while a ride is active 
+and with explicit permission. Push notification tokens (FCM) are stored per-device and may be 
+revoked by removing the device from your account sessions.`,
   },
 ];
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
-function ComplianceBadge({ framework }) {
-  const style = COMPLIANCE_COLORS[framework] || COMPLIANCE_COLORS.Other;
-  return (
-    <motion.span
-      whileHover={{ scale: 1.08 }}
-      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-widest"
-      style={{ background: style.bg, color: style.text, border: `1px solid ${style.text}30` }}
-    >
-      <Fingerprint size={10} />
-      {framework}
-    </motion.span>
-  );
-}
+const DATA_CATEGORIES = [
+  { cat: 'Identity',   examples: 'Name, email, phone, Aadhaar (encrypted), PAN',    roles: 'All' },
+  { cat: 'Location',   examples: 'GPS coordinates, last known address, service zone', roles: 'Customers, Drivers, CAs' },
+  { cat: 'Financial',  examples: 'Bank account last-4, UPI ID, settlement records',  roles: 'Partners' },
+  { cat: 'Health',     examples: 'Booking history, lab results, care assistant notes', roles: 'Customers' },
+  { cat: 'Device',     examples: 'FCM tokens, IP address, user-agent, audit sessions', roles: 'All' },
+  { cat: 'Behavioural',examples: 'Coin transactions, referral history, rating patterns', roles: 'All' },
+];
 
-function DataCategoryCard({ item, index }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 16 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true }}
-      transition={{ delay: index * 0.08 }}
-      className="glass-card p-4 space-y-2"
-    >
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <span className="font-montserrat font-black text-sm" style={{ color: 'var(--primary)' }}>
-          {item.category}
-        </span>
-        {item.retentionPeriod && (
-          <span className="badge badge-info text-[10px]">
-            <Clock size={9} /> {item.retentionPeriod}
-          </span>
-        )}
-      </div>
-      {item.description && (
-        <p className="text-xs" style={{ color: 'color-mix(in oklch, var(--base-content) 75%, transparent)' }}>
-          {item.description}
-        </p>
-      )}
-      {item.purpose && (
-        <p className="text-xs font-semibold" style={{ color: 'var(--base-content)' }}>
-          Purpose: <span className="font-normal">{item.purpose}</span>
-        </p>
-      )}
-      {item.sharedWith?.length > 0 && (
-        <div className="flex flex-wrap gap-1 pt-1">
-          {item.sharedWith.map(sw => (
-            <span key={sw} className="badge badge-warning text-[9px]">{sw}</span>
-          ))}
-        </div>
-      )}
-    </motion.div>
-  );
-}
-
-function PolicySectionCard({ section, index, onVisible }) {
-  const ref  = useRef(null);
-  const [open, setOpen] = useState(true);
-  const { icon: Icon, color, id, title, body } = section;
-
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) onVisible(id); },
-      { threshold: 0.35 }
-    );
-    if (ref.current) observer.observe(ref.current);
-    return () => observer.disconnect();
-  }, [id, onVisible]);
+// ── Accordion ─────────────────────────────────────────────────────────────────
+function Accordion({ section, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const { icon: Icon, title, color, content } = section;
 
   return (
-    <motion.section
-      ref={ref}
-      id={id}
-      initial={{ opacity: 0, y: 24 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, margin: '-50px' }}
-      transition={{ duration: 0.5, delay: index * 0.055 }}
-      className="card overflow-hidden"
-    >
+    <div className="card overflow-hidden">
       <button
-        onClick={() => setOpen(p => !p)}
-        className="w-full flex items-center justify-between gap-4 p-6 text-left hover:bg-base-200/40 transition-colors"
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-4 p-5 text-left group"
+        aria-expanded={open}
       >
-        <div className="flex items-center gap-4">
-          <span className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                style={{ background: `color-mix(in srgb, ${color}, transparent 82%)` }}>
-            <Icon size={18} style={{ color }} />
-          </span>
-          <span className="font-montserrat font-black text-base md:text-lg">
-            {title}
-          </span>
+        <div
+          className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-transform duration-300 group-hover:scale-110"
+          style={{ background: `color-mix(in srgb, ${color}, transparent 82%)`, border: `1px solid color-mix(in srgb, ${color}, transparent 55%)` }}
+        >
+          <Icon size={16} style={{ color }} />
         </div>
-        <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.25 }}>
-          <ChevronDown size={16} style={{ color: 'var(--primary)' }} />
-        </motion.span>
+        <span className="font-montserrat font-black text-sm text-base-content flex-1">{title}</span>
+        <motion.div animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.25 }}>
+          <ChevronDown size={16} style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }} />
+        </motion.div>
       </button>
 
       <AnimatePresence initial={false}>
@@ -218,388 +149,382 @@ function PolicySectionCard({ section, index, onVisible }) {
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.3 }}
-            className="overflow-hidden"
+            transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+            style={{ overflow: 'hidden' }}
           >
-            <div className="px-6 pb-6">
-              <div className="h-px mb-4" style={{ background: 'var(--base-300)' }} />
-              <p className="text-sm leading-relaxed"
-                 style={{ color: 'color-mix(in oklch, var(--base-content) 80%, transparent)' }}>
-                {body}
+            <div className="px-5 pb-5 pt-1">
+              <div className="divider mt-0 mb-4" />
+              <p className="text-sm leading-relaxed whitespace-pre-line"
+                style={{ color: 'color-mix(in oklch, var(--base-content) 72%, transparent)' }}>
+                {content}
               </p>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
-    </motion.section>
-  );
-}
-
-function SideNav({ sections, activeId, onNavigate }) {
-  return (
-    <motion.aside
-      initial={{ opacity: 0, x: -20 }}
-      animate={{ opacity: 1, x: 0 }}
-      transition={{ delay: 0.4, duration: 0.5 }}
-      className="hidden lg:block sticky top-28 w-64 shrink-0"
-    >
-      <div className="card p-5">
-        <p className="font-montserrat font-black text-xs uppercase tracking-widest mb-4"
-           style={{ color: 'var(--primary)' }}>
-          Policy Sections
-        </p>
-        <nav className="space-y-1 max-h-[70vh] overflow-y-auto pr-1" style={{ scrollbarWidth: 'thin' }}>
-          {sections.map((s, i) => {
-            const active = activeId === s.id;
-            const Icon   = s.icon;
-            return (
-              <button
-                key={s.id}
-                onClick={() => onNavigate(s.id)}
-                className={`w-full text-left text-xs py-2 px-3 rounded-lg transition-all duration-200 flex items-center gap-2 ${
-                  active ? 'font-bold' : 'font-medium opacity-60 hover:opacity-100'
-                }`}
-                style={{
-                  background: active ? `color-mix(in srgb, ${s.color}, transparent 87%)` : 'transparent',
-                  color: active ? s.color : 'var(--base-content)',
-                  borderLeft: active ? `3px solid ${s.color}` : '3px solid transparent',
-                }}
-              >
-                <Icon size={12} style={{ color: active ? s.color : undefined, flexShrink: 0 }} />
-                <span className="truncate">{s.title}</span>
-              </button>
-            );
-          })}
-        </nav>
-      </div>
-    </motion.aside>
-  );
-}
-
-function HeroBackground() {
-  return (
-    <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
-      <div className="absolute -top-40 left-1/2 -translate-x-1/2 w-[600px] h-[600px] rounded-full opacity-[0.07]"
-           style={{ background: 'radial-gradient(circle, var(--secondary), transparent 65%)' }} />
-      <div className="absolute bottom-0 right-0 w-[300px] h-[300px] rounded-full opacity-[0.05]"
-           style={{ background: 'radial-gradient(circle, var(--primary), transparent 70%)' }} />
-      <svg className="absolute inset-0 w-full h-full opacity-[0.04]" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <pattern id="pp-dots" width="24" height="24" patternUnits="userSpaceOnUse">
-            <circle cx="2" cy="2" r="1" fill="currentColor" />
-          </pattern>
-        </defs>
-        <rect width="100%" height="100%" fill="url(#pp-dots)" />
-      </svg>
     </div>
   );
 }
 
-function SkeletonLoader() {
+// ── Consent Banner ────────────────────────────────────────────────────────────
+function ConsentBanner({ status, submitting, onAccept }) {
+  if (status?.privacyAccepted) return null;
+
   return (
-    <div className="space-y-4 animate-pulse">
-      {[1, 2, 3, 4, 5].map(i => (
-        <div key={i} className="card p-6 space-y-3">
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-xl skeleton" />
-            <div className="h-5 w-44 rounded skeleton" />
+    <AnimatePresence>
+      <motion.div
+        initial={{ y: 80, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: 80, opacity: 0 }}
+        transition={{ type: 'spring', stiffness: 260, damping: 26 }}
+        className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-full max-w-lg px-4"
+      >
+        <div
+          className="rounded-2xl p-5 shadow-primary"
+          style={{
+            background: 'var(--base-100)',
+            border: '1px solid color-mix(in srgb, var(--primary), transparent 60%)',
+            boxShadow: 'var(--shadow-depth)',
+          }}
+        >
+          <div className="flex items-start gap-3 mb-4">
+            <AlertCircle size={18} style={{ color: 'var(--warning)' }} className="shrink-0 mt-0.5" />
+            <p className="text-sm leading-relaxed text-base-content">
+              We updated our Privacy Policy. Please review and accept to continue using Likeson.in.
+            </p>
           </div>
-          <div className="space-y-2 pt-2">
-            <div className="h-3 rounded skeleton w-full" />
-            <div className="h-3 rounded skeleton w-5/6" />
+          <div className="flex gap-3">
+            <button
+              onClick={onAccept}
+              disabled={submitting}
+              className="btn-primary-cta flex-1 text-center"
+              style={{ fontSize: '0.8rem', padding: '0.6rem 1rem' }}
+            >
+              {submitting ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="spinner w-4 h-4 animate-spin" /> Saving…
+                </span>
+              ) : (
+                <>I Accept <CheckCircle2 size={13} className="inline ml-1" /></>
+              )}
+            </button>
+            <a href="/legal/terms" className="btn-secondary flex-1 text-center text-xs py-2.5">
+              View Terms
+            </a>
           </div>
         </div>
-      ))}
-    </div>
+      </motion.div>
+    </AnimatePresence>
   );
 }
 
-// ─── Page Component ───────────────────────────────────────────────────────────
-export default function PrivacyPolicyPage() {
-  const dispatch  = useDispatch();
-  const policyData = useSelector(selectActivePrivacy);
-  const loading    = useSelector(selectPrivacyLoading);
-  const error      = useSelector(selectPrivacyError);
-
-  const [activeId, setActiveId] = useState(null);
-  const [showTop,  setShowTop]  = useState(false);
-
-  const { scrollYProgress } = useScroll();
-  const progressWidth = useTransform(scrollYProgress, [0, 1], ['0%', '100%']);
-
-  const handleVisible = useCallback((id) => setActiveId(id), []);
-
-  useEffect(() => { dispatch(fetchActivePrivacyPolicy()); }, [dispatch]);
+// ── Back to Top ───────────────────────────────────────────────────────────────
+function BackToTop() {
+  const [vis, setVis] = useState(false);
   useEffect(() => {
-    const fn = () => setShowTop(window.scrollY > 600);
-    window.addEventListener('scroll', fn);
-    return () => window.removeEventListener('scroll', fn);
+    const h = () => setVis(window.scrollY > 500);
+    window.addEventListener('scroll', h, { passive: true });
+    return () => window.removeEventListener('scroll', h);
   }, []);
+  if (!vis) return null;
+  return (
+    <button
+      onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+      className="fixed bottom-24 right-6 z-40 w-10 h-10 rounded-full flex items-center justify-center shadow-primary transition-transform hover:scale-110"
+      style={{ background: 'var(--primary)', color: 'var(--primary-content)' }}
+      aria-label="Back to top"
+    >
+      <ArrowUp size={16} />
+    </button>
+  );
+}
 
-  const scrollToSection = (id) =>
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+// ── Page ──────────────────────────────────────────────────────────────────────
+export default function PrivacyPolicyPage() {
+  const dispatch   = useDispatch();
+  const policy     = useSelector(selectActivePrivacy);
+  const loading    = useSelector(selectPrivacyLoading);
+  const status     = useSelector(selectConsentStatus);
+  const submitting = useSelector(selectConsentSubmitting);
 
-  // Merge backend content into section bodies if available
-  const sections = POLICY_SECTIONS.map(s => {
-    if (s.id === 'data-collected' && policyData?.dataRetentionPolicy)
-      return { ...s, body: policyData.dataRetentionPolicy };
-    if (s.id === 'cookies' && policyData?.cookiePolicy)
-      return { ...s, body: policyData.cookiePolicy };
-    return s;
-  });
+  const headerRef = useRef(null);
+  const { scrollYProgress } = useScroll({ target: headerRef, offset: ['start start', 'end start'] });
+  const headerY   = useTransform(scrollYProgress, [0, 1], ['0%', '25%']);
+  const headerOpa = useTransform(scrollYProgress, [0, 0.8], [1, 0]);
 
-  const frameworks    = policyData?.complianceFrameworks ?? ['GDPR', 'HIPAA', 'PDPA'];
-  const dataCollected = policyData?.dataCollected ?? [];
-  const version       = policyData?.version ?? '1.0.0';
-  const effectiveDate = policyData?.effectiveDate
-    ? new Date(policyData.effectiveDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-    : 'January 1, 2025';
-  const thirdParty    = policyData?.thirdPartySharing ?? false;
-  const geoTracking   = policyData?.geolocationTracking ?? false;
+  // Progress bar
+  const { scrollYProgress: pageProgress } = useScroll();
+  const progressWidth = useTransform(pageProgress, [0, 1], ['0%', '100%']);
+
+  useEffect(() => {
+    dispatch(fetchActivePrivacyPolicy());
+    dispatch(fetchConsentStatus());
+  }, [dispatch]);
+
+  const handleAccept = () =>
+    dispatch(recordConsent({ method: 'explicit_checkbox', platform: 'web' }));
 
   return (
-    <div className="min-h-screen" style={{ background: 'var(--base-100)' }}>
+    <main className="min-h-screen bg-base-100">
 
-      {/* ── Scroll progress ── */}
+      {/* Progress bar */}
       <motion.div
-        className="fixed top-0 left-0 h-[3px] z-50 origin-left"
-        style={{ width: progressWidth, background: 'linear-gradient(90deg, var(--secondary), var(--primary))' }}
+        className="fixed top-0 left-0 h-[3px] z-[100] origin-left"
+        style={{ width: progressWidth, background: 'var(--primary)' }}
       />
 
-      {/* ── Hero ── */}
-      <header className="relative overflow-hidden pt-24 pb-20 px-4">
-        <HeroBackground />
-        <div className="relative container-custom max-w-5xl mx-auto text-center">
+      {/* ── HEADER ──────────────────────────────────────────────────────── */}
+      <section
+        ref={headerRef}
+        className="relative py-28 md:py-36 overflow-hidden"
+        style={{ background: 'linear-gradient(150deg, color-mix(in srgb, var(--primary) 85%, var(--base-100)) 0%, var(--base-200) 100%)' }}
+      >
+        <div
+          className="absolute inset-0 opacity-[0.04] pointer-events-none"
+          style={{
+            backgroundImage: 'radial-gradient(circle, var(--base-content) 1px, transparent 1px)',
+            backgroundSize: '32px 32px',
+          }}
+        />
+
+        <motion.div
+          style={{ y: headerY, opacity: headerOpa }}
+          className="container-custom relative z-10 text-center"
+        >
           <motion.div
-            initial={{ opacity: 0, scale: 0.8 }}
+            initial={{ opacity: 0, scale: 0.85 }}
             animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.5 }}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold uppercase tracking-widest mb-6"
-            style={{
-              background: 'color-mix(in srgb, var(--secondary), transparent 88%)',
-              border: '1px solid color-mix(in srgb, var(--secondary), transparent 65%)',
-              color: 'var(--secondary)',
-            }}
+            transition={{ duration: 0.55 }}
+            className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-primary"
+            style={{ background: 'var(--primary)' }}
           >
-            <ShieldCheck size={12} />
-            Legal Document · Version {version}
+            <Shield size={28} color="#fff" />
           </motion.div>
 
           <motion.h1
-            initial={{ opacity: 0, y: 30 }}
+            initial={{ opacity: 0, y: 32 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.1 }}
-            className="section-heading mb-4"
+            transition={{ duration: 0.6, delay: 0.08 }}
+            className="font-montserrat font-black text-base-content mb-4"
+            style={{ fontSize: 'clamp(2rem, 5vw, 3.5rem)' }}
           >
-            Privacy{' '}
-            <span style={{
-              background: 'linear-gradient(135deg, var(--secondary), var(--primary))',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              backgroundClip: 'text',
-            }}>
-              Policy
-            </span>
+            Privacy <span className="text-gradient-primary">Policy</span>
           </motion.h1>
 
-          <motion.p
+          <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.2 }}
-            className="section-subheading max-w-xl mx-auto"
+            transition={{ duration: 0.55, delay: 0.18 }}
+            className="flex flex-wrap items-center justify-center gap-4 text-xs"
+            style={{ color: 'color-mix(in oklch, var(--base-content) 62%, transparent)' }}
           >
-            Your privacy matters. Learn how we collect, protect, and use your personal data.
-          </motion.p>
+            {loading ? (
+              <span className="skeleton h-4 w-40 rounded" />
+            ) : policy ? (
+              <>
+                <span className="badge badge-primary">v{policy.version}</span>
+                <span className="flex items-center gap-1.5">
+                  <Clock size={12} /> Effective {formatDate(policy.effectiveDate)}
+                </span>
+                {policy.publishedAt && (
+                  <span className="flex items-center gap-1.5">
+                    <FileText size={12} /> Published {formatDate(policy.publishedAt)}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span>Loading policy…</span>
+            )}
+          </motion.div>
 
-          {/* Meta pills */}
+          {policy?.summary && (
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.55, delay: 0.28 }}
+              className="mt-5 max-w-xl mx-auto text-sm leading-relaxed"
+              style={{ color: 'color-mix(in oklch, var(--base-content) 68%, transparent)' }}
+            >
+              {policy.summary}
+            </motion.p>
+          )}
+        </motion.div>
+      </section>
+
+      {/* ── CONTENT ─────────────────────────────────────────────────────── */}
+      <div className="container-custom py-16 max-w-4xl mx-auto">
+
+        {/* Compliance badges */}
+        {policy?.complianceFrameworks?.length > 0 && (
           <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.35, duration: 0.5 }}
-            className="flex flex-wrap justify-center gap-3 mt-6"
+            variants={stagger} initial="hidden" animate="show"
+            className="flex flex-wrap gap-2 mb-10"
           >
-            {[
-              { icon: Clock,      label: `Effective: ${effectiveDate}` },
-              { icon: Share2,     label: `3rd Party Sharing: ${thirdParty ? 'Yes' : 'No'}` },
-              { icon: MapPin,     label: `Geo Tracking: ${geoTracking ? 'Enabled' : 'Disabled'}` },
-              { icon: FileText,   label: `${sections.length} Sections` },
-            ].map(({ icon: Icon, label }) => (
-              <span key={label}
-                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold"
-                    style={{ background: 'var(--base-200)', color: 'var(--base-content)' }}>
-                <Icon size={12} style={{ color: 'var(--secondary)' }} />
-                {label}
-              </span>
+            {policy.complianceFrameworks.map((f, i) => (
+              <motion.span key={f} variants={fadeUp} custom={i} className="badge badge-info">
+                <Globe size={10} /> {f}
+              </motion.span>
             ))}
           </motion.div>
-        </div>
-      </header>
+        )}
 
-      {/* ── Compliance Frameworks Banner ── */}
-      {frameworks.length > 0 && (
+        {/* Dynamic content from DB (if exists) */}
+        {policy?.content && (
+          <motion.div
+            variants={fadeUp} initial="hidden" animate="show" custom={0}
+            className="card p-6 mb-8"
+          >
+            <h2 className="font-montserrat font-black text-base-content mb-3 flex items-center gap-2">
+              <FileText size={16} style={{ color: 'var(--primary)' }} />
+              Full Policy Text
+            </h2>
+            <div
+              className="text-sm leading-relaxed prose prose-sm max-w-none"
+              style={{ color: 'color-mix(in oklch, var(--base-content) 72%, transparent)' }}
+              dangerouslySetInnerHTML={{ __html: policy.content.replace(/\n/g, '<br/>') }}
+            />
+          </motion.div>
+        )}
+
+        {/* Static accordion sections */}
         <motion.div
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5 }}
-          className="container-custom max-w-5xl mx-auto px-4 mb-8"
+          variants={stagger} initial="hidden" animate="show"
+          className="flex flex-col gap-3 mb-12"
         >
-          <div className="card p-5 flex flex-wrap items-center gap-3">
-            <span className="font-montserrat font-black text-xs uppercase tracking-widest shrink-0"
-                  style={{ color: 'var(--base-content)' }}>
-              Compliance:
-            </span>
-            {frameworks.map(f => <ComplianceBadge key={f} framework={f} />)}
-            <span className="ml-auto text-xs font-semibold hidden sm:inline"
-                  style={{ color: 'color-mix(in oklch, var(--base-content) 55%, transparent)' }}>
-              We take compliance seriously
-            </span>
+          <motion.h2 variants={fadeUp} custom={0}
+            className="font-montserrat font-black text-base-content mb-2"
+            style={{ fontSize: 'clamp(1.3rem, 3vw, 1.8rem)' }}>
+            Policy Details
+          </motion.h2>
+          {STATIC_SECTIONS.map((s, i) => (
+            <motion.div key={s.id} variants={fadeUp} custom={i}>
+              <Accordion section={s} defaultOpen={i === 0} />
+            </motion.div>
+          ))}
+        </motion.div>
+
+        {/* Data table */}
+        <motion.div
+          variants={fadeUp} initial="hidden" animate="show" custom={0}
+          className="mb-12"
+        >
+          <h2 className="font-montserrat font-black text-base-content mb-4"
+            style={{ fontSize: 'clamp(1.3rem, 3vw, 1.8rem)' }}>
+            Data Categories We Process
+          </h2>
+          <div className="card overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ background: 'var(--primary)' }}>
+                  {['Category', 'Examples', 'Applies To'].map(h => (
+                    <th key={h} className="text-left px-4 py-3 font-bold text-xs uppercase tracking-wider"
+                      style={{ color: 'var(--primary-content)' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {DATA_CATEGORIES.map(({ cat, examples, roles }, i) => (
+                  <tr
+                    key={cat}
+                    style={{ background: i % 2 === 0 ? 'var(--base-100)' : 'var(--base-200)' }}
+                  >
+                    <td className="px-4 py-3 font-bold text-xs text-base-content whitespace-nowrap">{cat}</td>
+                    <td className="px-4 py-3 text-xs" style={{ color: 'color-mix(in oklch, var(--base-content) 70%, transparent)' }}>{examples}</td>
+                    <td className="px-4 py-3">
+                      <span className="badge badge-primary text-[10px]">{roles}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </motion.div>
-      )}
 
-      {/* ── Notice banner ── */}
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.55 }}
-        className="alert alert-info container-custom max-w-5xl mx-auto mb-8 px-4"
-      >
-        <Info size={16} style={{ color: 'var(--info)', flexShrink: 0 }} />
-        <span className="text-sm">
-          This policy is effective as of <strong>{effectiveDate}</strong>. We notify users of any material changes via email and in-app notifications.
-        </span>
-      </motion.div>
-
-      {/* ── Main ── */}
-      <main className="container-custom max-w-5xl mx-auto px-4 pb-24">
-        {loading ? (
-          <SkeletonLoader />
-        ) : error ? (
-          <div className="alert alert-error p-6 rounded-xl">
-            <AlertTriangle size={18} />
-            <span>{error}</span>
-          </div>
-        ) : (
-          <div className="flex gap-10 items-start">
-            <SideNav sections={sections} activeId={activeId} onNavigate={scrollToSection} />
-
-            <div className="flex-1 min-w-0 space-y-4">
-              {sections.map((section, i) => (
-                <PolicySectionCard
-                  key={section.id}
-                  section={section}
-                  index={i}
-                  onVisible={handleVisible}
-                />
-              ))}
-
-              {/* ── Data Categories ── */}
-              {dataCollected.length > 0 && (
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  viewport={{ once: true }}
-                  className="card p-6 space-y-4"
-                >
-                  <div className="flex items-center gap-3 mb-2">
-                    <span className="w-10 h-10 rounded-xl flex items-center justify-center"
-                          style={{ background: 'color-mix(in srgb, var(--primary), transparent 82%)' }}>
-                      <Database size={18} style={{ color: 'var(--primary)' }} />
+        {/* Dynamic dataCollected from DB */}
+        {policy?.dataCollected?.length > 0 && (
+          <motion.div variants={stagger} initial="hidden" animate="show" className="mb-12">
+            <h2 className="font-montserrat font-black text-base-content mb-4"
+              style={{ fontSize: 'clamp(1.3rem, 3vw, 1.8rem)' }}>
+              Detailed Data Processing Records
+            </h2>
+            <div className="grid sm:grid-cols-2 gap-4">
+              {policy.dataCollected.map((item, i) => (
+                <motion.div key={i} variants={fadeUp} custom={i} className="card p-5">
+                  <p className="font-montserrat font-black text-sm text-base-content mb-1">{item.category}</p>
+                  <p className="text-xs leading-relaxed mb-2"
+                    style={{ color: 'color-mix(in oklch, var(--base-content) 68%, transparent)' }}>
+                    {item.description}
+                  </p>
+                  {item.retentionPeriod && (
+                    <span className="badge badge-info text-[10px]">
+                      <Clock size={9} /> {item.retentionPeriod}
                     </span>
-                    <h3 className="font-montserrat font-black text-lg">Data Categories Breakdown</h3>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {dataCollected.map((item, i) => (
-                      <DataCategoryCard key={i} item={item} index={i} />
-                    ))}
-                  </div>
+                  )}
                 </motion.div>
-              )}
-
-              {/* ── Rights Summary ── */}
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                className="card p-6"
-              >
-                <div className="flex items-center gap-3 mb-5">
-                  <span className="w-10 h-10 rounded-xl flex items-center justify-center"
-                        style={{ background: 'color-mix(in srgb, var(--success), transparent 82%)' }}>
-                    <CheckCircle2 size={18} style={{ color: 'var(--success)' }} />
-                  </span>
-                  <h3 className="font-montserrat font-black text-lg">Your Data Rights at a Glance</h3>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {[
-                    { label: 'Right to Access',    emoji: '📋' },
-                    { label: 'Right to Correct',   emoji: '✏️' },
-                    { label: 'Right to Delete',    emoji: '🗑️' },
-                    { label: 'Right to Port',      emoji: '📦' },
-                    { label: 'Right to Object',    emoji: '✋' },
-                    { label: 'Right to Restrict',  emoji: '🔒' },
-                  ].map(({ label, emoji }, i) => (
-                    <motion.div
-                      key={label}
-                      initial={{ opacity: 0, scale: 0.9 }}
-                      whileInView={{ opacity: 1, scale: 1 }}
-                      viewport={{ once: true }}
-                      transition={{ delay: i * 0.06 }}
-                      className="glass-card p-3 flex flex-col items-center text-center gap-1"
-                    >
-                      <span className="text-2xl">{emoji}</span>
-                      <span className="text-xs font-bold" style={{ color: 'var(--base-content)' }}>{label}</span>
-                    </motion.div>
-                  ))}
-                </div>
-              </motion.div>
-
-              {/* ── Contact Footer ── */}
-              <motion.div
-                initial={{ opacity: 0 }}
-                whileInView={{ opacity: 1 }}
-                viewport={{ once: true }}
-                className="glass-card p-6 flex items-start gap-4"
-              >
-                <ShieldCheck size={24} style={{ color: 'var(--success)', flexShrink: 0, marginTop: 2 }} />
-                <div>
-                  <p className="font-montserrat font-black text-sm mb-1">
-                    Contact our Data Protection Officer
-                  </p>
-                  <p className="text-xs" style={{ color: 'color-mix(in oklch, var(--base-content) 70%, transparent)' }}>
-                    Reach us at{' '}
-                    <a href="mailto:dpo@example.com" className="text-primary font-semibold">
-                      dpo@example.com
-                    </a>{' '}
-                    for any privacy concerns or to exercise your data rights. We respond within 30 days.
-                  </p>
-                </div>
-              </motion.div>
+              ))}
             </div>
-          </div>
+          </motion.div>
         )}
-      </main>
 
-      {/* ── Back to top ── */}
-      <AnimatePresence>
-        {showTop && (
-          <motion.button
-            initial={{ opacity: 0, scale: 0.8, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.8, y: 20 }}
-            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-            className="fixed bottom-8 right-8 w-12 h-12 rounded-full flex items-center justify-center z-40 no-print"
-            style={{
-              background: 'linear-gradient(135deg, var(--secondary), var(--primary))',
-              color: 'var(--primary-content)',
-              boxShadow: '0 4px 20px color-mix(in srgb, var(--secondary), transparent 50%)',
-            }}
-            aria-label="Back to top"
-          >
-            <ArrowUp size={18} />
-          </motion.button>
-        )}
-      </AnimatePresence>
-    </div>
+        {/* Contact DPO */}
+        <motion.div
+          variants={fadeUp} initial="hidden" animate="show" custom={0}
+          className="card p-6"
+          style={{ border: '1px solid color-mix(in srgb, var(--primary), transparent 65%)' }}
+        >
+          <h3 className="font-montserrat font-black text-base-content mb-2 flex items-center gap-2">
+            <Shield size={16} style={{ color: 'var(--primary)' }} />
+            Contact Our Data Protection Officer
+          </h3>
+          <p className="text-sm leading-relaxed mb-4"
+            style={{ color: 'color-mix(in oklch, var(--base-content) 70%, transparent)' }}>
+            For data access requests, corrections, deletions, or to exercise your GDPR/PDPA rights,
+            contact us directly. We respond within 30 days.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <a href="mailto:dpo@likeson.in" className="btn-primary-cta" style={{ fontSize: '0.8rem', padding: '0.55rem 1.2rem' }}>
+              Email DPO
+            </a>
+            <a href="/contact" className="btn-secondary" style={{ fontSize: '0.8rem', padding: '0.55rem 1.2rem' }}>
+              Contact Us
+            </a>
+          </div>
+        </motion.div>
+
+        {/* Consent status */}
+        <motion.div
+          variants={fadeUp} initial="hidden" animate="show" custom={1}
+          className="mt-6"
+        >
+          {status?.privacyAccepted ? (
+            <div className="alert alert-success flex items-center gap-2">
+              <CheckCircle2 size={16} style={{ color: 'var(--success)' }} />
+              <span className="text-sm font-semibold">
+                You have accepted this Privacy Policy (v{status.activePrivacyVersion}).
+              </span>
+            </div>
+          ) : (
+            <div className="alert alert-warning flex items-center justify-between flex-wrap gap-3">
+              <span className="flex items-center gap-2 text-sm font-semibold">
+                <AlertCircle size={16} style={{ color: 'var(--warning)' }} />
+                You haven&apos;t accepted the current Privacy Policy yet.
+              </span>
+              <button
+                onClick={handleAccept}
+                disabled={submitting}
+                className="btn-primary-cta"
+                style={{ fontSize: '0.78rem', padding: '0.5rem 1rem' }}
+              >
+                {submitting ? 'Saving…' : 'Accept Now'}
+              </button>
+            </div>
+          )}
+        </motion.div>
+
+      </div>
+
+      <ConsentBanner status={status} submitting={submitting} onAccept={handleAccept} />
+      <BackToTop />
+    </main>
   );
 }
