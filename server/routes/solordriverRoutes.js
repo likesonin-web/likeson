@@ -1,35 +1,4 @@
-/**
- * ═══════════════════════════════════════════════════════════════════════════════
- * SOLO DRIVER PARTNER ROUTER — Likeson.in
- * ═══════════════════════════════════════════════════════════════════════════════
- *
- * Self-contained router for SoloDriverPartner operations.
- * All logic lives here — no separate controller/service files.
- *
- * SECTIONS
- *  §0   Imports & Bootstrap
- *  §1   Internal Logger
- *  §2   Input Validation Helpers
- *  §3   Async Wrapper
- *  §4   Solo-Partner Middleware (attach + guard)
- *  §5   Cache Key Builders
- *  §6   Audit Helper
- *  §7   Profile Routes          (own profile, settings, notifications)
- *  §8   KYC Routes              (submit, re-submit, status)
- *  §9   Vehicle Routes          (details, update, documents)
- *  §10  Bank & Settlement Routes
- *  §11  Availability & Location Routes
- *  §12  Service Zones & Pricing Routes
- *  §13  Stats & Rating Routes
- *  §14  Documents & Compliance Routes
- *  §15  Security Routes         (sessions, devices, account actions)
- *  §16  Admin Routes            (list, detail, verify, block, assign driver)
- *  §17  Export
- *
- * ═══════════════════════════════════════════════════════════════════════════════
- */
-
-// ── §0  Imports & Bootstrap ───────────────────────────────────────────────────
+ 
 
 import express              from 'express';
 import mongoose             from 'mongoose';

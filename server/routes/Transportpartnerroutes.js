@@ -492,33 +492,38 @@ router.patch(
   transportPartnerRoutes,
   async (req, res) => {
     try {
-      // Partners cannot change verificationStatus — admin-only
       const forbidden = ['verificationStatus', 'verifiedAt', 'verifiedBy', 'vehicleCode'];
-      forbidden.forEach((f) => delete req.body[f]);
+      const body = { ...req.body };
+      forbidden.forEach((f) => delete body[f]);
+
+      if (!Object.keys(body).length) {
+        return res.status(400).json({ success: false, message: 'No valid fields to update' });
+      }
 
       const setPayload = {};
-      Object.keys(req.body).forEach((key) => {
-        setPayload[`vehicles.$.${key}`] = req.body[key];
+      Object.keys(body).forEach((key) => {
+        setPayload[`vehicles.$.${key}`] = body[key];
       });
       setPayload.updatedBy = req.user._id;
 
       const agency = await TransportPartner.findOneAndUpdate(
         { _id: req.transportPartner.agency._id, 'vehicles._id': req.params.vehicleId },
         { $set: setPayload },
-        { new: true, runValidators: true }
-      ).select('vehicles.$');
+        { returnDocument: 'after', runValidators: true }
+      ).select('vehicles');                              // ← full array, no $
 
       if (!agency) return res.status(404).json({ success: false, message: 'Vehicle not found' });
 
+      const updated = agency.vehicles.id(req.params.vehicleId); // ← find subdoc by id
+
       await invalidateTPCache(req.transportPartner.agency._id);
 
-      return res.json({ success: true, message: 'Vehicle updated', data: agency.vehicles[0] });
+      return res.json({ success: true, message: 'Vehicle updated', data: updated });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
   }
 );
-
 /**
  * DELETE /api/transport/vehicles/:vehicleId
  * Soft-delete vehicle (set isActive: false)
