@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import {
@@ -10,7 +10,7 @@ import {
   ShieldAlert, FileUser, Plus, Trash2, Loader2,
   CheckCircle2, AlertCircle, Heart, Stethoscope,
   Award, Star, BadgeCheck, TrendingUp, Car,
-  Contact2, Info, ChevronRight, Languages,
+  Contact2, Info, ChevronRight, Languages, ArrowLeft,
 } from "lucide-react";
 
 import {
@@ -28,6 +28,7 @@ import {
   selectPartnershipStatus,
 } from "@/store/slices/soloDriverSlice";
 import { uploadSingleFile } from "@/store/slices/uploadSlice";
+import Container from "@/components/ui/Container";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Route → Tab map
@@ -96,14 +97,35 @@ const SectionCard = ({ title, icon: Icon, subtitle, children, index = 0 }) => (
   </motion.div>
 );
 
-/** Label + optional hint */
-const Field = ({ label, hint, children }) => (
-  <div className="space-y-1.5">
-    <label className="text-[10px] font-black uppercase tracking-widest text-base-content/40">{label}</label>
-    {children}
-    {hint && <p className="text-[10px] text-base-content/30 leading-relaxed">{hint}</p>}
-  </div>
-);
+/**
+ * Field wrapper — label + optional note (small helper text above input) + hint below
+ * note: short label note shown inline next to label (e.g. "Required", "Auto-generated")
+ */
+const Field = ({ label, note, noteVariant = "info", hint, children }) => {
+  const noteStyles = {
+    info:     "text-info",
+    warning:  "text-warning",
+    success:  "text-success",
+    error:    "text-error",
+    muted:    "text-base-content/30",
+  };
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <label className="text-[10px] font-black uppercase tracking-widest text-base-content/40">
+          {label}
+        </label>
+        {note && (
+          <span className={`text-[9px] font-bold uppercase tracking-wide ${noteStyles[noteVariant] || noteStyles.info}`}>
+            · {note}
+          </span>
+        )}
+      </div>
+      {children}
+      {hint && <p className="text-[10px] text-base-content/30 leading-relaxed">{hint}</p>}
+    </div>
+  );
+};
 
 const Input = ({ value, onChange, placeholder, type = "text", disabled = false }) => (
   <input
@@ -182,12 +204,19 @@ const CompletionRing = ({ percent }) => {
 export default function ProfilePage() {
   const dispatch    = useDispatch();
   const pathname    = usePathname();
+  const router      = useRouter();
 
   // ── Selectors ─────────────────────────────────────────────────────────
-  // selectProfile should return the profile from the Redux store (data.data from API).
-  // The API returns: { success, data: { ...profileFields, profile: { ...nestedFields } } }
-  // We handle both flat (data.data) and nested (data.data.profile) shapes below.
-  const profile     = useSelector(selectProfile);
+  //
+  // selectProfile → SoloDriverPartner flat doc (data from GET /me):
+  //   Fields live directly on the doc:
+  //     displayName, legalName, partnerCode, bio, phone, address,
+  //     kyc.verificationStatus, performance.rating, performance.totalRidesCompleted,
+  //     profileCompletionPercent, partnershipStatus, trainingCertificates, etc.
+  //   Linked User doc is populated under profile.user:
+  //     profile.user.name, profile.user.avatar (for fallback avatar)
+  //
+  const profile     = useSelector(selectProfile);          // SoloDriverPartner doc
   const completion  = useSelector(selectProfileCompletion); // profileCompletionPercent
   const status      = useSelector(selectPartnershipStatus); // partnershipStatus
   const isLoading   = useSelector(selectLoading("profile"));
@@ -212,44 +241,41 @@ export default function ProfilePage() {
   // ── Fetch profile on mount ─────────────────────────────────────────────
   useEffect(() => { dispatch(fetchMyProfile()); }, [dispatch]);
 
-  // ── Resolve the canonical profile object from either API shape ─────────
-  // Shape A (fetchMyProfile → solo partner): data.data  → flat object with all fields
-  // Shape B (fetchMyProfile → user endpoint): data.data → user object with data.data.profile nested
-  const resolvedProfile = profile?.profile ?? profile ?? {};
-
   // ── Sync profile → local form state ───────────────────────────────────
+  //
+  // profile = SoloDriverPartner flat doc. All fields accessed directly.
+  // DO NOT use profile.profile — there is no nesting. The virtual `profile`
+  // on User model resolves to role-specific doc, but here selectProfile
+  // already IS the SoloDriverPartner doc returned from GET /me.
+  //
   useEffect(() => {
     if (!profile) return;
-    const p = profile.profile ?? profile;
 
     setBasic({
-      displayName:            p.displayName            || "",
-      dateOfBirth:            p.dateOfBirth ? p.dateOfBirth.split("T")[0] : "",
-      gender:                 p.gender                 || "",
-      bio:                    p.bio                    || "",
-      yearsOfExperience:      p.yearsOfExperience      ?? 0,
-      hasMedicalTransportExp: p.hasMedicalTransportExp ?? false,
-      hasAmbulanceExp:        p.hasAmbulanceExp        ?? false,
-      profilePhotoUrl:        p.profilePhotoUrl        || "",
+      displayName:            profile.displayName            || "",
+      dateOfBirth:            profile.dateOfBirth ? profile.dateOfBirth.split("T")[0] : "",
+      gender:                 profile.gender                 || "",
+      bio:                    profile.bio                    || "",
+      profilePhotoUrl:        profile.profilePhotoUrl        || "",
     });
 
     setContact({
-      phone:          p.phone          || "",
-      altPhone:       p.altPhone       || "",
-      whatsappNumber: p.whatsappNumber || "",
-      email:          p.email          || "",
+      phone:          profile.phone          || "",
+      altPhone:       profile.altPhone       || "",
+      whatsappNumber: profile.whatsappNumber || "",
+      email:          profile.email          || "",
     });
 
-    setAddress(p.address || {});
+    setAddress(profile.address || {});
 
     setProfessional({
-      yearsOfExperience:      p.yearsOfExperience      ?? 0,
-      hasMedicalTransportExp: p.hasMedicalTransportExp ?? false,
-      hasAmbulanceExp:        p.hasAmbulanceExp        ?? false,
-      languagesSpoken:        p.languagesSpoken        || [],
+      yearsOfExperience:      profile.yearsOfExperience      ?? 0,
+      hasMedicalTransportExp: profile.hasMedicalTransportExp ?? false,
+      hasAmbulanceExp:        profile.hasAmbulanceExp        ?? false,
+      languagesSpoken:        profile.languagesSpoken        || [],
     });
 
-    setEmergency(p.emergencyContact || {});
+    setEmergency(profile.emergencyContact || {});
   }, [profile]);
 
   // ── Action handlers ────────────────────────────────────────────────────
@@ -286,223 +312,271 @@ export default function ProfilePage() {
   // ── Loading skeleton ───────────────────────────────────────────────────
   if (isLoading && !profile) {
     return (
-      <div className="flex items-center justify-center h-[60vh]">
-        <div className="flex flex-col items-center gap-4">
-          <div className="spinner w-10 h-10" />
-          <p className="text-xs font-black uppercase tracking-widest text-base-content/40">Loading Profile...</p>
+      <Container>
+        <div className="flex items-center justify-center h-[60vh]">
+          <div className="flex flex-col items-center gap-4">
+            <div className="spinner w-10 h-10" />
+            <p className="text-xs font-black uppercase tracking-widest text-base-content/40">Loading Profile...</p>
+          </div>
         </div>
-      </div>
+      </Container>
     );
   }
 
-  // ── Resolve display values from API data ───────────────────────────────
-  // Handles both API response shapes
-  const avatarUrl   = resolvedProfile.profilePhotoUrl
-                   || profile?.avatar
+  // ── Resolve display values from SoloDriverPartner flat doc ─────────────
+  //
+  // profile.user → populated User sub-doc (name, avatar) via populate('user', ...)
+  // profile.profilePhotoUrl → partner's own photo (takes priority)
+  // profile.performance.rating → avg rating (Number, from performance sub-schema)
+  // profile.performance.totalRidesCompleted → ride count
+  // profile.kyc.verificationStatus → 'pending'|'verified'|'rejected'|'not-submitted'
+  //
+  const avatarUrl   = profile?.profilePhotoUrl
+                   || profile?.user?.avatar
                    || "";
 
-  const displayName = resolvedProfile.displayName
-                   || resolvedProfile.legalName
-                   || profile?.name
+  const displayName = profile?.displayName
+                   || profile?.legalName
+                   || profile?.user?.name
                    || "Your Name";
 
-  const partnerCode = resolvedProfile.partnerCode || "—";
+  const partnerCode = profile?.partnerCode || "—";
 
-  const bio         = resolvedProfile.bio
-                   || "No bio yet — add one under Personal Details.";
+  const bio         = profile?.bio || "No bio yet — add one under Personal Details.";
 
-  const avgRating   = resolvedProfile.rating?.averageRating?.toFixed(1)
-                   ?? resolvedProfile.driverProfile?.performance?.rating?.toFixed(1)
-                   ?? "0.0";
+  // performance.rating is a Number (0–5). Default 0.
+  const avgRating   = (profile?.performance?.rating ?? 0).toFixed(1);
 
-  const totalRides  = resolvedProfile.stats?.totalRidesCompleted
-                   ?? resolvedProfile.rating?.totalRides
-                   ?? 0;
+  // performance.totalRidesCompleted is a Number. Default 0.
+  const totalRides  = profile?.performance?.totalRidesCompleted ?? 0;
 
-  const kycStatus   = resolvedProfile.kyc?.verificationStatus ?? "Not Submitted";
+  // kyc.verificationStatus: 'not-submitted'|'pending'|'under-review'|'verified'|'rejected'
+  const kycStatus   = profile?.kyc?.verificationStatus ?? "not-submitted";
 
-  const certificates = resolvedProfile.trainingCertificates || [];
+  const certificates = profile?.trainingCertificates || [];
 
-  const completionPct = completion ?? resolvedProfile.profileCompletionPercent ?? 0;
+  const completionPct = completion ?? profile?.profileCompletionPercent ?? 0;
 
   // ══════════════════════════════════════════════════════════════════════
   return (
-    <div  className="space-y-6 px-4 sm:space-y-6">
+    <Container>
+      <div className="space-y-6 py-4 sm:space-y-6">
 
-      {/* ── Hero Banner ─────────────────────────────────────────────────── */}
-      <motion.div
-        variants={fadeUp} initial="hidden" animate="visible"
-        className="relative rounded-2xl sm:rounded-3xl overflow-hidden border border-base-300 bg-gradient-to-br from-primary/10 via-base-200 to-secondary/10 p-4 sm:p-6"
-      >
-        {/* Ambient blobs */}
-        <div
-          className="absolute inset-0 opacity-5 pointer-events-none"
-          style={{
-            backgroundImage: [
-              "radial-gradient(circle at 15% 55%, var(--primary) 0%, transparent 55%)",
-              "radial-gradient(circle at 85% 20%, var(--secondary) 0%, transparent 55%)",
-            ].join(", "),
-          }}
-        />
+        {/* ── Back Button ─────────────────────────────────────────────────── */}
+        <motion.div variants={fadeUp} initial="hidden" animate="visible">
+          <button
+            onClick={() => router.back()}
+            className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-base-content/50 hover:text-primary transition-colors group"
+          >
+            <span className="p-1.5 rounded-xl bg-base-200 border border-base-300 group-hover:border-primary/40 group-hover:bg-primary/5 transition-all">
+              <ArrowLeft size={13} />
+            </span>
+            Go Back
+          </button>
+        </motion.div>
 
-        <div className="relative flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-6">
-
-          {/* Avatar */}
-          <div className="relative shrink-0">
-            <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden border-2 border-primary/30 shadow-xl bg-base-300">
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt="Profile"
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center">
-                  <Car size={32} className="text-primary/40" />
-                </div>
-              )}
-            </div>
-            <button
-              onClick={() => photoRef.current?.click()}
-              disabled={isUploading}
-              title="Upload photo"
-              className="absolute -bottom-2 -right-2 p-1.5 rounded-xl bg-primary text-primary-content shadow-lg hover:scale-110 transition-transform disabled:opacity-50"
-            >
-              {isUploading ? <Loader2 size={13} className="animate-spin" /> : <Camera size={13} />}
-            </button>
-            <input ref={photoRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
-          </div>
-
-          {/* Name / bio */}
-          <div className="flex-1 text-center sm:text-left min-w-0">
-            <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 mb-1">
-              <h1 className="text-xl sm:text-2xl font-black tracking-tight text-base-content truncate max-w-[200px] sm:max-w-none">
-                {displayName}
-              </h1>
-              {status && <StatusBadge status={status} />}
-            </div>
-            <p className="text-[10px] sm:text-xs text-base-content/40 font-mono uppercase tracking-widest">
-              {partnerCode}
-            </p>
-            <p className="text-xs sm:text-sm text-base-content/60 mt-1 max-w-sm mx-auto sm:mx-0 line-clamp-2">
-              {bio}
-            </p>
-          </div>
-
-          {/* Progress ring */}
-          <CompletionRing percent={completionPct} />
-        </div>
-
-        {/* Stat chips */}
-        <div className="relative mt-4 sm:mt-5 flex flex-wrap gap-2 sm:gap-3">
-          {[
-            { icon: Star,       value: avgRating,  label: "Rating" },
-            { icon: TrendingUp, value: totalRides, label: "Rides"  },
-            { icon: BadgeCheck, value: kycStatus,  label: "KYC"    },
-          ].map(({ icon: Icon, value, label }) => (
-            <div
-              key={label}
-              className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 sm:py-2 bg-base-100/60 border border-base-300 rounded-xl backdrop-blur-sm"
-            >
-              <Icon size={12} className="text-primary" />
-              <span className="text-[11px] sm:text-xs font-black text-base-content">{value}</span>
-              <span className="text-[8px] sm:text-[9px] uppercase tracking-widest text-base-content/40">{label}</span>
-            </div>
-          ))}
-        </div>
-      </motion.div>
-
-      {/* ── URL-driven Tab Nav ───────────────────────────────────────────── */}
-      <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={1} className="space-y-2">
-        {/* Scrollable tab strip — hides scrollbar but stays scrollable on mobile */}
-        <div
-          className="flex gap-1 bg-base-200 p-1 rounded-2xl overflow-x-auto"
-          style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
-        >
-          {TABS.map(({ id, label, icon: Icon, href }) => (
-            <Link
-              key={id}
-              href={href}
-              className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest whitespace-nowrap transition-all ${
-                activeTab === id
-                  ? "bg-primary text-primary-content shadow-md"
-                  : "text-base-content/50 hover:text-base-content hover:bg-base-300"
-              }`}
-            >
-              <Icon size={11} />
-              {label}
-            </Link>
-          ))}
-        </div>
-
-        {/* Breadcrumb */}
-        <div className="flex items-center gap-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-base-content/30">
-          <Link href="/partner/solo/profile" className="hover:text-primary transition-colors">Profile</Link>
-          <ChevronRight size={9} />
-          <span className="text-primary">{TABS.find((t) => t.id === activeTab)?.label}</span>
-        </div>
-      </motion.div>
-
-      {/* ── Tab Content ─────────────────────────────────────────────────── */}
-      <AnimatePresence mode="wait">
+        {/* ── Hero Banner ─────────────────────────────────────────────────── */}
         <motion.div
-          key={activeTab}
-          initial={{ opacity: 0, y: 14 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -14 }}
-          transition={{ duration: 0.28 }}
+          variants={fadeUp} initial="hidden" animate="visible"
+          className="relative rounded-2xl sm:rounded-3xl overflow-hidden border border-base-300 bg-gradient-to-br from-primary/10 via-base-200 to-secondary/10 p-4 sm:p-6"
         >
+          {/* Ambient blobs */}
+          <div
+            className="absolute inset-0 opacity-5 pointer-events-none"
+            style={{
+              backgroundImage: [
+                "radial-gradient(circle at 15% 55%, var(--primary) 0%, transparent 55%)",
+                "radial-gradient(circle at 85% 20%, var(--secondary) 0%, transparent 55%)",
+              ].join(", "),
+            }}
+          />
 
-          {/* ══ Personal Details ══════════════════════════════════════════ */}
-          {activeTab === "personal" && (
-            <SectionCard
-              title="Personal Details"
-              icon={UserRound}
-              subtitle="Your basic identity on the Likeson platform. Your display name is visible to riders; your legal name is managed by admin."
-              index={0}
-            >
-              <InfoNote>
-                Fill in all fields to improve your <strong>profile completion score</strong>.
-                A higher score increases your match priority for premium rides.
-              </InfoNote>
+          <div className="relative flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-6">
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                <Field label="Display Name" hint="Shown to riders on the booking screen.">
-                  <Input
-                    value={basic.displayName}
-                    onChange={(e) => setBasic((p) => ({ ...p, displayName: e.target.value }))}
-                    placeholder="e.g. Ravi Kumar"
+            {/* Avatar */}
+            <div className="relative shrink-0">
+              <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden border-2 border-primary/30 shadow-xl bg-base-300">
+                {avatarUrl ? (
+                  <img
+                    src={avatarUrl}
+                    alt="Profile"
+                    className="w-full h-full object-cover"
                   />
-                </Field>
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center">
+                    <Car size={32} className="text-primary/40" />
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => photoRef.current?.click()}
+                disabled={isUploading}
+                title="Upload profile photo"
+                className="absolute -bottom-2 -right-2 p-1.5 rounded-xl bg-primary text-primary-content shadow-lg hover:scale-110 transition-transform disabled:opacity-50"
+              >
+                {isUploading ? <Loader2 size={13} className="animate-spin" /> : <Camera size={13} />}
+              </button>
+              <input ref={photoRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
+            </div>
 
-                <Field label="Date of Birth" hint="Used for identity verification. Not shown publicly.">
-                  <Input
-                    type="date"
-                    value={basic.dateOfBirth}
-                    onChange={(e) => setBasic((p) => ({ ...p, dateOfBirth: e.target.value }))}
-                  />
-                </Field>
+            {/* Name / bio */}
+            <div className="flex-1 text-center sm:text-left min-w-0">
+              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 mb-1">
+                <h1 className="text-xl sm:text-2xl font-black tracking-tight text-base-content truncate max-w-[200px] sm:max-w-none">
+                  {displayName}
+                </h1>
+                {status && <StatusBadge status={status} />}
+              </div>
+              {/* partnerCode from SoloDriverPartner.partnerCode (format: LKS-SDP-XXXXXX) */}
+              <p className="text-[10px] sm:text-xs text-base-content/40 font-mono uppercase tracking-widest">
+                {partnerCode}
+              </p>
+              <p className="text-xs sm:text-sm text-base-content/60 mt-1 max-w-sm mx-auto sm:mx-0 line-clamp-2">
+                {bio}
+              </p>
+            </div>
 
-                <Field label="Gender">
-                  <Select value={basic.gender} onChange={(e) => setBasic((p) => ({ ...p, gender: e.target.value }))}>
-                    <option value="">Select gender</option>
-                    {["Male", "Female", "Other", "Prefer Not to Say"].map((g) => (
-                      <option key={g}>{g}</option>
-                    ))}
-                  </Select>
-                </Field>
+            {/* Progress ring — profileCompletionPercent from SoloDriverPartner */}
+            <CompletionRing percent={completionPct} />
+          </div>
 
-                <Field label="Years of Driving Experience" hint="Total years as a paid, professional driver.">
-                  <Input
-                    type="number"
-                    value={basic.yearsOfExperience}
-                    onChange={(e) => setBasic((p) => ({ ...p, yearsOfExperience: Number(e.target.value) }))}
-                    placeholder="e.g. 5"
-                  />
-                </Field>
+          {/* Stat chips */}
+          <div className="relative mt-4 sm:mt-5 flex flex-wrap gap-2 sm:gap-3">
+            {[
+              {
+                icon:  Star,
+                // performance.rating (Number 0–5) from SoloDriverPartner.performance sub-schema
+                value: avgRating,
+                label: "Rating",
+              },
+              {
+                icon:  TrendingUp,
+                // performance.totalRidesCompleted (Number) from SoloDriverPartner.performance
+                value: totalRides,
+                label: "Rides",
+              },
+              {
+                icon:  BadgeCheck,
+                // kyc.verificationStatus from SoloDriverPartner.kyc sub-schema
+                value: kycStatus,
+                label: "KYC",
+              },
+            ].map(({ icon: Icon, value, label }) => (
+              <div
+                key={label}
+                className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 sm:py-2 bg-base-100/60 border border-base-300 rounded-xl backdrop-blur-sm"
+              >
+                <Icon size={12} className="text-primary" />
+                <span className="text-[11px] sm:text-xs font-black text-base-content">{value}</span>
+                <span className="text-[8px] sm:text-[9px] uppercase tracking-widest text-base-content/40">{label}</span>
+              </div>
+            ))}
+          </div>
+        </motion.div>
 
-                <div className="sm:col-span-2">
-                  <Field label="Bio" hint="Max 500 characters. Tell riders a little about yourself.">
+        {/* ── URL-driven Tab Nav ───────────────────────────────────────────── */}
+        <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={1} className="space-y-2">
+          <div
+            className="flex gap-1 bg-base-200 p-1 rounded-2xl overflow-x-auto"
+            style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+          >
+            {TABS.map(({ id, label, icon: Icon, href }) => (
+              <Link
+                key={id}
+                href={href}
+                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest whitespace-nowrap transition-all ${
+                  activeTab === id
+                    ? "bg-primary text-primary-content shadow-md"
+                    : "text-base-content/50 hover:text-base-content hover:bg-base-300"
+                }`}
+              >
+                <Icon size={11} />
+                {label}
+              </Link>
+            ))}
+          </div>
+
+          {/* Breadcrumb */}
+          <div className="flex items-center gap-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-base-content/30">
+            <Link href="/partner/solo/profile" className="hover:text-primary transition-colors">Profile</Link>
+            <ChevronRight size={9} />
+            <span className="text-primary">{TABS.find((t) => t.id === activeTab)?.label}</span>
+          </div>
+        </motion.div>
+
+        {/* ── Tab Content ─────────────────────────────────────────────────── */}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -14 }}
+            transition={{ duration: 0.28 }}
+          >
+
+            {/* ══ Personal Details ══════════════════════════════════════════ */}
+            {activeTab === "personal" && (
+              <SectionCard
+                title="Personal Details"
+                icon={UserRound}
+                subtitle="Your basic identity on the Likeson platform. Display name is visible to riders; legal name is managed by admin."
+                index={0}
+              >
+                <InfoNote>
+                  Fill in all fields to improve your <strong>profile completion score</strong>.
+                  A higher score increases your match priority for premium rides.
+                </InfoNote>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+
+                  <Field
+                    label="Display Name"
+                    note="Visible to riders"
+                    hint="Shown to riders on the booking screen. Can differ from your legal name."
+                  >
+                    <Input
+                      value={basic.displayName}
+                      onChange={(e) => setBasic((p) => ({ ...p, displayName: e.target.value }))}
+                      placeholder="e.g. Ravi Kumar"
+                    />
+                  </Field>
+
+                  <Field
+                    label="Date of Birth"
+                    note="Private"
+                    noteVariant="muted"
+                    hint="Used for identity verification only. Never shown publicly to riders."
+                  >
+                    <Input
+                      type="date"
+                      value={basic.dateOfBirth}
+                      onChange={(e) => setBasic((p) => ({ ...p, dateOfBirth: e.target.value }))}
+                    />
+                  </Field>
+
+                  <Field
+                    label="Gender"
+                    note="Optional"
+                    noteVariant="muted"
+                    hint="Helps us improve ride matching preferences."
+                  >
+                    <Select value={basic.gender} onChange={(e) => setBasic((p) => ({ ...p, gender: e.target.value }))}>
+                      <option value="">Select gender</option>
+                      {["Male", "Female", "Other", "Prefer Not to Say"].map((g) => (
+                        <option key={g}>{g}</option>
+                      ))}
+                    </Select>
+                  </Field>
+
+                  <Field
+                    label="Bio"
+                    note="Max 500 chars"
+                    hint="Tell riders a little about yourself — experience, specialisations, languages."
+                  >
+                    {/* Bio spans full width on mobile, moved to sm:col-span-2 below */}
+                  </Field>
+
+                  <div className="sm:col-span-2 -mt-3">
                     <textarea
                       value={basic.bio}
                       onChange={(e) => setBasic((p) => ({ ...p, bio: e.target.value }))}
@@ -514,461 +588,579 @@ export default function ProfilePage() {
                     <p className="text-[9px] text-base-content/30 text-right mt-1">
                       {(basic.bio || "").length}/500
                     </p>
-                  </Field>
-                </div>
-              </div>
-
-              {/* Specialisations */}
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase tracking-widest text-base-content/40">
-                  Specialisations
-                </label>
-                <p className="text-[10px] text-base-content/30 leading-relaxed">
-                  Toggle the service types you are trained and equipped for. These influence your ride-matching priority.
-                </p>
-                <div className="flex flex-wrap gap-2 sm:gap-3 pt-1">
-                  {[
-                    { key: "hasMedicalTransportExp", label: "Medical Transport", icon: Stethoscope },
-                    { key: "hasAmbulanceExp",         label: "Ambulance",         icon: Heart        },
-                  ].map(({ key, label, icon: Icon }) => (
-                    <button
-                      key={key}
-                      onClick={() => setBasic((p) => ({ ...p, [key]: !p[key] }))}
-                      className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl border text-xs font-bold uppercase tracking-wide transition-all ${
-                        basic[key]
-                          ? "bg-primary/10 border-primary text-primary"
-                          : "border-base-300 text-base-content/40 hover:border-primary/50"
-                      }`}
-                    >
-                      <Icon size={13} />
-                      {label}
-                      {basic[key] && <CheckCircle2 size={11} />}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <SaveButton onClick={handleSaveBasic} loading={isUpdating} />
-            </SectionCard>
-          )}
-
-          {/* ══ Contact Info ══════════════════════════════════════════════ */}
-          {activeTab === "contact" && (
-            <SectionCard
-              title="Contact Info"
-              icon={Contact2}
-              subtitle="Your contact details are used by the operations team and for ride notifications. Keep them accurate and current."
-              index={0}
-            >
-              <InfoNote>
-                Your <strong>Primary Phone</strong> is tied to OTPs and ride alerts.
-                If you need to change your login phone number, please contact support directly.
-              </InfoNote>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                <Field label="Primary Phone *" hint="10-digit Indian mobile number — used for OTPs and ride alerts.">
-                  <Input
-                    value={contact.phone}
-                    onChange={(e) => setContact((p) => ({ ...p, phone: e.target.value }))}
-                    placeholder="9XXXXXXXXX"
-                  />
-                </Field>
-
-                <Field label="Alternate Phone" hint="Backup contact in case primary is unreachable.">
-                  <Input
-                    value={contact.altPhone}
-                    onChange={(e) => setContact((p) => ({ ...p, altPhone: e.target.value }))}
-                    placeholder="Optional"
-                  />
-                </Field>
-
-                <Field label="WhatsApp Number" hint="For ride confirmations and operational messages via WhatsApp.">
-                  <Input
-                    value={contact.whatsappNumber}
-                    onChange={(e) => setContact((p) => ({ ...p, whatsappNumber: e.target.value }))}
-                    placeholder="Same as primary? Enter here if different."
-                  />
-                </Field>
-
-                <Field label="Email Address" hint="For settlement reports, account alerts, and admin communication.">
-                  <Input
-                    type="email"
-                    value={contact.email}
-                    onChange={(e) => setContact((p) => ({ ...p, email: e.target.value }))}
-                    placeholder="you@example.com"
-                  />
-                </Field>
-              </div>
-
-              <InfoNote variant="warning">
-                Changes to your phone number or email are reviewed by the operations team
-                and may require re-verification before taking effect.
-              </InfoNote>
-
-              <SaveButton onClick={handleSaveContact} loading={isUpdating} />
-            </SectionCard>
-          )}
-
-          {/* ══ Address ═══════════════════════════════════════════════════ */}
-          {activeTab === "address" && (
-            <SectionCard
-              title="Residential Address"
-              icon={MapPin}
-              subtitle="Used for background verification and compliance records only. Your address is never shared with riders."
-              index={0}
-            >
-              <InfoNote>
-                Providing an accurate address speeds up your <strong>KYC approval</strong>.
-                City and State are required fields.
-              </InfoNote>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                <Field label="Street / Door No." hint="Flat number, building name, street name, locality.">
-                  <Input
-                    value={address.street}
-                    onChange={(e) => setAddress((p) => ({ ...p, street: e.target.value }))}
-                    placeholder="e.g. Flat 4B, Krishna Nagar"
-                  />
-                </Field>
-
-                <Field label="City *">
-                  <Input
-                    value={address.city}
-                    onChange={(e) => setAddress((p) => ({ ...p, city: e.target.value }))}
-                    placeholder="e.g. Vijayawada"
-                  />
-                </Field>
-
-                <Field label="State *">
-                  <Input
-                    value={address.state}
-                    onChange={(e) => setAddress((p) => ({ ...p, state: e.target.value }))}
-                    placeholder="e.g. Andhra Pradesh"
-                  />
-                </Field>
-
-                <Field label="PIN Code" hint="6-digit Indian postal code.">
-                  <Input
-                    value={address.pinCode}
-                    onChange={(e) => setAddress((p) => ({ ...p, pinCode: e.target.value }))}
-                    placeholder="500000"
-                  />
-                </Field>
-
-                <Field label="Country">
-                  <Input
-                    value={address.country || "India"}
-                    onChange={(e) => setAddress((p) => ({ ...p, country: e.target.value }))}
-                  />
-                </Field>
-              </div>
-
-              <SaveButton onClick={handleSaveAddress} loading={isUpdating} />
-            </SectionCard>
-          )}
-
-          {/* ══ Professional Info ══════════════════════════════════════════ */}
-          {activeTab === "professional" && (
-            <SectionCard
-              title="Professional Info"
-              icon={Briefcase}
-              subtitle="Your professional qualifications affect which ride types you are matched to. Keep this section accurate and up to date."
-              index={0}
-            >
-              <InfoNote>
-                Enabling <strong>Medical Transport</strong> or <strong>Ambulance Experience</strong> qualifies you
-                for higher-priority healthcare rides with better payout rates on the Likeson platform.
-              </InfoNote>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                <Field
-                  label="Years of Professional Driving Experience"
-                  hint="Count only years actively working as a paid driver."
-                >
-                  <Input
-                    type="number"
-                    value={professional.yearsOfExperience}
-                    onChange={(e) => setProfessional((p) => ({ ...p, yearsOfExperience: Number(e.target.value) }))}
-                    placeholder="e.g. 3"
-                  />
-                </Field>
-              </div>
-
-              <Field
-                label="Languages Spoken"
-                hint="Select all languages you can comfortably communicate in with riders."
-              >
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {LANGUAGES.map((lang) => (
-                    <button
-                      key={lang}
-                      onClick={() => toggleLang(lang)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold uppercase tracking-wide transition-all ${
-                        professional.languagesSpoken?.includes(lang)
-                          ? "bg-primary/10 border-primary text-primary"
-                          : "border-base-300 text-base-content/40 hover:border-primary/40"
-                      }`}
-                    >
-                      <Languages size={10} />
-                      {lang}
-                      {professional.languagesSpoken?.includes(lang) && <CheckCircle2 size={10} />}
-                    </button>
-                  ))}
-                </div>
-              </Field>
-
-              <Field
-                label="Special Capabilities"
-                hint="Toggle what you are trained or equipped for. This directly affects your matching priority."
-              >
-                <div className="flex flex-col sm:flex-row gap-3 mt-2">
-                  {[
-                    {
-                      key:   "hasMedicalTransportExp",
-                      label: "Medical Transport",
-                      icon:  Stethoscope,
-                      note:  "Trained in patient transport protocols",
-                    },
-                    {
-                      key:   "hasAmbulanceExp",
-                      label: "Ambulance Experience",
-                      icon:  Heart,
-                      note:  "Has operated or assisted in ambulance services",
-                    },
-                  ].map(({ key, label, icon: Icon, note }) => (
-                    <button
-                      key={key}
-                      onClick={() => setProfessional((p) => ({ ...p, [key]: !p[key] }))}
-                      className={`flex items-start gap-3 px-4 py-3.5 rounded-2xl border text-left flex-1 transition-all ${
-                        professional[key]
-                          ? "bg-primary/10 border-primary"
-                          : "border-base-300 hover:border-primary/40"
-                      }`}
-                    >
-                      <Icon
-                        size={18}
-                        className={`shrink-0 mt-0.5 ${professional[key] ? "text-primary" : "text-base-content/40"}`}
-                      />
-                      <div className="flex-1">
-                        <p className={`text-xs font-black uppercase tracking-wide ${professional[key] ? "text-primary" : "text-base-content/60"}`}>
-                          {label}
-                        </p>
-                        <p className="text-[10px] text-base-content/40 mt-0.5">{note}</p>
-                      </div>
-                      {professional[key] && (
-                        <CheckCircle2 size={15} className="text-primary shrink-0 self-center" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </Field>
-
-              <SaveButton onClick={handleSaveProfessional} loading={isUpdating} />
-            </SectionCard>
-          )}
-
-          {/* ══ Emergency Contact ══════════════════════════════════════════ */}
-          {activeTab === "emergency" && (
-            <SectionCard
-              title="Emergency Contact"
-              icon={ShieldAlert}
-              subtitle="This person will be notified only in genuine emergencies — accidents, medical incidents, or if you become unreachable mid-trip."
-              index={0}
-            >
-              <InfoNote variant="warning">
-                Please <strong>inform this person</strong> that they have been listed as your emergency contact on Likeson.
-                They should be reachable 24/7 and ideally located in the same city as you.
-              </InfoNote>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                <Field label="Full Name *" hint="Legal name of your emergency contact.">
-                  <Input
-                    value={emergency.name}
-                    onChange={(e) => setEmergency((p) => ({ ...p, name: e.target.value }))}
-                    placeholder="e.g. Lakshmi Devi"
-                  />
-                </Field>
-
-                <Field label="Relationship" hint="Your relationship to this person.">
-                  <Input
-                    value={emergency.relationship}
-                    onChange={(e) => setEmergency((p) => ({ ...p, relationship: e.target.value }))}
-                    placeholder="e.g. Spouse, Parent, Sibling"
-                  />
-                </Field>
-
-                <Field label="Phone Number *" hint="Must be reachable 24/7. Indian mobile preferred.">
-                  <Input
-                    value={emergency.phone}
-                    onChange={(e) => setEmergency((p) => ({ ...p, phone: e.target.value }))}
-                    placeholder="9XXXXXXXXX"
-                  />
-                </Field>
-              </div>
-
-              {/* Live preview chip */}
-              {emergency.name && emergency.phone && (
-                <InfoNote variant="success">
-                  Emergency contact set: <strong>{emergency.name}</strong>
-                  {emergency.relationship && ` (${emergency.relationship})`} — {emergency.phone}
-                </InfoNote>
-              )}
-
-              <SaveButton onClick={handleSaveEmergency} loading={isUpdating} />
-            </SectionCard>
-          )}
-
-          {/* ══ Certificates ═══════════════════════════════════════════════ */}
-          {activeTab === "certificates" && (
-            <SectionCard
-              title="Training Certificates"
-              icon={FileUser}
-              subtitle="Professional certifications strengthen your profile ranking and unlock premium ride categories."
-              index={0}
-            >
-              <InfoNote>
-                Certificates like <strong>First Aid</strong>, <strong>EVTS</strong>, or
-                <strong> Defensive Driving</strong> increase your match rate for specialised
-                medical rides. Expired certificates should be renewed and re-uploaded promptly.
-              </InfoNote>
-
-              {/* Certificate list */}
-              <div className="space-y-2.5">
-                {certificates.length === 0 ? (
-                  <div className="flex flex-col items-center gap-3 py-10 text-center">
-                    <Award size={36} className="text-base-content/20" />
-                    <p className="text-sm font-bold text-base-content/40">No certificates added yet</p>
-                    <p className="text-[10px] text-base-content/30 max-w-xs">
-                      Adding certifications can increase your match rate for specialised medical rides.
-                    </p>
                   </div>
-                ) : (
-                  certificates.map((cert) => {
-                    const isExpired = cert.expiresAt && new Date(cert.expiresAt) < new Date();
-                    return (
-                      <motion.div
-                        key={cert._id}
-                        initial={{ opacity: 0, x: -8 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        className={`flex items-center justify-between p-3 sm:p-4 rounded-2xl border bg-base-200/50 group hover:border-primary/40 transition-all ${
-                          isExpired ? "border-error/40 bg-error/5" : "border-base-300"
+                </div>
+
+                {/* Specialisations */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-base-content/40">
+                      Specialisations
+                    </label>
+                    <span className="text-[9px] font-bold uppercase tracking-wide text-info">· Affects ride matching</span>
+                  </div>
+                  <p className="text-[10px] text-base-content/30 leading-relaxed">
+                    Toggle the service types you are trained and equipped for. Enabling these increases your priority
+                    score for specialised healthcare rides with better payout rates.
+                  </p>
+                  <div className="flex flex-wrap gap-2 sm:gap-3 pt-1">
+                    {[
+                      { key: "hasMedicalTransportExp", label: "Medical Transport", icon: Stethoscope },
+                      { key: "hasAmbulanceExp",         label: "Ambulance",         icon: Heart        },
+                    ].map(({ key, label, icon: Icon }) => (
+                      <button
+                        key={key}
+                        onClick={() => setBasic((p) => ({ ...p, [key]: !p[key] }))}
+                        className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl border text-xs font-bold uppercase tracking-wide transition-all ${
+                          basic[key]
+                            ? "bg-primary/10 border-primary text-primary"
+                            : "border-base-300 text-base-content/40 hover:border-primary/50"
                         }`}
                       >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className={`p-2 rounded-xl shrink-0 ${isExpired ? "bg-error/10" : "bg-primary/10"}`}>
-                            <Award size={15} className={isExpired ? "text-error" : "text-primary"} />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-sm font-bold text-base-content flex items-center gap-2 flex-wrap">
-                              {cert.name}
-                              {isExpired && (
-                                <span className="text-[9px] bg-error/10 text-error border border-error/30 px-1.5 py-0.5 rounded font-black uppercase tracking-wide">
-                                  Expired
-                                </span>
-                              )}
-                            </p>
-                            <p className="text-[10px] text-base-content/40 mt-0.5 truncate">
-                              {cert.issuedBy || "—"}
-                              {cert.issuedAt  && ` · Issued: ${new Date(cert.issuedAt).toLocaleDateString()}`}
-                              {cert.expiresAt && ` · Expires: ${new Date(cert.expiresAt).toLocaleDateString()}`}
-                            </p>
-                          </div>
+                        <Icon size={13} />
+                        {label}
+                        {basic[key] && <CheckCircle2 size={11} />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <SaveButton onClick={handleSaveBasic} loading={isUpdating} />
+              </SectionCard>
+            )}
+
+            {/* ══ Contact Info ══════════════════════════════════════════════ */}
+            {activeTab === "contact" && (
+              <SectionCard
+                title="Contact Info"
+                icon={Contact2}
+                subtitle="Used by the operations team and for ride notifications. Keep these current and reachable."
+                index={0}
+              >
+                <InfoNote>
+                  Your <strong>Primary Phone</strong> is tied to OTPs and ride alerts.
+                  To change your login phone number, contact support.
+                </InfoNote>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+
+                  {/* phone → SoloDriverPartner.phone (10-digit Indian mobile, stored normalised) */}
+                  <Field
+                    label="Primary Phone"
+                    note="Required · OTP linked"
+                    noteVariant="warning"
+                    hint="10-digit Indian mobile. Used for OTPs, ride alerts, and driver dispatch."
+                  >
+                    <Input
+                      value={contact.phone}
+                      onChange={(e) => setContact((p) => ({ ...p, phone: e.target.value }))}
+                      placeholder="9XXXXXXXXX"
+                    />
+                  </Field>
+
+                  {/* altPhone → SoloDriverPartner.altPhone */}
+                  <Field
+                    label="Alternate Phone"
+                    note="Optional"
+                    noteVariant="muted"
+                    hint="Backup contact if your primary number is unreachable."
+                  >
+                    <Input
+                      value={contact.altPhone}
+                      onChange={(e) => setContact((p) => ({ ...p, altPhone: e.target.value }))}
+                      placeholder="Optional backup number"
+                    />
+                  </Field>
+
+                  {/* whatsappNumber → SoloDriverPartner.whatsappNumber */}
+                  <Field
+                    label="WhatsApp Number"
+                    note="Optional"
+                    noteVariant="muted"
+                    hint="For ride confirmations and updates via WhatsApp. Leave blank if same as primary."
+                  >
+                    <Input
+                      value={contact.whatsappNumber}
+                      onChange={(e) => setContact((p) => ({ ...p, whatsappNumber: e.target.value }))}
+                      placeholder="Same as primary? Enter here if different."
+                    />
+                  </Field>
+
+                  {/* email → SoloDriverPartner.email (partner's own email, may differ from User.email) */}
+                  <Field
+                    label="Email Address"
+                    note="For settlement reports"
+                    noteVariant="info"
+                    hint="Receives settlement reports, account alerts, and admin communications."
+                  >
+                    <Input
+                      type="email"
+                      value={contact.email}
+                      onChange={(e) => setContact((p) => ({ ...p, email: e.target.value }))}
+                      placeholder="you@example.com"
+                    />
+                  </Field>
+                </div>
+
+                <InfoNote variant="warning">
+                  Changes to phone or email are reviewed by the operations team
+                  and may require re-verification before taking effect.
+                </InfoNote>
+
+                <SaveButton onClick={handleSaveContact} loading={isUpdating} />
+              </SectionCard>
+            )}
+
+            {/* ══ Address ═══════════════════════════════════════════════════ */}
+            {activeTab === "address" && (
+              <SectionCard
+                title="Residential Address"
+                icon={MapPin}
+                subtitle="Used for background verification and compliance records only. Never shared with riders."
+                index={0}
+              >
+                <InfoNote>
+                  Providing an accurate address speeds up your <strong>KYC approval</strong>.
+                  City and State are required to submit KYC.
+                </InfoNote>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+
+                  {/* address.street → SoloDriverPartner.address.street */}
+                  <Field
+                    label="Street / Door No."
+                    note="Optional"
+                    noteVariant="muted"
+                    hint="Flat number, building name, street name, locality."
+                  >
+                    <Input
+                      value={address.street}
+                      onChange={(e) => setAddress((p) => ({ ...p, street: e.target.value }))}
+                      placeholder="e.g. Flat 4B, Krishna Nagar"
+                    />
+                  </Field>
+
+                  {/* address.city → SoloDriverPartner.address.city (required by schema) */}
+                  <Field
+                    label="City"
+                    note="Required"
+                    noteVariant="error"
+                    hint="Town or city where you primarily reside."
+                  >
+                    <Input
+                      value={address.city}
+                      onChange={(e) => setAddress((p) => ({ ...p, city: e.target.value }))}
+                      placeholder="e.g. Vijayawada"
+                    />
+                  </Field>
+
+                  {/* address.state → SoloDriverPartner.address.state (required by schema) */}
+                  <Field
+                    label="State"
+                    note="Required"
+                    noteVariant="error"
+                    hint="Indian state of residence."
+                  >
+                    <Input
+                      value={address.state}
+                      onChange={(e) => setAddress((p) => ({ ...p, state: e.target.value }))}
+                      placeholder="e.g. Andhra Pradesh"
+                    />
+                  </Field>
+
+                  {/* address.pinCode → SoloDriverPartner.address.pinCode */}
+                  <Field
+                    label="PIN Code"
+                    note="6 digits"
+                    noteVariant="muted"
+                    hint="Indian postal code for your residential area."
+                  >
+                    <Input
+                      value={address.pinCode}
+                      onChange={(e) => setAddress((p) => ({ ...p, pinCode: e.target.value }))}
+                      placeholder="500000"
+                    />
+                  </Field>
+
+                  {/* address.country → SoloDriverPartner.address.country (default: 'India') */}
+                  <Field
+                    label="Country"
+                    note="Default: India"
+                    noteVariant="muted"
+                    hint="Pre-filled as India. Update if applicable."
+                  >
+                    <Input
+                      value={address.country || "India"}
+                      onChange={(e) => setAddress((p) => ({ ...p, country: e.target.value }))}
+                    />
+                  </Field>
+                </div>
+
+                <SaveButton onClick={handleSaveAddress} loading={isUpdating} />
+              </SectionCard>
+            )}
+
+            {/* ══ Professional Info ══════════════════════════════════════════ */}
+            {activeTab === "professional" && (
+              <SectionCard
+                title="Professional Info"
+                icon={Briefcase}
+                subtitle="Your qualifications affect which ride types you are matched to. Keep this accurate."
+                index={0}
+              >
+                <InfoNote>
+                  Enabling <strong>Medical Transport</strong> or <strong>Ambulance Experience</strong> qualifies
+                  you for higher-priority healthcare rides with better payout rates.
+                </InfoNote>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+
+                  {/* yearsOfExperience → SoloDriverPartner.yearsOfExperience (Number, 0–60) */}
+                  <Field
+                    label="Years of Professional Driving"
+                    note="Max 60 years"
+                    noteVariant="muted"
+                    hint="Count only years actively working as a paid, professional driver."
+                  >
+                    <Input
+                      type="number"
+                      value={professional.yearsOfExperience}
+                      onChange={(e) => setProfessional((p) => ({ ...p, yearsOfExperience: Number(e.target.value) }))}
+                      placeholder="e.g. 3"
+                    />
+                  </Field>
+                </div>
+
+                {/* languagesSpoken → SoloDriverPartner.languagesSpoken (String enum array) */}
+                <Field
+                  label="Languages Spoken"
+                  note="Affects rider matching"
+                  noteVariant="info"
+                  hint="Select all languages you can comfortably communicate in with riders."
+                >
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {LANGUAGES.map((lang) => (
+                      <button
+                        key={lang}
+                        onClick={() => toggleLang(lang)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold uppercase tracking-wide transition-all ${
+                          professional.languagesSpoken?.includes(lang)
+                            ? "bg-primary/10 border-primary text-primary"
+                            : "border-base-300 text-base-content/40 hover:border-primary/40"
+                        }`}
+                      >
+                        <Languages size={10} />
+                        {lang}
+                        {professional.languagesSpoken?.includes(lang) && <CheckCircle2 size={10} />}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+
+                {/* hasMedicalTransportExp, hasAmbulanceExp → SoloDriverPartner Boolean fields */}
+                <Field
+                  label="Special Capabilities"
+                  note="Unlocks premium ride categories"
+                  noteVariant="success"
+                  hint="Toggle what you are trained or equipped for. Directly affects ride-matching priority."
+                >
+                  <div className="flex flex-col sm:flex-row gap-3 mt-2">
+                    {[
+                      {
+                        key:   "hasMedicalTransportExp",
+                        label: "Medical Transport",
+                        icon:  Stethoscope,
+                        note:  "Trained in patient transport protocols",
+                      },
+                      {
+                        key:   "hasAmbulanceExp",
+                        label: "Ambulance Experience",
+                        icon:  Heart,
+                        note:  "Has operated or assisted in ambulance services",
+                      },
+                    ].map(({ key, label, icon: Icon, note }) => (
+                      <button
+                        key={key}
+                        onClick={() => setProfessional((p) => ({ ...p, [key]: !p[key] }))}
+                        className={`flex items-start gap-3 px-4 py-3.5 rounded-2xl border text-left flex-1 transition-all ${
+                          professional[key]
+                            ? "bg-primary/10 border-primary"
+                            : "border-base-300 hover:border-primary/40"
+                        }`}
+                      >
+                        <Icon
+                          size={18}
+                          className={`shrink-0 mt-0.5 ${professional[key] ? "text-primary" : "text-base-content/40"}`}
+                        />
+                        <div className="flex-1">
+                          <p className={`text-xs font-black uppercase tracking-wide ${professional[key] ? "text-primary" : "text-base-content/60"}`}>
+                            {label}
+                          </p>
+                          <p className="text-[10px] text-base-content/40 mt-0.5">{note}</p>
                         </div>
-                        <button
-                          onClick={() => dispatch(removeTrainingCertificate(cert._id))}
-                          title="Remove certificate"
-                          className="p-2 rounded-xl text-error opacity-0 group-hover:opacity-100 hover:bg-error/10 transition-all shrink-0 ml-2"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </motion.div>
-                    );
-                  })
-                )}
-              </div>
+                        {professional[key] && (
+                          <CheckCircle2 size={15} className="text-primary shrink-0 self-center" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
 
-              {/* Add form */}
-              <AnimatePresence>
-                {showCertForm ? (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: "auto" }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="overflow-hidden"
+                <SaveButton onClick={handleSaveProfessional} loading={isUpdating} />
+              </SectionCard>
+            )}
+
+            {/* ══ Emergency Contact ══════════════════════════════════════════ */}
+            {activeTab === "emergency" && (
+              <SectionCard
+                title="Emergency Contact"
+                icon={ShieldAlert}
+                subtitle="Contacted only in genuine emergencies — accidents, medical incidents, or if you become unreachable mid-trip."
+                index={0}
+              >
+                <InfoNote variant="warning">
+                  Please <strong>inform this person</strong> they are your emergency contact on Likeson.
+                  They should be reachable 24/7, ideally in the same city as you.
+                </InfoNote>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+
+                  {/* emergencyContact.name → SoloDriverPartner.emergencyContact.name */}
+                  <Field
+                    label="Full Name"
+                    note="Required"
+                    noteVariant="error"
+                    hint="Legal name of your emergency contact person."
                   >
-                    <div className="p-4 sm:p-5 rounded-2xl border border-primary/30 bg-primary/5 space-y-4 mt-1">
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs font-black uppercase tracking-widest text-primary">New Certificate</p>
-                        <button
-                          onClick={() => setShowCertForm(false)}
-                          className="p-1.5 rounded-lg hover:bg-primary/10 text-primary/50 hover:text-primary transition-colors"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <Field label="Certificate Name *" hint="e.g. First Aid, EVTS, Defensive Driving">
-                          <Input
-                            value={newCert.name}
-                            onChange={(e) => setNewCert((p) => ({ ...p, name: e.target.value }))}
-                            placeholder="Certificate title"
-                          />
-                        </Field>
-                        <Field label="Issued By" hint="Organisation or institution that issued this certificate.">
-                          <Input
-                            value={newCert.issuedBy}
-                            onChange={(e) => setNewCert((p) => ({ ...p, issuedBy: e.target.value }))}
-                            placeholder="e.g. Red Cross India"
-                          />
-                        </Field>
-                        <Field label="Issue Date">
-                          <Input
-                            type="date"
-                            value={newCert.issuedAt}
-                            onChange={(e) => setNewCert((p) => ({ ...p, issuedAt: e.target.value }))}
-                          />
-                        </Field>
-                        <Field label="Expiry Date">
-                          <Input
-                            type="date"
-                            value={newCert.expiresAt}
-                            onChange={(e) => setNewCert((p) => ({ ...p, expiresAt: e.target.value }))}
-                          />
-                        </Field>
-                      </div>
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        <button
-                          onClick={handleAddCert}
-                          disabled={!newCert.name.trim()}
-                          className="btn-primary-cta text-xs px-5 py-2 disabled:opacity-50"
-                        >
-                          Add Certificate
-                        </button>
-                        <button
-                          onClick={() => setShowCertForm(false)}
-                          className="btn-secondary text-xs px-5 py-2"
-                        >
-                          Cancel
-                        </button>
-                      </div>
+                    <Input
+                      value={emergency.name}
+                      onChange={(e) => setEmergency((p) => ({ ...p, name: e.target.value }))}
+                      placeholder="e.g. Lakshmi Devi"
+                    />
+                  </Field>
+
+                  {/* emergencyContact.relationship → SoloDriverPartner.emergencyContact.relationship */}
+                  <Field
+                    label="Relationship"
+                    note="Optional"
+                    noteVariant="muted"
+                    hint="How this person relates to you (e.g. Spouse, Parent, Sibling)."
+                  >
+                    <Input
+                      value={emergency.relationship}
+                      onChange={(e) => setEmergency((p) => ({ ...p, relationship: e.target.value }))}
+                      placeholder="e.g. Spouse, Parent, Sibling"
+                    />
+                  </Field>
+
+                  {/* emergencyContact.phone → SoloDriverPartner.emergencyContact.phone */}
+                  <Field
+                    label="Phone Number"
+                    note="Required · 24/7 reachable"
+                    noteVariant="warning"
+                    hint="Must be reachable at all times. Indian mobile preferred."
+                  >
+                    <Input
+                      value={emergency.phone}
+                      onChange={(e) => setEmergency((p) => ({ ...p, phone: e.target.value }))}
+                      placeholder="9XXXXXXXXX"
+                    />
+                  </Field>
+                </div>
+
+                {/* Live preview */}
+                {emergency.name && emergency.phone && (
+                  <InfoNote variant="success">
+                    Emergency contact set: <strong>{emergency.name}</strong>
+                    {emergency.relationship && ` (${emergency.relationship})`} — {emergency.phone}
+                  </InfoNote>
+                )}
+
+                <SaveButton onClick={handleSaveEmergency} loading={isUpdating} />
+              </SectionCard>
+            )}
+
+            {/* ══ Certificates ═══════════════════════════════════════════════ */}
+            {activeTab === "certificates" && (
+              <SectionCard
+                title="Training Certificates"
+                icon={FileUser}
+                subtitle="Professional certifications strengthen your profile ranking and unlock premium ride categories."
+                index={0}
+              >
+                <InfoNote>
+                  Certificates like <strong>First Aid</strong>, <strong>EVTS</strong>, or
+                  <strong> Defensive Driving</strong> increase your match rate for specialised medical rides.
+                  Expired certificates should be renewed and re-uploaded promptly.
+                </InfoNote>
+
+                {/* Certificate list — trainingCertificates → SoloDriverPartner.trainingCertificates array */}
+                <div className="space-y-2.5">
+                  {certificates.length === 0 ? (
+                    <div className="flex flex-col items-center gap-3 py-10 text-center">
+                      <Award size={36} className="text-base-content/20" />
+                      <p className="text-sm font-bold text-base-content/40">No certificates added yet</p>
+                      <p className="text-[10px] text-base-content/30 max-w-xs">
+                        Adding certifications can increase your match rate for specialised medical rides.
+                      </p>
                     </div>
-                  </motion.div>
-                ) : (
-                  <motion.button
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    onClick={() => setShowCertForm(true)}
-                    className="flex items-center gap-2 px-4 py-3 rounded-2xl border border-dashed border-primary/40 text-primary text-xs font-black uppercase tracking-widest hover:bg-primary/5 transition-all w-full justify-center mt-1"
-                  >
-                    <Plus size={14} /> Add Certificate
-                  </motion.button>
-                )}
-              </AnimatePresence>
-            </SectionCard>
-          )}
+                  ) : (
+                    certificates.map((cert) => {
+                      const isExpired = cert.expiresAt && new Date(cert.expiresAt) < new Date();
+                      return (
+                        <motion.div
+                          key={cert._id}
+                          initial={{ opacity: 0, x: -8 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          className={`flex items-center justify-between p-3 sm:p-4 rounded-2xl border bg-base-200/50 group hover:border-primary/40 transition-all ${
+                            isExpired ? "border-error/40 bg-error/5" : "border-base-300"
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className={`p-2 rounded-xl shrink-0 ${isExpired ? "bg-error/10" : "bg-primary/10"}`}>
+                              <Award size={15} className={isExpired ? "text-error" : "text-primary"} />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-bold text-base-content flex items-center gap-2 flex-wrap">
+                                {cert.name}
+                                {isExpired && (
+                                  <span className="text-[9px] bg-error/10 text-error border border-error/30 px-1.5 py-0.5 rounded font-black uppercase tracking-wide">
+                                    Expired
+                                  </span>
+                                )}
+                              </p>
+                              <p className="text-[10px] text-base-content/40 mt-0.5 truncate">
+                                {cert.issuedBy || "—"}
+                                {cert.issuedAt  && ` · Issued: ${new Date(cert.issuedAt).toLocaleDateString()}`}
+                                {cert.expiresAt && ` · Expires: ${new Date(cert.expiresAt).toLocaleDateString()}`}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => dispatch(removeTrainingCertificate(cert._id))}
+                            title="Remove certificate"
+                            className="p-2 rounded-xl text-error opacity-0 group-hover:opacity-100 hover:bg-error/10 transition-all shrink-0 ml-2"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </motion.div>
+                      );
+                    })
+                  )}
+                </div>
 
-        </motion.div>
-      </AnimatePresence>
-    </div>
+                {/* Add cert form */}
+                <AnimatePresence>
+                  {showCertForm ? (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="p-4 sm:p-5 rounded-2xl border border-primary/30 bg-primary/5 space-y-4 mt-1">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-black uppercase tracking-widest text-primary">New Certificate</p>
+                          <button
+                            onClick={() => setShowCertForm(false)}
+                            className="p-1.5 rounded-lg hover:bg-primary/10 text-primary/50 hover:text-primary transition-colors"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+
+                          {/* trainingCertificates[].name → required */}
+                          <Field
+                            label="Certificate Name"
+                            note="Required"
+                            noteVariant="error"
+                            hint="e.g. First Aid, EVTS, Defensive Driving, BLS"
+                          >
+                            <Input
+                              value={newCert.name}
+                              onChange={(e) => setNewCert((p) => ({ ...p, name: e.target.value }))}
+                              placeholder="Certificate title"
+                            />
+                          </Field>
+
+                          {/* trainingCertificates[].issuedBy → optional */}
+                          <Field
+                            label="Issued By"
+                            note="Optional"
+                            noteVariant="muted"
+                            hint="Organisation or institution that issued this certificate."
+                          >
+                            <Input
+                              value={newCert.issuedBy}
+                              onChange={(e) => setNewCert((p) => ({ ...p, issuedBy: e.target.value }))}
+                              placeholder="e.g. Red Cross India"
+                            />
+                          </Field>
+
+                          {/* trainingCertificates[].issuedAt → optional Date */}
+                          <Field
+                            label="Issue Date"
+                            note="Optional"
+                            noteVariant="muted"
+                            hint="Date this certificate was awarded to you."
+                          >
+                            <Input
+                              type="date"
+                              value={newCert.issuedAt}
+                              onChange={(e) => setNewCert((p) => ({ ...p, issuedAt: e.target.value }))}
+                            />
+                          </Field>
+
+                          {/* trainingCertificates[].expiresAt → optional Date */}
+                          <Field
+                            label="Expiry Date"
+                            note="Important for compliance"
+                            noteVariant="warning"
+                            hint="Expired certificates show a warning badge on your profile."
+                          >
+                            <Input
+                              type="date"
+                              value={newCert.expiresAt}
+                              onChange={(e) => setNewCert((p) => ({ ...p, expiresAt: e.target.value }))}
+                            />
+                          </Field>
+                        </div>
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          <button
+                            onClick={handleAddCert}
+                            disabled={!newCert.name.trim()}
+                            className="btn-primary-cta text-xs px-5 py-2 disabled:opacity-50"
+                          >
+                            Add Certificate
+                          </button>
+                          <button
+                            onClick={() => setShowCertForm(false)}
+                            className="btn-secondary text-xs px-5 py-2"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ) : (
+                    <motion.button
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      onClick={() => setShowCertForm(true)}
+                      className="flex items-center gap-2 px-4 py-3 rounded-2xl border border-dashed border-primary/40 text-primary text-xs font-black uppercase tracking-widest hover:bg-primary/5 transition-all w-full justify-center mt-1"
+                    >
+                      <Plus size={14} /> Add Certificate
+                    </motion.button>
+                  )}
+                </AnimatePresence>
+              </SectionCard>
+            )}
+
+          </motion.div>
+        </AnimatePresence>
+
+      </div>
+    </Container>
   );
 }

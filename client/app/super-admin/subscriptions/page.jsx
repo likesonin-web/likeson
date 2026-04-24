@@ -1,1127 +1,965 @@
 'use client';
 
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  PieChart, Pie, Cell,
-  BarChart, Bar,
-  AreaChart, Area,
-  LineChart, Line,
-  XAxis, YAxis, Tooltip,
-  ResponsiveContainer, CartesianGrid,
-  RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
-  Legend,
+  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import {
-  Search, Users, FileText, Activity, Calendar,
-  CheckCircle2, AlertCircle, Download, X, Eye,
-  TrendingUp, Stethoscope, Car, FlaskConical,
-  ChevronDown, ChevronUp, Filter, RefreshCw,
-  Printer, Sparkles, Clock, BadgeCheck,
+  Users, TrendingUp, AlertTriangle, DollarSign,
+  RefreshCw, Download, Search, ChevronLeft, ChevronRight,
+  Eye, Edit2, XCircle, Filter, ArrowUpRight, ArrowDownRight,
+  CheckCircle2, Clock, Zap, MoreHorizontal, X,
 } from 'lucide-react';
 
+// ── Redux ─────────────────────────────────────────────────────────────────────
 import {
-  fetchActiveSubscriptions,
-  selectActiveSubscribers,
-  selectPlanLoading,
-} from '@/store/slices/subscriptionPlanSlice';
+  adminFetchAllSubscriptions,
+  selectAdminSubscriptions,
+  selectAdminPagination,
+  selectAdminLoading,
+  selectSubscriptionError,
+  adminUpdateSubscription,
+} from '../../../store/slices/subscriptionPlanSlice';
 
-/* ─────────────────────────────────────────────────────────────────
-   CONSTANTS
-   ───────────────────────────────────────────────────────────────── */
-const LOGO_URL =
-  'https://ik.imagekit.io/zxxzgk3iq/ChatGPT%20Image%20Feb%202,%202026,%2005_21_49%20PM.png?updatedAt=1770278792983';
-
-/* ─────────────────────────────────────────────────────────────────
-   ANIMATION VARIANTS
-   ───────────────────────────────────────────────────────────────── */
-const containerV = {
-  hidden:  { opacity: 0 },
-  visible: { opacity: 1, transition: { staggerChildren: 0.08, delayChildren: 0.04 } },
-};
-const itemV = {
-  hidden:  { opacity: 0, y: 22, scale: 0.97 },
-  visible: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.44, ease: [0.22, 1, 0.36, 1] } },
-};
-const drawerV = {
-  hidden:  { opacity: 0, x: 64 },
-  visible: { opacity: 1, x: 0,  transition: { duration: 0.38, ease: [0.22, 1, 0.36, 1] } },
-  exit:    { opacity: 0, x: 64, transition: { duration: 0.28 } },
+// ── Constants ─────────────────────────────────────────────────────────────────
+const PLAN_META = {
+  'Basic Care':            { color: '#3b82f6', bg: '#eff6ff', text: '#1d4ed8' },
+  'Standard Care':         { color: '#8b5cf6', bg: '#f5f3ff', text: '#6d28d9' },
+  'Premium Care':          { color: '#0ea5e9', bg: '#e0f2fe', text: '#0369a1' },
+  'Family Care':           { color: '#f59e0b', bg: '#fffbeb', text: '#b45309' },
+  'Pregnant Women Care':   { color: '#ec4899', bg: '#fdf2f8', text: '#be185d' },
+  "NRI's Care":            { color: '#10b981', bg: '#ecfdf5', text: '#047857' },
+  Custom:                  { color: '#6b7280', bg: '#f9fafb', text: '#374151' },
 };
 
-/* ─────────────────────────────────────────────────────────────────
-   PDF HELPERS
-   ───────────────────────────────────────────────────────────────── */
-async function fetchB64(url) {
-  const r  = await fetch(url);
-  const bl = await r.blob();
-  return new Promise((res, rej) => {
-    const rd = new FileReader();
-    rd.onload  = () => res(rd.result);
-    rd.onerror = rej;
-    rd.readAsDataURL(bl);
+const DEFAULT_META = { color: '#6b7280', bg: '#f9fafb', text: '#374151' };
+const getPlanMeta  = (name = '') => PLAN_META[name] ?? DEFAULT_META;
+
+const STATUS_MAP = {
+  Active:    { icon: CheckCircle2, label: 'Active',   cls: 'status-active'   },
+  Trial:     { icon: Clock,        label: 'Trial',    cls: 'status-trial'    },
+  Cancelled: { icon: XCircle,      label: 'Cancelled',cls: 'status-cancelled'},
+  Expired:   { icon: AlertTriangle,label: 'Expired',  cls: 'status-expired'  },
+};
+
+const PER_PAGE = 10;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const initials = (name = '') =>
+  name.split(' ').slice(0, 2).map(w => w[0] ?? '').join('').toUpperCase();
+
+const daysLeft = (dateStr) => {
+  if (!dateStr) return null;
+  const diff = Math.ceil((new Date(dateStr) - Date.now()) / 86_400_000);
+  return diff;
+};
+
+const fmtDate = (dateStr) => {
+  if (!dateStr) return '—';
+  return new Date(dateStr).toLocaleDateString('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric',
   });
-}
+};
 
-/* ─────────────────────────────────────────────────────────────────
-   INVOICE PDF GENERATOR
-   Key fixes:
-   • No Unicode symbols (✓ ● → ✗) — replaced with ASCII-safe text
-   • All column x+w coordinates verified to stay within page bounds
-   • Period string split into 2 lines to avoid overflow
-   • Amount col right edge anchored at PW-MR (196), text drawn 2mm inside
-   • Ribbon labels use calculated x positions, never overlap
-   • SUBSCRIPTION ACTIVE text fits inside stamp box
-   ───────────────────────────────────────────────────────────────── */
-async function generateInvoicePDF(sub) {
-  const { jsPDF } = await import('jspdf');
+const fmtINR = (n) =>
+  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n ?? 0);
 
-  /* page setup */
-  const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
-  const PW = 210;   // page width
-  const PH = 297;   // page height
-  const ML = 14;    // left margin
-  const MR = 14;    // right margin
-  const CW = PW - ML - MR;          // 182 mm — usable content width
-  const RE = PW - MR;               // 196 mm — right edge of content
+const AVATAR_PALETTE = [
+  ['#dbeafe','#1d4ed8'], ['#ede9fe','#6d28d9'], ['#dcfce7','#15803d'],
+  ['#fef3c7','#b45309'], ['#fce7f3','#be185d'], ['#e0f2fe','#0369a1'],
+  ['#f1f5f9','#475569'],
+];
+const avatarStyle = (name = '') => {
+  const idx = name.charCodeAt(0) % AVATAR_PALETTE.length;
+  const [bg, fg] = AVATAR_PALETTE[idx];
+  return { backgroundColor: bg, color: fg };
+};
 
-  /* ── colours ────────────────────────────────────────────────── */
-  const navy    = [15,  28,  80];
-  const blue    = [37,  99, 235];
-  const teal    = [20, 184, 166];
-  const dark    = [15,  23,  42];
-  const mid     = [71,  85, 105];
-  const muted   = [148,163, 184];
-  const light   = [241,245, 249];
-  const white   = [255,255, 255];
-  const green   = [22, 163,  74];
-  const greenBg = [220,252, 231];
-  const bdr     = [226,232, 240];
+// ── Sub-components ────────────────────────────────────────────────────────────
 
-  /* ── tiny helpers ────────────────────────────────────────────── */
-  const fc  = (c)          => doc.setFillColor(...c);
-  const dc  = (c, w = 0.3) => { doc.setDrawColor(...c); doc.setLineWidth(w); };
-  const box = (x, y, w, h, c, r = 0) => {
-    fc(c);
-    r > 0 ? doc.roundedRect(x, y, w, h, r, r, 'F') : doc.rect(x, y, w, h, 'F');
-  };
-  const hl  = (x1, x2, y, c = bdr, lw = 0.25) => { dc(c, lw); doc.line(x1, y, x2, y); };
-  const sf  = (s, sz, col) => {
-    doc.setFont('helvetica', s);
-    doc.setFontSize(sz);
-    doc.setTextColor(...col);
-  };
-  const t   = (str, x, y, o = {}) => doc.text(String(str), x, y, o);
-
-  /* ── data ───────────────────────────────────────────────────── */
-  const invNo   = `INV-${Date.now().toString().slice(-8)}`;
-  const today   = new Date();
-  const expiry  = new Date(sub.expiryDate);
-  const start   = sub.startDate ? new Date(sub.startDate) : today;
-  const fmt     = (d) => d.toLocaleDateString('en-IN', { day:'2-digit', month:'short',  year:'numeric' });
-  const fmtL    = (d) => d.toLocaleDateString('en-IN', { day:'2-digit', month:'long',   year:'numeric' });
-  // Safe ASCII currency — avoids Rs. symbol corruption in some viewers
-  const cur     = (n) => 'Rs. ' + Number(n||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-
-  const price    = Number(sub.priceMonthly || 0);
-  const subtotal = price;
-  const tax      = Math.round(subtotal * 0.18 * 100) / 100;
-  const total    = Math.round((subtotal + tax) * 100) / 100;
-
-  /* ════════════════════════════════════════════════════
-     1. HEADER BLOCK   y: 0 → 50
-     ════════════════════════════════════════════════════ */
-  box(0, 0, PW, 50, navy);
-  // teal corner triangle
-  doc.setFillColor(...teal);
-  doc.triangle(PW - 48, 0, PW, 0, PW, 50, 'F');
-  // indigo mid-triangle
-  doc.setFillColor(79, 70, 229);
-  doc.triangle(PW - 72, 0, PW - 48, 0, PW, 50, 'F');
-
-  /* logo */
-  try {
-    const b64 = await fetchB64(LOGO_URL);
-    doc.addImage(b64, 'PNG', ML, 7, 22, 22);
-  } catch {
-    box(ML, 7, 22, 22, blue, 3);
-    sf('bold', 12, white); t('L', ML + 11, 21, { align: 'center' });
-  }
-
-  /* brand text */
-  sf('bold', 16, white);
-  t('Likeson', ML + 28, 16);
-  sf('normal', 8, [180, 210, 255]);
-  t('Enterprise Healthcare Subscription Services', ML + 28, 22);
-  sf('normal', 7, [130, 165, 235]);
-  t('support@likeson.in  |  www.likeson.in  |  +91 98765 43210', ML + 28, 28);
-
-  /* INVOICE label — right side stays inside teal zone so white is readable */
-  sf('bold', 24, white);
-  t('INVOICE', RE - 2, 16, { align: 'right' });
-  sf('normal', 8.5, [180, 210, 255]);
-  t('No: ' + invNo, RE - 2, 24, { align: 'right' });
-  sf('normal', 7.5, [130, 165, 235]);
-  t('Issued: ' + fmtL(today), RE - 2, 30, { align: 'right' });
-
-  /* ── ribbon strip (dark sub-bar inside header) ─────────────── */
-  box(0, 40, PW, 10, [8, 18, 55]);
-
-  // Ribbon: STATUS | PLAN | RENEWAL | MEMBER
-  // Each item: label at rx, value at rx+label_width+2
-  // Spacing calculated: 4 items across 182mm = ~45mm each, with ML offset
-  const ribbonDefs = [
-    { k: 'STATUS',  v: 'ACTIVE'           },
-    { k: 'PLAN',    v: sub.planName||'N/A' },
-    { k: 'RENEWAL', v: fmt(expiry)         },
-    { k: 'MEMBER',  v: sub.userName||'N/A' },
-  ];
-  const ribbonSlot = CW / 4;  // 45.5 mm per slot
-  ribbonDefs.forEach(({ k, v }, i) => {
-    const rx = ML + i * ribbonSlot;
-    sf('bold',   6,   [90, 120, 190]);
-    t(k, rx, 47);
-    sf('normal', 8,   [160, 210, 255]);
-    // Truncate value if too long (max ~20 chars per slot)
-    const safeV = v.length > 18 ? v.slice(0, 17) + '.' : v;
-    t(safeV, rx + 14, 47);
-  });
-
-  /* ════════════════════════════════════════════════════
-     2. BILL-TO  +  INVOICE META   y: 58 → 92
-     ════════════════════════════════════════════════════ */
-  let y = 58;
-  const halfW = (CW - 5) / 2;   // ~88.5 mm each
-
-  /* LEFT — Bill To */
-  box(ML, y, halfW, 32, light, 3);
-  box(ML, y, 3, 32, blue);      // left accent bar
-  sf('bold',   7,  blue);  t('BILL TO',                     ML + 7,  y + 7);
-  sf('bold',   11, dark);  t(sub.userName  || 'Subscriber', ML + 7,  y + 15);
-  sf('normal',  9, mid);   t(sub.userEmail || '—',          ML + 7,  y + 22);
-  sf('normal',  8, muted); t('Subscription Member',         ML + 7,  y + 28);
-
-  /* RIGHT — Invoice Meta */
-  const metaX = ML + halfW + 5;
-  const metaW = halfW;          // right col same width
-  box(metaX, y, metaW, 32, light, 3);
-
-  const metaRows = [
-    { l: 'Invoice No.', v: invNo },
-    { l: 'Issue Date',  v: fmt(today) },
-    // Split period across label+value to avoid overflow
-    { l: 'From', v: fmt(start) },
-    { l: 'To',   v: fmt(expiry) },
-  ];
-  metaRows.forEach(({ l, v }, i) => {
-    const ry = y + 7 + i * 6.5;
-    sf('bold',   7.5, muted); t(l, metaX + 4,         ry);
-    sf('bold',   8,   dark);  t(v, metaX + metaW - 4, ry, { align: 'right' });
-    if (i < metaRows.length - 1) hl(metaX + 4, metaX + metaW - 4, ry + 2, bdr, 0.2);
-  });
-
-  /* ════════════════════════════════════════════════════
-     3. LINE ITEMS TABLE   y: 98 onwards
-     ════════════════════════════════════════════════════
-     Column layout (all absolute x positions, total = 182mm):
-       #          : x=14,  w=7    → text anchor at 14+3.5 (center)
-       Description: x=23,  w=63   → text anchor at 23+1.5 (left)
-       Category   : x=88,  w=30   → text anchor at 88+1.5 (left)
-       Unit       : x=120, w=18   → text anchor at 120+9 (center)
-       Qty        : x=140, w=12   → text anchor at 140+6 (center)
-       Amount     : x=154, w=28   → text anchor at 154+26=180 (right, 2mm inside RE=196)
-       SUM: 7+63+30+18+12+28 = 158 ... gaps: 2+2+2+2+2=10 → total 168 OK, RE=196 safe
-  */
-  y = 98;
-
-  const cols = [
-    { h: '#',           x: ML,       w: 7,   a: 'center' },
-    { h: 'Description', x: ML + 9,   w: 63,  a: 'left'   },
-    { h: 'Category',    x: ML + 74,  w: 30,  a: 'left'   },
-    { h: 'Unit',        x: ML + 106, w: 18,  a: 'center' },
-    { h: 'Qty',         x: ML + 126, w: 12,  a: 'center' },
-    { h: 'Amount',      x: ML + 140, w: 40,  a: 'right'  },
-    // Amount right edge: 14+140+40=194 — 2mm inside RE(196) ✓
-  ];
-
-  /* table header row */
-  box(ML, y, CW, 9, navy, 2);
-  cols.forEach(c => {
-    sf('bold', 7.5, white);
-    const tx = c.a === 'right'  ? c.x + c.w - 2
-             : c.a === 'center' ? c.x + c.w / 2
-             :                    c.x + 1.5;
-    t(c.h, tx, y + 6, { align: c.a });
-  });
-  y += 9;
-
-  /* table data rows */
-  const tableRows = [
-    {
-      desc: (sub.planName || 'Healthcare') + ' - Monthly Subscription',
-      cat: 'Subscription', unit: 'Month',
-      qty: 1,
-      amt: price > 0 ? cur(price) : 'Included',
-      hi: true,
-    },
-    {
-      desc: 'Doctor Consultations Used',
-      cat: 'Healthcare', unit: 'Session',
-      qty: sub.usage?.doctorConsultationsUsed || 0,
-      amt: 'Included', hi: false,
-    },
-    {
-      desc: 'Transport Rides Used',
-      cat: 'Transport', unit: 'Ride',
-      qty: sub.usage?.transportRidesUsed || 0,
-      amt: 'Included', hi: false,
-    },
-    {
-      desc: 'Lab / Diagnostic Tests Used',
-      cat: 'Diagnostics', unit: 'Test',
-      qty: sub.usage?.labTestsUsed || 0,
-      amt: 'Included', hi: false,
-    },
-  ];
-
-  const RH = 9.5;
-  tableRows.forEach((r, i) => {
-    box(ML, y, CW, RH, i % 2 === 0 ? white : light);
-    hl(ML, RE, y + RH, bdr, 0.2);
-
-    const cell = (col, val, bold, color) => {
-      sf(bold ? 'bold' : 'normal', 8.5, color);
-      const tx = col.a === 'right'  ? col.x + col.w - 2
-               : col.a === 'center' ? col.x + col.w / 2
-               :                      col.x + 1.5;
-      t(String(val), tx, y + 6.5, { align: col.a });
-    };
-
-    cell(cols[0], i + 1,    false, muted);
-    cell(cols[1], r.desc,   r.hi,  r.hi ? dark : mid);
-    cell(cols[2], r.cat,    false, muted);
-    cell(cols[3], r.unit,   false, muted);
-    cell(cols[4], r.qty,    false, r.hi ? dark : muted);
-
-    // Amount — use cols[5] right anchor
-    sf(r.hi ? 'bold' : 'normal', r.hi ? 9 : 8.5, r.hi ? blue : muted);
-    t(r.amt, cols[5].x + cols[5].w - 2, y + 6.5, { align: 'right' });
-
-    y += RH;
-  });
-
-  /* ════════════════════════════════════════════════════
-     4. TOTALS BLOCK   (right-aligned)
-     ════════════════════════════════════════════════════ */
-  y += 6;
-  const totW = 70;                // fixed width
-  const totX = RE - totW;        // left edge of totals box
-
-  box(totX, y, totW, 40, light, 3);
-
-  let ty = y + 8;
-
-  // Subtotal row
-  sf('normal', 8.5, mid);  t('Subtotal',  totX + 5,       ty);
-  sf('bold',   8.5, dark); t(cur(subtotal), totX + totW - 4, ty, { align: 'right' });
-  hl(totX + 5, totX + totW - 4, ty + 3, bdr, 0.2);
-  ty += 9;
-
-  // GST row
-  sf('normal', 8.5, mid);  t('GST (18%)', totX + 5,       ty);
-  sf('bold',   8.5, dark); t(cur(tax),    totX + totW - 4, ty, { align: 'right' });
-  ty += 9;
-
-  // Separator
-  hl(totX + 5, totX + totW - 4, ty - 2, blue, 0.5);
-
-  // Total row
-  sf('bold', 10, navy); t('TOTAL DUE',  totX + 5,        ty + 2);
-  sf('bold', 11, blue); t(cur(total),   totX + totW - 4,  ty + 2, { align: 'right' });
-
-  /* SUBSCRIPTION ACTIVE stamp */
-  ty += 11;
-  box(totX, ty, totW, 11, greenBg, 2);
-  dc(green, 0.3); doc.rect(totX, ty, totW, 11);
-  sf('bold', 8.5, green);
-  // ASCII-safe — no Unicode tick
-  t('[ ACTIVE ] SUBSCRIPTION', totX + totW / 2, ty + 7.5, { align: 'center' });
-
-  /* ════════════════════════════════════════════════════
-     5. USAGE SUMMARY CARDS
-     ════════════════════════════════════════════════════ */
-  y = ty + 18;
-
-  sf('bold', 7.5, muted);
-  t('SERVICE USAGE - THIS BILLING CYCLE', ML, y);
-  hl(ML, ML + 85, y + 2, bdr, 0.25);
-  y += 7;
-
-  const uCards = [
-    { label: 'Doctor Consultations', val: sub.usage?.doctorConsultationsUsed || 0, c: blue   },
-    { label: 'Transport Rides',      val: sub.usage?.transportRidesUsed      || 0, c: teal   },
-    { label: 'Lab / Diagnostics',    val: sub.usage?.labTestsUsed            || 0, c: [90, 80, 220] },
-  ];
-  const cardW = (CW - 8) / 3;   // ~57.3 mm each
-  uCards.forEach(({ label, val, c }, i) => {
-    const cx = ML + i * (cardW + 4);
-    box(cx, y, cardW, 24, light, 3);
-    box(cx, y, cardW, 3, c, 3);              // coloured top stripe
-    sf('bold', 20, c);
-    t(String(val), cx + cardW / 2, y + 16, { align: 'center' });
-    sf('normal', 7.5, muted);
-    t(label, cx + cardW / 2, y + 22, { align: 'center' });
-  });
-
-  /* ════════════════════════════════════════════════════
-     6. NOTES  +  TAX INFO BOX
-     ════════════════════════════════════════════════════ */
-  y += 32;
-  const noteW = Math.floor(CW * 0.62);  // 112 mm
-  const taxW  = CW - noteW - 5;         // 65 mm
-
-  /* Notes */
-  box(ML, y, noteW, 28, light, 3);
-  sf('bold', 7.5, blue);
-  t('NOTES & PAYMENT TERMS', ML + 4, y + 7);
-  const notes = [
-    '- System-generated invoice, no signature required.',
-    '- Subscription auto-renews unless cancelled 24 hrs before expiry.',
-    '- Disputes: billing@likeson.in within 7 days of issue date.',
-  ];
-  notes.forEach((n, i) => {
-    sf('normal', 7, muted);
-    t(n, ML + 4, y + 14 + i * 5.5);
-  });
-
-  /* Tax info */
-  const taxX = ML + noteW + 5;
-  box(taxX, y, taxW, 28, light, 3);
-  sf('bold',   8,   mid); t('TAX INFORMATION', taxX + taxW / 2, y + 7,  { align: 'center' });
-  sf('normal', 7.5, muted);
-  t('GSTIN: 37XXXXX1234X1ZX',  taxX + taxW / 2, y + 13, { align: 'center' });
-  t('SAC Code: 999313',         taxX + taxW / 2, y + 19, { align: 'center' });
-  t('HSN Code: 9993',           taxX + taxW / 2, y + 25, { align: 'center' });
-
-  /* ════════════════════════════════════════════════════
-     7. FOOTER
-     ════════════════════════════════════════════════════ */
-  box(0, PH - 16, PW, 16, navy);
-  box(0, PH - 16, PW, 2, teal);
-  sf('normal', 7.5, [160, 185, 230]);
-  t(
-    'Likeson Healthcare Pvt. Ltd.  |  Nellore, Andhra Pradesh 524 001  |  CIN: U85100AP2024PTC123456',
-    PW / 2, PH - 9.5, { align: 'center' }
-  );
-  sf('normal', 7, [100, 130, 180]);
-  t(
-    'www.likeson.in  |  support@likeson.in  |  Computer-generated document',
-    PW / 2, PH - 5, { align: 'center' }
-  );
-  sf('normal', 7, [100, 130, 180]);
-  t('Page 1 of 1', RE, PH - 5, { align: 'right' });
-
-  /* ── save ─────────────────────────────────────────────────────── */
-  const safe = (sub.userName || 'subscriber').replace(/\s+/g, '_');
-  doc.save(`Likeson_Invoice_${safe}_${invNo}.pdf`);
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   LIKESON BACKGROUND EFFECT
-   ───────────────────────────────────────────────────────────────── */
-const LikesonBg = () => (
-  <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden" aria-hidden>
-    {/* Mesh gradient */}
-    <div className="absolute inset-0" style={{
-      background: [
-        'radial-gradient(ellipse 80% 55% at 12%  8%,  color-mix(in srgb,var(--primary)   11%,transparent), transparent 60%)',
-        'radial-gradient(ellipse 60% 65% at 88% 18%,  color-mix(in srgb,var(--secondary)  8%,transparent), transparent 55%)',
-        'radial-gradient(ellipse 50% 55% at 50% 82%,  color-mix(in srgb,var(--accent)     7%,transparent), transparent 50%)',
-        'radial-gradient(ellipse 40% 40% at 82% 88%,  color-mix(in srgb,var(--primary)    5%,transparent), transparent 50%)',
-      ].join(','),
-    }} />
-    {/* Floating orbs */}
-    {[
-      { w:500, h:500, top:'-6%',  left:'-5%',  color:'var(--primary)',   dur:'26s', del:'0s'   },
-      { w:380, h:380, top:'58%',  left:'73%',  color:'var(--secondary)', dur:'32s', del:'-9s'  },
-      { w:320, h:320, top:'33%',  left:'44%',  color:'var(--accent)',    dur:'21s', del:'-5s'  },
-      { w:240, h:240, top:'78%',  left:'4%',   color:'var(--primary)',   dur:'29s', del:'-15s' },
-      { w:170, h:170, top:'8%',   left:'68%',  color:'var(--secondary)', dur:'23s', del:'-7s'  },
-    ].map((o, i) => (
-      <div key={i} className="absolute rounded-full animate-pulse-glow" style={{
-        width: o.w, height: o.h, top: o.top, left: o.left,
-        background: `radial-gradient(circle, color-mix(in srgb,${o.color} 14%,transparent), transparent 70%)`,
-        filter: 'blur(52px)',
-        animationDuration: o.dur, animationDelay: o.del,
-        animationTimingFunction: 'ease-in-out',
-      }} />
-    ))}
-    {/* Dot grid */}
-    <div className="absolute inset-0 opacity-[0.025]" style={{
-      backgroundImage: 'radial-gradient(circle, var(--base-content) 1px, transparent 1px)',
-      backgroundSize: '28px 28px',
-    }} />
-    {/* Noise texture */}
-    <div className="absolute inset-0 opacity-[0.02] mix-blend-overlay" style={{
-      backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
-      backgroundRepeat: 'repeat', backgroundSize: '256px 256px',
-    }} />
-  </div>
-);
-
-/* ─────────────────────────────────────────────────────────────────
-   RECHARTS CUSTOM TOOLTIP
-   ───────────────────────────────────────────────────────────────── */
-const ChartTip = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null;
+function MetricCard({ icon: Icon, label, value, delta, up, accent, delay }) {
   return (
-    <div className="glass-card p-3 text-xs font-poppins shadow-xl border border-base-300 min-w-[110px]">
-      {label && <p className="font-bold text-base-content mb-1">{label}</p>}
-      {payload.map((p, i) => (
-        <p key={i} style={{ color: p.color || p.fill }} className="flex justify-between gap-4">
-          <span>{p.name}</span><span className="font-bold">{p.value}</span>
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, delay }}
+      className="metric-card"
+    >
+      <div className="metric-icon-wrap" style={{ background: accent + '18', color: accent }}>
+        <Icon size={18} />
+      </div>
+      <p className="metric-label">{label}</p>
+      <p className="metric-value">{value}</p>
+      {delta && (
+        <p className="metric-delta">
+          {up
+            ? <ArrowUpRight size={12} className="delta-up" />
+            : <ArrowDownRight size={12} className="delta-dn" />}
+          <span className={up ? 'delta-up' : 'delta-dn'}>{delta}</span>
         </p>
-      ))}
+      )}
+    </motion.div>
+  );
+}
+
+function StatusBadge({ status }) {
+  const meta = STATUS_MAP[status] ?? STATUS_MAP.Active;
+  const Icon = meta.icon;
+  return (
+    <span className={`status-badge ${meta.cls}`}>
+      <Icon size={11} />
+      {meta.label}
+    </span>
+  );
+}
+
+function PlanBadge({ name }) {
+  const m = getPlanMeta(name);
+  return (
+    <span
+      className="plan-badge"
+      style={{ background: m.bg, color: m.text, borderColor: m.color + '40' }}
+    >
+      {name ?? 'Unknown'}
+    </span>
+  );
+}
+
+function ExpiryCell({ dateStr }) {
+  const d = daysLeft(dateStr);
+  if (d === null) return <span className="muted-text">—</span>;
+  const urgent = d <= 7;
+  const warn   = d <= 14;
+  return (
+    <span className={urgent ? 'expiry-urgent' : warn ? 'expiry-warn' : 'expiry-ok'}>
+      {fmtDate(dateStr)}
+      {urgent && <span className="expiry-tag"> · {d}d left</span>}
+    </span>
+  );
+}
+
+function UsageBar({ pct }) {
+  const safe = Math.min(100, Math.max(0, pct ?? 0));
+  const color = safe > 80 ? '#ef4444' : safe > 55 ? '#f59e0b' : '#10b981';
+  return (
+    <div className="usage-wrap">
+      <div className="usage-track">
+        <motion.div
+          className="usage-fill"
+          style={{ background: color }}
+          initial={{ width: 0 }}
+          animate={{ width: `${safe}%` }}
+          transition={{ duration: 0.6, delay: 0.1 }}
+        />
+      </div>
+      <span className="usage-pct" style={{ color }}>{safe}%</span>
     </div>
   );
-};
+}
 
-/* ─────────────────────────────────────────────────────────────────
-   STAT CARD
-   ───────────────────────────────────────────────────────────────── */
-const StatCard = React.memo(({ title, value, icon: Icon, trend, cv, sub }) => (
-  <motion.div variants={itemV} className="glass-card p-5 relative overflow-hidden group cursor-default">
-    <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-700" style={{
-      background: `radial-gradient(ellipse 80% 80% at 80% 20%, color-mix(in srgb,var(${cv}) 12%,transparent), transparent)`,
-    }} />
-    <div className="relative flex items-start justify-between">
-      <div>
-        <p className="text-[10px] font-bold text-base-content/40 font-poppins uppercase tracking-widest mb-2">{title}</p>
-        <h3 className="text-4xl font-black font-montserrat text-base-content leading-none">{value}</h3>
-        {trend && (
-          <p className="text-[11px] mt-2.5 font-semibold flex items-center gap-1.5" style={{ color: `var(${cv})` }}>
-            <TrendingUp className="w-3 h-3" />{trend}
-          </p>
-        )}
-        {sub && <p className="text-[10px] mt-1 text-base-content/30">{sub}</p>}
-      </div>
-      <div className="p-3 rounded-2xl transition-transform duration-300 group-hover:scale-110"
-           style={{ background: `color-mix(in srgb,var(${cv}) 15%,transparent)` }}>
-        <Icon className="w-5 h-5" style={{ color: `var(${cv})` }} />
-      </div>
-    </div>
-  </motion.div>
-));
-StatCard.displayName = 'StatCard';
+// Detail drawer
+function SubDetailDrawer({ sub, onClose, onUpdate }) {
+  const dispatch = useDispatch();
+  const [saving, setSaving] = useState(false);
+  if (!sub) return null;
 
-/* ─────────────────────────────────────────────────────────────────
-   LOADING SKELETON
-   ───────────────────────────────────────────────────────────────── */
-const Skeleton = () => (
-  <div className="space-y-6 animate-pulse w-full">
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
-      {[1,2,3,4].map(i => <div key={i} className="h-32 bg-base-300 rounded-2xl" />)}
-    </div>
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-      {[1,2,3].map(i => <div key={i} className="h-72 bg-base-300 rounded-2xl" />)}
-    </div>
-    <div className="h-96 bg-base-300 rounded-2xl" />
-  </div>
-);
+  const handleCancel = async () => {
+    setSaving(true);
+    await dispatch(adminUpdateSubscription({ subId: sub._id, status: 'Cancelled' }));
+    setSaving(false);
+    onUpdate();
+    onClose();
+  };
 
-/* ─────────────────────────────────────────────────────────────────
-   SUBSCRIBER DETAIL DRAWER
-   ───────────────────────────────────────────────────────────────── */
-const Drawer = ({ sub, onClose, onInvoice, pdfLoading }) => {
-  const expiry   = new Date(sub.expiryDate);
-  const daysLeft = Math.ceil((expiry - new Date()) / 864e5);
-  const radarData = [
-    { s: 'Consults',  A: sub.usage?.doctorConsultationsUsed || 0 },
-    { s: 'Transport', A: sub.usage?.transportRidesUsed      || 0 },
-    { s: 'Labs',      A: sub.usage?.labTestsUsed            || 0 },
-  ];
   return (
-    <motion.div className="fixed inset-0 z-50 flex items-center justify-end"
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <motion.div className="absolute inset-0 bg-base-content/20 backdrop-blur-sm" onClick={onClose} />
-      <motion.div variants={drawerV} initial="hidden" animate="visible" exit="exit"
-        className="relative z-10 w-full max-w-md h-full bg-base-100 border-l border-base-300 flex flex-col overflow-y-auto"
-        style={{ boxShadow: 'var(--shadow-xl)' }}>
-
-        {/* header */}
-        <div className="p-6 border-b border-base-300 flex items-center justify-between"
-             style={{ background: 'linear-gradient(135deg,color-mix(in srgb,var(--primary) 8%,var(--base-100)),color-mix(in srgb,var(--secondary) 6%,var(--base-100)))' }}>
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-primary flex items-center justify-center text-primary-content font-montserrat font-black text-lg">
-              {sub.userName?.charAt(0).toUpperCase() || 'U'}
-            </div>
-            <div>
-              <p className="font-montserrat font-bold text-base-content">{sub.userName}</p>
-              <p className="text-xs text-base-content/50">{sub.userEmail}</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-base-200 transition-colors">
-            <X className="w-5 h-5 text-base-content/60" />
-          </button>
+    <AnimatePresence>
+      <motion.div
+        className="drawer-overlay"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={onClose}
+      />
+      <motion.aside
+        className="drawer"
+        initial={{ x: '100%' }}
+        animate={{ x: 0 }}
+        exit={{ x: '100%' }}
+        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+      >
+        <div className="drawer-header">
+          <h2 className="drawer-title">Subscription Detail</h2>
+          <button className="icon-btn" onClick={onClose}><X size={18} /></button>
         </div>
 
-        {/* body */}
-        <div className="flex-1 p-6 space-y-5">
-          <div className="glass-card p-4 flex items-center justify-between">
+        <div className="drawer-body">
+          {/* User */}
+          <div className="drawer-avatar-row">
+            <div className="drawer-avatar" style={avatarStyle(sub.userName ?? '')}>
+              {initials(sub.userName)}
+            </div>
             <div>
-              <p className="text-[10px] text-base-content/40 uppercase tracking-widest font-poppins mb-1">Current Plan</p>
-              <p className="text-xl font-montserrat font-black text-primary">{sub.planName}</p>
-            </div>
-            <span className="badge badge-success text-[10px]">
-              <CheckCircle2 className="w-3 h-3" /> {sub.status}
-            </span>
-          </div>
-
-          <div className="glass-card p-4">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-[10px] text-base-content/40 uppercase tracking-widest font-poppins">Days Until Renewal</p>
-              <Clock className="w-4 h-4 text-warning" />
-            </div>
-            <p className="text-3xl font-montserrat font-black text-base-content">{daysLeft}</p>
-            <p className="text-xs text-base-content/40 mt-0.5">
-              Expires {expiry.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-            </p>
-            <div className="mt-3 h-1.5 bg-base-300 rounded-full overflow-hidden">
-              <div className="h-full rounded-full transition-all duration-700" style={{
-                width: `${Math.min(100, Math.max(5, (daysLeft / 30) * 100))}%`,
-                background: daysLeft < 7 ? 'var(--error)' : daysLeft < 15 ? 'var(--warning)' : 'var(--success)',
-              }} />
+              <p className="drawer-name">{sub.userName ?? '—'}</p>
+              <p className="drawer-email">{sub.userEmail ?? '—'}</p>
             </div>
           </div>
 
-          <div className="glass-card p-4">
-            <p className="text-[10px] text-base-content/40 uppercase tracking-widest font-poppins mb-3">Usage Radar</p>
-            <ResponsiveContainer width="100%" height={180}>
-              <RadarChart data={radarData}>
-                <PolarGrid stroke="var(--base-300)" />
-                <PolarAngleAxis dataKey="s" tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.6 }} />
-                <PolarRadiusAxis tick={false} axisLine={false} />
-                <Radar dataKey="A" stroke="var(--primary)" fill="var(--primary)" fillOpacity={0.25} />
-              </RadarChart>
-            </ResponsiveContainer>
-          </div>
+          <div className="drawer-divider" />
 
-          <div className="grid grid-cols-3 gap-3">
+          {/* Info grid */}
+          <div className="drawer-grid">
             {[
-              { l: 'Consults', v: sub.usage?.doctorConsultationsUsed || 0, I: Stethoscope, c: '--primary'   },
-              { l: 'Rides',    v: sub.usage?.transportRidesUsed      || 0, I: Car,         c: '--secondary' },
-              { l: 'Labs',     v: sub.usage?.labTestsUsed            || 0, I: FlaskConical,c: '--accent'    },
-            ].map(({ l, v, I, c }) => (
-              <div key={l} className="glass-card p-3 text-center">
-                <I className="w-4 h-4 mx-auto mb-1" style={{ color: `var(${c})` }} />
-                <p className="text-2xl font-montserrat font-black text-base-content">{v}</p>
-                <p className="text-[10px] text-base-content/40">{l}</p>
+              ['Plan',    <PlanBadge name={sub.planName} />],
+              ['Status',  <StatusBadge status={sub.status} />],
+              ['Expiry',  <ExpiryCell dateStr={sub.expiryDate} />],
+              ['MRR',     fmtINR(sub.planMrr)],
+              ['Sub ID',  <span className="mono-sm">{sub._id}</span>],
+              ['Auto-renew', sub.autoRenew ? '✓ Enabled' : '— Off'],
+            ].map(([k, v]) => (
+              <div key={k} className="drawer-row">
+                <span className="drawer-key">{k}</span>
+                <span className="drawer-val">{v}</span>
               </div>
             ))}
           </div>
+
+          {/* Usage */}
+          {sub.usage && (
+            <>
+              <div className="drawer-divider" />
+              <p className="drawer-section-title">Usage this month</p>
+              {Object.entries(sub.usage).map(([k, v]) => (
+                <div key={k} className="usage-row-detail">
+                  <span className="drawer-key">{k}</span>
+                  <UsageBar pct={typeof v === 'number' ? v : 0} />
+                </div>
+              ))}
+            </>
+          )}
         </div>
 
-        {/* footer */}
-        <div className="p-5 border-t border-base-300">
-          <button onClick={() => onInvoice(sub)} disabled={pdfLoading}
-            className="btn-primary-cta w-full flex items-center justify-center gap-2 text-xs">
-            {pdfLoading ? <span className="spinner w-4 h-4" /> : <Download className="w-4 h-4" />}
-            Generate Invoice PDF
+        <div className="drawer-footer">
+          <button className="btn-danger" onClick={handleCancel} disabled={saving}>
+            {saving ? 'Cancelling…' : 'Cancel Subscription'}
           </button>
         </div>
-      </motion.div>
-    </motion.div>
+      </motion.aside>
+    </AnimatePresence>
   );
-};
+}
 
-/* ─────────────────────────────────────────────────────────────────
-   MAIN COMPONENT
-   ───────────────────────────────────────────────────────────────── */
-export default function ActiveSubscriptionManagement() {
-  const dispatch       = useDispatch();
-  const subscribers    = useSelector(selectActiveSubscribers) || [];
-  const isLoading      = useSelector(selectPlanLoading);
+// ── Main Page ─────────────────────────────────────────────────────────────────
+export default function ActiveSubscriptionsPage() {
+  const dispatch    = useDispatch();
+  const rawSubs     = useSelector(selectAdminSubscriptions);
+  const pagination  = useSelector(selectAdminPagination);
+  const loading     = useSelector(selectAdminLoading);
+  const error       = useSelector(selectSubscriptionError);
 
-  const [search, setSearch]         = useState('');
-  const [sortField, setSortField]   = useState('userName');
-  const [sortDir, setSortDir]       = useState('asc');
-  const [planFilter, setPlanFilter] = useState('All');
-  const [drawer, setDrawer]         = useState(null);
-  const [selected, setSelected]     = useState(new Set());
-  const [pdfLoading, setPdf]        = useState(false);
-  const [bulkLoading, setBulk]      = useState(false);
-  const [chartMode, setChartMode]   = useState('area');
+  const [page,        setPage]        = useState(1);
+  const [search,      setSearch]      = useState('');
+  const [filter,      setFilter]      = useState('all');
+  const [selectedSub, setSelectedSub] = useState(null);
+  const [refreshing,  setRefreshing]  = useState(false);
 
-  useEffect(() => {
-    dispatch(fetchActiveSubscriptions({ page: 1, limit: 100 }));
-  }, [dispatch]);
+  // ── Fetch ────────────────────────────────────────────────────────────────
+  const load = useCallback(
+    (p = 1) => dispatch(adminFetchAllSubscriptions({ page: p, limit: PER_PAGE })),
+    [dispatch]
+  );
 
-  /* ── derived data ─────────────────────────────────────────────── */
-  const planOptions = useMemo(() => {
-    const p = [...new Set(subscribers.map(s => s.planName).filter(Boolean))];
-    return ['All', ...p];
-  }, [subscribers]);
+  useEffect(() => { load(page); }, [load, page]);
 
-  const filtered = useMemo(() => {
-    let r = [...subscribers];
-    if (planFilter !== 'All') r = r.filter(s => s.planName === planFilter);
-    if (search) {
-      const q = search.toLowerCase();
-      r = r.filter(s =>
-        s.userName?.toLowerCase().includes(q) ||
-        s.userEmail?.toLowerCase().includes(q) ||
-        s.planName?.toLowerCase().includes(q)
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await load(page);
+    setRefreshing(false);
+  };
+
+  // ── Client-side filter + search (on top of server-paginated data) ─────────
+  const displayed = useMemo(() => {
+    let rows = rawSubs ?? [];
+    if (filter !== 'all')
+      rows = rows.filter(s => {
+        if (filter === 'expiring') return daysLeft(s.expiryDate) <= 10;
+        return s.status === filter;
+      });
+    if (search.trim())
+      rows = rows.filter(s =>
+        [s.userName, s.userEmail, s.planName].some(f =>
+          (f ?? '').toLowerCase().includes(search.toLowerCase())
+        )
       );
-    }
-    r.sort((a, b) => {
-      const va = (a[sortField] ?? '').toString().toLowerCase();
-      const vb = (b[sortField] ?? '').toString().toLowerCase();
-      return va < vb ? (sortDir === 'asc' ? -1 : 1) : va > vb ? (sortDir === 'asc' ? 1 : -1) : 0;
-    });
-    return r;
-  }, [subscribers, search, planFilter, sortField, sortDir]);
+    return rows;
+  }, [rawSubs, filter, search]);
 
-  const planDist = useMemo(() => {
-    const d = subscribers.reduce((a, s) => { a[s.planName] = (a[s.planName] || 0) + 1; return a; }, {});
-    return Object.entries(d).map(([name, value], i) => ({
-      name, value,
-      color: ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)'][i % 4],
+  // ── Derived metrics ───────────────────────────────────────────────────────
+  const metrics = useMemo(() => {
+    const all      = rawSubs ?? [];
+    const active   = all.filter(s => s.status === 'Active').length;
+    const trial    = all.filter(s => s.status === 'Trial').length;
+    const expiring = all.filter(s => daysLeft(s.expiryDate) <= 10).length;
+    const mrr      = all.reduce((a, s) => a + (s.planMrr ?? 0), 0);
+    return { active, trial, expiring, mrr, total: all.length };
+  }, [rawSubs]);
+
+  // ── Chart data ────────────────────────────────────────────────────────────
+  const planChartData = useMemo(() => {
+    const map = {};
+    (rawSubs ?? []).forEach(s => {
+      const name = s.planName ?? 'Unknown';
+      map[name] = (map[name] ?? 0) + 1;
+    });
+    return Object.entries(map).map(([name, count]) => ({
+      name: name.replace(' Care', '').replace("NRI's", 'NRI'),
+      count,
+      fill: getPlanMeta(name).color,
     }));
-  }, [subscribers]);
+  }, [rawSubs]);
 
-  const usageData = useMemo(() => {
-    const t = subscribers.reduce((a, s) => {
-      a.c += s.usage?.doctorConsultationsUsed || 0;
-      a.t += s.usage?.transportRidesUsed      || 0;
-      a.l += s.usage?.labTestsUsed            || 0;
-      return a;
-    }, { c: 0, t: 0, l: 0 });
-    return [
-      { name: 'Consultations', value: t.c, fill: 'var(--chart-1)' },
-      { name: 'Transport',     value: t.t, fill: 'var(--chart-2)' },
-      { name: 'Lab Tests',     value: t.l, fill: 'var(--chart-3)' },
-    ];
-  }, [subscribers]);
-
-  const timeline = useMemo(() => {
-    const g = {};
-    subscribers.forEach(s => {
-      if (!s.expiryDate) return;
-      const k = new Date(s.expiryDate).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
-      g[k] = (g[k] || 0) + 1;
+  const mrrPieData = useMemo(() => {
+    const map = {};
+    (rawSubs ?? []).forEach(s => {
+      const name = s.planName ?? 'Unknown';
+      map[name] = (map[name] ?? 0) + (s.planMrr ?? 0);
     });
-    return Object.entries(g).map(([month, count]) => ({ month, count })).slice(0, 6);
-  }, [subscribers]);
+    return Object.entries(map).map(([name, value]) => ({
+      name, value, fill: getPlanMeta(name).color,
+    }));
+  }, [rawSubs]);
 
-  const totalUsage   = usageData.reduce((a, c) => a + c.value, 0);
-  const expiringSoon = useMemo(() => {
-    const cut = new Date(); cut.setDate(cut.getDate() + 7);
-    return subscribers.filter(s => s.expiryDate && new Date(s.expiryDate) <= cut).length;
-  }, [subscribers]);
-
-  /* ── handlers ─────────────────────────────────────────────────── */
-  const doSort = useCallback((f) => {
-    setSortField(p => {
-      if (p === f) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); return f; }
-      setSortDir('asc'); return f;
-    });
-  }, []);
-
-  const toggleRow = useCallback((id) => {
-    setSelected(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  }, []);
-
-  const toggleAll = useCallback(() => {
-    setSelected(p =>
-      p.size === filtered.length && filtered.length > 0
-        ? new Set()
-        : new Set(filtered.map(s => s._id))
+  // ── CSV export ────────────────────────────────────────────────────────────
+  const exportCSV = () => {
+    const header = 'Name,Email,Plan,Status,Expiry,MRR';
+    const rows   = displayed.map(s =>
+      `"${s.userName}","${s.userEmail}","${s.planName}",${s.status},${s.expiryDate ?? ''},${s.planMrr ?? 0}`
     );
-  }, [filtered]);
+    const blob = new Blob([[header, ...rows].join('\n')], { type: 'text/csv' });
+    const a    = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(blob), download: 'active_subscriptions.csv',
+    });
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
 
-  const doInvoice = useCallback(async (sub) => {
-    setPdf(true);
-    try { await generateInvoicePDF(sub); }
-    catch (e) { console.error(e); alert('PDF failed — run: npm install jspdf'); }
-    finally { setPdf(false); }
-  }, []);
-
-  const doBulk = useCallback(async () => {
-    if (!selected.size) return;
-    setBulk(true);
-    try {
-      for (const s of filtered.filter(x => selected.has(x._id))) await generateInvoicePDF(s);
-    } catch (e) { console.error(e); }
-    finally { setBulk(false); }
-  }, [selected, filtered]);
-
-  const SortIcon = ({ f }) =>
-    sortField !== f
-      ? <ChevronDown className="w-3 h-3 opacity-30 inline" />
-      : sortDir === 'asc'
-        ? <ChevronUp   className="w-3 h-3 text-primary inline" />
-        : <ChevronDown className="w-3 h-3 text-primary inline" />;
-
-  /* ── loading ──────────────────────────────────────────────────── */
-  if (isLoading && subscribers.length === 0) {
-    return <div className="container-custom py-8 relative"><LikesonBg /><Skeleton /></div>;
-  }
-
-  /* ── render ───────────────────────────────────────────────────── */
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <>
-      <LikesonBg />
+      {/* ── Scoped styles ── */}
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
-      <motion.div
-        className="container-custom py-8 w-full max-w-[1440px] mx-auto space-y-7 relative z-0"
-        variants={containerV} initial="hidden" animate="visible"
-      >
-        {/* ══ HEADER ══════════════════════════════════════════════ */}
-        <motion.div variants={itemV}
-          className="flex flex-col md:flex-row md:items-end justify-between gap-5">
-          <div>
-            {/* Logo + brand */}
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-xl overflow-hidden border border-base-300 shadow-sm bg-base-200 flex-shrink-0">
-                <img src={LOGO_URL} alt="Likeson"
-                     className="w-full h-full object-cover"
-                     onError={e => { e.currentTarget.style.display = 'none'; }} />
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-montserrat font-black text-primary">Likeson</span>
-                <span className="text-[10px] font-poppins text-base-content/40 uppercase tracking-widest border-l border-base-300 pl-2">
-                  Enterprise Analytics
-                </span>
-              </div>
-            </div>
-            <h1 className="section-heading mb-1 text-3xl md:text-4xl !leading-tight">
-              Active Subscriptions
-            </h1>
-            <p className="section-subheading mb-0 text-sm md:text-base">
-              Monitor subscriber health, usage metrics, and generate invoices.
-            </p>
+        .asp-root {
+          font-family: 'Sora', sans-serif;
+          min-height: 100vh;
+          background: var(--base-100);
+          color: var(--base-content);
+          padding: 28px 32px 48px;
+        }
+
+        /* Topbar */
+        .asp-topbar {
+          display: flex; align-items: center; justify-content: space-between;
+          margin-bottom: 28px;
+        }
+        .asp-title-block h1 {
+          font-size: 22px; font-weight: 800; letter-spacing: -0.5px;
+          color: var(--base-content); margin: 0;
+        }
+        .asp-title-block p {
+          font-size: 12px; color: oklch(50% 0 0 / 0.5);
+          font-family: 'JetBrains Mono', monospace; margin: 3px 0 0;
+        }
+        .asp-topbar-actions { display: flex; gap: 8px; align-items: center; }
+        .live-pill {
+          display: flex; align-items: center; gap: 5px;
+          background: #dcfce7; color: #15803d;
+          font-size: 11px; font-weight: 600; padding: 4px 10px;
+          border-radius: 20px; font-family: 'JetBrains Mono', monospace;
+        }
+        .dark .live-pill { background: #14532d; color: #86efac; }
+        .live-dot {
+          width: 6px; height: 6px; border-radius: 50%; background: #16a34a;
+          animation: lpulse 2s ease-in-out infinite;
+        }
+        @keyframes lpulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+        .btn-ghost {
+          display: flex; align-items: center; gap: 6px;
+          background: var(--base-200); border: 1px solid var(--base-300);
+          color: var(--base-content); padding: 7px 13px;
+          border-radius: 8px; font-size: 12px; font-weight: 600;
+          cursor: pointer; font-family: 'Sora', sans-serif;
+          transition: all .15s;
+        }
+        .btn-ghost:hover { background: var(--base-300); }
+        .btn-primary {
+          display: flex; align-items: center; gap: 6px;
+          background: var(--primary); color: var(--primary-content);
+          padding: 7px 15px; border-radius: 8px;
+          font-size: 12px; font-weight: 600; cursor: pointer;
+          border: none; font-family: 'Sora', sans-serif;
+          transition: filter .15s;
+        }
+        .btn-primary:hover { filter: brightness(1.08); }
+
+        /* Metrics */
+        .metrics-grid {
+          display: grid; grid-template-columns: repeat(4, 1fr);
+          gap: 12px; margin-bottom: 20px;
+        }
+        .metric-card {
+          background: var(--base-200); border: 1px solid var(--base-300);
+          border-radius: 12px; padding: 16px 18px;
+        }
+        .metric-icon-wrap {
+          width: 36px; height: 36px; border-radius: 9px;
+          display: flex; align-items: center; justify-content: center;
+          margin-bottom: 10px;
+        }
+        .metric-label { font-size: 11px; font-weight: 600; text-transform: uppercase;
+          letter-spacing: .07em; color: oklch(50% 0 0 / .55); margin-bottom: 4px; }
+        .metric-value { font-size: 28px; font-weight: 800; letter-spacing: -1px;
+          color: var(--base-content); line-height: 1; }
+        .metric-delta { display: flex; align-items: center; gap: 3px;
+          font-size: 11px; margin-top: 6px; color: oklch(50% 0 0 / .5); }
+        .delta-up { color: #16a34a; }
+        .delta-dn { color: #dc2626; }
+
+        /* Charts */
+        .charts-row { display: grid; grid-template-columns: 1.6fr 1fr;
+          gap: 12px; margin-bottom: 16px; }
+        .chart-card {
+          background: var(--base-100); border: 1px solid var(--base-300);
+          border-radius: 14px; padding: 18px 20px;
+        }
+        .chart-card-title { font-size: 13px; font-weight: 700;
+          color: var(--base-content); margin-bottom: 2px; }
+        .chart-card-sub { font-size: 11px; color: oklch(50% 0 0 / .45);
+          margin-bottom: 14px; }
+
+        /* Table */
+        .table-card {
+          background: var(--base-100); border: 1px solid var(--base-300);
+          border-radius: 14px; overflow: hidden; margin-bottom: 14px;
+        }
+        .table-toolbar {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 14px 18px; border-bottom: 1px solid var(--base-300);
+          gap: 12px; flex-wrap: wrap;
+        }
+        .table-toolbar-title { font-size: 13px; font-weight: 700;
+          color: var(--base-content); }
+        .toolbar-right { display: flex; gap: 8px; align-items: center; }
+        .search-box {
+          display: flex; align-items: center; gap: 7px;
+          background: var(--base-200); border: 1px solid var(--base-300);
+          border-radius: 8px; padding: 6px 10px;
+        }
+        .search-box input {
+          background: none; border: none; outline: none; font-size: 12px;
+          color: var(--base-content); width: 160px;
+          font-family: 'Sora', sans-serif;
+        }
+        .search-box input::placeholder { color: oklch(50% 0 0 / .4); }
+        .filter-pills { display: flex; gap: 5px; }
+        .filter-pill {
+          font-size: 11px; font-weight: 600; padding: 5px 10px;
+          border-radius: 6px; border: 1px solid var(--base-300);
+          background: var(--base-200); color: oklch(50% 0 0 / .6);
+          cursor: pointer; font-family: 'Sora', sans-serif;
+          transition: all .12s;
+        }
+        .filter-pill.active {
+          background: var(--primary); color: var(--primary-content);
+          border-color: var(--primary);
+        }
+        .filter-pill:hover:not(.active) { background: var(--base-300); }
+
+        /* Table */
+        .subs-table { width: 100%; border-collapse: collapse; }
+        .subs-table thead th {
+          padding: 10px 16px; text-align: left;
+          font-size: 10px; font-weight: 700; text-transform: uppercase;
+          letter-spacing: .08em; color: oklch(50% 0 0 / .5);
+          background: var(--base-200); border-bottom: 1px solid var(--base-300);
+        }
+        .subs-table tbody tr {
+          border-bottom: 1px solid var(--base-300);
+          transition: background .1s; cursor: pointer;
+        }
+        .subs-table tbody tr:last-child { border-bottom: none; }
+        .subs-table tbody tr:hover { background: var(--base-200); }
+        .subs-table td { padding: 12px 16px; vertical-align: middle; }
+
+        /* User cell */
+        .user-cell { display: flex; align-items: center; gap: 10px; }
+        .avatar-circle {
+          width: 34px; height: 34px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          font-size: 12px; font-weight: 700; flex-shrink: 0;
+        }
+        .user-name { font-size: 13px; font-weight: 600; color: var(--base-content); }
+        .user-email { font-size: 10px; color: oklch(50% 0 0 / .5);
+          font-family: 'JetBrains Mono', monospace; }
+
+        /* Badges */
+        .plan-badge {
+          display: inline-block; font-size: 10px; font-weight: 700;
+          padding: 3px 8px; border-radius: 20px; border: 1px solid;
+          white-space: nowrap;
+        }
+        .status-badge {
+          display: inline-flex; align-items: center; gap: 4px;
+          font-size: 10px; font-weight: 600; padding: 3px 8px;
+          border-radius: 20px; white-space: nowrap;
+        }
+        .status-active   { background:#dcfce7; color:#15803d; }
+        .status-trial    { background:#fef3c7; color:#92400e; }
+        .status-cancelled{ background:#fee2e2; color:#991b1b; }
+        .status-expired  { background:#f3f4f6; color:#6b7280; }
+        .dark .status-active   { background:#14532d; color:#86efac; }
+        .dark .status-trial    { background:#451a03; color:#fcd34d; }
+        .dark .status-cancelled{ background:#450a0a; color:#fca5a5; }
+        .dark .status-expired  { background:#1f2937; color:#9ca3af; }
+
+        /* Expiry */
+        .expiry-urgent { color: #dc2626; font-weight: 700;
+          font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+        .expiry-warn   { color: #d97706; font-weight: 600;
+          font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+        .expiry-ok     { color: var(--base-content); opacity: .7;
+          font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+        .expiry-tag { font-size: 10px; opacity: .75; }
+        .muted-text { color: oklch(50% 0 0 / .4); font-size: 12px; }
+
+        /* Usage */
+        .usage-wrap { display: flex; align-items: center; gap: 7px; }
+        .usage-track { width: 70px; height: 5px; background: var(--base-300);
+          border-radius: 3px; overflow: hidden; }
+        .usage-fill  { height: 100%; border-radius: 3px; }
+        .usage-pct   { font-size: 11px; font-weight: 600;
+          font-family: 'JetBrains Mono', monospace; min-width: 28px; }
+
+        /* Action buttons */
+        .row-actions { display: flex; gap: 5px; }
+        .icon-btn {
+          display: flex; align-items: center; justify-content: center;
+          width: 30px; height: 30px; border-radius: 7px;
+          border: 1px solid var(--base-300); background: var(--base-200);
+          color: oklch(50% 0 0 / .6); cursor: pointer;
+          transition: all .12s;
+        }
+        .icon-btn:hover { background: var(--primary); color: var(--primary-content);
+          border-color: var(--primary); }
+        .icon-btn.danger:hover { background: #ef4444; color: #fff; border-color: #ef4444; }
+
+        /* Pagination */
+        .pagination-row {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 11px 18px; border-top: 1px solid var(--base-300);
+          font-size: 11px; color: oklch(50% 0 0 / .5);
+        }
+        .pag-btns { display: flex; gap: 4px; }
+        .pag-btn {
+          min-width: 30px; height: 30px; border-radius: 7px;
+          border: 1px solid var(--base-300); background: var(--base-200);
+          color: var(--base-content); font-size: 11px; font-weight: 600;
+          cursor: pointer; display: flex; align-items: center;
+          justify-content: center; padding: 0 6px; font-family: 'Sora', sans-serif;
+          transition: all .12s;
+        }
+        .pag-btn.active { background: var(--primary); color: var(--primary-content);
+          border-color: var(--primary); }
+        .pag-btn:hover:not(.active):not(:disabled) { background: var(--base-300); }
+        .pag-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+        /* Empty / Error / Loading */
+        .state-box {
+          padding: 48px; text-align: center;
+          color: oklch(50% 0 0 / .45); font-size: 14px;
+        }
+        .state-box svg { margin: 0 auto 12px; display: block;
+          color: oklch(50% 0 0 / .25); }
+        .error-box { color: #ef4444; }
+
+        /* Summary footer */
+        .summary-footer { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; }
+        .sum-card {
+          background: var(--base-200); border: 1px solid var(--base-300);
+          border-radius: 12px; padding: 14px 16px;
+        }
+        .sum-label { font-size: 10px; font-weight: 700; text-transform: uppercase;
+          letter-spacing: .07em; color: oklch(50% 0 0 / .5); margin-bottom: 8px; }
+        .sum-track { width: 100%; height: 6px; background: var(--base-300);
+          border-radius: 3px; overflow: hidden; margin: 6px 0 5px; }
+        .sum-fill  { height: 100%; border-radius: 3px; }
+        .sum-nums  { display: flex; justify-content: space-between;
+          font-size: 11px; color: oklch(50% 0 0 / .55); }
+        .sum-count { font-size: 14px; font-weight: 800; margin-bottom: 2px; }
+
+        /* Drawer */
+        .drawer-overlay {
+          position: fixed; inset: 0;
+          background: rgba(0,0,0,.45);
+          z-index: 40; backdrop-filter: blur(2px);
+        }
+        .drawer {
+          position: fixed; top: 0; right: 0; bottom: 0;
+          width: 380px; background: var(--base-100);
+          border-left: 1px solid var(--base-300);
+          z-index: 50; display: flex; flex-direction: column;
+        }
+        .drawer-header {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 18px 20px; border-bottom: 1px solid var(--base-300);
+        }
+        .drawer-title { font-size: 15px; font-weight: 700; color: var(--base-content); }
+        .drawer-body { flex: 1; overflow-y: auto; padding: 20px; }
+        .drawer-footer { padding: 16px 20px; border-top: 1px solid var(--base-300); }
+        .drawer-avatar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+        .drawer-avatar {
+          width: 50px; height: 50px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          font-size: 16px; font-weight: 700; flex-shrink: 0;
+        }
+        .drawer-name  { font-size: 15px; font-weight: 700; color: var(--base-content); }
+        .drawer-email { font-size: 11px; color: oklch(50% 0 0 / .5);
+          font-family: 'JetBrains Mono', monospace; }
+        .drawer-divider { border: none; border-top: 1px solid var(--base-300); margin: 14px 0; }
+        .drawer-grid { display: flex; flex-direction: column; gap: 10px; }
+        .drawer-row { display: flex; align-items: center; justify-content: space-between;
+          font-size: 12px; }
+        .drawer-key { color: oklch(50% 0 0 / .5); font-weight: 500; }
+        .drawer-val { color: var(--base-content); font-weight: 600; }
+        .drawer-section-title { font-size: 11px; font-weight: 700; text-transform: uppercase;
+          letter-spacing: .07em; color: oklch(50% 0 0 / .5); margin-bottom: 10px; }
+        .usage-row-detail { display: flex; align-items: center;
+          justify-content: space-between; margin-bottom: 8px; font-size: 12px; }
+        .btn-danger {
+          width: 100%; padding: 10px; border-radius: 9px;
+          background: #fef2f2; border: 1px solid #fecaca;
+          color: #dc2626; font-size: 13px; font-weight: 700;
+          cursor: pointer; font-family: 'Sora', sans-serif;
+          transition: all .12s;
+        }
+        .btn-danger:hover { background: #dc2626; color: #fff; border-color: #dc2626; }
+        .btn-danger:disabled { opacity: .5; cursor: not-allowed; }
+
+        /* Mono */
+        .mono-sm { font-family: 'JetBrains Mono', monospace; font-size: 10px;
+          color: oklch(50% 0 0 / .6); }
+
+        /* Spinner */
+        .spin { animation: spin .8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Skeleton */
+        .skeleton-row td { padding: 14px 16px; }
+        .skel { border-radius: 6px; background: var(--base-300);
+          animation: shimmer 1.4s ease-in-out infinite; }
+        @keyframes shimmer {
+          0%,100%{opacity:1} 50%{opacity:.4}
+        }
+      `}</style>
+
+      <div className="asp-root">
+
+        {/* Topbar */}
+        <div className="asp-topbar">
+          <div className="asp-title-block">
+            <h1>Active Subscriptions</h1>
+            <p>admin / subscriptions / active</p>
           </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={() => dispatch(fetchActiveSubscriptions({ page: 1, limit: 100 }))}
-              className="btn-secondary flex items-center gap-2 py-2 px-4 text-xs">
-              <RefreshCw className="w-3.5 h-3.5" /> Refresh
+          <div className="asp-topbar-actions">
+            <div className="live-pill">
+              <div className="live-dot" />
+              Live
+            </div>
+            <button className="btn-ghost" onClick={handleRefresh} disabled={refreshing}>
+              <RefreshCw size={13} className={refreshing ? 'spin' : ''} />
+              Refresh
             </button>
-            {selected.size > 0 && (
-              <motion.button initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
-                onClick={doBulk} disabled={bulkLoading}
-                className="btn-primary-cta flex items-center gap-2 py-2 px-4 text-xs">
-                {bulkLoading ? <span className="spinner w-4 h-4" /> : <Printer className="w-3.5 h-3.5" />}
-                Invoice {selected.size} Selected
-              </motion.button>
-            )}
-            <div className="relative w-60">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-base-content/40" />
-              <input type="text" placeholder="Search name, email, plan…"
-                value={search} onChange={e => setSearch(e.target.value)}
-                className="input-field w-full pl-9 py-2 text-sm" aria-label="Search" />
-            </div>
+            <button className="btn-primary" onClick={exportCSV}>
+              <Download size={13} />
+              Export CSV
+            </button>
           </div>
-        </motion.div>
-
-        {/* ══ STAT CARDS ══════════════════════════════════════════ */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
-          <StatCard title="Total Subscribers"    value={subscribers.length}   icon={Users}      cv="--primary"   trend="Live count"            sub="All active plans" />
-          <StatCard title="Plan Tiers Active"    value={planDist.length}      icon={BadgeCheck} cv="--secondary" trend="Unique plan types"      sub="Across portfolio" />
-          <StatCard title="Total Service Events" value={totalUsage}           icon={Activity}   cv="--accent"    trend="This billing cycle"     sub="Consults + rides + labs" />
-          <StatCard title="Expiring in 7 Days"   value={expiringSoon}         icon={Clock}      cv="--warning"   trend={expiringSoon ? 'Needs attention' : 'All good'} sub="Renewal required" />
         </div>
 
-        {/* ══ CHARTS ══════════════════════════════════════════════ */}
-        {subscribers.length > 0 && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {/* Metrics */}
+        <div className="metrics-grid">
+          <MetricCard icon={Users}        label="Total subscribers" value={metrics.total}              accent="#3b82f6" delay={0} />
+          <MetricCard icon={Zap}          label="On free trial"     value={metrics.trial}              accent="#8b5cf6" delay={0.05} />
+          <MetricCard icon={AlertTriangle}label="Expiring ≤ 10 days" value={metrics.expiring}          accent="#f59e0b" delay={0.1} up={false} />
+          <MetricCard icon={TrendingUp}   label="Monthly MRR"       value={fmtINR(metrics.mrr)}       accent="#10b981" delay={0.15} up />
+        </div>
 
-            {/* Donut — plan distribution */}
-            <motion.div variants={itemV} className="glass-card p-6 flex flex-col">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-montserrat font-bold">Plan Distribution</h3>
-                <FileText className="w-4 h-4 text-base-content/30" />
-              </div>
-              <div className="flex-1 min-h-[220px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Tooltip content={<ChartTip />} />
-                    <Legend iconType="circle"
-                      wrapperStyle={{ fontFamily: 'var(--font-family-poppins)', fontSize: 11 }} />
-                    <Pie data={planDist} cx="50%" cy="44%"
-                         innerRadius={55} outerRadius={82}
-                         paddingAngle={4} dataKey="value" stroke="none">
-                      {planDist.map((e, i) => <Cell key={i} fill={e.color} />)}
-                    </Pie>
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            </motion.div>
-
-            {/* Bar — usage */}
-            <motion.div variants={itemV} className="glass-card p-6 flex flex-col">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-montserrat font-bold">Service Usage</h3>
-                <Activity className="w-4 h-4 text-base-content/30" />
-              </div>
-              <div className="flex-1 min-h-[220px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={usageData} margin={{ top: 10, right: 10, left: -22, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" vertical={false} />
-                    <XAxis dataKey="name"
-                      tick={{ fontFamily: 'var(--font-family-poppins)', fontSize: 10, fill: 'var(--base-content)', opacity: 0.6 }}
-                      axisLine={false} tickLine={false} />
-                    <YAxis
-                      tick={{ fontFamily: 'var(--font-family-poppins)', fontSize: 10, fill: 'var(--base-content)', opacity: 0.6 }}
-                      axisLine={false} tickLine={false} />
-                    <Tooltip content={<ChartTip />} cursor={{ fill: 'var(--base-200)' }} />
-                    <Bar dataKey="value" radius={[6, 6, 0, 0]} maxBarSize={52}>
-                      {usageData.map((e, i) => <Cell key={i} fill={e.fill} />)}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </motion.div>
-
-            {/* Area/Line — expiry timeline */}
-            <motion.div variants={itemV} className="glass-card p-6 flex flex-col">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-montserrat font-bold">Expiry Timeline</h3>
-                <div className="flex gap-1">
-                  {['area', 'line'].map(m => (
-                    <button key={m} onClick={() => setChartMode(m)}
-                      className={`px-2.5 py-1 rounded-lg text-[10px] font-poppins font-bold uppercase tracking-wider transition-all
-                        ${chartMode === m ? 'bg-primary text-primary-content' : 'bg-base-200 text-base-content/50 hover:bg-base-300'}`}>
-                      {m}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="flex-1 min-h-[220px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  {chartMode === 'area' ? (
-                    <AreaChart data={timeline} margin={{ top: 10, right: 10, left: -22, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="tg" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%"  stopColor="var(--secondary)" stopOpacity={0.45} />
-                          <stop offset="95%" stopColor="var(--secondary)" stopOpacity={0.02} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" vertical={false} />
-                      <XAxis dataKey="month" tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.6, fontFamily: 'var(--font-family-poppins)' }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.6, fontFamily: 'var(--font-family-poppins)' }} axisLine={false} tickLine={false} />
-                      <Tooltip content={<ChartTip />} />
-                      <Area type="monotone" dataKey="count" name="Renewals"
-                        stroke="var(--secondary)" fill="url(#tg)" strokeWidth={2.5}
-                        dot={{ r: 4, fill: 'var(--secondary)', strokeWidth: 0 }} />
-                    </AreaChart>
-                  ) : (
-                    <LineChart data={timeline} margin={{ top: 10, right: 10, left: -22, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" vertical={false} />
-                      <XAxis dataKey="month" tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.6, fontFamily: 'var(--font-family-poppins)' }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.6, fontFamily: 'var(--font-family-poppins)' }} axisLine={false} tickLine={false} />
-                      <Tooltip content={<ChartTip />} />
-                      <Line type="monotone" dataKey="count" name="Renewals"
-                        stroke="var(--accent)" strokeWidth={2.5}
-                        dot={{ r: 4, fill: 'var(--accent)', strokeWidth: 0 }} />
-                    </LineChart>
-                  )}
-                </ResponsiveContainer>
-              </div>
-            </motion.div>
-          </div>
-        )}
-
-        {/* ══ TABLE ═══════════════════════════════════════════════ */}
-        <motion.div variants={itemV} className="glass-card overflow-hidden">
-
-          {/* toolbar */}
-          <div className="p-5 border-b border-base-300 flex flex-wrap items-center justify-between gap-4 bg-base-100/50">
-            <div>
-              <h3 className="text-lg font-montserrat font-bold">Subscriber Directory</h3>
-              <p className="text-[11px] text-base-content/40 mt-0.5">
-                {filtered.length} of {subscribers.length} subscribers
-              </p>
+        {/* Charts */}
+        {!loading && rawSubs?.length > 0 && (
+          <div className="charts-row">
+            <div className="chart-card">
+              <p className="chart-card-title">Subscribers by plan</p>
+              <p className="chart-card-sub">Distribution across plan tiers</p>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={planChartData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" vertical={false} />
+                  <XAxis dataKey="name" tick={{ fontSize: 10, fill: 'oklch(50% 0 0 / 0.5)' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 10, fill: 'oklch(50% 0 0 / 0.5)' }} axisLine={false} tickLine={false} />
+                  <Tooltip
+                    contentStyle={{ background: 'var(--base-200)', border: '1px solid var(--base-300)', borderRadius: 8, fontSize: 12 }}
+                    cursor={{ fill: 'var(--base-200)' }}
+                  />
+                  <Bar dataKey="count" radius={[5, 5, 0, 0]}>
+                    {planChartData.map((e, i) => <Cell key={i} fill={e.fill} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </div>
-            <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-base-content/40" />
-              <div className="flex gap-1.5 flex-wrap">
-                {planOptions.map(p => (
-                  <button key={p} onClick={() => setPlanFilter(p)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-poppins font-semibold transition-all
-                      ${planFilter === p
-                        ? 'bg-primary text-primary-content'
-                        : 'bg-base-200 text-base-content/60 hover:bg-base-300'}`}>
-                    {p}
-                  </button>
+
+            <div className="chart-card">
+              <p className="chart-card-title">MRR by plan</p>
+              <p className="chart-card-sub">Revenue breakdown</p>
+              <ResponsiveContainer width="100%" height={160}>
+                <PieChart>
+                  <Pie data={mrrPieData} cx="50%" cy="50%" innerRadius={50} outerRadius={75}
+                    dataKey="value" paddingAngle={3}>
+                    {mrrPieData.map((e, i) => <Cell key={i} fill={e.fill} />)}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ background: 'var(--base-200)', border: '1px solid var(--base-300)', borderRadius: 8, fontSize: 12 }}
+                    formatter={(v) => fmtINR(v)}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                {mrrPieData.map((e, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'oklch(50% 0 0 / 0.6)' }}>
+                    <div style={{ width: 8, height: 8, borderRadius: 2, background: e.fill }} />
+                    {e.name.replace(' Care', '')}
+                  </div>
                 ))}
               </div>
             </div>
           </div>
+        )}
 
-          {/* table */}
-          <div className="overflow-x-auto">
-            {filtered.length === 0 ? (
-              <div className="p-16 text-center flex flex-col items-center text-base-content/40">
-                <AlertCircle className="w-14 h-14 mb-4 opacity-30" />
-                <p className="text-lg font-poppins font-medium">No subscribers found.</p>
-                {search && <p className="text-sm mt-1 opacity-70">Try a different search.</p>}
+        {/* Table */}
+        <div className="table-card">
+          <div className="table-toolbar">
+            <span className="table-toolbar-title">
+              Subscriber roster
+              <span style={{ fontWeight: 400, fontSize: 11, color: 'oklch(50% 0 0 / 0.45)', marginLeft: 8 }}>
+                {pagination?.total ?? rawSubs?.length ?? 0} total
+              </span>
+            </span>
+            <div className="toolbar-right">
+              <div className="filter-pills">
+                {['all', 'Active', 'Trial', 'expiring'].map(f => (
+                  <button
+                    key={f}
+                    className={`filter-pill ${filter === f ? 'active' : ''}`}
+                    onClick={() => { setFilter(f); setPage(1); }}
+                  >
+                    {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
+                  </button>
+                ))}
               </div>
-            ) : (
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-base-200/60 text-[10px] uppercase tracking-widest text-base-content/50 font-poppins font-bold border-b border-base-300">
-                    <th className="px-5 py-3.5 w-10">
-                      <input type="checkbox" className="rounded w-4 h-4 accent-primary cursor-pointer"
-                        checked={selected.size === filtered.length && filtered.length > 0}
-                        onChange={toggleAll} />
-                    </th>
-                    {[
-                      { l: 'Customer',      f: 'userName'   },
-                      { l: 'Plan & Status', f: 'planName'   },
-                      { l: 'Usage',         f: null         },
-                      { l: 'Renewal',       f: 'expiryDate' },
-                      { l: 'Actions',       f: null         },
-                    ].map(({ l, f }) => (
-                      <th key={l}
-                          className={`px-5 py-3.5 ${f ? 'cursor-pointer hover:text-primary select-none' : ''}`}
-                          onClick={() => f && doSort(f)}>
-                        <span className="flex items-center gap-1.5">
-                          {l}{f && <SortIcon f={f} />}
-                        </span>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  <AnimatePresence>
-                    {filtered.map((sub, idx) => {
-                      const exp     = new Date(sub.expiryDate);
-                      const dl      = Math.ceil((exp - new Date()) / 864e5);
-                      const isSel   = selected.has(sub._id);
-                      return (
-                        <motion.tr key={sub._id}
-                          initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                          transition={{ delay: Math.min(idx * 0.03, 0.25) }}
-                          className={`border-b border-base-300/40 transition-colors group
-                            ${isSel ? 'bg-primary/5' : 'hover:bg-base-200/30'}`}>
-
-                          {/* checkbox */}
-                          <td className="px-5 py-4">
-                            <input type="checkbox" className="rounded w-4 h-4 accent-primary cursor-pointer"
-                              checked={isSel} onChange={() => toggleRow(sub._id)} />
-                          </td>
-
-                          {/* customer */}
-                          <td className="px-5 py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-3">
-                              <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center text-primary font-montserrat font-black text-sm flex-shrink-0">
-                                {sub.userName?.charAt(0).toUpperCase() || 'U'}
-                              </div>
-                              <div>
-                                <p className="font-semibold text-sm text-base-content">{sub.userName}</p>
-                                <p className="text-[11px] text-base-content/50">{sub.userEmail}</p>
-                              </div>
-                            </div>
-                          </td>
-
-                          {/* plan */}
-                          <td className="px-5 py-4 whitespace-nowrap">
-                            <p className="font-semibold text-sm text-primary">{sub.planName}</p>
-                            <span className="badge badge-success text-[9px] mt-1">
-                              <CheckCircle2 className="w-2.5 h-2.5" /> {sub.status}
-                            </span>
-                          </td>
-
-                          {/* usage */}
-                          <td className="px-5 py-4 whitespace-nowrap">
-                            <div className="flex gap-3 text-[11px] font-poppins text-base-content/70">
-                              <span className="flex items-center gap-1">
-                                <Stethoscope className="w-3 h-3" style={{ color: 'var(--chart-1)' }} />
-                                {sub.usage?.doctorConsultationsUsed || 0}
-                              </span>
-                              <span className="flex items-center gap-1">
-                                <Car className="w-3 h-3" style={{ color: 'var(--chart-2)' }} />
-                                {sub.usage?.transportRidesUsed || 0}
-                              </span>
-                              <span className="flex items-center gap-1">
-                                <FlaskConical className="w-3 h-3" style={{ color: 'var(--chart-3)' }} />
-                                {sub.usage?.labTestsUsed || 0}
-                              </span>
-                            </div>
-                          </td>
-
-                          {/* renewal */}
-                          <td className="px-5 py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-1.5 text-sm text-base-content/70">
-                              <Calendar className="w-3.5 h-3.5 text-base-content/40" />
-                              {exp.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-                            </div>
-                            <span className={`text-[10px] font-semibold font-poppins ${
-                              dl < 0 ? 'text-error' : dl < 7 ? 'text-error' : dl < 15 ? 'text-warning' : 'text-success'
-                            }`}>
-                              {dl < 0 ? 'Expired' : `${dl}d left`}
-                            </span>
-                          </td>
-
-                          {/* actions */}
-                          <td className="px-5 py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button onClick={() => setDrawer(sub)}
-                                className="p-1.5 rounded-lg hover:bg-primary/10 text-primary transition-colors"
-                                title="View details">
-                                <Eye className="w-4 h-4" />
-                              </button>
-                              <button onClick={() => doInvoice(sub)} disabled={pdfLoading}
-                                className="p-1.5 rounded-lg hover:bg-secondary/10 text-secondary transition-colors"
-                                title="Download invoice">
-                                {pdfLoading
-                                  ? <span className="spinner w-4 h-4" />
-                                  : <Download className="w-4 h-4" />
-                                }
-                              </button>
-                            </div>
-                          </td>
-                        </motion.tr>
-                      );
-                    })}
-                  </AnimatePresence>
-                </tbody>
-              </table>
-            )}
+              <div className="search-box">
+                <Search size={13} style={{ color: 'oklch(50% 0 0 / 0.4)', flexShrink: 0 }} />
+                <input
+                  placeholder="Search name, email, plan…"
+                  value={search}
+                  onChange={e => { setSearch(e.target.value); setPage(1); }}
+                />
+                {search && (
+                  <button onClick={() => setSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}>
+                    <X size={12} style={{ color: 'oklch(50% 0 0 / 0.4)' }} />
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
-          {/* table footer */}
-          {filtered.length > 0 && (
-            <div className="px-5 py-3.5 border-t border-base-300 bg-base-100/50 flex items-center justify-between">
-              <span className="text-xs text-base-content/40 font-poppins">
-                {selected.size > 0
-                  ? `${selected.size} row${selected.size > 1 ? 's' : ''} selected — use Invoice button above`
-                  : `Showing ${filtered.length} subscriber${filtered.length !== 1 ? 's' : ''}`
-                }
+          <table className="subs-table">
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Plan</th>
+                <th>Status</th>
+                <th>Expiry</th>
+                <th>Usage</th>
+                <th>MRR</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {/* Loading skeletons */}
+              {loading && Array.from({ length: 6 }).map((_, i) => (
+                <tr key={i} className="skeleton-row">
+                  {[140, 100, 80, 90, 90, 70, 90].map((w, j) => (
+                    <td key={j}>
+                      <div className="skel" style={{ width: w, height: 14 }} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+
+              {/* Error */}
+              {!loading && error && (
+                <tr>
+                  <td colSpan={7}>
+                    <div className="state-box error-box">
+                      <AlertTriangle size={32} />
+                      <p>{error}</p>
+                    </div>
+                  </td>
+                </tr>
+              )}
+
+              {/* Empty */}
+              {!loading && !error && displayed.length === 0 && (
+                <tr>
+                  <td colSpan={7}>
+                    <div className="state-box">
+                      <Users size={32} />
+                      <p>No subscriptions match your filters.</p>
+                    </div>
+                  </td>
+                </tr>
+              )}
+
+              {/* Rows */}
+              {!loading && !error && displayed.map((sub, idx) => {
+                const usagePct = sub.usage
+                  ? Math.round(Object.values(sub.usage).reduce((a, v) => a + (typeof v === 'number' ? v : 0), 0) / Math.max(1, Object.keys(sub.usage).length))
+                  : 0;
+
+                return (
+                  <motion.tr
+                    key={sub._id}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.2, delay: idx * 0.03 }}
+                    onClick={() => setSelectedSub(sub)}
+                  >
+                    <td>
+                      <div className="user-cell">
+                        <div className="avatar-circle" style={avatarStyle(sub.userName ?? '')}>
+                          {initials(sub.userName)}
+                        </div>
+                        <div>
+                          <div className="user-name">{sub.userName ?? '—'}</div>
+                          <div className="user-email">{sub.userEmail ?? '—'}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td><PlanBadge name={sub.planName} /></td>
+                    <td><StatusBadge status={sub.status} /></td>
+                    <td><ExpiryCell dateStr={sub.expiryDate} /></td>
+                    <td><UsageBar pct={usagePct} /></td>
+                    <td>
+                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 600 }}>
+                        {fmtINR(sub.planMrr)}
+                      </span>
+                    </td>
+                    <td onClick={e => e.stopPropagation()}>
+                      <div className="row-actions">
+                        <button className="icon-btn" title="View" onClick={() => setSelectedSub(sub)}>
+                          <Eye size={13} />
+                        </button>
+                        <button className="icon-btn danger" title="Cancel" onClick={() => setSelectedSub(sub)}>
+                          <XCircle size={13} />
+                        </button>
+                      </div>
+                    </td>
+                  </motion.tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          {/* Pagination */}
+          {!loading && displayed.length > 0 && (
+            <div className="pagination-row">
+              <span>
+                Page {page} of {pagination?.pages ?? 1} · {pagination?.total ?? displayed.length} total
               </span>
-              <span className="flex items-center gap-1.5 text-xs text-base-content/30 font-poppins">
-                <Sparkles className="w-3 h-3 text-primary" /> Hover a row to reveal actions
-              </span>
+              <div className="pag-btns">
+                <button
+                  className="pag-btn"
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                >
+                  <ChevronLeft size={13} />
+                </button>
+                {Array.from({ length: pagination?.pages ?? 1 }, (_, i) => i + 1)
+                  .filter(p => p === 1 || p === (pagination?.pages ?? 1) || Math.abs(p - page) <= 1)
+                  .reduce((acc, p, i, arr) => {
+                    if (i > 0 && p - arr[i - 1] > 1) acc.push('…');
+                    acc.push(p);
+                    return acc;
+                  }, [])
+                  .map((p, i) =>
+                    p === '…'
+                      ? <span key={i} style={{ padding: '0 4px', fontSize: 12, color: 'oklch(50% 0 0 / .4)' }}>…</span>
+                      : <button key={p} className={`pag-btn ${p === page ? 'active' : ''}`} onClick={() => setPage(p)}>{p}</button>
+                  )}
+                <button
+                  className="pag-btn"
+                  onClick={() => setPage(p => Math.min(pagination?.pages ?? 1, p + 1))}
+                  disabled={page >= (pagination?.pages ?? 1)}
+                >
+                  <ChevronRight size={13} />
+                </button>
+              </div>
             </div>
           )}
-        </motion.div>
+        </div>
 
-      </motion.div>
-
-      {/* ══ DRAWER ══════════════════════════════════════════════════ */}
-      <AnimatePresence>
-        {drawer && (
-          <Drawer
-            sub={drawer}
-            onClose={() => setDrawer(null)}
-            onInvoice={doInvoice}
-            pdfLoading={pdfLoading}
-          />
+        {/* Plan summary footer */}
+        {!loading && rawSubs?.length > 0 && (
+          <div className="summary-footer">
+            {planChartData
+              .sort((a, b) => b.count - a.count)
+              .slice(0, 3)
+              .map((p, i) => {
+                const max = planChartData[0]?.count ?? 1;
+                return (
+                  <motion.div
+                    key={p.name}
+                    className="sum-card"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.2 + i * 0.05 }}
+                  >
+                    <div className="sum-label">{p.name} Care</div>
+                    <div className="sum-count" style={{ color: p.fill }}>{p.count}</div>
+                    <div className="sum-track">
+                      <div
+                        className="sum-fill"
+                        style={{ width: `${Math.round((p.count / max) * 100)}%`, background: p.fill }}
+                      />
+                    </div>
+                    <div className="sum-nums">
+                      <span>{p.count} subscribers</span>
+                      <span>{Math.round((p.count / (rawSubs?.length || 1)) * 100)}% share</span>
+                    </div>
+                  </motion.div>
+                );
+              })}
+          </div>
         )}
-      </AnimatePresence>
+      </div>
+
+      {/* Detail drawer */}
+      <SubDetailDrawer
+        sub={selectedSub}
+        onClose={() => setSelectedSub(null)}
+        onUpdate={() => load(page)}
+      />
     </>
   );
 }

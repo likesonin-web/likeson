@@ -9,67 +9,28 @@ import {
   Globe, AlertTriangle, CheckCircle2, Loader2, Shield,
   Navigation, Wifi, WifiOff, TrendingUp, ChevronRight,
   X, Info, ArrowLeft, Map, Layers, Star,
-  Activity, Zap
+  Activity, Zap, ChevronLeft,
 } from "lucide-react";
 
+ 
 import {
-  fetchAvailability,
-  toggleAvailability,
-  setAvailabilityOptimistic,
+  fetchDispatchStatus,
+  updateDispatchStatus,
+  setDispatchStatusOptimistic,
   fetchServiceZones,
   addServiceZone,
   removeServiceZone,
-  selectAvailability,
+  selectDispatch,
   selectServiceZones,
   selectLoading,
   selectError,
   selectIsOnline,
   selectIsDispatchReady,
   selectPartnershipStatus,
+  selectDispatchStatus,
 } from "@/store/slices/soloDriverSlice";
 
-/**
- * API shapes this component expects:
- *
- * GET /availability → {
- *   success: true,
- *   data: {
- *     isAvailable: boolean,
- *     availabilityHours: { start: string, end: string },
- *     partnershipStatus: string,          // "active" | "pending" | "suspended" etc.
- *     isOnboardingComplete: boolean,
- *     driverDispatchStatus: string,       // "Offline" | "Online" | "Busy"
- *     isDispatchReady: boolean,
- *   }
- * }
- *
- * GET /service-zones → {
- *   success: true,
- *   data: Array<{
- *     _id: string,
- *     city: string,
- *     state: string,
- *     pinCodes: string[],
- *     radiusKm: number,
- *     isActive: boolean,
- *   }>
- * }
- *
- * Redux slice must:
- *   selectAvailability       → state.soloDriver.availability        (the data object above)
- *   selectServiceZones       → state.soloDriver.serviceZones        (the array above)
- *   selectIsOnline           → state.soloDriver.availability?.isAvailable  (boolean)
- *   selectIsDispatchReady    → state.soloDriver.availability?.isDispatchReady (boolean)
- *   selectPartnershipStatus  → state.soloDriver.availability?.partnershipStatus (string)
- *
- * If your slice stores the availability response differently, update
- * these selectors in soloDriverSlice.js to point to the right paths.
- *
- * Example slice selectors that would match:
- *   export const selectIsOnline          = (s) => s.soloDriver.availability?.isAvailable ?? false;
- *   export const selectIsDispatchReady   = (s) => s.soloDriver.availability?.isDispatchReady ?? false;
- *   export const selectPartnershipStatus = (s) => s.soloDriver.availability?.partnershipStatus ?? "pending";
- */
+import Container from "@/components/ui/Container";
 
 const GMAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
 
@@ -78,11 +39,9 @@ const fadeUp = {
   hidden:  { opacity: 0, y: 24 },
   visible: { opacity: 1, y: 0, transition: { duration: 0.45, ease: [0.22, 1, 0.36, 1] } },
 };
-
 const stagger = {
   visible: { transition: { staggerChildren: 0.08 } },
 };
-
 const scaleIn = {
   hidden:  { opacity: 0, scale: 0.9 },
   visible: { opacity: 1, scale: 1, transition: { duration: 0.3, ease: [0.22, 1, 0.36, 1] } },
@@ -99,7 +58,7 @@ const INDIAN_STATES = [
   "Delhi","Jammu & Kashmir","Ladakh","Puducherry","Chandigarh",
 ];
 
-// ── Pulse dot for live indicator ──────────────────────────────────────────────
+// ── Pulse dot ─────────────────────────────────────────────────────────────────
 function PulseDot({ color = "#16a34a", size = 10 }) {
   return (
     <span className="relative inline-flex" style={{ width: size, height: size }}>
@@ -112,6 +71,16 @@ function PulseDot({ color = "#16a34a", size = 10 }) {
         style={{ width: size, height: size, backgroundColor: color }}
       />
     </span>
+  );
+}
+
+// ── Field note label helper ───────────────────────────────────────────────────
+function FieldNote({ children }) {
+  return (
+    <p className="flex items-start gap-1 text-xs text-base-content/45 mt-1 leading-relaxed">
+      <Info className="w-3 h-3 flex-shrink-0 mt-0.5 opacity-60" />
+      {children}
+    </p>
   );
 }
 
@@ -153,8 +122,8 @@ function ServiceZoneMap({ zones }) {
     const id = "gmaps-sdk";
     if (!document.getElementById(id)) {
       const script = document.createElement("script");
-      script.id  = id;
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${GMAPS_KEY}&libraries=geometry`;
+      script.id    = id;
+      script.src   = `https://maps.googleapis.com/maps/api/js?key=${GMAPS_KEY}&libraries=geometry`;
       script.async = true;
       script.defer = true;
       script.onload = initMap;
@@ -168,20 +137,15 @@ function ServiceZoneMap({ zones }) {
 
   useEffect(() => {
     if (!loaded || !mapInstance.current || !window.google) return;
-
     circles.current.forEach(c => c.setMap(null));
     markers.current.forEach(m => m.setMap(null));
     circles.current = [];
     markers.current = [];
-
-    // zones is already the array from API: data[]
     if (!zones?.length) return;
 
-    const geocoder = new window.google.maps.Geocoder();
-    const bounds   = new window.google.maps.LatLngBounds();
-    const colors   = ["#0284c7","#059669","#d97706","#9333ea","#ea580c","#2563eb"];
-
-    // Only render isActive zones on the map
+    const geocoder    = new window.google.maps.Geocoder();
+    const bounds      = new window.google.maps.LatLngBounds();
+    const colors      = ["#0284c7","#059669","#d97706","#9333ea","#ea580c","#2563eb"];
     const activeZones = zones.filter(z => z.isActive);
 
     activeZones.forEach((zone, i) => {
@@ -190,52 +154,30 @@ function ServiceZoneMap({ zones }) {
         if (status !== "OK" || !results?.[0]) return;
         const pos   = results[0].geometry.location;
         const color = colors[i % colors.length];
-
         const circle = new window.google.maps.Circle({
-          strokeColor:   color,
-          strokeOpacity: 0.8,
-          strokeWeight:  2,
-          fillColor:     color,
-          fillOpacity:   0.1,
-          map:           mapInstance.current,
-          center:        pos,
-          radius:        (zone.radiusKm || 15) * 1000,
+          strokeColor: color, strokeOpacity: 0.8, strokeWeight: 2,
+          fillColor: color, fillOpacity: 0.1,
+          map: mapInstance.current, center: pos, radius: (zone.radiusKm || 15) * 1000,
         });
         circles.current.push(circle);
         bounds.extend(pos);
-
         const marker = new window.google.maps.Marker({
-          position: pos,
-          map:      mapInstance.current,
-          title:    `${zone.city}, ${zone.state}`,
-          icon: {
-            path:        window.google.maps.SymbolPath.CIRCLE,
-            scale:       8,
-            fillColor:   color,
-            fillOpacity: 1,
-            strokeColor: "#fff",
-            strokeWeight: 2,
-          },
+          position: pos, map: mapInstance.current, title: `${zone.city}, ${zone.state}`,
+          icon: { path: window.google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: color, fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
         });
         markers.current.push(marker);
-
         const info = new window.google.maps.InfoWindow({
           content: `
-            <div style="background:#ffffff;color:#1e293b;padding:10px 14px;border-radius:8px;
-                        font-family:system-ui;font-size:13px;border:1px solid ${color}40;min-width:140px;
-                        box-shadow:0 4px 12px rgba(0,0,0,0.1)">
+            <div style="background:#fff;color:#1e293b;padding:10px 14px;border-radius:8px;
+                        font-family:system-ui;font-size:13px;border:1px solid ${color}40;min-width:140px;box-shadow:0 4px 12px rgba(0,0,0,0.1)">
               <div style="font-weight:700;color:${color};margin-bottom:4px">${zone.city}</div>
               <div style="color:#64748b">${zone.state}</div>
               <div style="margin-top:6px;color:#0284c7">📍 ${zone.radiusKm || 15} km radius</div>
               ${zone.pinCodes?.length ? `<div style="margin-top:4px;color:#64748b">📮 ${zone.pinCodes.join(", ")}</div>` : ""}
-            </div>
-          `,
+            </div>`,
         });
         marker.addListener("click", () => info.open(mapInstance.current, marker));
-
-        if (activeZones.length > 0) {
-          mapInstance.current.fitBounds(bounds, { padding: 60 });
-        }
+        if (activeZones.length > 0) mapInstance.current.fitBounds(bounds, { padding: 60 });
       });
     });
   }, [zones, loaded]);
@@ -258,11 +200,11 @@ function ServiceZoneMap({ zones }) {
 // ── Status chip ───────────────────────────────────────────────────────────────
 function StatusChip({ status }) {
   const map = {
-    active:          { label: "Active",        cls: "bg-success/15 text-success border-success/30" },
-    pending:         { label: "Pending",       cls: "bg-warning/15 text-warning border-warning/30" },
-    suspended:       { label: "Suspended",     cls: "bg-error/15   text-error   border-error/30"   },
-    "under-review":  { label: "Under Review",  cls: "bg-info/15    text-info    border-info/30"    },
-    rejected:        { label: "Rejected",      cls: "bg-error/15   text-error   border-error/30"   },
+    active:         { label: "Active",       cls: "bg-success/15 text-success border-success/30" },
+    pending:        { label: "Pending",      cls: "bg-warning/15 text-warning border-warning/30" },
+    suspended:      { label: "Suspended",    cls: "bg-error/15   text-error   border-error/30"   },
+    "under-review": { label: "Under Review", cls: "bg-info/15    text-info    border-info/30"    },
+    rejected:       { label: "Rejected",     cls: "bg-error/15   text-error   border-error/30"   },
   };
   const s = map[status] || { label: status || "—", cls: "bg-base-300 text-base-content/60 border-base-300" };
   return (
@@ -274,28 +216,23 @@ function StatusChip({ status }) {
 
 // ── Zone card ─────────────────────────────────────────────────────────────────
 function ZoneCard({ zone, onRemove, removing }) {
-  const colors = ["sky","emerald","amber","purple","orange","blue"];
-  const idx    = zone._id?.slice(-1).charCodeAt(0) % colors.length || 0;
-  const c      = colors[idx];
-
+  const colors  = ["sky","emerald","amber","purple","orange","blue"];
+  const idx     = zone._id?.slice(-1).charCodeAt(0) % colors.length || 0;
+  const c       = colors[idx];
   const colorMap = {
-    sky:     { border: "border-sky-200",     bg: "bg-sky-50",     text: "text-sky-600",     dot: "bg-sky-500"     },
-    emerald: { border: "border-emerald-200", bg: "bg-emerald-50", text: "text-emerald-600", dot: "bg-emerald-500" },
-    amber:   { border: "border-amber-200",   bg: "bg-amber-50",   text: "text-amber-600",   dot: "bg-amber-500"   },
-    purple:  { border: "border-purple-200",  bg: "bg-purple-50",  text: "text-purple-600",  dot: "bg-purple-500"  },
-    orange:  { border: "border-orange-200",  bg: "bg-orange-50",  text: "text-orange-600",  dot: "bg-orange-500"  },
-    blue:    { border: "border-blue-200",    bg: "bg-blue-50",    text: "text-blue-600",    dot: "bg-blue-500"    },
+    sky:     { border: "border-sky-200",     bg: "bg-sky-50",     text: "text-sky-600"     },
+    emerald: { border: "border-emerald-200", bg: "bg-emerald-50", text: "text-emerald-600" },
+    amber:   { border: "border-amber-200",   bg: "bg-amber-50",   text: "text-amber-600"   },
+    purple:  { border: "border-purple-200",  bg: "bg-purple-50",  text: "text-purple-600"  },
+    orange:  { border: "border-orange-200",  bg: "bg-orange-50",  text: "text-orange-600"  },
+    blue:    { border: "border-blue-200",    bg: "bg-blue-50",    text: "text-blue-600"    },
   };
   const col = colorMap[c];
 
   return (
     <motion.div
-      layout
-      variants={scaleIn}
-      initial="hidden"
-      animate="visible"
-      exit="exit"
-      className={`relative group rounded-2xl border  border-success/20 bg-success/10 p-4`}
+      layout variants={scaleIn} initial="hidden" animate="visible" exit="exit"
+      className="relative group rounded-2xl border border-success/20 bg-success/10 p-4"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
@@ -306,22 +243,18 @@ function ZoneCard({ zone, onRemove, removing }) {
             <p className="font-bold text-base-content text-sm truncate">{zone.city}</p>
             <p className="text-xs text-base-content/60 mt-0.5">{zone.state}</p>
             <div className="flex flex-wrap gap-1.5 mt-2">
-              <span className={`text-xs px-2 py-0.5 rounded-full bg-success/10  ${col.text} border ${col.border}`}>
+              <span className={`text-xs px-2 py-0.5 rounded-full bg-success/10 ${col.text} border ${col.border}`}>
                 {zone.radiusKm || 15} km radius
               </span>
               {zone.pinCodes?.length > 0 && (
-                <span className="text-xs px-2 py-0.5 rounded-full  text-base-content/60 border border-base-300">
+                <span className="text-xs px-2 py-0.5 rounded-full text-base-content/60 border border-base-300">
                   {zone.pinCodes.length} pin{zone.pinCodes.length > 1 ? "s" : ""}
                 </span>
               )}
               {zone.isActive ? (
-                <span className="text-xs px-2 py-0.5 rounded-full  bg-success/10 text-emerald-600 border border-emerald-200">
-                  Active
-                </span>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-success/10 text-emerald-600 border border-emerald-200">Active</span>
               ) : (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-base-200 text-base-content/40 border border-base-300">
-                  Inactive
-                </span>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-base-200 text-base-content/40 border border-base-300">Inactive</span>
               )}
             </div>
           </div>
@@ -339,7 +272,7 @@ function ZoneCard({ zone, onRemove, removing }) {
   );
 }
 
-// ── Add Zone modal ────────────────────────────────────────────────────────────
+// ── Add Zone Modal ────────────────────────────────────────────────────────────
 function AddZoneModal({ onClose, onAdd, loading }) {
   const [form, setForm] = useState({ city: "", state: "", radiusKm: "15", pinCodes: "" });
   const [errors, setErrors] = useState({});
@@ -357,17 +290,13 @@ function AddZoneModal({ onClose, onAdd, loading }) {
     const e = validate();
     if (Object.keys(e).length) { setErrors(e); return; }
     const pinCodes = form.pinCodes
-      .split(/[\s,]+/)
-      .map(p => p.trim())
-      .filter(p => /^\d{6}$/.test(p));
+      .split(/[\s,]+/).map(p => p.trim()).filter(p => /^\d{6}$/.test(p));
     onAdd({ city: form.city.trim(), state: form.state, radiusKm: Number(form.radiusKm), pinCodes });
   };
 
   return (
     <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
       style={{ background: "rgba(15,23,42,0.4)", backdropFilter: "blur(8px)" }}
       onClick={e => e.target === e.currentTarget && onClose()}
@@ -389,7 +318,7 @@ function AddZoneModal({ onClose, onAdd, loading }) {
           </button>
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-5">
           {/* City */}
           <div>
             <label className="text-xs font-semibold text-base-content mb-1.5 block">City *</label>
@@ -401,7 +330,10 @@ function AddZoneModal({ onClose, onAdd, loading }) {
                          outline-none focus:ring-2 focus:ring-primary/30 transition-all
                          ${errors.city ? "border-error/60" : "border-base-300 focus:border-primary/60"}`}
             />
-            {errors.city && <p className="text-xs text-error mt-1">{errors.city}</p>}
+            {errors.city
+              ? <p className="text-xs text-error mt-1">{errors.city}</p>
+              : <FieldNote>Enter the city name where you want to accept ride requests.</FieldNote>
+            }
           </div>
 
           {/* State */}
@@ -417,7 +349,10 @@ function AddZoneModal({ onClose, onAdd, loading }) {
               <option value="">Select state…</option>
               {INDIAN_STATES.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            {errors.state && <p className="text-xs text-error mt-1">{errors.state}</p>}
+            {errors.state
+              ? <p className="text-xs text-error mt-1">{errors.state}</p>
+              : <FieldNote>Select the Indian state this city belongs to.</FieldNote>
+            }
           </div>
 
           {/* Radius */}
@@ -433,13 +368,16 @@ function AddZoneModal({ onClose, onAdd, loading }) {
             <div className="flex justify-between text-xs text-base-content/40 mt-1">
               <span>1 km</span><span>100 km</span>
             </div>
-            {errors.radiusKm && <p className="text-xs text-error mt-1">{errors.radiusKm}</p>}
+            {errors.radiusKm
+              ? <p className="text-xs text-error mt-1">{errors.radiusKm}</p>
+              : <FieldNote>How far from the city center you are willing to pick up passengers. Larger radius = more ride chances.</FieldNote>
+            }
           </div>
 
           {/* Pin Codes */}
           <div>
             <label className="text-xs font-semibold text-base-content mb-1.5 block">
-              Pin Codes <span className="text-base-content/40 font-normal">(optional, comma separated)</span>
+              Pin Codes <span className="text-base-content/40 font-normal">(optional)</span>
             </label>
             <input
               value={form.pinCodes}
@@ -449,6 +387,7 @@ function AddZoneModal({ onClose, onAdd, loading }) {
                          text-base-content text-sm placeholder:text-base-content/30 outline-none focus:ring-2
                          focus:ring-primary/30 transition-all"
             />
+            <FieldNote>Comma-separated 6-digit pin codes to restrict pickups to specific localities. Leave blank for full city coverage.</FieldNote>
           </div>
         </div>
 
@@ -485,7 +424,7 @@ function ToggleSwitch({ checked, onChange, disabled }) {
       <motion.span
         layout
         transition={{ type: "spring", stiffness: 700, damping: 30 }}
-        className="inline-block h-5 w-5 rounded-full  shadow-lg"
+        className="inline-block h-5 w-5 rounded-full shadow-lg bg-white"
         style={{ x: checked ? 30 : 4 }}
       />
     </button>
@@ -494,9 +433,9 @@ function ToggleSwitch({ checked, onChange, disabled }) {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function AvailabilityServiceZones() {
-  const dispatch  = useDispatch();
-  const pathname  = usePathname();
-  const router    = useRouter();
+  const dispatch = useDispatch();
+  const pathname = usePathname();
+  const router   = useRouter();
 
   const getSection = () => {
     if (pathname?.includes("service-zones/add")) return "add";
@@ -505,39 +444,30 @@ export default function AvailabilityServiceZones() {
   };
   const section = getSection();
 
-  /**
-   * Selectors — these must match what soloDriverSlice.js exposes.
-   *
-   * availability → the full data object from GET /availability:
-   *   { isAvailable, availabilityHours, partnershipStatus,
-   *     isOnboardingComplete, driverDispatchStatus, isDispatchReady }
-   *
-   * serviceZones → the array from GET /service-zones data[]
-   *
-   * selectIsOnline          → availability.isAvailable (boolean)
-   * selectIsDispatchReady   → availability.isDispatchReady (boolean)
-   * selectPartnershipStatus → availability.partnershipStatus (string)
-   *
-   * If your slice stores them differently, update the selectors there —
-   * the component always reads via these selector functions.
-   */
-  const availability    = useSelector(selectAvailability);
-  const serviceZones    = useSelector(selectServiceZones);   // Array<zone>
-  const isOnline        = useSelector(selectIsOnline);       // availability.isAvailable
-  const isDispatchReady = useSelector(selectIsDispatchReady);// availability.isDispatchReady
-  const partnerStatus   = useSelector(selectPartnershipStatus); // availability.partnershipStatus
+  // ── Correct selectors aligned with soloDriverSlice ──────────────────────────
+  // dispatch object: { status, isDispatchable, isBlocked, isPaused, pausedUntil,
+  //                    partnershipStatus, onboardingComplete, kycVerified,
+  //                    vehicleVerified, currentRide, shift, lastLocationUpdate }
+  const dispatch_data   = useSelector(selectDispatch);          // full GET /dispatch/status payload
+  const serviceZones    = useSelector(selectServiceZones);       // Array<zone> from GET /service-zones
+  const currentStatus   = useSelector(selectDispatchStatus);     // dispatch.status || profile.status
+  const isOnline        = useSelector(selectIsOnline);           // status === 'Available'
+  const isDispatchReady = useSelector(selectIsDispatchReady);    // dispatch.isDispatchable
+  const partnerStatus   = useSelector(selectPartnershipStatus);  // dispatch.partnershipStatus
 
-  const loadingAvailability = useSelector(selectLoading("availability"));
-  const loadingToggle       = useSelector(selectLoading("toggleAvailability"));
-  const loadingZones        = useSelector(selectLoading("serviceZones"));
-  const loadingAddZone      = useSelector(selectLoading("addZone"));
-  const loadingRemoveZone   = useSelector(selectLoading("removeZone"));
+  const loadingDispatch      = useSelector(selectLoading("dispatch"));
+  const loadingToggle        = useSelector(selectLoading("updateDispatchStatus"));
+  const loadingZones         = useSelector(selectLoading("serviceZones"));
+  const loadingAddZone       = useSelector(selectLoading("addZone"));
+  const loadingRemoveZone    = useSelector(selectLoading("removeZone"));
+  const errorToggle          = useSelector(selectError("updateDispatchStatus"));
 
   const [removingId,   setRemovingId]   = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
 
+  // Initial data fetch
   useEffect(() => {
-    dispatch(fetchAvailability());
+    dispatch(fetchDispatchStatus());
     dispatch(fetchServiceZones());
   }, [dispatch]);
 
@@ -546,24 +476,17 @@ export default function AvailabilityServiceZones() {
     else setShowAddModal(false);
   }, [section]);
 
-  /**
-   * Toggle handler — sends the NEW desired state to the API.
-   * Uses optimistic update so the UI responds immediately,
-   * then re-fetches to sync with server truth.
-   *
-   * setAvailabilityOptimistic should update:
-   *   state.soloDriver.availability.isAvailable = val
-   */
+  // ── Toggle handler ───────────────────────────────────────────────────────────
+  // Router accepts: 'Available' | 'Offline' | 'On-Break'
   const handleToggle = async (val) => {
-    dispatch(setAvailabilityOptimistic(val));
-    await dispatch(toggleAvailability(val));
-    dispatch(fetchAvailability());
+    const newStatus = val ? "Available" : "Offline";
+    // Optimistic update: setDispatchStatusOptimistic(status) updates state.dispatch.status
+    dispatch(setDispatchStatusOptimistic(newStatus));
+    const result = await dispatch(updateDispatchStatus(newStatus));
+    // Re-sync on any result to stay in truth
+    dispatch(fetchDispatchStatus());
   };
 
-  /**
-   * Add zone — on success close modal and refresh zones list.
-   * The API returns the new zone; fetchServiceZones re-syncs the full array.
-   */
   const handleAddZone = async (payload) => {
     const result = await dispatch(addServiceZone(payload));
     if (!result.error) {
@@ -573,9 +496,6 @@ export default function AvailabilityServiceZones() {
     }
   };
 
-  /**
-   * Remove zone — pass the zone's _id (from API response).
-   */
   const handleRemoveZone = async (zoneId) => {
     setRemovingId(zoneId);
     await dispatch(removeServiceZone(zoneId));
@@ -590,22 +510,17 @@ export default function AvailabilityServiceZones() {
 
   const navTo = (path) => router.push(path);
 
-  // Derived stats from the zones array (data from API)
-  const activeZones = Array.isArray(serviceZones)
-    ? serviceZones.filter(z => z.isActive).length
-    : 0;
-  const totalKm = Array.isArray(serviceZones)
-    ? serviceZones.reduce((a, z) => a + (z.radiusKm || 15), 0)
-    : 0;
+  // Derived
+  const activeZones = Array.isArray(serviceZones) ? serviceZones.filter(z => z.isActive).length : 0;
+  const totalKm     = Array.isArray(serviceZones) ? serviceZones.reduce((a, z) => a + (z.radiusKm || 15), 0) : 0;
 
-  // Dispatch status label from availability data
-  // API returns driverDispatchStatus: "Offline" | "Online" | "Busy"
-  const dispatchStatusLabel = availability?.driverDispatchStatus || "—";
+  // dispatch.status: "Available" | "Offline" | "On-Break" | "On-Trip"
+  const dispatchStatusLabel = currentStatus || "—";
 
   return (
     <div className="min-h-screen bg-base-100 text-base-content font-[family-name:var(--font-family-poppins)]">
 
-      {/* Subtle grid background */}
+      {/* Background decoration */}
       <div
         className="fixed inset-0 pointer-events-none"
         style={{
@@ -616,419 +531,441 @@ export default function AvailabilityServiceZones() {
           backgroundSize: "48px 48px",
         }}
       />
-
       <div className="fixed top-0 left-1/4 w-96 h-96 bg-primary/5 rounded-full blur-3xl pointer-events-none" />
       <div className="fixed bottom-1/3 right-1/4 w-80 h-80 bg-success/5 rounded-full blur-3xl pointer-events-none" />
 
-      <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
+      <Container>
+        <div className="relative py-6 lg:py-8">
 
-        {/* ── Header ───────────────────────────────────────────────────────── */}
-        <motion.div initial="hidden" animate="visible" variants={stagger} className="mb-8">
-          <motion.div variants={fadeUp} className="flex flex-col md:flex-row   items-center gap-4 mb-6">
-            <div className="flex items-center gap-2.5">
-              <button
-                onClick={() => navTo("/partner/solo/availability")}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs md:text-sm font-semibold transition-all
-                  ${section === "availability"
-                    ? "bg-primary/10 text-primary border border-primary/25"
-                    : "text-base-content/40 hover:text-base-content/70"}`}
-              >
-                <Activity className="w-3.5 h-3.5" />
-                Availability
-              </button>
-              <ChevronRight className="w-3.5 h-3.5 text-base-content/30" />
-              <button
-                onClick={() => navTo("/partner/solo/service-zones")}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs md:text-sm font-semibold transition-all
-                  ${(section === "zones" || section === "add")
-                    ? "bg-primary/10 text-primary border border-primary/25"
-                    : "text-base-content/40 hover:text-base-content/70"}`}
-              >
-                <Globe className="w-3.5 h-3.5" />
-                Service Zones
-              </button>
-              {section === "add" && (
-                <>
-                  <ChevronRight className="w-3.5 h-3.5 text-base-content/30" />
-                  <span className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-semibold bg-success/10 text-success border border-success/25">
-                    <Plus className="w-3.5 h-3.5" />
-                    Add Zone
-                  </span>
-                </>
-              )}
-            </div>
-
-            <div className="  flex items-center gap-3">
-              {/* partnerStatus comes from availability.partnershipStatus */}
-              <StatusChip status={partnerStatus} />
-              {isOnline
-                ? <span className="flex items-center gap-1.5 text-xs font-bold text-success"><PulseDot color="#16a34a" />ONLINE</span>
-                : <span className="flex items-center gap-1.5 text-xs font-semibold text-base-content/40"><span className="w-2 h-2 rounded-full bg-base-300 inline-block" />OFFLINE</span>
-              }
-            </div>
-          </motion.div>
-
-          <motion.div variants={fadeUp}>
-            <h1 className="text-3xl lg:text-4xl font-black tracking-tight text-base-content font-[family-name:var(--font-family-montserrat)]">
-              {section === "availability" ? (
-                <>Availability <span className="text-gradient-primary">Control</span></>
-              ) : (
-                <>Service <span className="text-gradient-primary">Zones</span></>
-              )}
-            </h1>
-            <p className="text-base-content/60 mt-1 text-sm">
-              {section === "availability"
-                ? "Control your online status and dispatch readiness"
-                : "Manage the areas where you accept ride requests"}
-            </p>
-          </motion.div>
-        </motion.div>
-
-        {/* ── AVAILABILITY SECTION ──────────────────────────────────────────── */}
-        <AnimatePresence mode="wait">
-          {section === "availability" && (
-            <motion.div
-              key="availability"
-              initial="hidden" animate="visible" exit={{ opacity: 0, y: -16 }}
-              variants={stagger}
-              className="space-y-6"
+          {/* ── TOP BACK BUTTON ────────────────────────────────────────────── */}
+          <motion.div initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.3 }} className="mb-4">
+            <button
+              onClick={() => router.back()}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-base-content/50
+                         hover:text-base-content/80 hover:bg-base-200 transition-all font-medium"
             >
-              {/* Main toggle card */}
-              <motion.div variants={fadeUp}>
-                <div className="relative rounded-3xl border border-base-300 bg-base-100 shadow-sm overflow-hidden">
-                  <AnimatePresence>
-                    {isOnline && (
-                      <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="absolute inset-0 pointer-events-none"
-                        style={{ background: "radial-gradient(ellipse 60% 50% at 50% -10%, rgba(22,163,74,0.07), transparent)" }}
-                      />
-                    )}
-                  </AnimatePresence>
+              <ChevronLeft className="w-4 h-4" />
+              Back
+            </button>
+          </motion.div>
 
-                  <div className="relative p-6 lg:p-8">
-                    <div className="flex flex-col lg:flex-row lg:items-center gap-6 lg:gap-10">
-
-                      {/* Icon ring */}
-                      <div className="relative flex-shrink-0">
-                        <motion.div
-                          animate={isOnline ? {
-                            boxShadow: [
-                              "0 0 0 0px rgba(22,163,74,0.3)",
-                              "0 0 0 20px rgba(22,163,74,0)",
-                            ],
-                          } : {}}
-                          transition={{ duration: 2, repeat: Infinity }}
-                          className={`w-24 h-24 rounded-3xl flex items-center justify-center border-2 transition-all duration-500
-                            ${isOnline
-                              ? "bg-success/10 border-success/40"
-                              : "bg-base-200 border-base-300"}`}
-                        >
-                          {isOnline
-                            ? <Wifi className="w-10 h-10 text-success" />
-                            : <WifiOff className="w-10 h-10 text-base-content/30" />
-                          }
-                        </motion.div>
-                        {isOnline && (
-                          <span className="absolute -top-1 -right-1">
-                            <PulseDot color="#16a34a" size={12} />
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Text */}
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2">
-                          <h2 className="text-2xl font-black font-[family-name:var(--font-family-montserrat)] text-base-content">
-                            {isOnline ? "You're Online" : "You're Offline"}
-                          </h2>
-                        </div>
-                        <p className="text-base-content/60 text-sm leading-relaxed max-w-md">
-                          {isOnline
-                            ? "You're visible to customers and eligible for ride assignments in your service zones."
-                            : "You're not receiving any ride requests. Go online to start earning."}
-                        </p>
-
-                        {/*
-                          Readiness flags — sourced from availability object:
-                            isOnboardingComplete  → availability.isOnboardingComplete
-                            driverDispatchStatus  → availability.driverDispatchStatus ("Offline"|"Online"|"Busy")
-                            isDispatchReady       → availability.isDispatchReady
-                        */}
-                        <div className="flex flex-wrap gap-2 mt-4">
-                          <span className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border font-semibold
-                            ${availability?.isOnboardingComplete
-                              ? "bg-success/10 text-success border-success/25"
-                              : "bg-base-200 text-base-content/40 border-base-300"}`}>
-                            <CheckCircle2 className="w-3 h-3" />
-                            Onboarding {availability?.isOnboardingComplete ? "Complete" : "Pending"}
-                          </span>
-                          <span className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border font-semibold
-                            ${availability?.driverDispatchStatus && availability.driverDispatchStatus !== "Offline"
-                              ? "bg-info/10 text-info border-info/25"
-                              : "bg-base-200 text-base-content/40 border-base-300"}`}>
-                            <Navigation className="w-3 h-3" />
-                            Dispatch: {dispatchStatusLabel}
-                          </span>
-                          <span className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border font-semibold
-                            ${isDispatchReady
-                              ? "bg-success/10 text-success border-success/25"
-                              : "bg-warning/10 text-warning border-warning/25"}`}>
-                            <Zap className="w-3 h-3" />
-                            {isDispatchReady ? "Dispatch Ready" : "Not Dispatch Ready"}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Toggle — disabled when partnerStatus !== "active" */}
-                      <div className="flex-shrink-0 flex flex-col items-center gap-3">
-                        {loadingToggle ? (
-                          <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                        ) : (
-                          <ToggleSwitch
-                            checked={isOnline}
-                            onChange={handleToggle}
-                            disabled={loadingAvailability || partnerStatus !== "active"}
-                          />
-                        )}
-                        <span className="text-xs text-base-content/40 font-medium">
-                          {isOnline ? "Tap to go offline" : "Tap to go online"}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Warning if partner is not active */}
-                    {partnerStatus !== "active" && (
-                      <motion.div
-                        variants={fadeUp}
-                        className="mt-5 flex items-start gap-3 p-3.5 rounded-xl bg-warning/10 border border-warning/20"
-                      >
-                        <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0 mt-0.5" />
-                        <p className="text-xs text-warning-content">
-                          Your account status is <strong className="capitalize">{partnerStatus || "unknown"}</strong>. Only active partners can go online. Complete verification to activate.
-                        </p>
-                      </motion.div>
-                    )}
-                  </div>
-                </div>
-              </motion.div>
-
-              {/* Stats row */}
-              <motion.div variants={stagger} className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                {[
-                  {
-                    label: "Availability Hours",
-                    // availability.availabilityHours.start / .end
-                    value: `${availability?.availabilityHours?.start || "06:00"} – ${availability?.availabilityHours?.end || "22:00"}`,
-                    icon: Clock,
-                    color: "primary",
-                  },
-                  {
-                    label: "Service Zones",
-                    value: `${activeZones} active`,
-                    icon: Globe,
-                    color: "success",
-                  },
-                  {
-                    label: "Dispatch Status",
-                    // availability.driverDispatchStatus
-                    value: dispatchStatusLabel,
-                    icon: Navigation,
-                    color: "info",
-                  },
-                  {
-                    label: "Partnership",
-                    // availability.partnershipStatus
-                    value: partnerStatus || "—",
-                    icon: Shield,
-                    color: "warning",
-                  },
-                ].map((stat) => {
-                  const colMap = {
-                    primary: "border-primary/20  bg-primary/5  text-primary",
-                    success: "border-success/20  bg-success/5  text-success",
-                    info:    "border-info/20     bg-info/5     text-info",
-                    warning: "border-warning/20  bg-warning/5  text-warning",
-                  };
-                  return (
-                    <motion.div key={stat.label} variants={fadeUp}
-                      className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm"
-                    >
-                      <div className={`w-9 h-9 rounded-xl border flex items-center justify-center mb-3 ${colMap[stat.color]}`}>
-                        <stat.icon className="w-4 h-4" />
-                      </div>
-                      <p className="text-lg font-bold text-base-content capitalize">{stat.value}</p>
-                      <p className="text-xs text-base-content/50 mt-0.5">{stat.label}</p>
-                    </motion.div>
-                  );
-                })}
-              </motion.div>
-
-              {/* Navigate to zones CTA */}
-              <motion.div variants={fadeUp}>
+          {/* ── Header ─────────────────────────────────────────────────────── */}
+          <motion.div initial="hidden" animate="visible" variants={stagger} className="mb-8">
+            <motion.div variants={fadeUp} className="flex flex-col md:flex-row md:items-center gap-4 mb-6">
+              <div className="flex items-center gap-2.5">
+                <button
+                  onClick={() => navTo("/partner/solo/availability")}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs md:text-sm font-semibold transition-all
+                    ${section === "availability"
+                      ? "bg-primary/10 text-primary border border-primary/25"
+                      : "text-base-content/40 hover:text-base-content/70"}`}
+                >
+                  <Activity className="w-3.5 h-3.5" />
+                  Availability
+                </button>
+                <ChevronRight className="w-3.5 h-3.5 text-base-content/30" />
                 <button
                   onClick={() => navTo("/partner/solo/service-zones")}
-                  className="w-full flex items-center justify-between p-5 rounded-2xl border border-base-300
-                             bg-base-100 hover:border-primary/40 hover:bg-primary/5 hover:shadow-sm transition-all group"
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs md:text-sm font-semibold transition-all
+                    ${(section === "zones" || section === "add")
+                      ? "bg-primary/10 text-primary border border-primary/25"
+                      : "text-base-content/40 hover:text-base-content/70"}`}
                 >
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-                      <Map className="w-5 h-5 text-primary" />
-                    </div>
-                    <div className="text-left">
-                      <p className="font-bold text-base-content text-sm">Manage Service Zones</p>
-                      <p className="text-xs text-base-content/50 mt-0.5">{activeZones} active zone{activeZones !== 1 ? "s" : ""} · {totalKm} km total coverage</p>
-                    </div>
-                  </div>
-                  <ChevronRight className="w-5 h-5 text-base-content/30 group-hover:text-primary group-hover:translate-x-1 transition-all" />
+                  <Globe className="w-3.5 h-3.5" />
+                  Service Zones
                 </button>
-              </motion.div>
-            </motion.div>
-          )}
-
-          {/* ── SERVICE ZONES SECTION ──────────────────────────────────────── */}
-          {(section === "zones" || section === "add") && (
-            <motion.div
-              key="zones"
-              initial="hidden" animate="visible" exit={{ opacity: 0, y: -16 }}
-              variants={stagger}
-              className="space-y-6"
-            >
-              {/* Stats bar */}
-              <motion.div variants={fadeUp} className="grid grid-cols-3 gap-4">
-                {[
-                  {
-                    label: "Total Zones",
-                    // serviceZones is the array: data[]
-                    value: Array.isArray(serviceZones) ? serviceZones.length : 0,
-                    icon: Layers,
-                    color: "text-primary  bg-primary/5  border-primary/20",
-                  },
-                  {
-                    label: "Active Zones",
-                    value: activeZones,
-                    icon: CheckCircle2,
-                    color: "text-success  bg-success/5  border-success/20",
-                  },
-                  {
-                    label: "Total Coverage",
-                    value: `${totalKm} km`,
-                    icon: TrendingUp,
-                    color: "text-info     bg-info/5     border-info/20",
-                  },
-                ].map(s => (
-                  <div key={s.label} className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm">
-                    <div className={`w-8 h-8 rounded-xl border flex items-center justify-center mb-2 ${s.color}`}>
-                      <s.icon className="w-3.5 h-3.5" />
-                    </div>
-                    <p className="text-xl font-black text-base-content">{s.value}</p>
-                    <p className="text-xs text-base-content/50">{s.label}</p>
-                  </div>
-                ))}
-              </motion.div>
-
-              {/* Map + Zones list */}
-              <motion.div variants={fadeUp} className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-
-                {/* Map — receives zones array directly */}
-                <div className="lg:col-span-3 rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden" style={{ minHeight: 420 }}>
-                  <div className="p-4 border-b border-base-300 flex items-center justify-between bg-base-100">
-                    <div className="flex items-center gap-2">
-                      <Globe className="w-4 h-4 text-primary" />
-                      <span className="text-sm font-semibold text-base-content">Coverage Map</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <PulseDot color="#0284c7" size={8} />
-                      <span className="text-xs text-base-content/50">{activeZones} zone{activeZones !== 1 ? "s" : ""} visible</span>
-                    </div>
-                  </div>
-                  <div style={{ height: 380 }}>
-                    {/* Pass zones array (already the correct shape from API) */}
-                    <ServiceZoneMap zones={Array.isArray(serviceZones) ? serviceZones : []} />
-                  </div>
-                </div>
-
-                {/* Zone list */}
-                <div className="lg:col-span-2 flex flex-col gap-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-bold text-base-content">Your Zones</h3>
-                    <button
-                      onClick={() => { setShowAddModal(true); navTo("/partner/solo/service-zones/add"); }}
-                      disabled={Array.isArray(serviceZones) && serviceZones.length >= 10}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-primary/10 border border-primary/25
-                                 text-primary text-xs font-bold hover:bg-primary/20 disabled:opacity-40 transition-all"
-                    >
+                {section === "add" && (
+                  <>
+                    <ChevronRight className="w-3.5 h-3.5 text-base-content/30" />
+                    <span className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-semibold bg-success/10 text-success border border-success/25">
                       <Plus className="w-3.5 h-3.5" />
                       Add Zone
-                    </button>
+                    </span>
+                  </>
+                )}
+              </div>
+
+              <div className="md:ml-auto flex items-center gap-3">
+                <StatusChip status={partnerStatus} />
+                {isOnline
+                  ? <span className="flex items-center gap-1.5 text-xs font-bold text-success"><PulseDot color="#16a34a" />ONLINE</span>
+                  : <span className="flex items-center gap-1.5 text-xs font-semibold text-base-content/40"><span className="w-2 h-2 rounded-full bg-base-300 inline-block" />OFFLINE</span>
+                }
+              </div>
+            </motion.div>
+
+            <motion.div variants={fadeUp}>
+              <h1 className="text-3xl lg:text-4xl font-black tracking-tight text-base-content font-[family-name:var(--font-family-montserrat)]">
+                {section === "availability" ? (
+                  <>Availability <span className="text-primary">Control</span></>
+                ) : (
+                  <>Service <span className="text-primary">Zones</span></>
+                )}
+              </h1>
+              <p className="text-base-content/60 mt-1 text-sm">
+                {section === "availability"
+                  ? "Control your online status and dispatch readiness"
+                  : "Manage the areas where you accept ride requests"}
+              </p>
+            </motion.div>
+          </motion.div>
+
+          {/* ── AVAILABILITY SECTION ──────────────────────────────────────── */}
+          <AnimatePresence mode="wait">
+            {section === "availability" && (
+              <motion.div
+                key="availability"
+                initial="hidden" animate="visible" exit={{ opacity: 0, y: -16 }}
+                variants={stagger}
+                className="space-y-6"
+              >
+                {/* Main toggle card */}
+                <motion.div variants={fadeUp}>
+                  <div className="relative rounded-3xl border border-base-300 bg-base-100 shadow-sm overflow-hidden">
+                    <AnimatePresence>
+                      {isOnline && (
+                        <motion.div
+                          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                          className="absolute inset-0 pointer-events-none"
+                          style={{ background: "radial-gradient(ellipse 60% 50% at 50% -10%, rgba(22,163,74,0.07), transparent)" }}
+                        />
+                      )}
+                    </AnimatePresence>
+
+                    <div className="relative p-6 lg:p-8">
+                      <div className="flex flex-col lg:flex-row lg:items-center gap-6 lg:gap-10">
+
+                        {/* Icon */}
+                        <div className="relative flex-shrink-0">
+                          <motion.div
+                            animate={isOnline ? { boxShadow: ["0 0 0 0px rgba(22,163,74,0.3)", "0 0 0 20px rgba(22,163,74,0)"] } : {}}
+                            transition={{ duration: 2, repeat: Infinity }}
+                            className={`w-24 h-24 rounded-3xl flex items-center justify-center border-2 transition-all duration-500
+                              ${isOnline ? "bg-success/10 border-success/40" : "bg-base-200 border-base-300"}`}
+                          >
+                            {isOnline
+                              ? <Wifi className="w-10 h-10 text-success" />
+                              : <WifiOff className="w-10 h-10 text-base-content/30" />
+                            }
+                          </motion.div>
+                          {isOnline && (
+                            <span className="absolute -top-1 -right-1"><PulseDot color="#16a34a" size={12} /></span>
+                          )}
+                        </div>
+
+                        {/* Text + flags */}
+                        <div className="flex-1">
+                          <h2 className="text-2xl font-black font-[family-name:var(--font-family-montserrat)] text-base-content mb-2">
+                            {isOnline ? "You're Online" : "You're Offline"}
+                          </h2>
+                          <p className="text-base-content/60 text-sm leading-relaxed max-w-md">
+                            {isOnline
+                              ? "Visible to customers. Eligible for ride assignments in your service zones."
+                              : "Not receiving ride requests. Go online to start earning."}
+                          </p>
+
+                          {/* Dispatch readiness flags
+                              dispatch_data fields from GET /dispatch/status:
+                                onboardingComplete → dispatch_data.onboardingComplete
+                                kycVerified        → dispatch_data.kycVerified
+                                vehicleVerified    → dispatch_data.vehicleVerified
+                                status             → dispatch_data.status
+                                isDispatchable     → dispatch_data.isDispatchable
+                          */}
+                          <div className="flex flex-wrap gap-2 mt-4">
+                            <span className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border font-semibold
+                              ${dispatch_data?.onboardingComplete
+                                ? "bg-success/10 text-success border-success/25"
+                                : "bg-base-200 text-base-content/40 border-base-300"}`}>
+                              <CheckCircle2 className="w-3 h-3" />
+                              Onboarding {dispatch_data?.onboardingComplete ? "Complete" : "Pending"}
+                            </span>
+                            <span className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border font-semibold
+                              ${dispatch_data?.kycVerified
+                                ? "bg-success/10 text-success border-success/25"
+                                : "bg-warning/10 text-warning border-warning/25"}`}>
+                              <Shield className="w-3 h-3" />
+                              KYC {dispatch_data?.kycVerified ? "Verified" : "Pending"}
+                            </span>
+                            <span className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border font-semibold
+                              ${dispatch_data?.vehicleVerified
+                                ? "bg-success/10 text-success border-success/25"
+                                : "bg-warning/10 text-warning border-warning/25"}`}>
+                              <Navigation className="w-3 h-3" />
+                              Vehicle {dispatch_data?.vehicleVerified ? "Verified" : "Pending"}
+                            </span>
+                            <span className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border font-semibold
+                              ${isDispatchReady
+                                ? "bg-success/10 text-success border-success/25"
+                                : "bg-warning/10 text-warning border-warning/25"}`}>
+                              <Zap className="w-3 h-3" />
+                              {isDispatchReady ? "Dispatch Ready" : "Not Dispatch Ready"}
+                            </span>
+                          </div>
+
+                          {/* Field note for toggle */}
+                          <p className="flex items-start gap-1 text-xs text-base-content/40 mt-3 leading-relaxed">
+                            <Info className="w-3 h-3 flex-shrink-0 mt-0.5 opacity-60" />
+                            Toggle switches between <strong>Available</strong> (receiving rides) and <strong>Offline</strong>. Account must be active with verified KYC and vehicle to go online.
+                          </p>
+                        </div>
+
+                        {/* Toggle — only for active partners */}
+                        <div className="flex-shrink-0 flex flex-col items-center gap-3">
+                          <div className="text-xs text-base-content/40 font-medium text-center mb-1">
+                            {isOnline ? "Currently Online" : "Currently Offline"}
+                          </div>
+                          {loadingToggle || loadingDispatch ? (
+                            <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                          ) : (
+                            <ToggleSwitch
+                              checked={isOnline}
+                              onChange={handleToggle}
+                              disabled={partnerStatus !== "active"}
+                            />
+                          )}
+                          <span className="text-xs text-base-content/40 font-medium">
+                            {isOnline ? "Tap to go offline" : "Tap to go online"}
+                          </span>
+                          {errorToggle && (
+                            <p className="text-xs text-error text-center max-w-[140px]">{errorToggle}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Partner not active warning */}
+                      {partnerStatus !== "active" && (
+                        <motion.div
+                          variants={fadeUp}
+                          className="mt-5 flex items-start gap-3 p-3.5 rounded-xl bg-warning/10 border border-warning/20"
+                        >
+                          <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0 mt-0.5" />
+                          <p className="text-xs text-warning-content">
+                            Account status is <strong className="capitalize">{partnerStatus || "unknown"}</strong>. Only active partners can go online. Complete KYC, vehicle, and bank verification to activate.
+                          </p>
+                        </motion.div>
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
+
+                {/* Stats row
+                    All fields sourced from dispatch_data (GET /dispatch/status response):
+                      shift.startTime / shift.endTime → dispatch_data.shift
+                      status                          → dispatch_data.status
+                      partnershipStatus               → dispatch_data.partnershipStatus
+                */}
+                <motion.div variants={stagger} className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  {[
+                    {
+                      label: "Shift Hours",
+                      value: dispatch_data?.shift
+                        ? `${dispatch_data.shift.startTime || "—"} – ${dispatch_data.shift.endTime || "—"}`
+                        : "Not set",
+                      icon: Clock,
+                      color: "primary",
+                      note: "Your configured working shift window",
+                    },
+                    {
+                      label: "Active Service Zones",
+                      value: `${activeZones} zone${activeZones !== 1 ? "s" : ""}`,
+                      icon: Globe,
+                      color: "success",
+                      note: "Cities where you currently accept rides",
+                    },
+                    {
+                      label: "Dispatch Status",
+                      value: dispatchStatusLabel,
+                      icon: Navigation,
+                      color: "info",
+                      note: "Available · Offline · On-Break · On-Trip",
+                    },
+                    {
+                      label: "Partnership",
+                      value: partnerStatus || "—",
+                      icon: Shield,
+                      color: "warning",
+                      note: "Your account activation status",
+                    },
+                  ].map((stat) => {
+                    const colMap = {
+                      primary: "border-primary/20 bg-primary/5 text-primary",
+                      success: "border-success/20 bg-success/5 text-success",
+                      info:    "border-info/20    bg-info/5    text-info",
+                      warning: "border-warning/20 bg-warning/5 text-warning",
+                    };
+                    return (
+                      <motion.div key={stat.label} variants={fadeUp}
+                        className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm"
+                      >
+                        <div className={`w-9 h-9 rounded-xl border flex items-center justify-center mb-3 ${colMap[stat.color]}`}>
+                          <stat.icon className="w-4 h-4" />
+                        </div>
+                        <p className="text-lg font-bold text-base-content capitalize leading-tight">{stat.value}</p>
+                        <p className="text-xs text-base-content/50 mt-0.5">{stat.label}</p>
+                        <p className="text-xs text-base-content/35 mt-1 leading-tight">{stat.note}</p>
+                      </motion.div>
+                    );
+                  })}
+                </motion.div>
+
+                {/* Navigate to zones CTA */}
+                <motion.div variants={fadeUp}>
+                  <button
+                    onClick={() => navTo("/partner/solo/service-zones")}
+                    className="w-full flex items-center justify-between p-5 rounded-2xl border border-base-300
+                               bg-base-100 hover:border-primary/40 hover:bg-primary/5 hover:shadow-sm transition-all group"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+                        <Map className="w-5 h-5 text-primary" />
+                      </div>
+                      <div className="text-left">
+                        <p className="font-bold text-base-content text-sm">Manage Service Zones</p>
+                        <p className="text-xs text-base-content/50 mt-0.5">{activeZones} active zone{activeZones !== 1 ? "s" : ""} · {totalKm} km total coverage</p>
+                        <p className="text-xs text-base-content/35 mt-0.5">Add or remove cities where you accept ride requests</p>
+                      </div>
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-base-content/30 group-hover:text-primary group-hover:translate-x-1 transition-all" />
+                  </button>
+                </motion.div>
+              </motion.div>
+            )}
+
+            {/* ── SERVICE ZONES SECTION ──────────────────────────────────── */}
+            {(section === "zones" || section === "add") && (
+              <motion.div
+                key="zones"
+                initial="hidden" animate="visible" exit={{ opacity: 0, y: -16 }}
+                variants={stagger}
+                className="space-y-6"
+              >
+                {/* Stats bar */}
+                <motion.div variants={fadeUp} className="grid grid-cols-3 gap-4">
+                  {[
+                    { label: "Total Zones",     value: Array.isArray(serviceZones) ? serviceZones.length : 0, icon: Layers,       color: "text-primary bg-primary/5 border-primary/20", note: "All zones added" },
+                    { label: "Active Zones",    value: activeZones,                                           icon: CheckCircle2, color: "text-success bg-success/5 border-success/20", note: "Receiving requests" },
+                    { label: "Total Coverage",  value: `${totalKm} km`,                                       icon: TrendingUp,   color: "text-info    bg-info/5    border-info/20",    note: "Combined radius" },
+                  ].map(s => (
+                    <div key={s.label} className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm">
+                      <div className={`w-8 h-8 rounded-xl border flex items-center justify-center mb-2 ${s.color}`}>
+                        <s.icon className="w-3.5 h-3.5" />
+                      </div>
+                      <p className="text-xl font-black text-base-content">{s.value}</p>
+                      <p className="text-xs text-base-content/50">{s.label}</p>
+                      <p className="text-xs text-base-content/35 mt-0.5">{s.note}</p>
+                    </div>
+                  ))}
+                </motion.div>
+
+                {/* Map + Zone list */}
+                <motion.div variants={fadeUp} className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+
+                  {/* Map */}
+                  <div className="lg:col-span-3 rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden" style={{ minHeight: 420 }}>
+                    <div className="p-4 border-b border-base-300 flex items-center justify-between bg-base-100">
+                      <div className="flex items-center gap-2">
+                        <Globe className="w-4 h-4 text-primary" />
+                        <span className="text-sm font-semibold text-base-content">Coverage Map</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <PulseDot color="#0284c7" size={8} />
+                        <span className="text-xs text-base-content/50">{activeZones} zone{activeZones !== 1 ? "s" : ""} visible</span>
+                      </div>
+                    </div>
+                    {/* Field note below map header */}
+                    <div className="px-4 py-2 border-b border-base-200 bg-base-50">
+                      <p className="flex items-start gap-1 text-xs text-base-content/40 leading-relaxed">
+                        <Info className="w-3 h-3 flex-shrink-0 mt-0.5 opacity-60" />
+                        Circles show your service radius for each active zone. Click a marker for zone details.
+                      </p>
+                    </div>
+                    <div style={{ height: 360 }}>
+                      <ServiceZoneMap zones={Array.isArray(serviceZones) ? serviceZones : []} />
+                    </div>
                   </div>
 
-                  {loadingZones ? (
-                    <div className="flex items-center justify-center h-40">
-                      <Loader2 className="w-6 h-6 animate-spin text-primary" />
-                    </div>
-                  ) : !Array.isArray(serviceZones) || serviceZones.length === 0 ? (
-                    <motion.div
-                      variants={scaleIn}
-                      className="flex flex-col items-center justify-center gap-4 p-8 rounded-2xl border border-dashed border-base-300 bg-base-200/50"
-                    >
-                      <div className="w-14 h-14 rounded-2xl bg-base-200 flex items-center justify-center">
-                        <Globe className="w-6 h-6 text-base-content/30" />
-                      </div>
-                      <div className="text-center">
-                        <p className="text-sm font-semibold text-base-content/60">No service zones yet</p>
-                        <p className="text-xs text-base-content/40 mt-1">Add cities where you accept rides</p>
+                  {/* Zone list */}
+                  <div className="lg:col-span-2 flex flex-col gap-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-bold text-base-content">Your Zones</h3>
+                        <p className="text-xs text-base-content/40 mt-0.5">Max 10 zones allowed</p>
                       </div>
                       <button
                         onClick={() => { setShowAddModal(true); navTo("/partner/solo/service-zones/add"); }}
-                        className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-primary-content text-xs font-bold
-                                   hover:brightness-110 transition-all"
+                        disabled={Array.isArray(serviceZones) && serviceZones.length >= 10}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-primary/10 border border-primary/25
+                                   text-primary text-xs font-bold hover:bg-primary/20 disabled:opacity-40 transition-all"
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        Add First Zone
+                        Add Zone
                       </button>
-                    </motion.div>
-                  ) : (
-                    <div className="flex flex-col gap-3 max-h-[340px] overflow-y-auto pr-1 scrollbar-thin scrollbar-track-base-200 scrollbar-thumb-base-300">
-                      <AnimatePresence mode="popLayout">
-                        {serviceZones.map(zone => (
-                          <ZoneCard
-                            key={zone._id}
-                            zone={zone}
-                            onRemove={handleRemoveZone}
-                            // removingId tracks which _id is being deleted
-                            removing={removingId === zone._id && loadingRemoveZone}
-                          />
-                        ))}
-                      </AnimatePresence>
                     </div>
-                  )}
 
-                  {Array.isArray(serviceZones) && serviceZones.length >= 10 && (
-                    <div className="flex items-center gap-2 p-3 rounded-xl bg-warning/10 border border-warning/20">
-                      <Info className="w-3.5 h-3.5 text-warning flex-shrink-0" />
-                      <p className="text-xs text-warning">Maximum 10 service zones reached</p>
-                    </div>
-                  )}
-                </div>
-              </motion.div>
+                    {loadingZones ? (
+                      <div className="flex items-center justify-center h-40">
+                        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                      </div>
+                    ) : !Array.isArray(serviceZones) || serviceZones.length === 0 ? (
+                      <motion.div
+                        variants={scaleIn}
+                        className="flex flex-col items-center justify-center gap-4 p-8 rounded-2xl border border-dashed border-base-300 bg-base-200/50"
+                      >
+                        <div className="w-14 h-14 rounded-2xl bg-base-200 flex items-center justify-center">
+                          <Globe className="w-6 h-6 text-base-content/30" />
+                        </div>
+                        <div className="text-center">
+                          <p className="text-sm font-semibold text-base-content/60">No service zones yet</p>
+                          <p className="text-xs text-base-content/40 mt-1">Add cities where you accept rides</p>
+                        </div>
+                        <button
+                          onClick={() => { setShowAddModal(true); navTo("/partner/solo/service-zones/add"); }}
+                          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-primary-content text-xs font-bold hover:brightness-110 transition-all"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Add First Zone
+                        </button>
+                      </motion.div>
+                    ) : (
+                      <div className="flex flex-col gap-3 max-h-[360px] overflow-y-auto pr-1 scrollbar-thin scrollbar-track-base-200 scrollbar-thumb-base-300">
+                        <AnimatePresence mode="popLayout">
+                          {serviceZones.map(zone => (
+                            <ZoneCard
+                              key={zone._id}
+                              zone={zone}
+                              onRemove={handleRemoveZone}
+                              removing={removingId === zone._id && loadingRemoveZone}
+                            />
+                          ))}
+                        </AnimatePresence>
+                      </div>
+                    )}
 
-              {/* Quick back to availability */}
-              <motion.div variants={fadeUp}>
-                <button
-                  onClick={() => navTo("/partner/solo/availability")}
-                  className="flex items-center gap-2 text-sm text-base-content/40 hover:text-base-content/70 transition-colors"
-                >
-                  <ArrowLeft className="w-4 h-4" />
-                  Back to Availability
-                </button>
+                    {Array.isArray(serviceZones) && serviceZones.length >= 10 && (
+                      <div className="flex items-center gap-2 p-3 rounded-xl bg-warning/10 border border-warning/20">
+                        <Info className="w-3.5 h-3.5 text-warning flex-shrink-0" />
+                        <p className="text-xs text-warning">Maximum 10 service zones reached. Remove a zone to add another.</p>
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+
+                {/* Back to availability */}
+                <motion.div variants={fadeUp}>
+                  <button
+                    onClick={() => navTo("/partner/solo/availability")}
+                    className="flex items-center gap-2 text-sm text-base-content/40 hover:text-base-content/70 transition-colors"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    Back to Availability
+                  </button>
+                </motion.div>
               </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+            )}
+          </AnimatePresence>
+        </div>
+      </Container>
 
       {/* ── Add Zone Modal ──────────────────────────────────────────────────── */}
       <AnimatePresence>

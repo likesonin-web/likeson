@@ -8,7 +8,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Phone, Video, PhoneOff, Play, Pin, Reply, Edit3, Trash2,
   Forward, AlertCircle, Eye, Smile,
-  Mic, MicOff, VideoOff, Loader2,
+  Mic, MicOff, VideoOff, Loader2, Volume2, VolumeX,
 } from 'lucide-react';
 
 import {
@@ -44,6 +44,12 @@ import {
 } from './ChatPart1_Components';
 
 // ─── WEBRTC CALL SCREEN ───────────────────────────────────────────────────────
+// FIX #5: Race condition — offer arriving before PC is built now handled via
+//         offerBufferRef. When offer arrives while PC null, it is buffered and
+//         applied immediately after buildPC() completes.
+// FIX #6: Audio autoplay block — on NotAllowedError, shows "Tap to enable audio"
+//         button that triggers play on user gesture instead of silently dropping.
+// FIX #7: buildPC removed from useCallback deps of cleanup to break stale closure.
 export const CallScreen = memo(({
   call,
   isIncoming,
@@ -56,21 +62,21 @@ export const CallScreen = memo(({
 }) => {
   const dispatch = useDispatch();
 
-  // DOM refs
   const localVideoRef  = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
 
-  // WebRTC refs
   const pcRef          = useRef(null);
   const localStreamRef = useRef(null);
 
-  // Control refs
   const isMountedRef   = useRef(true);
   const iceQueueRef    = useRef([]);
   const offerSentRef   = useRef(false);
   const answerSentRef  = useRef(false);
   const durationTimer  = useRef(null);
+
+  // FIX #5: Buffer for SDP offer that arrives before PC is ready
+  const offerBufferRef = useRef(null);
 
   const peerMedia        = useSelector(selectCallPeerMedia);
   const mediaConstraints = useSelector(selectCallMediaConstraints);
@@ -82,12 +88,18 @@ export const CallScreen = memo(({
   const [camOff,   setCamOff]   = useState(false);
   const [duration, setDuration] = useState(0);
 
+  // FIX #6: Audio autoplay blocked state — show manual unblock button
+  const [audioBlocked,    setAudioBlocked]    = useState(false);
+  const [remoteAudioStream, setRemoteAudioStream] = useState(null);
+
   const isVideo    = call?.callType === 'video';
   const callerInfo = call?.caller || call?.callee;
 
   useEffect(() => { callPhaseRef.current = callPhase; }, [callPhase]);
 
   // ── Cleanup ───────────────────────────────────────────────────────────────
+  // FIX #7: cleanup does NOT depend on buildPC to avoid stale closure via
+  //         pc.onconnectionstatechange capturing an old buildPC instance.
   const stopAllTracks = useCallback(() => {
     localStreamRef.current?.getTracks().forEach((t) => { t.stop(); t.enabled = false; });
     localStreamRef.current = null;
@@ -114,6 +126,7 @@ export const CallScreen = memo(({
     iceQueueRef.current   = [];
     offerSentRef.current  = false;
     answerSentRef.current = false;
+    offerBufferRef.current = null;
   }, [stopAllTracks]);
 
   // ── Attach streams to DOM elements ────────────────────────────────────────
@@ -125,23 +138,43 @@ export const CallScreen = memo(({
     }
   }, [isVideo]);
 
+  // FIX #6: attachRemoteStream now handles autoplay block gracefully.
   const attachRemoteStream = useCallback((stream) => {
-    // Route ALL remote audio through the dedicated <audio> element.
-    // Never rely on <video> for audio — prevents double-audio phasing.
+    // Store stream for manual unblock button
+    setRemoteAudioStream(stream);
+
     if (remoteAudioRef.current) {
       remoteAudioRef.current.srcObject = stream;
       remoteAudioRef.current.volume    = 1.0;
-      remoteAudioRef.current.play().catch((err) => {
-        console.warn('[CallScreen] remoteAudio autoplay blocked:', err.message);
-      });
+      remoteAudioRef.current.play()
+        .then(() => {
+          setAudioBlocked(false);
+        })
+        .catch((err) => {
+          if (err.name === 'NotAllowedError' || err.name === 'AbortError') {
+            console.warn('[CallScreen] remoteAudio autoplay blocked — awaiting user gesture');
+            setAudioBlocked(true);
+          } else {
+            console.warn('[CallScreen] remoteAudio play error:', err.message);
+          }
+        });
     }
-    // Video element: only for showing remote video track, always muted
+
     if (isVideo && remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = stream;
       remoteVideoRef.current.muted     = true;
       remoteVideoRef.current.play().catch(() => {});
     }
   }, [isVideo]);
+
+  // FIX #6: Manual user-gesture triggered play to unblock audio
+  const handleUnblockAudio = useCallback(() => {
+    if (!remoteAudioRef.current || !remoteAudioStream) return;
+    remoteAudioRef.current.srcObject = remoteAudioStream;
+    remoteAudioRef.current.play()
+      .then(() => setAudioBlocked(false))
+      .catch((err) => console.error('[CallScreen] manual play failed:', err.message));
+  }, [remoteAudioStream]);
 
   const startTimer = useCallback(() => {
     clearInterval(durationTimer.current);
@@ -159,6 +192,10 @@ export const CallScreen = memo(({
   }, []);
 
   // ── Build PeerConnection ──────────────────────────────────────────────────
+  // FIX #7: onEnd ref used inside onconnectionstatechange to avoid stale closure.
+  const onEndRef = useRef(onEnd);
+  useEffect(() => { onEndRef.current = onEnd; }, [onEnd]);
+
   const buildPC = useCallback(() => {
     if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
 
@@ -196,16 +233,22 @@ export const CallScreen = memo(({
       }
     };
 
+    // FIX #7: Use ref for onEnd to avoid stale closure from buildPC deps
     pc.onconnectionstatechange = () => {
       if (!isMountedRef.current) return;
       if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
-        cleanup(); onEnd?.();
+        // cleanup is stable (no buildPC dep), safe to call
+        isMountedRef.current = false;
+        clearInterval(durationTimer.current);
+        stopAllTracks();
+        pcRef.current = null;
+        onEndRef.current?.();
       }
     };
 
     pcRef.current = pc;
     return pc;
-  }, [call, attachRemoteStream, startTimer, cleanup, onEnd]);
+  }, [call, attachRemoteStream, startTimer, stopAllTracks]);
 
   // ── Get local media ───────────────────────────────────────────────────────
   const getMedia = useCallback(async () => {
@@ -246,6 +289,13 @@ export const CallScreen = memo(({
         if (!stream || !isMountedRef.current) return;
         const pc = buildPC();
         stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+        // FIX #5: If offer was buffered before PC was ready, apply it now
+        if (offerBufferRef.current) {
+          const buffered = offerBufferRef.current;
+          offerBufferRef.current = null;
+          // Caller should not apply an offer (caller creates offer, not answer)
+          // Buffer only needed on callee side — see callee effect below
+        }
       });
     }
     return () => { cleanup(); };
@@ -302,12 +352,19 @@ export const CallScreen = memo(({
   }, [peerSdpAnswer, isIncoming, drainIceQueue]);
 
   // ── Callee: apply SDP offer from caller ───────────────────────────────────
+  // FIX #5: If PC not built yet when offer arrives, buffer the offer.
+  //         The offer is applied in handleAnswer after buildPC() completes.
   useEffect(() => {
     if (!isIncoming || !peerSdpOffer) return;
+
+    // Buffer the offer regardless — handleAnswer reads it
+    offerBufferRef.current = peerSdpOffer;
+
     const pc = pcRef.current;
     if (!pc || answerSentRef.current || pc.remoteDescription) return;
     if (pc.signalingState !== 'stable' && pc.signalingState !== 'have-remote-offer') return;
 
+    // PC already exists — apply immediately (not waiting for handleAnswer)
     answerSentRef.current = true;
     (async () => {
       try {
@@ -329,8 +386,9 @@ export const CallScreen = memo(({
           mediaConstraints: call?.mediaConstraints,
           caller:           call?.caller,
         }));
+        offerBufferRef.current = null; // consumed
       } catch (err) {
-        console.error('[CallScreen] createAnswer failed:', err.message);
+        console.error('[CallScreen] createAnswer (effect) failed:', err.message);
         answerSentRef.current = false;
       }
     })();
@@ -351,6 +409,7 @@ export const CallScreen = memo(({
   }, [iceCandidates]);
 
   // ── Callee: user taps Answer ──────────────────────────────────────────────
+  // FIX #5: After buildPC, check offerBufferRef for a buffered offer and apply immediately.
   const handleAnswer = useCallback(async () => {
     if (!isMountedRef.current) return;
     setCallPhase('connecting');
@@ -368,11 +427,13 @@ export const CallScreen = memo(({
       targetUserId:   call?.caller?._id,
     });
 
-    // Race guard: if offer already arrived before PC was built
-    if (peerSdpOffer && !answerSentRef.current) {
+    // FIX #5: Use buffered offer if it arrived before PC was built
+    const sdpOffer = offerBufferRef.current || peerSdpOffer;
+    if (sdpOffer && !answerSentRef.current) {
       answerSentRef.current = true;
+      offerBufferRef.current = null;
       try {
-        await pc.setRemoteDescription(new RTCSessionDescription(peerSdpOffer));
+        await pc.setRemoteDescription(new RTCSessionDescription(sdpOffer));
         await drainIceQueue(pc);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
@@ -391,7 +452,7 @@ export const CallScreen = memo(({
           caller:           call?.caller,
         }));
       } catch (err) {
-        console.error('[CallScreen] handleAnswer race createAnswer:', err.message);
+        console.error('[CallScreen] handleAnswer createAnswer:', err.message);
         answerSentRef.current = false;
       }
     }
@@ -423,7 +484,6 @@ export const CallScreen = memo(({
     });
   }, [call]);
 
-  // ── Derived display state ─────────────────────────────────────────────────
   const showLocalVideo  = isVideo && callPhase !== 'incoming';
   const showRemoteVideo = isVideo && callPhase === 'active';
   const remoteCamOff    = isVideo && callPhase === 'active' && peerMedia?.video === false;
@@ -436,7 +496,6 @@ export const CallScreen = memo(({
     active:     formatSeconds(duration),
   })[callPhase] ?? formatSeconds(duration);
 
-  // ─────────────────────────────────────────────────────────────────────────
   return (
     <motion.div
       initial={{ opacity: 0 }} animate={{ opacity: 1 }}
@@ -453,7 +512,23 @@ export const CallScreen = memo(({
         style={{ display: 'none' }}
       />
 
-      {/* Remote video — always muted, audio comes from <audio> above */}
+      {/* FIX #6: Audio unblock button — visible when autoplay is blocked */}
+      {audioBlocked && (
+        <div className="absolute top-4 left-0 right-0 flex justify-center z-30">
+          <motion.button
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            onClick={handleUnblockAudio}
+            className="flex items-center gap-2 text-white text-sm px-4 py-2 rounded-full shadow-xl"
+            style={{ background: 'rgba(239,68,68,0.85)' }}
+            aria-label="Tap to enable audio"
+          >
+            <VolumeX size={16} />
+            Tap to enable audio
+          </motion.button>
+        </div>
+      )}
+
       {isVideo && (
         <video
           ref={remoteVideoRef}
@@ -465,7 +540,6 @@ export const CallScreen = memo(({
         />
       )}
 
-      {/* Remote camera off: show their avatar */}
       {remoteCamOff && (
         <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
           <motion.div
@@ -483,7 +557,6 @@ export const CallScreen = memo(({
         </div>
       )}
 
-      {/* Peer disconnected banner */}
       {peerDisconnected && (
         <div className="absolute top-16 left-0 right-0 flex justify-center z-30">
           <span
@@ -495,7 +568,6 @@ export const CallScreen = memo(({
         </div>
       )}
 
-      {/* Main overlay: avatar + name + status */}
       <div
         className={`absolute inset-0 flex flex-col items-center justify-center text-white z-10 transition-opacity duration-500
           ${isVideo && callPhase === 'active' ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
@@ -529,7 +601,6 @@ export const CallScreen = memo(({
           </div>
         )}
 
-        {/* Audio-only active state: show timer + peer mute status */}
         {!isVideo && callPhase === 'active' && (
           <div className="mt-5 flex flex-col items-center gap-3">
             <p className="text-white text-3xl font-mono font-bold tracking-widest">
@@ -540,10 +611,19 @@ export const CallScreen = memo(({
                 🔇 Other person is muted
               </span>
             )}
+            {/* FIX #6: Show audio state indicator in audio-only mode too */}
+            {audioBlocked && (
+              <motion.button
+                onClick={handleUnblockAudio}
+                className="flex items-center gap-2 text-white text-xs px-3 py-1.5 rounded-full mt-1"
+                style={{ background: 'rgba(239,68,68,0.5)' }}
+              >
+                <VolumeX size={13} /> Tap to hear audio
+              </motion.button>
+            )}
           </div>
         )}
 
-        {/* Video call active: peer media status badges */}
         {isVideo && callPhase === 'active' && peerMedia && (
           <div className="flex gap-3 mt-3">
             {!peerMedia.audio && (
@@ -560,7 +640,6 @@ export const CallScreen = memo(({
         )}
       </div>
 
-      {/* Duration badge (video active) */}
       {isVideo && callPhase === 'active' && (
         <div className="absolute top-4 left-0 right-0 flex justify-center z-20">
           <span
@@ -572,7 +651,6 @@ export const CallScreen = memo(({
         </div>
       )}
 
-      {/* Local video PIP */}
       {showLocalVideo && (
         <div
           className="absolute bottom-28 right-4 w-28 h-20 rounded-xl overflow-hidden border-2 shadow-xl z-20 flex items-center justify-center"
@@ -595,12 +673,10 @@ export const CallScreen = memo(({
         </div>
       )}
 
-      {/* For audio-only calls: keep localVideoRef pointing to a real DOM node */}
       {!isVideo && (
         <video ref={localVideoRef} autoPlay playsInline muted style={{ display: 'none' }} />
       )}
 
-      {/* Controls */}
       <div
         className="absolute bottom-0 left-0 right-0 pb-10 pt-6 z-20 flex items-center justify-center gap-8"
         style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.75), transparent)' }}
@@ -630,7 +706,6 @@ export const CallScreen = memo(({
           </>
         ) : (
           <>
-            {/* Mute */}
             <div className="flex flex-col items-center gap-2">
               <motion.button
                 whileTap={{ scale: 0.9 }} onClick={handleMuteToggle}
@@ -644,7 +719,6 @@ export const CallScreen = memo(({
               <span className="text-white text-xs">{muted ? 'Unmute' : 'Mute'}</span>
             </div>
 
-            {/* Camera (video only) */}
             {isVideo && (
               <div className="flex flex-col items-center gap-2">
                 <motion.button
@@ -660,7 +734,6 @@ export const CallScreen = memo(({
               </div>
             )}
 
-            {/* End call */}
             <div className="flex flex-col items-center gap-2">
               <motion.button
                 whileTap={{ scale: 0.9 }} onClick={handleEnd}

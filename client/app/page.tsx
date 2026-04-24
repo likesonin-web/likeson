@@ -16,7 +16,7 @@ import Faq from "@/components/Faq";
 import LabHero from "@/app/lab-partner/Hero";
 import HeroSoloDriver from "@/components/hero/HeroSoloDriver";
 import CareAssistant from "@/components/Careassistanthero";
-
+import HeroDriver from "@/components/hero/HeroDriver";
 const Home: React.FC = () => {
   const { user } = useSelector((state: RootState) => state.user);
 
@@ -61,6 +61,11 @@ const Home: React.FC = () => {
       {user?.role=== 'solodriverpartner' && (
          
           <HeroSoloDriver/>
+         
+      )}
+      {user?.role === "driver" && (
+         
+          <HeroDriver/>
          
       )}
     </main>

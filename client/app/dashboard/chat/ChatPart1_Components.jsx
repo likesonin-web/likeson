@@ -1,14 +1,14 @@
 'use client';
 
 import React, {
-  useState, useEffect, useRef, useCallback, useMemo, memo,
+  useState, useEffect, useRef, useCallback, memo,
 } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Play, Pause, Download, X, Check, CheckCheck,
   Image as ImageIcon, File, Camera, Video as VideoFileIcon,
   Smile, ZoomIn, Sticker, Search, Loader2,
-  AlertCircle,
+  AlertCircle, Volume2, VolumeX,
 } from 'lucide-react';
 import { Grid } from '@giphy/react-components';
 import { GiphyFetch } from '@giphy/js-fetch-api';
@@ -16,7 +16,10 @@ import { useSelector } from 'react-redux';
 import { selectUserPresence, selectTypingUsers } from '@/store/slices/chatSlice';
 
 // ─── GIPHY CLIENT ─────────────────────────────────────────────────────────────
-export const gf = new GiphyFetch(process.env.NEXT_PUBLIC_GIPHY_API_KEY || '');
+// FIX #2: Guard against missing/empty API key — create gf lazily only when key exists.
+// Exporting null when key is absent prevents GiphyFetch constructor receiving empty string.
+const GIPHY_KEY = process.env.NEXT_PUBLIC_GIPHY_API_KEY || '';
+export const gf = GIPHY_KEY ? new GiphyFetch(GIPHY_KEY) : null;
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '😡', '🙏', '🔥'];
@@ -106,19 +109,43 @@ export const isConvAdmin = (participant) =>
   ['owner', 'admin'].includes(participant?.conversationRole?.toLowerCase());
 
 // ─── AUDIO PLAYER ─────────────────────────────────────────────────────────────
+// FIX #1: Added proper error state + user feedback on bad URL / play failure.
 export const AudioPlayer = memo(({ url }) => {
   const audioRef    = useRef(null);
-  const [playing,  setPlaying]  = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [current,  setCurrent]  = useState(0);
+  const [playing,   setPlaying]  = useState(false);
+  const [progress,  setProgress] = useState(0);
+  const [duration,  setDuration] = useState(0);
+  const [current,   setCurrent]  = useState(0);
+  const [audioError, setAudioError] = useState(false);
+  const [loadState,  setLoadState]  = useState('idle'); // 'idle'|'loading'|'ready'|'error'
 
   const togglePlay = useCallback(() => {
     const a = audioRef.current;
-    if (!a) return;
-    if (playing) { a.pause(); setPlaying(false); }
-    else { a.play().catch(() => {}); setPlaying(true); }
-  }, [playing]);
+    if (!a || audioError) return;
+    if (playing) {
+      a.pause();
+      setPlaying(false);
+    } else {
+      setLoadState('loading');
+      a.play()
+        .then(() => { setPlaying(true); setLoadState('ready'); })
+        .catch((err) => {
+          console.warn('[AudioPlayer] play() failed:', err.message);
+          setAudioError(true);
+          setLoadState('error');
+          setPlaying(false);
+        });
+    }
+  }, [playing, audioError]);
+
+  if (audioError) {
+    return (
+      <div className="flex items-center gap-2 min-w-[200px] max-w-[260px] opacity-60">
+        <AlertCircle size={16} />
+        <span className="text-xs">Audio unavailable</span>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-2.5 min-w-[200px] max-w-[260px]">
@@ -135,7 +162,11 @@ export const AudioPlayer = memo(({ url }) => {
           setPlaying(false); setProgress(0); setCurrent(0);
           if (audioRef.current) audioRef.current.currentTime = 0;
         }}
-        onLoadedMetadata={() => { if (audioRef.current) setDuration(audioRef.current.duration); }}
+        onLoadedMetadata={() => {
+          if (audioRef.current) setDuration(audioRef.current.duration);
+          setLoadState('ready');
+        }}
+        onError={() => { setAudioError(true); setLoadState('error'); }}
         preload="metadata"
       />
       <motion.button
@@ -143,8 +174,13 @@ export const AudioPlayer = memo(({ url }) => {
         className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
         style={{ background: 'rgba(255,255,255,0.25)' }}
         aria-label={playing ? 'Pause' : 'Play'}
+        disabled={loadState === 'loading'}
       >
-        {playing ? <Pause size={14} /> : <Play size={14} />}
+        {loadState === 'loading'
+          ? <Loader2 size={14} className="animate-spin" />
+          : playing
+          ? <Pause size={14} />
+          : <Play size={14} />}
       </motion.button>
       <div className="flex-1 flex flex-col gap-1">
         <div
@@ -341,17 +377,10 @@ export const FileAttachment = memo(({ attachment }) => (
 FileAttachment.displayName = 'FileAttachment';
 
 // ─── READ RECEIPT ─────────────────────────────────────────────────────────────
-// deliveredAt is ALWAYS null in the API response.
-// Use receipts.length > 0 to detect "delivered" state instead.
-//   • Single grey tick  = Sent       (message sent, no receipts yet)
-//   • Double grey tick  = Delivered  (receiver has a receipt entry but hasn't read)
-//   • Double blue tick  = Read       (readAt is set on any receipt)
 export const ReadReceipt = memo(({ message, isMine }) => {
   if (!isMine) return null;
-
   const receipts     = message.receipts || [];
   const readByAnyone = receipts.some((r) => r.readAt);
-  // deliveredAt is always null — treat any receipt entry as "delivered"
   const delivered    = receipts.length > 0;
 
   if (readByAnyone) {
@@ -365,16 +394,17 @@ export const ReadReceipt = memo(({ message, isMine }) => {
 ReadReceipt.displayName = 'ReadReceipt';
 
 // ─── EMOJI PICKER ─────────────────────────────────────────────────────────────
+// FIX #2: gf may be null when GIPHY key absent — render friendly fallback instead of crash.
 export const EmojiPicker = memo(({ onSelect, onClose }) => {
   const [activeCategory,  setActiveCategory]  = useState('quick');
   const [stickerMode,     setStickerMode]      = useState(false);
   const [stickerCategory, setStickerCategory]  = useState('trending');
   const [stickerSearch,   setStickerSearch]    = useState('');
-  const pickerRef = useRef(null);
 
   const currentCategory = EMOJI_CATEGORIES.find((c) => c.id === activeCategory);
 
   const fetchGifs = useCallback((offset) => {
+    if (!gf) return Promise.resolve({ data: [], pagination: { total_count: 0 } });
     if (stickerSearch.trim()) {
       return gf.search(stickerSearch, { type: 'stickers', offset, limit: 12, rating: 'g' });
     }
@@ -387,7 +417,6 @@ export const EmojiPicker = memo(({ onSelect, onClose }) => {
 
   return (
     <motion.div
-      ref={pickerRef}
       initial={{ opacity: 0, y: 10, scale: 0.95 }}
       animate={{ opacity: 1, y: 0,  scale: 1    }}
       exit={{    opacity: 0, y: 10, scale: 0.95 }}
@@ -492,7 +521,8 @@ export const EmojiPicker = memo(({ onSelect, onClose }) => {
             </div>
           )}
           <div className="px-2 pb-2 overflow-y-auto" style={{ maxHeight: 220 }}>
-            {process.env.NEXT_PUBLIC_GIPHY_API_KEY ? (
+            {/* FIX #2: Show config notice when GIPHY key missing, no crash */}
+            {gf ? (
               <Grid
                 key={`${stickerCategory}-${stickerSearch}`}
                 fetchGifs={fetchGifs}
@@ -524,7 +554,12 @@ export const EmojiPicker = memo(({ onSelect, onClose }) => {
             ) : (
               <div className="flex flex-col items-center justify-center py-8 opacity-50">
                 <Sticker size={32} className="mb-2" />
-                <p className="text-xs">Add NEXT_PUBLIC_GIPHY_API_KEY</p>
+                <p className="text-xs text-center" style={{ color: 'var(--base-content)' }}>
+                  Stickers unavailable
+                </p>
+                <p className="text-[10px] mt-1 opacity-60" style={{ color: 'var(--base-content)' }}>
+                  Add NEXT_PUBLIC_GIPHY_API_KEY to enable
+                </p>
               </div>
             )}
           </div>
@@ -536,68 +571,63 @@ export const EmojiPicker = memo(({ onSelect, onClose }) => {
 EmojiPicker.displayName = 'EmojiPicker';
 
 // ─── UPLOAD PREVIEW MODAL ─────────────────────────────────────────────────────
-// FIX 1: previewUrl is now managed via useState + useEffect instead of useMemo
-//         so it updates reliably when `files` prop changes and revokes properly.
-// FIX 2: Added localSending boolean state to prevent double-send during the gap
-//         between click and when XHR progress events first fire (progress===0 window).
-//         isSending = localSending || (progress > 0 && progress < 100)
-// FIX 3: Image preview uses an onError handler to catch broken blob URLs and
-//         falls back to a placeholder UI.
-// FIX 4: autoFocus removed from caption input to prevent cursor artifact (">")
-//         rendering in the input box on some browsers before the modal fully mounts.
+// FIX #3: Guard files[0] being undefined (empty array passed).
+// Existing FIX 1-4 from original kept + enhanced empty-array guard.
 export const UploadPreviewModal = memo(({ files, onSend, onCancel, progress }) => {
   const [caption,      setCaption]      = useState('');
   const [previewUrl,   setPreviewUrl]   = useState(null);
   const [imgError,     setImgError]     = useState(false);
-  // FIX: localSending prevents re-enabling the Send button before XHR fires
   const [localSending, setLocalSending] = useState(false);
 
-  const file    = files?.[0];
+  // FIX #3: Safely handle potentially empty/undefined files array
+  const safeFiles = Array.isArray(files) && files.length > 0 ? files : null;
+  const file      = safeFiles?.[0] || null;
+
   const isImage = file?.type?.startsWith('image/');
   const isVideo = file?.type?.startsWith('video/');
   const isAudio = file?.type?.startsWith('audio/');
 
-  // FIX: Generate object URL imperatively so it's always in sync with the file
   useEffect(() => {
     if (!file) {
       setPreviewUrl(null);
       setImgError(false);
       return;
     }
-    // Reset error state whenever file changes
     setImgError(false);
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
-    // Cleanup on unmount or file change
+    let url;
+    try {
+      url = URL.createObjectURL(file);
+      setPreviewUrl(url);
+    } catch (err) {
+      console.warn('[UploadPreview] createObjectURL failed:', err.message);
+      setPreviewUrl(null);
+    }
     return () => {
-      URL.revokeObjectURL(url);
+      if (url) URL.revokeObjectURL(url);
     };
   }, [file]);
 
-  // FIX: isSending is true as soon as button is clicked, not just when XHR fires
   const isSending = localSending || (progress > 0 && progress < 100);
 
-  // Reset localSending when upload completes or fails (progress reaches 100 or resets to 0)
   useEffect(() => {
-    if (progress === 100 || progress === 0) {
-      setLocalSending(false);
-    }
+    if (progress === 100 || progress === 0) setLocalSending(false);
   }, [progress]);
 
   const handleSend = useCallback(() => {
-    if (isSending) return;
-    // FIX: Set localSending true immediately on click — before XHR starts
+    if (isSending || !safeFiles) return;
     setLocalSending(true);
     onSend(caption);
-  }, [isSending, caption, onSend]);
+  }, [isSending, caption, onSend, safeFiles]);
 
-  // Allow Enter key in caption to trigger send
   const handleCaptionKeyDown = useCallback((e) => {
     if (e.key === 'Enter' && !e.shiftKey && !isSending) {
       e.preventDefault();
       handleSend();
     }
   }, [handleSend, isSending]);
+
+  // FIX #3: Don't render if no files
+  if (!safeFiles) return null;
 
   return (
     <motion.div
@@ -613,10 +643,9 @@ export const UploadPreviewModal = memo(({ files, onSend, onCancel, progress }) =
         className="w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl"
         style={{ background: 'var(--base-100)' }}
       >
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: 'var(--base-300)' }}>
           <h3 className="font-semibold text-sm" style={{ color: 'var(--base-content)' }}>
-            Send {files.length > 1 ? `${files.length} Files` : 'File'}
+            Send {safeFiles.length > 1 ? `${safeFiles.length} Files` : 'File'}
           </h3>
           <button
             onClick={onCancel}
@@ -629,13 +658,11 @@ export const UploadPreviewModal = memo(({ files, onSend, onCancel, progress }) =
           </button>
         </div>
 
-        {/* Preview area */}
         <div className="p-4">
           <div
             className="rounded-2xl overflow-hidden border flex items-center justify-center min-h-[180px] mb-3"
             style={{ background: 'var(--base-200)', borderColor: 'var(--base-300)' }}
           >
-            {/* IMAGE PREVIEW — FIX: use state-managed previewUrl, show fallback on error */}
             {isImage && previewUrl && !imgError && (
               <img
                 src={previewUrl}
@@ -644,8 +671,6 @@ export const UploadPreviewModal = memo(({ files, onSend, onCancel, progress }) =
                 onError={() => setImgError(true)}
               />
             )}
-
-            {/* FIX: Fallback when blob URL fails or image errors */}
             {isImage && (!previewUrl || imgError) && (
               <div className="text-center p-6">
                 <ImageIcon size={48} className="mx-auto mb-3 opacity-30" style={{ color: 'var(--base-content)' }} />
@@ -657,18 +682,15 @@ export const UploadPreviewModal = memo(({ files, onSend, onCancel, progress }) =
                 </p>
               </div>
             )}
-
             {isVideo && previewUrl && (
               <video src={previewUrl} controls className="max-h-52 w-full" />
             )}
-
             {isAudio && previewUrl && (
               <div className="w-full p-4 text-center">
                 <div className="text-5xl mb-3">🎵</div>
                 <audio src={previewUrl} controls className="w-full" />
               </div>
             )}
-
             {!isImage && !isVideo && !isAudio && (
               <div className="text-center p-6">
                 <File size={48} className="mx-auto mb-3 opacity-30" style={{ color: 'var(--base-content)' }} />
@@ -678,16 +700,15 @@ export const UploadPreviewModal = memo(({ files, onSend, onCancel, progress }) =
                 <p className="text-xs mt-1 opacity-50" style={{ color: 'var(--base-content)' }}>
                   {formatFileSize(file?.size)}
                 </p>
-                {files.length > 1 && (
+                {safeFiles.length > 1 && (
                   <p className="text-xs mt-1 opacity-60" style={{ color: 'var(--primary)' }}>
-                    +{files.length - 1} more files
+                    +{safeFiles.length - 1} more files
                   </p>
                 )}
               </div>
             )}
           </div>
 
-          {/* Caption input — FIX: removed autoFocus to prevent cursor ">" rendering bug */}
           <input
             type="text"
             value={caption}
@@ -704,7 +725,6 @@ export const UploadPreviewModal = memo(({ files, onSend, onCancel, progress }) =
             aria-label="Caption"
           />
 
-          {/* FIX: Show indeterminate shimmer while localSending=true but progress===0 */}
           {localSending && progress === 0 && (
             <div className="mt-3">
               <div className="flex justify-between text-xs mb-1 opacity-60" style={{ color: 'var(--base-content)' }}>
@@ -737,7 +757,6 @@ export const UploadPreviewModal = memo(({ files, onSend, onCancel, progress }) =
           )}
         </div>
 
-        {/* Action buttons */}
         <div className="flex gap-2 px-4 pb-5">
           <button
             onClick={onCancel}
@@ -747,8 +766,6 @@ export const UploadPreviewModal = memo(({ files, onSend, onCancel, progress }) =
           >
             Cancel
           </button>
-
-          {/* FIX: Send button shows spinner + "Sending…" text while uploading */}
           <motion.button
             whileTap={{ scale: 0.97 }}
             onClick={handleSend}
@@ -763,7 +780,7 @@ export const UploadPreviewModal = memo(({ files, onSend, onCancel, progress }) =
                 <span>Sending…</span>
               </>
             ) : (
-              <span>{`Send${files.length > 1 ? ` (${files.length})` : ''}`}</span>
+              <span>{`Send${safeFiles.length > 1 ? ` (${safeFiles.length})` : ''}`}</span>
             )}
           </motion.button>
         </div>
@@ -774,16 +791,14 @@ export const UploadPreviewModal = memo(({ files, onSend, onCancel, progress }) =
 UploadPreviewModal.displayName = 'UploadPreviewModal';
 
 // ─── ATTACH MENU ──────────────────────────────────────────────────────────────
-// FIX 1: Removed onClick={onClose} from <label> — closing the parent before the
-//         OS file picker returns silently loses the selected files.
-// FIX 2: onClose() is now called ONLY inside onChange after files are confirmed.
-// FIX 3: Reset input value after selection so same file can be re-picked.
+// FIX #4: capture prop omitted (not passed as undefined) when not needed.
+// Passing capture={undefined} causes some browsers to treat attribute as present → forces camera.
 export const AttachMenu = memo(({ onFileSelect, onClose }) => {
   const options = [
-    { icon: <ImageIcon size={18} />,     label: 'Photo',    accept: 'image/*',                              color: 'var(--error)'     },
-    { icon: <VideoFileIcon size={18} />, label: 'Video',    accept: 'video/*',                              color: 'var(--secondary)' },
-    { icon: <File size={18} />,          label: 'Document', accept: '.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv', color: 'var(--primary)'   },
-    { icon: <Camera size={18} />,        label: 'Camera',   accept: 'image/*', capture: true,               color: 'var(--success)'   },
+    { icon: <ImageIcon size={18} />,     label: 'Photo',    accept: 'image/*',                              color: 'var(--error)',     capture: false },
+    { icon: <VideoFileIcon size={18} />, label: 'Video',    accept: 'video/*',                              color: 'var(--secondary)', capture: false },
+    { icon: <File size={18} />,          label: 'Document', accept: '.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv', color: 'var(--primary)',   capture: false },
+    { icon: <Camera size={18} />,        label: 'Camera',   accept: 'image/*',                              color: 'var(--success)',   capture: true  },
   ];
 
   return (
@@ -797,7 +812,6 @@ export const AttachMenu = memo(({ onFileSelect, onClose }) => {
       role="menu"
     >
       {options.map(({ icon, label, accept, color, capture }) => (
-        // FIX: No onClick on label — do NOT close the menu until files are confirmed
         <label
           key={label}
           className="flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors hover:bg-base-200"
@@ -810,18 +824,18 @@ export const AttachMenu = memo(({ onFileSelect, onClose }) => {
             {icon}
           </span>
           <span className="text-sm font-medium" style={{ color: 'var(--base-content)' }}>{label}</span>
+          {/* FIX #4: Conditionally spread capture only when true — never pass undefined */}
           <input
             type="file"
             accept={accept}
-            capture={capture ? 'environment' : undefined}
+            {...(capture ? { capture: 'environment' } : {})}
             className="hidden"
             multiple={label === 'Photo' || label === 'Document'}
             onChange={(e) => {
-              // FIX: Only close menu and call onFileSelect after files are confirmed
               if (e.target.files?.length) {
                 onFileSelect(e.target.files);
-                e.target.value = ''; // reset so same file can be re-selected
-                onClose();           // close AFTER files are captured
+                e.target.value = '';
+                onClose();
               }
             }}
           />

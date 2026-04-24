@@ -1056,7 +1056,7 @@ export const {
 // SELECTORS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const sel = (state) => state.subscriptions;
+const sel = (state) => state.subscriptionPlan;
 
 // ── Plans ──────────────────────────────────────────────────────────────────
 export const selectAllPlans      = (state) => sel(state).plans;

@@ -9,14 +9,14 @@ import {
   Send, Paperclip, Mic, MicOff, Phone, Video,
   Search, X, ArrowLeft, Pin, Reply, Edit3,
   Smile, MoreVertical, Circle, Users, Hash,
-  Calendar, Loader2, ChevronDown,
+  Calendar, Loader2, ChevronDown, AlertTriangle,
 } from 'lucide-react';
 
 // ── All chatSlice imports ────────────────────────────────────────────────────
 import {
   // Conversations
   fetchConversations,
-  fetchConversation,          // FIX: was missing — needed after createConversation
+  fetchConversation,
   createConversation,
   updateConversation,
   archiveConversation,
@@ -83,9 +83,9 @@ import {
 
   // Upload helpers
   setUploadProgress,
-  resetUploadProgress,        // FIX: added
+  resetUploadProgress,
   setRecordingProgress,
-  resetRecordingProgress,     // FIX: added
+  resetRecordingProgress,
 
   // Selectors
   selectAllConversations,
@@ -113,7 +113,7 @@ import {
   selectPartners,
   selectLoadingPartners,
 
-  // Misc actions
+  // Misc
   getSocket,
 } from '@/store/slices/chatSlice';
 
@@ -132,6 +132,72 @@ import {
   PinnedMessagesPanel, ScheduledMessagesPanel, MediaGalleryPanel,
   SearchResultsPanel, PartnersPanel, ConversationDetails, ForwardModal,
 } from './ChatPart3_Panels';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INLINE CONFIRM DIALOG
+// FIX #10 (Chat.jsx): Replace window.confirm in handleDelete with async modal.
+// window.confirm blocks main thread and fails in iframes / PWA fullscreen / Electron.
+// ─────────────────────────────────────────────────────────────────────────────
+const ConfirmDialog = ({ open, title, message, confirmLabel = 'Confirm', danger = false, onConfirm, onCancel }) => {
+  if (!open) return null;
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}
+      onClick={onCancel}
+    >
+      <motion.div
+        initial={{ scale: 0.9, y: 16 }}
+        animate={{ scale: 1,   y: 0  }}
+        exit={{ scale: 0.9,    y: 16 }}
+        className="w-full max-w-xs rounded-2xl shadow-2xl overflow-hidden"
+        style={{ background: 'var(--base-100)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="p-5">
+          <div className="flex items-center gap-3 mb-3">
+            {danger && (
+              <span
+                className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+                style={{ background: 'color-mix(in oklch, var(--error) 15%, transparent)' }}
+              >
+                <AlertTriangle size={18} style={{ color: 'var(--error)' }} />
+              </span>
+            )}
+            <h3 className="font-semibold text-sm" style={{ color: 'var(--base-content)' }}>
+              {title}
+            </h3>
+          </div>
+          <p className="text-xs leading-relaxed mb-5" style={{ color: 'var(--base-content)', opacity: 0.7 }}>
+            {message}
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={onCancel}
+              className="flex-1 py-2.5 rounded-xl text-sm font-medium"
+              style={{ border: '1px solid var(--base-300)', color: 'var(--base-content)' }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={onConfirm}
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold"
+              style={{
+                background: danger ? 'var(--error)' : 'var(--primary)',
+                color:      danger ? 'var(--error-content)' : 'var(--primary-content)',
+              }}
+            >
+              {confirmLabel}
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INFINITE SCROLL HOOK
@@ -160,7 +226,6 @@ const Chat = () => {
   const activeConvId   = useSelector(selectActiveConversationId);
   const activeConv     = useSelector(selectActiveConversation);
 
-  // Guard with ?? [] so messages is never undefined even before first fetch
   const messages = useSelector((s) => {
     const msgs = selectMessagesByConversation(s, activeConvId);
     return Array.isArray(msgs) ? msgs : [];
@@ -202,6 +267,9 @@ const Chat = () => {
   const [showPartners,     setShowPartners]      = useState(false);
   const [showSearchResults,setShowSearchResults] = useState(false);
 
+  // FIX #10: delete confirm dialog state (replaces window.confirm)
+  const [deleteConfirm, setDeleteConfirm] = useState({ open: false, messageId: null });
+
   // ── WebRTC signalling state ───────────────────────────────────────────────
   const [peerSdpAnswer, setPeerSdpAnswer] = useState(null);
   const [peerSdpOffer,  setPeerSdpOffer]  = useState(null);
@@ -218,7 +286,6 @@ const Chat = () => {
   const emojiRef         = useRef(null);
   const messagesContRef  = useRef(null);
   const messageRefs      = useRef({});
-  // Keep activeConvId in a ref so socket listeners always get the current value
   const activeConvIdRef  = useRef(activeConvId);
   useEffect(() => { activeConvIdRef.current = activeConvId; }, [activeConvId]);
 
@@ -254,7 +321,7 @@ const Chat = () => {
     };
   }, [socketConnected]);
 
-  // Mark message as read when received via socket while conversation is open
+  // Auto-mark received messages as read when conversation is open
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
@@ -469,8 +536,6 @@ const Chat = () => {
     setShowAttach(false);
   }, []);
 
-  // FIX: After successful upload, reset progress AND refresh the conversation
-  // so the last message preview in the sidebar updates immediately.
   const handleConfirmSend = useCallback(async (caption) => {
     if (!pendingFiles || !activeConvId) return;
 
@@ -502,13 +567,10 @@ const Chat = () => {
         }));
       }
     } finally {
-      // Always clean up, even on error
       setPendingFiles(null);
       setReplyTo(null);
       dispatch(resetUploadProgress());
-      // FIX: Refresh conversations so lastMessage preview updates in sidebar
       dispatch(fetchConversations());
-      // FIX: Refresh single conversation to keep Redux store in sync
       dispatch(fetchConversation(activeConvId));
     }
   }, [pendingFiles, activeConvId, replyTo, dispatch]);
@@ -606,8 +668,15 @@ const Chat = () => {
     dispatch(pinMessage({ conversationId: activeConvId, messageId, pin }));
   }, [dispatch, activeConvId]);
 
+  // FIX #10: Open async confirm dialog instead of window.confirm
   const handleDelete = useCallback((messageId) => {
-    if (!window.confirm('Delete this message for everyone?')) return;
+    setDeleteConfirm({ open: true, messageId });
+  }, []);
+
+  const confirmDelete = useCallback(() => {
+    const { messageId } = deleteConfirm;
+    setDeleteConfirm({ open: false, messageId: null });
+    if (!messageId) return;
     const socket = getSocket();
     if (socket?.connected) {
       socket.emit('message:delete', { messageId, scope: 'deleted_for_everyone' });
@@ -618,7 +687,11 @@ const Chat = () => {
         scope: 'deleted_for_everyone',
       }));
     }
-  }, [dispatch, activeConvId]);
+  }, [deleteConfirm, dispatch, activeConvId]);
+
+  const cancelDelete = useCallback(() => {
+    setDeleteConfirm({ open: false, messageId: null });
+  }, []);
 
   const handleEdit = useCallback((msg) => {
     setEditingMsg(msg);
@@ -726,9 +799,6 @@ const Chat = () => {
   }, [activeCall, incomingCall, dispatch]);
 
   // ── Start chat with partner ────────────────────────────────────────────────
-  // FIX: After createConversation, must await fetchConversation(id) before
-  // calling setActiveConversation — otherwise the conversation object is not
-  // in the Redux store yet, causing a blank chat view.
   const handleStartChatWithPartner = useCallback(async (user) => {
     const existing = conversations.find((c) =>
       c.type === 'direct' &&
@@ -746,7 +816,6 @@ const Chat = () => {
         }));
         const newConvId = result?.payload?.conversation?._id;
         if (newConvId) {
-          // FIX: Load the conversation into Redux BEFORE activating it
           await dispatch(fetchConversation(newConvId));
           dispatch(setActiveConversation(newConvId));
           dispatch(fetchConversations());
@@ -761,6 +830,21 @@ const Chat = () => {
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--base-200)' }}>
+
+      {/* FIX #10: Async delete confirm — replaces window.confirm */}
+      <AnimatePresence>
+        {deleteConfirm.open && (
+          <ConfirmDialog
+            open={deleteConfirm.open}
+            title="Delete Message"
+            message="Delete this message for everyone? This cannot be undone."
+            confirmLabel="Delete"
+            danger
+            onConfirm={confirmDelete}
+            onCancel={cancelDelete}
+          />
+        )}
+      </AnimatePresence>
 
       {/* ── Call Screen ──────────────────────────────────────────────────── */}
       <AnimatePresence>
@@ -1349,7 +1433,7 @@ const Chat = () => {
               )}
             </AnimatePresence>
 
-            {/* ── Upload progress (inline, outside modal) ────────────────── */}
+            {/* ── Upload progress ────────────────────────────────────────── */}
             {uploadProgress > 0 && uploadProgress < 100 && (
               <div className="mx-3 mb-1.5">
                 <div className="h-1 rounded-full overflow-hidden" style={{ background: 'var(--base-300)' }}>
@@ -1380,8 +1464,6 @@ const Chat = () => {
             )}
 
             {/* ── Input bar ──────────────────────────────────────────────── */}
-            {/* FIX: z-20 creates a proper stacking context so attach menu (z-30)
-                and emoji picker (z-40) render above the messages scroll area   */}
             <div
               className="px-2 py-2 flex items-end gap-2 relative shrink-0 z-20"
               style={{ background: 'var(--base-100)', borderTop: '1px solid var(--base-300)' }}

@@ -2,14 +2,15 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ScanLine, FileCheck2, HeartPulse, ShieldCheck,
   Upload, CheckCircle2, Clock, XCircle, AlertTriangle,
   ChevronRight, Eye, Trash2, FileText, Camera, RefreshCw,
   BadgeCheck, Shield, Stethoscope, Car, Loader2, X,
-  ArrowRight, CalendarDays, Hash, BookOpen, Award,
-  Info, AlertCircle, HelpCircle
+  ArrowRight, ArrowLeft, CalendarDays, Hash, BookOpen, Award,
+  Info, AlertCircle, HelpCircle,
 } from 'lucide-react';
 
 import {
@@ -24,18 +25,19 @@ import {
 
 import {
   uploadSingleFile,
-  resetUploadState,
 } from '@/store/slices/uploadSlice';
+
+import Container from '@/components/ui/Container';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TABS = [
-  { id: 'status',  label: 'KYC Status',       icon: ScanLine,    route: '/partner/solo/kyc'         },
-  { id: 'submit',  label: 'Submit Documents',  icon: FileCheck2,  route: '/partner/solo/kyc/submit'  },
-  { id: 'medical', label: 'Medical Fitness',   icon: HeartPulse,  route: '/partner/solo/kyc/medical' },
-  { id: 'psv',     label: 'PSV Badge',         icon: ShieldCheck, route: '/partner/solo/kyc/psv'     },
+  { id: 'status',  label: 'KYC Status',       icon: ScanLine    },
+  { id: 'submit',  label: 'Submit Documents',  icon: FileCheck2  },
+  { id: 'medical', label: 'Medical Fitness',   icon: HeartPulse  },
+  { id: 'psv',     label: 'PSV Badge',         icon: ShieldCheck },
 ];
 
 const STATUS_CONFIG = {
@@ -77,14 +79,14 @@ const STATUS_CONFIG = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SHARED: InputNote — small helper text below inputs
+// InputNote — small helper text below inputs
 // ─────────────────────────────────────────────────────────────────────────────
 
 function InputNote({ children, variant = 'info' }) {
   const styles = {
-    info:    { icon: Info,         cls: 'text-info/70'    },
+    info:    { icon: Info,          cls: 'text-info/70'    },
     warning: { icon: AlertTriangle, cls: 'text-warning/80' },
-    tip:     { icon: HelpCircle,   cls: 'text-primary/60' },
+    tip:     { icon: HelpCircle,    cls: 'text-primary/60' },
   };
   const { icon: Icon, cls } = styles[variant] || styles.info;
 
@@ -97,12 +99,12 @@ function InputNote({ children, variant = 'info' }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UTILITY: File Uploader Component
+// FileUploader
 // ─────────────────────────────────────────────────────────────────────────────
 
 function FileUploader({ label, value, onChange, folder, accept = 'image/*,.pdf', hint, note }) {
   const dispatch    = useDispatch();
-  const isUploading = useSelector((s) => s.upload.isUploading);
+  const isUploading = useSelector((s) => s.upload?.isUploading ?? false);
   const inputRef    = useRef(null);
   const [preview,  setPreview]  = useState(null);
   const [dragOver, setDragOver] = useState(false);
@@ -141,8 +143,6 @@ function FileUploader({ label, value, onChange, folder, accept = 'image/*,.pdf',
   return (
     <div className="space-y-1.5">
       <label className="text-sm font-semibold text-base-content/80">{label}</label>
-
-      {/* Drop Zone */}
       <div
         onClick={() => !value && inputRef.current?.click()}
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -153,7 +153,7 @@ function FileUploader({ label, value, onChange, folder, accept = 'image/*,.pdf',
             ? 'border-primary bg-primary/5 scale-[1.01]'
             : value
               ? 'border-success/50 bg-success/5'
-              : 'border-base-300 hover:border-primary/50 hover:bg-primary/3'
+              : 'border-base-300 hover:border-primary/50 hover:bg-primary/5'
           }`}
         style={{ minHeight: 120 }}
       >
@@ -184,7 +184,6 @@ function FileUploader({ label, value, onChange, folder, accept = 'image/*,.pdf',
                 </p>
               </div>
             )}
-            {/* Overlay actions */}
             <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
               <button
                 type="button"
@@ -232,24 +231,22 @@ function FileUploader({ label, value, onChange, folder, accept = 'image/*,.pdf',
           onChange={(e) => handleFile(e.target.files?.[0])}
         />
       </div>
-
-      {/* Upload note */}
       {note && <InputNote variant="tip">{note}</InputNote>}
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SHARED: Section wrapper
+// Section wrapper
 // ─────────────────────────────────────────────────────────────────────────────
 
 function Section({ icon: Icon, title, subtitle, color = 'primary', children }) {
   const colorMap = {
-    primary: { ring: 'ring-primary/20',  bg: 'bg-primary/8',  text: 'text-primary',  border: 'border-primary/20'  },
-    info:    { ring: 'ring-info/20',     bg: 'bg-info/8',     text: 'text-info',     border: 'border-info/20'     },
-    accent:  { ring: 'ring-accent/20',   bg: 'bg-accent/8',   text: 'text-accent',   border: 'border-accent/20'   },
-    success: { ring: 'ring-success/20',  bg: 'bg-success/8',  text: 'text-success',  border: 'border-success/20'  },
-    warning: { ring: 'ring-warning/20',  bg: 'bg-warning/8',  text: 'text-warning',  border: 'border-warning/20'  },
+    primary: { ring: 'ring-primary/20',  bg: 'bg-primary/10',  text: 'text-primary',  border: 'border-primary/20'  },
+    info:    { ring: 'ring-info/20',     bg: 'bg-info/10',     text: 'text-info',     border: 'border-info/20'     },
+    accent:  { ring: 'ring-accent/20',   bg: 'bg-accent/10',   text: 'text-accent',   border: 'border-accent/20'   },
+    success: { ring: 'ring-success/20',  bg: 'bg-success/10',  text: 'text-success',  border: 'border-success/20'  },
+    warning: { ring: 'ring-warning/20',  bg: 'bg-warning/10',  text: 'text-warning',  border: 'border-warning/20'  },
   };
   const c = colorMap[color] || colorMap.primary;
 
@@ -270,7 +267,7 @@ function Section({ icon: Icon, title, subtitle, color = 'primary', children }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SHARED: Field wrapper
+// Field wrapper
 // ─────────────────────────────────────────────────────────────────────────────
 
 function Field({ label, children, note, noteVariant = 'info' }) {
@@ -284,7 +281,7 @@ function Field({ label, children, note, noteVariant = 'info' }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SHARED: Submit Button
+// Submit Button
 // ─────────────────────────────────────────────────────────────────────────────
 
 function SubmitButton({ loading, label }) {
@@ -315,6 +312,7 @@ function SubmitButton({ loading, label }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function KycStatusTab({ kyc }) {
+  // kyc state shape from GET /kyc: { kyc: soloKycSchema, medicalFitness, profileCompletionPercent, onboarding, partnershipStatus }
   const kycData = kyc?.kyc || {};
   const medical = kyc?.medicalFitness || {};
 
@@ -343,7 +341,7 @@ function KycStatusTab({ kyc }) {
           : 'not-submitted',
       detail: kycData.aadhaarLast4
         ? `XXXX XXXX ${kycData.aadhaarLast4}`
-        : 'Not submitted yet',
+        : kycData.maskedAadhaar || 'Not submitted yet',
     },
     {
       label:  'PAN Card',
@@ -408,9 +406,7 @@ function KycStatusTab({ kyc }) {
             <p className="text-xs text-base-content/40 mt-0.5">
               Submitted{' '}
               {new Date(kycData.submittedAt).toLocaleDateString('en-IN', {
-                day:   '2-digit',
-                month: 'short',
-                year:  'numeric',
+                day: '2-digit', month: 'short', year: 'numeric',
               })}
             </p>
           )}
@@ -445,6 +441,17 @@ function KycStatusTab({ kyc }) {
         </InputNote>
       </div>
 
+      {/* Partnership status callout */}
+      {kyc?.partnershipStatus && (
+        <div className="rounded-xl bg-primary/5 border border-primary/20 p-3 flex gap-2 items-center">
+          <BadgeCheck size={15} className="text-primary shrink-0" />
+          <p className="text-xs text-base-content/60">
+            Partnership status: <span className="font-bold capitalize text-primary">{kyc.partnershipStatus}</span>
+            {kyc.onboarding?.isComplete ? ' · Onboarding complete' : ' · Onboarding pending'}
+          </p>
+        </div>
+      )}
+
       {/* Document Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {docs.map((doc, i) => {
@@ -459,9 +466,7 @@ function KycStatusTab({ kyc }) {
               transition={{ delay: i * 0.07 }}
               className={`rounded-xl border p-4 flex items-start gap-3 ${sc.bg} ${sc.border} transition-all`}
             >
-              <div
-                className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${sc.bg} border ${sc.border}`}
-              >
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${sc.bg} border ${sc.border}`}>
                 <DocIcon size={18} className={sc.color} />
               </div>
               <div className="flex-1 min-w-0">
@@ -479,7 +484,7 @@ function KycStatusTab({ kyc }) {
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="rounded-xl bg-error/8 border border-error/30 p-4 flex gap-3"
+          className="rounded-xl bg-error/10 border border-error/30 p-4 flex gap-3"
         >
           <AlertTriangle size={18} className="text-error shrink-0 mt-0.5" />
           <div>
@@ -494,12 +499,16 @@ function KycStatusTab({ kyc }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TAB: SUBMIT KYC DOCUMENTS
+// POST /kyc — fields: drivingLicenceNumber, drivingLicenceExpiry, drivingLicenceDocUrl,
+//             licenceClass, aadhaarNumber, aadhaarFrontUrl, aadhaarBackUrl,
+//             panNumber, panCardUrl
 // ─────────────────────────────────────────────────────────────────────────────
 
 function SubmitKycTab({ kyc, onSuccess }) {
   const dispatch     = useDispatch();
   const isSubmitting = useSelector(selectLoading('submitKyc'));
 
+  // Pre-fill from existing kyc data (route returns masked data)
   const kd = kyc?.kyc || {};
 
   const [form, setForm] = useState({
@@ -516,8 +525,8 @@ function SubmitKycTab({ kyc, onSuccess }) {
     panCardUrl:           kd.panCardUrl || '',
   });
 
-  const set      = (k) => (v)  => setForm((p) => ({ ...p, [k]: v }));
-  const setInput = (k) => (e)  => setForm((p) => ({ ...p, [k]: e.target.value }));
+  const set      = (k) => (v) => setForm((p) => ({ ...p, [k]: v }));
+  const setInput = (k) => (e) => setForm((p) => ({ ...p, [k]: e.target.value }));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -532,16 +541,28 @@ function SubmitKycTab({ kyc, onSuccess }) {
     if (submitKyc.fulfilled.match(result)) onSuccess?.();
   };
 
+  // Block re-submission if already verified
+  const isVerified = kd.verificationStatus === 'verified';
+
   return (
     <form onSubmit={handleSubmit} className="space-y-8">
 
+      {isVerified && (
+        <div className="rounded-xl bg-success/10 border border-success/30 p-4 flex gap-3">
+          <CheckCircle2 size={16} className="text-success shrink-0 mt-0.5" />
+          <p className="text-sm text-base-content/70">
+            KYC already <strong className="text-success">verified</strong>. Contact support to make changes.
+          </p>
+        </div>
+      )}
+
       {/* ── Driving Licence ── */}
-      <Section icon={Car} title="Driving Licence" subtitle="Required for commercial operation in India" color="primary">
+      <Section icon={Car} title="Driving Licence" subtitle="Required for commercial vehicle operation in India" color="primary">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
 
           <Field
             label="DL Number *"
-            note="Enter exactly as printed on your licence — e.g. AP15 20210012345. No spaces."
+            note="Enter exactly as printed on your licence — e.g. AP15 20210012345. No spaces or hyphens."
           >
             <input
               className="input-field w-full font-mono uppercase tracking-widest"
@@ -550,12 +571,13 @@ function SubmitKycTab({ kyc, onSuccess }) {
               onChange={setInput('drivingLicenceNumber')}
               maxLength={20}
               required
+              disabled={isVerified}
             />
           </Field>
 
           <Field
             label="DL Expiry Date *"
-            note="Your licence must be valid for at least 90 days from today to qualify."
+            note="Licence must be valid for at least 90 days from today to qualify for activation."
             noteVariant="warning"
           >
             <input
@@ -564,6 +586,7 @@ function SubmitKycTab({ kyc, onSuccess }) {
               value={form.drivingLicenceExpiry}
               onChange={setInput('drivingLicenceExpiry')}
               required
+              disabled={isVerified}
             />
           </Field>
 
@@ -577,6 +600,7 @@ function SubmitKycTab({ kyc, onSuccess }) {
               placeholder="LMV, Transport"
               value={form.licenceClass}
               onChange={setInput('licenceClass')}
+              disabled={isVerified}
             />
           </Field>
 
@@ -589,7 +613,7 @@ function SubmitKycTab({ kyc, onSuccess }) {
           folder="kyc/dl"
           accept="image/*,.pdf"
           hint="Front side · JPG, PNG or PDF · max 5 MB"
-          note="Upload the front page of your DL clearly showing your name, photo, and validity dates. File size must be under 5 MB."
+          note="Upload the front page of your DL clearly showing your name, photo, and validity dates. Max file size: 5 MB."
         />
       </Section>
 
@@ -599,7 +623,7 @@ function SubmitKycTab({ kyc, onSuccess }) {
 
           <Field
             label="Aadhaar Number"
-            note="Your 12-digit Aadhaar number. We store only the last 4 digits for your privacy."
+            note="Your 12-digit Aadhaar number. Only last 4 digits are stored — rest are masked for your privacy."
             noteVariant="info"
           >
             <input
@@ -610,6 +634,7 @@ function SubmitKycTab({ kyc, onSuccess }) {
               pattern="[0-9]{12}"
               value={form.aadhaarNumber}
               onChange={setInput('aadhaarNumber')}
+              disabled={isVerified}
             />
           </Field>
 
@@ -622,7 +647,7 @@ function SubmitKycTab({ kyc, onSuccess }) {
             onChange={set('aadhaarFrontUrl')}
             folder="kyc/aadhaar"
             hint="Front side — name, DOB & photo visible"
-            note="Ensure your name and photo are clearly visible. Masked Aadhaar (last 4 digits) is also accepted."
+            note="Your name, photo and date of birth must be clearly visible. Masked Aadhaar (last 4 digits) accepted."
           />
           <FileUploader
             label="Aadhaar Back *"
@@ -630,7 +655,7 @@ function SubmitKycTab({ kyc, onSuccess }) {
             onChange={set('aadhaarBackUrl')}
             folder="kyc/aadhaar"
             hint="Back side — address visible"
-            note="The back side must show your complete address without any blurring or folding."
+            note="Full address must be visible without blurring, folding, or cropping."
           />
         </div>
       </Section>
@@ -641,7 +666,7 @@ function SubmitKycTab({ kyc, onSuccess }) {
 
           <Field
             label="PAN Number"
-            note="10-character alphanumeric PAN — e.g. ABCDE1234F. Must match the document uploaded below."
+            note="10-character alphanumeric PAN — e.g. ABCDE1234F. Must exactly match the uploaded document."
           >
             <input
               className="input-field w-full font-mono uppercase tracking-widest"
@@ -651,6 +676,7 @@ function SubmitKycTab({ kyc, onSuccess }) {
               title="Valid PAN format: 5 letters, 4 digits, 1 letter (e.g. ABCDE1234F)"
               value={form.panNumber}
               onChange={(e) => setForm((p) => ({ ...p, panNumber: e.target.value.toUpperCase() }))}
+              disabled={isVerified}
             />
           </Field>
 
@@ -662,34 +688,36 @@ function SubmitKycTab({ kyc, onSuccess }) {
           onChange={set('panCardUrl')}
           folder="kyc/pan"
           hint="Clear photo or scan of your PAN card"
-          note="Both the front face and all 4 edges of the card must be visible. Laminated card scans are acceptable."
+          note="All 4 edges and the full front face of the card must be visible. Laminated scans are acceptable."
         />
       </Section>
 
       {/* Info callout */}
-      <div className="rounded-xl bg-info/8 border border-info/25 p-4 flex gap-3">
+      <div className="rounded-xl bg-info/10 border border-info/25 p-4 flex gap-3">
         <Info size={16} className="text-info shrink-0 mt-0.5" />
         <div className="space-y-1">
           <p className="text-xs font-bold text-base-content">What happens after submission?</p>
           <p className="text-xs text-base-content/55 leading-relaxed">
-            Our compliance team reviews documents within <strong>1–2 business days</strong>. You'll receive
+            Our compliance team reviews documents within <strong>1–2 business days</strong>. You will receive
             an in-app notification once verification is complete. Rejected documents can be resubmitted
             with corrections at any time.
           </p>
         </div>
       </div>
 
-      <SubmitButton loading={isSubmitting} label="Submit KYC Documents" />
+      {!isVerified && <SubmitButton loading={isSubmitting} label="Submit KYC Documents" />}
     </form>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TAB: MEDICAL FITNESS
+// POST /kyc/medical — fields: certificateNumber, issuedBy, issuedAt, expiryDate, documentUrl, bloodGroup
 // ─────────────────────────────────────────────────────────────────────────────
 
 function MedicalTab({ kyc, onSuccess }) {
   const dispatch     = useDispatch();
+  // selectLoading('submitMedical') maps to loading.submitMedical in slice
   const isSubmitting = useSelector(selectLoading('submitMedical'));
   const med          = kyc?.medicalFitness || {};
 
@@ -709,6 +737,7 @@ function MedicalTab({ kyc, onSuccess }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    // submitMedicalFitness dispatches POST /kyc/medical
     const result = await dispatch(submitMedicalFitness(form));
     if (submitMedicalFitness.fulfilled.match(result)) onSuccess?.();
   };
@@ -718,14 +747,14 @@ function MedicalTab({ kyc, onSuccess }) {
       <Section
         icon={Stethoscope}
         title="Medical Fitness Certificate"
-        subtitle="Required for commercial driving — must be valid and current"
+        subtitle="Required for commercial driving — must be valid and issued by registered medical practitioner"
         color="success"
       >
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
 
           <Field
             label="Certificate Number"
-            note="Unique certificate ID printed on the document — e.g. MFC/2024/001234."
+            note="Unique certificate ID printed on the document — e.g. MFC/2024/001234. Leave blank if not printed."
           >
             <input
               className="input-field w-full font-mono"
@@ -737,7 +766,7 @@ function MedicalTab({ kyc, onSuccess }) {
 
           <Field
             label="Issued By"
-            note="Full name of the registered hospital or licensed medical officer who issued this certificate."
+            note="Full name of the registered hospital or licensed medical officer (MBBS or above) who issued this certificate."
           >
             <input
               className="input-field w-full"
@@ -749,7 +778,7 @@ function MedicalTab({ kyc, onSuccess }) {
 
           <Field
             label="Issue Date"
-            note="The date this certificate was signed and stamped by the issuing authority."
+            note="The date this certificate was signed and officially stamped by the issuing authority."
           >
             <input
               type="date"
@@ -761,7 +790,7 @@ function MedicalTab({ kyc, onSuccess }) {
 
           <Field
             label="Expiry Date *"
-            note="Medical fitness certificates are typically valid for 1 year. An expired certificate will be rejected."
+            note="Medical fitness certificates are typically valid for 1 year. Expired certificates will be rejected."
             noteVariant="warning"
           >
             <input
@@ -795,29 +824,29 @@ function MedicalTab({ kyc, onSuccess }) {
             ))}
           </div>
           <InputNote variant="info">
-            Select your blood group as shown in the medical certificate or your Aadhaar card.
+            Select your blood group as shown in the medical certificate or Aadhaar card.
             Choose "Unknown" if not stated — you can update this later.
           </InputNote>
         </div>
 
         <FileUploader
-          label="Medical Fitness Certificate *"
+          label="Medical Fitness Certificate Document *"
           value={form.documentUrl}
           onChange={set('documentUrl')}
           folder="kyc/medical"
           accept="image/*,.pdf"
           hint="Signed & stamped certificate · JPG, PNG or PDF"
-          note="The certificate must bear the doctor's stamp, registration number, and signature. Photocopies without an official seal are not accepted."
+          note="Certificate must bear the doctor's stamp, registration number, and signature. Photocopies without official seal are not accepted."
         />
       </Section>
 
-      {/* Requirement callout */}
-      <div className="rounded-xl bg-success/8 border border-success/25 p-4 flex gap-3">
+      {/* Requirements callout */}
+      <div className="rounded-xl bg-success/10 border border-success/25 p-4 flex gap-3">
         <CheckCircle2 size={16} className="text-success shrink-0 mt-0.5" />
         <div className="space-y-1">
           <p className="text-xs font-bold text-base-content">Medical fitness requirements</p>
           <p className="text-xs text-base-content/55 leading-relaxed">
-            The certificate must be issued by a <strong>registered medical practitioner (MBBS or above)</strong>{' '}
+            Certificate must be issued by a <strong>registered medical practitioner (MBBS or above)</strong>{' '}
             and cover fitness for commercial vehicle operation as per Motor Vehicles Act, 1988.
             Certificates older than 12 months will not be accepted.
           </p>
@@ -831,10 +860,12 @@ function MedicalTab({ kyc, onSuccess }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TAB: PSV BADGE
+// POST /kyc/psv — fields: psvBadgeNumber, psvBadgeExpiry, psvBadgeDocUrl
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PsvTab({ kyc, onSuccess }) {
   const dispatch     = useDispatch();
+  // selectLoading('submitPsv') maps to loading.submitPsv in slice
   const isSubmitting = useSelector(selectLoading('submitPsv'));
   const kd           = kyc?.kyc || {};
 
@@ -849,6 +880,7 @@ function PsvTab({ kyc, onSuccess }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    // submitPsvBadge dispatches POST /kyc/psv
     const result = await dispatch(submitPsvBadge(form));
     if (submitPsvBadge.fulfilled.match(result)) onSuccess?.();
   };
@@ -858,14 +890,14 @@ function PsvTab({ kyc, onSuccess }) {
       <Section
         icon={Award}
         title="PSV Badge"
-        subtitle="Public Service Vehicle badge — mandatory for passenger transport"
+        subtitle="Public Service Vehicle badge — mandatory for passenger transport operations"
         color="warning"
       >
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
 
           <Field
             label="PSV Badge Number *"
-            note="Unique badge ID issued by your Regional Transport Office — e.g. PSV/AP/2024/001. Enter exactly as printed."
+            note="Unique badge ID issued by your Regional Transport Office (RTO) — e.g. PSV/AP/2024/001. Enter exactly as printed."
           >
             <input
               className="input-field w-full font-mono uppercase tracking-widest"
@@ -878,7 +910,7 @@ function PsvTab({ kyc, onSuccess }) {
 
           <Field
             label="Expiry Date *"
-            note="PSV badges are typically valid for 3 years. A badge expiring within 30 days may affect activation."
+            note="PSV badges are typically valid for 3 years. A badge expiring within 30 days may delay account activation."
             noteVariant="warning"
           >
             <input
@@ -903,7 +935,7 @@ function PsvTab({ kyc, onSuccess }) {
         />
 
         {/* RTA warning */}
-        <div className="rounded-xl bg-warning/8 border border-warning/30 p-4 flex gap-3">
+        <div className="rounded-xl bg-warning/10 border border-warning/30 p-4 flex gap-3">
           <AlertTriangle size={16} className="text-warning shrink-0 mt-0.5" />
           <p className="text-xs text-base-content/60 leading-relaxed">
             The PSV badge must be issued by the <strong>Regional Transport Authority (RTA)</strong> and be
@@ -912,8 +944,8 @@ function PsvTab({ kyc, onSuccess }) {
           </p>
         </div>
 
-        {/* How to obtain note */}
-        <div className="rounded-xl bg-info/8 border border-info/25 p-4 flex gap-3">
+        {/* How to obtain */}
+        <div className="rounded-xl bg-info/10 border border-info/25 p-4 flex gap-3">
           <Info size={16} className="text-info shrink-0 mt-0.5" />
           <div className="space-y-1">
             <p className="text-xs font-bold text-base-content">Don't have a PSV badge yet?</p>
@@ -962,7 +994,14 @@ function SuccessOverlay({ message, onClose }) {
 
 export default function KycVerificationPage({ defaultTab = 'status', onTabChange }) {
   const dispatch  = useDispatch();
+  const router    = useRouter();
+
+  // selectKyc returns state.soloDriver.kyc
+  // which is populated by fetchKycStatus → GET /kyc
+  // shape: { kyc: soloKycSchema, medicalFitness, profileCompletionPercent, onboarding, partnershipStatus }
   const kyc       = useSelector(selectKyc);
+
+  // selectLoading('kyc') returns state.soloDriver.loading.kyc
   const isLoading = useSelector(selectLoading('kyc'));
 
   const [activeTab,  setActiveTab]  = useState(defaultTab);
@@ -979,6 +1018,7 @@ export default function KycVerificationPage({ defaultTab = 'status', onTabChange
 
   const handleSuccess = (msg) => {
     setSuccessMsg(msg);
+    // Refresh KYC status after submission
     dispatch(fetchKycStatus());
     setTimeout(() => setSuccessMsg(null), 4000);
   };
@@ -997,116 +1037,131 @@ export default function KycVerificationPage({ defaultTab = 'status', onTabChange
         <SuccessOverlay message={successMsg} onClose={() => setSuccessMsg(null)} />
       )}
 
-      {/* ── Page Header ── */}
-      <div className="px-4 sm:px-6 pt-6 pb-0">
-        <motion.div
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6"
-        >
-          <div className="flex items-center gap-3">
-            <div
-              className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0"
-              style={{ background: 'linear-gradient(135deg, var(--primary), var(--secondary))' }}
-            >
-              <BadgeCheck size={22} className="text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-black text-base-content tracking-tight">
-                KYC &amp; Verification
-              </h1>
-              <p className="text-xs text-base-content/50">
-                Upload and track your compliance documents
-              </p>
-            </div>
-          </div>
-
-          {/* Current Status Badge */}
-          <div
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl border ${sc.bg} ${sc.border} self-start sm:self-auto`}
+      <Container>
+        {/* ── Back Button ── */}
+        <div className="pt-5 pb-0">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="flex items-center gap-2 text-sm font-semibold text-base-content/60 hover:text-primary transition-colors duration-200 group"
           >
-            <StatusIcon size={14} className={sc.color} />
-            <span className={`text-xs font-bold ${sc.color}`}>{sc.label}</span>
-          </div>
-        </motion.div>
+            <ArrowLeft
+              size={16}
+              className="group-hover:-translate-x-0.5 transition-transform duration-200"
+            />
+            <span>Back</span>
+          </button>
+        </div>
 
-        {/* ── Tabs ── */}
-        <div className="flex gap-1 overflow-x-auto pb-0 scrollbar-none">
-          {TABS.map((tab) => {
-            const Icon     = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <motion.button
-                key={tab.id}
-                onClick={() => handleTabChange(tab.id)}
-                whileTap={{ scale: 0.96 }}
-                className={`relative flex items-center gap-2 px-4 py-3 rounded-t-xl text-sm font-bold whitespace-nowrap transition-all duration-200 flex-shrink-0
-                  ${isActive
-                    ? 'text-primary bg-base-100 border border-b-0 border-base-300'
-                    : 'text-base-content/50 hover:text-base-content hover:bg-base-200/60 border border-transparent'
-                  }`}
+        {/* ── Page Header ── */}
+        <div className="pt-4 pb-0">
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6"
+          >
+            <div className="flex items-center gap-3">
+              <div
+                className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0"
+                style={{ background: 'linear-gradient(135deg, var(--primary), var(--secondary))' }}
               >
-                <Icon size={15} />
-                <span>{tab.label}</span>
-                {isActive && (
-                  <motion.div
-                    layoutId="active-tab-indicator"
-                    className="absolute bottom-0 left-3 right-3 h-0.5 rounded-full"
-                    style={{ background: 'var(--primary)' }}
+                <BadgeCheck size={22} className="text-white" />
+              </div>
+              <div>
+                <h1 className="text-xl font-black text-base-content tracking-tight">
+                  KYC &amp; Verification
+                </h1>
+                <p className="text-xs text-base-content/50">
+                  Upload and track your compliance documents
+                </p>
+              </div>
+            </div>
+
+            {/* Current Status Badge */}
+            <div
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl border ${sc.bg} ${sc.border} self-start sm:self-auto`}
+            >
+              <StatusIcon size={14} className={sc.color} />
+              <span className={`text-xs font-bold ${sc.color}`}>{sc.label}</span>
+            </div>
+          </motion.div>
+
+          {/* ── Tabs ── */}
+          <div className="flex gap-1 overflow-x-auto pb-0 scrollbar-none">
+            {TABS.map((tab) => {
+              const Icon     = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <motion.button
+                  key={tab.id}
+                  onClick={() => handleTabChange(tab.id)}
+                  whileTap={{ scale: 0.96 }}
+                  className={`relative flex items-center gap-2 px-4 py-3 rounded-t-xl text-sm font-bold whitespace-nowrap transition-all duration-200 flex-shrink-0
+                    ${isActive
+                      ? 'text-primary bg-base-100 border border-b-0 border-base-300'
+                      : 'text-base-content/50 hover:text-base-content hover:bg-base-200/60 border border-transparent'
+                    }`}
+                >
+                  <Icon size={15} />
+                  <span>{tab.label}</span>
+                  {isActive && (
+                    <motion.div
+                      layoutId="active-tab-indicator"
+                      className="absolute bottom-0 left-3 right-3 h-0.5 rounded-full"
+                      style={{ background: 'var(--primary)' }}
+                    />
+                  )}
+                </motion.button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Divider */}
+        <div className="border-t border-base-300" />
+
+        {/* ── Tab Content ── */}
+        <div className="py-6">
+          {isLoading && !kyc ? (
+            <div className="flex flex-col items-center justify-center py-20 gap-4">
+              <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
+              <p className="text-sm text-base-content/50">Loading KYC status…</p>
+            </div>
+          ) : (
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeTab}
+                initial={{ opacity: 0, x: 12 }}
+                animate={{ opacity: 1, x: 0  }}
+                exit={{    opacity: 0, x: -12 }}
+                transition={{ duration: 0.2 }}
+              >
+                {activeTab === 'status'  && (
+                  <KycStatusTab kyc={kyc} />
+                )}
+                {activeTab === 'submit'  && (
+                  <SubmitKycTab
+                    kyc={kyc}
+                    onSuccess={() => handleSuccess('KYC documents submitted successfully!')}
                   />
                 )}
-              </motion.button>
-            );
-          })}
+                {activeTab === 'medical' && (
+                  <MedicalTab
+                    kyc={kyc}
+                    onSuccess={() => handleSuccess('Medical certificate submitted!')}
+                  />
+                )}
+                {activeTab === 'psv'     && (
+                  <PsvTab
+                    kyc={kyc}
+                    onSuccess={() => handleSuccess('PSV badge details submitted!')}
+                  />
+                )}
+              </motion.div>
+            </AnimatePresence>
+          )}
         </div>
-      </div>
-
-      {/* Divider */}
-      <div className="border-t border-base-300" />
-
-      {/* ── Tab Content ── */}
-      <div className="px-4 sm:px-6 py-6">
-        {isLoading && !kyc ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-4">
-            <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
-            <p className="text-sm text-base-content/50">Loading KYC status…</p>
-          </div>
-        ) : (
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, x: 12 }}
-              animate={{ opacity: 1, x: 0  }}
-              exit={{    opacity: 0, x: -12 }}
-              transition={{ duration: 0.2 }}
-            >
-              {activeTab === 'status'  && (
-                <KycStatusTab kyc={kyc} />
-              )}
-              {activeTab === 'submit'  && (
-                <SubmitKycTab
-                  kyc={kyc}
-                  onSuccess={() => handleSuccess('KYC documents submitted successfully!')}
-                />
-              )}
-              {activeTab === 'medical' && (
-                <MedicalTab
-                  kyc={kyc}
-                  onSuccess={() => handleSuccess('Medical certificate submitted!')}
-                />
-              )}
-              {activeTab === 'psv'     && (
-                <PsvTab
-                  kyc={kyc}
-                  onSuccess={() => handleSuccess('PSV badge details submitted!')}
-                />
-              )}
-            </motion.div>
-          </AnimatePresence>
-        )}
-      </div>
+      </Container>
     </div>
   );
 }
-
- 

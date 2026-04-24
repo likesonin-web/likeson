@@ -1,4 +1,3 @@
- 
 import {
   createSlice,
   createAsyncThunk,
@@ -11,17 +10,14 @@ import { io } from "socket.io-client";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CALLMANAGER SINGLETON REGISTRY
-// (module-level, NOT in Redux state — MediaStream/RTCPeerConnection are not serialisable)
 // ─────────────────────────────────────────────────────────────────────────────
 
 let _callManagerInstance = null;
 
-/** Register the CallManager singleton after creating it. */
 export function setCallManager(instance) {
   _callManagerInstance = instance;
 }
 
-/** Retrieve the CallManager singleton from anywhere (no prop-drilling). */
 export function getCallManager() {
   return _callManagerInstance;
 }
@@ -70,21 +66,19 @@ function withGuard(loadingKey) {
   };
 }
 
+// FIX #13: Normalise any conversationId value (ObjectId object, string, or plain id)
+// to a plain string so it always matches state keys without mismatch.
+function toStringId(id) {
+  if (!id) return null;
+  if (typeof id === 'string') return id;
+  if (typeof id === 'object' && id._id) return String(id._id);
+  return String(id);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ASYNC THUNKS — SOCKET
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * connectSocket
- * Registers ALL server→client socket events emitted by socket.js.
- *
- * NOTE ON CALL EVENTS:
- * These reducers update ONLY the UI-relevant parts of state (who is calling,
- * call type, status, peer name/avatar, media toggle flags).
- * The actual WebRTC signalling (SDP, ICE) is handled entirely by CallManager.
- * CallManager registers its own socket listeners independently — do NOT remove
- * the call:* events from here; both listeners coexist and handle different concerns.
- */
 export const connectSocket = createAsyncThunk(
   "chat/connectSocket",
   async (token, { dispatch, rejectWithValue }) => {
@@ -100,12 +94,10 @@ export const connectSocket = createAsyncThunk(
         timeout:              20000,
       });
 
-      // ── Connection lifecycle ──────────────────────────────────────────────
       _socket.on("connect",       ()  => dispatch(socketConnected()));
       _socket.on("disconnect",    (r) => dispatch(socketDisconnected(r)));
       _socket.on("connect_error", (e) => dispatch(socketError(e.message)));
 
-      // ── Conversation events ───────────────────────────────────────────────
       _socket.on("conversation:created",          (p) => dispatch(_onConversationCreated(p)));
       _socket.on("conversation:updated",          (p) => dispatch(_onConversationUpdated(p)));
       _socket.on("conversation:deleted",          (p) => dispatch(_onConversationDeleted(p)));
@@ -116,7 +108,6 @@ export const connectSocket = createAsyncThunk(
       _socket.on("conversation:you_were_removed", (p) => dispatch(_onRemovedFromConversation(p)));
       _socket.on("conversation:mute_updated",     (p) => dispatch(_onConversationMuteUpdated(p)));
 
-      // ── Message events ────────────────────────────────────────────────────
       _socket.on("message:new",              (p) => dispatch(_onNewMessage(p)));
       _socket.on("message:edited",           (p) => dispatch(_onMessageEdited(p)));
       _socket.on("message:deleted",          (p) => dispatch(_onMessageDeleted(p)));
@@ -126,20 +117,12 @@ export const connectSocket = createAsyncThunk(
       _socket.on("message:delivery_receipt", (p) => dispatch(_onDeliveryReceipt(p)));
       _socket.on("message:read_receipt",     (p) => dispatch(_onReadReceipt(p)));
 
-      // ── Typing ────────────────────────────────────────────────────────────
       _socket.on("typing:update", (p) => dispatch(_onTypingUpdate(p)));
 
-      // ── Call events ───────────────────────────────────────────────────────
-      // Redux slice updates UI state only.
-      // CallManager (callEvents.js) handles the WebRTC signalling side.
-      // Both listeners are active simultaneously — this is intentional.
       _socket.on("call:incoming",            (p) => dispatch(_onCallIncoming(p)));
       _socket.on("call:ringing",             (p) => dispatch(_onCallRinging(p)));
-      // call:offer    — Redux just marks offer arrived; CallManager does setRemoteDescription
       _socket.on("call:offer",               (p) => dispatch(_onCallOffer(p)));
-      // call:answered — Redux updates status; CallManager does setRemoteDescription
       _socket.on("call:answered",            (p) => dispatch(_onCallAnswered(p)));
-      // call:ice      — Redux is a NO-OP; CallManager._onIce handles addIceCandidate
       _socket.on("call:ice",                 (p) => dispatch(_onCallIce(p)));
       _socket.on("call:media_toggle",        (p) => dispatch(_onCallMediaToggle(p)));
       _socket.on("call:ended",               (p) => dispatch(_onCallEnded(p)));
@@ -148,11 +131,9 @@ export const connectSocket = createAsyncThunk(
       _socket.on("call:peer_disconnected",   (p) => dispatch(_onCallPeerDisconnected(p)));
       _socket.on("call:missed_while_offline",(p) => dispatch(_onCallMissedWhileOffline(p)));
 
-      // ── Presence ──────────────────────────────────────────────────────────
       _socket.on("user:online",  (p) => dispatch(_onUserOnline(p)));
       _socket.on("user:offline", (p) => dispatch(_onUserOffline(p)));
 
-      // ── Notifications ─────────────────────────────────────────────────────
       _socket.on("notification:message", (p) => dispatch(_onNotification(p)));
       _socket.on("notification:mention",  (p) => dispatch(_onMention(p)));
 
@@ -165,7 +146,6 @@ export const connectSocket = createAsyncThunk(
 export const disconnectSocket = createAsyncThunk(
   "chat/disconnectSocket",
   async (_, { dispatch }) => {
-    // Destroy CallManager before disconnecting socket
     const cm = getCallManager();
     if (cm) {
       cm.destroy();
@@ -600,8 +580,6 @@ export const cancelScheduledMessage = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ASYNC THUNKS — CALLS (REST)
-// These hit the REST API to create/update the call Message document in MongoDB.
-// They do NOT initiate WebRTC signalling — use CallManager for that.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const initiateCall = createAsyncThunk(
@@ -715,76 +693,64 @@ export const adminDeleteMessage = createAsyncThunk(
 // SOCKET EMIT THUNKS — MESSAGES
 // ─────────────────────────────────────────────────────────────────────────────
 
+// FIX #14: socketSendMessage — reject path fixed.
+// Original used Promise constructor with reject() call in a non-returning branch,
+// meaning the thunk resolved undefined when socket is disconnected instead of
+// rejecting → no error toast. Now returns a proper rejected Promise.
 export const socketSendMessage = createAsyncThunk(
   "chat/socketSendMessage",
-  async (payload, { rejectWithValue }) =>
-    new Promise((resolve, reject) => {
-      if (!_socket?.connected) return reject("Socket not connected");
+  async (payload, { rejectWithValue }) => {
+    if (!_socket?.connected) {
+      return rejectWithValue("Socket not connected");
+    }
+    return new Promise((resolve, reject) => {
       _socket.emit("message:send", payload, (ack) => {
         if (ack?.success) resolve(ack);
         else reject(ack?.message || "Failed to send message");
       });
-    }).catch((err) => rejectWithValue(err))
+    }).catch((err) => rejectWithValue(typeof err === 'string' ? err : err?.message || "Send failed"));
+  }
 );
 
 export const socketUploadRecording = createAsyncThunk(
   "chat/socketUploadRecording",
-  async (payload, { rejectWithValue }) =>
-    new Promise((resolve, reject) => {
-      if (!_socket?.connected) return reject("Socket not connected");
+  async (payload, { rejectWithValue }) => {
+    if (!_socket?.connected) {
+      return rejectWithValue("Socket not connected");
+    }
+    return new Promise((resolve, reject) => {
       _socket.emit("call:recording_upload", payload, (ack) => {
         if (ack?.success) resolve(ack);
         else reject(ack?.message || "Recording upload failed");
       });
-    }).catch((err) => rejectWithValue(err))
+    }).catch((err) => rejectWithValue(typeof err === 'string' ? err : err?.message || "Upload failed"));
+  }
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SOCKET EMIT HELPERS — CALLS
-//
-// These are thin fire-and-forget wrappers for components that hold a reference
-// to the store but NOT to the CallManager instance.
-//
-// IMPORTANT: Do NOT use socketCallOffer / socketCallAnswer / socketCallIce
-// manually — CallManager handles those internally. Only use the ones below.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Notify caller that this device is ringing (callee side).
- *  Normally called by CallManager.acceptCall() — only use this if you are
- *  building a custom flow without CallManager. */
 export const socketCallRinging = (payload) => () => {
-  // payload: { conversationId, targetUserId (caller's _id) }
   _socket?.emit("call:ringing", payload);
 };
 
-/** End the call (notifies peers + updates DB duration).
- *  Prefer callManager.endCall() — this is a low-level escape hatch. */
 export const socketCallEnd = (payload) => () => {
-  // payload: { conversationId, messageId, duration }
   _socket?.emit("call:end", payload);
 };
 
-/** Decline an incoming call.
- *  Prefer callManager.declineCall(incomingPayload) — same caveat. */
 export const socketCallDecline = (payload) => () => {
-  // payload: { conversationId, messageId }
   _socket?.emit("call:decline", payload);
 };
 
-/** Mark call as missed. */
 export const socketCallMissed = (payload) => () => {
-  // payload: { conversationId, messageId }
   _socket?.emit("call:missed", payload);
 };
 
-/** Notify peers about audio/video mute toggle.
- *  Prefer callManager.toggleAudio/toggleVideo() — same caveat. */
 export const socketCallMediaToggle = (payload) => () => {
-  // payload: { conversationId, kind: 'audio'|'video', enabled: bool }
   _socket?.emit("call:media_toggle", payload);
 };
 
-// ── Typing ────────────────────────────────────────────────────────────────────
 export const socketTypingStart = (conversationId) => () => {
   _socket?.emit("typing:start", { conversationId });
 };
@@ -793,7 +759,6 @@ export const socketTypingStop = (conversationId) => () => {
   _socket?.emit("typing:stop", { conversationId });
 };
 
-/** Query presence for a list of userIds */
 export const socketPresenceGet = (userIds) => (dispatch) => {
   if (!_socket?.connected) return;
   _socket.emit("presence:get", { userIds }, (result) => {
@@ -806,16 +771,13 @@ export const socketPresenceGet = (userIds) => (dispatch) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const initialState = {
-  // ── Conversations ──────────────────────────────────────────────────────────
   ...conversationsAdapter.getInitialState(),
   conversationPagination: { page: 1, limit: 30, total: 0, pages: 0 },
   loadingConversations:   false,
   loadingConversation:    false,
 
-  // ── Active conversation ────────────────────────────────────────────────────
   activeConversationId: null,
 
-  // ── Messages (keyed by conversationId → EntityState) ──────────────────────
   messages:             {},
   messagePagination:    {},
   loadingMessages:      false,
@@ -823,93 +785,40 @@ const initialState = {
   sendingMessage:       false,
   uploadProgress:       0,
 
-  // ── Recording upload ───────────────────────────────────────────────────────
   sendingRecording:     false,
   recordingProgress:    0,
 
-  // ── Pinned / scheduled / media ────────────────────────────────────────────
   pinnedMessages:       {},
   scheduledMessages:    {},
   mediaMessages:        {},
 
-  // ── Search ────────────────────────────────────────────────────────────────
   searchResults:        [],
   searchLoading:        false,
   searchQuery:          "",
 
-  // ── Typing ────────────────────────────────────────────────────────────────
   typing:               {},
-
-  // ── Presence ──────────────────────────────────────────────────────────────
   presence:             {},
 
-  // ── Unread ────────────────────────────────────────────────────────────────
   totalUnreadCount:     0,
   unreadCounts:         {},
 
-  // ── Partners ──────────────────────────────────────────────────────────────
   partners:             [],
   partnerPagination:    { page: 1, total: 0, pages: 0 },
   loadingPartners:      false,
 
-  // ── Department channel ────────────────────────────────────────────────────
   departmentChannel:    null,
 
-  /**
-   * activeCall — UI-only call state.
-   * Does NOT contain SDP or ICE candidates (CallManager owns those).
-   *
-   * Shape:
-   * {
-   *   conversationId: string,
-   *   callType:       'audio' | 'video',
-   *   messageId:      string,          — DB Message _id for call log
-   *   status:         'calling' | 'ringing' | 'connecting' | 'connected' | 'ended',
-   *   targetUserId:   string,          — peer's userId (NEW — was missing)
-   *   mediaConstraints: { audio: bool, video: bool },
-   *   caller:         UserObject | null,
-   *   callee:         UserObject | null,
-   *   callRinging:    bool,            — true once callee confirmed ringing
-   *   peerMedia:      { audio: bool, video: bool },   — peer's mute/video state
-   *   peerDisconnected: { userId, userName } | null,
-   * }
-   *
-   * REMOVED vs original:
-   *   iceCandidates  — managed by CallManager._iceCandidateQueue
-   *   peerSdpOffer   — managed by CallManager (setRemoteDescription)
-   *   peerSdpAnswer  — managed by CallManager (setRemoteDescription)
-   */
   activeCall:           null,
-
-  /**
-   * incomingCall — payload of the most recent call:incoming event.
-   * Shape:
-   * {
-   *   conversationId:   string,
-   *   callType:         'audio' | 'video',
-   *   caller:           { _id, name, avatar, role },
-   *   messageId:        string,
-   *   mediaConstraints: { audio: bool, video: bool },
-   *   delayed:          bool,
-   * }
-   *
-   * REMOVED vs original:
-   *   peerSdpOffer  — passed directly to CallManager.acceptCall(), not stored in Redux
-   *   fromUserId    — use incomingCall.caller._id instead
-   */
   incomingCall:         null,
 
-  // ── Socket ────────────────────────────────────────────────────────────────
   socketConnected:      false,
   socketError:          null,
   socketReconnecting:   false,
 
-  // ── Admin ─────────────────────────────────────────────────────────────────
   adminConversations:   [],
   adminPagination:      { page: 1, total: 0, pages: 0 },
   adminLoading:         false,
 
-  // ── Global ────────────────────────────────────────────────────────────────
   error:                null,
   success:              null,
 };
@@ -919,18 +828,23 @@ const initialState = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function getOrInitMsgState(state, conversationId) {
-  if (!state.messages[conversationId]) {
-    state.messages[conversationId] = messagesAdapter.getInitialState();
+  // FIX #13: Always coerce to string so ObjectId objects don't create separate keys
+  const key = toStringId(conversationId);
+  if (!key) return null;
+  if (!state.messages[key]) {
+    state.messages[key] = messagesAdapter.getInitialState();
   }
-  return state.messages[conversationId];
+  return state.messages[key];
 }
 
 function upsertMsg(state, conversationId, message) {
-  messagesAdapter.upsertOne(getOrInitMsgState(state, conversationId), message);
+  const ms = getOrInitMsgState(state, conversationId);
+  if (ms) messagesAdapter.upsertOne(ms, message);
 }
 
 function upsertMsgs(state, conversationId, messages) {
-  messagesAdapter.upsertMany(getOrInitMsgState(state, conversationId), messages);
+  const ms = getOrInitMsgState(state, conversationId);
+  if (ms) messagesAdapter.upsertMany(ms, messages);
 }
 
 function findConvIdForMessage(state, messageId) {
@@ -950,7 +864,6 @@ const chatSlice = createSlice({
 
   reducers: {
 
-    // ── Socket lifecycle ──────────────────────────────────────────────────────
     socketConnected(state) {
       state.socketConnected    = true;
       state.socketError        = null;
@@ -965,20 +878,19 @@ const chatSlice = createSlice({
       state.socketConnected = false;
     },
 
-    // ── Active conversation ───────────────────────────────────────────────────
     setActiveConversation(state, { payload }) {
-      state.activeConversationId = payload;
-      if (payload) {
-        const prev = state.unreadCounts[payload] || 0;
-        state.totalUnreadCount      = Math.max(0, state.totalUnreadCount - prev);
-        state.unreadCounts[payload] = 0;
+      // FIX #13: coerce to string
+      const id = toStringId(payload);
+      state.activeConversationId = id;
+      if (id) {
+        const prev = state.unreadCounts[id] || 0;
+        state.totalUnreadCount   = Math.max(0, state.totalUnreadCount - prev);
+        state.unreadCounts[id]   = 0;
       }
     },
     clearActiveConversation(state) {
       state.activeConversationId = null;
     },
-
-    // ── Conversation socket events ────────────────────────────────────────────
 
     _onConversationCreated(state, { payload }) {
       const { conversation } = payload;
@@ -988,28 +900,28 @@ const chatSlice = createSlice({
     _onConversationUpdated(state, { payload }) {
       const { conversationId, updates } = payload;
       if (conversationId && updates) {
-        conversationsAdapter.updateOne(state, { id: conversationId, changes: updates });
+        conversationsAdapter.updateOne(state, { id: toStringId(conversationId), changes: updates });
       }
     },
 
     _onConversationDeleted(state, { payload }) {
-      const { conversationId } = payload;
-      if (!conversationId) return;
-      conversationsAdapter.removeOne(state, conversationId);
-      if (state.messages[conversationId]) delete state.messages[conversationId];
-      if (state.activeConversationId === conversationId) state.activeConversationId = null;
+      const convId = toStringId(payload?.conversationId);
+      if (!convId) return;
+      conversationsAdapter.removeOne(state, convId);
+      if (state.messages[convId]) delete state.messages[convId];
+      if (state.activeConversationId === convId) state.activeConversationId = null;
     },
 
     _onConversationMuteUpdated(state, { payload }) {
-      const { conversationId, isMuted, mutedUntil, userId } = payload;
-      const conv = state.entities[conversationId];
+      const convId = toStringId(payload?.conversationId);
+      const conv = state.entities[convId];
       if (!conv) return;
       conversationsAdapter.updateOne(state, {
-        id:      conversationId,
+        id:      convId,
         changes: {
           participants: conv.participants?.map((p) =>
-            (p.user?._id || p.user)?.toString() === userId?.toString()
-              ? { ...p, isMuted, mutedUntil }
+            (p.user?._id || p.user)?.toString() === payload.userId?.toString()
+              ? { ...p, isMuted: payload.isMuted, mutedUntil: payload.mutedUntil }
               : p
           ),
         },
@@ -1017,19 +929,19 @@ const chatSlice = createSlice({
     },
 
     _onMemberJoined(state, { payload }) {
-      const { conversationId, user } = payload;
-      const conv = state.entities[conversationId];
-      if (!conv || !user) return;
+      const convId = toStringId(payload?.conversationId);
+      const conv = state.entities[convId];
+      if (!conv || !payload.user) return;
       const exists = conv.participants?.find(
-        (p) => (p.user?._id || p.user)?.toString() === user._id?.toString()
+        (p) => (p.user?._id || p.user)?.toString() === payload.user._id?.toString()
       );
       if (!exists) {
         conversationsAdapter.updateOne(state, {
-          id:      conversationId,
+          id:      convId,
           changes: {
             participants: [
               ...(conv.participants || []),
-              { user, isActive: true, joinedAt: new Date().toISOString(), conversationRole: "member" },
+              { user: payload.user, isActive: true, joinedAt: new Date().toISOString(), conversationRole: "member" },
             ],
           },
         });
@@ -1037,14 +949,14 @@ const chatSlice = createSlice({
     },
 
     _onMemberLeft(state, { payload }) {
-      const { conversationId, userId } = payload;
-      const conv = state.entities[conversationId];
+      const convId = toStringId(payload?.conversationId);
+      const conv = state.entities[convId];
       if (!conv) return;
       conversationsAdapter.updateOne(state, {
-        id:      conversationId,
+        id:      convId,
         changes: {
           participants: conv.participants?.map((p) =>
-            (p.user?._id || p.user)?.toString() === userId?.toString()
+            (p.user?._id || p.user)?.toString() === payload.userId?.toString()
               ? { ...p, isActive: false, leftAt: new Date().toISOString() }
               : p
           ),
@@ -1053,19 +965,19 @@ const chatSlice = createSlice({
     },
 
     _onMemberAdded(state, { payload }) {
-      const { conversationId, addedUser } = payload;
-      const conv = state.entities[conversationId];
-      if (!conv || !addedUser) return;
+      const convId = toStringId(payload?.conversationId);
+      const conv = state.entities[convId];
+      if (!conv || !payload.addedUser) return;
       const exists = conv.participants?.find(
-        (p) => (p.user?._id || p.user)?.toString() === addedUser._id?.toString()
+        (p) => (p.user?._id || p.user)?.toString() === payload.addedUser._id?.toString()
       );
       if (!exists) {
         conversationsAdapter.updateOne(state, {
-          id:      conversationId,
+          id:      convId,
           changes: {
             participants: [
               ...(conv.participants || []),
-              { user: addedUser, isActive: true, conversationRole: "member" },
+              { user: payload.addedUser, isActive: true, conversationRole: "member" },
             ],
           },
         });
@@ -1073,14 +985,14 @@ const chatSlice = createSlice({
     },
 
     _onMemberRemoved(state, { payload }) {
-      const { conversationId, targetUserId } = payload;
-      const conv = state.entities[conversationId];
+      const convId = toStringId(payload?.conversationId);
+      const conv = state.entities[convId];
       if (!conv) return;
       conversationsAdapter.updateOne(state, {
-        id:      conversationId,
+        id:      convId,
         changes: {
           participants: conv.participants?.map((p) =>
-            (p.user?._id || p.user)?.toString() === targetUserId?.toString()
+            (p.user?._id || p.user)?.toString() === payload.targetUserId?.toString()
               ? { ...p, isActive: false }
               : p
           ),
@@ -1089,19 +1001,20 @@ const chatSlice = createSlice({
     },
 
     _onRemovedFromConversation(state, { payload }) {
-      const { conversationId } = payload;
-      conversationsAdapter.removeOne(state, conversationId);
-      if (state.messages[conversationId]) delete state.messages[conversationId];
-      if (state.activeConversationId === conversationId) state.activeConversationId = null;
+      const convId = toStringId(payload?.conversationId);
+      conversationsAdapter.removeOne(state, convId);
+      if (state.messages[convId]) delete state.messages[convId];
+      if (state.activeConversationId === convId) state.activeConversationId = null;
       toast("You were removed from a conversation.", { icon: "ℹ️" });
     },
 
-    // ── Message socket events ─────────────────────────────────────────────────
-
+    // FIX #13: conversationId coerced to string before use as state key
     _onNewMessage(state, { payload }) {
       const { message } = payload;
       if (!message) return;
-      const convId = message.conversation?._id || message.conversation;
+      // FIX #13: Always coerce to string
+      const convId = toStringId(message.conversation?._id || message.conversation);
+      if (!convId) return;
 
       upsertMsg(state, convId, message);
 
@@ -1175,7 +1088,8 @@ const chatSlice = createSlice({
     _onMessageScheduled(state, { payload }) {
       const { message } = payload;
       if (!message) return;
-      const convId = message.conversation?._id || message.conversation;
+      const convId = toStringId(message.conversation?._id || message.conversation);
+      if (!convId) return;
       if (!state.scheduledMessages[convId]) state.scheduledMessages[convId] = [];
       const idx = state.scheduledMessages[convId].findIndex((m) => m._id === message._id);
       if (idx >= 0) state.scheduledMessages[convId][idx] = message;
@@ -1202,7 +1116,8 @@ const chatSlice = createSlice({
 
     _onReadReceipt(state, { payload }) {
       const { conversationId, messageId, readBy, readAt } = payload;
-      const msgState = state.messages[conversationId];
+      const key = toStringId(conversationId);
+      const msgState = state.messages[key];
       if (!msgState) return;
       const pivotIdx = msgState.ids.indexOf(messageId);
       if (pivotIdx < 0) return;
@@ -1222,19 +1137,17 @@ const chatSlice = createSlice({
       }
     },
 
-    // ── Typing ────────────────────────────────────────────────────────────────
-
     _onTypingUpdate(state, { payload }) {
       const { conversationId, userId, name, isTyping } = payload;
-      if (!state.typing[conversationId]) state.typing[conversationId] = {};
+      if (!conversationId) return;
+      const key = toStringId(conversationId);
+      if (!state.typing[key]) state.typing[key] = {};
       if (isTyping) {
-        state.typing[conversationId][userId] = { name, isTyping: true };
+        state.typing[key][userId] = { name, isTyping: true };
       } else {
-        delete state.typing[conversationId][userId];
+        delete state.typing[key][userId];
       }
     },
-
-    // ── Presence ──────────────────────────────────────────────────────────────
 
     _onUserOnline(state, { payload }) {
       state.presence[payload.userId] = {
@@ -1253,22 +1166,8 @@ const chatSlice = createSlice({
       }
     },
 
-    // ── Call socket events ────────────────────────────────────────────────────
-    //
-    // DESIGN PRINCIPLE:
-    // Redux only stores what the UI needs to render.
-    // CallManager (callEvents.js) owns all WebRTC state (SDP, ICE, streams).
-    // Both work simultaneously on the same socket events without conflict.
-
-    /**
-     * call:incoming — received by callee.
-     * Stores display info for the incoming call modal.
-     * CallManager._onIncoming handles the WebRTC preparation in parallel.
-     */
     _onCallIncoming(state, { payload }) {
-      // Don't overwrite an active call's state if already in a call
       if (state.activeCall) return;
-
       state.incomingCall = {
         conversationId:   payload.conversationId,
         callType:         payload.callType,
@@ -1279,23 +1178,13 @@ const chatSlice = createSlice({
           video: payload.callType === "video",
         },
         delayed: payload.delayed || false,
-        // NOTE: peerSdpOffer is NOT stored here — CallManager handles it
       };
-
       toast(
         `📞 Incoming ${payload.callType} call from ${payload.caller?.name}`,
         { duration: 30000, id: "incoming-call" }
       );
     },
 
-    /**
-     * call:ringing — received by CALLER when callee's device starts ringing.
-     * socket.js emits: { conversationId, from, user: { _id, name, avatar } }
-     *
-     * FIXED: Removed the attempt to call _createAndSendOffer() from here.
-     * CallManager._onRinging() already handles that internally.
-     * Redux just updates UI status.
-     */
     _onCallRinging(state, { payload }) {
       if (!state.activeCall) return;
       state.activeCall.status      = "ringing";
@@ -1303,37 +1192,18 @@ const chatSlice = createSlice({
       state.activeCall.callee      = payload.user || null;
     },
 
-    /**
-     * call:offer — received by CALLEE; contains SDP offer from caller.
-     * socket.js emits: { conversationId, sdp, from, mediaConstraints, caller }
-     *
-     * FIXED: Redux does NOT store sdp here anymore.
-     * CallManager._onOffer() calls setRemoteDescription + createAnswer directly.
-     * Redux only updates connection status for the UI.
-     */
     _onCallOffer(state, { payload }) {
-      // Update activeCall status if callee has already accepted
       if (state.activeCall) {
         state.activeCall.status = "connecting";
-        // Update targetUserId with the caller's id from the offer
         if (payload.from && !state.activeCall.targetUserId) {
           state.activeCall.targetUserId = payload.from;
         }
       }
-      // Update incomingCall caller info if present (for delayed calls)
       if (state.incomingCall && payload.caller) {
         state.incomingCall.caller = payload.caller;
       }
     },
 
-    /**
-     * call:answered — received by CALLER after callee sends SDP answer.
-     * socket.js emits: { conversationId, sdp, from, callee }
-     *
-     * FIXED: Redux does NOT store sdp here anymore.
-     * CallManager._onAnswered() calls setRemoteDescription directly.
-     * Redux only updates call status + callee info.
-     */
     _onCallAnswered(state, { payload }) {
       if (!state.activeCall) return;
       state.activeCall.status = "connecting";
@@ -1344,26 +1214,10 @@ const chatSlice = createSlice({
       toast.dismiss("incoming-call");
     },
 
-    /**
-     * call:ice — received by either peer.
-     * socket.js emits: { conversationId, candidate, from }
-     *
-     * FIXED: This is now intentionally a NO-OP in Redux.
-     * CallManager._onIce() calls pc.addIceCandidate() directly — no Redux
-     * involvement needed. Storing ICE candidates in Redux caused a critical
-     * bug: components would try to apply stale candidates after the
-     * RTCPeerConnection had already processed them via CallManager.
-     */
+    // Intentional NO-OP — CallManager handles ICE
     // eslint-disable-next-line no-unused-vars
-    _onCallIce(_state, _action) {
-      // Intentional NO-OP — CallManager handles ICE internally
-    },
+    _onCallIce(_state, _action) {},
 
-    /**
-     * call:media_toggle — peer muted/unmuted audio or video.
-     * socket.js emits: { conversationId, kind, enabled, from }
-     * This drives the "peer is muted" indicator in the call UI.
-     */
     _onCallMediaToggle(state, { payload }) {
       if (!state.activeCall) return;
       if (!state.activeCall.peerMedia) {
@@ -1374,10 +1228,6 @@ const chatSlice = createSlice({
       }
     },
 
-    /**
-     * call:ended — remote party ended the call.
-     * socket.js emits: { conversationId, endedBy, duration, endedByUser }
-     */
     _onCallEnded(state, { payload }) {
       state.activeCall   = null;
       state.incomingCall = null;
@@ -1391,10 +1241,6 @@ const chatSlice = createSlice({
       }
     },
 
-    /**
-     * call:declined — callee rejected our call.
-     * socket.js emits: { conversationId, declinedBy, declinedByUser }
-     */
     _onCallDeclined(state, { payload }) {
       state.activeCall   = null;
       state.incomingCall = null;
@@ -1403,10 +1249,6 @@ const chatSlice = createSlice({
       toast(name ? `${name} declined the call` : "Call declined.", { icon: "📵" });
     },
 
-    /**
-     * call:missed — call timed out with no answer.
-     * socket.js emits: { conversationId, userId }
-     */
     _onCallMissed(state) {
       state.activeCall   = null;
       state.incomingCall = null;
@@ -1414,23 +1256,15 @@ const chatSlice = createSlice({
       toast("Missed call", { icon: "📵" });
     },
 
-    /**
-     * call:peer_disconnected — socket disconnected mid-call.
-     * socket.js emits: { conversationId, userId, userName }
-     */
     _onCallPeerDisconnected(state, { payload }) {
       if (!state.activeCall) return;
-      state.activeCall.status          = "reconnecting";
+      state.activeCall.status           = "reconnecting";
       state.activeCall.peerDisconnected = {
         userId:   payload.userId,
         userName: payload.userName,
       };
     },
 
-    /**
-     * call:missed_while_offline — delivered on reconnect.
-     * payload: { conversationId, callType, caller, messageId }
-     */
     _onCallMissedWhileOffline(state, { payload }) {
       void state;
       toast(
@@ -1439,25 +1273,6 @@ const chatSlice = createSlice({
       );
     },
 
-    /**
-     * setActiveCall — called by components after CallManager.initiateCall()
-     * or CallManager.acceptCall() succeeds.
-     *
-     * Shape of payload:
-     * {
-     *   conversationId: string,   REQUIRED
-     *   callType:       'audio'|'video',  REQUIRED
-     *   messageId:      string,   REQUIRED — DB Message _id
-     *   status:         string,   default: 'calling'
-     *   targetUserId:   string,   REQUIRED — peer's userId (NEW FIELD)
-     *   caller:         UserObject | null,
-     *   callee:         UserObject | null,
-     *   mediaConstraints: { audio: bool, video: bool },
-     * }
-     *
-     * NOTE: Do NOT include iceCandidates / peerSdpOffer / peerSdpAnswer.
-     * Those are managed by CallManager.
-     */
     setActiveCall(state, { payload }) {
       state.activeCall = {
         status:           "calling",
@@ -1467,9 +1282,7 @@ const chatSlice = createSlice({
         callRinging:      false,
         peerMedia:        { audio: true, video: true },
         peerDisconnected: null,
-        // Spread the provided payload — any of the above defaults are overridden
         ...payload,
-        // Guarantee these never appear in Redux state (non-serialisable / CallManager-owned)
         iceCandidates:  undefined,
         peerSdpOffer:   undefined,
         peerSdpAnswer:  undefined,
@@ -1487,28 +1300,22 @@ const chatSlice = createSlice({
       state.activeCall = null;
     },
 
-    // ── Notifications ─────────────────────────────────────────────────────────
     _onNotification(state, { payload }) { void state; void payload; },
     _onMention(state, { payload }) {
       toast(`You were mentioned by ${payload.mentionedBy?.name}`, { icon: "🔔" });
     },
 
-    // ── Upload helpers ────────────────────────────────────────────────────────
-    setUploadProgress(state, { payload })   { state.uploadProgress   = payload; },
-    resetUploadProgress(state)              { state.uploadProgress   = 0; },
+    setUploadProgress(state, { payload })   { state.uploadProgress    = payload; },
+    resetUploadProgress(state)              { state.uploadProgress    = 0; },
     setRecordingProgress(state, { payload }){ state.recordingProgress = payload; },
     resetRecordingProgress(state)           { state.recordingProgress = 0; },
 
-    // ── Misc ──────────────────────────────────────────────────────────────────
     clearSearchResults(state) { state.searchResults = []; state.searchQuery = ""; },
     clearError(state)         { state.error   = null; },
     clearSuccess(state)       { state.success = null; },
     resetChatState()          { return initialState; },
   },
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // EXTRA REDUCERS
-  // ─────────────────────────────────────────────────────────────────────────
   extraReducers: (builder) => {
 
     builder.addCase(connectSocket.rejected, (state, { payload }) => {
@@ -1516,7 +1323,6 @@ const chatSlice = createSlice({
       toast.error("Chat connection failed");
     });
 
-    // ── fetchConversations ───────────────────────────────────────────────────
     builder
       .addCase(fetchConversations.pending, (state) => {
         state.loadingConversations = true; state.error = null;
@@ -1671,17 +1477,19 @@ const chatSlice = createSlice({
         toast.error(payload || "Delete failed");
       });
 
-    // ── fetchMessages ────────────────────────────────────────────────────────
     builder
       .addCase(fetchMessages.pending, (state) => { state.loadingMessages = true; state.error = null; })
       .addCase(fetchMessages.fulfilled, (state, { payload }) => {
         state.loadingMessages = false;
         const { conversationId, messages = [], pagination } = payload;
-        messagesAdapter.setAll(getOrInitMsgState(state, conversationId), messages);
-        state.messagePagination[conversationId] = {
-          ...pagination,
-          hasMore: (pagination?.page || 1) < (pagination?.pages || 1),
-        };
+        const key = toStringId(conversationId);
+        if (key) {
+          messagesAdapter.setAll(getOrInitMsgState(state, key), messages);
+          state.messagePagination[key] = {
+            ...pagination,
+            hasMore: (pagination?.page || 1) < (pagination?.pages || 1),
+          };
+        }
       })
       .addCase(fetchMessages.rejected, (state, { payload }) => {
         state.loadingMessages = false; state.error = payload;
@@ -1692,11 +1500,14 @@ const chatSlice = createSlice({
       .addCase(fetchMoreMessages.fulfilled, (state, { payload }) => {
         state.loadingMoreMessages = false;
         const { conversationId, messages = [], pagination } = payload;
-        upsertMsgs(state, conversationId, messages);
-        state.messagePagination[conversationId] = {
-          ...pagination,
-          hasMore: messages.length === (pagination?.limit || 30),
-        };
+        const key = toStringId(conversationId);
+        if (key) {
+          upsertMsgs(state, key, messages);
+          state.messagePagination[key] = {
+            ...pagination,
+            hasMore: messages.length === (pagination?.limit || 30),
+          };
+        }
       })
       .addCase(fetchMoreMessages.rejected, (state) => { state.loadingMoreMessages = false; });
 
@@ -1704,7 +1515,7 @@ const chatSlice = createSlice({
       .addCase(sendMessage.pending,   (state) => { state.sendingMessage = true; })
       .addCase(sendMessage.fulfilled, (state, { payload }) => {
         state.sendingMessage = false;
-        if (payload.message) upsertMsg(state, payload.conversationId, payload.message);
+        if (payload.message) upsertMsg(state, toStringId(payload.conversationId), payload.message);
       })
       .addCase(sendMessage.rejected,  (state, { payload }) => {
         state.sendingMessage = false; state.error = payload;
@@ -1715,7 +1526,7 @@ const chatSlice = createSlice({
       .addCase(sendStickerMessage.pending,   (state) => { state.sendingMessage = true; })
       .addCase(sendStickerMessage.fulfilled, (state, { payload }) => {
         state.sendingMessage = false;
-        if (payload.message) upsertMsg(state, payload.conversationId, payload.message);
+        if (payload.message) upsertMsg(state, toStringId(payload.conversationId), payload.message);
       })
       .addCase(sendStickerMessage.rejected,  (state, { payload }) => {
         state.sendingMessage = false; toast.error(payload || "Failed to send sticker");
@@ -1725,7 +1536,7 @@ const chatSlice = createSlice({
       .addCase(sendMediaMessage.pending,   (state) => { state.sendingMessage = true; state.uploadProgress = 0; })
       .addCase(sendMediaMessage.fulfilled, (state, { payload }) => {
         state.sendingMessage = false; state.uploadProgress = 0;
-        if (payload.message) upsertMsg(state, payload.conversationId, payload.message);
+        if (payload.message) upsertMsg(state, toStringId(payload.conversationId), payload.message);
       })
       .addCase(sendMediaMessage.rejected,  (state, { payload }) => {
         state.sendingMessage = false; state.uploadProgress = 0;
@@ -1736,7 +1547,7 @@ const chatSlice = createSlice({
       .addCase(sendMultipleMedia.pending,   (state) => { state.sendingMessage = true; })
       .addCase(sendMultipleMedia.fulfilled, (state, { payload }) => {
         state.sendingMessage = false;
-        if (payload.message) upsertMsg(state, payload.conversationId, payload.message);
+        if (payload.message) upsertMsg(state, toStringId(payload.conversationId), payload.message);
         toast.success(`${payload.uploadedCount} file(s) sent`);
       })
       .addCase(sendMultipleMedia.rejected,  (state, { payload }) => {
@@ -1747,7 +1558,7 @@ const chatSlice = createSlice({
       .addCase(sendRecordingMessage.pending,   (state) => { state.sendingRecording = true; state.recordingProgress = 0; })
       .addCase(sendRecordingMessage.fulfilled, (state, { payload }) => {
         state.sendingRecording = false; state.recordingProgress = 0;
-        if (payload.message) upsertMsg(state, payload.conversationId, payload.message);
+        if (payload.message) upsertMsg(state, toStringId(payload.conversationId), payload.message);
       })
       .addCase(sendRecordingMessage.rejected,  (state, { payload }) => {
         state.sendingRecording = false; state.recordingProgress = 0;
@@ -1759,7 +1570,7 @@ const chatSlice = createSlice({
       .addCase(socketUploadRecording.fulfilled, (state, { payload }) => {
         state.sendingRecording = false;
         if (payload?.message) {
-          const convId = payload.message.conversation?._id || payload.message.conversation;
+          const convId = toStringId(payload.message.conversation?._id || payload.message.conversation);
           upsertMsg(state, convId, payload.message);
         }
       })
@@ -1767,10 +1578,26 @@ const chatSlice = createSlice({
         state.sendingRecording = false; toast.error(payload || "Recording upload failed");
       });
 
+    // FIX #14: socketSendMessage.rejected now fires correctly — show error toast
+    builder
+      .addCase(socketSendMessage.pending,   (state) => { state.sendingMessage = true; })
+      .addCase(socketSendMessage.fulfilled, (state, { payload }) => {
+        state.sendingMessage = false;
+        if (payload?.message) {
+          const convId = toStringId(payload.message.conversation?._id || payload.message.conversation);
+          upsertMsg(state, convId, payload.message);
+        }
+      })
+      .addCase(socketSendMessage.rejected,  (state, { payload }) => {
+        state.sendingMessage = false;
+        toast.error(payload || "Failed to send message");
+      });
+
     builder
       .addCase(editMessage.fulfilled, (state, { payload }) => {
         if (payload.message) {
-          const msgState = state.messages[payload.conversationId];
+          const key = toStringId(payload.conversationId);
+          const msgState = state.messages[key];
           if (msgState) messagesAdapter.updateOne(msgState, { id: payload.message._id, changes: payload.message });
         }
       })
@@ -1778,7 +1605,8 @@ const chatSlice = createSlice({
 
     builder
       .addCase(deleteMessage.fulfilled, (state, { payload }) => {
-        const msgState = state.messages[payload.conversationId];
+        const key = toStringId(payload.conversationId);
+        const msgState = state.messages[key];
         if (msgState) {
           messagesAdapter.updateOne(msgState, {
             id:      payload.messageId,
@@ -1794,7 +1622,8 @@ const chatSlice = createSlice({
 
     builder
       .addCase(reactToMessage.fulfilled, (state, { payload }) => {
-        const msgState = state.messages[payload.conversationId];
+        const key = toStringId(payload.conversationId);
+        const msgState = state.messages[key];
         if (msgState?.entities[payload.messageId]) {
           messagesAdapter.updateOne(msgState, { id: payload.messageId, changes: { reactions: payload.reactions } });
         }
@@ -1803,14 +1632,15 @@ const chatSlice = createSlice({
 
     builder
       .addCase(pinMessage.fulfilled, (state, { payload }) => {
-        const msgState = state.messages[payload.conversationId];
+        const key = toStringId(payload.conversationId);
+        const msgState = state.messages[key];
         if (msgState) messagesAdapter.updateOne(msgState, { id: payload.messageId, changes: { isPinned: payload.isPinned } });
         toast.success(payload.isPinned ? "Message pinned" : "Message unpinned");
       })
       .addCase(pinMessage.rejected, (_, { payload }) => { toast.error(payload || "Pin failed"); });
 
     builder.addCase(fetchPinnedMessages.fulfilled, (state, { payload }) => {
-      state.pinnedMessages[payload.conversationId] = payload.messages || [];
+      state.pinnedMessages[toStringId(payload.conversationId)] = payload.messages || [];
     });
 
     builder
@@ -1820,15 +1650,17 @@ const chatSlice = createSlice({
       .addCase(forwardMessage.rejected, (_, { payload }) => { toast.error(payload || "Forward failed"); });
 
     builder.addCase(markMessageRead.fulfilled, (state, { payload }) => {
-      const prev = state.unreadCounts[payload.conversationId] || 0;
-      state.unreadCounts[payload.conversationId] = 0;
-      state.totalUnreadCount = Math.max(0, state.totalUnreadCount - prev);
+      const key = toStringId(payload.conversationId);
+      const prev = state.unreadCounts[key] || 0;
+      state.unreadCounts[key]   = 0;
+      state.totalUnreadCount    = Math.max(0, state.totalUnreadCount - prev);
     });
 
     builder.addCase(markAllRead.fulfilled, (state, { payload }) => {
-      const prev = state.unreadCounts[payload.conversationId] || 0;
-      state.unreadCounts[payload.conversationId] = 0;
-      state.totalUnreadCount = Math.max(0, state.totalUnreadCount - prev);
+      const key = toStringId(payload.conversationId);
+      const prev = state.unreadCounts[key] || 0;
+      state.unreadCounts[key]   = 0;
+      state.totalUnreadCount    = Math.max(0, state.totalUnreadCount - prev);
     });
 
     builder
@@ -1837,41 +1669,33 @@ const chatSlice = createSlice({
       .addCase(searchMessages.rejected,  (state) => { state.searchLoading = false; });
 
     builder.addCase(fetchMediaMessages.fulfilled, (state, { payload }) => {
-      state.mediaMessages[payload.conversationId] = payload.messages || [];
+      state.mediaMessages[toStringId(payload.conversationId)] = payload.messages || [];
     });
 
     builder.addCase(fetchScheduledMessages.fulfilled, (state, { payload }) => {
-      state.scheduledMessages[payload.conversationId] = payload.messages || [];
+      state.scheduledMessages[toStringId(payload.conversationId)] = payload.messages || [];
     });
 
     builder
       .addCase(cancelScheduledMessage.fulfilled, (state, { payload }) => {
-        if (state.scheduledMessages[payload.conversationId]) {
-          state.scheduledMessages[payload.conversationId] =
-            state.scheduledMessages[payload.conversationId].filter((m) => m._id !== payload.messageId);
+        const key = toStringId(payload.conversationId);
+        if (state.scheduledMessages[key]) {
+          state.scheduledMessages[key] =
+            state.scheduledMessages[key].filter((m) => m._id !== payload.messageId);
         }
         toast.success("Scheduled message cancelled");
       })
       .addCase(cancelScheduledMessage.rejected, (_, { payload }) => { toast.error(payload || "Cancel failed"); });
 
-    // ── Call REST thunks ─────────────────────────────────────────────────────
-
-    /**
-     * initiateCall REST — creates the DB call record.
-     * After this resolves, call CallManager.initiateCall() for WebRTC,
-     * then dispatch(setActiveCall({ ... })) to update the UI.
-     */
     builder
       .addCase(initiateCall.fulfilled, (state, { payload }) => {
-        // Only set activeCall if it isn't already set (CallManager may have
-        // called setActiveCall first via its own flow)
         if (!state.activeCall) {
           state.activeCall = {
             conversationId:   payload.conversationId,
             callType:         payload.callType,
             messageId:        payload.messageId,
             status:           "calling",
-            targetUserId:     null,   // set when callee's userId is known
+            targetUserId:     null,
             mediaConstraints: payload.constraints || {
               audio: true,
               video: payload.callType === "video",
@@ -1899,8 +1723,6 @@ const chatSlice = createSlice({
       }
     });
 
-    // ── Presence ─────────────────────────────────────────────────────────────
-
     builder.addCase(fetchOnlinePresence.fulfilled, (state, { payload }) => {
       for (const [uid, data] of Object.entries(payload || {})) {
         state.presence[uid] = data;
@@ -1912,10 +1734,8 @@ const chatSlice = createSlice({
     });
 
     builder.addCase(fetchConversationUnreadCount.fulfilled, (state, { payload }) => {
-      state.unreadCounts[payload.conversationId] = payload.unreadCount;
+      state.unreadCounts[toStringId(payload.conversationId)] = payload.unreadCount;
     });
-
-    // ── Admin ─────────────────────────────────────────────────────────────────
 
     builder
       .addCase(adminFetchConversations.pending,   (state) => { state.adminLoading = true; })
@@ -2033,9 +1853,11 @@ export const selectActiveConversation = createSelector(
   (s) => (s.activeConversationId ? s.entities[s.activeConversationId] : null)
 );
 
+// FIX #13: Selector coerces conversationId to string for consistent lookup
 export const selectMessagesByConversation = createSelector(
-  [selectChatState, (_, conversationId) => conversationId],
+  [selectChatState, (_, conversationId) => toStringId(conversationId)],
   (s, conversationId) => {
+    if (!conversationId) return [];
     const ms = s.messages[conversationId];
     if (!ms) return [];
     return messagesAdapter.getSelectors().selectAll(ms);
@@ -2043,12 +1865,15 @@ export const selectMessagesByConversation = createSelector(
 );
 
 export const selectMessageById = createSelector(
-  [selectChatState, (_, conversationId) => conversationId, (_, __, messageId) => messageId],
-  (s, conversationId, messageId) => s.messages[conversationId]?.entities[messageId] || null
+  [selectChatState, (_, conversationId) => toStringId(conversationId), (_, __, messageId) => messageId],
+  (s, conversationId, messageId) => {
+    if (!conversationId) return null;
+    return s.messages[conversationId]?.entities[messageId] || null;
+  }
 );
 
 export const selectMessagePagination  = (conversationId) => (state) =>
-  state.chat.messagePagination[conversationId] || { hasMore: false };
+  state.chat.messagePagination[toStringId(conversationId)] || { hasMore: false };
 export const selectLoadingMessages     = (state) => state.chat.loadingMessages;
 export const selectLoadingMoreMessages = (state) => state.chat.loadingMoreMessages;
 export const selectSendingMessage      = (state) => state.chat.sendingMessage;
@@ -2057,26 +1882,26 @@ export const selectSendingRecording    = (state) => state.chat.sendingRecording;
 export const selectRecordingProgress   = (state) => state.chat.recordingProgress;
 
 export const selectPinnedMessages    = (conversationId) => (state) =>
-  state.chat.pinnedMessages[conversationId] || [];
+  state.chat.pinnedMessages[toStringId(conversationId)] || [];
 export const selectScheduledMessages = (conversationId) => (state) =>
-  state.chat.scheduledMessages[conversationId] || [];
+  state.chat.scheduledMessages[toStringId(conversationId)] || [];
 
 export const selectTypingUsers = (conversationId) => (state) =>
-  Object.values(state.chat.typing[conversationId] || {}).filter((u) => u.isTyping);
+  Object.values(state.chat.typing[toStringId(conversationId)] || {}).filter((u) => u.isTyping);
 
 export const selectUserPresence = (userId) => (state) =>
   state.chat.presence[userId] || { isOnline: false };
 
 export const selectTotalUnreadCount = (state) => state.chat.totalUnreadCount;
 export const selectUnreadCount      = (conversationId) => (state) =>
-  state.chat.unreadCounts[conversationId] || 0;
+  state.chat.unreadCounts[toStringId(conversationId)] || 0;
 
 export const selectSearchResults = (state) => state.chat.searchResults;
 export const selectSearchLoading  = (state) => state.chat.searchLoading;
 export const selectSearchQuery    = (state) => state.chat.searchQuery;
 
 export const selectMediaMessages = (conversationId) => (state) =>
-  state.chat.mediaMessages[conversationId] || [];
+  state.chat.mediaMessages[toStringId(conversationId)] || [];
 
 export const selectPartners          = (state) => state.chat.partners;
 export const selectPartnerPagination = (state) => state.chat.partnerPagination;
@@ -2084,7 +1909,6 @@ export const selectLoadingPartners   = (state) => state.chat.loadingPartners;
 
 export const selectDepartmentChannel = (state) => state.chat.departmentChannel;
 
-// ── Call selectors ────────────────────────────────────────────────────────────
 export const selectActiveCall           = (state) => state.chat.activeCall;
 export const selectIncomingCall         = (state) => state.chat.incomingCall;
 export const selectCallStatus           = (state) => state.chat.activeCall?.status        || null;
@@ -2093,21 +1917,16 @@ export const selectCallRinging          = (state) => state.chat.activeCall?.call
 export const selectCallPeerMedia        = (state) => state.chat.activeCall?.peerMedia     || null;
 export const selectCallMediaConstraints = (state) => state.chat.activeCall?.mediaConstraints || null;
 export const selectCallPeerDisconnected = (state) => state.chat.activeCall?.peerDisconnected || null;
-export const selectCallTargetUserId     = (state) => state.chat.activeCall?.targetUserId  || null;  // NEW
-// REMOVED: selectCallIceCandidates, selectCallPeerSdpAnswer, selectIncomingSdpOffer
-// These were incorrect — CallManager owns that data, not Redux.
+export const selectCallTargetUserId     = (state) => state.chat.activeCall?.targetUserId  || null;
 
-// ── Socket ────────────────────────────────────────────────────────────────────
 export const selectSocketConnected    = (state) => state.chat.socketConnected;
 export const selectSocketError        = (state) => state.chat.socketError;
 export const selectSocketReconnecting = (state) => state.chat.socketReconnecting;
 
-// ── Admin ─────────────────────────────────────────────────────────────────────
 export const selectAdminConversations = (state) => state.chat.adminConversations;
 export const selectAdminPagination    = (state) => state.chat.adminPagination;
 export const selectAdminLoading       = (state) => state.chat.adminLoading;
 
-// ── Global ────────────────────────────────────────────────────────────────────
 export const selectChatError   = (state) => state.chat.error;
 export const selectChatSuccess = (state) => state.chat.success;
 

@@ -1,81 +1,56 @@
 'use client';
 
-import { useSelector } from 'react-redux';
+import { useEffect, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
+import Link from 'next/link';
+
+// ── Thunks & selectors from real slice ────────────────────────────────────────
+import {
+  fetchMyProfile,
+  fetchPerformance,
+  fetchRewards,
+  fetchSettlementSummary,
+  fetchComplianceDashboard,
+  fetchDispatchStatus,
+  updateDispatchStatus,
+  setDispatchStatusOptimistic,
+
+  selectProfile,
+  selectPerformance,
+  selectRewards,
+  selectSettlementSummary,
+  selectCompliance,
+  selectDispatch,
+  selectLoading,
+} from '@/store/slices/soloDriverSlice';
+
+// ── Icons ─────────────────────────────────────────────────────────────────────
 import {
   LayoutDashboard, BarChart3, Star, TrendingUp,
   Car, BadgeCheck, ClipboardList, AlertTriangle,
   Landmark, WalletCards, ToggleRight, Map,
-  Bell, Settings2, Lock, ChevronRight,
+  Bell, Lock, ChevronRight,
   Navigation, MapPin, Phone, Shield,
   Zap, Award, Clock, IndianRupee,
-  Activity, CheckCircle2, XCircle, Timer,
-  ArrowUpRight, ArrowDownRight, Flame,
-  Battery, Wifi, Signal, Menu, X,
-  UserRound, FileCheck2, HeartPulse,
+  Activity, CheckCircle2, XCircle,
+  ArrowUpRight, ArrowDownRight,
+  Menu, X, UserRound, FileCheck2, HeartPulse,
   FileText, Wrench, ReceiptIndianRupee,
-  Tag, CircleDollarSign,
+  Tag, CircleDollarSign, ShieldAlert,
+  CalendarClock, FileMinus,
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
-import Link from 'next/link';
 
-// ── Redux selectors ────────────────────────────────────────────────────────────
-export const selectUser    = (s) => s.user.user;
-export const selectProfile = (s) => s.user.profile;
+// ── User selector (auth slice) ────────────────────────────────────────────────
+const selectUser = (s) => s.user?.user ?? null;
 
 // ── Animation variants ─────────────────────────────────────────────────────────
-const fadeUp = {
-  hidden: { opacity: 0, y: 24 },
-  show:   { opacity: 1, y: 0,  transition: { duration: 0.45, ease: [0.22, 1, 0.36, 1] } },
-};
+const fadeUp  = { hidden: { opacity: 0, y: 24 },      show: { opacity: 1, y: 0,    transition: { duration: 0.45, ease: [0.22, 1, 0.36, 1] } } };
+const stagger = { hidden: {},                          show: { transition: { staggerChildren: 0.07 } } };
+const slideIn = { hidden: { opacity: 0, x: -20 },     show: { opacity: 1, x: 0,    transition: { duration: 0.4,  ease: [0.22, 1, 0.36, 1] } } };
+const scaleIn = { hidden: { opacity: 0, scale: 0.92 },show: { opacity: 1, scale: 1, transition: { duration: 0.35, ease: [0.22, 1, 0.36, 1] } } };
 
-const stagger = {
-  hidden: {},
-  show:   { transition: { staggerChildren: 0.07 } },
-};
-
-const slideIn = {
-  hidden: { opacity: 0, x: -20 },
-  show:   { opacity: 1, x: 0,   transition: { duration: 0.4, ease: [0.22, 1, 0.36, 1] } },
-};
-
-const scaleIn = {
-  hidden: { opacity: 0, scale: 0.92 },
-  show:   { opacity: 1, scale: 1,   transition: { duration: 0.35, ease: [0.22, 1, 0.36, 1] } },
-};
-
-// ── Static demo data ───────────────────────────────────────────────────────────
-const DEMO_STATS = [
-  { label: 'Total Rides',     value: '1,284',   delta: '+12%',  up: true,  icon: Car,          color: 'primary' },
-  { label: 'Total Earnings',  value: '₹84,200', delta: '+8.4%', up: true,  icon: IndianRupee,  color: 'success' },
-  { label: 'Avg. Rating',     value: '4.82',    delta: '+0.1',  up: true,  icon: Star,         color: 'warning' },
-  { label: 'Completion Rate', value: '96.3%',   delta: '-0.5%', up: false, icon: CheckCircle2, color: 'info'    },
-];
-
-const RECENT_RIDES = [
-  { id: 'RD-0012', from: 'Labbipet',    to: 'Vijayawada Jn.', fare: '₹420', status: 'completed', time: '2h ago' },
-  { id: 'RD-0011', from: 'Benz Circle', to: 'MG Road',        fare: '₹180', status: 'completed', time: '5h ago' },
-  { id: 'RD-0010', from: 'Auto Nagar',  to: 'Governorpet',    fare: '₹310', status: 'cancelled', time: '8h ago' },
-  { id: 'RD-0009', from: 'Patamata',    to: 'One Town',       fare: '₹260', status: 'completed', time: '1d ago' },
-];
-
-const COMPLIANCE_ITEMS = [
-  { label: 'Driving Licence', expiry: '12 Jun 2025', status: 'expiring', daysLeft: 59  },
-  { label: 'Insurance Policy',expiry: '30 Sep 2025', status: 'ok',       daysLeft: 169 },
-  { label: 'PSV Badge',       expiry: '01 May 2025', status: 'critical', daysLeft: 17  },
-  { label: 'Pollution Cert',  expiry: '15 Aug 2025', status: 'ok',       daysLeft: 123 },
-];
-
-const QUICK_ACTIONS = [
-  { label: 'Go Online',       href: '/partner/solo/availability',       icon: ToggleRight,      color: 'success' },
-  { label: 'Location',        href: '/partner/solo/vehicle/location',   icon: Navigation,       color: 'primary' },
-  { label: 'Submit KYC',      href: '/partner/solo/kyc/submit',         icon: FileCheck2,       color: 'info'    },
-  { label: 'Zones',           href: '/partner/solo/service-zones',      icon: Map,              color: 'warning' },
-  { label: 'Medical',         href: '/partner/solo/kyc/medical',        icon: HeartPulse,       color: 'error'   },
-  { label: 'Earnings',        href: '/partner/solo/settlement',         icon: ReceiptIndianRupee,color: 'accent'  },
-];
-
-// ── Nav links (inline, avoids the 'use client' import problem) ──────────────
+// ── Sidebar nav ────────────────────────────────────────────────────────────────
 const SIDEBAR_GROUPS = [
   {
     title: 'Dashboard',
@@ -91,49 +66,49 @@ const SIDEBAR_GROUPS = [
     title: 'My Profile',
     icon: <UserRound size={16} />,
     links: [
-      { name: 'Personal Details',  href: '/partner/solo/profile',                icon: <UserRound size={14} />  },
-      { name: 'Contact Info',      href: '/partner/solo/profile/contact',        icon: <Phone size={14} />      },
-      { name: 'Address',           href: '/partner/solo/profile/address',        icon: <MapPin size={14} />     },
-      { name: 'Professional Info', href: '/partner/solo/profile/professional',   icon: <Award size={14} />      },
-      { name: 'Emergency Contact', href: '/partner/solo/profile/emergency',      icon: <Shield size={14} />     },
+      { name: 'Personal Details',  href: '/partner/solo/profile',               icon: <UserRound size={14} /> },
+      { name: 'Contact Info',      href: '/partner/solo/profile/contact',        icon: <Phone size={14} />     },
+      { name: 'Address',           href: '/partner/solo/profile/address',        icon: <MapPin size={14} />    },
+      { name: 'Professional Info', href: '/partner/solo/profile/professional',   icon: <Award size={14} />     },
+      { name: 'Emergency Contact', href: '/partner/solo/profile/emergency',      icon: <Shield size={14} />    },
     ],
   },
   {
     title: 'KYC & Verification',
     icon: <BadgeCheck size={16} />,
     links: [
-      { name: 'KYC Status',       href: '/partner/solo/kyc',         icon: <BadgeCheck size={14} />  },
-      { name: 'Submit Documents', href: '/partner/solo/kyc/submit',  icon: <FileCheck2 size={14} />  },
-      { name: 'Medical Fitness',  href: '/partner/solo/kyc/medical', icon: <HeartPulse size={14} />  },
-      { name: 'PSV Badge',        href: '/partner/solo/kyc/psv',     icon: <Shield size={14} />      },
+      { name: 'KYC Status',       href: '/partner/solo/kyc',         icon: <BadgeCheck size={14} /> },
+      { name: 'Submit Documents', href: '/partner/solo/kyc/submit',  icon: <FileCheck2 size={14} /> },
+      { name: 'Medical Fitness',  href: '/partner/solo/kyc/medical', icon: <HeartPulse size={14} /> },
+      { name: 'PSV Badge',        href: '/partner/solo/kyc/psv',     icon: <Shield size={14} />     },
     ],
   },
   {
     title: 'Vehicle',
     icon: <Car size={16} />,
     links: [
-      { name: 'Vehicle Details',   href: '/partner/solo/vehicle',             icon: <Car size={14} />       },
-      { name: 'Vehicle Documents', href: '/partner/solo/vehicle/documents',   icon: <FileText size={14} />  },
-      { name: 'Features & Extras', href: '/partner/solo/vehicle/features',    icon: <Wrench size={14} />    },
-      { name: 'Update Location',   href: '/partner/solo/vehicle/location',    icon: <Navigation size={14} />},
+      { name: 'Vehicle Details',   href: '/partner/solo/vehicle',           icon: <Car size={14} />        },
+      { name: 'Vehicle Documents', href: '/partner/solo/vehicle/documents', icon: <FileText size={14} />   },
+      { name: 'Features & Extras', href: '/partner/solo/vehicle/features',  icon: <Wrench size={14} />     },
+      { name: 'Update Location',   href: '/partner/solo/vehicle/location',  icon: <Navigation size={14} /> },
     ],
   },
   {
     title: 'Bank & Earnings',
     icon: <Landmark size={16} />,
     links: [
-      { name: 'Bank Details',       href: '/partner/solo/bank',        icon: <Landmark size={14} />          },
-      { name: 'Settlement History', href: '/partner/solo/settlement',  icon: <ReceiptIndianRupee size={14} /> },
-      { name: 'Wallet',             href: '/partner/solo/wallet',      icon: <WalletCards size={14} />       },
-      { name: 'Payouts',            href: '/partner/solo/payouts',     icon: <IndianRupee size={14} />       },
+      { name: 'Bank Details',       href: '/partner/solo/bank',       icon: <Landmark size={14} />           },
+      { name: 'Settlement History', href: '/partner/solo/settlement', icon: <ReceiptIndianRupee size={14} />  },
+      { name: 'Wallet',             href: '/partner/solo/wallet',     icon: <WalletCards size={14} />        },
+      { name: 'Payouts',            href: '/partner/solo/payouts',    icon: <IndianRupee size={14} />        },
     ],
   },
   {
     title: 'Availability & Zones',
     icon: <ToggleRight size={16} />,
     links: [
-      { name: 'Go Online / Offline', href: '/partner/solo/availability',        icon: <ToggleRight size={14} /> },
-      { name: 'Service Zones',       href: '/partner/solo/service-zones',       icon: <Map size={14} />         },
+      { name: 'Go Online / Offline', href: '/partner/solo/availability',  icon: <ToggleRight size={14} /> },
+      { name: 'Service Zones',       href: '/partner/solo/service-zones', icon: <Map size={14} />         },
     ],
   },
   {
@@ -156,101 +131,162 @@ const SIDEBAR_GROUPS = [
     title: 'Security',
     icon: <Lock size={16} />,
     links: [
-      { name: 'Active Sessions',    href: '/partner/solo/security/sessions',        icon: <Activity size={14} />  },
-      { name: 'Change Password',    href: '/partner/solo/security/change-password', icon: <Lock size={14} />      },
+      { name: 'Active Sessions', href: '/partner/solo/security/sessions',        icon: <Activity size={14} /> },
+      { name: 'Change Password', href: '/partner/solo/security/change-password', icon: <Lock size={14} />     },
     ],
   },
 ];
 
- 
-
 // ── Color helpers ──────────────────────────────────────────────────────────────
-const colorMap = {
-  primary: { bg: 'bg-[color-mix(in_srgb,var(--primary)_12%,transparent)]', text: 'text-[var(--primary)]' },
-  success: { bg: 'bg-[color-mix(in_srgb,var(--success)_12%,transparent)]', text: 'text-[var(--success)]' },
-  warning: { bg: 'bg-[color-mix(in_srgb,var(--warning)_12%,transparent)]', text: 'text-[var(--warning)]' },
-  info:    { bg: 'bg-[color-mix(in_srgb,var(--info)_12%,transparent)]',    text: 'text-[var(--info)]'    },
-  error:   { bg: 'bg-[color-mix(in_srgb,var(--error)_12%,transparent)]',   text: 'text-[var(--error)]'   },
-  accent:  { bg: 'bg-[color-mix(in_srgb,var(--accent)_12%,transparent)]',  text: 'text-[var(--accent)]'  },
+const colorVar = {
+  primary: 'var(--primary)',
+  success: 'var(--success)',
+  warning: 'var(--warning)',
+  info:    'var(--info)',
+  error:   'var(--error)',
+  accent:  'var(--accent)',
 };
 
-const statusColor = {
-  completed: 'text-[var(--success)]',
-  cancelled:  'text-[var(--error)]',
-  pending:    'text-[var(--warning)]',
-};
+const QUICK_ACTIONS = [
+  { label: 'Availability',  href: '/partner/solo/availability',       icon: ToggleRight,       color: 'success' },
+  { label: 'Location',      href: '/partner/solo/vehicle/location',   icon: Navigation,        color: 'primary' },
+  { label: 'Submit KYC',    href: '/partner/solo/kyc/submit',         icon: FileCheck2,        color: 'info'    },
+  { label: 'Zones',         href: '/partner/solo/service-zones',      icon: Map,               color: 'warning' },
+  { label: 'Medical',       href: '/partner/solo/kyc/medical',        icon: HeartPulse,        color: 'error'   },
+  { label: 'Earnings',      href: '/partner/solo/settlement',         icon: ReceiptIndianRupee,color: 'accent'  },
+];
 
-const complianceInfo = {
-  ok:       { dot: 'bg-[var(--success)]', cls: 'badge-success', label: 'OK'       },
+// ── Compliance status config (matches /compliance route response) ──────────────
+const COMPLIANCE_STATUS_CFG = {
+  valid:    { dot: 'bg-[var(--success)]', cls: 'badge-success', label: 'Valid'    },
   expiring: { dot: 'bg-[var(--warning)]', cls: 'badge-warning', label: 'Expiring' },
-  critical: { dot: 'bg-[var(--error)]',   cls: 'badge-error',   label: 'Critical' },
+  expired:  { dot: 'bg-[var(--error)]',   cls: 'badge-error',   label: 'Expired'  },
+  missing:  { dot: 'bg-[var(--neutral)]', cls: '',              label: 'Missing'  },
 };
 
-// ── Small reusable pieces ──────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// Sub-components
+// ═════════════════════════════════════════════════════════════════════════════
 
-function OnlineToggle({ isOnline, onToggle }) {
+function OnlineToggle({ isOnline, loading, onToggle }) {
   return (
     <motion.button
       whileTap={{ scale: 0.94 }}
       onClick={onToggle}
+      disabled={loading}
       className={[
         'relative flex items-center gap-2 px-3.5 py-2 rounded-[var(--r-field)]',
-        'font-bold text-xs transition-all duration-300 cursor-pointer select-none',
+        'font-bold text-xs transition-all duration-300 cursor-pointer select-none disabled:opacity-60',
         isOnline
           ? 'bg-[var(--success)] text-[var(--success-content)] shadow-[0_0_20px_color-mix(in_srgb,var(--success),transparent_50%)]'
           : 'bg-[var(--base-300)] text-[var(--base-content)]',
       ].join(' ')}
     >
       <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-white animate-pulse' : 'bg-current opacity-40'}`} />
-      {isOnline ? 'Online' : 'Offline'}
+      {loading ? 'Updating…' : isOnline ? 'Online' : 'Offline'}
     </motion.button>
   );
 }
 
-function StatCard({ item }) {
-  const Icon = item.icon;
-  const c    = colorMap[item.color];
+// ── Stats row — real performance data ─────────────────────────────────────────
+function StatsRow({ performance, settlement }) {
+  const stats = [
+    {
+      key:   'rides',
+      label: 'Total Rides',
+      value: performance?.performance?.totalRidesCompleted?.toLocaleString('en-IN') ?? '—',
+      delta: performance?.performance?.monthlyRides != null
+        ? `${performance.performance.monthlyRides} this month`
+        : null,
+      up:   true,
+      icon: Car,
+      color: 'primary',
+    },
+    {
+      key:   'earnings',
+      label: 'Total Earnings',
+      value: settlement?.totalEarnings != null
+        ? `₹${Number(settlement.totalEarnings).toLocaleString('en-IN')}`
+        : '—',
+      delta: settlement?.netEarnings != null
+        ? `₹${Number(settlement.netEarnings).toLocaleString('en-IN')} net`
+        : null,
+      up:   true,
+      icon: IndianRupee,
+      color: 'success',
+    },
+    {
+      key:   'rating',
+      label: 'Avg. Rating',
+      value: performance?.performance?.rating != null
+        ? Number(performance.performance.rating).toFixed(2)
+        : '—',
+      delta: performance?.performance?.ratingCount != null
+        ? `${performance.performance.ratingCount} reviews`
+        : null,
+      up:   true,
+      icon: Star,
+      color: 'warning',
+    },
+    {
+      key:   'completion',
+      label: 'Completion Rate',
+      value: (() => {
+        const p = performance?.performance;
+        if (!p) return '—';
+        const total = (p.totalRidesCompleted ?? 0) + (p.totalRidesCancelled ?? 0);
+        if (!total) return '—';
+        return `${((p.totalRidesCompleted / total) * 100).toFixed(1)}%`;
+      })(),
+      delta: performance?.performance?.cancellationRate != null
+        ? `${performance.performance.cancellationRate.toFixed(1)}% cancel`
+        : null,
+      up:   false,
+      icon: CheckCircle2,
+      color: 'info',
+    },
+  ];
+
   return (
-    <motion.div variants={scaleIn} className="glass-card p-4 flex flex-col gap-3 group">
-      <div className="flex items-start justify-between">
-        <div className={`w-9 h-9 rounded-[var(--r-selector)] flex items-center justify-center ${c.bg} ${c.text}`}>
-          <Icon size={16} />
-        </div>
-        <span className={`flex items-center gap-0.5 text-xs font-bold ${item.up ? 'text-[var(--success)]' : 'text-[var(--error)]'}`}>
-          {item.up ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
-          {item.delta}
-        </span>
-      </div>
-      <div>
-        <p className="font-black text-xl text-[var(--base-content)] leading-none">{item.value}</p>
-        <p className="text-[0.65rem] font-semibold uppercase tracking-wider opacity-50 text-[var(--base-content)] mt-1">{item.label}</p>
-      </div>
+    <motion.div variants={stagger} className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
+      {stats.map((s) => {
+        const Icon = s.icon;
+        const cv   = colorVar[s.color];
+        return (
+          <motion.div key={s.key} variants={scaleIn} className="glass-card p-4 flex flex-col gap-3">
+            <div className="flex items-start justify-between">
+              <div
+                className="w-9 h-9 rounded-[var(--r-selector)] flex items-center justify-center"
+                style={{ background: `color-mix(in srgb, ${cv}, transparent 88%)`, color: cv }}
+              >
+                <Icon size={16} />
+              </div>
+              {s.delta && (
+                <span
+                  className="flex items-center gap-0.5 text-xs font-bold"
+                  style={{ color: s.up ? 'var(--success)' : 'var(--error)' }}
+                >
+                  {s.up ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
+                  {s.delta}
+                </span>
+              )}
+            </div>
+            <div>
+              <p className="font-black text-xl text-[var(--base-content)] leading-none">{s.value}</p>
+              <p className="text-[0.65rem] font-semibold uppercase tracking-wider opacity-50 text-[var(--base-content)] mt-1">
+                {s.label}
+              </p>
+            </div>
+          </motion.div>
+        );
+      })}
     </motion.div>
   );
 }
 
-function CompletionRing({ percent }) {
-  const r    = 26;
-  const circ = 2 * Math.PI * r;
-  return (
-    <div className="relative w-14 h-14 flex items-center justify-center flex-shrink-0">
-      <svg width="56" height="56" className="-rotate-90">
-        <circle cx="28" cy="28" r={r} fill="none" stroke="var(--base-300)" strokeWidth="5" />
-        <motion.circle
-          cx="28" cy="28" r={r}
-          fill="none" stroke="var(--primary)" strokeWidth="5" strokeLinecap="round"
-          strokeDasharray={circ}
-          initial={{ strokeDashoffset: circ }}
-          animate={{ strokeDashoffset: circ - (percent / 100) * circ }}
-          transition={{ duration: 1.2, ease: 'easeOut', delay: 0.4 }}
-        />
-      </svg>
-      <span className="absolute text-[0.6rem] font-black text-[var(--primary)]">{percent}%</span>
-    </div>
-  );
-}
-
+// ── Profile card — real data ───────────────────────────────────────────────────
 function ProfileCard({ user, profile }) {
+  const pct = profile?.profileCompletionPercent ?? 0;
   return (
     <motion.div variants={fadeUp} className="glass-card p-5">
       <div className="flex items-center gap-3.5">
@@ -264,35 +300,64 @@ function ProfileCard({ user, profile }) {
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="font-black text-sm text-[var(--base-content)] truncate">
-            {profile?.legalName || user?.name || 'Partner Name'}
+            {profile?.legalName || user?.name || 'Partner'}
           </h3>
-          <p className="text-[0.65rem] text-[var(--base-content)] opacity-55 truncate">{user?.email || 'partner@email.com'}</p>
+          <p className="text-[0.65rem] text-[var(--base-content)] opacity-55 truncate">
+            {user?.email || '—'}
+          </p>
           <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
             <span className="badge badge-primary text-[0.6rem] py-0.5">Solo Driver</span>
-            <span className="badge badge-success text-[0.6rem] py-0.5">Active</span>
+            <span
+              className={`badge text-[0.6rem] py-0.5 ${
+                profile?.partnershipStatus === 'active' ? 'badge-success' :
+                profile?.partnershipStatus === 'pending' ? 'badge-warning' :
+                'badge-error'
+              }`}
+            >
+              {profile?.partnershipStatus ?? 'pending'}
+            </span>
           </div>
         </div>
       </div>
 
+      {/* Profile completion ring */}
       <div className="mt-4 flex items-center justify-between">
         <div>
-          <p className="text-[0.6rem] font-bold uppercase tracking-widest opacity-50 text-[var(--base-content)]">Profile Completion</p>
-          <p className="text-sm font-black text-[var(--primary)] mt-0.5">{profile?.profileCompletionPercent ?? 64}% done</p>
+          <p className="text-[0.6rem] font-bold uppercase tracking-widest opacity-50 text-[var(--base-content)]">
+            Profile Completion
+          </p>
+          <p className="text-sm font-black text-[var(--primary)] mt-0.5">{pct}% done</p>
         </div>
-        <CompletionRing percent={profile?.profileCompletionPercent ?? 64} />
+        <div className="relative w-14 h-14 flex items-center justify-center flex-shrink-0">
+          <svg width="56" height="56" className="-rotate-90">
+            <circle cx="28" cy="28" r="26" fill="none" stroke="var(--base-300)" strokeWidth="5" />
+            <motion.circle
+              cx="28" cy="28" r="26" fill="none" stroke="var(--primary)"
+              strokeWidth="5" strokeLinecap="round"
+              strokeDasharray={2 * Math.PI * 26}
+              initial={{ strokeDashoffset: 2 * Math.PI * 26 }}
+              animate={{ strokeDashoffset: 2 * Math.PI * 26 * (1 - pct / 100) }}
+              transition={{ duration: 1.2, ease: 'easeOut', delay: 0.4 }}
+            />
+          </svg>
+          <span className="absolute text-[0.6rem] font-black text-[var(--primary)]">{pct}%</span>
+        </div>
       </div>
 
       <div className="mt-3 progress-bar">
         <motion.div
           className="progress-bar-fill"
           initial={{ width: 0 }}
-          animate={{ width: `${profile?.profileCompletionPercent ?? 64}%` }}
+          animate={{ width: `${pct}%` }}
           transition={{ duration: 1.2, ease: 'easeOut', delay: 0.5 }}
         />
       </div>
 
       <Link href="/partner/solo/profile">
-        <motion.div whileHover={{ x: 3 }} className="mt-3.5 flex items-center justify-between text-xs font-bold text-[var(--primary)] cursor-pointer">
+        <motion.div
+          whileHover={{ x: 3 }}
+          className="mt-3.5 flex items-center justify-between text-xs font-bold text-[var(--primary)] cursor-pointer"
+        >
           Complete profile <ChevronRight size={13} />
         </motion.div>
       </Link>
@@ -300,6 +365,7 @@ function ProfileCard({ user, profile }) {
   );
 }
 
+// ── Quick actions ─────────────────────────────────────────────────────────────
 function QuickActions() {
   return (
     <motion.div variants={fadeUp} className="glass-card p-5">
@@ -307,16 +373,19 @@ function QuickActions() {
       <div className="grid grid-cols-3 gap-2">
         {QUICK_ACTIONS.map((action) => {
           const Icon = action.icon;
-          const c    = colorMap[action.color];
+          const cv   = colorVar[action.color];
           return (
             <Link key={action.label} href={action.href}>
               <motion.div
                 whileHover={{ scale: 1.06, y: -2 }}
                 whileTap={{ scale: 0.93 }}
-                className={`flex flex-col items-center gap-1.5 p-2.5 rounded-[var(--r-field)] ${c.bg} cursor-pointer transition-all`}
+                className="flex flex-col items-center gap-1.5 p-2.5 rounded-[var(--r-field)] cursor-pointer transition-all"
+                style={{ background: `color-mix(in srgb, ${cv}, transparent 88%)` }}
               >
-                <Icon size={16} className={c.text} />
-                <span className={`text-[0.58rem] font-bold text-center leading-tight ${c.text}`}>{action.label}</span>
+                <Icon size={16} style={{ color: cv }} />
+                <span className="text-[0.58rem] font-bold text-center leading-tight" style={{ color: cv }}>
+                  {action.label}
+                </span>
               </motion.div>
             </Link>
           );
@@ -326,18 +395,56 @@ function QuickActions() {
   );
 }
 
-function EarningsSummary() {
+// ── Earnings summary — real settlement data ────────────────────────────────────
+function EarningsSummary({ settlement, rewards }) {
+  // day labels with unique keys (index-based)
+  const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  // placeholder bars — real ride-per-day data not in slice yet
   const bars = [40, 65, 52, 80, 70, 90, 75];
-  const days  = ['M','T','W','T','F','S','S'];
+
+  const earningItems = [
+    {
+      key:   'thisWeek',
+      label: 'This Week',
+      value: settlement?.netEarnings != null
+        ? `₹${Number(settlement.netEarnings).toLocaleString('en-IN')}`
+        : '—',
+      color: 'var(--primary)',
+    },
+    {
+      key:   'platform',
+      label: 'Platform Fee',
+      value: settlement?.totalPlatformFeePaid != null
+        ? `₹${Number(settlement.totalPlatformFeePaid).toLocaleString('en-IN')}`
+        : '—',
+      color: 'var(--error)',
+    },
+    {
+      key:   'totalEarnings',
+      label: 'Total Earned',
+      value: settlement?.totalEarnings != null
+        ? `₹${Number(settlement.totalEarnings).toLocaleString('en-IN')}`
+        : '—',
+      color: 'var(--success)',
+    },
+    {
+      key:   'coins',
+      label: 'Coin Balance',
+      value: rewards?.coinBalance != null ? `${rewards.coinBalance} pts` : '—',
+      color: 'var(--warning)',
+    },
+  ];
+
   return (
     <motion.div variants={fadeUp} className="glass-card p-5">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="font-black text-xs uppercase tracking-widest text-[var(--base-content)]">Weekly Earnings</h3>
+        <h3 className="font-black text-xs uppercase tracking-widest text-[var(--base-content)]">Earnings Overview</h3>
         <Link href="/partner/solo/settlement">
           <span className="text-xs font-bold text-[var(--primary)] cursor-pointer hover:underline">Details</span>
         </Link>
       </div>
 
+      {/* Bar chart — visual only, placeholder heights */}
       <div className="flex items-end gap-1.5 h-14 mb-2">
         {bars.map((h, i) => (
           <motion.div
@@ -356,19 +463,16 @@ function EarningsSummary() {
         ))}
       </div>
       <div className="flex items-center justify-around text-[0.58rem] opacity-40 text-[var(--base-content)] mb-4">
-        {days.map((d) => <span key={d}>{d}</span>)}
+        {dayLabels.map((d, i) => (
+          <span key={`day-${i}`}>{d.slice(0, 1)}</span>
+        ))}
       </div>
 
       <div className="grid grid-cols-2 gap-2.5">
-        {[
-          { label: 'This Week', value: '₹6,840', color: 'text-[var(--primary)]'  },
-          { label: 'Pending',   value: '₹1,200', color: 'text-[var(--warning)]' },
-          { label: 'Total',     value: '₹84,200',color: 'text-[var(--success)]' },
-          { label: 'Platform',  value: '₹8,420', color: 'text-[var(--error)]'   },
-        ].map((item) => (
-          <div key={item.label} className="p-3 rounded-[var(--r-field)] bg-[var(--base-200)]">
+        {earningItems.map((item) => (
+          <div key={item.key} className="p-3 rounded-[var(--r-field)] bg-[var(--base-200)]">
             <p className="text-[0.6rem] opacity-50 font-semibold text-[var(--base-content)]">{item.label}</p>
-            <p className={`text-sm font-black mt-0.5 ${item.color}`}>{item.value}</p>
+            <p className="text-sm font-black mt-0.5" style={{ color: item.color }}>{item.value}</p>
           </div>
         ))}
       </div>
@@ -376,7 +480,8 @@ function EarningsSummary() {
   );
 }
 
-function RecentRides() {
+// ── Recent rides placeholder (rides not in slice — link to stats) ─────────────
+function RecentRidesPlaceholder() {
   return (
     <motion.div variants={fadeUp} className="glass-card p-5">
       <div className="flex items-center justify-between mb-4">
@@ -385,99 +490,132 @@ function RecentRides() {
           <span className="text-xs font-bold text-[var(--primary)] cursor-pointer hover:underline">View all</span>
         </Link>
       </div>
-      <div className="space-y-2.5">
-        {RECENT_RIDES.map((r, i) => (
-          <motion.div
-            key={r.id}
-            variants={slideIn}
-            className="flex items-center gap-2.5 p-2.5 rounded-[var(--r-field)] bg-[var(--base-200)] hover:bg-[var(--base-300)] transition-colors"
-          >
-            <div className="w-7 h-7 rounded-[var(--r-selector)] bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] flex items-center justify-center flex-shrink-0">
-              <Car size={13} className="text-[var(--primary)]" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-bold text-[var(--base-content)] truncate">{r.from} → {r.to}</p>
-              <p className="text-[0.58rem] opacity-45 text-[var(--base-content)]">{r.id} · {r.time}</p>
-            </div>
-            <div className="text-right flex-shrink-0">
-              <p className="text-xs font-black text-[var(--base-content)]">{r.fare}</p>
-              <p className={`text-[0.58rem] font-bold capitalize ${statusColor[r.status]}`}>{r.status}</p>
-            </div>
-          </motion.div>
-        ))}
+      <div className="flex flex-col items-center justify-center py-8 gap-3">
+        <Car size={32} style={{ color: 'color-mix(in oklch, var(--base-content) 25%, transparent)' }} />
+        <p className="text-xs font-semibold text-[var(--base-content)] opacity-45 text-center">
+          Ride history loads from the stats page.
+        </p>
+        <Link href="/partner/solo/stats">
+          <button className="btn-secondary px-4 py-1.5 text-xs">View Stats</button>
+        </Link>
       </div>
     </motion.div>
   );
 }
 
-function ComplianceWidget() {
+// ── Compliance widget — real data from selectCompliance ───────────────────────
+function ComplianceWidget({ compliance }) {
+  const docs    = compliance?.documents ?? [];
+  const overall = compliance?.overallStatus ?? null;
+
+  // Show at most 4 most critical docs
+  const ORDER  = { expired: 0, missing: 1, expiring: 2, valid: 3 };
+  const sorted = [...docs]
+    .sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9))
+    .slice(0, 4);
+
   return (
     <motion.div variants={fadeUp} className="glass-card p-5">
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-black text-xs uppercase tracking-widest text-[var(--base-content)]">Compliance</h3>
-        <Link href="/partner/solo/compliance/alerts">
-          <span className="text-xs font-bold text-[var(--warning)] cursor-pointer hover:underline flex items-center gap-1">
-            <AlertTriangle size={11} /> Alerts
+        <Link href="/partner/solo/compliance">
+          <span
+            className="text-xs font-bold cursor-pointer hover:underline flex items-center gap-1"
+            style={{
+              color: overall === 'critical' ? 'var(--error)'
+                   : overall === 'warning'  ? 'var(--warning)'
+                   : 'var(--primary)',
+            }}
+          >
+            {(overall === 'critical' || overall === 'warning') && <AlertTriangle size={11} />}
+            {overall ? overall.charAt(0).toUpperCase() + overall.slice(1) : 'View'}
           </span>
         </Link>
       </div>
-      <div className="space-y-2.5">
-        {COMPLIANCE_ITEMS.map((item) => {
-          const c = complianceInfo[item.status];
-          return (
-            <div key={item.label} className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${c.dot}`} />
-                <span className="text-xs font-semibold text-[var(--base-content)] truncate">{item.label}</span>
+
+      {sorted.length === 0 ? (
+        <p className="text-xs text-[var(--base-content)] opacity-40 py-4 text-center">No compliance data</p>
+      ) : (
+        <div className="space-y-2.5">
+          {sorted.map((item) => {
+            const c = COMPLIANCE_STATUS_CFG[item.status] ?? COMPLIANCE_STATUS_CFG.missing;
+            return (
+              <div key={item.label} className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${c.dot}`} />
+                  <span className="text-xs font-semibold text-[var(--base-content)] truncate">{item.label}</span>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {item.daysLeft != null && (
+                    <span className="text-[0.58rem] opacity-45 text-[var(--base-content)]">
+                      {item.status === 'expired' ? `${Math.abs(item.daysLeft)}d ago` : `${item.daysLeft}d`}
+                    </span>
+                  )}
+                  <span className={`badge ${c.cls} text-[0.55rem] py-0.5 px-1.5`}>{c.label}</span>
+                </div>
               </div>
-              <div className="flex items-center gap-1.5 flex-shrink-0">
-                <span className="text-[0.58rem] opacity-45 text-[var(--base-content)]">{item.daysLeft}d</span>
-                <span className={`badge ${c.cls} text-[0.55rem] py-0.5 px-1.5`}>{c.label}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </motion.div>
   );
 }
 
+// ── Vehicle card — real profile.vehicle data ───────────────────────────────────
 function VehicleCard({ profile }) {
+  const v = profile?.vehicle;
   return (
     <motion.div variants={fadeUp} className="glass-card p-5">
       <h3 className="font-black text-xs uppercase tracking-widest text-[var(--base-content)] mb-4">Vehicle Status</h3>
       <div className="flex items-center gap-3 mb-4">
-        <div className="w-10 h-10 rounded-[var(--r-field)] bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] flex items-center justify-center">
-          <Car size={18} className="text-[var(--primary)]" />
+        <div
+          className="w-10 h-10 rounded-[var(--r-field)] flex items-center justify-center"
+          style={{ background: 'color-mix(in srgb, var(--primary), transparent 88%)' }}
+        >
+          <Car size={18} style={{ color: 'var(--primary)' }} />
         </div>
-        <div>
-          <p className="text-sm font-black text-[var(--base-content)]">
-            {profile?.vehicle?.make || 'Toyota'} {profile?.vehicle?.model || 'Innova'}
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-black text-[var(--base-content)] truncate">
+            {v?.make && v?.model ? `${v.make} ${v.model}` : 'No vehicle added'}
           </p>
           <p className="text-xs opacity-50 text-[var(--base-content)]">
-            {profile?.vehicle?.registrationNumber || 'AP 16 AB 1234'}
+            {v?.registrationNumber ?? '—'}
           </p>
         </div>
-        <span className="ml-auto badge badge-success text-[0.6rem]">Verified</span>
+        <span
+          className={`badge text-[0.6rem] flex-shrink-0 ${
+            v?.verificationStatus === 'verified' ? 'badge-success' :
+            v?.verificationStatus === 'rejected' ? 'badge-error'   :
+            'badge-warning'
+          }`}
+        >
+          {v?.verificationStatus ?? 'pending'}
+        </span>
       </div>
+
       <div className="space-y-1.5">
         {[
-          { label: 'Insurance',    ok: true  },
-          { label: 'RC Book',      ok: true  },
-          { label: 'Fitness Cert', ok: false },
-          { label: 'Permit',       ok: true  },
+          { label: 'Insurance',    ok: !!v?.insurancePolicyUrl  },
+          { label: 'RC Book',      ok: !!v?.rcBookUrl           },
+          { label: 'Fitness Cert', ok: !!v?.fitnessCertUrl      },
+          { label: 'Permit',       ok: !!v?.permitType          },
         ].map((item) => (
           <div key={item.label} className="flex items-center justify-between text-xs">
             <span className="font-semibold text-[var(--base-content)] opacity-65">{item.label}</span>
             {item.ok
-              ? <CheckCircle2 size={13} className="text-[var(--success)]" />
-              : <XCircle      size={13} className="text-[var(--error)]"   />
+              ? <CheckCircle2 size={13} style={{ color: 'var(--success)' }} />
+              : <XCircle      size={13} style={{ color: 'var(--error)' }}   />
             }
           </div>
         ))}
       </div>
+
       <Link href="/partner/solo/vehicle/documents">
-        <motion.div whileHover={{ x: 3 }} className="mt-3.5 flex items-center justify-between text-xs font-bold text-[var(--primary)] cursor-pointer">
+        <motion.div
+          whileHover={{ x: 3 }}
+          className="mt-3.5 flex items-center justify-between text-xs font-bold text-[var(--primary)] cursor-pointer"
+        >
           Manage documents <ChevronRight size={13} />
         </motion.div>
       </Link>
@@ -485,33 +623,51 @@ function VehicleCard({ profile }) {
   );
 }
 
-function RatingCard() {
+// ── Rating card — real performance data ───────────────────────────────────────
+function RatingCard({ performance }) {
+  const p      = performance?.performance;
+  const rating = p?.rating       ?? 0;
+  const count  = p?.ratingCount  ?? 0;
+
+  // Fake breakdown distribution (API doesn't return star breakdown)
+  const dist = [76, 15, 6, 2, 1];
+
   return (
     <motion.div variants={fadeUp} className="glass-card p-5">
       <h3 className="font-black text-xs uppercase tracking-widest text-[var(--base-content)] mb-4">Rating Breakdown</h3>
       <div className="flex items-center gap-4 mb-3">
         <div>
-          <p className="text-4xl font-black text-[var(--primary)] leading-none">4.82</p>
+          <p className="text-4xl font-black text-[var(--primary)] leading-none">
+            {rating ? Number(rating).toFixed(2) : '—'}
+          </p>
           <div className="flex items-center gap-0.5 mt-1">
-            {[1,2,3,4,5].map((s) => (
-              <Star key={s} size={10} className={s <= 5 ? 'text-[var(--warning)] fill-[var(--warning)]' : 'text-[var(--base-300)]'} />
+            {[1, 2, 3, 4, 5].map((s) => (
+              <Star
+                key={`star-${s}`}
+                size={10}
+                className={s <= Math.round(rating) ? 'fill-[var(--warning)]' : ''}
+                style={{ color: s <= Math.round(rating) ? 'var(--warning)' : 'var(--base-300)' }}
+              />
             ))}
           </div>
-          <p className="text-[0.6rem] opacity-40 text-[var(--base-content)] mt-1">1,284 rides</p>
+          <p className="text-[0.6rem] opacity-40 text-[var(--base-content)] mt-1">{count} reviews</p>
         </div>
         <div className="flex-1 space-y-1">
-          {[5,4,3,2,1].map((star, i) => (
-            <div key={star} className="flex items-center gap-1.5">
+          {[5, 4, 3, 2, 1].map((star, i) => (
+            <div key={`bar-star-${star}`} className="flex items-center gap-1.5">
               <span className="text-[0.58rem] opacity-45 text-[var(--base-content)] w-2">{star}</span>
               <div className="flex-1 h-1.5 bg-[var(--base-300)] rounded-full overflow-hidden">
                 <motion.div
-                  className="h-full bg-[var(--warning)] rounded-full"
+                  className="h-full rounded-full"
+                  style={{ background: 'var(--warning)' }}
                   initial={{ width: 0 }}
-                  animate={{ width: `${[76,15,6,2,1][i]}%` }}
+                  animate={{ width: `${dist[i]}%` }}
                   transition={{ duration: 0.8, delay: i * 0.1 }}
                 />
               </div>
-              <span className="text-[0.55rem] opacity-35 text-[var(--base-content)] w-5 text-right">{[76,15,6,2,1][i]}%</span>
+              <span className="text-[0.55rem] opacity-35 text-[var(--base-content)] w-5 text-right">
+                {dist[i]}%
+              </span>
             </div>
           ))}
         </div>
@@ -520,13 +676,11 @@ function RatingCard() {
   );
 }
 
-// ── Desktop Sidebar ────────────────────────────────────────────────────────────
+// ── Desktop sidebar ────────────────────────────────────────────────────────────
 function DesktopSidebar({ activePath }) {
   const [openGroup, setOpenGroup] = useState('Dashboard');
-
   return (
     <aside className="hidden lg:flex flex-col w-60 xl:w-64 h-screen sticky top-0 bg-[var(--base-200)] border-r border-[var(--base-300)] overflow-y-auto flex-shrink-0">
-      {/* Logo */}
       <div className="px-4 py-4 border-b border-[var(--base-300)]">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-[var(--r-field)] bg-gradient-to-br from-[var(--primary)] to-[var(--accent)] flex items-center justify-center shadow-[0_4px_12px_color-mix(in_srgb,var(--primary),transparent_60%)]">
@@ -539,7 +693,6 @@ function DesktopSidebar({ activePath }) {
         </div>
       </div>
 
-      {/* Nav */}
       <nav className="flex-1 px-2.5 py-3 space-y-0.5 overflow-y-auto">
         {SIDEBAR_GROUPS.map((group) => {
           const isOpen = openGroup === group.title;
@@ -550,7 +703,9 @@ function DesktopSidebar({ activePath }) {
                 className="w-full flex items-center gap-2 px-2.5 py-2 rounded-[var(--r-field)] hover:bg-[var(--base-300)] transition-colors cursor-pointer"
               >
                 <span className="text-[var(--primary)] opacity-75">{group.icon}</span>
-                <span className="flex-1 text-left text-[0.65rem] font-bold text-[var(--base-content)] uppercase tracking-wider">{group.title}</span>
+                <span className="flex-1 text-left text-[0.65rem] font-bold text-[var(--base-content)] uppercase tracking-wider">
+                  {group.title}
+                </span>
                 <motion.span animate={{ rotate: isOpen ? 90 : 0 }} transition={{ duration: 0.2 }}>
                   <ChevronRight size={12} className="opacity-35" />
                 </motion.span>
@@ -593,11 +748,10 @@ function DesktopSidebar({ activePath }) {
         })}
       </nav>
 
-      {/* Footer */}
       <div className="p-3 border-t border-[var(--base-300)]">
         <Link href="/partner/solo/security/sessions">
           <div className="flex items-center gap-2 px-2 py-1.5 rounded-[var(--r-field)] text-[0.65rem] font-semibold text-[var(--base-content)] opacity-50 hover:opacity-100 hover:bg-[var(--base-300)] transition-all cursor-pointer">
-            <Lock size={12} /> Security & Sessions
+            <Lock size={12} /> Security &amp; Sessions
           </div>
         </Link>
       </div>
@@ -605,12 +759,22 @@ function DesktopSidebar({ activePath }) {
   );
 }
 
-// ── Main component ─────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// Main page
+// ═════════════════════════════════════════════════════════════════════════════
 export default function SoloPartnerDashboard() {
-  const user    = useSelector(selectUser);
-  const profile = useSelector(selectProfile);
+  const dispatch = useDispatch();
 
-  const [isOnline,   setIsOnline]   = useState(false);
+  // Real selectors
+  const user        = useSelector(selectUser);
+  const profile     = useSelector(selectProfile);         // SoloDriverPartner doc
+  const performance = useSelector(selectPerformance);     // GET /performance
+  const rewards     = useSelector(selectRewards);         // GET /rewards
+  const settlement  = useSelector(selectSettlementSummary); // GET /settlement
+  const compliance  = useSelector(selectCompliance);      // GET /compliance
+  const dispatch_st = useSelector(selectDispatch);        // GET /dispatch/status
+  const statusLoading = useSelector(selectLoading('updateDispatchStatus'));
+
   const [mobileMenu, setMobileMenu] = useState(false);
   const [greeting,   setGreeting]   = useState('');
 
@@ -619,23 +783,37 @@ export default function SoloPartnerDashboard() {
     setGreeting(h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening');
   }, []);
 
+  // Fetch all dashboard data on mount
+  useEffect(() => {
+    dispatch(fetchMyProfile());
+    dispatch(fetchPerformance());
+    dispatch(fetchRewards());
+    dispatch(fetchSettlementSummary());
+    dispatch(fetchComplianceDashboard());
+    dispatch(fetchDispatchStatus());
+  }, [dispatch]);
+
+  const isOnline  = dispatch_st?.status === 'Available';
   const firstName = profile?.displayName?.split(' ')[0]
     || user?.name?.split(' ')[0]
     || 'Partner';
 
+  // Toggle online/offline via real dispatch route
+  const handleToggleOnline = () => {
+    const next = isOnline ? 'Offline' : 'Available';
+    dispatch(setDispatchStatusOptimistic(next));
+    dispatch(updateDispatchStatus(next));
+  };
+
   return (
     <div data-theme="solodriverpartner" className="min-h-screen bg-[var(--base-100)] flex">
 
-      {/* Desktop sidebar */}
       <DesktopSidebar activePath="/partner/solo/dashboard" />
 
-      {/* Main */}
       <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
 
-        {/* ── Top bar ──────────────────────────────────────────────────────── */}
+        {/* ── Top bar ──────────────────────────────────────────────────── */}
         <header className="sticky top-0 z-[90] bg-[color-mix(in_srgb,var(--base-100)_85%,transparent)] backdrop-blur-strong border-b border-[var(--base-300)] px-4 lg:px-6 py-3 flex items-center justify-between gap-3">
-
-          {/* Mobile hamburger */}
           <motion.button
             whileTap={{ scale: 0.9 }}
             className="lg:hidden w-8 h-8 rounded-[var(--r-field)] bg-[var(--base-300)] flex items-center justify-center cursor-pointer"
@@ -644,21 +822,26 @@ export default function SoloPartnerDashboard() {
             <Menu size={15} className="text-[var(--base-content)]" />
           </motion.button>
 
-          {/* Title */}
           <div className="flex-1">
             <h1 className="text-sm lg:text-base font-black text-[var(--base-content)] leading-tight">
               {greeting}, <span className="text-[var(--primary)]">{firstName}</span> 👋
             </h1>
             <p className="text-[0.6rem] opacity-45 text-[var(--base-content)] hidden lg:block mt-0.5">
-              {profile?.partnerCode || 'LKS-SDP-XXXXX'} · Solo Driver Partner
+              {profile?.partnerCode ?? '—'} · Solo Driver Partner
             </p>
           </div>
 
-          {/* Controls */}
           <div className="flex items-center gap-2">
-            <OnlineToggle isOnline={isOnline} onToggle={() => setIsOnline(!isOnline)} />
+            <OnlineToggle
+              isOnline={isOnline}
+              loading={statusLoading}
+              onToggle={handleToggleOnline}
+            />
             <Link href="/partner/solo/notifications">
-              <motion.button whileTap={{ scale: 0.9 }} className="relative w-8 h-8 rounded-[var(--r-field)] bg-[var(--base-200)] flex items-center justify-center cursor-pointer hover:bg-[var(--base-300)] transition-colors">
+              <motion.button
+                whileTap={{ scale: 0.9 }}
+                className="relative w-8 h-8 rounded-[var(--r-field)] bg-[var(--base-200)] flex items-center justify-center cursor-pointer hover:bg-[var(--base-300)] transition-colors"
+              >
                 <Bell size={15} className="text-[var(--base-content)]" />
                 <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-[var(--error)] rounded-full" />
               </motion.button>
@@ -666,7 +849,7 @@ export default function SoloPartnerDashboard() {
             <Link href="/partner/solo/profile">
               <motion.img
                 whileTap={{ scale: 0.9 }}
-                src={user?.avatar || 'https://ik.imagekit.io/zxxzgk3iq/Likeson/ChatGPT%20Image%20Feb%209,%202026,%2011_02_59%20AM.png?updatedAt=1770615249818'}
+                src={user?.avatar ?? 'https://ik.imagekit.io/zxxzgk3iq/Likeson/ChatGPT%20Image%20Feb%209,%202026,%2011_02_59%20AM.png?updatedAt=1770615249818'}
                 alt="avatar"
                 className="w-8 h-8 lg:w-9 lg:h-9 rounded-[var(--r-field)] object-cover ring-2 ring-[var(--primary)] cursor-pointer"
               />
@@ -674,7 +857,7 @@ export default function SoloPartnerDashboard() {
           </div>
         </header>
 
-        {/* ── Mobile drawer ─────────────────────────────────────────────────── */}
+        {/* ── Mobile drawer ─────────────────────────────────────────── */}
         <AnimatePresence>
           {mobileMenu && (
             <>
@@ -688,10 +871,9 @@ export default function SoloPartnerDashboard() {
                 transition={{ type: 'spring', damping: 26, stiffness: 250 }}
                 className="fixed inset-y-0 left-0 z-[201] w-72 bg-[var(--base-200)] shadow-2xl overflow-y-auto lg:hidden"
               >
-                {/* Drawer header */}
                 <div className="px-4 py-4 border-b border-[var(--base-300)] flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-[var(--r-field)] bg-gradient-to-br from-[var(--primary)] to-[var(--accent)] flex items-center justify-center">
+                    <div className="w-8 h-8 rounded-[var(--r-field)]  bg-primary flex items-center justify-center">
                       <Zap size={15} className="text-white" />
                     </div>
                     <p className="font-black text-sm text-[var(--base-content)]">Likeson Partner</p>
@@ -700,12 +882,12 @@ export default function SoloPartnerDashboard() {
                     <X size={17} className="text-[var(--base-content)] opacity-55" />
                   </motion.button>
                 </div>
-
-                {/* Drawer nav */}
                 <nav className="px-3 py-3">
                   {SIDEBAR_GROUPS.map((group) => (
                     <div key={group.title} className="mb-3">
-                      <p className="px-2 mb-1 text-[0.55rem] font-black uppercase tracking-widest text-[var(--primary)] opacity-80">{group.title}</p>
+                      <p className="px-2 mb-1 text-[0.55rem] font-black uppercase tracking-widest text-[var(--primary)] opacity-80">
+                        {group.title}
+                      </p>
                       {group.links.map((link) => (
                         <Link key={link.href} href={link.href} onClick={() => setMobileMenu(false)}>
                           <div className="flex items-center gap-2.5 px-3 py-2 rounded-[var(--r-field)] text-xs font-semibold text-[var(--base-content)] opacity-75 hover:opacity-100 hover:bg-[var(--base-300)] transition-all cursor-pointer">
@@ -721,67 +903,46 @@ export default function SoloPartnerDashboard() {
           )}
         </AnimatePresence>
 
-        {/* ── Page body ─────────────────────────────────────────────────────── */}
+        {/* ── Page body ─────────────────────────────────────────────── */}
         <main className="flex-1 p-4 lg:p-6 pb-24 lg:pb-8 overflow-x-hidden">
 
-          {/* ─── MOBILE layout ─── */}
-          <motion.div
-            className="lg:hidden space-y-4"
-            initial="hidden"
-            animate="show"
-            variants={stagger}
-          >
-            {/* 2-col stat grid */}
-            <motion.div variants={stagger} className="grid grid-cols-2 gap-3">
-              {DEMO_STATS.map((s) => <StatCard key={s.label} item={s} />)}
-            </motion.div>
-
+          {/* Mobile layout */}
+          <motion.div className="lg:hidden space-y-4" initial="hidden" animate="show" variants={stagger}>
+            <StatsRow performance={performance} settlement={settlement} />
             <ProfileCard user={user} profile={profile} />
             <QuickActions />
-            <EarningsSummary />
-            <RecentRides />
-            <ComplianceWidget />
+            <EarningsSummary settlement={settlement} rewards={rewards} />
+            <RecentRidesPlaceholder />
+            <ComplianceWidget compliance={compliance} />
           </motion.div>
 
-          {/* ─── DESKTOP layout ─── */}
-          <motion.div
-            className="hidden lg:block"
-            initial="hidden"
-            animate="show"
-            variants={stagger}
-          >
+          {/* Desktop layout */}
+          <motion.div className="hidden lg:block" initial="hidden" animate="show" variants={stagger}>
             {/* Row 1 — 4 stat cards */}
-            <motion.div variants={stagger} className="grid grid-cols-4 gap-4 mb-6">
-              {DEMO_STATS.map((s) => <StatCard key={s.label} item={s} />)}
-            </motion.div>
+            <div className="mb-6">
+              <StatsRow performance={performance} settlement={settlement} />
+            </div>
 
             {/* Row 2 — 3-column grid */}
             <div className="grid grid-cols-12 gap-5">
-
-              {/* Col A (3 cols) — Profile + Quick Actions */}
               <div className="col-span-3 space-y-5">
                 <ProfileCard user={user} profile={profile} />
                 <QuickActions />
               </div>
-
-              {/* Col B (5 cols) — Earnings + Recent Rides */}
               <div className="col-span-5 space-y-5">
-                <EarningsSummary />
-                <RecentRides />
+                <EarningsSummary settlement={settlement} rewards={rewards} />
+                <RecentRidesPlaceholder />
               </div>
-
-              {/* Col C (4 cols) — Compliance + Vehicle + Rating */}
               <div className="col-span-4 space-y-5">
-                <ComplianceWidget />
+                <ComplianceWidget compliance={compliance} />
                 <VehicleCard profile={profile} />
-                <RatingCard />
+                <RatingCard performance={performance} />
               </div>
             </div>
           </motion.div>
+
         </main>
       </div>
-
-     
     </div>
   );
 }

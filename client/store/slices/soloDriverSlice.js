@@ -1,5 +1,3 @@
- 
-
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import API   from '../api';
 import toast from 'react-hot-toast';
@@ -18,6 +16,10 @@ const rejectWith = (thunkAPI, error, fallback = 'Something went wrong') => {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §A  PROFILE THUNKS
+// Routes: GET /me, PATCH /me, PATCH /me/contact, PATCH /me/address,
+//         PATCH /me/professional, POST /me/training-certificates,
+//         DELETE /me/training-certificates/:certId, PATCH /me/emergency,
+//         GET /me/settings, PATCH /me/settings, DELETE /me
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const fetchMyProfile = createAsyncThunk(
@@ -172,6 +174,7 @@ export const requestAccountDeletion = createAsyncThunk(
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §B  KYC THUNKS
+// Routes: GET /kyc, POST /kyc, POST /kyc/medical, POST /kyc/psv
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const fetchKycStatus = createAsyncThunk(
@@ -232,6 +235,8 @@ export const submitPsvBadge = createAsyncThunk(
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §C  VEHICLE THUNKS
+// Routes: GET /vehicle, PUT /vehicle, PATCH /vehicle/documents,
+//         PATCH /vehicle/features, PATCH /vehicle/location
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const fetchVehicle = createAsyncThunk(
@@ -292,9 +297,11 @@ export const updateVehicleFeatures = createAsyncThunk(
 
 export const updateVehicleLocation = createAsyncThunk(
   'soloDriver/updateVehicleLocation',
-  async ({ lng, lat, gpsDeviceId }, thunkAPI) => {
+  async ({ lng, lat, heading, speedKmh, gpsDeviceId }, thunkAPI) => {
     try {
-      const { data } = await API.patch(`${BASE}/vehicle/location`, { lng, lat, gpsDeviceId });
+      const { data } = await API.patch(`${BASE}/vehicle/location`, {
+        lng, lat, heading, speedKmh, gpsDeviceId,
+      });
       return data.data;
     } catch (err) {
       return rejectWith(thunkAPI, err, 'Location update failed');
@@ -304,6 +311,7 @@ export const updateVehicleLocation = createAsyncThunk(
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §D  BANK & SETTLEMENT THUNKS
+// Routes: GET /bank, POST /bank, GET /settlement
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const fetchBankDetails = createAsyncThunk(
@@ -347,37 +355,56 @@ export const fetchSettlementSummary = createAsyncThunk(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// §E  AVAILABILITY THUNKS
+// §E  DISPATCH THUNKS
+// Routes: GET /dispatch/status, PATCH /dispatch/status, PATCH /dispatch/shift
+// NOTE: Old /availability thunks removed — router has no such routes.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export const fetchAvailability = createAsyncThunk(
-  'soloDriver/fetchAvailability',
+export const fetchDispatchStatus = createAsyncThunk(
+  'soloDriver/fetchDispatchStatus',
   async (_, thunkAPI) => {
     try {
-      const { data } = await API.get(`${BASE}/availability`);
+      const { data } = await API.get(`${BASE}/dispatch/status`);
       return data.data;
     } catch (err) {
-      return rejectWith(thunkAPI, err, 'Failed to load availability');
+      return rejectWith(thunkAPI, err, 'Failed to load dispatch status');
     }
   }
 );
 
-export const toggleAvailability = createAsyncThunk(
-  'soloDriver/toggleAvailability',
-  async (isAvailable, thunkAPI) => {
+// status: 'Available' | 'Offline' | 'On-Break'
+export const updateDispatchStatus = createAsyncThunk(
+  'soloDriver/updateDispatchStatus',
+  async (status, thunkAPI) => {
     try {
-      const { data } = await API.patch(`${BASE}/availability`, { isAvailable });
-      toast.success(data.message);
+      const { data } = await API.patch(`${BASE}/dispatch/status`, { status });
+      toast.success(data.message || `Status: ${status}`);
+      return data.data; // { status }
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Status update failed');
+      return rejectWith(thunkAPI, err, 'Failed to update dispatch status');
+    }
+  }
+);
+
+// payload: { shiftType?, startTime?, endTime?, daysAvailable? }
+export const updateDispatchShift = createAsyncThunk(
+  'soloDriver/updateDispatchShift',
+  async (payload, thunkAPI) => {
+    try {
+      const { data } = await API.patch(`${BASE}/dispatch/shift`, payload);
+      toast.success(data.message || 'Shift updated');
       return data.data;
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Failed to update availability');
-      return rejectWith(thunkAPI, err, 'Failed to update availability');
+      toast.error(err?.response?.data?.message || 'Shift update failed');
+      return rejectWith(thunkAPI, err, 'Failed to update shift');
     }
   }
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §F  SERVICE ZONES THUNKS
+// Routes: GET /service-zones, POST /service-zones, DELETE /service-zones/:zoneId
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const fetchServiceZones = createAsyncThunk(
@@ -422,6 +449,7 @@ export const removeServiceZone = createAsyncThunk(
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §G  PRICING THUNKS
+// Routes: GET /pricing, PUT /pricing
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const fetchPricing = createAsyncThunk(
@@ -451,35 +479,50 @@ export const updatePricing = createAsyncThunk(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// §H  STATS & RATING THUNKS
+// §H  PERFORMANCE & REWARDS THUNKS
+// Routes: GET /performance, GET /rewards, GET /rewards/badges
+// NOTE: Old /stats and /rating thunks removed — router has no such routes.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export const fetchStats = createAsyncThunk(
-  'soloDriver/fetchStats',
+export const fetchPerformance = createAsyncThunk(
+  'soloDriver/fetchPerformance',
   async (_, thunkAPI) => {
     try {
-      const { data } = await API.get(`${BASE}/stats`);
+      const { data } = await API.get(`${BASE}/performance`);
       return data.data;
     } catch (err) {
-      return rejectWith(thunkAPI, err, 'Failed to load stats');
+      return rejectWith(thunkAPI, err, 'Failed to load performance');
     }
   }
 );
 
-export const fetchRating = createAsyncThunk(
-  'soloDriver/fetchRating',
+export const fetchRewards = createAsyncThunk(
+  'soloDriver/fetchRewards',
   async (_, thunkAPI) => {
     try {
-      const { data } = await API.get(`${BASE}/rating`);
+      const { data } = await API.get(`${BASE}/rewards`);
       return data.data;
     } catch (err) {
-      return rejectWith(thunkAPI, err, 'Failed to load rating');
+      return rejectWith(thunkAPI, err, 'Failed to load rewards');
+    }
+  }
+);
+
+export const fetchRewardBadges = createAsyncThunk(
+  'soloDriver/fetchRewardBadges',
+  async (_, thunkAPI) => {
+    try {
+      const { data } = await API.get(`${BASE}/rewards/badges`);
+      return data.data;
+    } catch (err) {
+      return rejectWith(thunkAPI, err, 'Failed to load badges');
     }
   }
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §I  COMPLIANCE THUNKS
+// Routes: GET /compliance
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const fetchComplianceDashboard = createAsyncThunk(
@@ -495,7 +538,12 @@ export const fetchComplianceDashboard = createAsyncThunk(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// §J  SECURITY THUNKS
+// §J  SECURITY & NOTIFICATIONS THUNKS
+// Routes: GET /security/sessions, DELETE /security/sessions/:sessionId,
+//         GET /security/devices, DELETE /security/devices/:deviceId,
+//         POST /security/change-password,
+//         GET /notifications, PATCH /notifications/:id/read,
+//         PATCH /notifications/read-all
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const fetchSessions = createAsyncThunk(
@@ -567,10 +615,6 @@ export const changePassword = createAsyncThunk(
   }
 );
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// §K  NOTIFICATION THUNKS
-// ═══════════════════════════════════════════════════════════════════════════════
-
 export const fetchNotifications = createAsyncThunk(
   'soloDriver/fetchNotifications',
   async ({ page = 1, limit = 20, unread, type } = {}, thunkAPI) => {
@@ -613,19 +657,20 @@ export const markNotificationRead = createAsyncThunk(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// §L  ADMIN THUNKS
+// §K  ADMIN THUNKS
+// Routes: GET /admin/list, POST /admin/create, GET /admin/:id,
+//         PATCH /admin/:id/verify-kyc, PATCH /admin/:id/verify-vehicle,
+//         PATCH /admin/:id/verify-bank, PATCH /admin/:id/status,
+//         PATCH /admin/:id/block, PATCH /admin/:id/platform-fee,
+//         GET /admin/compliance-alerts, POST /admin/:id/notes,
+//         PATCH /admin/:id/rewards/award-badge,
+//         PATCH /admin/:id/rewards/adjust-coins
+// NOTE: adminCreateCompanionDriver removed — router has no /admin/:id/create-driver route.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const adminCreateSoloDriver = createAsyncThunk(
   'soloDriver/adminCreateSoloDriver',
   async (payload, thunkAPI) => {
-    // payload: { name, email, phone, legalName, address,
-    //   displayName?, dateOfBirth?, gender?,
-    //   drivingLicenceNumber?, drivingLicenceExpiry?,
-    //   registrationNumber?, vehicleType?, make?, vehicleModel?,
-    //   businessType?, tradeName?, settlementCycle?,
-    //   platformFeeOverride?: { type: 'fixed'|'percentage', value: number },
-    //   internalNotes?, adminNotes? }
     try {
       const { data } = await API.post(`${ADMIN}/create`, payload);
       toast.success(data.message || 'Solo driver partner account created');
@@ -646,21 +691,21 @@ export const adminFetchPartnerList = createAsyncThunk(
       page = 1, limit = 20,
       status, kycStatus, vehicleStatus,
       city, state, search,
-      hasDriverProfile, sortBy, sortOrder,
+      sortBy, sortOrder, isBlocked, partnershipStatus,
     } = {},
     thunkAPI
   ) => {
     try {
       const params = { page, limit };
-      if (status)           params.status           = status;
-      if (kycStatus)        params.kycStatus        = kycStatus;
-      if (vehicleStatus)    params.vehicleStatus    = vehicleStatus;
-      if (city)             params.city             = city;
-      if (state)            params.state            = state;
-      if (search)           params.search           = search;
-      if (hasDriverProfile !== undefined) params.hasDriverProfile = hasDriverProfile;
-      if (sortBy)           params.sortBy           = sortBy;
-      if (sortOrder)        params.sortOrder        = sortOrder;
+      if (status || partnershipStatus) params.status = status || partnershipStatus;
+      if (kycStatus)     params.kycStatus     = kycStatus;
+      if (vehicleStatus) params.vehicleStatus = vehicleStatus;
+      if (city)          params.city          = city;
+      if (state)         params.state         = state;
+      if (search)        params.search        = search;
+      if (isBlocked !== undefined) params.isBlocked = isBlocked;
+      if (sortBy)        params.sortBy        = sortBy;
+      if (sortOrder)     params.sortOrder     = sortOrder;
       const { data } = await API.get(`${ADMIN}/list`, { params });
       return data;
     } catch (err) {
@@ -701,7 +746,7 @@ export const adminVerifyKyc = createAsyncThunk(
         action, rejectionReason,
       });
       toast.success(data.message || `KYC ${action}d`);
-      return { partnerId, kycStatus: data.data.kycStatus, action };
+      return { partnerId, ...data.data }; // { kycStatus, autoActivated, partnershipStatus }
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Action failed');
       return rejectWith(thunkAPI, err, 'KYC verification action failed');
@@ -717,7 +762,7 @@ export const adminVerifyVehicle = createAsyncThunk(
         action, rejectionReason,
       });
       toast.success(data.message || `Vehicle ${action}d`);
-      return { partnerId, vehicleStatus: data.data.vehicleStatus, action };
+      return { partnerId, ...data.data }; // { vehicleStatus, autoActivated, partnershipStatus }
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Action failed');
       return rejectWith(thunkAPI, err, 'Vehicle verification action failed');
@@ -731,7 +776,7 @@ export const adminVerifyBank = createAsyncThunk(
     try {
       const { data } = await API.patch(`${ADMIN}/${partnerId}/verify-bank`);
       toast.success(data.message || 'Bank account verified');
-      return partnerId;
+      return { partnerId, ...data.data }; // { bankVerified, autoActivated, partnershipStatus }
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Verification failed');
       return rejectWith(thunkAPI, err, 'Bank verification failed');
@@ -771,32 +816,6 @@ export const adminBlockPartner = createAsyncThunk(
   }
 );
 
-export const adminCreateCompanionDriver = createAsyncThunk(
-  'soloDriver/adminCreateCompanionDriver',
-  async (partnerId, thunkAPI) => {
-    try {
-      const { data } = await API.post(`${ADMIN}/${partnerId}/create-driver`);
-      toast.success(data.message || 'Companion driver profile created');
-      return { partnerId, driverProfileId: data.data.driverProfileId };
-    } catch (err) {
-      toast.error(err?.response?.data?.message || 'Failed to create driver profile');
-      return rejectWith(thunkAPI, err, 'Failed to create companion driver');
-    }
-  }
-);
-
-/**
- * adminUpdatePlatformFee  (formerly adminUpdateCommission)
- *
- * Sets a per-partner platform fee override that takes precedence over
- * PlatformPricingConfig.transport.platformFee for this partner's rides.
- *
- * payload:
- *   partnerId       – ObjectId string
- *   platformFeeOverride – { type: 'fixed'|'percentage', value: number } | null
- *                         null clears the override → global config is used
- *   settlementCycle – 'Daily' | 'Weekly' | 'Bi-Weekly' | 'Monthly'
- */
 export const adminUpdatePlatformFee = createAsyncThunk(
   'soloDriver/adminUpdatePlatformFee',
   async ({ partnerId, platformFeeOverride, settlementCycle }, thunkAPI) => {
@@ -828,25 +847,60 @@ export const adminUpdateNotes = createAsyncThunk(
   }
 );
 
+// payload: { partnerId, badgeId, name, description?, iconUrl? }
+export const adminAwardBadge = createAsyncThunk(
+  'soloDriver/adminAwardBadge',
+  async ({ partnerId, badgeId, name, description, iconUrl }, thunkAPI) => {
+    try {
+      const { data } = await API.patch(`${ADMIN}/${partnerId}/rewards/award-badge`, {
+        badgeId, name, description, iconUrl,
+      });
+      toast.success(data.message || `Badge "${name}" awarded`);
+      return { partnerId, badgeId, name, description, iconUrl };
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Failed to award badge');
+      return rejectWith(thunkAPI, err, 'Failed to award badge');
+    }
+  }
+);
+
+// payload: { partnerId, type: 'ADMIN_CREDIT'|'ADMIN_DEBIT', amount, description }
+export const adminAdjustCoins = createAsyncThunk(
+  'soloDriver/adminAdjustCoins',
+  async ({ partnerId, type, amount, description }, thunkAPI) => {
+    try {
+      const { data } = await API.patch(`${ADMIN}/${partnerId}/rewards/adjust-coins`, {
+        type, amount, description,
+      });
+      toast.success(data.message || 'Coins adjusted');
+      return { partnerId, type, amount, newBalance: data.data.newBalance };
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Coin adjustment failed');
+      return rejectWith(thunkAPI, err, 'Failed to adjust coins');
+    }
+  }
+);
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// §M  INITIAL STATE & SLICE
+// §L  INITIAL STATE & SLICE
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const initialState = {
-  profile:      null,
-  settings:     null,
-  kyc:          null,
-  vehicle:      null,
-  bankDetails:  null,
-  settlement:   null,
-  availability: null,
-  serviceZones: [],
-  pricing:      null,
-  stats:        null,
-  rating:       null,
-  compliance:   null,
-  sessions:     [],
-  devices:      [],
+  profile:       null,
+  settings:      null,
+  kyc:           null,
+  vehicle:       null,
+  bankDetails:   null,
+  settlement:    null,
+  dispatch:      null,   // replaces availability — GET /dispatch/status payload
+  serviceZones:  [],
+  pricing:       null,
+  performance:   null,   // GET /performance
+  rewards:       null,   // GET /rewards
+  badges:        [],     // GET /rewards/badges
+  compliance:    null,
+  sessions:      [],
+  devices:       [],
   notifications: {
     list:        [],
     pagination:  null,
@@ -863,6 +917,7 @@ const initialState = {
   },
 
   loading: {
+    // Profile
     profile:               false,
     updateProfile:         false,
     updateContact:         false,
@@ -874,48 +929,61 @@ const initialState = {
     settings:              false,
     updateSettings:        false,
     deletionRequest:       false,
+    // KYC
     kyc:                   false,
     submitKyc:             false,
     submitMedical:         false,
     submitPsv:             false,
+    // Vehicle
     vehicle:               false,
     updateVehicle:         false,
     updateVehicleDocs:     false,
     updateVehicleFeatures: false,
     updateLocation:        false,
+    // Bank & Settlement
     bank:                  false,
     submitBank:            false,
     settlement:            false,
-    availability:          false,
-    toggleAvailability:    false,
+    // Dispatch
+    dispatch:              false,
+    updateDispatchStatus:  false,
+    updateDispatchShift:   false,
+    // Service Zones
     serviceZones:          false,
     addZone:               false,
     removeZone:            false,
+    // Pricing
     pricing:               false,
     updatePricing:         false,
-    stats:                 false,
-    rating:                false,
+    // Performance & Rewards
+    performance:           false,
+    rewards:               false,
+    badges:                false,
+    // Compliance
     compliance:            false,
+    // Security
     sessions:              false,
     revokeSession:         false,
     devices:               false,
     removeDevice:          false,
     changePassword:        false,
+    // Notifications
     notifications:         false,
     markAllRead:           false,
-    // admin
-    adminCreate:               false,
-    adminList:                 false,
-    adminDetail:               false,
-    adminVerifyKyc:            false,
-    adminVerifyVehicle:        false,
-    adminVerifyBank:           false,
-    adminStatus:               false,
-    adminBlock:                false,
-    adminCreateDriver:         false,
-    adminPlatformFee:          false,   // renamed from adminCommission
-    adminComplianceAlerts:     false,
-    adminNotes:                false,
+    // Admin
+    adminCreate:           false,
+    adminList:             false,
+    adminDetail:           false,
+    adminVerifyKyc:        false,
+    adminVerifyVehicle:    false,
+    adminVerifyBank:       false,
+    adminStatus:           false,
+    adminBlock:            false,
+    adminPlatformFee:      false,
+    adminComplianceAlerts: false,
+    adminNotes:            false,
+    adminAwardBadge:       false,
+    adminAdjustCoins:      false,
   },
 
   errors: {},
@@ -938,9 +1006,10 @@ const soloDriverSlice = createSlice({
     resetSoloDriver() {
       return initialState;
     },
-    setAvailabilityOptimistic(state, action) {
-      if (state.availability) state.availability.isAvailable = action.payload;
-      if (state.profile)      state.profile.isAvailable      = action.payload;
+    // Optimistic dispatch status toggle (e.g. Available ↔ Offline)
+    setDispatchStatusOptimistic(state, action) {
+      if (state.dispatch) state.dispatch.status = action.payload;
+      if (state.profile)  state.profile.status  = action.payload;
     },
     incrementUnreadCount(state) {
       state.notifications.unreadCount += 1;
@@ -952,7 +1021,8 @@ const soloDriverSlice = createSlice({
   },
 
   extraReducers: (builder) => {
-    // §A  Profile
+
+    // ── §A  Profile ────────────────────────────────────────────────────────
     builder
       .addCase(fetchMyProfile.pending,   setLoading('profile'))
       .addCase(fetchMyProfile.rejected,  setError('profile'))
@@ -1033,7 +1103,7 @@ const soloDriverSlice = createSlice({
       .addCase(requestAccountDeletion.rejected,  setError('deletionRequest'))
       .addCase(requestAccountDeletion.fulfilled, clearLoading('deletionRequest'))
 
-    // §B  KYC
+    // ── §B  KYC ────────────────────────────────────────────────────────────
       .addCase(fetchKycStatus.pending,   setLoading('kyc'))
       .addCase(fetchKycStatus.rejected,  setError('kyc'))
       .addCase(fetchKycStatus.fulfilled, (state, action) => {
@@ -1056,7 +1126,7 @@ const soloDriverSlice = createSlice({
       .addCase(submitPsvBadge.rejected,  setError('submitPsv'))
       .addCase(submitPsvBadge.fulfilled, clearLoading('submitPsv'))
 
-    // §C  Vehicle
+    // ── §C  Vehicle ────────────────────────────────────────────────────────
       .addCase(fetchVehicle.pending,   setLoading('vehicle'))
       .addCase(fetchVehicle.rejected,  setError('vehicle'))
       .addCase(fetchVehicle.fulfilled, (state, action) => {
@@ -1096,9 +1166,11 @@ const soloDriverSlice = createSlice({
           };
           state.vehicle.lastLocationUpdatedAt = action.payload.updatedAt;
         }
+        // Mirror onto dispatch so isDispatchable stays fresh
+        if (state.dispatch) state.dispatch.lastLocationUpdate = action.payload?.updatedAt;
       })
 
-    // §D  Bank & Settlement
+    // ── §D  Bank & Settlement ──────────────────────────────────────────────
       .addCase(fetchBankDetails.pending,   setLoading('bank'))
       .addCase(fetchBankDetails.rejected,  setError('bank'))
       .addCase(fetchBankDetails.fulfilled, (state, action) => {
@@ -1117,27 +1189,35 @@ const soloDriverSlice = createSlice({
         state.settlement          = action.payload;
       })
 
-    // §E  Availability
-      .addCase(fetchAvailability.pending,   setLoading('availability'))
-      .addCase(fetchAvailability.rejected,  setError('availability'))
-      .addCase(fetchAvailability.fulfilled, (state, action) => {
-        state.loading.availability = false;
-        state.availability          = action.payload;
+    // ── §E  Dispatch ───────────────────────────────────────────────────────
+      .addCase(fetchDispatchStatus.pending,   setLoading('dispatch'))
+      .addCase(fetchDispatchStatus.rejected,  setError('dispatch'))
+      .addCase(fetchDispatchStatus.fulfilled, (state, action) => {
+        state.loading.dispatch = false;
+        state.dispatch          = action.payload;
       })
 
-      .addCase(toggleAvailability.pending,   setLoading('toggleAvailability'))
-      .addCase(toggleAvailability.rejected,  (state, action) => {
-        state.loading.toggleAvailability = false;
-        state.errors.toggleAvailability  = action.payload;
-        if (state.availability) state.availability.isAvailable = !state.availability.isAvailable;
+      .addCase(updateDispatchStatus.pending,   setLoading('updateDispatchStatus'))
+      .addCase(updateDispatchStatus.rejected,  (state, action) => {
+        state.loading.updateDispatchStatus = false;
+        state.errors.updateDispatchStatus  = action.payload;
+        // Revert optimistic update if any
       })
-      .addCase(toggleAvailability.fulfilled, (state, action) => {
-        state.loading.toggleAvailability = false;
-        if (state.availability) state.availability.isAvailable = action.payload.isAvailable;
-        if (state.profile)      state.profile.isAvailable      = action.payload.isAvailable;
+      .addCase(updateDispatchStatus.fulfilled, (state, action) => {
+        state.loading.updateDispatchStatus = false;
+        if (state.dispatch) state.dispatch.status = action.payload.status;
+        if (state.profile)  state.profile.status  = action.payload.status;
       })
 
-    // §F  Service Zones
+      .addCase(updateDispatchShift.pending,   setLoading('updateDispatchShift'))
+      .addCase(updateDispatchShift.rejected,  setError('updateDispatchShift'))
+      .addCase(updateDispatchShift.fulfilled, (state, action) => {
+        state.loading.updateDispatchShift = false;
+        if (state.dispatch && action.payload) state.dispatch.shift = { ...state.dispatch.shift, ...action.payload };
+        if (state.profile  && action.payload) state.profile.shift  = { ...state.profile.shift,  ...action.payload };
+      })
+
+    // ── §F  Service Zones ──────────────────────────────────────────────────
       .addCase(fetchServiceZones.pending,   setLoading('serviceZones'))
       .addCase(fetchServiceZones.rejected,  setError('serviceZones'))
       .addCase(fetchServiceZones.fulfilled, (state, action) => {
@@ -1161,7 +1241,7 @@ const soloDriverSlice = createSlice({
         );
       })
 
-    // §G  Pricing
+    // ── §G  Pricing ────────────────────────────────────────────────────────
       .addCase(fetchPricing.pending,   setLoading('pricing'))
       .addCase(fetchPricing.rejected,  setError('pricing'))
       .addCase(fetchPricing.fulfilled, (state, action) => {
@@ -1176,22 +1256,29 @@ const soloDriverSlice = createSlice({
         if (state.pricing && action.payload) state.pricing = { ...state.pricing, ...action.payload };
       })
 
-    // §H  Stats & Rating
-      .addCase(fetchStats.pending,   setLoading('stats'))
-      .addCase(fetchStats.rejected,  setError('stats'))
-      .addCase(fetchStats.fulfilled, (state, action) => {
-        state.loading.stats = false;
-        state.stats          = action.payload;
+    // ── §H  Performance & Rewards ──────────────────────────────────────────
+      .addCase(fetchPerformance.pending,   setLoading('performance'))
+      .addCase(fetchPerformance.rejected,  setError('performance'))
+      .addCase(fetchPerformance.fulfilled, (state, action) => {
+        state.loading.performance = false;
+        state.performance          = action.payload;
       })
 
-      .addCase(fetchRating.pending,   setLoading('rating'))
-      .addCase(fetchRating.rejected,  setError('rating'))
-      .addCase(fetchRating.fulfilled, (state, action) => {
-        state.loading.rating = false;
-        state.rating          = action.payload;
+      .addCase(fetchRewards.pending,   setLoading('rewards'))
+      .addCase(fetchRewards.rejected,  setError('rewards'))
+      .addCase(fetchRewards.fulfilled, (state, action) => {
+        state.loading.rewards = false;
+        state.rewards          = action.payload;
       })
 
-    // §I  Compliance
+      .addCase(fetchRewardBadges.pending,   setLoading('badges'))
+      .addCase(fetchRewardBadges.rejected,  setError('badges'))
+      .addCase(fetchRewardBadges.fulfilled, (state, action) => {
+        state.loading.badges = false;
+        state.badges          = action.payload || [];
+      })
+
+    // ── §I  Compliance ─────────────────────────────────────────────────────
       .addCase(fetchComplianceDashboard.pending,   setLoading('compliance'))
       .addCase(fetchComplianceDashboard.rejected,  setError('compliance'))
       .addCase(fetchComplianceDashboard.fulfilled, (state, action) => {
@@ -1199,7 +1286,7 @@ const soloDriverSlice = createSlice({
         state.compliance          = action.payload;
       })
 
-    // §J  Security
+    // ── §J  Security & Notifications ───────────────────────────────────────
       .addCase(fetchSessions.pending,   setLoading('sessions'))
       .addCase(fetchSessions.rejected,  setError('sessions'))
       .addCase(fetchSessions.fulfilled, (state, action) => {
@@ -1236,7 +1323,6 @@ const soloDriverSlice = createSlice({
       .addCase(changePassword.rejected,  setError('changePassword'))
       .addCase(changePassword.fulfilled, clearLoading('changePassword'))
 
-    // §K  Notifications
       .addCase(fetchNotifications.pending,   setLoading('notifications'))
       .addCase(fetchNotifications.rejected,  setError('notifications'))
       .addCase(fetchNotifications.fulfilled, (state, action) => {
@@ -1266,7 +1352,7 @@ const soloDriverSlice = createSlice({
         }
       })
 
-    // §L  Admin
+    // ── §K  Admin ──────────────────────────────────────────────────────────
       .addCase(adminCreateSoloDriver.pending,   setLoading('adminCreate'))
       .addCase(adminCreateSoloDriver.rejected,  setError('adminCreate'))
       .addCase(adminCreateSoloDriver.fulfilled, (state, action) => {
@@ -1301,9 +1387,11 @@ const soloDriverSlice = createSlice({
       .addCase(adminVerifyKyc.rejected,  setError('adminVerifyKyc'))
       .addCase(adminVerifyKyc.fulfilled, (state, action) => {
         state.loading.adminVerifyKyc = false;
+        const { kycStatus, autoActivated, partnershipStatus } = action.payload;
         if (state.admin.selectedPartner) {
-          state.admin.selectedPartner.kyc.verificationStatus = action.payload.kycStatus;
-          state.admin.selectedPartner.kyc.isVerified         = action.payload.kycStatus === 'verified';
+          state.admin.selectedPartner.kyc.verificationStatus = kycStatus;
+          state.admin.selectedPartner.kyc.isVerified         = kycStatus === 'verified';
+          if (autoActivated) state.admin.selectedPartner.partnershipStatus = partnershipStatus;
         }
       })
 
@@ -1311,17 +1399,23 @@ const soloDriverSlice = createSlice({
       .addCase(adminVerifyVehicle.rejected,  setError('adminVerifyVehicle'))
       .addCase(adminVerifyVehicle.fulfilled, (state, action) => {
         state.loading.adminVerifyVehicle = false;
+        const { vehicleStatus, autoActivated, partnershipStatus } = action.payload;
         if (state.admin.selectedPartner) {
-          state.admin.selectedPartner.vehicle.verificationStatus = action.payload.vehicleStatus;
-          state.admin.selectedPartner.vehicle.isActive           = action.payload.vehicleStatus === 'verified';
+          state.admin.selectedPartner.vehicle.verificationStatus = vehicleStatus;
+          state.admin.selectedPartner.vehicle.isActive           = vehicleStatus === 'verified';
+          if (autoActivated) state.admin.selectedPartner.partnershipStatus = partnershipStatus;
         }
       })
 
       .addCase(adminVerifyBank.pending,   setLoading('adminVerifyBank'))
       .addCase(adminVerifyBank.rejected,  setError('adminVerifyBank'))
-      .addCase(adminVerifyBank.fulfilled, (state) => {
+      .addCase(adminVerifyBank.fulfilled, (state, action) => {
         state.loading.adminVerifyBank = false;
-        if (state.admin.selectedPartner) state.admin.selectedPartner.bankDetails.isVerified = true;
+        const { autoActivated, partnershipStatus } = action.payload;
+        if (state.admin.selectedPartner) {
+          state.admin.selectedPartner.bankDetails.isVerified = true;
+          if (autoActivated) state.admin.selectedPartner.partnershipStatus = partnershipStatus;
+        }
       })
 
       .addCase(adminUpdatePartnerStatus.pending,   setLoading('adminStatus'))
@@ -1329,7 +1423,7 @@ const soloDriverSlice = createSlice({
       .addCase(adminUpdatePartnerStatus.fulfilled, (state, action) => {
         state.loading.adminStatus = false;
         const { partnerId, partnershipStatus } = action.payload;
-        if (state.admin.selectedPartner?._id === partnerId)
+        if (String(state.admin.selectedPartner?._id) === String(partnerId))
           state.admin.selectedPartner.partnershipStatus = partnershipStatus;
         const listItem = state.admin.list.find((p) => String(p._id) === String(partnerId));
         if (listItem) listItem.partnershipStatus = partnershipStatus;
@@ -1341,30 +1435,18 @@ const soloDriverSlice = createSlice({
         state.loading.adminBlock = false;
         const { partnerId, action: blockAction } = action.payload;
         const isBlocked = blockAction === 'block';
-        if (state.admin.selectedPartner?._id === partnerId)
+        if (String(state.admin.selectedPartner?._id) === String(partnerId))
           state.admin.selectedPartner.user.isBlocked = isBlocked;
         const listItem = state.admin.list.find((p) => String(p._id) === String(partnerId));
         if (listItem?.user) listItem.user.isBlocked = isBlocked;
       })
 
-      .addCase(adminCreateCompanionDriver.pending,   setLoading('adminCreateDriver'))
-      .addCase(adminCreateCompanionDriver.rejected,  setError('adminCreateDriver'))
-      .addCase(adminCreateCompanionDriver.fulfilled, (state, action) => {
-        state.loading.adminCreateDriver = false;
-        const { partnerId, driverProfileId } = action.payload;
-        if (state.admin.selectedPartner?._id === partnerId)
-          state.admin.selectedPartner.driverProfile = driverProfileId;
-        const listItem = state.admin.list.find((p) => String(p._id) === String(partnerId));
-        if (listItem) listItem.driverProfile = driverProfileId;
-      })
-
-      // Platform fee (replaces commission)
       .addCase(adminUpdatePlatformFee.pending,   setLoading('adminPlatformFee'))
       .addCase(adminUpdatePlatformFee.rejected,  setError('adminPlatformFee'))
       .addCase(adminUpdatePlatformFee.fulfilled, (state, action) => {
         state.loading.adminPlatformFee = false;
         const { partnerId, platformFeeOverride, settlementCycle } = action.payload;
-        if (state.admin.selectedPartner?._id === partnerId) {
+        if (String(state.admin.selectedPartner?._id) === String(partnerId)) {
           if (platformFeeOverride !== undefined)
             state.admin.selectedPartner.platformFeeOverride = platformFeeOverride;
           if (settlementCycle)
@@ -1378,12 +1460,39 @@ const soloDriverSlice = createSlice({
         state.loading.adminNotes = false;
         if (state.admin.selectedPartner)
           state.admin.selectedPartner.adminNotes = action.payload.notes;
+      })
+
+      .addCase(adminAwardBadge.pending,   setLoading('adminAwardBadge'))
+      .addCase(adminAwardBadge.rejected,  setError('adminAwardBadge'))
+      .addCase(adminAwardBadge.fulfilled, (state, action) => {
+        state.loading.adminAwardBadge = false;
+        const { badgeId, name, description, iconUrl } = action.payload;
+        if (state.admin.selectedPartner) {
+          if (!state.admin.selectedPartner.rewards) state.admin.selectedPartner.rewards = {};
+          if (!state.admin.selectedPartner.rewards.badges) state.admin.selectedPartner.rewards.badges = [];
+          state.admin.selectedPartner.rewards.badges.push({
+            badgeId, name, description, iconUrl,
+            earnedAt: new Date().toISOString(),
+            isActive: true,
+          });
+        }
+      })
+
+      .addCase(adminAdjustCoins.pending,   setLoading('adminAdjustCoins'))
+      .addCase(adminAdjustCoins.rejected,  setError('adminAdjustCoins'))
+      .addCase(adminAdjustCoins.fulfilled, (state, action) => {
+        state.loading.adminAdjustCoins = false;
+        const { partnerId, newBalance } = action.payload;
+        if (String(state.admin.selectedPartner?._id) === String(partnerId)) {
+          if (!state.admin.selectedPartner.rewards) state.admin.selectedPartner.rewards = {};
+          state.admin.selectedPartner.rewards.coinBalance = newBalance;
+        }
       });
   },
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// §N  SELECTORS
+// §M  SELECTORS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const sd = (state) => state.soloDriver;
@@ -1395,11 +1504,12 @@ export const selectKyc               = (s) => sd(s).kyc;
 export const selectVehicle           = (s) => sd(s).vehicle;
 export const selectBankDetails       = (s) => sd(s).bankDetails;
 export const selectSettlementSummary = (s) => sd(s).settlement;
-export const selectAvailability      = (s) => sd(s).availability;
+export const selectDispatch          = (s) => sd(s).dispatch;
 export const selectServiceZones      = (s) => sd(s).serviceZones;
 export const selectPricing           = (s) => sd(s).pricing;
-export const selectStats             = (s) => sd(s).stats;
-export const selectRating            = (s) => sd(s).rating;
+export const selectPerformance       = (s) => sd(s).performance;
+export const selectRewards           = (s) => sd(s).rewards;
+export const selectBadges            = (s) => sd(s).badges;
 export const selectCompliance        = (s) => sd(s).compliance;
 export const selectSessions          = (s) => sd(s).sessions;
 export const selectDevices           = (s) => sd(s).devices;
@@ -1419,17 +1529,16 @@ export const selectLoading = (key) => (s) => sd(s).loading[key] ?? false;
 export const selectError   = (key) => (s) => sd(s).errors[key]  ?? null;
 
 // Compound / derived
-export const selectIsOnline          = (s) => sd(s).availability?.isAvailable     ?? sd(s).profile?.isAvailable ?? false;
-export const selectIsDispatchReady   = (s) => sd(s).availability?.isDispatchReady ?? false;
-export const selectPartnershipStatus = (s) => sd(s).profile?.partnershipStatus    ?? null;
+export const selectDispatchStatus    = (s) => sd(s).dispatch?.status        ?? sd(s).profile?.status ?? null;
+export const selectIsOnline          = (s) => sd(s).dispatch?.status === 'Available' ?? false;
+export const selectIsDispatchReady   = (s) => sd(s).dispatch?.isDispatchable ?? false;
+export const selectPartnershipStatus = (s) => sd(s).profile?.partnershipStatus ?? null;
 export const selectProfileCompletion = (s) => sd(s).profile?.profileCompletionPercent ?? 0;
-export const selectKycStatus         = (s) => sd(s).kyc?.kyc?.verificationStatus  ?? sd(s).profile?.kyc?.verificationStatus ?? null;
-export const selectVehicleStatus     = (s) => sd(s).vehicle?.verificationStatus   ?? sd(s).profile?.vehicle?.verificationStatus ?? null;
+export const selectKycStatus         = (s) =>
+  sd(s).kyc?.kyc?.verificationStatus  ?? sd(s).profile?.kyc?.verificationStatus ?? null;
+export const selectVehicleStatus     = (s) =>
+  sd(s).vehicle?.verificationStatus   ?? sd(s).profile?.vehicle?.verificationStatus ?? null;
 
-/**
- * Resolves the display label for the partner's effective platform fee.
- * Returns the override value if set, otherwise 'Platform default'.
- */
 export const selectEffectivePlatformFee = (s) => {
   const override = sd(s).profile?.platformFeeOverride;
   if (!override) return 'Platform default';
@@ -1443,14 +1552,17 @@ export const selectHasComplianceIssue = (s) => {
   return c ? (c.hasExpired || c.hasExpiring) : false;
 };
 
+export const selectCoinBalance = (s) =>
+  sd(s).rewards?.coinBalance ?? sd(s).profile?.rewards?.coinBalance ?? 0;
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// §O  EXPORT
+// §N  EXPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const {
   clearError,
   resetSoloDriver,
-  setAvailabilityOptimistic,
+  setDispatchStatusOptimistic,
   incrementUnreadCount,
   prependNotification,
 } = soloDriverSlice.actions;

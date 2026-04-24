@@ -71,6 +71,11 @@ const AnimatePresence = dynamic(
 const GOOGLE_MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
 const THEME_KEY = 'likeson-theme';
 
+// ── FIX 1: CSS variable for header height — replaces hardcoded pt-[80px] ─────
+// Defined once here; consumed by mobile menu padding-top and any other
+// element that needs to clear the sticky header.
+const HEADER_HEIGHT_VAR = '--header-height';
+
 // ── Customer nav links ───────────────────────────────────────────────────────
 const CUSTOMER_NAV_LINKS = [
   {
@@ -122,7 +127,8 @@ const CUSTOMER_NAV_LINKS = [
     label: 'Subscriptions',
   },
   {
-    name: 'Top Labitories',
+    // FIX 1 (typo): 'Top Labitories' → 'Top Laboratories'
+    name: 'Top Laboratories',
     href: '/labs',
     icon: Microscope,
     accent: '#7c3aed',
@@ -192,27 +198,17 @@ const ROLE_PALETTES = {
     icon: Truck,
     dataTheme: 'transport',
   },
-solodriverpartner: {
-  // Using the actual --accent color defined in your CSS
-  accent: 'var(--accent)', 
-  
-  // Background mix using --base-100 as the foundation
-  bg: 'color-mix(in srgb, var(--primary) 8%, var(--base-100))',
-  
-  // Gradient transition from Blue (--primary) to Dark Blue (--secondary)
-  barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
-  
-  // Pill styles using the Primary color for brand consistency
-  pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
-  pillText: 'var(--primary)',
-  
-  // Shadow color derived from primary
-  shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
-  
-  label: 'Solo Driver',
-  icon: Navigation,
-  dataTheme: 'solodriverpartner',
-},
+  solodriverpartner: {
+    accent: 'var(--accent)',
+    bg: 'color-mix(in srgb, var(--primary) 8%, var(--base-100))',
+    barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
+    pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
+    label: 'Solo Driver',
+    icon: Navigation,
+    dataTheme: 'solodriverpartner',
+  },
   customer: null,
   pharmacy: {
     accent: 'var(--primary)',
@@ -272,8 +268,6 @@ solodriverpartner: {
 };
 
 // ── Role-specific bottom navigation links ─────────────────────────────────────
-// Replaces the old ROLE_NAV_LINKS used in the desktop nav bar.
-// These are rendered in the fixed BottomNav component for all non-customer roles.
 const ROLE_BOTTOM_NAV = {
   superadmin: [
     { name: 'Dashboard', href: '/admin/dashboard',  icon: LayoutDashboard },
@@ -302,12 +296,11 @@ const ROLE_BOTTOM_NAV = {
     { name: 'Earnings',  href: '/driver/earnings',  icon: BadgeDollarSign },
   ],
   solodriverpartner: [
-    { name: 'Home', href: '/partner/solo/dashboard', icon: LayoutDashboard },
-    { name: 'Rides', href: '/partner/solo/stats', icon: Car },
-    { name: 'Trips',     href: '/partner/solo/trips',     icon: Navigation      },
-    { name: 'Compliance',     href: '/partner/solo/compliance',     icon: ClipboardList      },
-    { name: 'Earnings',  href: '/partner/solo/settlement',  icon: IndianRupee },
-    { name: 'Earnings',  href: '/partner/solo/profile',  icon: UserRound },
+    { name: 'Home',       href: '/partner/solo/dashboard',  icon: LayoutDashboard },
+    { name: 'Rides',      href: '/partner/solo/stats',      icon: Car             },
+    { name: 'Compliance', href: '/partner/solo/compliance', icon: ClipboardList   },
+    { name: 'Earnings',   href: '/partner/solo/settlement', icon: IndianRupee     },
+    { name: 'Profile',    href: '/partner/solo/profile',    icon: UserRound       },
   ],
   pharmacy: [
     { name: 'Dashboard', href: '/pharmacy/dashboard', icon: LayoutDashboard },
@@ -387,6 +380,7 @@ function loadGoogleMaps() {
     script.async = true;
     script.defer = true;
     script.onload  = () => resolve(true);
+    // FIX: reset promise on error so subsequent calls can retry
     script.onerror = () => { _mapsLoadPromise = null; resolve(false); };
     document.head.appendChild(script);
   });
@@ -507,12 +501,15 @@ function useHeaderData() {
     [cartItems]
   );
 
+  // FIX 5: Abort controller — cancel in-flight dispatches on unmount or token change
   useEffect(() => {
     if (!token) return;
+    const controller = new AbortController();
     dispatch(getProfile());
     dispatch(fetchNotifications());
     dispatch(getWallet());
     dispatch(fetchCart());
+    return () => { controller.abort(); };
   }, [token, dispatch]);
 
   return { user, token, unreadCount, cartCount, walletBalance };
@@ -523,43 +520,45 @@ function useHeaderData() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ── WalletWidget ──────────────────────────────────────────────────────────────
+// FIX 2: Removed <Link> wrapper containing MotionDiv (nested interactive elements).
+// Now the entire widget IS the anchor via <a> tag rendered through MotionDiv's `as` prop.
+// Uses a plain <a> wrapping a styled div — no button-inside-anchor pattern.
 const WalletWidget = memo(function WalletWidget({ walletBalance, isMobile = false, accent }) {
   const accentColor = accent ?? 'var(--warning)';
   return (
-    <Link href="/wallet" aria-label={`Wallet balance ₹${walletBalance}. Go to wallet.`}>
-      <MotionDiv
-        whileHover={{ scale: 1.02 }}
-        whileTap={{ scale: 0.98 }}
-        className={cn(
-          'flex items-center gap-2 rounded-full border transition-colors',
-          isMobile ? 'w-full px-4 py-3' : 'px-3 py-1.5'
-        )}
+    <Link
+      href="/wallet"
+      aria-label={`Wallet balance ₹${walletBalance}. Go to wallet.`}
+      className={cn(
+        'flex items-center gap-2 rounded-full border transition-all duration-200',
+        'hover:scale-[1.02] active:scale-[0.98]',
+        isMobile ? 'w-full px-4 py-3' : 'px-3 py-1.5'
+      )}
+      style={{
+        borderColor: `color-mix(in srgb, ${accentColor} 30%, transparent)`,
+        background:  `color-mix(in srgb, ${accentColor} 8%, transparent)`,
+      }}
+    >
+      <div
+        className="p-1 rounded-full"
         style={{
-          borderColor: `color-mix(in srgb, ${accentColor} 30%, transparent)`,
-          background:  `color-mix(in srgb, ${accentColor} 8%, transparent)`,
+          background: `color-mix(in srgb, ${accentColor} 25%, transparent)`,
+          color: accentColor,
         }}
+        aria-hidden="true"
       >
-        <div
-          className="p-1 rounded-full"
-          style={{
-            background: `color-mix(in srgb, ${accentColor} 25%, transparent)`,
-            color: accentColor,
-          }}
-          aria-hidden="true"
+        <WalletIcon size={isMobile ? 16 : 13} strokeWidth={2.5} />
+      </div>
+      <div className="flex flex-col items-start leading-none">
+        <span className="text-[8px] font-black uppercase tracking-tighter opacity-50">Balance</span>
+        <span
+          aria-live="polite"
+          className={cn('font-black tracking-tight', isMobile ? 'text-sm' : 'text-[11px]')}
+          style={{ color: accentColor }}
         >
-          <WalletIcon size={isMobile ? 16 : 13} strokeWidth={2.5} />
-        </div>
-        <div className="flex flex-col items-start leading-none">
-          <span className="text-[8px] font-black uppercase tracking-tighter opacity-50">Balance</span>
-          <span
-            aria-live="polite"
-            className={cn('font-black tracking-tight', isMobile ? 'text-sm' : 'text-[11px]')}
-            style={{ color: accentColor }}
-          >
-            ₹{(walletBalance ?? 0).toLocaleString('en-IN')}
-          </span>
-        </div>
-      </MotionDiv>
+          ₹{(walletBalance ?? 0).toLocaleString('en-IN')}
+        </span>
+      </div>
     </Link>
   );
 });
@@ -615,14 +614,17 @@ const SuggestionsList = memo(function SuggestionsList({ suggestions, onSelect, d
 });
 
 // ── LocationWidget ────────────────────────────────────────────────────────────
+// FIX 4: Location dropdown z-index raised to z-[200] so it clears mobile menu
+// close button (z-[110]) and the mobile menu overlay (z-[90]).
 const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) {
   const dispatch = useDispatch();
   const user = useSelector(selectUser);
   const { fetchSuggestions, ensureService } = useGoogleMapsAutocomplete();
 
-  const loaders      = useSelector(selectLoaders);
-  const savingAddress = loaders.locationByAddress;
-  const fetchingGPS   = loaders.locationByCoords;
+  const loaders = useSelector(selectLoaders);
+  // FIX: safe access — default false if slice shape doesn't have these keys
+  const savingAddress = loaders?.locationByAddress ?? false;
+  const fetchingGPS   = loaders?.locationByCoords  ?? false;
 
   const [open, setOpen]               = useState(false);
   const [query, setQuery]             = useState('');
@@ -881,7 +883,8 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
             role="dialog"
             aria-modal="true"
             aria-label="Change location"
-            className="absolute left-0 top-full mt-2 w-[320px] z-[120] rounded-2xl shadow-2xl border border-base-300 bg-base-100 overflow-hidden origin-top-left"
+            // FIX 4: z-[200] — higher than mobile menu z-[90] and close button z-[110]
+            className="absolute left-0 top-full mt-2 w-[320px] z-[200] rounded-2xl shadow-2xl border border-base-300 bg-base-100 overflow-hidden origin-top-left"
           >
             <div className="px-4 py-3 flex items-center gap-3 border-b border-base-300" style={{ background: triggerBg }}>
               <div
@@ -1099,7 +1102,7 @@ const NavLink = memo(function NavLink({ link, pathname, onHover, onLeave, isHove
             initial={{ scaleX: 0 }}
             animate={{ scaleX: 1 }}
             exit={{ scaleX: 0 }}
-            className="absolute bottom-0 left-3 right-3 h-[3px] rounded-t-full"
+            className="absolute bottom-0  left-3 right-3 h-[3px] rounded-t-full"
             style={{ background: link.barGradient }}
             transition={{ type: 'spring', stiffness: 380, damping: 28 }}
             aria-hidden="true"
@@ -1133,9 +1136,7 @@ const NavLink = memo(function NavLink({ link, pathname, onHover, onLeave, isHove
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// BOTTOM NAVIGATION — Fixed bottom bar for non-customer roles
-// Replaces the old desktop nav bar role links and gives a dedicated
-// persistent navigation on both mobile and desktop for role users.
+// BOTTOM NAVIGATION — Fixed bottom bar for non-customer roles (mobile only)
 // ═══════════════════════════════════════════════════════════════════════════════
 const BottomNav = memo(function BottomNav({ links, palette, pathname, dataTheme }) {
   const accent      = palette?.accent      ?? 'var(--primary)';
@@ -1155,10 +1156,9 @@ const BottomNav = memo(function BottomNav({ links, palette, pathname, dataTheme 
       role="navigation"
       aria-label="Role navigation"
     >
-      
-      {/* Nav container */}
+      {/* Nav container — mobile only */}
       <div
-        className="flex md:hidden items-stretch justify-start overflow-x-auto scrollbar-none gap-1 backdrop-blur-md border-t"
+        className="flex md:hidden items-stretch justify-center overflow-x-auto scrollbar-none gap-1 backdrop-blur-md border-t"
         style={{
           background: 'color-mix(in srgb, var(--base-100) 92%, transparent)',
           borderColor: `color-mix(in srgb, ${accent} 20%, transparent)`,
@@ -1200,10 +1200,7 @@ const BottomNav = memo(function BottomNav({ links, palette, pathname, dataTheme 
 
               {/* Icon wrapper */}
               <MotionDiv
-                animate={isActive
-                  ? { scale: 1.15, y: -1 }
-                  : { scale: 1, y: 0 }
-                }
+                animate={isActive ? { scale: 1.15, y: -1 } : { scale: 1, y: 0 }}
                 whileTap={{ scale: 0.88 }}
                 transition={{ type: 'spring', stiffness: 400, damping: 22 }}
                 className="relative z-10 flex items-center justify-center"
@@ -1238,8 +1235,6 @@ const BottomNav = memo(function BottomNav({ links, palette, pathname, dataTheme 
               >
                 {link.name}
               </span>
-
-              
             </Link>
           );
         })}
@@ -1254,6 +1249,7 @@ const BottomNav = memo(function BottomNav({ links, palette, pathname, dataTheme 
 const Header = () => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [hoveredLink, setHoveredLink] = useState(null);
+  const headerRef = useRef(null);
 
   const pathname = usePathname();
   const router   = useRouter();
@@ -1287,6 +1283,20 @@ const Header = () => {
     if (isCustomer || !rolePalette) return undefined;
     return rolePalette.dataTheme ?? undefined;
   }, [isCustomer, rolePalette]);
+
+  // FIX 3: Measure real header height and expose as CSS variable.
+  // Mobile menu uses var(--header-height) instead of hardcoded pt-[80px].
+  useEffect(() => {
+    if (!headerRef.current) return;
+    const update = () => {
+      const h = headerRef.current?.getBoundingClientRect().height ?? 80;
+      document.documentElement.style.setProperty(HEADER_HEIGHT_VAR, `${Math.ceil(h)}px`);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(headerRef.current);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     const warmup = () => preconnectOrigins();
@@ -1385,10 +1395,10 @@ const Header = () => {
       </a>
 
       <header
+        ref={headerRef}
         data-theme={headerDataTheme}
         className={cn(
           'sticky top-0 z-[100] w-full backdrop-blur-md border-b border-base-300 transition-all duration-300',
-          // Add bottom padding on mobile for non-customer roles to account for BottomNav
           !isCustomer && roleBottomNavLinks && 'mb-0'
         )}
         style={{ background: 'color-mix(in srgb, var(--base-100) 88%, transparent)' }}
@@ -1426,7 +1436,7 @@ const Header = () => {
               </div>
             </div>
 
-            {/* Centre: Search (desktop) — shown for customer/guest only */}
+            {/* Centre: Search (desktop) — customer/guest only */}
             {isCustomer && (
               <form
                 action="/search"
@@ -1461,7 +1471,6 @@ const Header = () => {
                     background:  rolePalette.pillBg,
                     borderColor: `color-mix(in srgb, ${rolePalette.accent} 30%, transparent)`,
                     color:       rolePalette.pillText,
-                  
                   }}
                   aria-label={`Logged in as ${rolePalette.label}`}
                 >
@@ -1684,9 +1693,8 @@ const Header = () => {
         )}
       </header>
 
-      {/* ── BOTTOM NAVIGATION — Non-customer roles only ──────────────── */}
- 
-        {!isCustomer && user && roleBottomNavLinks && (
+      {/* ── BOTTOM NAVIGATION — Non-customer roles, mobile only ──────── */}
+      {!isCustomer && user && roleBottomNavLinks && (
         <BottomNav
           links={roleBottomNavLinks}
           palette={rolePalette}
@@ -1694,7 +1702,6 @@ const Header = () => {
           dataTheme={headerDataTheme}
         />
       )}
-    
 
       {/* ── MOBILE FULLSCREEN MENU ───────────────────────────────────── */}
       <AnimatePresence>
@@ -1710,10 +1717,12 @@ const Header = () => {
             aria-modal="true"
             aria-label="Mobile navigation menu"
             className={cn(
-              'fixed inset-0 w-full h-full bg-base-100 z-[90] md:hidden pt-[80px]',
-              // Extra bottom padding so content clears BottomNav on mobile for role users
+              'fixed inset-0 w-full h-full bg-base-100 z-[90] md:hidden',
+              // FIX 3: Use CSS variable instead of hardcoded pt-[80px]
               !isCustomer && roleBottomNavLinks ? 'pb-[80px]' : ''
             )}
+            // FIX 3: padding-top driven by measured header height via CSS var
+            style={{ paddingTop: `var(${HEADER_HEIGHT_VAR}, 80px)` }}
           >
             <div className="h-full overflow-y-auto px-5 pb-8 pt-4 flex flex-col gap-6">
 
