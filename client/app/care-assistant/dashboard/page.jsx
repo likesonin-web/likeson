@@ -1,774 +1,1123 @@
-"use client";
+'use client';
 
-import { useState, useEffect, useRef } from "react";
-import { useSelector } from "react-redux";
-import { motion, AnimatePresence } from "framer-motion";
+import { useEffect, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { motion, AnimatePresence } from 'framer-motion';
+import Link from 'next/link';
+
+// ── Slice imports ──────────────────────────────────────────────────────────────
 import {
-  LayoutDashboard, TrendingUp, Activity,
+  getProfile,
+  getPerformance,
+  getKycStatus,
+  getBankDetails,
+  getSettings,
+  updateAvailability,
+  setOnlineOptimistic,
+  selectProfile,
+  selectPerformance,
+  selectEarnings,
+  selectKycStatus,
+  selectBankDetails,
+  selectSettings,
+  selectIsOnline,
+  selectCurrentStatus,
+  selectProfileCompletion,
+  selectLoadingKey,
+} from '@/store/slices/careAssistantSlice';
+
+// ── Icons ──────────────────────────────────────────────────────────────────────
+import {
+  LayoutDashboard, Heart, Star, TrendingUp, Activity,
   UserRound, UserCog, MapPin, Phone, Camera,
   ToggleRight, Clock, CalendarCheck,
-  Star, FileText, Stethoscope, Briefcase,
-  Wallet, CreditCard, ReceiptIndianRupee, Landmark,
-  ShieldCheck, ScanLine, HeartPulse,
-  Bell, Smartphone, Settings2,
-  KeyRound, History, AlertCircle,
-  LogOut, LifeBuoy, MessageSquare,
-  ChevronRight, X, Search,
-  ArrowUpRight, CheckCircle2, Clock3,
-} from "lucide-react";
+  Briefcase, Stethoscope, FileText,
+  Landmark, CreditCard, Wallet, ReceiptIndianRupee,
+  ShieldCheck, ScanLine,
+  HeartPulse, Settings2, Bell, Smartphone,
+  KeyRound, History, AlertCircle, LogOut,
+  LifeBuoy, MessageSquare,
+  ChevronRight, Menu, X, Zap,
+  CheckCircle2, XCircle, ArrowUpRight,
+  Award, Sparkles, CircleAlert, Timer,
+  Users, ClipboardCheck, BadgeCheck,
+  Wifi, WifiOff, Sun, Moon,
+} from 'lucide-react';
 
-// ── Section definitions — all colours use CSS vars from [data-theme="care-assistant"] ──
-const SECTIONS = [
-  {
-    id: "overview", title: "Overview",
-    accentVar: "var(--primary)",
-    pillBgVar: "var(--base-200)",
-    gradient: "linear-gradient(135deg, var(--neutral) 0%, var(--primary) 100%)",
-    icon: LayoutDashboard,
-    links: [
-      { name: "Dashboard",              href: "/care-assistant/dashboard",   icon: LayoutDashboard },
-      { name: "Performance & Earnings", href: "/care-assistant/performance", icon: TrendingUp },
-      { name: "Activity Summary",       href: "/care-assistant/stats",       icon: Activity },
-    ],
-  },
-  {
-    id: "profile", title: "My Profile",
-    accentVar: "var(--secondary)",
-    pillBgVar: "color-mix(in oklch, var(--secondary) 12%, var(--base-100))",
-    gradient: "linear-gradient(135deg, oklch(35% 0.12 10) 0%, var(--secondary) 100%)",
-    icon: UserCog,
-    links: [
-      { name: "Profile Overview",     href: "/care-assistant/profile",                   icon: UserRound },
-      { name: "Personal Information", href: "/care-assistant/profile/personal",          icon: UserCog },
-      { name: "Address Details",      href: "/care-assistant/profile/address",           icon: MapPin },
-      { name: "Emergency Contact",    href: "/care-assistant/profile/emergency-contact", icon: Phone },
-      { name: "Profile Photo",        href: "/care-assistant/upload/photo",              icon: Camera },
-    ],
-  },
-  {
-    id: "availability", title: "Availability & Scheduling",
-    accentVar: "var(--primary)",
-    pillBgVar: "var(--base-200)",
-    gradient: "linear-gradient(135deg, var(--neutral) 0%, var(--primary) 100%)",
-    icon: CalendarCheck,
-    links: [
-      { name: "Go Online / Offline", href: "/care-assistant/availability", icon: ToggleRight },
-      { name: "Work Status",         href: "/care-assistant/status",       icon: Clock },
-      { name: "Live Location",       href: "/care-assistant/location",     icon: MapPin },
-      { name: "Weekly Schedule",     href: "/care-assistant/schedule",     icon: CalendarCheck },
-    ],
-  },
-  {
-    id: "training", title: "Training & Certifications",
-    accentVar: "color-mix(in oklch, var(--primary) 80%, var(--secondary))",
-    pillBgVar: "color-mix(in oklch, var(--primary) 10%, var(--base-100))",
-    gradient: "linear-gradient(135deg, oklch(30% 0.18 270) 0%, oklch(55% 0.20 285) 100%)",
-    icon: Briefcase,
-    links: [
-      { name: "My Certifications",     href: "/care-assistant/training/certificates",     icon: Star },
-      { name: "Add Certificate",       href: "/care-assistant/training/certificates/add", icon: FileText },
-      { name: "Training Competencies", href: "/care-assistant/training",                  icon: Stethoscope },
-    ],
-  },
-  {
-    id: "finance", title: "Finance & Payouts",
-    accentVar: "var(--accent)",
-    pillBgVar: "color-mix(in oklch, var(--accent) 12%, var(--base-100))",
-    gradient: "linear-gradient(135deg, oklch(40% 0.12 80) 0%, var(--accent) 100%)",
-    icon: Landmark,
-    links: [
-      { name: "Earnings Summary", href: "/care-assistant/performance",      icon: Wallet },
-      { name: "Bank Account",     href: "/care-assistant/bank",             icon: CreditCard },
-      { name: "Payout Rates",     href: "/care-assistant/platform-pricing", icon: ReceiptIndianRupee },
-    ],
-  },
-  {
-    id: "kyc", title: "KYC & Identity Verification",
-    accentVar: "var(--success)",
-    pillBgVar: "color-mix(in oklch, var(--success) 12%, var(--base-100))",
-    gradient: "linear-gradient(135deg, oklch(30% 0.14 150) 0%, var(--success) 100%)",
-    icon: ShieldCheck,
-    links: [
-      { name: "Verification Status",  href: "/care-assistant/kyc/status",      icon: ShieldCheck },
-      { name: "Submit KYC Documents", href: "/care-assistant/kyc/submit",      icon: ScanLine },
-      { name: "Upload Documents",     href: "/care-assistant/upload/document", icon: FileText },
-    ],
-  },
-  {
-    id: "health", title: "Health Declaration",
-    accentVar: "var(--error)",
-    pillBgVar: "color-mix(in oklch, var(--error) 12%, var(--base-100))",
-    gradient: "linear-gradient(135deg, oklch(35% 0.16 25) 0%, var(--error) 100%)",
-    icon: HeartPulse,
-    links: [
-      { name: "Fitness Declaration", href: "/care-assistant/health-declaration", icon: HeartPulse },
-    ],
-  },
-  {
-    id: "settings", title: "Settings & Preferences",
-    accentVar: "var(--primary)",
-    pillBgVar: "var(--base-200)",
-    gradient: "linear-gradient(135deg, var(--neutral) 0%, oklch(50% 0.16 295) 100%)",
-    icon: Settings2,
-    links: [
-      { name: "Notification Preferences", href: "/care-assistant/settings/notifications", icon: Bell },
-      { name: "Service Area",             href: "/care-assistant/settings/service-area",  icon: MapPin },
-      { name: "Registered Devices",       href: "/care-assistant/settings",               icon: Smartphone },
-    ],
-  },
-  {
-    id: "security", title: "Account Security",
-    accentVar: "var(--neutral-content)",
-    pillBgVar: "var(--base-300)",
-    gradient: "linear-gradient(135deg, oklch(20% 0.01 240) 0%, oklch(40% 0.04 230) 100%)",
-    icon: KeyRound,
-    links: [
-      { name: "Change Password",    href: "/care-assistant/security/change-password", icon: KeyRound },
-      { name: "Active Sessions",    href: "/care-assistant/security/sessions",        icon: History },
-      { name: "Email Verification", href: "/care-assistant/security/verify-email",    icon: ShieldCheck },
-      { name: "Delete Account",     href: "/care-assistant/security/delete-account",  icon: AlertCircle },
-    ],
-  },
-  {
-    id: "support", title: "Help & Support",
-    accentVar: "var(--primary)",
-    pillBgVar: "var(--base-200)",
-    gradient: "linear-gradient(135deg, var(--neutral) 0%, var(--secondary) 100%)",
-    icon: LifeBuoy,
-    links: [
-      { name: "Help Centre",            href: "/care-assistant/support",        icon: LifeBuoy },
-      { name: "Raise a Support Ticket", href: "/care-assistant/support/ticket", icon: MessageSquare },
-    ],
-  },
-  {
-    id: "account", title: "Sign Out",
-    accentVar: "var(--error)",
-    pillBgVar: "color-mix(in oklch, var(--error) 12%, var(--base-100))",
-    gradient: "linear-gradient(135deg, oklch(38% 0.18 25) 0%, var(--error) 100%)",
-    icon: LogOut,
-    links: [
-      { name: "Sign Out", href: "/care-assistant/logout", icon: LogOut },
-    ],
-  },
-];
+// ── Nav from constants ─────────────────────────────────────────────────────────
+import { CARE_ASSISTANT_DASHBOARD_LINKS } from '@/constants/careassistant';
 
-const QUICK_ACTIONS = [
-  {
-    name: "Go Online",
-    href: "/care-assistant/availability",
-    icon: ToggleRight,
-    gradient: "linear-gradient(135deg, var(--neutral) 0%, var(--primary) 100%)",
-  },
-  {
-    name: "Schedule",
-    href: "/care-assistant/schedule",
-    icon: CalendarCheck,
-    gradient: "linear-gradient(135deg, oklch(35% 0.12 10) 0%, var(--secondary) 100%)",
-  },
-  {
-    name: "Earnings",
-    href: "/care-assistant/performance",
-    icon: Wallet,
-    gradient: "linear-gradient(135deg, oklch(40% 0.12 80) 0%, var(--accent) 100%)",
-  },
-  {
-    name: "KYC Status",
-    href: "/care-assistant/kyc/status",
-    icon: ShieldCheck,
-    gradient: "linear-gradient(135deg, oklch(30% 0.14 150) 0%, var(--success) 100%)",
-  },
-];
+// ── Selectors ──────────────────────────────────────────────────────────────────
+const selectUser = (s) => s.user?.user ?? null;
 
-// ── Animation variants ─────────────────────────────────────────────────────────
-const fadeUp  = { hidden: { opacity: 0, y: 16 }, show: { opacity: 1, y: 0, transition: { duration: 0.35, ease: [0.22, 1, 0.36, 1] } } };
-const stagger = { hidden: {}, show: { transition: { staggerChildren: 0.06 } } };
-const scaleIn = { hidden: { opacity: 0, scale: 0.94 }, show: { opacity: 1, scale: 1, transition: { duration: 0.4, ease: [0.22, 1, 0.36, 1] } } };
+// ── Variants ───────────────────────────────────────────────────────────────────
+const fadeUp   = { hidden: { opacity: 0, y: 20 },      show: { opacity: 1, y: 0,    transition: { duration: 0.5, ease: [0.22, 1, 0.36, 1] } } };
+const fadeIn   = { hidden: { opacity: 0 },             show: { opacity: 1,           transition: { duration: 0.4 } } };
+const stagger  = { hidden: {},                         show: { transition: { staggerChildren: 0.08 } } };
+const slideR   = { hidden: { opacity: 0, x: 20 },      show: { opacity: 1, x: 0,    transition: { duration: 0.4, ease: [0.22, 1, 0.36, 1] } } };
+const popIn    = { hidden: { opacity: 0, scale: 0.88 },show: { opacity: 1, scale: 1, transition: { duration: 0.35, ease: [0.34, 1.56, 0.64, 1] } } };
 
-// ── KYC badge ──────────────────────────────────────────────────────────────────
-function KycBadge({ status }) {
-  const map = {
-    Verified:       { colorVar: "var(--success)", bgVar: "color-mix(in oklch, var(--success) 15%, var(--base-100))", icon: CheckCircle2, label: "Verified" },
-    "Under-Review": { colorVar: "var(--warning)", bgVar: "color-mix(in oklch, var(--warning) 15%, var(--base-100))", icon: Clock3,       label: "In Review" },
-    Pending:        { colorVar: "var(--base-content)", bgVar: "var(--base-300)", icon: Clock3,      label: "Pending" },
-    Rejected:       { colorVar: "var(--error)",   bgVar: "color-mix(in oklch, var(--error) 15%, var(--base-100))",   icon: AlertCircle, label: "Rejected" },
-  };
-  const cfg = map[status] ?? map.Pending;
-  const Icon = cfg.icon;
+// ── KYC status map ─────────────────────────────────────────────────────────────
+const KYC_CFG = {
+  Verified:     { cls: 'badge-success', label: 'Verified',     icon: CheckCircle2 },
+  'Under-Review':{ cls: 'badge-warning', label: 'Under Review', icon: Timer },
+  Pending:      { cls: 'badge-info',    label: 'Pending',      icon: CircleAlert },
+  Rejected:     { cls: 'badge-error',   label: 'Rejected',     icon: XCircle },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SIDEBAR
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function Sidebar({ activePath, collapsed, onClose }) {
+  const [openGroup, setOpenGroup] = useState('Overview');
+
   return (
-    <span
-      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black"
-      style={{ background: cfg.bgVar, color: cfg.colorVar }}
+    <aside
+      className={[
+        'flex flex-col h-screen bg-[var(--base-200)] border-r border-[var(--base-300)]',
+        'overflow-y-auto flex-shrink-0',
+        onClose
+          ? 'w-72' // mobile drawer
+          : 'hidden lg:flex w-64',
+      ].join(' ')}
     >
-      <Icon size={9} />{cfg.label}
-    </span>
+      {/* Logo */}
+      <div className="px-5 py-5 border-b border-[var(--base-300)]">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-[var(--r-box)] bg-gradient-to-br from-[var(--primary)] to-[var(--secondary)] flex items-center justify-center shadow-[0_4px_14px_color-mix(in_srgb,var(--primary),transparent_55%)]">
+              <Heart size={16} className="text-white fill-white" />
+            </div>
+            <div>
+              <p className="font-black text-sm leading-none text-[var(--base-content)]">Likeson</p>
+              <p className="text-[0.58rem] font-bold uppercase tracking-widest text-[var(--primary)] mt-0.5">Care Assistant</p>
+            </div>
+          </div>
+          {onClose && (
+            <button onClick={onClose} className="cursor-pointer text-[var(--base-content)] opacity-50 hover:opacity-100">
+              <X size={16} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Nav */}
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
+        {CARE_ASSISTANT_DASHBOARD_LINKS.map((group) => {
+          const isOpen = openGroup === group.title;
+          return (
+            <div key={group.title}>
+              <button
+                onClick={() => setOpenGroup(isOpen ? null : group.title)}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-[var(--r-field)] hover:bg-[var(--base-300)] transition-colors cursor-pointer group"
+              >
+                <span className="text-[var(--primary)] opacity-70 group-hover:opacity-100 transition-opacity">
+                  {group.icons}
+                </span>
+                <span className="flex-1 text-left text-[0.65rem] font-bold text-[var(--base-content)] uppercase tracking-wider">
+                  {group.title}
+                </span>
+                <motion.span animate={{ rotate: isOpen ? 90 : 0 }} transition={{ duration: 0.2 }}>
+                  <ChevronRight size={11} className="opacity-30" />
+                </motion.span>
+              </button>
+
+              <AnimatePresence initial={false}>
+                {isOpen && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="ml-4 pl-3 border-l border-[var(--base-300)] mt-0.5 mb-1 space-y-0.5">
+                      {group.links.map((link) => {
+                        const active = activePath === link.href;
+                        return (
+                          <Link key={link.href} href={link.href}>
+                            <motion.div
+                              whileHover={{ x: 3 }}
+                              className={[
+                                'flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--r-field)] text-[0.65rem] font-semibold cursor-pointer transition-colors',
+                                active
+                                  ? 'bg-[color-mix(in_srgb,var(--primary)_14%,transparent)] text-[var(--primary)]'
+                                  : 'text-[var(--base-content)] opacity-55 hover:opacity-100 hover:bg-[var(--base-300)]',
+                              ].join(' ')}
+                            >
+                              {link.icon} {link.name}
+                            </motion.div>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          );
+        })}
+      </nav>
+
+      {/* Bottom quick link */}
+      <div className="p-3 border-t border-[var(--base-300)]">
+        <Link href="/care-assistant/support">
+          <div className="flex items-center gap-2 px-2 py-1.5 rounded-[var(--r-field)] text-[0.65rem] font-semibold text-[var(--base-content)] opacity-45 hover:opacity-100 hover:bg-[var(--base-300)] transition-all cursor-pointer">
+            <LifeBuoy size={12} /> Help &amp; Support
+          </div>
+        </Link>
+      </div>
+    </aside>
   );
 }
 
-// ── Status dot ─────────────────────────────────────────────────────────────────
-function StatusDot({ isOnline }) {
+// ═══════════════════════════════════════════════════════════════════════════════
+// ONLINE PILL TOGGLE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function OnlinePill({ isOnline, loading, onToggle }) {
   return (
-    <span
-      className="w-2 h-2 rounded-full flex-shrink-0"
-      style={{
-        background: isOnline ? "var(--primary)" : "var(--base-300)",
-        boxShadow:  isOnline ? "0 0 0 3px var(--base-200)" : "none",
-      }}
-    />
+    <motion.button
+      whileTap={{ scale: 0.94 }}
+      onClick={onToggle}
+      disabled={loading}
+      className={[
+        'relative flex items-center gap-2 px-4 py-1.5 rounded-full',
+        'font-bold text-xs transition-all duration-300 cursor-pointer select-none disabled:opacity-50',
+        isOnline
+          ? 'bg-[var(--success)] text-[var(--success-content)] shadow-[0_0_18px_color-mix(in_srgb,var(--success),transparent_45%)]'
+          : 'bg-[var(--base-300)] text-[var(--base-content)]',
+      ].join(' ')}
+    >
+      <motion.span
+        animate={{ scale: isOnline ? [1, 1.4, 1] : 1 }}
+        transition={{ repeat: isOnline ? Infinity : 0, duration: 1.6 }}
+        className={`w-2 h-2 rounded-full ${isOnline ? 'bg-white' : 'bg-current opacity-40'}`}
+      />
+      {loading ? 'Updating…' : isOnline ? 'Online' : 'Offline'}
+    </motion.button>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MAIN COMPONENT
-// ─────────────────────────────────────────────────────────────────────────────
-export default function CareAssistantDashboard() {
-  const user    = useSelector((s) => s.user?.user)    ?? null;
-  const profile = useSelector((s) => s.user?.profile) ?? null;
+// ═══════════════════════════════════════════════════════════════════════════════
+// HERO BANNER — greeting + status
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  const displayName   = profile?.fullName                    || user?.name   || "Care Assistant";
-  const displayCity   = profile?.availability?.currentCity   || profile?.address?.city || "—";
-  const displayAvatar = profile?.photoUrl                    || user?.avatar || null;
-  const initials      = displayName.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+function HeroBanner({ user, profile, isOnline, status, completion }) {
+  const firstName = profile?.fullName?.split(' ')[0] || user?.name?.split(' ')[0] || 'Care Assistant';
+  const hour = new Date().getHours();
+  const timeIcon = hour < 12 ? <Sun size={14} /> : hour < 17 ? <Sun size={14} /> : <Moon size={14} />;
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
 
-  const perf          = profile?.performance ?? {};
-  const earnings      = profile?.earnings    ?? {};
-  const kycStatus     = profile?.kyc?.verificationStatus ?? "Pending";
-  const isOnlineProp  = profile?.availability?.isOnline   ?? false;
-  const completionPct = profile?.profileCompletionPercent ?? 0;
+  const statusMap = {
+    Available: { color: 'var(--success)', label: 'Available' },
+    'On-Task': { color: 'var(--warning)', label: 'On Task' },
+    'On-Break': { color: 'var(--info)',    label: 'On Break' },
+    Offline:   { color: 'var(--neutral)', label: 'Offline' },
+    Suspended: { color: 'var(--error)',   label: 'Suspended' },
+  };
+  const st = statusMap[status] || statusMap.Offline;
 
-  const [search,     setSearch]     = useState("");
-  const [expanded,   setExpanded]   = useState(null);
-  const [isOnline,   setIsOnline]   = useState(isOnlineProp);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const searchRef = useRef(null);
+  return (
+    <motion.div
+      variants={fadeUp}
+      className="relative overflow-hidden rounded-[var(--r-box)] p-6 md:p-8"
+      style={{
+        background: 'linear-gradient(135deg, color-mix(in srgb, var(--primary) 18%, var(--base-200)), color-mix(in srgb, var(--secondary) 12%, var(--base-100)))',
+        border: '1px solid color-mix(in srgb, var(--primary), transparent 75%)',
+      }}
+    >
+      {/* Decorative blob */}
+      <div className="absolute -top-10 -right-10 w-48 h-48 rounded-full opacity-10"
+        style={{ background: 'radial-gradient(circle, var(--primary), transparent 70%)' }} />
+      <div className="absolute -bottom-8 -left-8 w-36 h-36 rounded-full opacity-8"
+        style={{ background: 'radial-gradient(circle, var(--secondary), transparent 70%)' }} />
 
-  useEffect(() => { setIsOnline(isOnlineProp); }, [isOnlineProp]);
-  useEffect(() => { if (searchOpen) searchRef.current?.focus(); }, [searchOpen]);
+      <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-5">
+        {/* Left */}
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-[var(--primary)] opacity-75">{timeIcon}</span>
+            <span className="text-xs font-semibold text-[var(--base-content)] opacity-55">{greeting}</span>
+          </div>
+          <h1 className="text-2xl md:text-3xl font-black text-[var(--base-content)] leading-tight">
+            {firstName} <span className="text-[var(--primary)]">✦</span>
+          </h1>
+          <p className="text-xs text-[var(--base-content)] opacity-50 mt-1 font-medium">
+            {profile?.specializations?.length
+              ? profile.specializations.slice(0, 2).join(' · ')
+              : 'Care Assistant'}
+          </p>
 
-  const STATS = [
+          {/* Status row */}
+          <div className="flex items-center gap-2 mt-3 flex-wrap">
+            <span
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[0.65rem] font-bold"
+              style={{
+                background: `color-mix(in srgb, ${st.color}, transparent 85%)`,
+                color: st.color,
+                border: `1px solid color-mix(in srgb, ${st.color}, transparent 65%)`,
+              }}
+            >
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: st.color }} />
+              {st.label}
+            </span>
+            {profile?.availability?.currentCity && (
+              <span className="flex items-center gap-1 text-[0.62rem] text-[var(--base-content)] opacity-45 font-medium">
+                <MapPin size={10} /> {profile.availability.currentCity}
+              </span>
+            )}
+            {profile?.workType && (
+              <span className="badge badge-primary text-[0.58rem] py-0.5">{profile.workType}</span>
+            )}
+          </div>
+        </div>
+
+        {/* Right — profile completion arc */}
+        <div className="flex items-center gap-5">
+          {/* Radial progress */}
+          <div className="relative w-20 h-20 flex items-center justify-center">
+            <svg width="80" height="80" className="-rotate-90">
+              <circle cx="40" cy="40" r="34" fill="none" stroke="var(--base-300)" strokeWidth="6" />
+              <motion.circle
+                cx="40" cy="40" r="34" fill="none" stroke="var(--primary)"
+                strokeWidth="6" strokeLinecap="round"
+                strokeDasharray={2 * Math.PI * 34}
+                initial={{ strokeDashoffset: 2 * Math.PI * 34 }}
+                animate={{ strokeDashoffset: 2 * Math.PI * 34 * (1 - completion / 100) }}
+                transition={{ duration: 1.4, ease: 'easeOut', delay: 0.3 }}
+              />
+            </svg>
+            <div className="absolute text-center">
+              <p className="text-sm font-black text-[var(--primary)] leading-none">{completion}%</p>
+              <p className="text-[0.5rem] font-semibold text-[var(--base-content)] opacity-50 uppercase tracking-wide leading-none mt-0.5">Profile</p>
+            </div>
+          </div>
+
+          {/* Avatar */}
+          <div className="relative">
+            <img
+              src={user?.avatar || 'https://api.dicebear.com/7.x/adventurer/svg?seed=careassistant'}
+              alt="avatar"
+              className="w-16 h-16 rounded-[var(--r-box)] object-cover ring-2 ring-[var(--primary)] ring-offset-2 ring-offset-[var(--base-200)]"
+            />
+            <span
+              className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center ring-2 ring-[var(--base-200)]"
+              style={{ background: isOnline ? 'var(--success)' : 'var(--base-300)' }}
+            >
+              {isOnline ? <Wifi size={8} className="text-white" /> : <WifiOff size={8} className="text-[var(--base-content)] opacity-50" />}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Completion bar */}
+      <div className="relative z-10 mt-5">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[0.6rem] font-bold uppercase tracking-wider text-[var(--base-content)] opacity-45">Profile Completion</span>
+          <Link href="/care-assistant/profile">
+            <span className="text-[0.62rem] font-bold text-[var(--primary)] hover:underline cursor-pointer">Complete now →</span>
+          </Link>
+        </div>
+        <div className="progress-bar h-1.5">
+          <motion.div
+            className="progress-bar-fill"
+            initial={{ width: 0 }}
+            animate={{ width: `${completion}%` }}
+            transition={{ duration: 1.4, ease: 'easeOut', delay: 0.4 }}
+          />
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STAT CARDS ROW
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function StatCards({ performance, earnings }) {
+  const stats = [
     {
-      label:    "Pending",
-      value:    `₹${(earnings.pendingPayout ?? 0).toLocaleString("en-IN")}`,
-      sub:      "Payout due",
-      accentVar: "var(--accent)",
-      icon:     TrendingUp,
+      key: 'tasks',
+      label: 'Tasks Done',
+      value: performance?.totalTasksCompleted?.toLocaleString('en-IN') ?? '—',
+      sub: performance?.monthlyTasks != null ? `${performance.monthlyTasks} this month` : null,
+      icon: ClipboardCheck,
+      color: 'var(--primary)',
     },
     {
-      label:    "Sessions",
-      value:    String(perf.totalTasksCompleted ?? 0),
-      sub:      "Completed",
-      accentVar: "var(--primary)",
-      icon:     Activity,
+      key: 'rating',
+      label: 'Avg Rating',
+      value: performance?.averageRating != null ? Number(performance.averageRating).toFixed(1) : '—',
+      sub: performance?.totalRatings != null ? `${performance.totalRatings} reviews` : null,
+      icon: Star,
+      color: 'var(--warning)',
     },
     {
-      label:    "Rating",
-      value:    `${(perf.averageRating ?? 5).toFixed(1)}★`,
-      sub:      `${perf.totalRatings ?? 0} reviews`,
-      accentVar: "var(--secondary)",
-      icon:     Star,
+      key: 'earnings',
+      label: 'Total Earned',
+      value: earnings?.totalPaid != null ? `₹${Number(earnings.totalPaid).toLocaleString('en-IN')}` : '—',
+      sub: earnings?.pendingPayout != null ? `₹${Number(earnings.pendingPayout).toLocaleString('en-IN')} pending` : null,
+      icon: Wallet,
+      color: 'var(--success)',
     },
     {
-      label:    "KYC",
-      value:    kycStatus === "Verified" ? "✓ Done" : kycStatus,
-      sub:      "Identity",
-      accentVar: kycStatus === "Verified" ? "var(--success)" : "var(--error)",
-      icon:     ShieldCheck,
+      key: 'ontime',
+      label: 'On-Time Rate',
+      value: performance?.onTimeArrivalRate != null ? `${performance.onTimeArrivalRate}%` : '—',
+      sub: performance?.repeatClientRate != null ? `${performance.repeatClientRate}% repeat clients` : null,
+      icon: Timer,
+      color: 'var(--secondary)',
     },
   ];
 
-  const filtered = search.trim()
-    ? SECTIONS.map((s) => ({
-        ...s,
-        links: s.links.filter((l) =>
-          l.name.toLowerCase().includes(search.toLowerCase()) ||
-          s.title.toLowerCase().includes(search.toLowerCase())
-        ),
-      })).filter((s) => s.links.length > 0)
-    : SECTIONS;
-
-  const font = { fontFamily: "var(--font-sans, system-ui, sans-serif)" };
-
   return (
-    <div
-      data-theme="care-assistant"
-      style={{
-        position:  "relative",
-        minHeight: "100dvh",
-        background: "var(--base-100)",
-        color:      "var(--base-content)",
-        ...font,
-      }}
-    >
-      {/* Top accent stripe */}
-      <div
-        className="h-1 w-full sticky top-0 z-50"
-        style={{ background: "linear-gradient(90deg, var(--neutral), var(--primary), var(--secondary))" }}
-      />
-
-      {/* ── INLINE TOOLBAR ── */}
-      <div
-        className="sticky top-1 z-40 px-4 pt-3 pb-2 flex items-center gap-2"
-        style={{
-          background:     "color-mix(in oklch, var(--base-100) 90%, transparent)",
-          backdropFilter: "blur(16px)",
-        }}
-      >
-        {/* Online pill */}
-        <button
-          onClick={() => setIsOnline((p) => !p)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[10px] font-black uppercase tracking-widest transition-all"
-          style={{
-            background:  isOnline ? "var(--base-200)" : "var(--base-300)",
-            borderColor: isOnline ? "color-mix(in oklch, var(--primary) 45%, transparent)" : "var(--base-300)",
-            color:       isOnline ? "var(--neutral)"  : "var(--base-content)",
-            ...font,
-          }}
-        >
-          <StatusDot isOnline={isOnline} />
-          {isOnline ? "Online" : "Offline"}
-        </button>
-
-        <div className="flex-1" />
-
-        {/* Search toggle */}
-        <button
-          onClick={() => setSearchOpen((p) => !p)}
-          className="w-9 h-9 rounded-xl border flex items-center justify-center transition-all"
-          style={{
-            borderColor: "var(--base-300)",
-            background:  "color-mix(in oklch, var(--primary) 8%, var(--base-100))",
-            color:       "var(--base-content)",
-          }}
-          aria-label="Toggle search"
-        >
-          {searchOpen ? <X size={15} /> : <Search size={15} />}
-        </button>
-
-        {/* Notifications */}
-        <button
-          className="w-9 h-9 rounded-xl border flex items-center justify-center relative"
-          style={{
-            borderColor: "var(--base-300)",
-            background:  "var(--base-100)",
-            color:       "var(--base-content)",
-          }}
-          aria-label="Notifications"
-        >
-          <Bell size={15} />
-          <span
-            className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full border-2"
-            style={{
-              background:   "var(--error)",
-              borderColor:  "var(--base-100)",
-            }}
-          />
-        </button>
-      </div>
-
-      {/* Search bar */}
-      <AnimatePresence>
-        {searchOpen && (
+    <motion.div variants={stagger} className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      {stats.map((s) => {
+        const Icon = s.icon;
+        return (
           <motion.div
-            initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}
-            className="overflow-hidden pt-5 px-4 pb-3"
+            key={s.key}
+            variants={popIn}
+            className="glass-card p-4 cursor-default"
           >
-            <div className="relative">
-              <Search
-                size={13}
-                className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
-                style={{ color: "var(--primary)" }}
-              />
-              <input
-                ref={searchRef}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search features…"
-                className="w-full pl-9 pr-4 py-2.5 rounded-xl text-[13px] font-medium outline-none"
+            <div className="flex items-start justify-between mb-3">
+              <div
+                className="w-9 h-9 rounded-[var(--r-selector)] flex items-center justify-center flex-shrink-0"
                 style={{
-                  border:      "1px solid var(--base-300)",
-                  background:  "var(--base-200)",
-                  color:       "var(--base-content)",
-                  ...font,
-                }}
-              />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ── MAIN SCROLL AREA ── */}
-      <main className="max-w-lg mx-auto px-4 pb-28 pt-2 space-y-5">
-
-        {/* GREETING CARD */}
-        {!search && (
-          <motion.div
-            variants={scaleIn} initial="hidden" animate="show"
-            className="relative overflow-hidden rounded-2xl p-5"
-            style={{
-              background: "linear-gradient(135deg, var(--neutral) 0%, var(--primary) 100%)",
-              color:      "var(--primary-content)",
-            }}
-          >
-            <div
-              className="absolute -top-8 -right-8 w-36 h-36 rounded-full opacity-10"
-              style={{ background: "var(--secondary)" }}
-            />
-            <div
-              className="absolute -bottom-6 left-8 w-20 h-20 rounded-full opacity-10"
-              style={{ background: "var(--primary-content)" }}
-            />
-
-            <div className="relative z-10">
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.25em] opacity-60 mb-1"
-                    style={{ color: "var(--primary-content)" }}>
-                    Welcome back
-                  </p>
-                  <p className="text-xl font-black tracking-tight leading-tight"
-                    style={{ color: "var(--primary-content)" }}>
-                    {displayName} 👋
-                  </p>
-                  <div className="flex items-center gap-2 mt-1.5">
-                    <MapPin size={10} style={{ color: "var(--primary-content)", opacity: 0.6 }} />
-                    <p className="text-[11px] opacity-60" style={{ color: "var(--primary-content)" }}>{displayCity}</p>
-                    {user?.role && (
-                      <>
-                        <span style={{ color: "var(--primary-content)", opacity: 0.3 }}>·</span>
-                        <p className="text-[11px] capitalize" style={{ color: "var(--primary-content)", opacity: 0.8 }}>{user.role}</p>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {displayAvatar ? (
-                  <img
-                    src={displayAvatar} alt={displayName}
-                    className="w-12 h-12 rounded-2xl object-cover flex-shrink-0"
-                    style={{ border: "2px solid color-mix(in oklch, var(--primary-content) 30%, transparent)" }}
-                  />
-                ) : (
-                  <div
-                    className="w-12 h-12 rounded-2xl flex items-center justify-center text-[15px] font-black flex-shrink-0"
-                    style={{
-                      background:     "color-mix(in oklch, var(--primary-content) 20%, transparent)",
-                      backdropFilter: "blur(8px)",
-                      color:          "var(--primary-content)",
-                    }}
-                  >
-                    {initials}
-                  </div>
-                )}
-              </div>
-
-              {/* Profile completion bar */}
-              <div className="flex items-center gap-3 mt-2">
-                <div className="flex-1">
-                  <div className="flex items-center justify-between mb-1">
-                    <span
-                      className="text-[9px] font-black uppercase tracking-widest opacity-60"
-                      style={{ color: "var(--primary-content)" }}
-                    >
-                      Profile
-                    </span>
-                    <span
-                      className="text-[10px] font-black opacity-80"
-                      style={{ color: "var(--primary-content)" }}
-                    >
-                      {completionPct}%
-                    </span>
-                  </div>
-                  <div
-                    className="h-1 rounded-full overflow-hidden"
-                    style={{ background: "color-mix(in oklch, var(--primary-content) 20%, transparent)" }}
-                  >
-                    <div
-                      className="h-full rounded-full transition-all duration-700"
-                      style={{ width: `${completionPct}%`, background: "var(--secondary)" }}
-                    />
-                  </div>
-                </div>
-                <KycBadge status={kycStatus} />
-              </div>
-            </div>
-          </motion.div>
-        )}
-
-        {/* STATS */}
-        {!search && (
-          <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-2 gap-3">
-            {STATS.map((s) => (
-              <motion.div
-                key={s.label} variants={fadeUp}
-                className="rounded-2xl p-3.5 flex flex-col gap-1"
-                style={{
-                  background: "var(--base-100)",
-                  border:     `1px solid color-mix(in oklch, ${s.accentVar} 22%, transparent)`,
-                  boxShadow:  `0 1px 8px color-mix(in oklch, ${s.accentVar} 8%, transparent)`,
+                  background: `color-mix(in srgb, ${s.color}, transparent 86%)`,
+                  color: s.color,
                 }}
               >
-                <div className="flex items-center justify-between mb-1">
-                  <p
-                    className="text-[9px] font-black uppercase tracking-widest opacity-60"
-                    style={{ color: "var(--base-content)" }}
-                  >
-                    {s.label}
-                  </p>
-                  <div
-                    className="w-6 h-6 rounded-lg flex items-center justify-center"
-                    style={{
-                      background: `color-mix(in oklch, ${s.accentVar} 14%, transparent)`,
-                      color:       s.accentVar,
-                    }}
-                  >
-                    <s.icon size={11} />
-                  </div>
-                </div>
-                <p className="text-lg font-black leading-none" style={{ color: s.accentVar }}>{s.value}</p>
-                <p
-                  className="text-[10px] font-semibold opacity-50"
-                  style={{ color: "var(--base-content)" }}
-                >
+                <Icon size={15} />
+              </div>
+              {s.sub && (
+                <span className="text-[0.58rem] font-semibold text-[var(--base-content)] opacity-40 text-right leading-tight max-w-[70px]">
                   {s.sub}
-                </p>
-              </motion.div>
-            ))}
-          </motion.div>
-        )}
-
-        {/* QUICK ACTIONS */}
-        {!search && (
-          <div>
-            <p
-              className="text-[9px] font-black uppercase tracking-[0.3em] mb-3 px-1 opacity-55"
-              style={{ color: "var(--primary)" }}
-            >
-              Quick Actions
+                </span>
+              )}
+            </div>
+            <p className="text-2xl font-black text-[var(--base-content)] leading-none" style={{ color: s.color }}>
+              {s.value}
             </p>
-            <div className="grid grid-cols-4 gap-2">
-              {QUICK_ACTIONS.map((qa, i) => (
-                <motion.a
-                  key={qa.name} href={qa.href}
-                  initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.07 }} whileTap={{ scale: 0.93 }}
-                  className="flex flex-col items-center gap-2 p-3 rounded-2xl text-center"
-                  style={{
-                    background:  "var(--base-100)",
-                    border:      "1px solid var(--base-200)",
-                    textDecoration: "none",
-                    ...font,
-                  }}
-                >
-                  <div
-                    className="w-10 h-10 rounded-xl flex items-center justify-center"
-                    style={{ background: qa.gradient }}
-                  >
-                    <qa.icon size={18} color="var(--primary-content)" />
-                  </div>
-                  <p
-                    className="text-[9px] font-black uppercase tracking-tight leading-tight"
-                    style={{ color: "var(--base-content)" }}
-                  >
-                    {qa.name}
-                  </p>
-                </motion.a>
+            <p className="text-[0.62rem] font-semibold uppercase tracking-widest text-[var(--base-content)] opacity-45 mt-1">
+              {s.label}
+            </p>
+          </motion.div>
+        );
+      })}
+    </motion.div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// KYC & VERIFICATION CARD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function KycCard({ kycStatus }) {
+  const status = kycStatus?.kyc?.verificationStatus ?? 'Pending';
+  const cfg = KYC_CFG[status] || KYC_CFG.Pending;
+  const Icon = cfg.icon;
+
+  const docs = [
+    { label: 'Aadhaar', done: !!kycStatus?.kyc?.aadhaarFrontUrl, verified: kycStatus?.kyc?.aadhaarVerified },
+    { label: 'PAN Card', done: !!kycStatus?.kyc?.panCardUrl, verified: kycStatus?.kyc?.panVerified },
+    { label: 'Police Verification', done: kycStatus?.verification?.policeVerificationStatus === 'Completed', verified: kycStatus?.verification?.policeVerificationStatus === 'Completed' },
+  ];
+
+  return (
+    <motion.div variants={fadeUp} className="glass-card p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-black text-xs uppercase tracking-widest text-[var(--base-content)]">KYC Status</h3>
+        <Link href="/care-assistant/kyc/status">
+          <span className="text-xs font-bold text-[var(--primary)] cursor-pointer hover:underline">View</span>
+        </Link>
+      </div>
+
+      {/* Big status pill */}
+      <div className="flex items-center gap-3 p-3 rounded-[var(--r-field)] mb-4"
+        style={{ background: `color-mix(in srgb, ${status === 'Verified' ? 'var(--success)' : status === 'Rejected' ? 'var(--error)' : 'var(--warning)'}, transparent 90%)` }}
+      >
+        <Icon size={18} style={{ color: status === 'Verified' ? 'var(--success)' : status === 'Rejected' ? 'var(--error)' : 'var(--warning)' }} />
+        <div>
+          <p className="text-xs font-black text-[var(--base-content)]">{cfg.label}</p>
+          {kycStatus?.kyc?.rejectionReason && (
+            <p className="text-[0.6rem] text-[var(--error)] mt-0.5">{kycStatus.kyc.rejectionReason}</p>
+          )}
+        </div>
+      </div>
+
+      {/* Doc checklist */}
+      <div className="space-y-2">
+        {docs.map((d) => (
+          <div key={d.label} className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-[var(--base-content)] opacity-65">{d.label}</span>
+            <div className="flex items-center gap-1.5">
+              {d.done
+                ? <CheckCircle2 size={13} style={{ color: d.verified ? 'var(--success)' : 'var(--warning)' }} />
+                : <XCircle size={13} style={{ color: 'var(--error)' }} />
+              }
+              <span className="text-[0.58rem] text-[var(--base-content)] opacity-40">
+                {d.done ? (d.verified ? 'Verified' : 'Uploaded') : 'Missing'}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {status !== 'Verified' && (
+        <Link href="/care-assistant/kyc/submit">
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.97 }}
+            className="mt-4 w-full py-2 rounded-[var(--r-field)] text-xs font-bold flex items-center justify-center gap-2 cursor-pointer"
+            style={{ background: 'var(--primary)', color: 'var(--primary-content)' }}
+          >
+            <ScanLine size={13} /> Submit KYC
+          </motion.button>
+        </Link>
+      )}
+    </motion.div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WEEKLY AVAILABILITY HEATMAP
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function AvailabilityHeatmap({ profile }) {
+  const schedule = profile?.weeklySchedule;
+  const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  const labels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+  const today = new Date().getDay(); // 0=Sun
+  const todayIdx = today === 0 ? 6 : today - 1;
+
+  return (
+    <motion.div variants={fadeUp} className="glass-card p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-black text-xs uppercase tracking-widest text-[var(--base-content)]">Weekly Schedule</h3>
+        <Link href="/care-assistant/schedule">
+          <span className="text-xs font-bold text-[var(--primary)] cursor-pointer hover:underline">Edit</span>
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-7 gap-1.5 mb-3">
+        {days.map((day, i) => {
+          const avail = schedule?.[day]?.isAvailable;
+          const isToday = i === todayIdx;
+          return (
+            <motion.div
+              key={day}
+              whileHover={{ scale: 1.12 }}
+              className="flex flex-col items-center gap-1.5 cursor-default"
+            >
+              <span className={`text-[0.58rem] font-bold uppercase ${isToday ? 'text-[var(--primary)]' : 'text-[var(--base-content)] opacity-40'}`}>
+                {labels[i]}
+              </span>
+              <div
+                className="w-8 h-8 rounded-[var(--r-selector)] flex items-center justify-center transition-all"
+                style={{
+                  background: avail
+                    ? `color-mix(in srgb, var(--primary), transparent ${isToday ? '40%' : '70%'})`
+                    : 'var(--base-300)',
+                  border: isToday ? '2px solid var(--primary)' : '2px solid transparent',
+                }}
+              >
+                {avail ? (
+                  <CheckCircle2 size={12} style={{ color: 'var(--primary)' }} />
+                ) : (
+                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--base-content)] opacity-20" />
+                )}
+              </div>
+              {schedule?.[day]?.startTime && (
+                <span className="text-[0.48rem] text-[var(--base-content)] opacity-30 font-medium">
+                  {schedule[day].startTime}
+                </span>
+              )}
+            </motion.div>
+          );
+        })}
+      </div>
+
+      <p className="text-[0.6rem] text-[var(--base-content)] opacity-40 text-center font-medium">
+        Work type: <strong className="text-[var(--primary)] opacity-100">{profile?.workType || '—'}</strong>
+      </p>
+    </motion.div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PERFORMANCE RING CHART
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function PerformanceRings({ performance }) {
+  const rings = [
+    { label: 'Completion', value: (() => {
+        const p = performance;
+        if (!p) return 0;
+        const total = (p.totalTasksCompleted ?? 0) + (p.totalTasksCancelled ?? 0);
+        return total ? Math.round((p.totalTasksCompleted / total) * 100) : 0;
+      })(), color: 'var(--primary)', r: 52 },
+    { label: 'On-Time',   value: performance?.onTimeArrivalRate ?? 0, color: 'var(--success)', r: 38 },
+    { label: 'Repeat',    value: performance?.repeatClientRate  ?? 0, color: 'var(--secondary)', r: 24 },
+  ];
+
+  return (
+    <motion.div variants={fadeUp} className="glass-card p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-black text-xs uppercase tracking-widest text-[var(--base-content)]">Performance</h3>
+        <Link href="/care-assistant/performance">
+          <span className="text-xs font-bold text-[var(--primary)] cursor-pointer hover:underline">Details</span>
+        </Link>
+      </div>
+
+      <div className="flex items-center gap-5">
+        {/* Concentric rings */}
+        <div className="relative w-[130px] h-[130px] flex-shrink-0 flex items-center justify-center">
+          <svg width="130" height="130" className="-rotate-90">
+            {rings.map((ring) => {
+              const circ = 2 * Math.PI * ring.r;
+              return (
+                <g key={ring.label}>
+                  <circle cx="65" cy="65" r={ring.r} fill="none" stroke="var(--base-300)" strokeWidth="6" />
+                  <motion.circle
+                    cx="65" cy="65" r={ring.r} fill="none"
+                    stroke={ring.color}
+                    strokeWidth="6" strokeLinecap="round"
+                    strokeDasharray={circ}
+                    initial={{ strokeDashoffset: circ }}
+                    animate={{ strokeDashoffset: circ * (1 - ring.value / 100) }}
+                    transition={{ duration: 1.2, ease: 'easeOut', delay: 0.3 }}
+                  />
+                </g>
+              );
+            })}
+          </svg>
+          <div className="absolute text-center">
+            <p className="text-lg font-black text-[var(--primary)] leading-none">
+              {performance?.averageRating ? Number(performance.averageRating).toFixed(1) : '—'}
+            </p>
+            <div className="flex justify-center mt-0.5">
+              {[1,2,3,4,5].map((s) => (
+                <Star key={s} size={7} fill={s <= Math.round(performance?.averageRating ?? 0) ? 'var(--warning)' : 'none'}
+                  style={{ color: s <= Math.round(performance?.averageRating ?? 0) ? 'var(--warning)' : 'var(--base-300)' }} />
               ))}
             </div>
           </div>
-        )}
-
-        {/* SECTION CARDS */}
-        <div>
-          {!search && (
-            <p
-              className="text-[9px] font-black uppercase tracking-[0.3em] mb-3 px-1 opacity-55"
-              style={{ color: "var(--primary)" }}
-            >
-              All Features
-            </p>
-          )}
-
-          {search && filtered.length === 0 && (
-            <div className="text-center py-12" style={{ opacity: 0.4 }}>
-              <Search size={32} className="mx-auto mb-2" style={{ color: "var(--primary)" }} />
-              <p className="text-sm font-bold" style={{ color: "var(--base-content)" }}>
-                No results for "{search}"
-              </p>
-            </div>
-          )}
-
-          <motion.div variants={stagger} initial="hidden" animate="show" className="space-y-2.5">
-            {filtered.map((section) => {
-              const isExpanded  = expanded === section.id;
-              const SectionIcon = section.icon;
-
-              return (
-                <motion.div
-                  key={section.id} variants={fadeUp}
-                  className="rounded-2xl overflow-hidden"
-                  style={{
-                    border:     isExpanded
-                      ? `1px solid color-mix(in oklch, ${section.accentVar} 35%, transparent)`
-                      : "1px solid var(--base-200)",
-                    background: "var(--base-100)",
-                    transition: "border-color 0.2s, box-shadow 0.2s",
-                    boxShadow:  isExpanded
-                      ? `0 2px 16px color-mix(in oklch, ${section.accentVar} 12%, transparent)`
-                      : "none",
-                  }}
-                >
-                  {/* Section header */}
-                  <button
-                    onClick={() => setExpanded(isExpanded ? null : section.id)}
-                    className="w-full flex items-center gap-3 px-4 py-3.5 text-left transition-all"
-                    style={{
-                      background: isExpanded
-                        ? `color-mix(in oklch, ${section.accentVar} 8%, transparent)`
-                        : "transparent",
-                      border:  "none",
-                      cursor:  "pointer",
-                      ...font,
-                    }}
-                  >
-                    <div
-                      className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center"
-                      style={{ background: section.gradient }}
-                    >
-                      <SectionIcon size={16} color="var(--primary-content)" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p
-                        className="text-[13px] font-black leading-tight"
-                        style={{ color: isExpanded ? section.accentVar : "var(--neutral)" }}
-                      >
-                        {section.title}
-                      </p>
-                      <p
-                        className="text-[10px] font-semibold opacity-50"
-                        style={{ color: "var(--base-content)" }}
-                      >
-                        {section.links.length} {section.links.length === 1 ? "option" : "options"}
-                      </p>
-                    </div>
-                    <motion.div
-                      animate={{ rotate: isExpanded ? 90 : 0 }}
-                      transition={{ type: "spring", stiffness: 320, damping: 26 }}
-                    >
-                      <ChevronRight
-                        size={15}
-                        style={{ color: section.accentVar, opacity: isExpanded ? 1 : 0.4 }}
-                      />
-                    </motion.div>
-                  </button>
-
-                  {/* Expanded links */}
-                  <AnimatePresence initial={false}>
-                    {isExpanded && (
-                      <motion.div
-                        key="content"
-                        initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
-                        className="overflow-hidden"
-                      >
-                        <div
-                          className="px-3 pb-3 pt-1 flex flex-col gap-0.5"
-                          style={{ borderTop: `1px solid color-mix(in oklch, ${section.accentVar} 15%, transparent)` }}
-                        >
-                          {section.links.map((link, idx) => {
-                            const LinkIcon = link.icon;
-                            return (
-                              <motion.a
-                                key={link.name} href={link.href}
-                                initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }}
-                                transition={{ delay: idx * 0.045 }} whileTap={{ scale: 0.97 }}
-                                className="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all"
-                                style={{ background: "transparent", textDecoration: "none", ...font }}
-                                onMouseEnter={(e) => {
-                                  e.currentTarget.style.background =
-                                    `color-mix(in oklch, ${section.accentVar} 8%, transparent)`;
-                                }}
-                                onMouseLeave={(e) => {
-                                  e.currentTarget.style.background = "transparent";
-                                }}
-                              >
-                                <div
-                                  className="w-7 h-7 rounded-lg flex-shrink-0 flex items-center justify-center"
-                                  style={{
-                                    background: `color-mix(in oklch, ${section.accentVar} 14%, transparent)`,
-                                    color:       section.accentVar,
-                                  }}
-                                >
-                                  <LinkIcon size={13} />
-                                </div>
-                                <span
-                                  className="flex-1 text-[12px] font-bold"
-                                  style={{ color: "var(--neutral)" }}
-                                >
-                                  {link.name}
-                                </span>
-                                <ArrowUpRight
-                                  size={12}
-                                  style={{ color: section.accentVar, opacity: 0.45 }}
-                                />
-                              </motion.a>
-                            );
-                          })}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </motion.div>
-              );
-            })}
-          </motion.div>
         </div>
-      </main>
 
-      {/* ── BOTTOM NAV ── */}
-      <nav
-        className="fixed bottom-0 left-0 right-0 z-50 px-4 safe-bottom"
-        style={{
-          background:     "color-mix(in oklch, var(--base-100) 94%, transparent)",
-          backdropFilter: "blur(18px)",
-          borderTop:      "1px solid var(--base-200)",
-        }}
-      >
-        <div className="max-w-lg mx-auto flex items-center justify-around py-2">
-          {[
-            { name: "Home",     href: "/care-assistant/dashboard",   icon: LayoutDashboard, active: true },
-            { name: "Schedule", href: "/care-assistant/schedule",    icon: CalendarCheck },
-            { name: "Earnings", href: "/care-assistant/performance", icon: TrendingUp },
-            { name: "Profile",  href: "/care-assistant/profile",     icon: UserRound },
-            { name: "Support",  href: "/care-assistant/support",     icon: LifeBuoy },
-          ].map((item) => (
-            <a
-              key={item.name} href={item.href}
-              className="flex flex-col items-center gap-1 px-2 py-1 rounded-xl transition-all"
-              style={{
-                color:       item.active ? "var(--primary)" : "var(--base-content)",
-                opacity:     item.active ? 1 : 0.45,
-                textDecoration: "none",
-                ...font,
-              }}
-            >
-              <div
-                className="w-9 h-9 rounded-xl flex items-center justify-center"
-                style={{ background: item.active ? "var(--base-200)" : "transparent" }}
-              >
-                <item.icon size={17} />
+        {/* Legend */}
+        <div className="flex-1 space-y-3">
+          {rings.map((ring) => (
+            <div key={ring.label}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[0.62rem] font-semibold text-[var(--base-content)] opacity-60">{ring.label}</span>
+                <span className="text-xs font-black" style={{ color: ring.color }}>{ring.value}%</span>
               </div>
-              <span className="text-[8px] font-black uppercase tracking-tight">{item.name}</span>
-              {item.active && (
+              <div className="h-1.5 bg-[var(--base-300)] rounded-full overflow-hidden">
                 <motion.div
-                  layoutId="bottom-bar"
-                  className="w-4 h-0.5 rounded-full"
-                  style={{ background: "var(--primary)" }}
+                  className="h-full rounded-full"
+                  style={{ background: ring.color }}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${ring.value}%` }}
+                  transition={{ duration: 1.1, delay: 0.4, ease: 'easeOut' }}
                 />
-              )}
-            </a>
+              </div>
+            </div>
+          ))}
+          <div className="flex gap-3 pt-1">
+            <div className="text-center">
+              <p className="text-xs font-black text-[var(--error)]">{performance?.complaintsCount ?? 0}</p>
+              <p className="text-[0.52rem] opacity-40 text-[var(--base-content)] uppercase tracking-wide">Complaints</p>
+            </div>
+            <div className="text-center">
+              <p className="text-xs font-black text-[var(--success)]">{performance?.complimentsCount ?? 0}</p>
+              <p className="text-[0.52rem] opacity-40 text-[var(--base-content)] uppercase tracking-wide">Compliments</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EARNINGS CARD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function EarningsCard({ earnings, performance }) {
+  const items = [
+    { label: 'Total Paid',    value: earnings?.totalPaid        != null ? `₹${Number(earnings.totalPaid).toLocaleString('en-IN')}` : '—', color: 'var(--success)' },
+    { label: 'Pending',       value: earnings?.pendingPayout    != null ? `₹${Number(earnings.pendingPayout).toLocaleString('en-IN')}` : '—', color: 'var(--warning)' },
+    { label: 'Total Tasks',   value: earnings?.lifetimeBookings != null ? earnings.lifetimeBookings.toLocaleString('en-IN') : '—', color: 'var(--primary)' },
+    { label: 'Last Payout',   value: earnings?.lastPayoutAt     ? new Date(earnings.lastPayoutAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—', color: 'var(--secondary)' },
+  ];
+
+  // Sparkline bars (placeholder visual rhythm)
+  const bars = [30, 55, 42, 70, 60, 85, 72, 90, 65, 80, 55, 75];
+
+  return (
+    <motion.div variants={fadeUp} className="glass-card p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-black text-xs uppercase tracking-widest text-[var(--base-content)]">Earnings Overview</h3>
+        <Link href="/care-assistant/performance">
+          <span className="text-xs font-bold text-[var(--primary)] cursor-pointer hover:underline">Details</span>
+        </Link>
+      </div>
+
+      {/* Sparkline */}
+      <div className="flex items-end gap-1 h-10 mb-3">
+        {bars.map((h, i) => (
+          <motion.div
+            key={i}
+            className="flex-1 rounded-t-sm"
+            style={{
+              background: i === bars.length - 1
+                ? 'var(--primary)'
+                : `color-mix(in srgb, var(--primary), transparent ${70 - i * 2}%)`,
+              alignSelf: 'flex-end',
+            }}
+            initial={{ height: 0 }}
+            animate={{ height: `${h}%` }}
+            transition={{ duration: 0.5, delay: i * 0.05, ease: 'easeOut' }}
+          />
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        {items.map((item) => (
+          <div key={item.label} className="p-2.5 rounded-[var(--r-field)] bg-[var(--base-200)]">
+            <p className="text-[0.58rem] opacity-45 font-semibold text-[var(--base-content)] uppercase tracking-wide">{item.label}</p>
+            <p className="text-sm font-black mt-0.5" style={{ color: item.color }}>{item.value}</p>
+          </div>
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// QUICK ACTIONS GRID
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const QUICK_ACTIONS = [
+  { label: 'Go Online',    href: '/care-assistant/availability',  icon: ToggleRight,        color: 'var(--success)' },
+  { label: 'My Schedule',  href: '/care-assistant/schedule',       icon: CalendarCheck,      color: 'var(--primary)' },
+  { label: 'Submit KYC',   href: '/care-assistant/kyc/submit',     icon: ShieldCheck,        color: 'var(--info)' },
+  { label: 'Earnings',     href: '/care-assistant/performance',    icon: ReceiptIndianRupee, color: 'var(--warning)' },
+  { label: 'My Location',  href: '/care-assistant/location',       icon: MapPin,             color: 'var(--secondary)' },
+  { label: 'Health Decl.', href: '/care-assistant/health-declaration', icon: HeartPulse,   color: 'var(--error)' },
+];
+
+function QuickActions() {
+  return (
+    <motion.div variants={fadeUp} className="glass-card p-5">
+      <h3 className="font-black text-xs uppercase tracking-widest text-[var(--base-content)] mb-4">Quick Actions</h3>
+      <div className="grid grid-cols-3 gap-2">
+        {QUICK_ACTIONS.map((a) => {
+          const Icon = a.icon;
+          return (
+            <Link key={a.label} href={a.href}>
+              <motion.div
+                whileHover={{ scale: 1.06, y: -2 }}
+                whileTap={{ scale: 0.93 }}
+                className="flex flex-col items-center gap-1.5 p-3 rounded-[var(--r-field)] cursor-pointer transition-all"
+                style={{ background: `color-mix(in srgb, ${a.color}, transparent 88%)` }}
+              >
+                <Icon size={16} style={{ color: a.color }} />
+                <span className="text-[0.58rem] font-bold text-center leading-tight" style={{ color: a.color }}>
+                  {a.label}
+                </span>
+              </motion.div>
+            </Link>
+          );
+        })}
+      </div>
+    </motion.div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRAINING & CERTS CARD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function TrainingCard({ profile }) {
+  const t = profile?.training;
+  const flags = [
+    { label: 'First Aid',          done: t?.isFirstAidCertified },
+    { label: 'Patient Etiquette',  done: t?.patientEtiquetteTrained },
+    { label: 'Mobility Support',   done: t?.mobilitySupportTrained },
+    { label: 'Medication Mgmt',    done: t?.medicationManagement },
+    { label: 'Wound Care',         done: t?.woundCare },
+  ];
+  const certCount = t?.certificates?.length ?? 0;
+  const doneCount = flags.filter((f) => f.done).length;
+
+  return (
+    <motion.div variants={fadeUp} className="glass-card p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-black text-xs uppercase tracking-widest text-[var(--base-content)]">Training</h3>
+        <Link href="/care-assistant/training">
+          <span className="text-xs font-bold text-[var(--primary)] cursor-pointer hover:underline">Manage</span>
+        </Link>
+      </div>
+
+      {/* Badge count */}
+      <div className="flex items-center gap-3 mb-4">
+        <div className="w-12 h-12 rounded-[var(--r-box)] flex items-center justify-center flex-shrink-0"
+          style={{ background: 'color-mix(in srgb, var(--primary), transparent 85%)' }}
+        >
+          <Award size={20} style={{ color: 'var(--primary)' }} />
+        </div>
+        <div>
+          <p className="text-lg font-black text-[var(--primary)] leading-none">{certCount}</p>
+          <p className="text-[0.6rem] font-semibold text-[var(--base-content)] opacity-50 uppercase tracking-wide">Certificates</p>
+          <p className="text-[0.6rem] text-[var(--base-content)] opacity-35">{doneCount}/{flags.length} competencies</p>
+        </div>
+      </div>
+
+      {/* Competencies */}
+      <div className="space-y-1.5">
+        {flags.map((f) => (
+          <div key={f.label} className="flex items-center justify-between">
+            <span className="text-[0.65rem] font-semibold text-[var(--base-content)] opacity-60">{f.label}</span>
+            {f.done
+              ? <CheckCircle2 size={13} style={{ color: 'var(--success)' }} />
+              : <XCircle size={13} style={{ color: 'var(--base-300)' }} />
+            }
+          </div>
+        ))}
+      </div>
+
+      {/* Recent certs */}
+      {t?.certificates?.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-[var(--base-300)]">
+          <p className="text-[0.58rem] uppercase tracking-widest text-[var(--base-content)] opacity-35 font-bold mb-2">Recent</p>
+          {t.certificates.slice(0, 2).map((c) => (
+            <div key={c._id} className="flex items-center justify-between py-1">
+              <span className="text-[0.65rem] font-semibold text-[var(--base-content)] truncate max-w-[130px]">{c.name}</span>
+              <span className={`text-[0.55rem] font-bold px-1.5 py-0.5 rounded-full ${c.isVerified ? 'badge-success' : 'badge-warning'}`}>
+                {c.isVerified ? 'Verified' : 'Pending'}
+              </span>
+            </div>
           ))}
         </div>
-      </nav>
+      )}
+    </motion.div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BANK CARD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function BankCard({ bankDetails }) {
+  return (
+    <motion.div variants={fadeUp} className="glass-card p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-black text-xs uppercase tracking-widest text-[var(--base-content)]">Payout Bank</h3>
+        <Link href="/care-assistant/bank">
+          <span className="text-xs font-bold text-[var(--primary)] cursor-pointer hover:underline">Edit</span>
+        </Link>
+      </div>
+
+      {bankDetails?.bankName ? (
+        <>
+          <div className="p-3 rounded-[var(--r-field)] mb-3"
+            style={{ background: 'linear-gradient(135deg, color-mix(in srgb, var(--primary) 18%, var(--base-200)), var(--base-200))' }}
+          >
+            <div className="flex items-center justify-between mb-2">
+              <Landmark size={16} style={{ color: 'var(--primary)' }} />
+              <span className={`text-[0.55rem] font-bold px-2 py-0.5 rounded-full ${bankDetails.isBankVerified ? 'badge-success' : 'badge-warning'}`}>
+                {bankDetails.isBankVerified ? 'Verified' : 'Unverified'}
+              </span>
+            </div>
+            <p className="text-xs font-black text-[var(--base-content)]">{bankDetails.bankName}</p>
+            <p className="text-[0.65rem] text-[var(--base-content)] opacity-50 mt-0.5 font-mono">
+              •••• •••• {bankDetails.accountLast4 || '——'}
+            </p>
+          </div>
+          <p className="text-[0.6rem] text-[var(--base-content)] opacity-40">
+            IFSC: <span className="font-mono font-semibold">{bankDetails.ifscCode || '—'}</span>
+          </p>
+          {bankDetails.upiId && (
+            <p className="text-[0.6rem] text-[var(--base-content)] opacity-40 mt-0.5">
+              UPI: {bankDetails.upiId}
+            </p>
+          )}
+        </>
+      ) : (
+        <div className="flex flex-col items-center justify-center py-6 gap-2">
+          <CreditCard size={28} style={{ color: 'color-mix(in srgb, var(--base-content) 20%, transparent)' }} />
+          <p className="text-xs text-[var(--base-content)] opacity-35 text-center">No bank account added</p>
+          <Link href="/care-assistant/bank">
+            <button className="btn-secondary px-4 py-1.5 text-xs">Add Bank</button>
+          </Link>
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOTIFICATION PREFS CARD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function NotifCard({ settings }) {
+  const prefs = settings?.notifPrefs;
+  const items = [
+    { label: 'SMS',       key: 'sms',      icon: '📱' },
+    { label: 'Email',     key: 'email',    icon: '✉️' },
+    { label: 'Push',      key: 'push',     icon: '🔔' },
+    { label: 'WhatsApp',  key: 'whatsapp', icon: '💬' },
+  ];
+
+  return (
+    <motion.div variants={fadeUp} className="glass-card p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-black text-xs uppercase tracking-widest text-[var(--base-content)]">Notifications</h3>
+        <Link href="/care-assistant/settings/notifications">
+          <span className="text-xs font-bold text-[var(--primary)] cursor-pointer hover:underline">Edit</span>
+        </Link>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {items.map((item) => {
+          const on = prefs?.[item.key] ?? true;
+          return (
+            <div key={item.key} className="flex items-center justify-between p-2.5 rounded-[var(--r-field)] bg-[var(--base-200)]">
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm">{item.icon}</span>
+                <span className="text-[0.62rem] font-semibold text-[var(--base-content)] opacity-65">{item.label}</span>
+              </div>
+              <span
+                className="w-2 h-2 rounded-full"
+                style={{ background: on ? 'var(--success)' : 'var(--base-300)' }}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </motion.div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HEALTH DECLARATION BANNER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function HealthBanner({ profile }) {
+  const fit = profile?.healthDeclaration?.isMedicallyFit;
+  const declared = profile?.healthDeclaration?.declaredAt;
+
+  if (fit === undefined || fit === null) {
+    return (
+      <motion.div variants={fadeUp}
+        className="glass-card p-4 flex items-center gap-4"
+        style={{ borderLeft: '3px solid var(--warning)' }}
+      >
+        <HeartPulse size={20} style={{ color: 'var(--warning)' }} />
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-black text-[var(--base-content)]">Health Declaration Needed</p>
+          <p className="text-[0.6rem] text-[var(--base-content)] opacity-45">Submit fitness declaration to go online</p>
+        </div>
+        <Link href="/care-assistant/health-declaration">
+          <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
+            className="px-3 py-1.5 rounded-[var(--r-field)] text-xs font-bold cursor-pointer flex-shrink-0"
+            style={{ background: 'var(--warning)', color: 'var(--warning-content)' }}
+          >
+            Declare
+          </motion.button>
+        </Link>
+      </motion.div>
+    );
+  }
+
+  return (
+    <motion.div variants={fadeUp}
+      className="glass-card p-4 flex items-center gap-4"
+      style={{ borderLeft: `3px solid ${fit ? 'var(--success)' : 'var(--error)'}` }}
+    >
+      <HeartPulse size={20} style={{ color: fit ? 'var(--success)' : 'var(--error)' }} />
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-black text-[var(--base-content)]">
+          {fit ? 'Medically Fit ✓' : 'Not Declared Fit'}
+        </p>
+        {declared && (
+          <p className="text-[0.6rem] text-[var(--base-content)] opacity-40">
+            Declared on {new Date(declared).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+          </p>
+        )}
+      </div>
+      <Link href="/care-assistant/health-declaration">
+        <span className="text-[0.65rem] font-bold text-[var(--primary)] cursor-pointer hover:underline flex-shrink-0">Update</span>
+      </Link>
+    </motion.div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN DASHBOARD PAGE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export default function CareAssistantDashboard() {
+  const dispatch = useDispatch();
+
+  const user        = useSelector(selectUser);
+  const profile     = useSelector(selectProfile);
+  const performance = useSelector(selectPerformance);
+  const earnings    = useSelector(selectEarnings);
+  const kycStatus   = useSelector(selectKycStatus);
+  const bankDetails = useSelector(selectBankDetails);
+  const settings    = useSelector(selectSettings);
+  const isOnline    = useSelector(selectIsOnline);
+  const status      = useSelector(selectCurrentStatus);
+  const completion  = useSelector(selectProfileCompletion);
+  const availLoading = useSelector(selectLoadingKey('availability'));
+
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  useEffect(() => {
+    dispatch(getProfile());
+    dispatch(getPerformance());
+    dispatch(getKycStatus());
+    dispatch(getBankDetails());
+    dispatch(getSettings());
+  }, [dispatch]);
+
+  const handleToggle = () => {
+    const next = !isOnline;
+    dispatch(setOnlineOptimistic(next));
+    dispatch(updateAvailability({ isOnline: next }));
+  };
+
+  return (
+    <div data-theme="care-assistant" className="min-h-screen bg-[var(--base-100)] flex">
+
+      {/* Desktop Sidebar */}
+      <Sidebar activePath="/care-assistant/dashboard" />
+
+      {/* Mobile drawer overlay */}
+      <AnimatePresence>
+        {mobileOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[200] bg-black/50 backdrop-blur-sm lg:hidden"
+              onClick={() => setMobileOpen(false)}
+            />
+            <motion.div
+              initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }}
+              transition={{ type: 'spring', damping: 28, stiffness: 260 }}
+              className="fixed inset-y-0 left-0 z-[201] lg:hidden shadow-2xl"
+            >
+              <Sidebar activePath="/care-assistant/dashboard" onClose={() => setMobileOpen(false)} />
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Main content */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
+
+        {/* ── Top bar ─────────────────────────────────────────────── */}
+        <header className="sticky top-0 z-[90] bg-[color-mix(in_srgb,var(--base-100)_82%,transparent)] backdrop-blur-strong border-b border-[var(--base-300)] px-4 lg:px-6 py-3 flex items-center justify-between gap-3">
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            className="lg:hidden w-8 h-8 rounded-[var(--r-field)] bg-[var(--base-300)] flex items-center justify-center cursor-pointer"
+            onClick={() => setMobileOpen(true)}
+          >
+            <Menu size={15} className="text-[var(--base-content)]" />
+          </motion.button>
+
+          <div className="flex-1 hidden lg:block">
+            <h1 className="text-sm font-black text-[var(--base-content)]">
+              Dashboard <span className="text-[var(--primary)]">— Care Assistant</span>
+            </h1>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <OnlinePill isOnline={isOnline} loading={availLoading} onToggle={handleToggle} />
+
+            <Link href="/care-assistant/settings/notifications">
+              <motion.button
+                whileTap={{ scale: 0.9 }}
+                className="relative w-8 h-8 rounded-[var(--r-field)] bg-[var(--base-200)] flex items-center justify-center cursor-pointer hover:bg-[var(--base-300)] transition-colors"
+              >
+                <Bell size={15} className="text-[var(--base-content)]" />
+                <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-[var(--error)] rounded-full" />
+              </motion.button>
+            </Link>
+
+            <Link href="/care-assistant/profile">
+              <motion.img
+                whileTap={{ scale: 0.9 }}
+                src={user?.avatar || 'https://api.dicebear.com/7.x/adventurer/svg?seed=ca'}
+                alt="avatar"
+                className="w-8 h-8 lg:w-9 lg:h-9 rounded-[var(--r-field)] object-cover ring-2 ring-[var(--primary)] cursor-pointer"
+              />
+            </Link>
+          </div>
+        </header>
+
+        {/* ── Page body ──────────────────────────────────────────── */}
+        <main className="flex-1 p-4 lg:p-6 pb-24 lg:pb-8 overflow-x-hidden">
+
+          {/* MOBILE LAYOUT */}
+          <motion.div className="lg:hidden space-y-4" initial="hidden" animate="show" variants={stagger}>
+            <HeroBanner user={user} profile={profile} isOnline={isOnline} status={status} completion={completion} />
+            <StatCards performance={performance} earnings={earnings} />
+            <HealthBanner profile={profile} />
+            <QuickActions />
+            <PerformanceRings performance={performance} />
+            <AvailabilityHeatmap profile={profile} />
+            <EarningsCard earnings={earnings} performance={performance} />
+            <KycCard kycStatus={kycStatus} />
+            <TrainingCard profile={profile} />
+            <BankCard bankDetails={bankDetails} />
+            <NotifCard settings={settings} />
+          </motion.div>
+
+          {/* DESKTOP LAYOUT */}
+          <motion.div className="hidden lg:block space-y-5" initial="hidden" animate="show" variants={stagger}>
+
+            {/* Row 1 — Hero full width */}
+            <HeroBanner user={user} profile={profile} isOnline={isOnline} status={status} completion={completion} />
+
+            {/* Row 2 — 4 stat cards */}
+            <StatCards performance={performance} earnings={earnings} />
+
+            {/* Row 3 — health banner */}
+            <HealthBanner profile={profile} />
+
+            {/* Row 4 — 3-col grid */}
+            <div className="grid grid-cols-12 gap-5">
+
+              {/* Col 1: left (4) */}
+              <div className="col-span-4 space-y-5">
+                <QuickActions />
+                <KycCard kycStatus={kycStatus} />
+                <NotifCard settings={settings} />
+              </div>
+
+              {/* Col 2: center (4) */}
+              <div className="col-span-4 space-y-5">
+                <PerformanceRings performance={performance} />
+                <AvailabilityHeatmap profile={profile} />
+                <BankCard bankDetails={bankDetails} />
+              </div>
+
+              {/* Col 3: right (4) */}
+              <div className="col-span-4 space-y-5">
+                <EarningsCard earnings={earnings} performance={performance} />
+                <TrainingCard profile={profile} />
+              </div>
+            </div>
+
+          </motion.div>
+        </main>
+      </div>
     </div>
   );
 }

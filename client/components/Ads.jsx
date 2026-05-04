@@ -9,9 +9,10 @@ import {
 } from '@/store/slices/adsSlice';
 import {
   ExternalLink, X, ChevronLeft, ChevronRight,
-  MapPin, Zap, Navigation, ArrowRight, 
+  MapPin, Zap, Navigation, ArrowRight,
   Globe, HeartPulse, ShieldCheck, Volume2, VolumeX
 } from 'lucide-react';
+import Container from './ui/Container';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,12 @@ const useAdInteraction = (dispatch) => {
 const useViewTracking = (adId, onView) => {
   const ref = useRef(null);
   const fired = useRef(false);
+
+  // FIX: Reset fired when adId changes so new ad gets view tracked
+  useEffect(() => {
+    fired.current = false;
+  }, [adId]);
+
   useEffect(() => {
     if (!adId || !ref.current) return;
     const obs = new IntersectionObserver(([e]) => {
@@ -65,7 +72,7 @@ const AdMedia = ({ ad, className = "" }) => {
           loop
           playsInline
         />
-        <button 
+        <button
           onClick={(e) => { e.stopPropagation(); setIsMuted(!isMuted); }}
           className="absolute bottom-3 right-3 p-2 bg-black/60 text-white rounded-full opacity-0 group-hover/media:opacity-100 transition-opacity z-20"
         >
@@ -109,16 +116,16 @@ const GlobalAd = ({ ads, slot, onView, onClick }) => {
   if (slot === 'Popup') {
     return (
       <AnimatePresence>
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
           className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
         >
-          <motion.div 
+          <motion.div
             initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
             className="relative w-full max-w-4xl bg-base-100 rounded-box overflow-hidden shadow-2xl border border-base-300 flex flex-col md:flex-row h-auto md:h-[500px]"
           >
-            <button 
-              onClick={() => setIsOpen(false)} 
+            <button
+              onClick={() => setIsOpen(false)}
               className="absolute top-4 right-4 z-50 p-2 bg-black/20 hover:bg-black/40 rounded-full text-base-content transition-colors"
             >
               <X size={20} />
@@ -138,8 +145,8 @@ const GlobalAd = ({ ads, slot, onView, onClick }) => {
                 </div>
                 <h2 className="text-3xl md:text-4xl font-black leading-tight mb-4">{ad.adContent.headline}</h2>
                 <p className="text-base-content/60 text-sm mb-8 leading-relaxed">{ad.adContent.subHeadline}</p>
-                <button 
-                  onClick={() => onClick(ad)} 
+                <button
+                  onClick={() => onClick(ad)}
                   className="btn-primary-cta w-full py-4 flex items-center justify-center gap-2 group"
                 >
                   {ad.adContent.ctaText} <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
@@ -222,7 +229,7 @@ const RideTrackingAd = ({ ads, slot, onView, onClick }) => {
   return (
     <motion.div ref={ref} initial={{ y: 100 }} animate={{ y: 0 }} className="fixed bottom-6 left-4 right-4 md:left-auto md:right-6 md:w-96 z-[999]">
       <div className="bg-neutral text-neutral-content p-5 rounded-box shadow-2xl flex flex-col gap-4 border border-white/10 relative overflow-hidden">
-        <button onClick={() => setDismissed(true)} className="absolute top-2 right-2 p-1 text-white/30 hover:text-white"><X size={16}/></button>
+        <button onClick={() => setDismissed(true)} className="absolute top-2 right-2 p-1 text-white/30 hover:text-white"><X size={16} /></button>
         <div className="flex items-center gap-3">
           <div className="w-14 h-14 rounded-field overflow-hidden bg-white/10 shrink-0">
             <AdMedia ad={ad} className="w-full h-full" />
@@ -272,58 +279,74 @@ const SearchResultsAd = ({ ads, slot, onView, onClick }) => {
   );
 };
 
+// ─── Page → Component Map ────────────────────────────────────────────────────
+// FIX: Global ads (Popup, Hero_Banner, Native_Feed) can appear on any page.
+// Backend already filters by page+slot. We trust server response directly —
+// no re-filtering by page/slot on client (was causing ads to vanish).
+
+const PAGE_COMPONENT_MAP = {
+  Global: GlobalAd,
+  Medicine_Store: MedicineStoreAd,
+  Ride_Tracking_Screen: RideTrackingAd,
+  Search_Results: SearchResultsAd,
+};
+
 // ─── Main Component ─────────────────────────────────────────────────────────
 
-const ADS = ({ page = 'Global', slot = 'Native_Feed', className = "" }) => {
+const ADS = ({ page, slot, className = "" }) => {
   const dispatch = useDispatch();
-  const { activeBanners = [], isRefreshing } = useSelector((s) => s.ads);
+
+  // FIX: Read from bannersByKey map using page_slot key, not flat activeBanners array.
+  // This prevents multiple ADS instances from clobbering each other's data.
+  const bannerKey = `${page}_${slot}`;
+  const bannersByKey = useSelector((s) => s.ads.bannersByKey);
+  const isRefreshing = useSelector((s) => s.ads.isRefreshing);
+
+  // FIX: ads for THIS specific page+slot
+  const ads = useMemo(() => bannersByKey?.[bannerKey] ?? [], [bannersByKey, bannerKey]);
+
   const { handleView, handleClick } = useAdInteraction(dispatch);
 
   useEffect(() => {
     dispatch(fetchActiveBanners({ page, slot }));
   }, [dispatch, page, slot]);
 
-  const processedAds = useMemo(() => {
-    const currentHour = new Date().getHours();
-    
-    return activeBanners
-      .filter(ad => {
-        // MATCH LOGIC: Match specific slot OR if the request is 'Native_Feed' but ad is general
-        const isCorrectPage = (ad.placement?.page === page || ad.placement?.page === 'Global');
-        const isCorrectSlot = ad.placement?.slot === slot;
-        const isActive = ad.status === 'Active';
-        
-        // Time Filter
-        const isTimeValid = !ad.schedule?.displayHours?.length || ad.schedule.displayHours.includes(currentHour);
-        
-        return isCorrectPage && isCorrectSlot && isActive && isTimeValid;
-      })
-      .sort((a, b) => {
-        if (b.placement.priority !== a.placement.priority) {
-          return b.placement.priority - a.placement.priority;
-        }
-        const mediaOrder = { 'Image': 0, 'Video': 1, 'Gif': 2 };
-        return mediaOrder[a.adContent.mediaType] - mediaOrder[b.adContent.mediaType];
-      });
-  }, [activeBanners, page, slot]);
+  // FIX: Sort by priority client-side (server already sorts, this is a safety net)
+  const sortedAds = useMemo(() => {
+    return [...ads].sort((a, b) => {
+      if (b.placement.priority !== a.placement.priority) {
+        return b.placement.priority - a.placement.priority;
+      }
+      const mediaOrder = { Image: 0, Video: 1, Gif: 2 };
+      return (mediaOrder[a.adContent.mediaType] ?? 0) - (mediaOrder[b.adContent.mediaType] ?? 0);
+    });
+  }, [ads]);
 
-  if (isRefreshing && processedAds.length === 0) {
+  if (isRefreshing && sortedAds.length === 0) {
     return (
-      <div className={`w-full animate-pulse bg-base-300 rounded-box ${className}`} 
-           style={{ height: slot === 'Hero_Banner' ? '350px' : '120px' }} />
+      <div
+        className={`w-full animate-pulse bg-base-300 rounded-box ${className}`}
+        style={{ height: slot === 'Hero_Banner' ? '350px' : '120px' }}
+      />
     );
   }
 
-  if (!processedAds.length) return null;
+  if (!sortedAds.length) return null;
 
-  const props = { ads: processedAds, slot, onView: handleView, onClick: handleClick };
+  // FIX: Determine which component to render.
+  // Global page ads use GlobalAd regardless of which page they appear on.
+  // For non-Global pages, use the page-specific component.
+  // Backend already matched page+slot — just render what came back.
+  const adPage = sortedAds[0]?.placement?.page ?? page;
+  const AdComponent = PAGE_COMPONENT_MAP[adPage] ?? GlobalAd;
+
+  const props = { ads: sortedAds, slot, onView: handleView, onClick: handleClick };
 
   return (
     <div className={`w-full h-auto ${className}`}>
-      {page === 'Global' && <GlobalAd {...props} />}
-      {page === 'Medicine_Store' && <MedicineStoreAd {...props} />}
-      {page === 'Ride_Tracking_Screen' && <RideTrackingAd {...props} />}
-      {page === 'Search_Results' && <SearchResultsAd {...props} />}
+      <Container >
+      <AdComponent {...props} />
+      </Container>
     </div>
   );
 };

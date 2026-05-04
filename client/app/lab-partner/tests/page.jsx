@@ -35,7 +35,7 @@ const SAMPLE_TYPES = ["Blood","Urine","Stool","Swab","Saliva","Tissue","CSF","Sp
 
 const emptyForm = {
   testCode: "", testName: "", category: "", sampleType: "",
-  turnaroundHours: "", mrpPrice: "", partnerPrice: "",
+  turnaroundHours: "", mrpPrice: "", partnerPrice: "", discountedPrice: "",
   homeCollectionAvailable: false, isActive: true,
 };
 
@@ -107,12 +107,21 @@ function TestCard({ test, index, onEdit, onToggle, onDelete, actionLoading }) {
             </div>
 
             {/* Price */}
-            <div className="text-right shrink-0">
-              <p className="text-lg font-extrabold text-primary">₹{Number(test.mrpPrice).toLocaleString("en-IN")}</p>
-              {test.partnerPrice && (
-                <p className="text-xs text-base-content/40 line-through">₹{Number(test.partnerPrice).toLocaleString("en-IN")}</p>
-              )}
-            </div>
+          <div className="text-right shrink-0">
+  <p className="text-lg font-extrabold text-primary">
+    ₹{Number(test.discountedPrice || test.mrpPrice).toLocaleString("en-IN")}
+  </p>
+  {test.discountedPrice && Number(test.discountedPrice) < Number(test.mrpPrice) && (
+    <p className="text-xs text-base-content/40 line-through">
+      ₹{Number(test.mrpPrice).toLocaleString("en-IN")}
+    </p>
+  )}
+  {test.discountedPrice && Number(test.discountedPrice) < Number(test.mrpPrice) && (
+    <p className="text-[10px] text-success font-bold">
+      {Math.round(((test.mrpPrice - test.discountedPrice) / test.mrpPrice) * 100)}% off
+    </p>
+  )}
+</div>
           </div>
         </div>
       </div>
@@ -134,13 +143,22 @@ function TestCard({ test, index, onEdit, onToggle, onDelete, actionLoading }) {
                 <p className="text-[10px] font-semibold text-base-content/50 uppercase tracking-wide">Home Collection</p>
                 <p className="text-sm font-bold">{test.homeCollectionAvailable ? "Yes" : "No"}</p>
               </div>
-              {test.partnerPrice && (
-                <div className="p-3 rounded-xl bg-base-200">
-                  <DollarSign size={13} className="text-accent mb-1" />
-                  <p className="text-[10px] font-semibold text-base-content/50 uppercase tracking-wide">Partner Price</p>
-                  <p className="text-sm font-bold">₹{Number(test.partnerPrice).toLocaleString("en-IN")}</p>
-                </div>
-              )}
+             {test.partnerPrice && (
+  <div className="p-3 rounded-xl bg-base-200">
+    <DollarSign size={13} className="text-accent mb-1" />
+    <p className="text-[10px] font-semibold text-base-content/50 uppercase tracking-wide">Our Cost</p>
+    <p className="text-sm font-bold">₹{Number(test.partnerPrice).toLocaleString("en-IN")}</p>
+  </div>
+)}
+{test.partnerPrice && (
+  <div className="p-3 rounded-xl bg-base-200">
+    <TrendingUp size={13} className="text-success mb-1" />
+    <p className="text-[10px] font-semibold text-base-content/50 uppercase tracking-wide">Margin</p>
+    <p className="text-sm font-bold text-success">
+      ₹{((test.discountedPrice ?? test.mrpPrice) - test.partnerPrice).toLocaleString("en-IN")}
+    </p>
+  </div>
+)}
               {test.reportTemplateUrl && (
                 <div className="p-3 rounded-xl bg-base-200">
                   <FileText size={13} className="text-warning mb-1" />
@@ -277,27 +295,40 @@ function TestFormModal({ open, onClose, editTest, onSubmit, actionLoading }) {
             </div>
 
             {/* Row 3 — Pricing */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">MRP Price (₹) *</label>
-                <input type="number" min="0" value={form.mrpPrice} onChange={e => set("mrpPrice", e.target.value)}
-                  placeholder="500"
-                  className={`input-field w-full ${errors.mrpPrice ? "border-error focus:ring-error/50" : ""}`} />
-                {errors.mrpPrice && <p className="text-xs text-error mt-1.5 flex items-center gap-1"><AlertCircle size={11} />{errors.mrpPrice}</p>}
-              </div>
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">Partner Price (₹)</label>
-                <input type="number" min="0" value={form.partnerPrice} onChange={e => set("partnerPrice", e.target.value)}
-                  placeholder="400"
-                  className="input-field w-full" />
-              </div>
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">TAT (Hours)</label>
-                <input type="number" min="0" value={form.turnaroundHours} onChange={e => set("turnaroundHours", e.target.value)}
-                  placeholder="24"
-                  className="input-field w-full" />
-              </div>
-            </div>
+        
+<div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+  <div>
+    <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">MRP (₹) *</label>
+    <input type="number" min="0" value={form.mrpPrice} onChange={e => set("mrpPrice", e.target.value)}
+      placeholder="500" className={`input-field w-full ${errors.mrpPrice ? "border-error focus:ring-error/50" : ""}`} />
+    {errors.mrpPrice && <p className="text-xs text-error mt-1.5 flex items-center gap-1"><AlertCircle size={11}/>{errors.mrpPrice}</p>}
+  </div>
+  <div>
+    <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">Discounted (₹)</label>
+    <input type="number" min="0" value={form.discountedPrice} onChange={e => set("discountedPrice", e.target.value)}
+      placeholder="420" className="input-field w-full" />
+    {form.mrpPrice && form.discountedPrice && (
+      <p className="text-[10px] text-success mt-1 font-semibold">
+        {Math.round(((form.mrpPrice - form.discountedPrice) / form.mrpPrice) * 100)}% off shown to customer
+      </p>
+    )}
+  </div>
+  <div>
+    <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">Partner Cost (₹)</label>
+    <input type="number" min="0" value={form.partnerPrice} onChange={e => set("partnerPrice", e.target.value)}
+      placeholder="300" className="input-field w-full" />
+    {form.partnerPrice && (form.discountedPrice || form.mrpPrice) && (
+      <p className="text-[10px] text-accent mt-1 font-semibold">
+        Margin: ₹{((form.discountedPrice || form.mrpPrice) - form.partnerPrice)}
+      </p>
+    )}
+  </div>
+  <div>
+    <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">TAT (Hours)</label>
+    <input type="number" min="0" value={form.turnaroundHours} onChange={e => set("turnaroundHours", e.target.value)}
+      placeholder="24" className="input-field w-full" />
+  </div>
+</div>
 
             {/* Toggles */}
             <div className="grid grid-cols-2 gap-5">

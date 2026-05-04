@@ -66,7 +66,7 @@ const SectionTitle = ({ icon: Icon, title, count }) => (
     <div className="w-8 h-8 rounded-xl bg-[var(--primary)]/10 flex items-center justify-center">
       <Icon size={15} className="text-[var(--primary)]" />
     </div>
-    <h2 className="font-montserrat font-extrabold text-base text-[var(--base-content)]">{title}</h2>
+    <h2 className=" font-poppins font-extrabold text-base text-[var(--base-content)]">{title}</h2>
     {count != null && (
       <span className="badge badge-primary text-[10px]">{count}</span>
     )}
@@ -92,17 +92,20 @@ const TestCard = ({ test }) => (
           </div>
         )}
       </div>
-      <div className="text-right flex-shrink-0">
-        {test.partnerPrice && test.partnerPrice < test.mrpPrice && (
-          <p className="text-[10px] line-through text-[var(--base-content)]/30">₹{test.mrpPrice}</p>
-        )}
-        <p className="font-extrabold text-base text-[var(--primary)]">₹{test.partnerPrice ?? test.mrpPrice}</p>
-        {test.partnerPrice && test.partnerPrice < test.mrpPrice && (
-          <p className="text-[10px] text-[var(--success)] font-bold">
-            {Math.round(((test.mrpPrice - test.partnerPrice) / test.mrpPrice) * 100)}% off
-          </p>
-        )}
-      </div>
+     
+<div className="text-right flex-shrink-0">
+  {test.discountedPrice && test.discountedPrice < test.mrpPrice && (
+    <p className="text-[10px] line-through text-[var(--base-content)]/30">₹{test.mrpPrice}</p>
+  )}
+  <p className="font-extrabold text-base text-[var(--primary)]">
+    ₹{test.discountedPrice ?? test.mrpPrice}
+  </p>
+  {test.discountedPrice && test.discountedPrice < test.mrpPrice && (
+    <p className="text-[10px] text-[var(--success)] font-bold">
+      {Math.round(((test.mrpPrice - test.discountedPrice) / test.mrpPrice) * 100)}% off
+    </p>
+  )}
+</div>
     </div>
     {test.testCode && <p className="text-[9px] text-[var(--base-content)]/25 mt-2 font-mono">#{test.testCode}</p>}
   </motion.div>
@@ -127,15 +130,20 @@ const PackageCard = ({ pkg }) => (
           </p>
         )}
       </div>
-      <div className="text-right flex-shrink-0">
-        {pkg.partnerPrice && pkg.partnerPrice < pkg.mrpPrice && (
-          <p className="text-[10px] line-through text-[var(--base-content)]/30">₹{pkg.mrpPrice}</p>
-        )}
-        <p className="font-extrabold text-base text-[var(--primary)]">₹{pkg.partnerPrice ?? pkg.mrpPrice}</p>
-        {pkg.partnerPrice && pkg.partnerPrice < pkg.mrpPrice && (
-          <p className="text-[10px] text-[var(--success)] font-bold">{Math.round(((pkg.mrpPrice - pkg.partnerPrice)/pkg.mrpPrice)*100)}% off</p>
-        )}
-      </div>
+   
+<div className="text-right flex-shrink-0">
+  {pkg.discountedPrice && pkg.discountedPrice < pkg.mrpPrice && (
+    <p className="text-[10px] line-through text-[var(--base-content)]/30">₹{pkg.mrpPrice}</p>
+  )}
+  <p className="font-extrabold text-base text-[var(--primary)]">
+    ₹{pkg.discountedPrice ?? pkg.mrpPrice}
+  </p>
+  {pkg.discountedPrice && pkg.discountedPrice < pkg.mrpPrice && (
+    <p className="text-[10px] text-[var(--success)] font-bold">
+      {Math.round(((pkg.mrpPrice - pkg.discountedPrice)/pkg.mrpPrice)*100)}% off
+    </p>
+  )}
+</div>
     </div>
   </motion.div>
 );
@@ -312,7 +320,7 @@ export default function LabDetailPage() {
               <div className="flex items-start justify-between gap-2 flex-wrap">
                 <div>
                   <div className="flex items-center gap-2 flex-wrap mb-1">
-                    <h1 className="font-montserrat font-extrabold text-xl md:text-2xl text-[var(--base-content)] leading-tight">{lab.labName}</h1>
+                    <h1 className=" font-poopins font-extrabold text-xl md:text-2xl text-[var(--base-content)] leading-tight">{lab.labName}</h1>
                     {lab.isVerified && (
                       <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--success)]/14 text-[var(--success)] text-[10px] font-bold border border-[var(--success)]/22">
                         <Shield size={8}/> NABL
@@ -521,7 +529,7 @@ export default function LabDetailPage() {
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-xl bg-[var(--primary)]/10 flex items-center justify-center"><TestTube size={15} className="text-[var(--primary)]"/></div>
-                  <h2 className="font-montserrat font-extrabold text-base text-[var(--base-content)]">Available Tests</h2>
+                  <h2 className=" font-poopins font-extrabold text-base text-[var(--base-content)]">Available Tests</h2>
                   <span className="badge badge-primary text-[10px]">{filteredTests.length}</span>
                 </div>
                 <div className="relative">
@@ -553,7 +561,7 @@ export default function LabDetailPage() {
               <div className="card p-5 mb-5">
                 <div className="flex items-start gap-6 flex-wrap">
                   <div className="text-center min-w-20">
-                    <div className="font-montserrat font-extrabold text-5xl text-[var(--primary)]">{lab.averageRating?.toFixed(1)}</div>
+                    <div className=" font-poopins font-extrabold text-5xl text-[var(--primary)]">{lab.averageRating?.toFixed(1)}</div>
                     <StarRow rating={lab.averageRating} size={15}/>
                     <p className="text-[11px] text-[var(--base-content)]/40 mt-1">{lab.totalReviews} total</p>
                   </div>

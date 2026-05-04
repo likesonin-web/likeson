@@ -60,7 +60,9 @@ export const CARE_ASSISTANT_DASHBOARD_LINKS = [
     links: [
       { name: "Dashboard",            href: "/care-assistant/dashboard",               icon: <LayoutDashboard size={18} /> },
       { name: "Performance & Earnings", href: "/care-assistant/performance",           icon: <TrendingUp size={18} />      },
-      { name: "Activity Summary",     href: "/care-assistant/stats",                   icon: <Activity size={18} />        },
+      { name: "Activity Summary",     href: "/care-assistant/stats",  
+                         icon: <Activity size={18} />        },
+      {name:"Work Calendar", href:"/care-assistant/calendar", icon:<CalendarCheck size={18} />},
     ],
   },
 

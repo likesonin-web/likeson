@@ -148,9 +148,7 @@ const uploadToImageKit = (buffer, originalName, heroId) => {
  * Wipes out public active hero caches, admin list caches, and optionally a specific hero's cache.
  */
 const clearHeroCaches = async (heroId = null) => {
-  // Clears /api/v1/hero/active, /api/v1/hero?page=..., etc.
   await invalidatePattern('GET:/api/v1/hero*');
-  
   if (heroId) {
     await invalidateKey(`hero:${heroId}`);
   }
@@ -164,6 +162,10 @@ const clearHeroCaches = async (heroId = null) => {
 // GET /api/v1/hero/active
 // Public — returns the single highest-priority, currently-visible hero.
 // Cached for 5 minutes (300 seconds)
+//
+// BUG 1 FIX: duplicate $or key — JS objects can't have two keys named $or.
+// The second $or silently overwrites the first, so the activeFrom filter was
+// never applied. Wrapped both conditions inside $and so both are enforced.
 // ─────────────────────────────────────────────────────────────────────────────
 
 router.get(
@@ -174,8 +176,12 @@ router.get(
 
     const hero = await HeroPage.findOne({
       isActive: true,
-      $or: [{ activeFrom: null }, { activeFrom: { $lte: now } }],
-      $or: [{ activeTo:   null }, { activeTo:   { $gte: now } }],
+      // FIX: use $and to combine two separate $or clauses — previously the
+      // second $or key overwrote the first in the plain JS object literal.
+      $and: [
+        { $or: [{ activeFrom: null }, { activeFrom: { $lte: now } }] },
+        { $or: [{ activeTo:   null }, { activeTo:   { $gte: now } }] },
+      ],
     })
       .sort({ priority: -1, createdAt: -1 })
       .select('-__v -createdBy -updatedBy')
@@ -367,7 +373,6 @@ router.post(
 
     const hero = await HeroPage.create(heroData);
 
-    // Invalidate caches
     await clearHeroCaches(hero._id);
 
     audit('hero.create', req.user._id, hero._id, { internalName: hero.internalName });
@@ -489,7 +494,6 @@ router.put(
 
     await hero.save();
 
-    // Invalidate caches
     await clearHeroCaches(hero._id);
 
     audit('hero.update', req.user._id, hero._id, { internalName: hero.internalName });
@@ -519,14 +523,16 @@ router.patch(
     hero.updatedBy = req.user._id;
     await hero.save();
 
-    // Invalidate caches
     await clearHeroCaches(hero._id);
 
     audit('hero.toggle', req.user._id, hero._id, { isActive: hero.isActive });
     log.info('Hero page toggled', { heroId: hero._id, isActive: hero.isActive, by: req.user._id });
 
+    // BUG 7 FIX: return full hero fields (not just _id + isActive) so the Redux
+    // slice can detect if the Mongoose pre-save hook auto-deactivated the record
+    // due to an expired activeTo — the client now receives the source-of-truth.
     return sendSuccess(res, 200, `Hero page ${hero.isActive ? 'activated' : 'deactivated'}`, {
-      data: { _id: hero._id, isActive: hero.isActive },
+      data: { _id: hero._id, isActive: hero.isActive, activeTo: hero.activeTo, activeFrom: hero.activeFrom },
     });
   })
 );
@@ -554,7 +560,6 @@ router.patch(
     );
     if (!hero) return sendError(res, 404, 'Hero page not found');
 
-    // Invalidate caches
     await clearHeroCaches(hero._id);
 
     audit('hero.priority', req.user._id, hero._id, { priority });
@@ -597,7 +602,6 @@ router.post(
     hero.updatedBy = req.user._id;
     await hero.save();
 
-    // Invalidate caches
     await clearHeroCaches(hero._id);
 
     audit('hero.media.replace', req.user._id, hero._id, { mediaUrl: ikResult.url });
@@ -623,7 +627,6 @@ router.delete(
     const hero = await HeroPage.findByIdAndDelete(id);
     if (!hero) return sendError(res, 404, 'Hero page not found');
 
-    // Invalidate caches
     await clearHeroCaches(id);
 
     audit('hero.delete', req.user._id, id, { internalName: hero.internalName });
@@ -636,7 +639,6 @@ router.delete(
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/hero/imagekit/auth
 // Authenticated — returns ImageKit client-side auth params (for direct upload).
-// (No caching applied here as signatures rotate/expire)
 // ─────────────────────────────────────────────────────────────────────────────
 
 router.get(

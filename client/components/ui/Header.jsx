@@ -70,10 +70,6 @@ const AnimatePresence = dynamic(
 // ── Constants ────────────────────────────────────────────────────────────────
 const GOOGLE_MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
 const THEME_KEY = 'likeson-theme';
-
-// ── FIX 1: CSS variable for header height — replaces hardcoded pt-[80px] ─────
-// Defined once here; consumed by mobile menu padding-top and any other
-// element that needs to clear the sticky header.
 const HEADER_HEIGHT_VAR = '--header-height';
 
 // ── Customer nav links ───────────────────────────────────────────────────────
@@ -127,7 +123,6 @@ const CUSTOMER_NAV_LINKS = [
     label: 'Subscriptions',
   },
   {
-    // FIX 1 (typo): 'Top Labitories' → 'Top Laboratories'
     name: 'Top Laboratories',
     href: '/labs',
     icon: Microscope,
@@ -139,9 +134,21 @@ const CUSTOMER_NAV_LINKS = [
     shadowColor: 'rgba(124,58,237,0.35)',
     label: 'Labs',
   },
+  {
+  name: 'Search',
+  href: '/search',
+  icon: Search,
+  accent: '#0ea5e9',
+  bg: 'rgba(14,165,233,0.07)',
+  barGradient: 'linear-gradient(90deg,#0ea5e9,#38bdf8)',
+  pillBg: 'rgba(14,165,233,0.12)',
+  pillText: '#0ea5e9',
+  shadowColor: 'rgba(14,165,233,0.35)',
+  label: 'Search',
+},
 ];
 
-// ── Role-based theme palettes ─────────────────────────────────────────────────
+// ── Role-based theme palettes — use CSS vars from role data-theme ─────────────
 const ROLE_PALETTES = {
   superadmin: {
     accent: 'var(--primary)',
@@ -152,7 +159,7 @@ const ROLE_PALETTES = {
     shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
     label: 'Super Admin',
     icon: ShieldCheck,
-    dataTheme: null,
+    dataTheme: 'superadmin',
   },
   admin: {
     accent: 'var(--primary)',
@@ -163,7 +170,7 @@ const ROLE_PALETTES = {
     shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
     label: 'Admin',
     icon: UserCog,
-    dataTheme: null,
+    dataTheme: 'admin',
   },
   doctor: {
     accent: 'var(--primary)',
@@ -241,7 +248,7 @@ const ROLE_PALETTES = {
     shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
     label: 'Finance',
     icon: BadgeDollarSign,
-    dataTheme: null,
+    dataTheme: 'finance',
   },
   'lab partner': {
     accent: 'var(--primary)',
@@ -309,8 +316,8 @@ const ROLE_BOTTOM_NAV = {
   ],
   'care assistant': [
     { name: 'Dashboard', href: '/care-assistant/dashboard', icon: LayoutDashboard },
-    { name: 'Patients',  href: '/care/patients',            icon: UserRound       },
-    { name: 'Schedule',  href: '/care/schedule',            icon: Calendar        },
+    { name: 'Patients',  href: '/care-assistant/patients',            icon: UserRound       },
+    { name: 'Schedule',  href: '/care-assistant/schedule',            icon: Calendar        },
   ],
   finance: [
     { name: 'Dashboard',    href: '/finance/dashboard',    icon: LayoutDashboard },
@@ -376,11 +383,11 @@ function loadGoogleMaps() {
     const existing = document.querySelector('script[src*="maps.googleapis.com"]');
     if (existing) { existing.addEventListener('load', () => resolve(true)); return; }
     const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&libraries=places`;
+    // Use new Places API (v=beta required for AutocompleteSuggestion)
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&libraries=places&v=beta`;
     script.async = true;
     script.defer = true;
     script.onload  = () => resolve(true);
-    // FIX: reset promise on error so subsequent calls can retry
     script.onerror = () => { _mapsLoadPromise = null; resolve(false); };
     document.head.appendChild(script);
   });
@@ -418,72 +425,69 @@ const CART_FLOAT = {
   idle:  { y: 0 },
 };
 
-// ── ThemeToggle ───────────────────────────────────────────────────────────────
-const ThemeToggle = memo(function ThemeToggle() {
-  const { theme, setTheme, resolvedTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
+ 
 
-  useEffect(() => { setMounted(true); }, []);
-
-  if (!mounted) {
-    return <div className="w-9 h-9 rounded-xl border border-base-300 skeleton" aria-hidden="true" />;
-  }
-
-  const cycle = () => {
-    const next = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system';
-    setTheme(next);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(THEME_KEY, next);
-    }
-  };
-
-  const Icon  = theme === 'system' ? Monitor : resolvedTheme === 'dark' ? Moon : Sun;
-  const label = theme === 'system' ? 'System theme' : theme === 'light' ? 'Light theme' : 'Dark theme';
-
-  return (
-    <button
-      onClick={cycle}
-      aria-label={`${label} — click to change`}
-      title={label}
-      className="p-2 rounded-xl border border-base-300 text-base-content/50 hover:bg-primary/10 hover:text-primary transition-all duration-200"
-    >
-      <Icon size={17} />
-    </button>
-  );
-});
-
-// ── Custom hook: Google Maps autocomplete ─────────────────────────────────────
+// ── FIX: New Google Maps AutocompleteSuggestion API hook ──────────────────────
 function useGoogleMapsAutocomplete() {
-  const autocompleteService = useRef(null);
-
-  const ensureService = useCallback(async () => {
-    if (autocompleteService.current) return true;
-    const loaded = await loadGoogleMaps();
-    if (loaded && window.google?.maps?.places) {
-      autocompleteService.current = new window.google.maps.places.AutocompleteService();
-      return true;
-    }
-    return false;
+  const ensureLoaded = useCallback(async () => {
+    return loadGoogleMaps();
   }, []);
 
+  // FIX: Use new AutocompleteSuggestion API (replaces deprecated AutocompleteService)
   const fetchSuggestions = useCallback(async (value, onResult) => {
     if (!value?.trim()) { onResult([]); return; }
-    const ready = await ensureService();
-    if (!ready || !autocompleteService.current) { onResult([]); return; }
-    try {
-      autocompleteService.current.getPlacePredictions(
-        { input: value, componentRestrictions: { country: 'in' }, types: ['geocode', 'establishment'] },
-        (predictions, status) => {
-          onResult(status === window.google.maps.places.PlacesServiceStatus.OK ? predictions ?? [] : []);
-        }
-      );
-    } catch (err) {
-      if (process.env.NODE_ENV === 'development') console.error('Maps autocomplete error:', err);
-      onResult([]);
-    }
-  }, [ensureService]);
 
-  return { fetchSuggestions, ensureService };
+    const loaded = await ensureLoaded();
+    if (!loaded) { onResult([]); return; }
+
+    try {
+      // New API: google.maps.places.AutocompleteSuggestion
+      const { AutocompleteSuggestion } = await google.maps.importLibrary('places');
+
+      const { suggestions } = await AutocompleteSuggestion.fetchAutocompleteSuggestions({
+        input: value,
+        includedRegionCodes: ['in'],
+        includedPrimaryTypes: ['geocode', 'establishment'],
+      });
+
+      // Normalize to shape compatible with existing SuggestionsList component
+      const normalized = (suggestions ?? []).map((s) => {
+        const place = s.placePrediction;
+        return {
+          place_id: place.placeId,
+          description: place.text?.toString() ?? place.mainText?.toString() ?? '',
+          structured_formatting: {
+            main_text: place.mainText?.toString() ?? '',
+            secondary_text: place.secondaryText?.toString() ?? '',
+          },
+          // Store raw place for geocoding
+          _placePrediction: place,
+        };
+      });
+
+      onResult(normalized);
+    } catch (err) {
+      // Fallback: try legacy AutocompleteService if new API unavailable
+      try {
+        if (window.google?.maps?.places?.AutocompleteService) {
+          const svc = new window.google.maps.places.AutocompleteService();
+          svc.getPlacePredictions(
+            { input: value, componentRestrictions: { country: 'in' }, types: ['geocode', 'establishment'] },
+            (predictions, status) => {
+              onResult(status === window.google.maps.places.PlacesServiceStatus.OK ? predictions ?? [] : []);
+            }
+          );
+        } else {
+          onResult([]);
+        }
+      } catch {
+        if (process.env.NODE_ENV === 'development') console.error('Maps autocomplete fallback error:', err);
+        onResult([]);
+      }
+    }
+  }, [ensureLoaded]);
+
+  return { fetchSuggestions, ensureService: ensureLoaded };
 }
 
 // ── Custom hook: header data ──────────────────────────────────────────────────
@@ -501,15 +505,12 @@ function useHeaderData() {
     [cartItems]
   );
 
-  // FIX 5: Abort controller — cancel in-flight dispatches on unmount or token change
   useEffect(() => {
     if (!token) return;
-    const controller = new AbortController();
     dispatch(getProfile());
     dispatch(fetchNotifications());
     dispatch(getWallet());
     dispatch(fetchCart());
-    return () => { controller.abort(); };
   }, [token, dispatch]);
 
   return { user, token, unreadCount, cartCount, walletBalance };
@@ -520,9 +521,6 @@ function useHeaderData() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ── WalletWidget ──────────────────────────────────────────────────────────────
-// FIX 2: Removed <Link> wrapper containing MotionDiv (nested interactive elements).
-// Now the entire widget IS the anchor via <a> tag rendered through MotionDiv's `as` prop.
-// Uses a plain <a> wrapping a styled div — no button-inside-anchor pattern.
 const WalletWidget = memo(function WalletWidget({ walletBalance, isMobile = false, accent }) {
   const accentColor = accent ?? 'var(--warning)';
   return (
@@ -578,7 +576,7 @@ const SuggestionsList = memo(function SuggestionsList({ suggestions, onSelect, d
     >
       {suggestions.map((s, idx) => (
         <MotionLi
-          key={s.place_id}
+          key={s.place_id ?? idx}
           role="option"
           aria-selected="false"
           initial={{ opacity: 0, x: -8 }}
@@ -614,15 +612,14 @@ const SuggestionsList = memo(function SuggestionsList({ suggestions, onSelect, d
 });
 
 // ── LocationWidget ────────────────────────────────────────────────────────────
-// FIX 4: Location dropdown z-index raised to z-[200] so it clears mobile menu
-// close button (z-[110]) and the mobile menu overlay (z-[90]).
+// FIX: Mobile location display — reads from user.lastKnownAddress + shows live
 const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) {
   const dispatch = useDispatch();
+  // FIX: re-select user on every render so address updates reflect immediately
   const user = useSelector(selectUser);
   const { fetchSuggestions, ensureService } = useGoogleMapsAutocomplete();
 
   const loaders = useSelector(selectLoaders);
-  // FIX: safe access — default false if slice shape doesn't have these keys
   const savingAddress = loaders?.locationByAddress ?? false;
   const fetchingGPS   = loaders?.locationByCoords  ?? false;
 
@@ -635,16 +632,20 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
   const inputRef      = useRef(null);
   const debounceTimer = useRef(null);
 
+  // FIX: derive address fresh from user selector on each render
   const savedAddress = user?.lastKnownAddress ?? null;
+
   const cityLabel = useMemo(() => {
     if (!savedAddress) return 'Set Location';
     const first = savedAddress.split(',')[0]?.trim() ?? savedAddress;
     return first.length > 18 ? first.slice(0, 16) + '…' : first;
   }, [savedAddress]);
+
   const regionLabel = useMemo(() => {
     if (!savedAddress) return null;
     return savedAddress.split(',')[1]?.trim() ?? null;
   }, [savedAddress]);
+
   const nameInitial = useMemo(() => user?.name?.charAt(0).toUpperCase() ?? '?', [user?.name]);
   const firstName   = useMemo(() => user?.name?.split(' ')[0] ?? 'You', [user?.name]);
 
@@ -691,16 +692,38 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
       } else {
         await dispatch(updateLocationByAddress(address));
       }
+      // FIX: refresh profile after location update so user.lastKnownAddress is fresh
+      dispatch(getProfile());
     } catch (err) {
       if (process.env.NODE_ENV === 'development') console.error('Geocode dispatch error:', err);
     }
   }, [dispatch]);
 
+  // FIX: Use new Places API for geocoding selected suggestion
   const handleSelectSuggestion = useCallback(async (suggestion) => {
     const address = suggestion.description;
     setQuery(suggestion.structured_formatting?.main_text ?? address);
     setSuggestions([]);
+
     try {
+      // New API path: use Place.fetchFields for geocoding
+      if (suggestion._placePrediction && window.google?.maps) {
+        try {
+          const place = suggestion._placePrediction.toPlace();
+          await place.fetchFields({ fields: ['location'] });
+          if (place.location) {
+            const lat = place.location.lat();
+            const lng = place.location.lng();
+            await geocodeAndDispatch(address, lat, lng);
+            setOpen(false); setQuery('');
+            return;
+          }
+        } catch {
+          // fall through to legacy geocoder
+        }
+      }
+
+      // Legacy geocoder fallback
       if (window.google?.maps) {
         const geocoder = new window.google.maps.Geocoder();
         geocoder.geocode({ address }, async (results, status) => {
@@ -732,10 +755,13 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
             geocoder.geocode({ location: { lat, lng } }, async (results, status) => {
               const address = status === 'OK' && results?.[0] ? results[0].formatted_address : undefined;
               await dispatch(updateLocationByCoords({ lat, lng, address }));
+              // FIX: refresh profile so UI updates
+              dispatch(getProfile());
               setLocalGPSLoading(false); setOpen(false);
             });
           } else {
             await dispatch(updateLocationByCoords({ lat, lng }));
+            dispatch(getProfile());
             setLocalGPSLoading(false); setOpen(false);
           }
         } catch (err) {
@@ -752,10 +778,12 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
 
   const searchInput = (
     <div className="relative">
-      <label htmlFor="location-search" className="sr-only">Search location by area, city or pincode</label>
+      <label htmlFor={isMobile ? 'location-search-mobile' : 'location-search'} className="sr-only">
+        Search location by area, city or pincode
+      </label>
       <Search size={13} className="absolute left-3.5 top-1/2 -translate-y-1/2 opacity-35 pointer-events-none" aria-hidden="true" />
       <input
-        id="location-search"
+        id={isMobile ? 'location-search-mobile' : 'location-search'}
         ref={inputRef}
         value={query}
         onChange={handleQueryChange}
@@ -770,7 +798,7 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
     </div>
   );
 
-  // MOBILE
+  // ── MOBILE ───────────────────────────────────────────────────────────────────
   if (isMobile) {
     return (
       <div
@@ -778,6 +806,7 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
         style={{ borderColor: `color-mix(in srgb, ${accent} 25%, transparent)` }}
         aria-label="Location settings"
       >
+        {/* FIX: Mobile header shows current address live */}
         <div className="flex items-center gap-3 px-4 py-3" style={{ background: triggerBg }}>
           <div
             className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center text-sm font-black text-white shadow-sm"
@@ -787,19 +816,34 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
             {nameInitial}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-[10px] font-black uppercase tracking-widest opacity-40 leading-none mb-0.5">{firstName}'s Location</p>
-            <p className="text-[12px] font-black truncate leading-tight" style={{ color: accent }}>{cityLabel}</p>
-            {regionLabel && <p className="text-[10px] opacity-40 truncate leading-tight">{regionLabel}</p>}
+            <p className="text-[10px] font-black uppercase tracking-widest opacity-40 leading-none mb-0.5">
+              {firstName}'s Location
+            </p>
+            {/* FIX: show saved address — live reactive via Redux selector */}
+            <p className="text-[12px] font-black truncate leading-tight" style={{ color: accent }}>
+              {cityLabel}
+            </p>
+            {regionLabel && (
+              <p className="text-[10px] opacity-40 truncate leading-tight">{regionLabel}</p>
+            )}
+            {/* FIX: show full address below city if set */}
+            {savedAddress && savedAddress.includes(',') && (
+              <p className="text-[9px] opacity-30 truncate leading-tight mt-0.5">{savedAddress}</p>
+            )}
           </div>
           <button
             aria-label="Edit location"
             className="w-8 h-8 rounded-lg flex items-center justify-center transition-all active:scale-90"
             style={{ background: `color-mix(in srgb, ${accent} 15%, transparent)`, color: accent }}
-            onClick={() => inputRef.current?.focus()}
+            onClick={() => {
+              // scroll to search input when pencil tapped
+              setTimeout(() => inputRef.current?.focus(), 100);
+            }}
           >
             <Pencil size={13} strokeWidth={2.5} />
           </button>
         </div>
+
         <div className="p-3 flex flex-col gap-2 bg-base-100">
           <button
             type="button"
@@ -809,7 +853,11 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border font-bold text-[12px] transition-all active:scale-[0.98] disabled:opacity-60"
             style={{ borderColor: `color-mix(in srgb, ${accent} 25%, transparent)`, color: accent, background: triggerBg }}
           >
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `color-mix(in srgb, ${accent} 20%, transparent)` }} aria-hidden="true">
+            <div
+              className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+              style={{ background: `color-mix(in srgb, ${accent} 20%, transparent)` }}
+              aria-hidden="true"
+            >
               {gpsLoading ? <Loader2 size={13} className="animate-spin" /> : <Locate size={13} />}
             </div>
             <div className="text-left">
@@ -819,14 +867,21 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
           </button>
           {searchInput}
           <AnimatePresence>
-            <SuggestionsList suggestions={suggestions} onSelect={handleSelectSuggestion} disabled={savingAddress} accent={accent} />
+            {suggestions.length > 0 && (
+              <SuggestionsList
+                suggestions={suggestions}
+                onSelect={handleSelectSuggestion}
+                disabled={savingAddress}
+                accent={accent}
+              />
+            )}
           </AnimatePresence>
         </div>
       </div>
     );
   }
 
-  // DESKTOP
+  // ── DESKTOP ──────────────────────────────────────────────────────────────────
   return (
     <div className="relative flex-shrink-0" ref={wrapperRef}>
       <MotionButton
@@ -883,7 +938,6 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
             role="dialog"
             aria-modal="true"
             aria-label="Change location"
-            // FIX 4: z-[200] — higher than mobile menu z-[90] and close button z-[110]
             className="absolute left-0 top-full mt-2 w-[320px] z-[200] rounded-2xl shadow-2xl border border-base-300 bg-base-100 overflow-hidden origin-top-left"
           >
             <div className="px-4 py-3 flex items-center gap-3 border-b border-base-300" style={{ background: triggerBg }}>
@@ -899,7 +953,11 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
                 <p className="text-[13px] font-black truncate leading-tight" style={{ color: accent }}>{cityLabel}</p>
                 {regionLabel && <p className="text-[10px] opacity-40 truncate">{regionLabel}</p>}
               </div>
-              <div className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black" style={{ background: `color-mix(in srgb, ${accent} 18%, transparent)`, color: accent }} aria-hidden="true">
+              <div
+                className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black"
+                style={{ background: `color-mix(in srgb, ${accent} 18%, transparent)`, color: accent }}
+                aria-hidden="true"
+              >
                 <Pencil size={10} strokeWidth={2.5} />
                 <span>Edit</span>
               </div>
@@ -915,7 +973,11 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
                 className="w-full flex items-center gap-3 px-3.5 py-3 rounded-xl border text-left transition-all disabled:opacity-60"
                 style={{ borderColor: `color-mix(in srgb, ${accent} 20%, transparent)`, background: triggerBg }}
               >
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `color-mix(in srgb, ${accent} 20%, transparent)`, color: accent }} aria-hidden="true">
+                <div
+                  className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                  style={{ background: `color-mix(in srgb, ${accent} 20%, transparent)`, color: accent }}
+                  aria-hidden="true"
+                >
                   {gpsLoading ? <Loader2 size={15} className="animate-spin" /> : <Navigation size={15} />}
                 </div>
                 <div>
@@ -932,7 +994,14 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
               </div>
               {searchInput}
               <AnimatePresence>
-                <SuggestionsList suggestions={suggestions} onSelect={handleSelectSuggestion} disabled={savingAddress} accent={accent} />
+                {suggestions.length > 0 && (
+                  <SuggestionsList
+                    suggestions={suggestions}
+                    onSelect={handleSelectSuggestion}
+                    disabled={savingAddress}
+                    accent={accent}
+                  />
+                )}
               </AnimatePresence>
             </div>
           </MotionDiv>
@@ -1102,7 +1171,7 @@ const NavLink = memo(function NavLink({ link, pathname, onHover, onLeave, isHove
             initial={{ scaleX: 0 }}
             animate={{ scaleX: 1 }}
             exit={{ scaleX: 0 }}
-            className="absolute bottom-0  left-3 right-3 h-[3px] rounded-t-full"
+            className="absolute bottom-0 left-3 right-3 h-[3px] rounded-t-full"
             style={{ background: link.barGradient }}
             transition={{ type: 'spring', stiffness: 380, damping: 28 }}
             aria-hidden="true"
@@ -1136,13 +1205,12 @@ const NavLink = memo(function NavLink({ link, pathname, onHover, onLeave, isHove
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// BOTTOM NAVIGATION — Fixed bottom bar for non-customer roles (mobile only)
+// BOTTOM NAVIGATION
 // ═══════════════════════════════════════════════════════════════════════════════
 const BottomNav = memo(function BottomNav({ links, palette, pathname, dataTheme }) {
   const accent      = palette?.accent      ?? 'var(--primary)';
   const barGradient = palette?.barGradient ?? 'linear-gradient(90deg, var(--primary), var(--secondary))';
   const pillBg      = palette?.pillBg      ?? 'color-mix(in srgb, var(--primary) 12%, transparent)';
-  const shadowColor = palette?.shadowColor ?? 'color-mix(in srgb, var(--primary) 35%, transparent)';
 
   if (!links || links.length === 0) return null;
 
@@ -1156,7 +1224,6 @@ const BottomNav = memo(function BottomNav({ links, palette, pathname, dataTheme 
       role="navigation"
       aria-label="Role navigation"
     >
-      {/* Nav container — mobile only */}
       <div
         className="flex md:hidden items-stretch justify-center overflow-x-auto scrollbar-none gap-1 backdrop-blur-md border-t"
         style={{
@@ -1176,7 +1243,6 @@ const BottomNav = memo(function BottomNav({ links, palette, pathname, dataTheme 
               aria-label={link.name}
               className="relative flex flex-col items-center justify-center flex-shrink-0 min-w-[72px] min-h-[60px] py-2 px-1 gap-1 transition-all duration-200 focus-visible:outline-none group"
             >
-              {/* Active background pill */}
               {isActive && (
                 <MotionDiv
                   layoutId="bottom-nav-active-pill"
@@ -1186,8 +1252,6 @@ const BottomNav = memo(function BottomNav({ links, palette, pathname, dataTheme 
                   aria-hidden="true"
                 />
               )}
-
-              {/* Active top indicator bar */}
               {isActive && (
                 <MotionDiv
                   layoutId="bottom-nav-indicator"
@@ -1197,8 +1261,6 @@ const BottomNav = memo(function BottomNav({ links, palette, pathname, dataTheme 
                   aria-hidden="true"
                 />
               )}
-
-              {/* Icon wrapper */}
               <MotionDiv
                 animate={isActive ? { scale: 1.15, y: -1 } : { scale: 1, y: 0 }}
                 whileTap={{ scale: 0.88 }}
@@ -1206,7 +1268,6 @@ const BottomNav = memo(function BottomNav({ links, palette, pathname, dataTheme 
                 className="relative z-10 flex items-center justify-center"
                 aria-hidden="true"
               >
-                {/* Glow ring when active */}
                 {isActive && (
                   <span
                     className="absolute inset-0 rounded-full blur-md opacity-40 scale-150"
@@ -1224,8 +1285,6 @@ const BottomNav = memo(function BottomNav({ links, palette, pathname, dataTheme 
                   }}
                 />
               </MotionDiv>
-
-              {/* Label */}
               <span
                 className="relative z-10 text-[9px] font-black uppercase tracking-[0.1em] leading-none transition-all duration-200"
                 style={{
@@ -1273,7 +1332,6 @@ const Header = () => {
     return hoverPalette ?? activePalette;
   }, [isCustomer, rolePalette, hoverPalette, activePalette]);
 
-  // Bottom nav links for non-customer roles
   const roleBottomNavLinks = useMemo(() => {
     if (isCustomer) return null;
     return ROLE_BOTTOM_NAV[userRole] ?? null;
@@ -1284,8 +1342,7 @@ const Header = () => {
     return rolePalette.dataTheme ?? undefined;
   }, [isCustomer, rolePalette]);
 
-  // FIX 3: Measure real header height and expose as CSS variable.
-  // Mobile menu uses var(--header-height) instead of hardcoded pt-[80px].
+  // Measure header height → CSS var
   useEffect(() => {
     if (!headerRef.current) return;
     const update = () => {
@@ -1316,6 +1373,7 @@ const Header = () => {
 
   useEffect(() => { setMobileOpen(false); }, [pathname]);
 
+  // Focus trap for mobile menu
   useEffect(() => {
     if (!mobileOpen) return;
     const menu = document.getElementById('mobile-menu');
@@ -1397,8 +1455,8 @@ const Header = () => {
       <header
         ref={headerRef}
         data-theme={headerDataTheme}
-        className={cn(
-          'sticky top-0 z-[100] w-full backdrop-blur-md border-b border-base-300 transition-all duration-300',
+       className={cn(
+  pathname === '/search' ? 'hidden' : 'sticky top-0 z-[100] w-full backdrop-blur-md border-b border-base-300 transition-all duration-300',
           !isCustomer && roleBottomNavLinks && 'mb-0'
         )}
         style={{ background: 'color-mix(in srgb, var(--base-100) 88%, transparent)' }}
@@ -1438,28 +1496,22 @@ const Header = () => {
 
             {/* Centre: Search (desktop) — customer/guest only */}
             {isCustomer && (
-              <form
-                action="/search"
-                role="search"
-                className="hidden lg:flex flex-1 max-w-sm relative"
-                aria-label="Search doctors and services"
-              >
-                <label htmlFor="header-search" className="sr-only">Search services or doctors</label>
-                <Search
-                  className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
-                  style={{ color: mood?.accent ?? 'var(--base-content)', opacity: 0.5 }}
-                  aria-hidden="true"
-                />
-                <input
-                  id="header-search"
-                  type="search"
-                  name="q"
-                  placeholder="Search services or doctors…"
-                  aria-label="Search"
-                  className="input-field w-full pl-10 text-[13px] placeholder:text-base-content/40 transition-all duration-300 rounded-xl bg-base-200/50 border-transparent focus:bg-base-100"
-                  style={{ outlineColor: mood?.accent ?? 'var(--primary)' }}
-                />
-              </form>
+            <Link
+  href="/search"
+  aria-label="Open search"
+  className="hidden lg:flex flex-1 max-w-sm relative items-center"
+>
+  <Search
+    className="absolute left-4 w-4 h-4 pointer-events-none"
+    style={{ color: mood?.accent ?? 'var(--base-content)', opacity: 0.5 }}
+    aria-hidden="true"
+  />
+  <div
+    className="input-field w-full pl-10 text-[13px] text-base-content/40 rounded-xl bg-base-200/50 border-transparent cursor-pointer select-none py-3"
+  >
+    Search services or doctors…
+  </div>
+</Link>
             )}
 
             {/* Centre: Role title for non-customer */}
@@ -1543,10 +1595,9 @@ const Header = () => {
                           size="icon"
                           className="rounded-full text-base-content/60 hover:bg-base-200"
                           tabIndex={-1}
-                          aria-hidden="true"
                         >
                           <MotionDiv variants={CART_FLOAT} animate={cartCount > 0 ? 'float' : 'idle'} aria-hidden="true">
-                            <ShoppingCart size={19} />
+                            <ShoppingCart size={19} aria-hidden="true" />
                           </MotionDiv>
                         </Button>
                         {cartCount > 0 && (
@@ -1572,7 +1623,7 @@ const Header = () => {
                     </Link>
                   )}
 
-                  <ThemeToggle />
+               
 
                   {/* Notifications */}
                   <Link
@@ -1585,10 +1636,9 @@ const Header = () => {
                         size="icon"
                         className="rounded-full text-base-content/60 hover:bg-base-200"
                         tabIndex={-1}
-                        aria-hidden="true"
                       >
                         <MotionDiv variants={BELL_RING} animate={unreadCount > 0 ? 'ring' : 'idle'} aria-hidden="true">
-                          <Bell size={19} />
+                          <Bell size={19} aria-hidden="true" />
                         </MotionDiv>
                         {unreadCount > 0 && (
                           <>
@@ -1693,6 +1743,9 @@ const Header = () => {
         )}
       </header>
 
+
+      
+
       {/* ── BOTTOM NAVIGATION — Non-customer roles, mobile only ──────── */}
       {!isCustomer && user && roleBottomNavLinks && (
         <BottomNav
@@ -1702,6 +1755,26 @@ const Header = () => {
           dataTheme={headerDataTheme}
         />
       )}
+      {isCustomer && (
+  <div className="fixed bottom-0 left-0 right-0 z-[99] flex md:hidden items-center justify-around border-t safe-bottom"
+    style={{ background: 'color-mix(in srgb, var(--base-100) 92%, transparent)', borderColor: 'var(--base-300)', backdropFilter: 'blur(12px)' }}>
+    {CUSTOMER_NAV_LINKS.map(link => {
+      const isActive = pathname === link.href || pathname.startsWith(link.href + '/');
+      const Icon = link.icon;
+      return (
+        <Link key={link.name} href={link.href} aria-label={link.name}
+          className="flex flex-col items-center justify-center flex-1 min-h-[56px] gap-1 py-2">
+          <Icon size={18} strokeWidth={isActive ? 2.5 : 1.8}
+            style={{ color: isActive ? link.accent : 'var(--base-content)', opacity: isActive ? 1 : 0.4 }} />
+          <span className="text-[9px] font-black uppercase tracking-wider"
+            style={{ color: isActive ? link.accent : 'var(--base-content)', opacity: isActive ? 1 : 0.4 }}>
+            {link.label}
+          </span>
+        </Link>
+      );
+    })}
+  </div>
+)}
 
       {/* ── MOBILE FULLSCREEN MENU ───────────────────────────────────── */}
       <AnimatePresence>
@@ -1718,15 +1791,13 @@ const Header = () => {
             aria-label="Mobile navigation menu"
             className={cn(
               'fixed inset-0 w-full h-full bg-base-100 z-[90] md:hidden',
-              // FIX 3: Use CSS variable instead of hardcoded pt-[80px]
               !isCustomer && roleBottomNavLinks ? 'pb-[80px]' : ''
             )}
-            // FIX 3: padding-top driven by measured header height via CSS var
             style={{ paddingTop: `var(${HEADER_HEIGHT_VAR}, 80px)` }}
           >
             <div className="h-full overflow-y-auto px-5 pb-8 pt-4 flex flex-col gap-6">
 
-              {/* Location widget */}
+              {/* FIX: Location widget in mobile menu — always visible, shows current address */}
               <LocationWidget mood={mood} isMobile />
 
               {/* User profile */}

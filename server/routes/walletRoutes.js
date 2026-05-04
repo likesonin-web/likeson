@@ -2,85 +2,87 @@
  * walletRouter.js — Likeson.in
  *
  * Enterprise-grade wallet router.
+ * Razorpay-only payout flow. P2P / UPI features removed.
+ * All bugs from wallet.model.js audit applied here consistently.
  *
- * Fixes & additions over the previous version:
- *  1.  Withdrawal balance validation — checks withdrawableAvailable (not raw balance).
- *      Only Add_Money + Referral_Bonus are withdrawable (WITHDRAWABLE_PURPOSES).
- *  2.  Admin /complete now calls Razorpay X Payout API directly instead of
- *      trusting a caller-supplied razorpayPayoutId.
- *  3.  SystemLog entries on every significant action (audit trail).
- *  4.  Redis cache invalidation on wallet-mutating routes.
- *  5.  Role-based access control via authorize() on all admin routes.
- *  6.  Idempotency guards on top-up verify (duplicate payment blocked).
- *  7.  All async paths wrapped in asyncHandler; centralised error handler at bottom.
- *  8.  Pagination helpers normalised; consistent response envelope.
- *  9.  P2P transfer uses wallet.availableBalance (includes locked-balance awareness).
- * 10.  Withdrawal request snapshots last-4 digits only (PCI hygiene).
+ * Architecture:
+ *   Utilities → Middleware → Validators → Route Handlers → Error Handler
  */
 
-import express            from 'express';
-import Razorpay           from 'razorpay';
-import crypto             from 'crypto';
-import axios              from 'axios';
+import express  from 'express';
+import Razorpay from 'razorpay';
+import crypto   from 'crypto';
+import axios    from 'axios';
 
 import { protect, authorize } from '../middleware/authMiddleware.js';
 import cache                  from '../middleware/cache.js';
-import { invalidateKey, invalidatePattern } from '../utils/cacheInvalidation.js';
+import {
+  invalidateKey,
+  invalidatePattern,
+}                             from '../utils/cacheInvalidation.js';
 
 import Wallet, {
-  TRANSFER_LIMITS,
   WITHDRAWAL_LIMITS,
   WITHDRAWABLE_PURPOSES,
-}                         from '../models/Wallet.js';
-import User               from '../models/User.js';
-import Notification       from '../models/Notification.js';
-import SystemLog          from '../models/SystemLog.js';
-import sendEmail          from '../utils/sendEmail.js';
+}                             from '../models/Wallet.js';
+import User                   from '../models/User.js';
+import Notification            from '../models/Notification.js';
+import SystemLog               from '../models/SystemLog.js';
+import sendEmail               from '../utils/sendEmail.js';
 import { transactionalTemplate } from '../utils/emailTemplates.js';
 
 const router = express.Router();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Config
+// Environment / Config
 // ─────────────────────────────────────────────────────────────────────────────
-const RAZORPAY_KEY_ID     = process.env.RAZORPAY_KEY_ID     || 'rzp_test_SJTh9WQJSGGnIT';
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '0IT2SC59bGq578K2QnUEleFX';
 
-/**
- * Razorpay X (Payout) uses a separate key-pair in production.
- * Falls back to the standard key for test/sandbox environments.
- */
-const RAZORPAY_X_KEY_ID     = process.env.RAZORPAY_X_KEY_ID     || RAZORPAY_KEY_ID;
-const RAZORPAY_X_KEY_SECRET = process.env.RAZORPAY_X_KEY_SECRET || RAZORPAY_KEY_SECRET;
+const {
+  RAZORPAY_KEY_ID,
+  RAZORPAY_KEY_SECRET,
+  RAZORPAY_X_KEY_ID,
+  RAZORPAY_X_KEY_SECRET,
+  RAZORPAY_X_ACCOUNT_NUMBER,
+  NODE_ENV,
+} = process.env;
 
-/**
- * Razorpay X Fund Account ID for the platform's own payout account.
- * Required when initiating payouts from the Razorpay X API.
- */
-const RAZORPAY_X_ACCOUNT_NUMBER = process.env.RAZORPAY_X_ACCOUNT_NUMBER || '';
+if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+  console.error('[BOOT] FATAL: Razorpay standard credentials not set');
+}
+if (!RAZORPAY_X_KEY_ID || !RAZORPAY_X_KEY_SECRET) {
+  console.error('[BOOT] WARN:  Razorpay X credentials not set — payouts will fail');
+}
+if (!RAZORPAY_X_ACCOUNT_NUMBER) {
+  console.error('[BOOT] WARN:  RAZORPAY_X_ACCOUNT_NUMBER not set — payouts will fail');
+}
 
+/** Standard Razorpay SDK instance (orders, payments). */
 const razorpay = new Razorpay({
   key_id:     RAZORPAY_KEY_ID,
   key_secret: RAZORPAY_KEY_SECRET,
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Utilities
+// Logging utilities
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Wraps an async route handler — forwards errors to Express error handler. */
-const asyncHandler = (fn) => (req, res, next) =>
-  Promise.resolve(fn(req, res, next)).catch(next);
-
-/** Structured audit console log (replace with Winston transport in production). */
-const logAudit = (action, metadata = {}) =>
+/**
+ * Structured console audit log.
+ * Replace with Winston transport in production.
+ */
+const logAudit = (action, meta = {}) =>
   console.log(
-    `[AUDIT][${new Date().toISOString()}] ${action} | ${JSON.stringify(metadata)}`
+    JSON.stringify({
+      ts:     new Date().toISOString(),
+      type:   'AUDIT',
+      action,
+      ...meta,
+    })
   );
 
 /**
- * Persists an entry to the SystemLog collection (non-blocking).
- * Never throws — logs errors to console only.
+ * Persists a SystemLog entry non-blocking.
+ * Never propagates errors to callers.
  */
 const persistLog = async ({
   level    = 'info',
@@ -102,59 +104,74 @@ const persistLog = async ({
       relatedEntity,
     });
   } catch (err) {
-    console.error('[SystemLog] Failed to persist:', err.message);
+    console.error('[SystemLog] persist failed:', err.message);
   }
 };
 
-/** Returns today's date string in YYYY-MM-DD (IST). */
-const todayIST = () =>
-  new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+// ─────────────────────────────────────────────────────────────────────────────
+// Async handler
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Wraps an async route fn; forwards thrown errors to Express error handler. */
+const asyncHandler = (fn) => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pagination
+// ─────────────────────────────────────────────────────────────────────────────
+
+const parsePagination = (query, maxLimit = 50) => ({
+  page:  Math.max(1, parseInt(query.page,  10) || 1),
+  limit: Math.min(maxLimit, parseInt(query.limit, 10) || 20),
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wallet helpers
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Finds or auto-creates a wallet for the given userId.
- * UPI ID is derived from the user's phone number on first creation.
+ * Returns existing wallet or creates one.
+ * No UPI ID generated — Razorpay handles UPI.
  */
 const findOrCreateWallet = async (userId) => {
-  let wallet = await Wallet.findOne({ user: userId }).lean(false);
+  let wallet = await Wallet.findOne({ user: userId });
   if (!wallet) {
-    const user  = await User.findById(userId).select('phone').lean();
-    const upiId = user?.phone
-      ? `${user.phone.replace('+', '')}@likeson`
-      : `${userId.toString().slice(-8)}@likeson`;
+    wallet = await Wallet.create({
+      user:         userId,
+      balance:      0,
+      transactions: [],
+    });
 
-    wallet = await Wallet.create({ user: userId, balance: 0, transactions: [], upiId });
-    logAudit('WALLET_CREATED', { userId, upiId });
+    logAudit('WALLET_CREATED', { userId });
 
     await persistLog({
       level:   'success',
       message: 'Wallet auto-created',
       actor:   { userId, role: 'customer' },
       relatedEntity: { model: 'User', entityId: userId },
-      metadata: { upiId },
     });
   }
   return wallet;
 };
 
 /**
- * Invalidates cached wallet data for a user.
- * Call after any balance-mutating operation.
+ * Invalidates all cached wallet data for a user.
+ * Fire-and-forget — allSettled swallows partial failures.
  */
-const invalidateWalletCache = async (userId) => {
-  await Promise.allSettled([
+const invalidateWalletCache = (userId) =>
+  Promise.allSettled([
     invalidateKey(`wallet:${userId}`),
     invalidateKey(`GET:/api/wallet/me`),
     invalidatePattern(`wallet:${userId}:*`),
   ]);
-};
 
 /**
- * Dispatches in-app notification + email (non-blocking; swallows errors).
+ * Dispatches in-app notification + email.
+ * Non-blocking; swallows all errors.
  */
 const dispatchNotification = async (userId, { title, body, type, emailSubject }) => {
   try {
     await Notification.create({ recipient: userId, title, body, type, priority: 'High' });
-
     const user = await User.findById(userId).select('email').lean();
     if (user?.email) {
       const html = transactionalTemplate({
@@ -175,129 +192,97 @@ const dispatchNotification = async (userId, { title, body, type, emailSubject })
   }
 };
 
-/** Generates a shared pair transaction ID for P2P transfers. */
-const generatePairTxnId = () =>
-  `P2P-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
-
 /**
- * Parses a UPI deep-link URI and extracts the VPA (UPI ID).
- * e.g. "upi://pay?pa=9876543210@likeson&pn=John"
+ * Returns a client-safe masked bank account object.
+ * Strips raw accountNumber; exposes only last-4.
  */
-const extractUpiIdFromQrString = (qrString = '') => {
-  try {
-    const match = qrString.match(/[?&]pa=([^&]+)/i);
-    if (match?.[1]) return decodeURIComponent(match[1]).toLowerCase().trim();
+const maskBankAccount = (acc) => ({
+  _id:                  acc._id,
+  accountHolderName:    acc.accountHolderName,
+  maskedAccount:        `XXXX${acc.accountNumber.slice(-4)}`,
+  ifscCode:             acc.ifscCode,
+  bankName:             acc.bankName,
+  branchName:           acc.branchName,
+  accountType:          acc.accountType,
+  isPrimary:            acc.isPrimary,
+  isVerified:           acc.isVerified,
+  verifiedAt:           acc.verifiedAt,
+  razorpayFundAccountId: acc.razorpayFundAccountId,
+  addedAt:              acc.addedAt,
+});
 
-    if (/^[\w.\-+]+@[\w]+$/.test(qrString.trim()))
-      return qrString.trim().toLowerCase();
-  } catch {
-    // Malformed QR string — return null
-  }
-  return null;
-};
-
-/**
- * Resolves a transfer target to { receiverWallet, resolvedUpiId, mode }.
- * Supports: upi_id | phone | qr scan modes.
- */
-const resolveTransferTarget = async ({ upiId, phone, qrString }) => {
-  if (qrString) {
-    const extractedUpiId = extractUpiIdFromQrString(qrString);
-    if (!extractedUpiId) return null;
-    const receiverWallet = await Wallet.findOne({ upiId: extractedUpiId });
-    if (!receiverWallet) return null;
-    return { receiverWallet, resolvedUpiId: extractedUpiId, mode: 'qr' };
-  }
-
-  if (upiId) {
-    const normalised     = upiId.trim().toLowerCase();
-    const receiverWallet = await Wallet.findOne({ upiId: normalised });
-    if (!receiverWallet) return null;
-    return { receiverWallet, resolvedUpiId: normalised, mode: 'upi_id' };
-  }
-
-  if (phone) {
-    const normalised = phone.replace(/\D/g, '');
-    const user       = await User.findOne({ phone: { $regex: normalised } }).select('_id').lean();
-    if (!user) return null;
-    const receiverWallet = await Wallet.findOne({ user: user._id });
-    if (!receiverWallet) return null;
-    return {
-      receiverWallet,
-      resolvedUpiId: receiverWallet.upiId || `${normalised}@likeson`,
-      mode:          'phone',
-    };
-  }
-
-  return null;
-};
+// ─────────────────────────────────────────────────────────────────────────────
+// Razorpay X — Payout API
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Builds a Razorpay X Payout via the REST API.
+ * Initiates a bank payout via Razorpay X REST API.
  *
- * Razorpay X Payout API docs:
- *   https://razorpay.com/docs/api/x/payouts/create/
- *
- * Returns the full payout object on success.
- * Throws a structured error on failure (caller must handle).
+ * @param {object} opts
+ * @param {string} opts.razorpayFundAccountId - fa_... ID stored on bank account
+ * @param {number} opts.amountPaise           - amount in paise (integer)
+ * @param {string} opts.requestId             - WDR-... used as reference_id
+ * @param {string} [opts.narration]
+ * @returns {Promise<object>} Razorpay payout object
+ * @throws  Axios error with response.data.error on Razorpay failure
  */
 const initiateRazorpayXPayout = async ({
   razorpayFundAccountId,
-  amount,               // in paise (integer)
+  amountPaise,
   requestId,
   narration,
 }) => {
-  const authToken = Buffer.from(`${RAZORPAY_X_KEY_ID}:${RAZORPAY_X_KEY_SECRET}`).toString('base64');
-
-  const payload = {
-    account_number: RAZORPAY_X_ACCOUNT_NUMBER,
-    fund_account_id: razorpayFundAccountId,
-    amount,                                   // paise
-    currency: 'INR',
-    mode: 'IMPS',
-    purpose: 'payout',
-    queue_if_low_balance: true,
-    reference_id: requestId,
-    narration: narration || 'Likeson Wallet Withdrawal',
-    notes: {
-      source: 'likeson_wallet',
-      requestId,
+  const response = await axios.post(
+    'https://api.razorpay.com/v1/payouts',
+    {
+      account_number:       RAZORPAY_X_ACCOUNT_NUMBER,
+      fund_account_id:      razorpayFundAccountId,
+      amount:               amountPaise,
+      currency:             'INR',
+      mode:                 'IMPS',
+      purpose:              'payout',
+      queue_if_low_balance: true,
+      reference_id:         requestId,
+      narration:            narration || 'Likeson Wallet Withdrawal',
+      notes: {
+        source:    'likeson_wallet',
+        requestId,
+      },
     },
-  };
-
- const response = await axios.post(
-  'https://api.razorpay.com/v1/payouts',
-  payload,
-  {
-    auth: {
-      username: process.env.RAZORPAY_X_KEY_ID,
-      password: process.env.RAZORPAY_X_KEY_SECRET
-    },
-    headers: {
-      'Content-Type': 'application/json'
+    {
+      auth: {
+        username: RAZORPAY_X_KEY_ID,
+        password: RAZORPAY_X_KEY_SECRET,
+      },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 15_000,
     }
-  }
-);
-
+  );
   return response.data;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pagination helper
+// Inline validators (return error string or null)
 // ─────────────────────────────────────────────────────────────────────────────
-const parsePagination = (query, maxLimit = 50) => ({
-  page:  Math.max(1, parseInt(query.page)  || 1),
-  limit: Math.min(maxLimit, parseInt(query.limit) || 20),
-});
+
+const validateAmount = (value, { min, max, label = 'Amount' } = {}) => {
+  const n = Number(value);
+  if (!value || isNaN(n) || n <= 0) return `${label} must be a positive number`;
+  if (min !== undefined && n < min)  return `Minimum ${label.toLowerCase()} is ₹${min}`;
+  if (max !== undefined && n > max)  return `Maximum ${label.toLowerCase()} per request is ₹${max.toLocaleString('en-IN')}`;
+  return null;
+};
+
+const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Routes
+// Routes — User
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── GET /api/wallet/me ────────────────────────────────────────────────────────
 /**
- * Returns the authenticated user's full wallet document.
- * Cached per-user for 30 s.
+ * Returns the authenticated user's wallet.
+ * Cached 30 s per user.
  */
 router.get(
   '/me',
@@ -311,32 +296,28 @@ router.get(
 
 // ── POST /api/wallet/add-money ────────────────────────────────────────────────
 /**
- * Initialises a Razorpay order for wallet top-up (minimum ₹100).
+ * Creates a Razorpay order for wallet top-up.
+ * Min ₹100; Razorpay's own limits apply beyond that.
  */
 router.post(
   '/add-money',
   protect,
   asyncHandler(async (req, res) => {
     const { amount } = req.body;
-
-    if (!amount || Number(amount) < 100) {
-      return res.status(400).json({
-        success: false,
-        message: 'Minimum top-up amount is ₹100',
-      });
-    }
+    const err = validateAmount(amount, { min: 100, label: 'Top-up amount' });
+    if (err) return res.status(400).json({ success: false, message: err });
 
     await findOrCreateWallet(req.user._id);
 
     const rzpOrder = await razorpay.orders.create({
-      amount:   Math.round(Number(amount) * 100),
+      amount:   Math.round(Number(amount) * 100), // paise
       currency: 'INR',
       receipt:  `WALLET_${req.user._id.toString().slice(-6)}_${Date.now()}`,
       notes:    { userId: req.user._id.toString(), type: 'wallet_topup' },
     });
 
     logAudit('WALLET_TOPUP_INIT', {
-      userId:    req.user._id,
+      userId:     req.user._id,
       amount,
       rzpOrderId: rzpOrder.id,
     });
@@ -356,8 +337,13 @@ router.post(
 
 // ── POST /api/wallet/verify-topup ─────────────────────────────────────────────
 /**
- * Verifies Razorpay HMAC signature and credits the wallet.
- * Idempotent — duplicate payment_ids are rejected with 409.
+ * Verifies Razorpay HMAC-SHA256 signature and credits wallet.
+ * Idempotent — duplicate payment_ids are rejected with HTTP 409.
+ *
+ * Body: { razorpay_order_id, razorpay_payment_id, razorpay_signature, amount }
+ *
+ * SECURITY: amount is re-verified against what Razorpay actually charged
+ * (via payment fetch) — never trust client-supplied amount blindly.
  */
 router.post(
   '/verify-topup',
@@ -367,31 +353,27 @@ router.post(
       razorpay_order_id,
       razorpay_payment_id,
       razorpay_signature,
-      amount,
     } = req.body;
 
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !amount) {
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required payment fields',
+        message: 'razorpay_order_id, razorpay_payment_id, and razorpay_signature are required',
       });
-    }
-
-    const creditAmount = Number(amount);
-    if (isNaN(creditAmount) || creditAmount <= 0) {
-      return res.status(400).json({ success: false, message: 'Invalid payment amount' });
     }
 
     // 1. Verify HMAC-SHA256 signature
-    const hmac = crypto.createHmac('sha256', RAZORPAY_KEY_SECRET);
-    hmac.update(`${razorpay_order_id}|${razorpay_payment_id}`);
-    if (hmac.digest('hex') !== razorpay_signature) {
+    const expectedSig = crypto
+      .createHmac('sha256', RAZORPAY_KEY_SECRET)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+      .digest('hex');
+
+    if (expectedSig !== razorpay_signature) {
       logAudit('WALLET_TOPUP_SECURITY_ALERT', {
         userId: req.user._id,
         razorpay_order_id,
-        ip: req.ip,
+        ip:     req.ip,
       });
-
       await persistLog({
         level:    'warning',
         category: 'security',
@@ -401,21 +383,45 @@ router.post(
         metadata: { razorpay_order_id, razorpay_payment_id },
         relatedEntity: { model: 'User', entityId: req.user._id },
       });
-
       return res.status(400).json({ success: false, message: 'Invalid payment signature' });
     }
 
-    // 2. Idempotency guard
+    // 2. Fetch authoritative amount from Razorpay (never trust client)
+    let verifiedAmountINR;
+    try {
+      const payment    = await razorpay.payments.fetch(razorpay_payment_id);
+      verifiedAmountINR = payment.amount / 100; // paise → INR
+      if (payment.status !== 'captured' && payment.status !== 'authorized') {
+        return res.status(400).json({
+          success: false,
+          message: `Payment not captured. Status: ${payment.status}`,
+        });
+      }
+    } catch (rzpErr) {
+      logAudit('RAZORPAY_PAYMENT_FETCH_FAILED', {
+        razorpay_payment_id,
+        error: rzpErr.message,
+      });
+      return res.status(502).json({
+        success: false,
+        message: 'Failed to verify payment with Razorpay. Please contact support.',
+      });
+    }
+
+    // 3. Idempotency guard — prevent double credit
     const wallet = await findOrCreateWallet(req.user._id);
-    if (wallet.transactions.some((t) => t.transactionId === razorpay_payment_id)) {
+    const alreadyCredited = wallet.transactions.some(
+      (t) => t.transactionId === razorpay_payment_id
+    );
+    if (alreadyCredited) {
       return res.status(409).json({
         success: false,
         message: 'Payment already credited to wallet',
       });
     }
 
-    // 3. Credit wallet (Add_Money is withdrawable — pre-save hook manages withdrawableBalance)
-    await wallet.credit(creditAmount, 'Add_Money', {
+    // 4. Credit wallet (Add_Money → withdrawable per model pre-save hook)
+    await wallet.credit(verifiedAmountINR, 'Add_Money', {
       transactionId: razorpay_payment_id,
       description:   `Wallet top-up via Razorpay (Order: ${razorpay_order_id})`,
     });
@@ -424,22 +430,21 @@ router.post(
 
     logAudit('WALLET_TOPUP_SUCCESS', {
       userId:     req.user._id,
-      amount:     creditAmount,
-      newBalance: wallet.balance,
+      amount:     verifiedAmountINR,
     });
 
     await persistLog({
       level:   'success',
-      message: `Wallet credited ₹${creditAmount} via Razorpay`,
+      message: `Wallet credited ₹${verifiedAmountINR} via Razorpay`,
       actor:   { userId: req.user._id, role: req.user.role, ip: req.ip },
       request: { method: 'POST', path: req.originalUrl, statusCode: 200 },
-      metadata: { creditAmount, razorpay_payment_id, razorpay_order_id },
+      metadata: { verifiedAmountINR, razorpay_payment_id, razorpay_order_id },
       relatedEntity: { model: 'User', entityId: req.user._id },
     });
 
     dispatchNotification(req.user._id, {
       title:        'Wallet Top-Up Successful',
-      body:         `₹${creditAmount.toLocaleString('en-IN')} has been added to your Likeson Wallet.`,
+      body:         `₹${verifiedAmountINR.toLocaleString('en-IN')} has been added to your Likeson Wallet.`,
       type:         'Payment_Success',
       emailSubject: 'Wallet Credited — Likeson Healthcare',
     });
@@ -449,294 +454,14 @@ router.post(
   })
 );
 
-// ── POST /api/wallet/lookup ───────────────────────────────────────────────────
-/**
- * Resolves a UPI ID / phone / QR string to the receiver's public profile.
- */
-router.post(
-  '/lookup',
-  protect,
-  asyncHandler(async (req, res) => {
-    const { upiId, phone, qrString } = req.body;
-
-    if (!upiId && !phone && !qrString) {
-      return res.status(400).json({
-        success: false,
-        message: 'Provide one of: upiId, phone, or qrString',
-      });
-    }
-
-    const result = await resolveTransferTarget({ upiId, phone, qrString });
-    if (!result) {
-      return res.status(404).json({
-        success: false,
-        message: 'No Likeson wallet found for the provided identifier',
-      });
-    }
-
-    const isSelf       = result.receiverWallet.user.toString() === req.user._id.toString();
-    const receiverUser = await User.findById(result.receiverWallet.user)
-      .select('name avatar phone')
-      .lean();
-
-    res.status(200).json({
-      success: true,
-      isSelf,
-      receiver: {
-        name:   receiverUser?.name  || 'Likeson User',
-        upiId:  result.resolvedUpiId,
-        avatar: receiverUser?.avatar || null,
-        mode:   result.mode,
-      },
-    });
-  })
-);
-
-// ── POST /api/wallet/transfer ─────────────────────────────────────────────────
-/**
- * Sends money from the authenticated user's wallet to another Likeson wallet.
- *
- * Body: { amount, note?, upiId | phone | qrString }
- *
- * NOTE: P2P transfers debit from availableBalance (total – locked).
- * Transferred funds arrive as P2P_Receive on the receiver side, which is
- * NOT in WITHDRAWABLE_PURPOSES — recipients cannot withdraw P2P money.
- * Only Add_Money + Referral_Bonus credits are withdrawable.
- */
-router.post(
-  '/transfer',
-  protect,
-  asyncHandler(async (req, res) => {
-    const { amount, note, upiId, phone, qrString } = req.body;
-
-    // 1. Validate amount
-    const transferAmount = Number(amount);
-    if (isNaN(transferAmount) || transferAmount < TRANSFER_LIMITS.MIN_AMOUNT) {
-      return res.status(400).json({
-        success: false,
-        message: `Minimum transfer amount is ₹${TRANSFER_LIMITS.MIN_AMOUNT}`,
-      });
-    }
-    if (transferAmount > TRANSFER_LIMITS.MAX_AMOUNT) {
-      return res.status(400).json({
-        success: false,
-        message: `Maximum transfer per transaction is ₹${TRANSFER_LIMITS.MAX_AMOUNT.toLocaleString('en-IN')}`,
-      });
-    }
-
-    // 2. Validate identifier
-    if (!upiId && !phone && !qrString) {
-      return res.status(400).json({
-        success: false,
-        message: 'Provide one of: upiId, phone, or qrString',
-      });
-    }
-
-    // 3. Resolve receiver
-    const target = await resolveTransferTarget({ upiId, phone, qrString });
-    if (!target) {
-      return res.status(404).json({
-        success: false,
-        message: 'No Likeson wallet found for the provided identifier',
-      });
-    }
-    const { receiverWallet, resolvedUpiId, mode } = target;
-
-    // 4. Self-transfer guard
-    if (receiverWallet.user.toString() === req.user._id.toString()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot transfer money to yourself',
-      });
-    }
-
-    // 5. Load sender wallet
-    const senderWallet = await findOrCreateWallet(req.user._id);
-
-    if (!senderWallet.isActive) {
-      return res.status(403).json({ success: false, message: 'Your wallet is currently inactive' });
-    }
-    if (!receiverWallet.isActive) {
-      return res.status(403).json({ success: false, message: 'Recipient wallet is currently inactive' });
-    }
-
-    // 6. Available balance check (balance − lockedBalance)
-    if (senderWallet.availableBalance < transferAmount) {
-      return res.status(400).json({
-        success: false,
-        message: `Insufficient balance. Available: ₹${senderWallet.availableBalance.toLocaleString('en-IN')}`,
-      });
-    }
-
-    // 7. Daily limit check
-    const todayTotal = senderWallet.getDailyTransferTotal();
-    if (todayTotal + transferAmount > TRANSFER_LIMITS.DAILY_LIMIT) {
-      const remaining = +(TRANSFER_LIMITS.DAILY_LIMIT - todayTotal).toFixed(2);
-      return res.status(400).json({
-        success: false,
-        message: `Daily transfer limit reached. Remaining today: ₹${remaining.toLocaleString('en-IN')}`,
-      });
-    }
-
-    // 8. Execute transfer
-    const pairTxnId  = generatePairTxnId();
-    const timestamp  = new Date();
-
-    const [receiverUser, senderUser] = await Promise.all([
-      User.findById(receiverWallet.user).select('name').lean(),
-      User.findById(req.user._id).select('name').lean(),
-    ]);
-
-    // Debit sender
-    const senderBalanceBefore    = senderWallet.balance;
-    senderWallet.balance         = +(senderWallet.balance - transferAmount).toFixed(2);
-    senderWallet.transactions.push({
-      type:              'Debit',
-      amount:            transferAmount,
-      purpose:           'P2P_Send',
-      status:            'Success',
-      balanceBefore:     senderBalanceBefore,
-      balanceAfter:      senderWallet.balance,
-      pairTxnId,
-      counterpartyId:    receiverWallet.user,
-      counterpartyUpiId: resolvedUpiId,
-      transferMode:      mode,
-      description:       `Sent to ${receiverUser?.name || resolvedUpiId}`,
-      note:              note || undefined,
-      timestamp,
-    });
-    senderWallet.incrementDailyTransfer(transferAmount);
-    senderWallet._newTxnCount = 1;
-
-    // Credit receiver
-    const receiverBalanceBefore    = receiverWallet.balance;
-    receiverWallet.balance         = +(receiverWallet.balance + transferAmount).toFixed(2);
-    receiverWallet.transactions.push({
-      type:              'Credit',
-      amount:            transferAmount,
-      purpose:           'P2P_Receive',   // NOT withdrawable — intentional
-      status:            'Success',
-      balanceBefore:     receiverBalanceBefore,
-      balanceAfter:      receiverWallet.balance,
-      pairTxnId,
-      counterpartyId:    req.user._id,
-      counterpartyUpiId: senderWallet.upiId || `${req.user._id.toString().slice(-8)}@likeson`,
-      transferMode:      mode,
-      description:       `Received from ${senderUser?.name || 'Likeson User'}`,
-      note:              note || undefined,
-      timestamp,
-    });
-    receiverWallet._newTxnCount = 1;
-
-    // Save both (true atomicity requires MongoDB replica-set sessions)
-    await Promise.all([senderWallet.save(), receiverWallet.save()]);
-    await Promise.all([
-      invalidateWalletCache(req.user._id),
-      invalidateWalletCache(receiverWallet.user),
-    ]);
-
-    logAudit('P2P_TRANSFER_SUCCESS', {
-      senderId: req.user._id,
-      receiverId: receiverWallet.user,
-      amount:   transferAmount,
-      pairTxnId,
-      mode,
-      resolvedUpiId,
-    });
-
-    await persistLog({
-      level:   'success',
-      message: `P2P transfer ₹${transferAmount} via ${mode}`,
-      actor:   { userId: req.user._id, role: req.user.role, ip: req.ip },
-      request: { method: 'POST', path: req.originalUrl, statusCode: 200 },
-      metadata: {
-        transferAmount,
-        pairTxnId,
-        mode,
-        resolvedUpiId,
-        receiverId: receiverWallet.user,
-      },
-      relatedEntity: { model: 'User', entityId: req.user._id },
-    });
-
-    // 9. Notifications (non-blocking)
-    const amtFmt = `₹${transferAmount.toLocaleString('en-IN')}`;
-    dispatchNotification(req.user._id, {
-      title:        'Money Sent',
-      body:         `${amtFmt} sent to ${receiverUser?.name || resolvedUpiId} successfully.`,
-      type:         'Payment_Success',
-      emailSubject: 'Transfer Successful — Likeson Wallet',
-    });
-    dispatchNotification(receiverWallet.user, {
-      title:        'Money Received',
-      body:         `${amtFmt} received from ${senderUser?.name || 'Likeson User'}.`,
-      type:         'Payment_Success',
-      emailSubject: 'You Received Money — Likeson Wallet',
-    });
-
-    res.status(200).json({
-      success: true,
-      message: `${amtFmt} sent successfully`,
-      transfer: {
-        pairTxnId,
-        amount:        transferAmount,
-        mode,
-        receiverUpiId: resolvedUpiId,
-        receiverName:  receiverUser?.name || 'Likeson User',
-        newBalance:    senderWallet.balance,
-      },
-    });
-  })
-);
-
-// ── GET /api/wallet/transfers ─────────────────────────────────────────────────
-/**
- * Returns paginated P2P transfer history for the authenticated user.
- * Query: ?page=1&limit=20
- */
-router.get(
-  '/transfers',
-  protect,
-  asyncHandler(async (req, res) => {
-    const { page, limit } = parsePagination(req.query);
-
-    const wallet = await Wallet.findOne({ user: req.user._id }).lean();
-    if (!wallet) {
-      return res.status(200).json({ success: true, transfers: [], total: 0 });
-    }
-
-    const p2pTxns = wallet.transactions
-      .filter((t) => t.purpose === 'P2P_Send' || t.purpose === 'P2P_Receive')
-      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-    const total     = p2pTxns.length;
-    const paginated = p2pTxns.slice((page - 1) * limit, page * limit);
-
-    res.status(200).json({ success: true, total, page, limit, transfers: paginated });
-  })
-);
-
-// ── GET /api/wallet/upi-id ────────────────────────────────────────────────────
-/**
- * Returns the authenticated user's UPI ID.
- */
-router.get(
-  '/upi-id',
-  protect,
-  asyncHandler(async (req, res) => {
-    const wallet = await findOrCreateWallet(req.user._id);
-    res.status(200).json({ success: true, upiId: wallet.upiId });
-  })
-);
-
 // ── GET /api/wallet/withdrawable-balance ──────────────────────────────────────
 /**
- * Returns a detailed breakdown of the user's withdrawable balance.
+ * Returns a complete breakdown of withdrawable vs. non-withdrawable balance.
  *
- * withdrawableBalance  = sum of Add_Money + Referral_Bonus credits (tracked by Wallet model)
- * lockedBalance        = amount held pending withdrawal approval
- * withdrawableAvailable = withdrawableBalance − lockedBalance  ← ceiling for new requests
- * nonWithdrawable      = balance − withdrawableBalance (P2P received, cashback, etc.)
+ * withdrawableBalance   = Add_Money + Referral_Bonus credits (tracked in model)
+ * lockedBalance         = funds held pending withdrawal approval
+ * withdrawableAvailable = withdrawableBalance − lockedBalance (ceiling for new requests)
+ * nonWithdrawable       = balance − withdrawableBalance (cashback, etc.)
  */
 router.get(
   '/withdrawable-balance',
@@ -745,14 +470,14 @@ router.get(
     const wallet = await findOrCreateWallet(req.user._id);
 
     res.status(200).json({
-      success:              true,
-      balance:              wallet.balance,
-      withdrawableBalance:  wallet.withdrawableBalance,
-      lockedBalance:        wallet.lockedBalance,
+      success:               true,
+      balance:               wallet.balance,
+      withdrawableBalance:   wallet.withdrawableBalance,
+      lockedBalance:         wallet.lockedBalance,
       withdrawableAvailable: wallet.withdrawableAvailable,
-      nonWithdrawable:      +(wallet.balance - wallet.withdrawableBalance).toFixed(2),
-      withdrawableSources:  ['Add_Money', 'Referral_Bonus'],
-      note:                 'Only funds added via top-up or referral bonus can be withdrawn to a bank account.',
+      nonWithdrawable:       +(wallet.balance - wallet.withdrawableBalance).toFixed(2),
+      withdrawableSources:   Array.from(WITHDRAWABLE_PURPOSES),
+      note:                  'Only funds from top-up and referral bonus can be withdrawn to a bank account.',
       withdrawalLimits: {
         minAmount:  WITHDRAWAL_LIMITS.MIN_AMOUNT,
         maxAmount:  WITHDRAWAL_LIMITS.MAX_AMOUNT,
@@ -772,20 +497,47 @@ router.get(
   '/bank-accounts',
   protect,
   asyncHandler(async (req, res) => {
-    const wallet   = await findOrCreateWallet(req.user._id);
-    const accounts = wallet.bankAccounts.map(maskBankAccount);
-    res.status(200).json({ success: true, bankAccounts: accounts });
+    const wallet = await findOrCreateWallet(req.user._id);
+    res.status(200).json({
+      success:      true,
+      bankAccounts: wallet.bankAccounts.map(maskBankAccount),
+    });
   })
 );
 
 // ── POST /api/wallet/bank-accounts ────────────────────────────────────────────
 /**
- * Adds a new verified bank account (max 3 per wallet).
+ * Adds a bank account. Creates Razorpay Contact + Fund Account automatically.
+ * Max 3 accounts per wallet enforced by model.
  *
- * Body:
- *   accountHolderName, accountNumber, ifscCode,
- *   bankName?, branchName?, accountType?, isPrimary?
+ * Body: { accountHolderName, accountNumber, ifscCode, bankName?, branchName?,
+ *          accountType?, isPrimary? }
+ *
+ * Flow:
+ *   1. Validate inputs
+ *   2. Create Razorpay Contact
+ *   3. Create Razorpay Fund Account → gets razorpayFundAccountId
+ *   4. Save bank account with isVerified: true
  */
+/**
+ * PATCH — replace the existing POST /api/wallet/bank-accounts route body.
+ *
+ * Root cause of "Authentication failed":
+ *   RAZORPAY_X_KEY_ID or RAZORPAY_X_KEY_SECRET is undefined/empty at runtime.
+ *   axios sends `username: undefined` → Razorpay X returns HTTP 401.
+ *   The old code only warned at boot but never blocked the request.
+ *
+ * Fixes applied (route only — nothing else changed):
+ *   1. Hard-block if X credentials missing → 503 with actionable message.
+ *   2. Separate try/catch for Contact vs Fund Account creation
+ *      so the error message tells admin exactly which step failed.
+ *   3. Log rzpErr.response?.status alongside description so you see
+ *      "401 Authentication failed" not just "Authentication failed".
+ *   4. Expose raw Razorpay error.description when available;
+ *      fall back to rzpErr.message only when no response body.
+ */
+
+// ── POST /api/wallet/bank-accounts ────────────────────────────────────────────
 router.post(
   '/bank-accounts',
   protect,
@@ -800,106 +552,190 @@ router.post(
       isPrimary,
     } = req.body;
 
-    // 1. Basic Validations
-    if (!accountHolderName || !accountNumber || !ifscCode) {
-      return res.status(400).json({
-        success: false,
-        message: 'accountHolderName, accountNumber, and ifscCode are required',
-      });
+    // ── 1. Input validation ──────────────────────────────────────────────────
+    if (!accountHolderName?.trim()) {
+      return res.status(400).json({ success: false, message: 'accountHolderName is required' });
+    }
+    if (!accountNumber) {
+      return res.status(400).json({ success: false, message: 'accountNumber is required' });
+    }
+    if (!ifscCode) {
+      return res.status(400).json({ success: false, message: 'ifscCode is required' });
     }
 
     const cleanAccountNumber = accountNumber.replace(/\D/g, '');
-    const cleanIfsc = ifscCode.trim().toUpperCase();
-
-    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(cleanIfsc)) {
-      return res.status(400).json({ success: false, message: 'Invalid IFSC format' });
-    }
-
-    // 2. Razorpay X Automation: Create Contact & Fund Account
-    let razorpayContactId;
-    let razorpayFundAccountId;
-
-    try {
-      // Step A: Create or Get Razorpay Contact
-      // Using axios because Razorpay's standard SDK doesn't always support full X features well
-      const authHeader = {
-        auth: { username: RAZORPAY_X_KEY_ID, password: RAZORPAY_X_KEY_SECRET }
-      };
-
-      const contactResponse = await axios.post(
-        'https://api.razorpay.com/v1/contacts',
-        {
-          name: accountHolderName,
-          email: req.user.email,
-          contact: req.user.phone || "9999999999", // Fallback if phone missing
-          type: "customer",
-          reference_id: req.user._id.toString()
-        },
-        authHeader
-      );
-      razorpayContactId = contactResponse.data.id;
-
-      // Step B: Create Fund Account (Bank Account)
-      const fundResponse = await axios.post(
-        'https://api.razorpay.com/v1/fund_accounts',
-        {
-          contact_id: razorpayContactId,
-          account_type: "bank_account",
-          bank_account: {
-            name: accountHolderName,
-            ifsc: cleanIfsc,
-            account_number: cleanAccountNumber
-          }
-        },
-        authHeader
-      );
-      razorpayFundAccountId = fundResponse.data.id;
-
-    } catch (rzpErr) {
-      const errorMsg = rzpErr.response?.data?.error?.description || "Razorpay verification failed";
-      return res.status(422).json({
+    if (cleanAccountNumber.length < 9 || cleanAccountNumber.length > 18) {
+      return res.status(400).json({
         success: false,
-        message: `Verification Error: ${errorMsg}. Please check your bank details.`
+        message: 'Account number must be between 9 and 18 digits',
       });
     }
 
-    // 3. Save to Database
+    const cleanIfsc = ifscCode.trim().toUpperCase();
+    if (!IFSC_RE.test(cleanIfsc)) {
+      return res.status(400).json({ success: false, message: 'Invalid IFSC code format' });
+    }
+
+    // ── 2. Razorpay X credential guard ───────────────────────────────────────
+    // Block early — avoids a guaranteed 401 from Razorpay and surfaces a
+    // clear ops error instead of a confusing "Authentication failed" to the user.
+    if (!RAZORPAY_X_KEY_ID || !RAZORPAY_X_KEY_SECRET) {
+      logAudit('BANK_ACCOUNT_ADD_BLOCKED', {
+        userId: req.user._id,
+        reason: 'RAZORPAY_X credentials not configured',
+      });
+      return res.status(503).json({
+        success: false,
+        message:
+          'Bank account verification is temporarily unavailable. ' +
+          'Razorpay X credentials are not configured on this server. ' +
+          'Please contact support.',
+      });
+    }
+
+    // ── 3. Max account guard ─────────────────────────────────────────────────
     const wallet = await findOrCreateWallet(req.user._id);
-    
-    // addBankAccount handles the primary logic and max 3 accounts limit
+    if (wallet.bankAccounts.length >= 3) {
+      return res.status(400).json({
+        success: false,
+        message: 'Maximum 3 bank accounts allowed. Remove one to add another.',
+      });
+    }
+
+    const rzpAuth = {
+      auth: {
+        username: RAZORPAY_X_KEY_ID,
+        password: RAZORPAY_X_KEY_SECRET,
+      },
+    };
+
+    // ── 4a. Create Razorpay Contact ──────────────────────────────────────────
+    let contactId;
+    try {
+      const contactRes = await axios.post(
+        'https://api.razorpay.com/v1/contacts',
+        {
+          name:         accountHolderName.trim(),
+          email:        req.user.email,
+          contact:      req.user.phone?.replace(/\D/g, '') || '9999999999',
+          type:         'customer',
+          reference_id: req.user._id.toString(),
+        },
+        { ...rzpAuth, timeout: 10_000 }
+      );
+      contactId = contactRes.data.id;
+    } catch (rzpErr) {
+      const httpStatus = rzpErr.response?.status;
+      const errMsg =
+        rzpErr.response?.data?.error?.description ||
+        rzpErr.response?.data?.error?.reason ||
+        rzpErr.message ||
+        'Unknown error';
+
+      logAudit('RAZORPAY_CONTACT_CREATE_ERROR', {
+        userId:     req.user._id,
+        httpStatus,
+        error:      errMsg,
+        ifsc:       cleanIfsc,
+      });
+
+      // 401 = bad credentials — ops problem, not user problem
+      if (httpStatus === 401) {
+        return res.status(503).json({
+          success: false,
+          message:
+            'Bank verification service is misconfigured (authentication error). ' +
+            'Please contact support — do not retry.',
+        });
+      }
+
+      return res.status(422).json({
+        success: false,
+        message: `Bank contact creation failed: ${errMsg}. Please check your details and try again.`,
+      });
+    }
+
+    // ── 4b. Create Razorpay Fund Account ─────────────────────────────────────
+    let razorpayFundAccountId;
+    try {
+      const fundRes = await axios.post(
+        'https://api.razorpay.com/v1/fund_accounts',
+        {
+          contact_id:   contactId,
+          account_type: 'bank_account',
+          bank_account: {
+            name:           accountHolderName.trim(),
+            ifsc:           cleanIfsc,
+            account_number: cleanAccountNumber,
+          },
+        },
+        { ...rzpAuth, timeout: 10_000 }
+      );
+      razorpayFundAccountId = fundRes.data.id;
+    } catch (rzpErr) {
+      const httpStatus = rzpErr.response?.status;
+      const errMsg =
+        rzpErr.response?.data?.error?.description ||
+        rzpErr.response?.data?.error?.reason ||
+        rzpErr.message ||
+        'Unknown error';
+
+      logAudit('RAZORPAY_FUND_ACCOUNT_ERROR', {
+        userId:     req.user._id,
+        httpStatus,
+        error:      errMsg,
+        ifsc:       cleanIfsc,
+        contactId,
+      });
+
+      if (httpStatus === 401) {
+        return res.status(503).json({
+          success: false,
+          message:
+            'Bank verification service is misconfigured (authentication error). ' +
+            'Please contact support — do not retry.',
+        });
+      }
+
+      // 400 from Razorpay = bad bank details (wrong account number, IFSC mismatch, etc.)
+      return res.status(422).json({
+        success: false,
+        message: `Bank account verification failed: ${errMsg}. Please check your account number and IFSC code.`,
+      });
+    }
+
+    // ── 5. Save to wallet ────────────────────────────────────────────────────
     const updatedWallet = await wallet.addBankAccount({
-      accountHolderName: accountHolderName.trim(),
-      accountNumber:     cleanAccountNumber,
-      ifscCode:          cleanIfsc,
-      bankName:          bankName?.trim(),
-      branchName:        branchName?.trim(),
-      accountType:       accountType || 'Savings',
-      isPrimary:         isPrimary === true,
-      // Store the Razorpay IDs
-      razorpayContactId,
+      accountHolderName:    accountHolderName.trim(),
+      accountNumber:        cleanAccountNumber,
+      ifscCode:             cleanIfsc,
+      bankName:             bankName?.trim(),
+      branchName:           branchName?.trim(),
+      accountType:          accountType || 'Savings',
+      isPrimary:            isPrimary === true,
       razorpayFundAccountId,
-      isVerified: true // Set to true as Razorpay accepted the details
+      isVerified:           true,
+      verifiedAt:           new Date(),
     });
 
-    // 4. Logging & Audit
     logAudit('BANK_ACCOUNT_ADDED', {
-      userId: req.user._id,
+      userId:               req.user._id,
       razorpayFundAccountId,
-      maskedAccount: `XXXX${cleanAccountNumber.slice(-4)}`,
+      maskedAccount:        `XXXX${cleanAccountNumber.slice(-4)}`,
     });
 
     await persistLog({
-      level:   'success',
+      level:    'success',
       category: 'payment',
-      message: 'Bank account added and verified with Razorpay X',
-      actor:   { userId: req.user._id, role: req.user.role },
+      message:  'Bank account added and verified via Razorpay X',
+      actor:    { userId: req.user._id, role: req.user.role },
       metadata: { razorpayFundAccountId, ifscCode: cleanIfsc },
       relatedEntity: { model: 'User', entityId: req.user._id },
     });
 
     res.status(201).json({
-      success: true,
-      message: 'Bank account verified and added successfully.',
+      success:      true,
+      message:      'Bank account verified and added successfully.',
       bankAccounts: updatedWallet.bankAccounts.map(maskBankAccount),
     });
   })
@@ -923,13 +759,17 @@ router.patch(
 
     res.status(200).json({
       success:            true,
-      message:            'Primary bank account updated successfully',
+      message:            'Primary bank account updated',
       primaryBankAccount: updatedWallet.primaryBankAccount,
     });
   })
 );
 
 // ── DELETE /api/wallet/bank-accounts/:bankAccountId ───────────────────────────
+/**
+ * Removes a bank account.
+ * Blocked if a Pending/Approved withdrawal references this account.
+ */
 router.delete(
   '/bank-accounts/:bankAccountId',
   protect,
@@ -941,7 +781,6 @@ router.delete(
       return res.status(404).json({ success: false, message: 'Wallet not found' });
     }
 
-    // Guard: cannot remove if a pending/approved withdrawal references this account
     const hasPendingWithdrawal = wallet.withdrawalRequests.some(
       (r) =>
         r.bankAccountId?.toString() === bankAccountId &&
@@ -963,7 +802,7 @@ router.delete(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Withdrawals (User-facing)
+// Withdrawals — User
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── GET /api/wallet/withdrawals ───────────────────────────────────────────────
@@ -976,7 +815,7 @@ router.get(
   protect,
   asyncHandler(async (req, res) => {
     const { page, limit } = parsePagination(req.query);
-    const status          = req.query.status;
+    const { status }      = req.query;
 
     const wallet = await Wallet.findOne({ user: req.user._id }).lean();
     if (!wallet) {
@@ -986,7 +825,6 @@ router.get(
     let requests = [...wallet.withdrawalRequests].sort(
       (a, b) => new Date(b.requestedAt) - new Date(a.requestedAt)
     );
-
     if (status) requests = requests.filter((r) => r.status === status);
 
     const total     = requests.length;
@@ -998,15 +836,11 @@ router.get(
 
 // ── POST /api/wallet/withdrawals ──────────────────────────────────────────────
 /**
- * Creates a withdrawal request for admin approval.
+ * Submits a withdrawal request for admin approval.
  *
- * IMPORTANT — what can be withdrawn:
- *   Only credits from Add_Money (Razorpay top-up) and Referral_Bonus
- *   are counted in withdrawableBalance. P2P received money, cashback,
- *   coin conversions etc. are NOT withdrawable.
- *
- * The ceiling for a new request is wallet.withdrawableAvailable
- *   = withdrawableBalance − lockedBalance
+ * Withdrawal eligibility:
+ *   Only Add_Money + Referral_Bonus credits count toward withdrawableBalance.
+ *   Ceiling for a new request = withdrawableAvailable (withdrawableBalance − lockedBalance).
  *
  * Body: { amount: number, bankAccountId: string }
  */
@@ -1016,51 +850,36 @@ router.post(
   asyncHandler(async (req, res) => {
     const { amount, bankAccountId } = req.body;
 
-    if (!amount || !bankAccountId) {
-      return res.status(400).json({
-        success: false,
-        message: 'amount and bankAccountId are required',
-      });
+    if (!bankAccountId) {
+      return res.status(400).json({ success: false, message: 'bankAccountId is required' });
     }
+
+    const amtErr = validateAmount(amount, {
+      min:   WITHDRAWAL_LIMITS.MIN_AMOUNT,
+      max:   WITHDRAWAL_LIMITS.MAX_AMOUNT,
+      label: 'Withdrawal amount',
+    });
+    if (amtErr) return res.status(400).json({ success: false, message: amtErr });
 
     const withdrawAmount = Number(amount);
-    if (isNaN(withdrawAmount) || withdrawAmount <= 0) {
-      return res.status(400).json({ success: false, message: 'Invalid withdrawal amount' });
-    }
-
-    if (withdrawAmount < WITHDRAWAL_LIMITS.MIN_AMOUNT) {
-      return res.status(400).json({
-        success: false,
-        message: `Minimum withdrawal amount is ₹${WITHDRAWAL_LIMITS.MIN_AMOUNT}`,
-      });
-    }
-
-    if (withdrawAmount > WITHDRAWAL_LIMITS.MAX_AMOUNT) {
-      return res.status(400).json({
-        success: false,
-        message: `Maximum withdrawal per request is ₹${WITHDRAWAL_LIMITS.MAX_AMOUNT.toLocaleString('en-IN')}`,
-      });
-    }
-
-    const wallet = await findOrCreateWallet(req.user._id);
+    const wallet         = await findOrCreateWallet(req.user._id);
 
     if (!wallet.isActive) {
       return res.status(403).json({ success: false, message: 'Your wallet is currently inactive' });
     }
 
-    // --- Balance eligibility check ---
-    // Only withdrawableAvailable (Add_Money + Referral_Bonus, minus locked) can be withdrawn.
+    // Withdrawable balance check (model.withdrawableAvailable = withdrawableBalance − lockedBalance)
     if (wallet.withdrawableAvailable < withdrawAmount) {
       const isLocked = wallet.withdrawableBalance >= withdrawAmount;
       return res.status(400).json({
-        success:              false,
-        message:              isLocked
-          ? `Amount is locked by a pending withdrawal request. Available to withdraw: ₹${wallet.withdrawableAvailable.toLocaleString('en-IN')}`
+        success: false,
+        message: isLocked
+          ? `Amount is locked by a pending withdrawal. Available: ₹${wallet.withdrawableAvailable.toLocaleString('en-IN')}`
           : `Insufficient withdrawable balance. Only top-up and referral bonus money (₹${wallet.withdrawableBalance.toLocaleString('en-IN')}) can be withdrawn. Available: ₹${wallet.withdrawableAvailable.toLocaleString('en-IN')}`,
         withdrawableAvailable: wallet.withdrawableAvailable,
         withdrawableBalance:   wallet.withdrawableBalance,
         lockedBalance:         wallet.lockedBalance,
-        withdrawableSources:   ['Add_Money', 'Referral_Bonus'],
+        withdrawableSources:   Array.from(WITHDRAWABLE_PURPOSES),
       });
     }
 
@@ -1070,11 +889,11 @@ router.post(
       const remaining = +(WITHDRAWAL_LIMITS.DAILY_LIMIT - dailyUsed).toFixed(2);
       return res.status(400).json({
         success: false,
-        message: `Daily withdrawal limit exceeded. You can withdraw ₹${remaining.toLocaleString('en-IN')} more today.`,
+        message: `Daily withdrawal limit exceeded. Remaining today: ₹${remaining.toLocaleString('en-IN')}`,
       });
     }
 
-    // requestWithdrawal handles bank-account existence & verification checks
+    // Delegate to model method (handles bank account existence, verification, locking)
     const { request } = await wallet.requestWithdrawal({
       amount:      withdrawAmount,
       bankAccountId,
@@ -1101,7 +920,7 @@ router.post(
 
     dispatchNotification(req.user._id, {
       title:        'Withdrawal Request Submitted',
-      body:         `Your withdrawal request of ₹${withdrawAmount.toLocaleString('en-IN')} has been submitted and is pending admin approval.`,
+      body:         `Your withdrawal of ₹${withdrawAmount.toLocaleString('en-IN')} is pending admin approval.`,
       type:         'Payment_Pending',
       emailSubject: 'Withdrawal Request Received — Likeson Wallet',
     });
@@ -1114,7 +933,7 @@ router.post(
         amount:            request.amount,
         status:            request.status,
         accountHolderName: request.accountHolderName,
-        maskedAccount:     `XXXX${request.accountNumber}`,
+        maskedAccount:     `XXXX${request.accountNumber}`, // already last-4 from model
         bankName:          request.bankName,
         requestedAt:       request.requestedAt,
       },
@@ -1140,20 +959,19 @@ router.get(
       return res.status(404).json({ success: false, message: 'Withdrawal request not found' });
     }
 
-    const { accountNumber: _raw, ...safeRequest } = request;
+    // Destructure raw accountNumber out; expose only masked version
+    const { accountNumber, ...safeRequest } = request;
     res.status(200).json({
       success: true,
-      request: {
-        ...safeRequest,
-        maskedAccount: `XXXX${request.accountNumber}`,
-      },
+      request: { ...safeRequest, maskedAccount: `XXXX${accountNumber}` },
     });
   })
 );
 
 // ── POST /api/wallet/withdrawals/:requestId/cancel ────────────────────────────
 /**
- * Allows the user to cancel a PENDING withdrawal before admin acts on it.
+ * Allows the authenticated user to cancel a PENDING withdrawal.
+ * Internally delegates to wallet.rejectWithdrawal with an audit note.
  */
 router.post(
   '/withdrawals/:requestId/cancel',
@@ -1170,7 +988,6 @@ router.post(
     if (!request) {
       return res.status(404).json({ success: false, message: 'Withdrawal request not found' });
     }
-
     if (request.status !== 'Pending') {
       return res.status(400).json({
         success: false,
@@ -1187,9 +1004,9 @@ router.post(
     await invalidateWalletCache(req.user._id);
 
     logAudit('WITHDRAWAL_CANCELLED_BY_USER', {
-      userId: req.user._id,
+      userId:    req.user._id,
       requestId,
-      amount: request.amount,
+      amount:    request.amount,
     });
 
     await persistLog({
@@ -1203,20 +1020,53 @@ router.post(
 
     res.status(200).json({
       success: true,
-      message: 'Withdrawal request cancelled. Your funds have been unlocked.',
+      message: 'Withdrawal cancelled. Funds have been unlocked.',
     });
+  })
+);
+
+// ── GET /api/wallet/transactions ──────────────────────────────────────────────
+/**
+ * Returns paginated transaction history for the authenticated user.
+ * Query: ?page=1&limit=20&type=Credit&purpose=Add_Money
+ */
+router.get(
+  '/transactions',
+  protect,
+  asyncHandler(async (req, res) => {
+    const { page, limit }    = parsePagination(req.query);
+    const { type, purpose }  = req.query;
+
+    const wallet = await Wallet.findOne({ user: req.user._id }).lean();
+    if (!wallet) {
+      return res.status(200).json({ success: true, transactions: [], total: 0 });
+    }
+
+    let txns = [...wallet.transactions].sort(
+      (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
+    );
+    if (type)    txns = txns.filter((t) => t.type    === type);
+    if (purpose) txns = txns.filter((t) => t.purpose === purpose);
+
+    const total     = txns.length;
+    const paginated = txns.slice((page - 1) * limit, page * limit);
+
+    res.status(200).json({ success: true, total, page, limit, transactions: paginated });
   })
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Admin — Withdrawal Management
 // ─────────────────────────────────────────────────────────────────────────────
-// All admin routes require role: admin or superadmin (via authorize middleware).
+// All admin routes require role: admin | superadmin | finance
 
 // ── GET /api/wallet/admin/withdrawals ─────────────────────────────────────────
 /**
  * [Admin] Lists all withdrawal requests across all wallets, filtered by status.
  * Query: ?status=Pending&page=1&limit=20
+ *
+ * Uses aggregation with $lookup for user details.
+ * Indexed on withdrawalRequests.status — O(log n).
  */
 router.get(
   '/admin/withdrawals',
@@ -1259,15 +1109,20 @@ router.get(
       ]),
     ]);
 
-    const total = countResult[0]?.total || 0;
-
-    res.status(200).json({ success: true, total, page, limit, withdrawals: results });
+    res.status(200).json({
+      success:     true,
+      total:       countResult[0]?.total || 0,
+      page,
+      limit,
+      withdrawals: results,
+    });
   })
 );
 
 // ── POST /api/wallet/admin/withdrawals/:requestId/approve ─────────────────────
 /**
- * [Admin] Approves a pending withdrawal request.
+ * [Admin] Approves a Pending withdrawal — moves to Approved status.
+ * Does NOT initiate payout; use /complete for that.
  * Body: { walletId }
  */
 router.post(
@@ -1324,7 +1179,7 @@ router.post(
 
     dispatchNotification(wallet.user, {
       title:        'Withdrawal Approved',
-      body:         `Your withdrawal of ₹${request.amount.toLocaleString('en-IN')} has been approved and will be credited to your bank account shortly.`,
+      body:         `Your withdrawal of ₹${request.amount.toLocaleString('en-IN')} has been approved and will be credited shortly.`,
       type:         'Payment_Success',
       emailSubject: 'Withdrawal Approved — Likeson Wallet',
     });
@@ -1335,23 +1190,17 @@ router.post(
 
 // ── POST /api/wallet/admin/withdrawals/:requestId/complete ────────────────────
 /**
- * [Admin] Initiates the actual bank payout via Razorpay X Payout API,
- * then marks the withdrawal as completed and debits the wallet.
+ * [Admin] Initiates Razorpay X Payout and marks withdrawal complete.
  *
- * The payout is initiated HERE — callers do NOT supply a razorpayPayoutId.
- * The razorpayPayoutId is obtained from the Razorpay API response and stored.
- *
- * Prerequisites:
- *   - Bank account must have razorpayFundAccountId set (via /admin/bank-accounts/.../verify).
- *   - RAZORPAY_X_ACCOUNT_NUMBER env var must be configured.
+ * Sequence (order is intentional — BUG 2 fix):
+ *   1. Validate request state and bank account
+ *   2. Idempotency guard (razorpayPayoutId already set?)
+ *   3. Call Razorpay X API → get payoutResult
+ *   4. Call wallet.completeWithdrawal (debit FIRST, then status = Completed)
+ *   5. Sync razorpayPayoutStatus to the request sub-doc
+ *   6. Audit + notify
  *
  * Body: { walletId }
- */
-// ── POST /api/wallet/admin/withdrawals/:requestId/complete ────────────────────
-/**
- * [Admin] Initiates the actual bank payout via Razorpay X Payout API.
- * * FIX: Ensures we correctly resolve the bank account from the sub-document 
- * array and validates the Razorpay Fund Account ID.
  */
 router.post(
   '/admin/withdrawals/:requestId/complete',
@@ -1365,28 +1214,32 @@ router.post(
       return res.status(400).json({ success: false, message: 'walletId is required' });
     }
 
-    // 1. Fetch wallet with the sub-documents
+    if (!RAZORPAY_X_ACCOUNT_NUMBER) {
+      logAudit('PAYOUT_CONFIG_MISSING', { adminId: req.user._id });
+      return res.status(500).json({
+        success: false,
+        message: 'Platform error: RAZORPAY_X_ACCOUNT_NUMBER not configured.',
+      });
+    }
+
     const wallet = await Wallet.findById(walletId);
     if (!wallet) {
       return res.status(404).json({ success: false, message: 'Wallet not found' });
     }
 
-    // 2. Find the specific withdrawal request
     const request = wallet.withdrawalRequests.find((r) => r.requestId === requestId);
     if (!request) {
       return res.status(404).json({ success: false, message: 'Withdrawal request not found' });
     }
 
-    // 3. Status Guard: Only 'Approved' requests should be processed for payout
-    // If it's still 'Pending', you might want to approve it first or allow it here
     if (!['Pending', 'Approved'].includes(request.status)) {
       return res.status(400).json({
         success: false,
-        message: `Cannot complete withdrawal. Current status: ${request.status}`,
+        message: `Cannot complete withdrawal in status: ${request.status}`,
       });
     }
 
-    // 4. Idempotency Guard: Don't trigger duplicate payouts
+    // Idempotency — payout already triggered
     if (request.razorpayPayoutId) {
       return res.status(409).json({
         success: false,
@@ -1394,100 +1247,116 @@ router.post(
       });
     }
 
-    // 5. Resolve the specific bank account used for this request
+    // Resolve bank account sub-document (may have been removed since request was made)
     const bankAccount = wallet.bankAccounts.id(request.bankAccountId);
-    
     if (!bankAccount) {
       return res.status(400).json({
         success: false,
-        message: 'The bank account associated with this request has been removed from the wallet.',
+        message: 'The bank account for this request has been removed from the wallet.',
       });
     }
 
-    // 6. CRITICAL FIX: The Fund Account ID check
     if (!bankAccount.razorpayFundAccountId) {
       return res.status(400).json({
         success: false,
-        message: `Payout failed: Bank account ending in ${bankAccount.accountNumber.slice(-4)} is not verified with Razorpay. Please verify it first.`,
+        message: `Bank account XXXX${bankAccount.accountNumber.slice(-4)} is not linked to Razorpay. Please verify it via admin panel first.`,
       });
     }
 
-    if (!RAZORPAY_X_ACCOUNT_NUMBER) {
-      return res.status(500).json({
-        success: false,
-        message: 'Platform Error: RAZORPAY_X_ACCOUNT_NUMBER is missing from environment variables.',
-      });
-    }
-
-    // 7. Initiate Razorpay X Payout
+    // Initiate Razorpay X Payout
     let payoutResult;
     try {
       payoutResult = await initiateRazorpayXPayout({
         razorpayFundAccountId: bankAccount.razorpayFundAccountId,
-        amount: Math.round(request.amount * 100), // Convert INR to Paise
-        requestId: request.requestId,
-        narration: `Likeson Wdr ${request.requestId.slice(-6)}`,
+        amountPaise:           Math.round(request.amount * 100),
+        requestId:             request.requestId,
+        narration:             `Likeson Wdr ${request.requestId.slice(-6)}`,
       });
     } catch (payoutErr) {
-      const errDetail = payoutErr?.response?.data?.error?.description || payoutErr.message;
-      
+      const errDetail =
+        payoutErr?.response?.data?.error?.description || payoutErr.message;
+
+      logAudit('RAZORPAY_PAYOUT_FAILED', {
+        adminId:   req.user._id,
+        requestId,
+        error:     errDetail,
+      });
+
       await persistLog({
-        level: 'error',
+        level:    'error',
         category: 'payment',
-        message: `Razorpay Payout API Error: ${errDetail}`,
-        actor: { userId: req.user._id },
-        metadata: { requestId, error: errDetail }
+        message:  `Razorpay X Payout API error: ${errDetail}`,
+        actor:    { userId: req.user._id, role: req.user.role, ip: req.ip },
+        metadata: { requestId, error: errDetail },
+        relatedEntity: { model: 'User', entityId: wallet.user },
       });
 
       return res.status(502).json({
         success: false,
-        message: `Razorpay X Error: ${errDetail}`,
+        message: `Razorpay X error: ${errDetail}`,
       });
     }
 
-    // 8. Update Wallet Transaction and Status
-    // completeWithdrawal handles: status = 'Completed', releases lockedBalance, and records the debit txn.
+    // BUG 2 FIX: debit wallet FIRST inside completeWithdrawal, THEN status = Completed
+    // If debit throws, the payout ID is not yet stored — admin can retry safely.
     const updatedWallet = await wallet.completeWithdrawal({
       requestId,
       razorpayPayoutId: payoutResult.id,
-      reviewedBy: req.user._id,
+      reviewedBy:       req.user._id,
     });
 
-    // 9. Sync the Payout Status (e.g., 'processing', 'processed')
-    const finalReq = updatedWallet.withdrawalRequests.find(r => r.requestId === requestId);
-    finalReq.razorpayPayoutStatus = payoutResult.status;
-    await updatedWallet.save();
+    // Sync Razorpay's live payout status (e.g. 'processing', 'processed')
+    const finalReq = updatedWallet.withdrawalRequests.find((r) => r.requestId === requestId);
+    if (finalReq) {
+      finalReq.razorpayPayoutStatus = payoutResult.status;
+      await updatedWallet.save();
+    }
 
     await invalidateWalletCache(wallet.user);
 
-    // 10. Audit and Notifications
+    logAudit('WITHDRAWAL_COMPLETED', {
+      adminId:         req.user._id,
+      requestId,
+      userId:          wallet.user,
+      amount:          request.amount,
+      razorpayPayoutId: payoutResult.id,
+    });
+
     await persistLog({
-      level: 'success',
+      level:    'success',
       category: 'payment',
-      message: `Payout ${payoutResult.id} initiated for request ${requestId}`,
-      actor: { userId: req.user._id },
-      relatedEntity: { model: 'User', entityId: wallet.user }
+      message:  `Payout ${payoutResult.id} initiated for withdrawal ${requestId}`,
+      actor:    { userId: req.user._id, role: req.user.role, ip: req.ip },
+      request:  { method: 'POST', path: req.originalUrl, statusCode: 200 },
+      metadata: {
+        requestId,
+        amount:           request.amount,
+        razorpayPayoutId: payoutResult.id,
+        payoutStatus:     payoutResult.status,
+      },
+      relatedEntity: { model: 'User', entityId: wallet.user },
     });
 
     dispatchNotification(wallet.user, {
-      title: 'Withdrawal Processed',
-      body: `₹${request.amount} is being transferred to your bank account. Payout ID: ${payoutResult.id}`,
-      type: 'Payment_Success'
+      title:        'Withdrawal Processed',
+      body:         `₹${request.amount.toLocaleString('en-IN')} is being transferred to your bank account. Payout ID: ${payoutResult.id}`,
+      type:         'Payment_Success',
+      emailSubject: 'Withdrawal Processed — Likeson Wallet',
     });
 
     res.status(200).json({
-      success: true,
-      message: 'Payout successfully initiated',
-      payoutId: payoutResult.id,
-      status: payoutResult.status,
-      newBalance: updatedWallet.balance
+      success:    true,
+      message:    'Payout initiated successfully',
+      payoutId:   payoutResult.id,
+      status:     payoutResult.status,
+      newBalance: updatedWallet.balance,
     });
   })
 );
 
 // ── POST /api/wallet/admin/withdrawals/:requestId/reject ──────────────────────
 /**
- * [Admin] Rejects a pending withdrawal. Releases locked amount.
+ * [Admin] Rejects a Pending withdrawal. Releases locked amount. No reversal credit.
  * Body: { walletId, adminNote? }
  */
 router.post(
@@ -1512,6 +1381,7 @@ router.post(
       return res.status(404).json({ success: false, message: 'Withdrawal request not found' });
     }
 
+    // rejectWithdrawal internally calls getDailyWithdrawalTotal() before decrement (BUG 4 fix)
     await wallet.rejectWithdrawal({ requestId, reviewedBy: req.user._id, adminNote });
 
     await invalidateWalletCache(wallet.user);
@@ -1536,22 +1406,19 @@ router.post(
 
     dispatchNotification(wallet.user, {
       title:        'Withdrawal Rejected',
-      body:         `Your withdrawal request of ₹${request.amount.toLocaleString('en-IN')} was rejected. Funds have been unlocked.${adminNote ? ` Reason: ${adminNote}` : ''}`,
+      body:         `Your withdrawal of ₹${request.amount.toLocaleString('en-IN')} was rejected. Funds unlocked.${adminNote ? ` Reason: ${adminNote}` : ''}`,
       type:         'Payment_Failed',
       emailSubject: 'Withdrawal Rejected — Likeson Wallet',
     });
 
-    res.status(200).json({
-      success: true,
-      message: 'Withdrawal request rejected and funds unlocked',
-    });
+    res.status(200).json({ success: true, message: 'Withdrawal rejected and funds unlocked' });
   })
 );
 
 // ── POST /api/wallet/admin/withdrawals/:requestId/fail ────────────────────────
 /**
- * [Admin] Marks a withdrawal as failed after payout attempt fails.
- * Releases lock and credits reversal (restores withdrawableBalance).
+ * [Admin] Marks a payout as failed after Razorpay returns a failure.
+ * Releases lock and credits Withdrawal_Reversal (restores withdrawableBalance).
  * Body: { walletId, failureReason? }
  */
 router.post(
@@ -1576,6 +1443,7 @@ router.post(
       return res.status(404).json({ success: false, message: 'Withdrawal request not found' });
     }
 
+    // failWithdrawal: releases lock, decrements daily total safely, credits reversal
     const updatedWallet = await wallet.failWithdrawal({
       requestId,
       failureReason,
@@ -1595,7 +1463,7 @@ router.post(
     await persistLog({
       level:    'error',
       category: 'payment',
-      message:  `Withdrawal ${requestId} marked failed — amount reversed`,
+      message:  `Withdrawal ${requestId} failed — amount reversed to wallet`,
       actor:    { userId: req.user._id, role: req.user.role, ip: req.ip },
       request:  { method: 'POST', path: req.originalUrl, statusCode: 200 },
       metadata: { requestId, amount: request.amount, failureReason },
@@ -1603,7 +1471,7 @@ router.post(
     });
 
     dispatchNotification(updatedWallet.user, {
-      title:        'Withdrawal Failed',
+      title:        'Withdrawal Failed — Funds Returned',
       body:         `Your withdrawal of ₹${request.amount.toLocaleString('en-IN')} could not be processed. The amount has been returned to your wallet.${failureReason ? ` Reason: ${failureReason}` : ''}`,
       type:         'Payment_Failed',
       emailSubject: 'Withdrawal Failed — Funds Returned — Likeson Wallet',
@@ -1611,7 +1479,7 @@ router.post(
 
     res.status(200).json({
       success:             true,
-      message:             'Withdrawal marked as failed and amount reversed to wallet',
+      message:             'Withdrawal marked failed. Amount reversed to wallet.',
       newBalance:          updatedWallet.balance,
       withdrawableBalance: updatedWallet.withdrawableBalance,
     });
@@ -1620,31 +1488,23 @@ router.post(
 
 // ── PATCH /api/wallet/admin/bank-accounts/:walletId/:bankAccountId/verify ─────
 /**
- * [Admin] Marks a bank account as verified (post penny-drop / manual check).
- * Also stores Razorpay Fund Account & Contact IDs needed for payouts.
+ * [Admin] Manually verifies a bank account and links Razorpay Fund Account ID.
+ * Required before payouts can be initiated for this account.
  *
- * Body (optional):
- *   { razorpayFundAccountId: "fa_...", razorpayContactId: "cont_..." }
- */
-// ── PATCH /api/wallet/admin/bank-accounts/:walletId/:bankAccountId/verify ─────
-/**
- * [Admin] Marks a bank account as verified.
- * This is the FIX for the "No Razorpay Fund Account ID" error.
- * * Body: { razorpayFundAccountId: string, razorpayContactId: string }
+ * Body: { razorpayFundAccountId: string }
  */
 router.patch(
   '/admin/bank-accounts/:walletId/:bankAccountId/verify',
   protect,
   authorize('admin', 'superadmin', 'finance'),
   asyncHandler(async (req, res) => {
-    const { walletId, bankAccountId } = req.params;
-    const { razorpayFundAccountId, razorpayContactId } = req.body;
+    const { walletId, bankAccountId }   = req.params;
+    const { razorpayFundAccountId }     = req.body;
 
-    // 1. Validation: Ensure the Fund Account ID is provided
     if (!razorpayFundAccountId) {
       return res.status(400).json({
         success: false,
-        message: 'razorpayFundAccountId is required to enable payouts for this account.'
+        message: 'razorpayFundAccountId is required to enable payouts for this account.',
       });
     }
 
@@ -1653,101 +1513,341 @@ router.patch(
       return res.status(404).json({ success: false, message: 'Wallet not found' });
     }
 
-    // 2. Find the specific bank account in the sub-document array
     const account = wallet.bankAccounts.id(bankAccountId);
     if (!account) {
-      return res.status(404).json({ success: false, message: 'Bank account not found in this wallet' });
+      return res.status(404).json({ success: false, message: 'Bank account not found' });
     }
 
-    // 3. Update the fields
-    account.isVerified = true;
-    account.verifiedAt = new Date();
-    account.razorpayFundAccountId = razorpayFundAccountId;
-    if (razorpayContactId) account.razorpayContactId = razorpayContactId;
-    account.updatedAt = new Date();
+    account.isVerified             = true;
+    account.verifiedAt             = new Date();
+    account.razorpayFundAccountId  = razorpayFundAccountId;
+    account.updatedAt              = new Date();
 
-    // 4. Save the parent document
     await wallet.save();
-
-    // Invalidate cache
     await invalidateWalletCache(wallet.user);
 
+    logAudit('BANK_ACCOUNT_VERIFIED_BY_ADMIN', {
+      adminId:              req.user._id,
+      walletId,
+      bankAccountId,
+      razorpayFundAccountId,
+      maskedAccount:        `XXXX${account.accountNumber.slice(-4)}`,
+    });
+
     await persistLog({
-      level: 'success',
+      level:    'success',
       category: 'kyc',
-      message: `Bank account XXXX${account.accountNumber.slice(-4)} verified with Fund ID`,
-      actor: { userId: req.user._id, role: req.user.role },
+      message:  `Bank account XXXX${account.accountNumber.slice(-4)} verified and Fund Account linked`,
+      actor:    { userId: req.user._id, role: req.user.role },
       metadata: { walletId, bankAccountId, razorpayFundAccountId },
       relatedEntity: { model: 'User', entityId: wallet.user },
     });
 
     dispatchNotification(wallet.user, {
       title: 'Bank Account Verified',
-      body: `Your bank account ending in ${account.accountNumber.slice(-4)} is now verified and ready for withdrawals.`,
-      type: 'KYC_Approved'
+      body:  `Your bank account ending in ${account.accountNumber.slice(-4)} is verified and ready for withdrawals.`,
+      type:  'KYC_Approved',
     });
 
     res.status(200).json({
       success: true,
-      message: 'Bank account verified and Razorpay IDs linked successfully.',
-      account: maskBankAccount(account)
+      message: 'Bank account verified and Razorpay Fund Account linked.',
+      account: maskBankAccount(account),
     });
   })
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Shared helpers (defined after routes to avoid hoisting confusion)
-// ─────────────────────────────────────────────────────────────────────────────
-
+// ── GET /api/wallet/admin/wallets ─────────────────────────────────────────────
 /**
- * Returns a safe, masked representation of a bank account sub-document.
- * Always strips the raw accountNumber before sending to clients.
+ * [Admin] Lists all wallets with user info.
+ * Query: ?page=1&limit=20&isActive=true
  */
-function maskBankAccount(acc) {
-  return {
-    _id:               acc._id,
-    accountHolderName: acc.accountHolderName,
-    maskedAccount:     `XXXX${acc.accountNumber.slice(-4)}`,
-    ifscCode:          acc.ifscCode,
-    bankName:          acc.bankName,
-    branchName:        acc.branchName,
-    accountType:       acc.accountType,
-    isPrimary:         acc.isPrimary,
-    isVerified:        acc.isVerified,
-    verifiedAt:        acc.verifiedAt,
-    addedAt:           acc.addedAt,
-  };
-}
+router.get(
+  '/admin/wallets',
+  protect,
+  authorize('admin', 'superadmin', 'finance'),
+  asyncHandler(async (req, res) => {
+    const { page, limit } = parsePagination(req.query, 100);
+    const isActiveFilter  = req.query.isActive !== undefined
+      ? { isActive: req.query.isActive === 'true' }
+      : {};
+
+    const [results, countResult] = await Promise.all([
+      Wallet.aggregate([
+        { $match: isActiveFilter },
+        { $sort:  { createdAt: -1 } },
+        { $skip:  (page - 1) * limit },
+        { $limit: limit },
+        {
+          $lookup: {
+            from:         'users',
+            localField:   'user',
+            foreignField: '_id',
+            as:           '_userArr',
+            pipeline:     [{ $project: { name: 1, email: 1, phone: 1, role: 1 } }],
+          },
+        },
+        {
+          $project: {
+            user:                { $arrayElemAt: ['$_userArr', 0] },
+            balance:             1,
+            withdrawableBalance: 1,
+            lockedBalance:       1,
+            totalCredited:       1,
+            totalDebited:        1,
+            totalWithdrawn:      1,
+            isActive:            1,
+            lastTransactionAt:   1,
+            createdAt:           1,
+          },
+        },
+      ]),
+      Wallet.countDocuments(isActiveFilter),
+    ]);
+
+    res.status(200).json({ success: true, total: countResult, page, limit, wallets: results });
+  })
+);
+
+// ── PATCH /api/wallet/admin/wallets/:walletId/toggle-active ───────────────────
+/**
+ * [Admin] Activates or deactivates a wallet.
+ * Body: { isActive: boolean }
+ */
+router.patch(
+  '/admin/wallets/:walletId/toggle-active',
+  protect,
+  authorize('admin', 'superadmin'),
+  asyncHandler(async (req, res) => {
+    const { walletId } = req.params;
+    const { isActive } = req.body;
+
+    if (typeof isActive !== 'boolean') {
+      return res.status(400).json({ success: false, message: 'isActive must be a boolean' });
+    }
+
+    const wallet = await Wallet.findById(walletId);
+    if (!wallet) {
+      return res.status(404).json({ success: false, message: 'Wallet not found' });
+    }
+
+    wallet.isActive  = isActive;
+    wallet.updatedBy = req.user._id;
+    await wallet.save();
+
+    await invalidateWalletCache(wallet.user);
+
+    logAudit('WALLET_ACTIVE_TOGGLED', {
+      adminId:  req.user._id,
+      walletId,
+      isActive,
+      userId:   wallet.user,
+    });
+
+    await persistLog({
+      level:    isActive ? 'success' : 'warning',
+      category: 'system',
+      message:  `Wallet ${walletId} ${isActive ? 'activated' : 'deactivated'} by admin`,
+      actor:    { userId: req.user._id, role: req.user.role, ip: req.ip },
+      request:  { method: 'PATCH', path: req.originalUrl, statusCode: 200 },
+      metadata: { walletId, isActive },
+      relatedEntity: { model: 'User', entityId: wallet.user },
+    });
+
+    res.status(200).json({
+      success:  true,
+      message:  `Wallet ${isActive ? 'activated' : 'deactivated'} successfully`,
+      isActive: wallet.isActive,
+    });
+  })
+);
+
+// ── POST /api/wallet/admin/credit ─────────────────────────────────────────────
+/**
+ * [Admin] Manually credits a wallet (Admin_Credit).
+ * Body: { walletId, amount, description?, note? }
+ */
+router.post(
+  '/admin/credit',
+  protect,
+  authorize('admin', 'superadmin'),
+  asyncHandler(async (req, res) => {
+    const { walletId, amount, description, note } = req.body;
+
+    if (!walletId) {
+      return res.status(400).json({ success: false, message: 'walletId is required' });
+    }
+    const amtErr = validateAmount(amount, { min: 1, label: 'Credit amount' });
+    if (amtErr) return res.status(400).json({ success: false, message: amtErr });
+
+    const wallet = await Wallet.findById(walletId);
+    if (!wallet) {
+      return res.status(404).json({ success: false, message: 'Wallet not found' });
+    }
+
+    const creditAmount = Number(amount);
+    await wallet.credit(creditAmount, 'Admin_Credit', {
+      description: description || 'Admin manual credit',
+      initiatedBy: req.user._id,
+      note,
+    });
+
+    await invalidateWalletCache(wallet.user);
+
+    logAudit('ADMIN_WALLET_CREDIT', {
+      adminId:  req.user._id,
+      walletId,
+      userId:   wallet.user,
+      amount:   creditAmount,
+    });
+
+    await persistLog({
+      level:    'success',
+      category: 'payment',
+      message:  `Admin credited ₹${creditAmount} to wallet ${walletId}`,
+      actor:    { userId: req.user._id, role: req.user.role, ip: req.ip },
+      request:  { method: 'POST', path: req.originalUrl, statusCode: 200 },
+      metadata: { walletId, creditAmount, description },
+      relatedEntity: { model: 'User', entityId: wallet.user },
+    });
+
+    dispatchNotification(wallet.user, {
+      title:        'Wallet Credited',
+      body:         `₹${creditAmount.toLocaleString('en-IN')} has been added to your Likeson Wallet by admin.`,
+      type:         'Payment_Success',
+      emailSubject: 'Wallet Credited — Likeson Healthcare',
+    });
+
+    const updatedWallet = await Wallet.findById(walletId);
+    res.status(200).json({
+      success:    true,
+      message:    `₹${creditAmount} credited successfully`,
+      newBalance: updatedWallet.balance,
+    });
+  })
+);
+
+// ── POST /api/wallet/admin/debit ──────────────────────────────────────────────
+/**
+ * [Admin] Manually debits a wallet (Admin_Debit).
+ * Body: { walletId, amount, description?, note? }
+ */
+router.post(
+  '/admin/debit',
+  protect,
+  authorize('admin', 'superadmin'),
+  asyncHandler(async (req, res) => {
+    const { walletId, amount, description, note } = req.body;
+
+    if (!walletId) {
+      return res.status(400).json({ success: false, message: 'walletId is required' });
+    }
+    const amtErr = validateAmount(amount, { min: 1, label: 'Debit amount' });
+    if (amtErr) return res.status(400).json({ success: false, message: amtErr });
+
+    const wallet = await Wallet.findById(walletId);
+    if (!wallet) {
+      return res.status(404).json({ success: false, message: 'Wallet not found' });
+    }
+
+    const debitAmount = Number(amount);
+
+    if (wallet.availableBalance < debitAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient balance. Available: ₹${wallet.availableBalance}`,
+      });
+    }
+
+    await wallet.debit(debitAmount, 'Admin_Debit', {
+      description: description || 'Admin manual debit',
+      initiatedBy: req.user._id,
+      note,
+    });
+
+    await invalidateWalletCache(wallet.user);
+
+    logAudit('ADMIN_WALLET_DEBIT', {
+      adminId:  req.user._id,
+      walletId,
+      userId:   wallet.user,
+      amount:   debitAmount,
+    });
+
+    await persistLog({
+      level:    'warning',
+      category: 'payment',
+      message:  `Admin debited ₹${debitAmount} from wallet ${walletId}`,
+      actor:    { userId: req.user._id, role: req.user.role, ip: req.ip },
+      request:  { method: 'POST', path: req.originalUrl, statusCode: 200 },
+      metadata: { walletId, debitAmount, description },
+      relatedEntity: { model: 'User', entityId: wallet.user },
+    });
+
+    const updatedWallet = await Wallet.findById(walletId);
+    res.status(200).json({
+      success:    true,
+      message:    `₹${debitAmount} debited successfully`,
+      newBalance: updatedWallet.balance,
+    });
+  })
+);
+
+// ── GET /api/wallet/admin/wallets/:walletId ───────────────────────────────────
+/**
+ * [Admin] Returns full wallet detail for a single user.
+ */
+router.get(
+  '/admin/wallets/:walletId',
+  protect,
+  authorize('admin', 'superadmin', 'finance'),
+  asyncHandler(async (req, res) => {
+    const { walletId } = req.params;
+
+    const wallet = await Wallet.findById(walletId)
+      .populate('user', 'name email phone role')
+      .lean();
+
+    if (!wallet) {
+      return res.status(404).json({ success: false, message: 'Wallet not found' });
+    }
+
+    // Mask all bank account numbers before returning to admin
+    wallet.bankAccounts = wallet.bankAccounts.map(maskBankAccount);
+
+    res.status(200).json({ success: true, wallet });
+  })
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Centralised Error Handler
+// Must be the last use() registered on this router.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// eslint-disable-next-line no-unused-vars
 router.use(async (err, req, res, _next) => {
-  const status  = err.status  || err.statusCode || 500;
+  const status  = err.status || err.statusCode || 500;
   const message = err.message || 'Internal Server Error';
 
   logAudit('WALLET_ROUTER_ERROR', {
     message,
-    userId:  req.user?._id,
-    path:    req.originalUrl,
-    stack:   process.env.NODE_ENV !== 'production' ? err.stack : undefined,
+    userId: req.user?._id,
+    path:   req.originalUrl,
+    stack:  NODE_ENV !== 'production' ? err.stack : undefined,
   });
 
-  // Persist error to SystemLog (non-blocking)
   await persistLog({
     level:    'error',
     category: 'system',
     message:  `Wallet router error: ${message}`,
     actor:    { userId: req.user?._id, ip: req.ip },
     request:  { method: req.method, path: req.originalUrl, statusCode: status },
-    metadata: {
-      stack: process.env.NODE_ENV !== 'production' ? err.stack : undefined,
-    },
+    metadata: { stack: NODE_ENV !== 'production' ? err.stack : undefined },
   }).catch(() => {});
 
   res.status(status).json({
     success: false,
-    message: status === 500 ? 'A system error occurred. Please try again.' : message,
+    message: status === 500 ? 'A system error occurred. Please try again later.' : message,
   });
 });
 

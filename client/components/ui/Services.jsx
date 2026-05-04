@@ -257,14 +257,14 @@ const ServiceCard = memo(({ service }) => {
         </div>
 
         {/* Content */}
-        <h3
+        <h1
           id={`service-title-${service.id}`}
-          className="text-2xl font-bold mb-4 group-hover:translate-x-1 transition-transform duration-300 font-montserrat text-base-content"
+          className="text-2xl font-black   mb-4 group-hover:translate-x-1 transition-transform duration-300 font-montserrat text-base-content"
         >
           {service.title}
-        </h3>
+        </h1>
 
-        <p className="text-base-content/60 leading-relaxed mb-8 font-poppins">
+        <p className="text-base-content/60 leading-relaxed text-sm mb-8 font-poppins">
           {service.description}
         </p>
 
@@ -280,7 +280,7 @@ const ServiceCard = memo(({ service }) => {
                 className={`shrink-0 opacity-70 group-hover/item:opacity-100 transition-opacity ${service.styleMap.text}`}
                 aria-hidden="true"
               />
-              <span className="text-sm font-medium text-base-content/70 group-hover/item:text-base-content transition-colors font-poppins">
+              <span className="text-xs font-medium text-base-content/70 group-hover/item:text-base-content transition-colors font-poppins">
                 {feature}
               </span>
             </li>

@@ -308,16 +308,16 @@ const DoctorCard = memo(function DoctorCard({ doctor }) {
         >
           View Profile <ArrowRight size={11} />
         </Link>
-        <Link href={`/book-appointment?doctor=${_id}`}>
-          <motion.button
-            whileHover={{ scale: 1.04 }}
-            whileTap={{ scale: 0.96 }}
-            className="px-3.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-white"
-            style={{ background: THEME.gradient }}
-          >
-            Book Now
-          </motion.button>
-        </Link>
+      <Link href={`/book-appointment?doctor=${_id}&type=doctor_consultation&name=${encodeURIComponent(displayName)}&spec=${encodeURIComponent(specialization || '')}`}>
+  <motion.button
+    whileHover={{ scale: 1.04 }}
+    whileTap={{ scale: 0.96 }}
+    className="px-3.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-white"
+    style={{ background: THEME.gradient }}
+  >
+    Book Now
+  </motion.button>
+</Link>
       </div>
     </motion.div>
   );

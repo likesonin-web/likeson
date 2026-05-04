@@ -12,6 +12,8 @@
  *  §E  Transport Partner — service zones & pricing
  *  §G  Transport Partner — dashboard stats & activity logs
  *  §H  Driver — own profile, KYC, shift, location, status, rewards, bank, logs
+ *        + photo, emergency, notifs, performance, coins, certs, kyc-doc,
+ *          kyc-licence, medical-fitness, compliance, onboarding
  *  §I  Admin — partner management (list, create, update, status, kyc, notes, delete)
  *  §J  Admin — vehicle verification
  *  §K  Admin — driver management (platform-wide)
@@ -632,12 +634,181 @@ export const updateDriverMe = createAsyncThunk(
   }
 );
 
+/** PATCH /api/transport/driver/me/photo */
+export const updateDriverPhoto = createAsyncThunk(
+  'transportPartner/updateDriverPhoto',
+  async ({ photoUrl }, { rejectWithValue }) => {
+    try {
+      return unwrap(await API.patch('/transport/driver/me/photo', { photoUrl }));
+    } catch (err) {
+      return rejectWith(err, rejectWithValue);
+    }
+  }
+);
+
+/** DELETE /api/transport/driver/me/photo */
+export const removeDriverPhoto = createAsyncThunk(
+  'transportPartner/removeDriverPhoto',
+  async (_, { rejectWithValue }) => {
+    try {
+      return unwrap(await API.delete('/transport/driver/me/photo'));
+    } catch (err) {
+      return rejectWith(err, rejectWithValue);
+    }
+  }
+);
+
+/** PATCH /api/transport/driver/me/emergency */
+export const updateDriverEmergencyContact = createAsyncThunk(
+  'transportPartner/updateDriverEmergencyContact',
+  async (data, { rejectWithValue }) => {
+    try {
+      return unwrap(await API.patch('/transport/driver/me/emergency', data));
+    } catch (err) {
+      return rejectWith(err, rejectWithValue);
+    }
+  }
+);
+
+/** PATCH /api/transport/driver/me/notifs */
+export const updateDriverNotifPrefs = createAsyncThunk(
+  'transportPartner/updateDriverNotifPrefs',
+  async (data, { rejectWithValue }) => {
+    try {
+      return unwrap(await API.patch('/transport/driver/me/notifs', data));
+    } catch (err) {
+      return rejectWith(err, rejectWithValue);
+    }
+  }
+);
+
+/** GET /api/transport/driver/me/performance */
+export const fetchDriverOwnPerformance = createAsyncThunk(
+  'transportPartner/fetchDriverOwnPerformance',
+  async (_, { rejectWithValue }) => {
+    try {
+      return unwrap(await API.get('/transport/driver/me/performance'));
+    } catch (err) {
+      return rejectWith(err, rejectWithValue);
+    }
+  }
+);
+
+/** GET /api/transport/driver/me/coins */
+export const fetchDriverCoinHistory = createAsyncThunk(
+  'transportPartner/fetchDriverCoinHistory',
+  async (params = {}, { rejectWithValue }) => {
+    try {
+      return unwrap(await API.get('/transport/driver/me/coins', { params }));
+    } catch (err) {
+      return rejectWith(err, rejectWithValue);
+    }
+  }
+);
+
+/** POST /api/transport/driver/me/certs */
+export const addDriverCertificate = createAsyncThunk(
+  'transportPartner/addDriverCertificate',
+  async (data, { rejectWithValue }) => {
+    try {
+      return unwrap(await API.post('/transport/driver/me/certs', data));
+    } catch (err) {
+      return rejectWith(err, rejectWithValue);
+    }
+  }
+);
+
+/** DELETE /api/transport/driver/me/certs/:certId */
+export const removeDriverCertificate = createAsyncThunk(
+  'transportPartner/removeDriverCertificate',
+  async (certId, { rejectWithValue }) => {
+    try {
+      const res = unwrap(await API.delete(`/transport/driver/me/certs/${certId}`));
+      return { ...res, certId };
+    } catch (err) {
+      return rejectWith(err, rejectWithValue);
+    }
+  }
+);
+
 /** PUT /api/transport/driver/kyc */
 export const submitDriverKyc = createAsyncThunk(
   'transportPartner/submitDriverKyc',
   async (data, { rejectWithValue }) => {
     try {
       return unwrap(await API.put('/transport/driver/kyc', data));
+    } catch (err) {
+      return rejectWith(err, rejectWithValue);
+    }
+  }
+);
+
+/** PATCH /api/transport/driver/kyc/document */
+export const reuploadDriverKycDocument = createAsyncThunk(
+  'transportPartner/reuploadDriverKycDocument',
+  async (data, { rejectWithValue }) => {
+    try {
+      return unwrap(await API.patch('/transport/driver/kyc/document', data));
+    } catch (err) {
+      return rejectWith(err, rejectWithValue);
+    }
+  }
+);
+
+/** PATCH /api/transport/driver/kyc/licence-numbers */
+export const updateDriverLicenceNumbers = createAsyncThunk(
+  'transportPartner/updateDriverLicenceNumbers',
+  async (data, { rejectWithValue }) => {
+    try {
+      return unwrap(await API.patch('/transport/driver/kyc/licence-numbers', data));
+    } catch (err) {
+      return rejectWith(err, rejectWithValue);
+    }
+  }
+);
+
+/** PUT /api/transport/driver/medical-fitness */
+export const updateDriverMedicalFitness = createAsyncThunk(
+  'transportPartner/updateDriverMedicalFitness',
+  async (data, { rejectWithValue }) => {
+    try {
+      return unwrap(await API.put('/transport/driver/medical-fitness', data));
+    } catch (err) {
+      return rejectWith(err, rejectWithValue);
+    }
+  }
+);
+
+/** GET /api/transport/driver/me/compliance */
+export const fetchDriverCompliance = createAsyncThunk(
+  'transportPartner/fetchDriverCompliance',
+  async (_, { rejectWithValue }) => {
+    try {
+      return unwrap(await API.get('/transport/driver/me/compliance'));
+    } catch (err) {
+      return rejectWith(err, rejectWithValue);
+    }
+  }
+);
+
+/** PATCH /api/transport/driver/onboarding */
+export const updateDriverOnboarding = createAsyncThunk(
+  'transportPartner/updateDriverOnboarding',
+  async (data, { rejectWithValue }) => {
+    try {
+      return unwrap(await API.patch('/transport/driver/onboarding', data));
+    } catch (err) {
+      return rejectWith(err, rejectWithValue);
+    }
+  }
+);
+
+/** POST /api/transport/driver/onboarding/complete */
+export const completeDriverOnboarding = createAsyncThunk(
+  'transportPartner/completeDriverOnboarding',
+  async (_, { rejectWithValue }) => {
+    try {
+      return unwrap(await API.post('/transport/driver/onboarding/complete'));
     } catch (err) {
       return rejectWith(err, rejectWithValue);
     }
@@ -869,8 +1040,7 @@ export const adminVerifyVehicle = createAsyncThunk(
 
 /**
  * GET /api/transport/admin/drivers/available
- * NOTE: Must call this thunk BEFORE adminFetchDriverById in component routing
- * to avoid the Express route ordering issue (handled server-side via [FIX-3]).
+ * NOTE: Must call before adminFetchDriverById to avoid Express route ordering collision.
  */
 export const adminFetchAvailableDrivers = createAsyncThunk(
   'transportPartner/adminFetchAvailableDrivers',
@@ -1111,6 +1281,9 @@ const initialState = {
   driverRewards: null,
   driverOwnLogs: [],
   driverOwnLogsTotal: 0,
+  driverOwnPerformance: null,
+  driverCoinHistory: null,
+  driverCompliance: null,
 
   // ── §I  Admin: partners ─────────────────────────────────────────────────────
   adminPartners: [],
@@ -1274,13 +1447,11 @@ const transportPartnerSlice = createSlice({
     });
 
     addCases(builder, addTPVehicle, (state, { payload }) => {
-      // Server returns the newly-created subdoc as payload.data
       if (payload.data) state.vehicles.push(payload.data);
       toast.success(payload.message ?? 'Vehicle added');
     });
 
     addCases(builder, updateTPVehicle, (state, { payload }) => {
-      // Server returns vehicles.$ (the matched subdoc) as payload.data
       if (payload.data?._id) {
         const idx = state.vehicles.findIndex((v) => v._id === payload.data._id);
         if (idx !== -1) state.vehicles[idx] = payload.data;
@@ -1338,7 +1509,6 @@ const transportPartnerSlice = createSlice({
     });
 
     addCases(builder, toggleTPDriverActive, (state, { payload }) => {
-      // Server returns { isActive: bool, driverId }
       if (payload.driverId !== undefined) {
         const driver = state.drivers.find((d) => d._id === payload.driverId);
         if (driver) driver.isActive = payload.isActive;
@@ -1401,7 +1571,6 @@ const transportPartnerSlice = createSlice({
     });
 
     addCases(builder, addTPBankAccount, (state, { payload }) => {
-      // Server returns full bankAccounts array
       if (state.bankDetails) state.bankDetails.bankAccounts = payload.data;
       toast.success(payload.message ?? 'Bank account added');
     });
@@ -1421,7 +1590,6 @@ const transportPartnerSlice = createSlice({
     });
 
     addCases(builder, addTPUpiHandle, (state, { payload }) => {
-      // Server returns full upiHandles array
       if (state.bankDetails) state.bankDetails.upiHandles = payload.data;
       toast.success('UPI handle added');
     });
@@ -1450,14 +1618,11 @@ const transportPartnerSlice = createSlice({
     });
 
     addCases(builder, addTPZone, (state, { payload }) => {
-      // Server returns full serviceZones array after $push
       state.zones = payload.data;
       toast.success('Service zone added');
     });
 
     addCases(builder, updateTPZone, (state, { payload }) => {
-      // Server returns serviceZones.$ (single matched zone) as payload.data,
-      // plus we forward zoneId from the thunk arg so we can splice correctly.
       if (payload.data && payload.zoneId) {
         const idx = state.zones.findIndex((z) => z._id === payload.zoneId);
         if (idx !== -1) state.zones[idx] = payload.data;
@@ -1475,7 +1640,6 @@ const transportPartnerSlice = createSlice({
     });
 
     addCases(builder, updateTPPricing, (state, { payload }) => {
-      // Server returns updated pricing subdoc
       if (state.pricing) state.pricing.pricing = payload.data;
       else state.pricing = { pricing: payload.data };
       toast.success('Pricing updated');
@@ -1503,11 +1667,89 @@ const transportPartnerSlice = createSlice({
       toast.success(payload.message ?? 'Profile updated');
     });
 
+    addCases(builder, updateDriverPhoto, (state, { payload }) => {
+      if (state.driverMe) state.driverMe.photoUrl = payload.data?.photoUrl;
+      toast.success(payload.message ?? 'Profile photo updated');
+    });
+
+    addCases(builder, removeDriverPhoto, (state, { payload }) => {
+      if (state.driverMe) state.driverMe.photoUrl = null;
+      toast.success(payload.message ?? 'Profile photo removed');
+    });
+
+    addCases(builder, updateDriverEmergencyContact, (state, { payload }) => {
+      if (state.driverMe) state.driverMe.emergencyContact = payload.data;
+      toast.success(payload.message ?? 'Emergency contact updated');
+    });
+
+    addCases(builder, updateDriverNotifPrefs, (state, { payload }) => {
+      if (state.driverMe) state.driverMe.notifPrefs = payload.data;
+      toast.success(payload.message ?? 'Notification preferences updated');
+    });
+
+    addCases(builder, fetchDriverOwnPerformance, (state, { payload }) => {
+      state.driverOwnPerformance = payload.data;
+    });
+
+    addCases(builder, fetchDriverCoinHistory, (state, { payload }) => {
+      state.driverCoinHistory = payload.data;
+    });
+
+    addCases(builder, addDriverCertificate, (state, { payload }) => {
+      if (state.driverMe) {
+        if (!state.driverMe.trainingCertificates) state.driverMe.trainingCertificates = [];
+        state.driverMe.trainingCertificates.push(payload.data);
+      }
+      toast.success(payload.message ?? 'Certificate added');
+    });
+
+    addCases(builder, removeDriverCertificate, (state, { payload }) => {
+      if (state.driverMe?.trainingCertificates) {
+        state.driverMe.trainingCertificates = state.driverMe.trainingCertificates.filter(
+          (c) => c._id !== payload.certId
+        );
+      }
+      toast.success(payload.message ?? 'Certificate removed');
+    });
+
     addCases(builder, submitDriverKyc, (state, { payload }) => {
       if (state.driverMe?.kyc) {
         state.driverMe.kyc.verificationStatus = payload.data?.verificationStatus;
       }
       toast.success(payload.message ?? 'KYC submitted for review');
+    });
+
+    addCases(builder, reuploadDriverKycDocument, (state, { payload }) => {
+      if (state.driverMe?.kyc) {
+        Object.assign(state.driverMe.kyc, payload.data);
+      }
+      toast.success(payload.message ?? 'Document submitted for re-review');
+    });
+
+    addCases(builder, updateDriverLicenceNumbers, (state, { payload }) => {
+      if (state.driverMe?.kyc) {
+        Object.assign(state.driverMe.kyc, payload.data);
+      }
+      toast.success(payload.message ?? 'Licence details updated');
+    });
+
+    addCases(builder, updateDriverMedicalFitness, (state, { payload }) => {
+      if (state.driverMe) state.driverMe.medicalFitness = payload.data;
+      toast.success(payload.message ?? 'Medical fitness updated');
+    });
+
+    addCases(builder, fetchDriverCompliance, (state, { payload }) => {
+      state.driverCompliance = payload.data;
+    });
+
+    addCases(builder, updateDriverOnboarding, (state, { payload }) => {
+      if (state.driverMe) state.driverMe.onboarding = payload.data;
+      toast.success('Onboarding progress saved');
+    });
+
+    addCases(builder, completeDriverOnboarding, (state, { payload }) => {
+      if (state.driverMe) state.driverMe.onboarding = payload.data;
+      toast.success(payload.message ?? 'Onboarding complete');
     });
 
     addCases(builder, updateDriverShift, (state, { payload }) => {
@@ -1516,7 +1758,6 @@ const transportPartnerSlice = createSlice({
     });
 
     addCases(builder, updateDriverStatus, (state, { payload }) => {
-      // Server returns { status }
       if (state.driverMe) state.driverMe.status = payload.status;
       toast.success(`Status: ${payload.status}`);
     });
@@ -1624,7 +1865,6 @@ const transportPartnerSlice = createSlice({
     });
 
     addCases(builder, adminVerifyVehicle, (state, { payload }) => {
-      // Remove vehicle from pending list when verified or rejected
       if (payload.vehicleId) {
         state.pendingVehicles = state.pendingVehicles.filter(
           (item) => item.vehicle?._id !== payload.vehicleId
@@ -1651,7 +1891,6 @@ const transportPartnerSlice = createSlice({
 
     addCases(builder, adminVerifyDriverKyc, (state, { payload }) => {
       if (payload.data?._id) {
-        // Merge KYC + isVerified / isActive changes into detail view
         if (state.adminDriverDetail?._id === payload.data._id) {
           Object.assign(state.adminDriverDetail, payload.data);
         }
@@ -1726,7 +1965,6 @@ const transportPartnerSlice = createSlice({
     });
 
     addCases(builder, adminProcessPartnerSettlement, (state, { payload }) => {
-      // Optimistically adjust pending/settled balances in partner detail
       if (payload.partnerId && state.adminPartnerDetail?._id === payload.partnerId) {
         const bank = state.adminPartnerDetail.bankDetails;
         if (bank) {
@@ -1759,8 +1997,8 @@ const transportPartnerSlice = createSlice({
 
 export const {
   clearTPError,
-  resetTPState,
-  setDriverActiveOptimistic
+  resetTPState, 
+  setDriverActiveOptimistic,
 } = transportPartnerSlice.actions;
 
 export default transportPartnerSlice.reducer;

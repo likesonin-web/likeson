@@ -30,6 +30,11 @@ import pharmacyStoreReducer from "./slices/pharmacy/pharmacyStoreSlice";
  import careAssistantReducer from './slices/careAssistantSlice';
 import labReducer from './slices/labSlice';
 import hospitalManagerReducer from './slices/hospitalManagerSlice';
+import driverReducer from './slices/driverSlice';
+import searchReducer from './slices/searchSlice';
+import bookingReducer from './slices/bookingSlice';
+import operationsReducer from './slices/operationsSlice';
+import availabilityReducer from './slices/availabilitySlice';
 export const store = configureStore({
   reducer: {
     user: userReducer,
@@ -59,11 +64,16 @@ export const store = configureStore({
  platformPricing: platformPricingReducer,
     customerProfile: customerProfileReducer,
 soloDriver: soloDriverReducer,
+driver: driverReducer,
     //  pharmacy slices
     pharmacyStore: pharmacyStoreReducer,
     careAssistant: careAssistantReducer,
     hospitalManager: hospitalManagerReducer,
     labs: labReducer,
+    search: searchReducer,
+    booking: bookingReducer,
+    operations: operationsReducer,
+    availability:availabilityReducer,
   },
   devTools: process.env.NODE_ENV !== "production",
 });

@@ -102,12 +102,17 @@ function InputNote({ children, variant = 'info' }) {
 // FileUploader
 // ─────────────────────────────────────────────────────────────────────────────
 
-function FileUploader({ label, value, onChange, folder, accept = 'image/*,.pdf', hint, note }) {
+function FileUploader({ label, value, onChange, folder, accept = 'image/*,.pdf', hint, note, required }) {
   const dispatch    = useDispatch();
   const isUploading = useSelector((s) => s.upload?.isUploading ?? false);
   const inputRef    = useRef(null);
   const [preview,  setPreview]  = useState(null);
   const [dragOver, setDragOver] = useState(false);
+
+  // Reset preview when value cleared externally
+  useEffect(() => {
+    if (!value) setPreview(null);
+  }, [value]);
 
   const handleFile = useCallback(
     async (file) => {
@@ -142,7 +147,10 @@ function FileUploader({ label, value, onChange, folder, accept = 'image/*,.pdf',
 
   return (
     <div className="space-y-1.5">
-      <label className="text-sm font-semibold text-base-content/80">{label}</label>
+      <label className="text-sm font-semibold text-base-content/80">
+        {label}
+        {required && <span className="text-error ml-0.5">*</span>}
+      </label>
       <div
         onClick={() => !value && inputRef.current?.click()}
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -270,10 +278,13 @@ function Section({ icon: Icon, title, subtitle, color = 'primary', children }) {
 // Field wrapper
 // ─────────────────────────────────────────────────────────────────────────────
 
-function Field({ label, children, note, noteVariant = 'info' }) {
+function Field({ label, children, note, noteVariant = 'info', required }) {
   return (
     <div className="space-y-1.5">
-      <label className="text-sm font-semibold text-base-content/70">{label}</label>
+      <label className="text-sm font-semibold text-base-content/70">
+        {label}
+        {required && <span className="text-error ml-0.5">*</span>}
+      </label>
       {children}
       {note && <InputNote variant={noteVariant}>{note}</InputNote>}
     </div>
@@ -309,12 +320,19 @@ function SubmitButton({ loading, label }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TAB: KYC STATUS
+// GET /kyc response shape:
+//   { kyc: soloKycSchema, medicalFitness, profileCompletionPercent,
+//     isOnboardingComplete, partnershipStatus }
 // ─────────────────────────────────────────────────────────────────────────────
 
 function KycStatusTab({ kyc }) {
-  // kyc state shape from GET /kyc: { kyc: soloKycSchema, medicalFitness, profileCompletionPercent, onboarding, partnershipStatus }
+  // FIX: router returns flat { kyc, medicalFitness, profileCompletionPercent,
+  //      isOnboardingComplete, partnershipStatus } — NOT nested kyc.kyc
   const kycData = kyc?.kyc || {};
   const medical = kyc?.medicalFitness || {};
+
+  // FIX: aadhaar display — router returns maskedAadhaar (built from aadhaarLast4)
+  const aadhaarDisplay = kycData.maskedAadhaar || (kycData.aadhaarLast4 ? `XXXX XXXX ${kycData.aadhaarLast4}` : 'Not submitted yet');
 
   const docs = [
     {
@@ -334,24 +352,25 @@ function KycStatusTab({ kyc }) {
     {
       label:  'Aadhaar Card',
       icon:   ScanLine,
+      // FIX: use aadhaarVerified flag from schema, fallback to presence of front URL
       status: kycData.aadhaarVerified
         ? 'verified'
         : kycData.aadhaarFrontUrl
           ? 'pending'
           : 'not-submitted',
-      detail: kycData.aadhaarLast4
-        ? `XXXX XXXX ${kycData.aadhaarLast4}`
-        : kycData.maskedAadhaar || 'Not submitted yet',
+      detail: aadhaarDisplay,
     },
     {
       label:  'PAN Card',
       icon:   FileText,
+      // FIX: use panVerified flag from schema
       status: kycData.panVerified
         ? 'verified'
         : kycData.panCardUrl
           ? 'pending'
           : 'not-submitted',
-      detail: kycData.panNumber || 'Not submitted yet',
+      // PAN number is select:false on schema — won't be in response, show redacted placeholder
+      detail: kycData.panCardUrl ? 'Document uploaded' : 'Not submitted yet',
     },
     {
       label:  'PSV Badge',
@@ -385,6 +404,11 @@ function KycStatusTab({ kyc }) {
 
   const completedCount = docs.filter((d) => d.status === 'verified').length;
   const progress       = Math.round((completedCount / docs.length) * 100);
+
+  // FIX: partnershipStatus is flat on the kyc response object, not nested
+  const partnershipStatus  = kyc?.partnershipStatus;
+  // FIX: isOnboardingComplete is flat on the kyc response object
+  const isOnboardingComplete = kyc?.isOnboardingComplete;
 
   return (
     <div className="space-y-6">
@@ -441,13 +465,16 @@ function KycStatusTab({ kyc }) {
         </InputNote>
       </div>
 
-      {/* Partnership status callout */}
-      {kyc?.partnershipStatus && (
+      {/* FIX: use flat partnershipStatus and isOnboardingComplete from response */}
+      {partnershipStatus && (
         <div className="rounded-xl bg-primary/5 border border-primary/20 p-3 flex gap-2 items-center">
           <BadgeCheck size={15} className="text-primary shrink-0" />
           <p className="text-xs text-base-content/60">
-            Partnership status: <span className="font-bold capitalize text-primary">{kyc.partnershipStatus}</span>
-            {kyc.onboarding?.isComplete ? ' · Onboarding complete' : ' · Onboarding pending'}
+            Partnership status:{' '}
+            <span className="font-bold capitalize text-primary">{partnershipStatus}</span>
+            {isOnboardingComplete
+              ? ' · Onboarding complete'
+              : ' · Onboarding pending'}
           </p>
         </div>
       )}
@@ -509,6 +536,7 @@ function SubmitKycTab({ kyc, onSuccess }) {
   const isSubmitting = useSelector(selectLoading('submitKyc'));
 
   // Pre-fill from existing kyc data (route returns masked data)
+  // FIX: kyc data is at kyc.kyc (the embedded soloKycSchema sub-doc)
   const kd = kyc?.kyc || {};
 
   const [form, setForm] = useState({
@@ -521,7 +549,7 @@ function SubmitKycTab({ kyc, onSuccess }) {
       : '',
     drivingLicenceDocUrl: kd.drivingLicenceDocUrl  || '',
     licenceClass:         kd.licenceClass?.join(', ') || '',
-    panNumber:            '',
+    panNumber:            '',   // PAN is select:false — never pre-filled from GET
     panCardUrl:           kd.panCardUrl || '',
   });
 
@@ -530,13 +558,29 @@ function SubmitKycTab({ kyc, onSuccess }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    // Client-side: require DL doc
+    if (!form.drivingLicenceDocUrl) {
+      alert('Please upload your Driving Licence document.');
+      return;
+    }
+
     const payload = {
       ...form,
-      licenceClass: form.licenceClass
+      // FIX: strip empty strings so server doesn't get blank aadhaar/pan
+      aadhaarNumber: form.aadhaarNumber.trim() || undefined,
+      panNumber:     form.panNumber.trim()     || undefined,
+      licenceClass:  form.licenceClass
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean),
     };
+
+    // Remove undefined keys (avoid sending empty strings to server)
+    Object.keys(payload).forEach((k) => {
+      if (payload[k] === undefined || payload[k] === '') delete payload[k];
+    });
+
     const result = await dispatch(submitKyc(payload));
     if (submitKyc.fulfilled.match(result)) onSuccess?.();
   };
@@ -561,7 +605,8 @@ function SubmitKycTab({ kyc, onSuccess }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
 
           <Field
-            label="DL Number *"
+            label="DL Number"
+            required
             note="Enter exactly as printed on your licence — e.g. AP15 20210012345. No spaces or hyphens."
           >
             <input
@@ -576,7 +621,8 @@ function SubmitKycTab({ kyc, onSuccess }) {
           </Field>
 
           <Field
-            label="DL Expiry Date *"
+            label="DL Expiry Date"
+            required
             note="Licence must be valid for at least 90 days from today to qualify for activation."
             noteVariant="warning"
           >
@@ -607,7 +653,8 @@ function SubmitKycTab({ kyc, onSuccess }) {
         </div>
 
         <FileUploader
-          label="Driving Licence Document *"
+          label="Driving Licence Document"
+          required
           value={form.drivingLicenceDocUrl}
           onChange={set('drivingLicenceDocUrl')}
           folder="kyc/dl"
@@ -632,8 +679,13 @@ function SubmitKycTab({ kyc, onSuccess }) {
               maxLength={12}
               inputMode="numeric"
               pattern="[0-9]{12}"
+              title="Aadhaar must be exactly 12 digits"
               value={form.aadhaarNumber}
-              onChange={setInput('aadhaarNumber')}
+              onChange={(e) => {
+                // FIX: strip non-digits on input
+                const cleaned = e.target.value.replace(/\D/g, '').slice(0, 12);
+                setForm((p) => ({ ...p, aadhaarNumber: cleaned }));
+              }}
               disabled={isVerified}
             />
           </Field>
@@ -642,7 +694,8 @@ function SubmitKycTab({ kyc, onSuccess }) {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
           <FileUploader
-            label="Aadhaar Front *"
+            label="Aadhaar Front"
+            required
             value={form.aadhaarFrontUrl}
             onChange={set('aadhaarFrontUrl')}
             folder="kyc/aadhaar"
@@ -650,7 +703,8 @@ function SubmitKycTab({ kyc, onSuccess }) {
             note="Your name, photo and date of birth must be clearly visible. Masked Aadhaar (last 4 digits) accepted."
           />
           <FileUploader
-            label="Aadhaar Back *"
+            label="Aadhaar Back"
+            required
             value={form.aadhaarBackUrl}
             onChange={set('aadhaarBackUrl')}
             folder="kyc/aadhaar"
@@ -675,7 +729,11 @@ function SubmitKycTab({ kyc, onSuccess }) {
               pattern="[A-Z]{5}[0-9]{4}[A-Z]{1}"
               title="Valid PAN format: 5 letters, 4 digits, 1 letter (e.g. ABCDE1234F)"
               value={form.panNumber}
-              onChange={(e) => setForm((p) => ({ ...p, panNumber: e.target.value.toUpperCase() }))}
+              onChange={(e) => setForm((p) => ({
+                ...p,
+                // FIX: uppercase and strip non-alphanumeric
+                panNumber: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10),
+              }))}
               disabled={isVerified}
             />
           </Field>
@@ -712,13 +770,15 @@ function SubmitKycTab({ kyc, onSuccess }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TAB: MEDICAL FITNESS
-// POST /kyc/medical — fields: certificateNumber, issuedBy, issuedAt, expiryDate, documentUrl, bloodGroup
+// POST /kyc/medical — fields: certificateNumber, issuedBy, issuedAt, expiryDate,
+//                             documentUrl, bloodGroup
 // ─────────────────────────────────────────────────────────────────────────────
 
 function MedicalTab({ kyc, onSuccess }) {
   const dispatch     = useDispatch();
-  // selectLoading('submitMedical') maps to loading.submitMedical in slice
+  // FIX: slice loading key is 'submitMedical' (matches extraReducers in slice)
   const isSubmitting = useSelector(selectLoading('submitMedical'));
+  // FIX: medicalFitness is flat on the kyc response object
   const med          = kyc?.medicalFitness || {};
 
   const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'Unknown'];
@@ -737,7 +797,22 @@ function MedicalTab({ kyc, onSuccess }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    // submitMedicalFitness dispatches POST /kyc/medical
+
+    // FIX: client-side validate expiryDate not in past before dispatch
+    if (!form.expiryDate) {
+      alert('Expiry date is required.');
+      return;
+    }
+    if (new Date(form.expiryDate) <= new Date()) {
+      alert('Medical fitness certificate must not be expired.');
+      return;
+    }
+
+    if (!form.documentUrl) {
+      alert('Please upload your medical fitness certificate.');
+      return;
+    }
+
     const result = await dispatch(submitMedicalFitness(form));
     if (submitMedicalFitness.fulfilled.match(result)) onSuccess?.();
   };
@@ -789,7 +864,8 @@ function MedicalTab({ kyc, onSuccess }) {
           </Field>
 
           <Field
-            label="Expiry Date *"
+            label="Expiry Date"
+            required
             note="Medical fitness certificates are typically valid for 1 year. Expired certificates will be rejected."
             noteVariant="warning"
           >
@@ -799,6 +875,8 @@ function MedicalTab({ kyc, onSuccess }) {
               value={form.expiryDate}
               onChange={setInput('expiryDate')}
               required
+              // FIX: min = today so browser native date picker prevents past dates
+              min={new Date().toISOString().split('T')[0]}
             />
           </Field>
 
@@ -830,7 +908,8 @@ function MedicalTab({ kyc, onSuccess }) {
         </div>
 
         <FileUploader
-          label="Medical Fitness Certificate Document *"
+          label="Medical Fitness Certificate Document"
+          required
           value={form.documentUrl}
           onChange={set('documentUrl')}
           folder="kyc/medical"
@@ -865,8 +944,9 @@ function MedicalTab({ kyc, onSuccess }) {
 
 function PsvTab({ kyc, onSuccess }) {
   const dispatch     = useDispatch();
-  // selectLoading('submitPsv') maps to loading.submitPsv in slice
+  // FIX: slice loading key is 'submitPsv' (matches extraReducers in slice)
   const isSubmitting = useSelector(selectLoading('submitPsv'));
+  // FIX: PSV badge fields are inside kyc.kyc (soloKycSchema sub-doc)
   const kd           = kyc?.kyc || {};
 
   const [form, setForm] = useState({
@@ -880,7 +960,22 @@ function PsvTab({ kyc, onSuccess }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    // submitPsvBadge dispatches POST /kyc/psv
+
+    // FIX: client-side validate expiry not in past before dispatch
+    if (!form.psvBadgeExpiry) {
+      alert('PSV badge expiry date is required.');
+      return;
+    }
+    if (new Date(form.psvBadgeExpiry) <= new Date()) {
+      alert('PSV badge must not be expired.');
+      return;
+    }
+
+    if (!form.psvBadgeDocUrl) {
+      alert('Please upload your PSV badge document.');
+      return;
+    }
+
     const result = await dispatch(submitPsvBadge(form));
     if (submitPsvBadge.fulfilled.match(result)) onSuccess?.();
   };
@@ -896,20 +991,26 @@ function PsvTab({ kyc, onSuccess }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
 
           <Field
-            label="PSV Badge Number *"
+            label="PSV Badge Number"
+            required
             note="Unique badge ID issued by your Regional Transport Office (RTO) — e.g. PSV/AP/2024/001. Enter exactly as printed."
           >
             <input
               className="input-field w-full font-mono uppercase tracking-widest"
               placeholder="PSV/AP/2024/001"
               value={form.psvBadgeNumber}
-              onChange={setInput('psvBadgeNumber')}
+              onChange={(e) => setForm((p) => ({
+                ...p,
+                // FIX: uppercase on input to match server toUpperCase().trim()
+                psvBadgeNumber: e.target.value.toUpperCase(),
+              }))}
               required
             />
           </Field>
 
           <Field
-            label="Expiry Date *"
+            label="Expiry Date"
+            required
             note="PSV badges are typically valid for 3 years. A badge expiring within 30 days may delay account activation."
             noteVariant="warning"
           >
@@ -919,13 +1020,16 @@ function PsvTab({ kyc, onSuccess }) {
               value={form.psvBadgeExpiry}
               onChange={setInput('psvBadgeExpiry')}
               required
+              // FIX: min = today so browser native date picker prevents past dates
+              min={new Date().toISOString().split('T')[0]}
             />
           </Field>
 
         </div>
 
         <FileUploader
-          label="PSV Badge Document *"
+          label="PSV Badge Document"
+          required
           value={form.psvBadgeDocUrl}
           onChange={set('psvBadgeDocUrl')}
           folder="kyc/psv"
@@ -997,8 +1101,8 @@ export default function KycVerificationPage({ defaultTab = 'status', onTabChange
   const router    = useRouter();
 
   // selectKyc returns state.soloDriver.kyc
-  // which is populated by fetchKycStatus → GET /kyc
-  // shape: { kyc: soloKycSchema, medicalFitness, profileCompletionPercent, onboarding, partnershipStatus }
+  // Shape from GET /kyc: { kyc: soloKycSchema, medicalFitness,
+  //   profileCompletionPercent, isOnboardingComplete, partnershipStatus }
   const kyc       = useSelector(selectKyc);
 
   // selectLoading('kyc') returns state.soloDriver.loading.kyc
@@ -1023,6 +1127,7 @@ export default function KycVerificationPage({ defaultTab = 'status', onTabChange
     setTimeout(() => setSuccessMsg(null), 4000);
   };
 
+  // FIX: kycStatus is nested under kyc.kyc.verificationStatus (the embedded soloKycSchema)
   const kycStatus  = kyc?.kyc?.verificationStatus || 'not-submitted';
   const sc         = STATUS_CONFIG[kycStatus] || STATUS_CONFIG['not-submitted'];
   const StatusIcon = sc.icon;

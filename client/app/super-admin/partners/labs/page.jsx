@@ -256,6 +256,11 @@ const TestFormModal = ({ open, onClose, onSave, initial, actionLoading }) => {
         <div style={{ marginBottom:11 }}><label style={lbl}>Partner (₹)</label><input type="number" value={form.partnerPrice} onChange={e=>set('partnerPrice',e.target.value)} placeholder="260" style={inp}/></div>
         <div style={{ marginBottom:11 }}><label style={lbl}>TAT (hrs)</label><input type="number" value={form.turnaroundHours} onChange={e=>set('turnaroundHours',e.target.value)} placeholder="6" style={inp}/></div>
       </div>
+      <div style={{ marginBottom:11 }}>
+  <label style={lbl}>Discounted (₹)</label>
+  <input type="number" value={form.discountedPrice??''} 
+    onChange={e=>set('discountedPrice',e.target.value)} placeholder="310" style={inp}/>
+</div>
       <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12 }}>
         <div style={{ marginBottom:11 }}><label style={lbl}>Home Collection</label><select value={form.homeCollectionAvailable} onChange={e=>set('homeCollectionAvailable',e.target.value)} style={inp}><option value="true">Available</option><option value="false">Not Available</option></select></div>
         <div style={{ marginBottom:11 }}><label style={lbl}>Report Template</label><input type="file" accept=".pdf,image/*" onChange={e=>set('reportTemplate',e.target.files[0])} style={{ fontSize:12,color:'var(--base-content,#374151)' }}/></div>
@@ -464,6 +469,11 @@ const OverviewTab = ({ lab, onEdit }) => {
         <StatCard label="Packages"      value={lab.labPackages?.filter(p=>p.isActive).length??0}  icon={Package}     color="#4f46e5"/>
         <StatCard label="Branches"      value={lab.branches?.filter(b=>b.isActive).length??0}     icon={Building2}   color="#10b981"/>
         <StatCard label="Commission"    value={`${lab.commissionRate??0}%`}                        icon={TrendingUp}  color="#f59e0b"/>
+     
+<StatCard 
+  label="Total Active Margin" 
+  value={`₹${lab.labTests?.filter(t=>t.isActive&&t.partnerPrice).reduce((s,t)=>s+((t.discountedPrice??t.mrpPrice)-t.partnerPrice),0)??0}`}
+  icon={TrendingUp} color="#10b981"/>
       </div>
       <Divider label="Lab Information"/>
       <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0 22px',marginBottom:14 }}>
@@ -520,6 +530,11 @@ const TestsTab = ({ lab, dispatch, actionLoading }) => {
                 </div>
               </div>
               <div style={{ textAlign:'right',flexShrink:0 }}><div style={{ fontSize:14,fontWeight:800,color:'#7c3aed' }}>₹{t.mrpPrice}</div>{t.partnerPrice&&<div style={{ fontSize:10,color:'#9ca3af' }}>Partner: ₹{t.partnerPrice}</div>}</div>
+              {(t.mrpPrice && t.partnerPrice) && (
+  <div style={{ fontSize:10, color:'#10b981', fontWeight:700 }}>
+    Margin: ₹{(t.discountedPrice ?? t.mrpPrice) - t.partnerPrice}
+  </div>
+)}
             </div>
             <div style={{ display:'flex',gap:6,marginTop:8,justifyContent:'flex-end' }}>
               <Btn label="Edit" icon={Edit3} size="sm" variant="primary" onClick={()=>{setEditTarget(t);setShowForm(true);}}/>

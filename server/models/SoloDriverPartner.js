@@ -146,7 +146,7 @@ const soloKycSchema = new Schema(
       match:  [/^\d{12}$/, 'Aadhaar must be 12 digits'],
       select: false,
     },
-    aadhaarLast4:    { type: String, maxlength: 4 },
+ 
     aadhaarFrontUrl: { type: String },
     aadhaarBackUrl:  { type: String },
     aadhaarVerified: { type: Boolean, default: false },
@@ -202,7 +202,6 @@ const soloBankSchema = new Schema(
   {
     accountHolderName: { type: String, trim: true },
     accountNumber:     { type: String, trim: true, select: false },
-    accountLast4:      { type: String, maxlength: 4 },
     ifscCode: {
       type:      String,
       uppercase: true,

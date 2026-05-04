@@ -70,6 +70,11 @@ export const TRANSPORT_PARTNER_LINKS = {
           link:  "/transport-partner/logs",            // → GET /api/transport/logs
           icons: <ScrollText size={16} />,
         },
+        {
+          title: "Work Calendar",
+          link:  "/transport-partner/calendar",         // → GET /api/transport/calendar
+          icons: <CalendarDays size={16} />,
+        },
       ],
     },
 

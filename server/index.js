@@ -46,6 +46,8 @@ import referralRouter           from "./routes/referralRoutes.js";
 import pricingRouter            from './routes/Platformpricingroutes.js'
 import soloDriverRouter           from './routes/solordriverRoutes.js'
 import careAssistantRouter           from'./routes/careassistantRoutes.js'
+import driverRouter           from './routes/driverRouter.js'
+import searchRouter           from './routes/searchRouter.js'
 // ─────────────────────────────────────────────
  
 // ─────────────────────────────────────────────
@@ -169,13 +171,19 @@ app.use("/api/referral",           referralRouter);
 app.use("/api/pricing",           pricingRouter);
 app.use("/api/solo-driver",           soloDriverRouter);
 app.use("/api/care-assistant",           careAssistantRouter);
- 
-
+app.use("/api/driver", driverRouter);
+app.use('/api/search', searchRouter);
 import labRoutes from './routes/labRoutes.js';
 app.use('/api/labs', labRoutes);
-
+import bookingRoutes from './routes/bookingRoutes.js';
+app.use('/api/bookings', bookingRoutes);
+import customerBookingRouter from './routes/customerbookingrouter.js';
+app.use('/api/bookings', customerBookingRouter);
 import hospitalManagerRouter from './routes/hospitalManagerRouter.js';
 app.use('/api/hospital-manager', hospitalManagerRouter);
+
+import availabilityRouter from './routes/availabilityRouter.js';
+app.use('/api/availability', availabilityRouter);
 /* ---------------- Logs ---------------- */
 
 app.use(morgan(NODE_ENV === "development" ? "dev" : "combined"));
@@ -208,12 +216,7 @@ app.get("/", (_req, res) => {
   });
 });
 
-/* ---------------- Routes ---------------- */
-
-app.use("/api/users", userRouter);
-/* all your remaining routes */
-
-/* ---------------- Error Handler ---------------- */
+ 
 
 app.use((err, req, res, next) => {
   console.error(err);

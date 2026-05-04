@@ -38,7 +38,7 @@ const CHART_COLORS = ["var(--chart-1)","var(--chart-2)","var(--chart-3)","var(--
 
 const emptyForm = {
   packageCode: "", packageName: "", description: "",
-  tests: [], mrpPrice: "", partnerPrice: "", validUntil: "", isActive: true,
+  tests: [], mrpPrice: "", partnerPrice: "", discountedPrice: "", validUntil: "", isActive: true,
 };
 
 // ─── Stat Card ─────────────────────────────────────────────────────────────
@@ -70,8 +70,13 @@ function PackageCard({ pkg, index, tests, onEdit, onToggle, onDelete, actionLoad
     .map(id => tests.find(t => t._id === id || t._id === id?.toString()))
     .filter(Boolean);
 
-  const savings = pkg.partnerPrice ? Number(pkg.mrpPrice) - Number(pkg.partnerPrice) : 0;
-  const savingsPct = pkg.partnerPrice ? Math.round((savings / pkg.mrpPrice) * 100) : 0;
+ // REPLACE these two lines near top of PackageCard:
+const savings = pkg.discountedPrice
+  ? Number(pkg.mrpPrice) - Number(pkg.discountedPrice)
+  : 0;
+const savingsPct = pkg.discountedPrice
+  ? Math.round((savings / pkg.mrpPrice) * 100)
+  : 0;
 
   const isExpired = pkg.validUntil && new Date(pkg.validUntil) < new Date();
 
@@ -134,12 +139,20 @@ function PackageCard({ pkg, index, tests, onEdit, onToggle, onDelete, actionLoad
               </div>
 
               {/* Price block */}
-              <div className="text-right shrink-0">
-                <p className="text-lg font-black text-primary">₹{Number(pkg.mrpPrice).toLocaleString("en-IN")}</p>
-                {pkg.partnerPrice && (
-                  <p className="text-xs text-success font-semibold">Partner ₹{Number(pkg.partnerPrice).toLocaleString("en-IN")}</p>
-                )}
-              </div>
+           
+<div className="text-right shrink-0">
+  <p className="text-lg font-black text-primary">
+    ₹{Number(pkg.discountedPrice || pkg.mrpPrice).toLocaleString("en-IN")}
+  </p>
+  {pkg.discountedPrice && Number(pkg.discountedPrice) < Number(pkg.mrpPrice) && (
+    <p className="text-xs text-base-content/40 line-through">₹{Number(pkg.mrpPrice).toLocaleString("en-IN")}</p>
+  )}
+  {pkg.partnerPrice && (
+    <p className="text-[10px] text-accent font-semibold">
+      Margin: ₹{((pkg.discountedPrice ?? pkg.mrpPrice) - pkg.partnerPrice).toLocaleString("en-IN")}
+    </p>
+  )}
+</div>
             </div>
 
             {pkg.description && (
@@ -303,21 +316,40 @@ function PackageFormModal({ open, onClose, editPkg, onSubmit, actionLoading, tes
 
           <form onSubmit={handleSubmit} className="p-8 space-y-6">
             {/* Name + Code */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">Package Name *</label>
-                <input value={form.packageName} onChange={e => set("packageName", e.target.value)}
-                  placeholder="e.g. Full Body Checkup"
-                  className={`input-field w-full ${errors.packageName ? "border-error" : ""}`} />
-                {errors.packageName && <p className="text-xs text-error mt-1.5 flex items-center gap-1"><AlertCircle size={11} />{errors.packageName}</p>}
-              </div>
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">Package Code</label>
-                <input value={form.packageCode} onChange={e => set("packageCode", e.target.value)}
-                  placeholder="e.g. PKG-FBC-001"
-                  className="input-field w-full" />
-              </div>
-            </div>
+          
+<div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+  <div>
+    <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">MRP (₹) *</label>
+    <input type="number" min="0" value={form.mrpPrice} onChange={e => set("mrpPrice", e.target.value)}
+      placeholder="2000" className={`input-field w-full ${errors.mrpPrice ? "border-error" : ""}`} />
+    {errors.mrpPrice && <p className="text-xs text-error mt-1.5 flex items-center gap-1"><AlertCircle size={11}/>{errors.mrpPrice}</p>}
+  </div>
+  <div>
+    <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">Discounted (₹)</label>
+    <input type="number" min="0" value={form.discountedPrice} onChange={e => set("discountedPrice", e.target.value)}
+      placeholder="1700" className="input-field w-full" />
+    {form.mrpPrice && form.discountedPrice && (
+      <p className="text-[10px] text-success mt-1 font-semibold">
+        {Math.round(((form.mrpPrice - form.discountedPrice) / form.mrpPrice) * 100)}% off
+      </p>
+    )}
+  </div>
+  <div>
+    <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">Partner Cost (₹)</label>
+    <input type="number" min="0" value={form.partnerPrice} onChange={e => set("partnerPrice", e.target.value)}
+      placeholder="1400" className="input-field w-full" />
+    {form.partnerPrice && (form.discountedPrice || form.mrpPrice) && (
+      <p className="text-[10px] text-accent mt-1 font-semibold">
+        Margin: ₹{((form.discountedPrice || form.mrpPrice) - form.partnerPrice)}
+      </p>
+    )}
+  </div>
+  <div>
+    <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">Valid Until</label>
+    <input type="date" value={form.validUntil} onChange={e => set("validUntil", e.target.value)}
+      min={new Date().toISOString().slice(0,10)} className="input-field w-full" />
+  </div>
+</div>
 
             {/* Description */}
             <div>
@@ -477,7 +509,12 @@ function PackagePriceChart({ packages }) {
   const data = packages
     .filter(p => p.isActive)
     .slice(0, 6)
-    .map(p => ({ name: p.packageName.slice(0, 12), mrp: Number(p.mrpPrice), partner: p.partnerPrice ? Number(p.partnerPrice) : 0 }));
+    .map(p => ({
+  name: p.packageName.slice(0, 12),
+  mrp: Number(p.mrpPrice),
+  discounted: p.discountedPrice ? Number(p.discountedPrice) : Number(p.mrpPrice),
+  cost: p.partnerPrice ? Number(p.partnerPrice) : 0
+}));
 
   if (data.length < 2) return null;
 
@@ -503,7 +540,10 @@ function PackagePriceChart({ packages }) {
             contentStyle={{ background: "var(--base-100)", border: "1px solid var(--base-300)", borderRadius: 12, fontSize: 11, fontWeight: 700 }}
             formatter={(v, n) => [`₹${Number(v).toLocaleString("en-IN")}`, n === "mrp" ? "MRP" : "Partner"]}
           />
-          <Bar dataKey="mrp" radius={[6,6,0,0]} fill="var(--primary)" opacity={0.8} />
+          // REPLACE Bar elements:
+<Bar dataKey="mrp"        radius={[6,6,0,0]} fill="var(--base-300)"  opacity={0.6} />
+<Bar dataKey="discounted" radius={[6,6,0,0]} fill="var(--primary)"   opacity={0.9} />
+<Bar dataKey="cost"       radius={[6,6,0,0]} fill="var(--success)"   opacity={0.8} />
           <Bar dataKey="partner" radius={[6,6,0,0]} fill="var(--success)" opacity={0.8} />
         </BarChart>
       </ResponsiveContainer>

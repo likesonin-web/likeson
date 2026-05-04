@@ -419,12 +419,13 @@ router.get(
     if (category) tests = tests.filter((t) => t.category?.toLowerCase() === category.toLowerCase());
     if (search)   tests = tests.filter((t) => t.testName?.toLowerCase().includes(search.toLowerCase()));
 
-    return res.status(200).json({
-      success: true,
-      labName: lab.labName,
-      total:   tests.length,
-      data:    tests,
-    });
+   // replace return line:
+return res.status(200).json({
+  success: true,
+  labName: lab.labName,
+  total:   tests.length,
+  data:    tests.map(({ partnerPrice: _, ...t }) => t),  // strip partner price
+});
   })
 );
 
@@ -780,10 +781,8 @@ router.post(
   asyncHandler(async (req, res) => {
     const lab = req.lab;
 
-    const {
-      testCode, testName, category, sampleType,
-      turnaroundHours, mrpPrice, partnerPrice, homeCollectionAvailable,
-    } = req.body;
+ const { testCode, testName, category, sampleType,
+  turnaroundHours, mrpPrice, partnerPrice, discountedPrice, homeCollectionAvailable } = req.body;
 
     if (!testName || mrpPrice == null) {
       return res.status(400).json({ success: false, message: 'testName and mrpPrice are required.' });
@@ -802,6 +801,7 @@ router.post(
       mrpPrice:               Number(mrpPrice),
       partnerPrice:           partnerPrice    ? Number(partnerPrice)    : undefined,
       homeCollectionAvailable: homeCollectionAvailable === 'true',
+      discountedPrice: discountedPrice ? Number(discountedPrice) : undefined,
       reportTemplateUrl,
       isActive: true,
     });
@@ -835,8 +835,8 @@ router.patch(
 
     // Partners can update description-level fields; price changes flagged for admin review
     [
-      'testCode', 'testName', 'category', 'sampleType',
-      'turnaroundHours', 'mrpPrice', 'partnerPrice', 'homeCollectionAvailable',
+     'testCode', 'testName', 'category', 'sampleType',
+'turnaroundHours', 'mrpPrice', 'discountedPrice', 'partnerPrice', 'homeCollectionAvailable',
     ].forEach((f) => { if (req.body[f] !== undefined) test[f] = req.body[f]; });
 
     // Partners can toggle their own tests active/inactive

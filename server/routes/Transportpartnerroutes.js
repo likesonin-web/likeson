@@ -1,36 +1,4 @@
-/**
- * ═══════════════════════════════════════════════════════════════════════════════
- * TransportPartnerRoutes.js — Likeson.in
- * ═══════════════════════════════════════════════════════════════════════════════
- *
- * ALL ROUTE GROUPS IN THIS FILE
- * ─────────────────────────────
- *  §A  Transport Partner — own profile, KYC, settings, security
- *  §B  Transport Partner — vehicle management (CRUD + verify)
- *  §C  Transport Partner — driver management (assign, remove, view)
- *  §D  Transport Partner — bank & settlement management
- *  §E  Transport Partner — service zones & pricing
- *  §F  Transport Partner — availability & notifications
- *  §G  Transport Partner — dashboard stats & activity logs
- *  §H  Driver routes     — profile, KYC, shifts, location, status
- *  §I  Admin / Superadmin — partner management (list, verify, suspend)
- *  §J  Admin / Superadmin — vehicle verification
- *  §K  Admin / Superadmin — driver management (platform-wide)
- *  §L  Admin / Superadmin — pricing / platform-fee overrides
- *  §M  Admin / Superadmin — system logs for a partner / driver
- *
- * AUTH MIDDLEWARE
- *   protect                    — JWT guard (all routes)
- *   authorize(...roles)        — role guard
- *   attachTransportPartnerAgency — sets req.transportPartner.agency
- *   transportPartnerRoutes     — [protect, getDeviceInfo, authorize('transportpartner'), attachTP]
- *
- * CACHE / INVALIDATION
- *   cache(ttl, keyFn?)         — Redis GET cache
- *   invalidatePattern / invalidateKey / invalidateKeys — from cacheInvalidation.js
- *
- * ═══════════════════════════════════════════════════════════════════════════════
- */
+ 
 
 import express             from 'express';
 import mongoose            from 'mongoose';
@@ -506,15 +474,18 @@ router.patch(
       });
       setPayload.updatedBy = req.user._id;
 
-      const agency = await TransportPartner.findOneAndUpdate(
-        { _id: req.transportPartner.agency._id, 'vehicles._id': req.params.vehicleId },
-        { $set: setPayload },
-        { returnDocument: 'after', runValidators: true }
-      ).select('vehicles');                              // ← full array, no $
+      // BROKEN
+const agency = await TransportPartner.findOneAndUpdate(
+  { _id: req.transportPartner.agency._id, 'vehicles._id': req.params.vehicleId },
+  { $set: setPayload },
+  { returnDocument: 'after', runValidators: true }
+).select('vehicles');  // <-- full array, then .id() below
+
+const updated = agency.vehicles.id(req.params.vehicleId); // correct workaround already written                       // ← full array, no $
 
       if (!agency) return res.status(404).json({ success: false, message: 'Vehicle not found' });
 
-      const updated = agency.vehicles.id(req.params.vehicleId); // ← find subdoc by id
+       // ← find subdoc by id
 
       await invalidateTPCache(req.transportPartner.agency._id);
 
@@ -1292,16 +1263,18 @@ router.patch(
       const setPayload = {};
       Object.keys(req.body).forEach((k) => { setPayload[`serviceZones.$.${k}`] = req.body[k]; });
       setPayload.updatedBy = req.user._id;
+const agency = await TransportPartner.findOneAndUpdate(
+  { _id: req.transportPartner.agency._id, 'serviceZones._id': req.params.zoneId },
+  { $set: setPayload },
+  { new: true }
+).select('serviceZones');  // fetch full array
 
-      const agency = await TransportPartner.findOneAndUpdate(
-        { _id: req.transportPartner.agency._id, 'serviceZones._id': req.params.zoneId },
-        { $set: setPayload },
-        { new: true }
-      ).select('serviceZones.$');
+if (!agency) return res.status(404).json({ success: false, message: 'Zone not found' });
 
-      if (!agency) return res.status(404).json({ success: false, message: 'Zone not found' });
-      await invalidateTPCache(req.transportPartner.agency._id);
-      return res.json({ success: true, data: agency.serviceZones[0] });
+const updated = agency.serviceZones.id(req.params.zoneId);  // find by id
+
+await invalidateTPCache(req.transportPartner.agency._id);
+return res.json({ success: true, data: updated });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -1760,6 +1733,584 @@ router.get(
       ]);
 
       return res.json({ success: true, total, page: +page, data: logs });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §H (extended)  DRIVER — ADDITIONAL SELF-SERVICE ROUTES
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * PATCH /api/transport/driver/me/photo
+ * Driver uploads / replaces their profile photo URL
+ */
+router.patch(
+  '/driver/me/photo',
+  protect,
+  getDeviceInfo,
+  authorize('driver'),
+  async (req, res) => {
+    try {
+      const { photoUrl } = req.body;
+      if (!photoUrl) {
+        return res.status(400).json({ success: false, message: 'photoUrl is required' });
+      }
+
+      const driver = await Driver.findOneAndUpdate(
+        { user: req.user._id },
+        { $set: { photoUrl, updatedBy: req.user._id } },
+        { new: true }
+      ).select('photoUrl');
+
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      // Keep the linked User avatar in sync
+      await User.findByIdAndUpdate(req.user._id, { $set: { avatar: photoUrl } });
+
+      return res.json({ success: true, message: 'Profile photo updated', data: { photoUrl: driver.photoUrl } });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * DELETE /api/transport/driver/me/photo
+ * Remove profile photo — resets to role-default avatar
+ */
+router.delete(
+  '/driver/me/photo',
+  protect,
+  getDeviceInfo,
+  authorize('driver'),
+  async (req, res) => {
+    try {
+      const defaultAvatar = 'https://ik.imagekit.io/zxxzgk3iq/Likeson/ChatGPT%20Image%20Feb%209,%202026,%2011_02_59%20AM.png?updatedAt=1770615249818';
+
+      await Driver.findOneAndUpdate(
+        { user: req.user._id },
+        { $set: { photoUrl: null, updatedBy: req.user._id } }
+      );
+
+      await User.findByIdAndUpdate(req.user._id, { $set: { avatar: defaultAvatar } });
+
+      return res.json({ success: true, message: 'Profile photo removed' });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * PATCH /api/transport/driver/me/emergency
+ * Driver updates own emergency contact
+ */
+router.patch(
+  '/driver/me/emergency',
+  protect,
+  getDeviceInfo,
+  authorize('driver'),
+  async (req, res) => {
+    try {
+      const { name, relationship, phone } = req.body;
+
+      if (!name || !phone) {
+        return res.status(400).json({ success: false, message: 'name and phone are required' });
+      }
+
+      const driver = await Driver.findOneAndUpdate(
+        { user: req.user._id },
+        {
+          $set: {
+            emergencyContact: { name, relationship, phone },
+            updatedBy: req.user._id,
+          },
+        },
+        { new: true, runValidators: true }
+      ).select('emergencyContact');
+
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      return res.json({ success: true, message: 'Emergency contact updated', data: driver.emergencyContact });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * PATCH /api/transport/driver/me/notifs
+ * Driver updates notification preferences
+ */
+router.patch(
+  '/driver/me/notifs',
+  protect,
+  getDeviceInfo,
+  authorize('driver'),
+  async (req, res) => {
+    try {
+      const { smsAlerts, whatsappAlerts, pushNotifications } = req.body;
+
+      const update = {};
+      if (smsAlerts !== undefined)         update['notifPrefs.smsAlerts']         = smsAlerts;
+      if (whatsappAlerts !== undefined)     update['notifPrefs.whatsappAlerts']     = whatsappAlerts;
+      if (pushNotifications !== undefined)  update['notifPrefs.pushNotifications']  = pushNotifications;
+
+      if (!Object.keys(update).length) {
+        return res.status(400).json({ success: false, message: 'No valid preference fields provided' });
+      }
+
+      const driver = await Driver.findOneAndUpdate(
+        { user: req.user._id },
+        { $set: { ...update, updatedBy: req.user._id } },
+        { new: true }
+      ).select('notifPrefs');
+
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      return res.json({ success: true, message: 'Notification preferences updated', data: driver.notifPrefs });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * GET /api/transport/driver/me/performance
+ * Driver reads their own performance summary
+ */
+router.get(
+  '/driver/me/performance',
+  protect,
+  authorize('driver'),
+  cache(120, (req) => `driver:${req.user._id}:performance`),
+  async (req, res) => {
+    try {
+      const driver = await Driver.findOne({ user: req.user._id })
+        .select('performance rewards.tier rewards.coinBalance driverCode legalName status profileCompletionPercent');
+
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      return res.json({ success: true, data: driver });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * GET /api/transport/driver/me/coins
+ * Driver views full coin transaction history
+ */
+router.get(
+  '/driver/me/coins',
+  protect,
+  authorize('driver'),
+  async (req, res) => {
+    try {
+      const { page = 1, limit = 20, type } = req.query;
+
+      const driver = await Driver.findOne({ user: req.user._id })
+        .select('rewards.coinBalance rewards.totalCoinsEarned rewards.totalCoinsRedeem rewards.coinTransactions rewards.tier rewards.badges');
+
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      let txns = driver.rewards.coinTransactions;
+      if (type) txns = txns.filter((t) => t.type === type);
+
+      // Manual pagination on the embedded array
+      const total  = txns.length;
+      const paged  = txns
+        .slice()
+        .reverse()  // newest first
+        .slice((+page - 1) * +limit, +page * +limit);
+
+      return res.json({
+        success: true,
+        data: {
+          coinBalance:      driver.rewards.coinBalance,
+          totalCoinsEarned: driver.rewards.totalCoinsEarned,
+          totalCoinsRedeem: driver.rewards.totalCoinsRedeem,
+          tier:             driver.rewards.tier,
+          badges:           driver.rewards.badges,
+          transactions:     { total, page: +page, count: paged.length, data: paged },
+        },
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * POST /api/transport/driver/me/certs
+ * Driver adds a training certificate
+ */
+router.post(
+  '/driver/me/certs',
+  protect,
+  getDeviceInfo,
+  authorize('driver'),
+  async (req, res) => {
+    try {
+      const { name, issuedBy, issuedAt, expiresAt, documentUrl } = req.body;
+      if (!name) {
+        return res.status(400).json({ success: false, message: 'Certificate name is required' });
+      }
+
+      const driver = await Driver.findOneAndUpdate(
+        { user: req.user._id },
+        {
+          $push: { trainingCertificates: { name, issuedBy, issuedAt, expiresAt, documentUrl } },
+          $set:  { updatedBy: req.user._id },
+        },
+        { new: true, runValidators: true }
+      ).select('trainingCertificates');
+
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      const added = driver.trainingCertificates[driver.trainingCertificates.length - 1];
+      return res.status(201).json({ success: true, message: 'Certificate added', data: added });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * DELETE /api/transport/driver/me/certs/:certId
+ * Driver removes a training certificate
+ */
+router.delete(
+  '/driver/me/certs/:certId',
+  protect,
+  getDeviceInfo,
+  authorize('driver'),
+  async (req, res) => {
+    try {
+      const driver = await Driver.findOneAndUpdate(
+        { user: req.user._id },
+        {
+          $pull: { trainingCertificates: { _id: req.params.certId } },
+          $set:  { updatedBy: req.user._id },
+        },
+        { new: true }
+      ).select('trainingCertificates');
+
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      return res.json({ success: true, message: 'Certificate removed' });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * PATCH /api/transport/driver/kyc/document
+ * Driver re-uploads a single KYC document URL (without changing the
+ * whole KYC object). Resets verificationStatus → 'Under-Review'.
+ *
+ * Accepted fields:
+ *   aadhaarDocUrl | drivingLicenceDocUrl | psvBadgeDocUrl | panDocUrl
+ */
+router.patch(
+  '/driver/kyc/document',
+  protect,
+  getDeviceInfo,
+  authorize('driver'),
+  async (req, res) => {
+    try {
+      const allowedDocs = ['aadhaarDocUrl', 'drivingLicenceDocUrl', 'psvBadgeDocUrl', 'panDocUrl'];
+      const updates = {};
+
+      allowedDocs.forEach((field) => {
+        if (req.body[field]) updates[`kyc.${field}`] = req.body[field];
+      });
+
+      if (!Object.keys(updates).length) {
+        return res.status(400).json({
+          success: false,
+          message: `Provide at least one of: ${allowedDocs.join(', ')}`,
+        });
+      }
+
+      // Re-submit triggers review
+      updates['kyc.verificationStatus'] = 'Under-Review';
+      updates['kyc.submittedAt']        = new Date();
+      updates['kyc.rejectionReason']    = null;
+      updates.updatedBy                 = req.user._id;
+
+      const driver = await Driver.findOneAndUpdate(
+        { user: req.user._id },
+        { $set: updates },
+        { new: true, runValidators: true }
+      ).select('kyc.verificationStatus kyc.aadhaarDocUrl kyc.drivingLicenceDocUrl kyc.psvBadgeDocUrl kyc.panDocUrl kyc.submittedAt');
+
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      syslog({
+        level: 'info', category: 'kyc',
+        message: 'Driver KYC document(s) re-uploaded',
+        actor: { userId: req.user._id, name: req.user.name, role: req.user.role, ip: req.deviceInfo?.ipAddress },
+        relatedEntity: { model: 'User', entityId: req.user._id, label: req.user.email },
+        request: { method: 'PATCH', path: req.originalUrl, statusCode: 200 },
+        metadata: { updatedDocs: Object.keys(req.body).filter((k) => allowedDocs.includes(k)) },
+      });
+
+      return res.json({
+        success: true,
+        message: 'Document(s) submitted for re-review',
+        data: driver.kyc,
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * PATCH /api/transport/driver/kyc/licence-numbers
+ * Driver updates licence/badge numbers (non-document fields).
+ * Also resets to Under-Review so admin re-validates the new numbers.
+ *
+ * Accepted fields:
+ *   drivingLicenceNumber | drivingLicenceExpiry | licenceClass[]
+ *   psvBadgeNumber | psvBadgeExpiry
+ *   panNumber
+ */
+router.patch(
+  '/driver/kyc/licence-numbers',
+  protect,
+  getDeviceInfo,
+  authorize('driver'),
+  async (req, res) => {
+    try {
+      const allowed = [
+        'drivingLicenceNumber', 'drivingLicenceExpiry', 'licenceClass',
+        'psvBadgeNumber', 'psvBadgeExpiry', 'panNumber',
+      ];
+
+      const updates = {};
+      allowed.forEach((f) => {
+        if (req.body[f] !== undefined) updates[`kyc.${f}`] = req.body[f];
+      });
+
+      if (!Object.keys(updates).length) {
+        return res.status(400).json({ success: false, message: `Provide at least one of: ${allowed.join(', ')}` });
+      }
+
+      updates['kyc.verificationStatus'] = 'Under-Review';
+      updates['kyc.submittedAt']        = new Date();
+      updates['kyc.rejectionReason']    = null;
+      updates.updatedBy                 = req.user._id;
+
+      const driver = await Driver.findOneAndUpdate(
+        { user: req.user._id },
+        { $set: updates },
+        { new: true, runValidators: true }
+      ).select('kyc.drivingLicenceNumber kyc.drivingLicenceExpiry kyc.licenceClass kyc.psvBadgeNumber kyc.psvBadgeExpiry kyc.verificationStatus');
+
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      return res.json({ success: true, message: 'Licence details updated and submitted for review', data: driver.kyc });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * PUT /api/transport/driver/medical-fitness
+ * Driver submits / updates medical fitness certificate
+ */
+router.put(
+  '/driver/medical-fitness',
+  protect,
+  getDeviceInfo,
+  authorize('driver'),
+  async (req, res) => {
+    try {
+      const {
+        certificateNumber, issuedBy, issuedAt,
+        expiryDate, documentUrl, bloodGroup,
+      } = req.body;
+
+      const update = {};
+      if (certificateNumber) update['medicalFitness.certificateNumber'] = certificateNumber;
+      if (issuedBy)          update['medicalFitness.issuedBy']          = issuedBy;
+      if (issuedAt)          update['medicalFitness.issuedAt']          = new Date(issuedAt);
+      if (expiryDate)        update['medicalFitness.expiryDate']        = new Date(expiryDate);
+      if (documentUrl)       update['medicalFitness.documentUrl']       = documentUrl;
+      if (bloodGroup)        update['medicalFitness.bloodGroup']        = bloodGroup;
+
+      // Mark valid only when both cert number + expiry are present
+      if (certificateNumber || expiryDate) {
+        const driver = await Driver.findOne({ user: req.user._id }).select('medicalFitness');
+        const merged = { ...driver?.medicalFitness?.toObject?.() ?? {}, ...update };
+        const isValid = !!(merged['medicalFitness.certificateNumber'] ?? merged.certificateNumber) &&
+                        !!(merged['medicalFitness.expiryDate'] ?? merged.expiryDate) &&
+                        new Date(merged['medicalFitness.expiryDate'] ?? merged.expiryDate) > new Date();
+        update['medicalFitness.isValid'] = isValid;
+      }
+
+      update.updatedBy = req.user._id;
+
+      const driver = await Driver.findOneAndUpdate(
+        { user: req.user._id },
+        { $set: update },
+        { new: true, runValidators: true }
+      ).select('medicalFitness');
+
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      syslog({
+        level: 'info', category: 'kyc',
+        message: 'Driver medical fitness certificate updated',
+        actor: { userId: req.user._id, name: req.user.name, role: req.user.role, ip: req.deviceInfo?.ipAddress },
+        relatedEntity: { model: 'User', entityId: req.user._id, label: req.user.email },
+        request: { method: 'PUT', path: req.originalUrl, statusCode: 200 },
+      });
+
+      return res.json({ success: true, message: 'Medical fitness updated', data: driver.medicalFitness });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * GET /api/transport/driver/me/compliance
+ * Driver checks their own compliance summary:
+ * DL expiry, PSV badge expiry, medical fitness, KYC status.
+ * Flags items expiring within 30 days.
+ */
+router.get(
+  '/driver/me/compliance',
+  protect,
+  authorize('driver'),
+  async (req, res) => {
+    try {
+      const driver = await Driver.findOne({ user: req.user._id })
+        .select('kyc.verificationStatus kyc.drivingLicenceExpiry kyc.psvBadgeExpiry medicalFitness.expiryDate medicalFitness.isValid isVerified isBlocked isPaused profileCompletionPercent');
+
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      const now  = new Date();
+      const soon = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+      const flag = (date) => {
+        if (!date) return { status: 'missing', daysLeft: null };
+        const d       = new Date(date);
+        const expired = d < now;
+        const daysLeft = Math.ceil((d - now) / (1000 * 60 * 60 * 24));
+        return {
+          status:   expired ? 'expired' : d < soon ? 'expiring_soon' : 'valid',
+          expiresAt: d,
+          daysLeft:  expired ? 0 : daysLeft,
+        };
+      };
+
+      return res.json({
+        success: true,
+        data: {
+          kycStatus:            driver.kyc.verificationStatus,
+          isVerified:           driver.isVerified,
+          isBlocked:            driver.isBlocked,
+          isPaused:             driver.isPaused,
+          profileCompletion:    driver.profileCompletionPercent,
+          drivingLicence:       flag(driver.kyc?.drivingLicenceExpiry),
+          psvBadge:             flag(driver.kyc?.psvBadgeExpiry),
+          medicalFitness: {
+            ...flag(driver.medicalFitness?.expiryDate),
+            isValid: driver.medicalFitness?.isValid ?? false,
+          },
+        },
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * PATCH /api/transport/driver/onboarding
+ * Driver updates their own onboarding step / terms agreement.
+ */
+router.patch(
+  '/driver/onboarding',
+  protect,
+  getDeviceInfo,
+  authorize('driver'),
+  async (req, res) => {
+    try {
+      const { step, agreedToTerms } = req.body;
+
+      const update = { updatedBy: req.user._id };
+      if (step !== undefined)   update['onboarding.step'] = step;
+
+      if (agreedToTerms) {
+        update['onboarding.agreedToTermsAt'] = new Date();
+        update['onboarding.agreedToTermsIp'] = req.deviceInfo?.ipAddress || null;
+      }
+
+      const driver = await Driver.findOneAndUpdate(
+        { user: req.user._id },
+        { $set: update },
+        { new: true }
+      ).select('onboarding profileCompletionPercent');
+
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      return res.json({ success: true, data: driver.onboarding });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * POST /api/transport/driver/onboarding/complete
+ * Mark onboarding as complete (only if profile completion >= 70%).
+ */
+router.post(
+  '/driver/onboarding/complete',
+  protect,
+  getDeviceInfo,
+  authorize('driver'),
+  async (req, res) => {
+    try {
+      const driver = await Driver.findOne({ user: req.user._id })
+        .select('onboarding profileCompletionPercent kyc.verificationStatus');
+
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      if (driver.profileCompletionPercent < 70) {
+        return res.status(400).json({
+          success: false,
+          message: `Profile must be at least 70% complete (currently ${driver.profileCompletionPercent}%)`,
+        });
+      }
+
+      driver.onboarding.isComplete  = true;
+      driver.onboarding.completedAt = new Date();
+      driver.onboarding.step        = 99;
+      driver.updatedBy              = req.user._id;
+      await driver.save();
+
+      syslog({
+        level: 'success', category: 'user',
+        message: `Driver onboarding marked complete`,
+        actor: { userId: req.user._id, name: req.user.name, role: req.user.role, ip: req.deviceInfo?.ipAddress },
+        relatedEntity: { model: 'User', entityId: req.user._id, label: req.user.email },
+        request: { method: 'POST', path: req.originalUrl, statusCode: 200 },
+      });
+
+      return res.json({ success: true, message: 'Onboarding complete', data: driver.onboarding });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }

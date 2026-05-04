@@ -7,8 +7,7 @@ import toast from 'react-hot-toast';
 // ─────────────────────────────────────────────────────────────────────────────
 const initialState = {
   // ── Core wallet ─────────────────────────────────────────────────────────────
-  wallet:   null,   // Full wallet object from GET /me
-  myUpiId:  null,   // Authenticated user's UPI ID
+  wallet: null, // Full wallet object from GET /me
 
   // ── Withdrawable balance breakdown ──────────────────────────────────────────
   /**
@@ -21,19 +20,19 @@ const initialState = {
    */
   withdrawableInfo: null,
 
-  // ── Bank accounts ────────────────────────────────────────────────────────────
-  bankAccounts: [],   // Array of masked bank account objects
+  // ── Bank accounts ─────────────────────────────────────────────────────────
+  bankAccounts: [], // Array of masked bank account objects
 
-  // ── Withdrawals (user) ───────────────────────────────────────────────────────
+  // ── Withdrawals (user) ────────────────────────────────────────────────────
   withdrawals: {
     requests: [],
     total:    0,
     page:     1,
     limit:    20,
   },
-  activeWithdrawal: null,  // Single withdrawal detail (GET /withdrawals/:requestId)
+  activeWithdrawal: null, // Single withdrawal detail (GET /withdrawals/:requestId)
 
-  // ── Admin: withdrawal queue ──────────────────────────────────────────────────
+  // ── Admin: withdrawal queue ────────────────────────────────────────────────
   adminWithdrawals: {
     requests: [],
     total:    0,
@@ -41,30 +40,29 @@ const initialState = {
     limit:    20,
   },
 
-  // ── P2P transfer history ─────────────────────────────────────────────────────
-  transferHistory: {
-    transfers: [],
-    total:     0,
-    page:      1,
-    limit:     20,
+  // ── Admin: wallet list ────────────────────────────────────────────────────
+  adminWallets: {
+    wallets: [],
+    total:   0,
+    page:    1,
+    limit:   20,
   },
 
-  // ── UPI Lookup ───────────────────────────────────────────────────────────────
-  lookupResult: null,   // { success, isSelf, receiver: { name, upiId, avatar, mode } }
+  // ── Transactions (server-paginated, used by admin wallet detail) ──────────
+  // User transactions are embedded in wallet.transactions (from GET /me)
 
-  // ── Granular loading flags ───────────────────────────────────────────────────
-  loading:                 false,  // fetchWalletDetails
-  actionLoading:           false,  // add-money, verify-topup, transfer
-  historyLoading:          false,  // fetchTransferHistory
-  lookupLoading:           false,  // lookupTransferTarget
-  bankAccountsLoading:     false,  // fetchBankAccounts
-  bankAccountActing:       false,  // add / remove / set-primary (user)
-  withdrawalsLoading:      false,  // fetchWithdrawals, fetchWithdrawalById
-  withdrawalActing:        false,  // submit / cancel / admin actions
-  withdrawableLoading:     false,  // fetchWithdrawableBalance
-  adminWithdrawalsLoading: false,  // fetchAdminWithdrawals
+  // ── Granular loading flags ────────────────────────────────────────────────
+  loading:                 false, // fetchWalletDetails
+  actionLoading:           false, // add-money, verify-topup
+  bankAccountsLoading:     false, // fetchBankAccounts
+  bankAccountActing:       false, // add / remove / set-primary / admin verify
+  withdrawalsLoading:      false, // fetchWithdrawals, fetchWithdrawalById
+  withdrawalActing:        false, // submit / cancel / admin actions
+  withdrawableLoading:     false, // fetchWithdrawableBalance
+  adminWithdrawalsLoading: false, // fetchAdminWithdrawals
+  adminWalletsLoading:     false, // fetchAdminWallets
 
-  // ── Error ────────────────────────────────────────────────────────────────────
+  // ── Error ─────────────────────────────────────────────────────────────────
   error: null,
 };
 
@@ -102,22 +100,6 @@ export const fetchWalletDetails = createAsyncThunk(
 );
 
 /**
- * GET /api/wallet/upi-id
- * Fetches the authenticated user's UPI ID for display / QR generation.
- */
-export const fetchMyUpiId = createAsyncThunk(
-  'wallet/fetchMyUpiId',
-  async (_, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get('/wallet/upi-id');
-      return data.upiId;
-    } catch (error) {
-      return rejectWithValue(extractError(error, 'Failed to fetch UPI ID'));
-    }
-  }
-);
-
-/**
  * GET /api/wallet/withdrawable-balance
  * Returns full withdrawable vs non-withdrawable balance breakdown + daily limit info.
  *
@@ -126,7 +108,7 @@ export const fetchMyUpiId = createAsyncThunk(
  *     nonWithdrawable, withdrawableSources, note, withdrawalLimits }
  *
  * NOTE: Only Add_Money + Referral_Bonus credits are withdrawable.
- *       P2P received funds, cashback, etc. are NOT withdrawable.
+ *       All other credits — P2P, Cashback, Refunds, Coins — are NOT withdrawable.
  */
 export const fetchWithdrawableBalance = createAsyncThunk(
   'wallet/fetchWithdrawableBalance',
@@ -165,102 +147,35 @@ export const initializeWalletTopup = createAsyncThunk(
 
 /**
  * POST /api/wallet/verify-topup
- * Verifies Razorpay HMAC signature and credits the wallet.
+ * Verifies Razorpay HMAC signature.
+ * Server fetches the authoritative amount from Razorpay — do NOT send amount.
  * Idempotent — duplicate payment IDs are rejected server-side with 409.
  *
- * Payload: { razorpay_order_id, razorpay_payment_id, razorpay_signature, amount }
+ * Payload: { razorpay_order_id, razorpay_payment_id, razorpay_signature }
  * Returns: updated wallet object
+ *
+ * NOTE: `displayAmount` is a UI-only hint passed through so the success
+ *       toast can show the credited amount — it is NOT sent to the server.
  */
 export const verifyWalletTopup = createAsyncThunk(
   'wallet/verifyTopup',
-  async (payload, { rejectWithValue }) => {
+  async ({ razorpay_order_id, razorpay_payment_id, razorpay_signature, displayAmount }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post('/wallet/verify-topup', payload);
+      const { data } = await API.post('/wallet/verify-topup', {
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature,
+        // amount intentionally NOT sent — server verifies with Razorpay directly
+      });
       toast.success(
-        `₹${Number(payload.amount).toLocaleString('en-IN')} added to your wallet!`
+        displayAmount
+          ? `₹${Number(displayAmount).toLocaleString('en-IN')} added to your wallet!`
+          : 'Wallet top-up successful!'
       );
       return data.wallet;
     } catch (error) {
       toast.error(extractError(error, 'Payment verification failed'));
       return rejectWithValue(extractError(error));
-    }
-  }
-);
-
-// ══════════════════════════════════════════════════════════════════════════════
-// UPI LOOKUP
-// ══════════════════════════════════════════════════════════════════════════════
-
-/**
- * POST /api/wallet/lookup
- * Resolves a UPI ID / phone number / QR string to a receiver's public profile.
- *
- * Payload (exactly one of):
- *   { upiId: string }
- *   { phone: string }
- *   { qrString: string }
- *
- * Returns: { success, isSelf, receiver: { name, upiId, avatar, mode } }
- */
-export const lookupTransferTarget = createAsyncThunk(
-  'wallet/lookupTarget',
-  async (payload, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post('/wallet/lookup', payload);
-      return data;
-    } catch (error) {
-      toast.error(extractError(error, 'User not found'));
-      return rejectWithValue(extractError(error));
-    }
-  }
-);
-
-// ══════════════════════════════════════════════════════════════════════════════
-// P2P TRANSFER
-// ══════════════════════════════════════════════════════════════════════════════
-
-/**
- * POST /api/wallet/transfer
- * Sends money from the authenticated user's wallet to another Likeson wallet.
- *
- * Payload: { amount, note?, upiId | phone | qrString }
- *
- * Returns: { success, message, transfer: { pairTxnId, amount, mode,
- *            receiverUpiId, receiverName, newBalance } }
- *
- * Note: Funds transferred via P2P arrive as P2P_Receive on the receiver side,
- *       which is NOT withdrawable. Only Add_Money + Referral_Bonus are withdrawable.
- */
-export const transferMoney = createAsyncThunk(
-  'wallet/transferMoney',
-  async (payload, { rejectWithValue, dispatch }) => {
-    try {
-      const { data } = await API.post('/wallet/transfer', payload);
-      toast.success(data.message || 'Money sent successfully');
-      // Re-fetch full wallet to keep balance + transactions in sync
-      dispatch(fetchWalletDetails());
-      return data;
-    } catch (error) {
-      toast.error(extractError(error, 'Transfer failed'));
-      return rejectWithValue(extractError(error));
-    }
-  }
-);
-
-/**
- * GET /api/wallet/transfers?page=&limit=
- * Returns paginated P2P transfer history for the authenticated user.
- *
- * Returns: { success, total, page, limit, transfers }
- */
-export const fetchTransferHistory = createAsyncThunk(
-  'wallet/fetchTransferHistory',
-  async (params = {}, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get('/wallet/transfers', { params });
-      return data;
-    } catch (error) {
-      return rejectWithValue(extractError(error, 'Failed to load transfer history'));
     }
   }
 );
@@ -288,7 +203,7 @@ export const fetchBankAccounts = createAsyncThunk(
 /**
  * POST /api/wallet/bank-accounts
  * Adds a new bank account (maximum 3 per wallet).
- * Newly added accounts start as unverified — admin must verify before withdrawal.
+ * Router auto-creates Razorpay Contact + Fund Account and marks isVerified: true.
  *
  * Payload:
  *   { accountHolderName, accountNumber, ifscCode,
@@ -301,7 +216,7 @@ export const addBankAccount = createAsyncThunk(
   async (payload, { rejectWithValue }) => {
     try {
       const { data } = await API.post('/wallet/bank-accounts', payload);
-      toast.success('Bank account added. Pending verification.');
+      toast.success('Bank account verified and added successfully.');
       return data.bankAccounts;
     } catch (error) {
       toast.error(extractError(error, 'Failed to add bank account'));
@@ -314,7 +229,7 @@ export const addBankAccount = createAsyncThunk(
  * PATCH /api/wallet/bank-accounts/:bankAccountId/set-primary
  * Sets a bank account as the default payout account.
  *
- * Returns: primaryBankAccount object
+ * Returns: { bankAccountId, primaryBankAccount }
  */
 export const setPrimaryBankAccount = createAsyncThunk(
   'wallet/setPrimaryBankAccount',
@@ -400,11 +315,8 @@ export const fetchWithdrawalById = createAsyncThunk(
  *
  * IMPORTANT — withdrawable funds:
  *   Only Add_Money (Razorpay top-up) and Referral_Bonus credits are withdrawable.
- *   P2P received funds, cashback, and coin conversions are NOT withdrawable.
- *   The server returns a clear error message if balance is insufficient or ineligible.
  *
  * Payload: { amount: number, bankAccountId: string }
- *
  * Returns: { success, message, request, withdrawableAvailable }
  */
 export const requestWithdrawal = createAsyncThunk(
@@ -447,6 +359,29 @@ export const cancelWithdrawal = createAsyncThunk(
 );
 
 // ══════════════════════════════════════════════════════════════════════════════
+// TRANSACTIONS (user — server-paginated endpoint)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/wallet/transactions?page=&limit=&type=&purpose=
+ * Returns paginated transaction history for the authenticated user.
+ * Use this for large histories; wallet.transactions in /me is capped at last 1000.
+ *
+ * Returns: { success, total, page, limit, transactions }
+ */
+export const fetchTransactions = createAsyncThunk(
+  'wallet/fetchTransactions',
+  async (params = {}, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get('/wallet/transactions', { params });
+      return data;
+    } catch (error) {
+      return rejectWithValue(extractError(error, 'Failed to load transactions'));
+    }
+  }
+);
+
+// ══════════════════════════════════════════════════════════════════════════════
 // ADMIN — WITHDRAWAL MANAGEMENT
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -474,7 +409,6 @@ export const fetchAdminWithdrawals = createAsyncThunk(
  * POST /api/wallet/admin/withdrawals/:requestId/approve
  * [Admin] Approves a pending withdrawal request.
  * Status changes: Pending → Approved.
- * Actual payout is triggered separately via /complete.
  *
  * Payload: { walletId: string }
  * Returns: { requestId, updatedRequest }
@@ -499,19 +433,15 @@ export const approveWithdrawal = createAsyncThunk(
 
 /**
  * POST /api/wallet/admin/withdrawals/:requestId/complete
- * [Admin] Initiates the Razorpay X Payout directly from the server and
- * marks the withdrawal as completed, debiting the user's wallet.
+ * [Admin] Initiates the Razorpay X Payout server-side and marks withdrawal Completed.
  *
- * IMPORTANT: The server calls the Razorpay X Payout API internally using
- * RAZORPAY_X_KEY_ID / RAZORPAY_X_KEY_SECRET env vars. The client does NOT
- * supply a razorpayPayoutId — it is obtained from Razorpay and stored server-side.
- *
- * Prerequisites:
- *   - Bank account must have razorpayFundAccountId set (via admin verify endpoint).
- *   - RAZORPAY_X_ACCOUNT_NUMBER must be configured on the server.
+ * CRITICAL: Server calls Razorpay X internally — client supplies ONLY { walletId }.
+ * Do NOT send razorpayPayoutId from the client.
  *
  * Payload: { walletId: string }
- * Returns: { success, razorpayPayoutId, razorpayPayoutStatus, newBalance, withdrawableBalance }
+ * Returns: { success, payoutId, status, newBalance }
+ *
+ * BUG FIX: Router returns { payoutId, status } — not { razorpayPayoutId, razorpayPayoutStatus }.
  */
 export const completeWithdrawal = createAsyncThunk(
   'wallet/completeWithdrawal',
@@ -525,10 +455,9 @@ export const completeWithdrawal = createAsyncThunk(
       dispatch(fetchAdminWithdrawals());
       return {
         requestId,
-        razorpayPayoutId:     data.razorpayPayoutId,
-        razorpayPayoutStatus: data.razorpayPayoutStatus,
-        newBalance:           data.newBalance,
-        withdrawableBalance:  data.withdrawableBalance,
+        payoutId:   data.payoutId,   // matches router response key
+        status:     data.status,     // Razorpay payout status e.g. 'processing'
+        newBalance: data.newBalance,
       };
     } catch (error) {
       toast.error(extractError(error, 'Failed to complete withdrawal'));
@@ -539,8 +468,7 @@ export const completeWithdrawal = createAsyncThunk(
 
 /**
  * POST /api/wallet/admin/withdrawals/:requestId/reject
- * [Admin] Rejects a pending withdrawal request.
- * Releases the locked amount back to withdrawableAvailable.
+ * [Admin] Rejects a pending withdrawal request. Releases the locked amount.
  *
  * Payload: { walletId: string, adminNote?: string }
  * Returns: requestId
@@ -565,9 +493,7 @@ export const rejectWithdrawal = createAsyncThunk(
 
 /**
  * POST /api/wallet/admin/withdrawals/:requestId/fail
- * [Admin] Marks a withdrawal as failed (e.g. Razorpay payout failed externally).
- * Releases the locked amount and credits a Withdrawal_Reversal transaction,
- * restoring the user's withdrawableBalance.
+ * [Admin] Marks a withdrawal as failed. Releases lock and credits Withdrawal_Reversal.
  *
  * Payload: { walletId: string, failureReason?: string }
  * Returns: { requestId, newBalance, withdrawableBalance }
@@ -596,28 +522,132 @@ export const failWithdrawal = createAsyncThunk(
 
 /**
  * PATCH /api/wallet/admin/bank-accounts/:walletId/:bankAccountId/verify
- * [Admin] Marks a bank account as verified after penny-drop / manual check.
- * Also stores razorpayFundAccountId + razorpayContactId for future payouts.
- * Without razorpayFundAccountId, the /complete endpoint will reject the payout.
+ * [Admin] Manually verifies a bank account and links Razorpay Fund Account ID.
+ * Required when auto-verification during addBankAccount failed.
  *
- * Payload: { razorpayFundAccountId?: string, razorpayContactId?: string }
+ * BUG FIX: razorpayContactId removed from schema — do NOT send it.
+ *
+ * Payload: { razorpayFundAccountId: string }
  * Returns: verified bank account object (masked)
  */
 export const adminVerifyBankAccount = createAsyncThunk(
   'wallet/adminVerifyBankAccount',
-  async (
-    { walletId, bankAccountId, razorpayFundAccountId, razorpayContactId },
-    { rejectWithValue }
-  ) => {
+  async ({ walletId, bankAccountId, razorpayFundAccountId }, { rejectWithValue }) => {
     try {
       const { data } = await API.patch(
         `/wallet/admin/bank-accounts/${walletId}/${bankAccountId}/verify`,
-        { razorpayFundAccountId, razorpayContactId }
+        { razorpayFundAccountId } // razorpayContactId removed from schema
       );
       toast.success('Bank account verified successfully');
       return data.account;
     } catch (error) {
       toast.error(extractError(error, 'Failed to verify bank account'));
+      return rejectWithValue(extractError(error));
+    }
+  }
+);
+
+/**
+ * POST /api/wallet/admin/credit
+ * [Admin] Manually credits a wallet (Admin_Credit purpose).
+ *
+ * Payload: { walletId, amount, description?, note? }
+ * Returns: { success, message, newBalance }
+ */
+export const adminCreditWallet = createAsyncThunk(
+  'wallet/adminCreditWallet',
+  async ({ walletId, amount, description, note }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.post('/wallet/admin/credit', {
+        walletId, amount, description, note,
+      });
+      toast.success(`₹${Number(amount).toLocaleString('en-IN')} credited successfully`);
+      return { walletId, newBalance: data.newBalance };
+    } catch (error) {
+      toast.error(extractError(error, 'Failed to credit wallet'));
+      return rejectWithValue(extractError(error));
+    }
+  }
+);
+
+/**
+ * POST /api/wallet/admin/debit
+ * [Admin] Manually debits a wallet (Admin_Debit purpose).
+ *
+ * Payload: { walletId, amount, description?, note? }
+ * Returns: { success, message, newBalance }
+ */
+export const adminDebitWallet = createAsyncThunk(
+  'wallet/adminDebitWallet',
+  async ({ walletId, amount, description, note }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.post('/wallet/admin/debit', {
+        walletId, amount, description, note,
+      });
+      toast.success(`₹${Number(amount).toLocaleString('en-IN')} debited successfully`);
+      return { walletId, newBalance: data.newBalance };
+    } catch (error) {
+      toast.error(extractError(error, 'Failed to debit wallet'));
+      return rejectWithValue(extractError(error));
+    }
+  }
+);
+
+/**
+ * GET /api/wallet/admin/wallets?page=&limit=&isActive=
+ * [Admin] Lists all wallets with user info.
+ *
+ * Returns: { success, total, page, limit, wallets }
+ */
+export const fetchAdminWallets = createAsyncThunk(
+  'wallet/fetchAdminWallets',
+  async (params = {}, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get('/wallet/admin/wallets', { params });
+      return data;
+    } catch (error) {
+      return rejectWithValue(extractError(error, 'Failed to load wallets'));
+    }
+  }
+);
+
+/**
+ * GET /api/wallet/admin/wallets/:walletId
+ * [Admin] Returns full wallet detail for a single user.
+ *
+ * Returns: { success, wallet }
+ */
+export const fetchAdminWalletById = createAsyncThunk(
+  'wallet/fetchAdminWalletById',
+  async ({ walletId }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`/wallet/admin/wallets/${walletId}`);
+      return data.wallet;
+    } catch (error) {
+      return rejectWithValue(extractError(error, 'Failed to load wallet detail'));
+    }
+  }
+);
+
+/**
+ * PATCH /api/wallet/admin/wallets/:walletId/toggle-active
+ * [Admin] Activates or deactivates a wallet.
+ *
+ * Payload: { isActive: boolean }
+ * Returns: { success, isActive }
+ */
+export const toggleWalletActive = createAsyncThunk(
+  'wallet/toggleWalletActive',
+  async ({ walletId, isActive }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.patch(
+        `/wallet/admin/wallets/${walletId}/toggle-active`,
+        { isActive }
+      );
+      toast.success(`Wallet ${isActive ? 'activated' : 'deactivated'}`);
+      return { walletId, isActive: data.isActive };
+    } catch (error) {
+      toast.error(extractError(error, 'Failed to update wallet status'));
       return rejectWithValue(extractError(error));
     }
   }
@@ -636,19 +666,14 @@ const walletSlice = createSlice({
       state.error = null;
     },
 
-    /** Clears the UPI lookup result. Call after transfer completes or modal closes. */
-    clearLookupResult: (state) => {
-      state.lookupResult = null;
-    },
-
     /** Clears the active withdrawal detail. Call on detail modal close. */
     clearActiveWithdrawal: (state) => {
       state.activeWithdrawal = null;
     },
 
     /**
-     * Manually patch the wallet balance in state (e.g. after a Razorpay
-     * success callback before the verify-topup response arrives).
+     * Manually patch the wallet balance in state (e.g. optimistic update
+     * after a Razorpay success callback before verify-topup response arrives).
      */
     patchWalletBalance: (state, action) => {
       if (state.wallet) {
@@ -670,25 +695,14 @@ const walletSlice = createSlice({
       .addCase(fetchWalletDetails.fulfilled, (state, { payload }) => {
         state.loading = false;
         state.wallet  = payload;
-        // Keep myUpiId in sync if the wallet carries it
-        if (payload?.upiId) state.myUpiId = payload.upiId;
+        // Sync bank accounts from wallet embed so both slices stay consistent
+        if (Array.isArray(payload?.bankAccounts)) {
+          state.bankAccounts = payload.bankAccounts;
+        }
       })
       .addCase(fetchWalletDetails.rejected, (state, { payload }) => {
         state.loading = false;
         state.error   = payload;
-      })
-
-      // ════════════════════════════════════════════════════════════════════════
-      // FETCH MY UPI ID
-      // ════════════════════════════════════════════════════════════════════════
-      .addCase(fetchMyUpiId.pending, (state) => {
-        state.error = null;
-      })
-      .addCase(fetchMyUpiId.fulfilled, (state, { payload }) => {
-        state.myUpiId = payload;
-      })
-      .addCase(fetchMyUpiId.rejected, (state, { payload }) => {
-        state.error = payload;
       })
 
       // ════════════════════════════════════════════════════════════════════════
@@ -715,7 +729,7 @@ const walletSlice = createSlice({
         state.error         = null;
       })
       .addCase(initializeWalletTopup.fulfilled, (state) => {
-        // rzpOrder is returned directly to the caller — no state update needed
+        // rzpOrder returned directly to caller via unwrap() — no state update needed
         state.actionLoading = false;
       })
       .addCase(initializeWalletTopup.rejected, (state, { payload }) => {
@@ -733,73 +747,21 @@ const walletSlice = createSlice({
       .addCase(verifyWalletTopup.fulfilled, (state, { payload }) => {
         state.actionLoading = false;
         state.wallet        = payload;
-        // Sync withdrawableInfo balances so UI reflects the credit immediately
+        // Sync bank accounts from the returned wallet
+        if (Array.isArray(payload?.bankAccounts)) {
+          state.bankAccounts = payload.bankAccounts;
+        }
+        // Immediately reflect new balance in withdrawableInfo so UI stays coherent
         if (state.withdrawableInfo && payload) {
-          state.withdrawableInfo.balance              = payload.balance;
-          state.withdrawableInfo.withdrawableBalance  = payload.withdrawableBalance;
-          state.withdrawableInfo.withdrawableAvailable = payload.withdrawableAvailable;
-          state.withdrawableInfo.lockedBalance        = payload.lockedBalance;
+          state.withdrawableInfo.balance               = payload.balance;
+          state.withdrawableInfo.withdrawableBalance   = payload.withdrawableBalance;
+          state.withdrawableInfo.withdrawableAvailable = payload.withdrawableAvailable ?? payload.withdrawableBalance;
+          state.withdrawableInfo.lockedBalance         = payload.lockedBalance ?? 0;
         }
       })
       .addCase(verifyWalletTopup.rejected, (state, { payload }) => {
         state.actionLoading = false;
         state.error         = payload;
-      })
-
-      // ════════════════════════════════════════════════════════════════════════
-      // UPI LOOKUP
-      // ════════════════════════════════════════════════════════════════════════
-      .addCase(lookupTransferTarget.pending, (state) => {
-        state.lookupLoading = true;
-        state.lookupResult  = null;
-        state.error         = null;
-      })
-      .addCase(lookupTransferTarget.fulfilled, (state, { payload }) => {
-        state.lookupLoading = false;
-        state.lookupResult  = payload;
-      })
-      .addCase(lookupTransferTarget.rejected, (state, { payload }) => {
-        state.lookupLoading = false;
-        state.error         = payload;
-      })
-
-      // ════════════════════════════════════════════════════════════════════════
-      // P2P TRANSFER
-      // ════════════════════════════════════════════════════════════════════════
-      .addCase(transferMoney.pending, (state) => {
-        state.actionLoading = true;
-        state.error         = null;
-      })
-      .addCase(transferMoney.fulfilled, (state, { payload }) => {
-        state.actionLoading = false;
-        state.lookupResult  = null; // Clear lookup so form resets
-        // Optimistically update balance from server response
-        if (state.wallet && payload?.transfer?.newBalance !== undefined) {
-          state.wallet.balance = payload.transfer.newBalance;
-        }
-      })
-      .addCase(transferMoney.rejected, (state, { payload }) => {
-        state.actionLoading = false;
-        state.error         = payload;
-      })
-
-      // ── Transfer History ────────────────────────────────────────────────────
-      .addCase(fetchTransferHistory.pending, (state) => {
-        state.historyLoading = true;
-        state.error          = null;
-      })
-      .addCase(fetchTransferHistory.fulfilled, (state, { payload }) => {
-        state.historyLoading  = false;
-        state.transferHistory = {
-          transfers: payload.transfers,
-          total:     payload.total,
-          page:      payload.page,
-          limit:     payload.limit,
-        };
-      })
-      .addCase(fetchTransferHistory.rejected, (state, { payload }) => {
-        state.historyLoading = false;
-        state.error          = payload;
       })
 
       // ════════════════════════════════════════════════════════════════════════
@@ -832,14 +794,14 @@ const walletSlice = createSlice({
         state.error             = payload;
       })
 
-      // ── Set Primary Bank Account ─────────────────────────────────────────────
+      // ── Set Primary Bank Account ──────────────────────────────────────────
       .addCase(setPrimaryBankAccount.pending, (state) => {
         state.bankAccountActing = true;
         state.error             = null;
       })
       .addCase(setPrimaryBankAccount.fulfilled, (state, { payload }) => {
         state.bankAccountActing = false;
-        // Flip isPrimary flags locally without needing a full re-fetch
+        // Flip isPrimary flags locally without a full re-fetch
         state.bankAccounts = state.bankAccounts.map((acc) => ({
           ...acc,
           isPrimary: acc._id === payload.bankAccountId,
@@ -850,7 +812,7 @@ const walletSlice = createSlice({
         state.error             = payload;
       })
 
-      // ── Remove Bank Account ──────────────────────────────────────────────────
+      // ── Remove Bank Account ───────────────────────────────────────────────
       .addCase(removeBankAccount.pending, (state) => {
         state.bankAccountActing = true;
         state.error             = null;
@@ -887,7 +849,7 @@ const walletSlice = createSlice({
         state.error              = payload;
       })
 
-      // ── Fetch Withdrawal By ID ───────────────────────────────────────────────
+      // ── Fetch Withdrawal By ID ────────────────────────────────────────────
       .addCase(fetchWithdrawalById.pending, (state) => {
         state.withdrawalsLoading = true;
         state.error              = null;
@@ -901,7 +863,7 @@ const walletSlice = createSlice({
         state.error              = payload;
       })
 
-      // ── Request Withdrawal ───────────────────────────────────────────────────
+      // ── Request Withdrawal ────────────────────────────────────────────────
       .addCase(requestWithdrawal.pending, (state) => {
         state.withdrawalActing = true;
         state.error            = null;
@@ -923,18 +885,17 @@ const walletSlice = createSlice({
         state.error            = payload;
       })
 
-      // ── Cancel Withdrawal ────────────────────────────────────────────────────
+      // ── Cancel Withdrawal ─────────────────────────────────────────────────
       .addCase(cancelWithdrawal.pending, (state) => {
         state.withdrawalActing = true;
         state.error            = null;
       })
       .addCase(cancelWithdrawal.fulfilled, (state, { payload: requestId }) => {
         state.withdrawalActing = false;
-        // Mark as Rejected locally so the UI updates before the re-fetch resolves
+        // Mark as Rejected locally so UI updates immediately before re-fetch
         state.withdrawals.requests = state.withdrawals.requests.map((r) =>
           r.requestId === requestId ? { ...r, status: 'Rejected' } : r
         );
-        // Also clear activeWithdrawal if it was the same request
         if (state.activeWithdrawal?.requestId === requestId) {
           state.activeWithdrawal = { ...state.activeWithdrawal, status: 'Rejected' };
         }
@@ -965,14 +926,13 @@ const walletSlice = createSlice({
         state.error                   = payload;
       })
 
-      // ── Admin: Approve Withdrawal ────────────────────────────────────────────
+      // ── Admin: Approve Withdrawal ─────────────────────────────────────────
       .addCase(approveWithdrawal.pending, (state) => {
         state.withdrawalActing = true;
         state.error            = null;
       })
       .addCase(approveWithdrawal.fulfilled, (state, { payload }) => {
         state.withdrawalActing = false;
-        // Update the request status inline — stays in the queue until /complete or /reject
         state.adminWithdrawals.requests = state.adminWithdrawals.requests.map((item) =>
           item.request?.requestId === payload.requestId
             ? { ...item, request: { ...item.request, ...payload.updatedRequest } }
@@ -984,14 +944,14 @@ const walletSlice = createSlice({
         state.error            = payload;
       })
 
-      // ── Admin: Complete Withdrawal (Razorpay X Payout initiated server-side) ─
+      // ── Admin: Complete Withdrawal (Razorpay X Payout initiated server-side)
       .addCase(completeWithdrawal.pending, (state) => {
         state.withdrawalActing = true;
         state.error            = null;
       })
       .addCase(completeWithdrawal.fulfilled, (state, { payload }) => {
         state.withdrawalActing = false;
-        // Remove from the admin queue — it is now Completed
+        // Remove from queue — now Completed
         state.adminWithdrawals.requests = state.adminWithdrawals.requests.filter(
           (item) => item.request?.requestId !== payload.requestId
         );
@@ -1002,7 +962,7 @@ const walletSlice = createSlice({
         state.error            = payload;
       })
 
-      // ── Admin: Reject Withdrawal ─────────────────────────────────────────────
+      // ── Admin: Reject Withdrawal ──────────────────────────────────────────
       .addCase(rejectWithdrawal.pending, (state) => {
         state.withdrawalActing = true;
         state.error            = null;
@@ -1019,7 +979,7 @@ const walletSlice = createSlice({
         state.error            = payload;
       })
 
-      // ── Admin: Fail Withdrawal ───────────────────────────────────────────────
+      // ── Admin: Fail Withdrawal ────────────────────────────────────────────
       .addCase(failWithdrawal.pending, (state) => {
         state.withdrawalActing = true;
         state.error            = null;
@@ -1036,19 +996,80 @@ const walletSlice = createSlice({
         state.error            = payload;
       })
 
-      // ── Admin: Verify Bank Account ───────────────────────────────────────────
+      // ── Admin: Verify Bank Account ────────────────────────────────────────
       .addCase(adminVerifyBankAccount.pending, (state) => {
         state.bankAccountActing = true;
         state.error             = null;
       })
       .addCase(adminVerifyBankAccount.fulfilled, (state) => {
-        // Admin is verifying another user's account — no local bank account
-        // array to patch here. The user will see the change after re-fetching.
         state.bankAccountActing = false;
+        // Admin is acting on another user's account — no local bankAccounts to patch
       })
       .addCase(adminVerifyBankAccount.rejected, (state, { payload }) => {
         state.bankAccountActing = false;
         state.error             = payload;
+      })
+
+      // ── Admin: Credit Wallet ──────────────────────────────────────────────
+      .addCase(adminCreditWallet.pending, (state) => {
+        state.actionLoading = true;
+        state.error         = null;
+      })
+      .addCase(adminCreditWallet.fulfilled, (state) => {
+        state.actionLoading = false;
+      })
+      .addCase(adminCreditWallet.rejected, (state, { payload }) => {
+        state.actionLoading = false;
+        state.error         = payload;
+      })
+
+      // ── Admin: Debit Wallet ───────────────────────────────────────────────
+      .addCase(adminDebitWallet.pending, (state) => {
+        state.actionLoading = true;
+        state.error         = null;
+      })
+      .addCase(adminDebitWallet.fulfilled, (state) => {
+        state.actionLoading = false;
+      })
+      .addCase(adminDebitWallet.rejected, (state, { payload }) => {
+        state.actionLoading = false;
+        state.error         = payload;
+      })
+
+      // ── Admin: Fetch Wallets List ─────────────────────────────────────────
+      .addCase(fetchAdminWallets.pending, (state) => {
+        state.adminWalletsLoading = true;
+        state.error               = null;
+      })
+      .addCase(fetchAdminWallets.fulfilled, (state, { payload }) => {
+        state.adminWalletsLoading = false;
+        state.adminWallets = {
+          wallets: payload.wallets,
+          total:   payload.total,
+          page:    payload.page,
+          limit:   payload.limit,
+        };
+      })
+      .addCase(fetchAdminWallets.rejected, (state, { payload }) => {
+        state.adminWalletsLoading = false;
+        state.error               = payload;
+      })
+
+      // ── Admin: Toggle Wallet Active ───────────────────────────────────────
+      .addCase(toggleWalletActive.pending, (state) => {
+        state.actionLoading = true;
+        state.error         = null;
+      })
+      .addCase(toggleWalletActive.fulfilled, (state, { payload }) => {
+        state.actionLoading = false;
+        // Patch the wallet in the admin list in-place
+        state.adminWallets.wallets = state.adminWallets.wallets.map((w) =>
+          w._id === payload.walletId ? { ...w, isActive: payload.isActive } : w
+        );
+      })
+      .addCase(toggleWalletActive.rejected, (state, { payload }) => {
+        state.actionLoading = false;
+        state.error         = payload;
       });
   },
 });
@@ -1058,7 +1079,6 @@ const walletSlice = createSlice({
 // ─────────────────────────────────────────────────────────────────────────────
 export const {
   clearWalletErrors,
-  clearLookupResult,
   clearActiveWithdrawal,
   patchWalletBalance,
 } = walletSlice.actions;
@@ -1071,10 +1091,10 @@ export const {
 export const selectWalletData          = (state) => state.wallet.wallet;
 export const selectWalletBalance       = (state) => state.wallet.wallet?.balance ?? 0;
 export const selectWalletTransactions  = (state) => state.wallet.wallet?.transactions ?? [];
-export const selectMyUpiId             = (state) => state.wallet.myUpiId;
 export const selectWalletLoading       = (state) => state.wallet.loading;
 export const selectWalletActionLoading = (state) => state.wallet.actionLoading;
 export const selectWalletError         = (state) => state.wallet.error;
+export const selectWalletIsActive      = (state) => state.wallet.wallet?.isActive ?? true;
 
 // ── Withdrawable balance ──────────────────────────────────────────────────────
 export const selectWithdrawableInfo       = (state) => state.wallet.withdrawableInfo;
@@ -1086,13 +1106,13 @@ export const selectWithdrawalLimits       = (state) => state.wallet.withdrawable
 export const selectWithdrawableLoading    = (state) => state.wallet.withdrawableLoading;
 
 // ── Bank accounts ─────────────────────────────────────────────────────────────
-export const selectBankAccounts        = (state) => state.wallet.bankAccounts;
-export const selectPrimaryBankAccount  = (state) =>
+export const selectBankAccounts         = (state) => state.wallet.bankAccounts;
+export const selectPrimaryBankAccount   = (state) =>
   state.wallet.bankAccounts.find((a) => a.isPrimary) ?? null;
 export const selectVerifiedBankAccounts = (state) =>
   state.wallet.bankAccounts.filter((a) => a.isVerified);
-export const selectBankAccountsLoading = (state) => state.wallet.bankAccountsLoading;
-export const selectBankAccountActing   = (state) => state.wallet.bankAccountActing;
+export const selectBankAccountsLoading  = (state) => state.wallet.bankAccountsLoading;
+export const selectBankAccountActing    = (state) => state.wallet.bankAccountActing;
 
 // ── Withdrawals (user) ────────────────────────────────────────────────────────
 export const selectWithdrawals        = (state) => state.wallet.withdrawals.requests;
@@ -1110,16 +1130,9 @@ export const selectAdminWithdrawalsPage    = (state) => state.wallet.adminWithdr
 export const selectAdminWithdrawalsLimit   = (state) => state.wallet.adminWithdrawals.limit;
 export const selectAdminWithdrawalsLoading = (state) => state.wallet.adminWithdrawalsLoading;
 
-// ── P2P transfer history ──────────────────────────────────────────────────────
-export const selectTransferHistory        = (state) => state.wallet.transferHistory;
-export const selectTransfers              = (state) => state.wallet.transferHistory.transfers;
-export const selectTransfersTotal         = (state) => state.wallet.transferHistory.total;
-export const selectHistoryLoading         = (state) => state.wallet.historyLoading;
-
-// ── UPI Lookup ────────────────────────────────────────────────────────────────
-export const selectLookupResult  = (state) => state.wallet.lookupResult;
-export const selectLookupLoading = (state) => state.wallet.lookupLoading;
-export const selectLookupIsSelf  = (state) => state.wallet.lookupResult?.isSelf ?? false;
-export const selectLookupReceiver = (state) => state.wallet.lookupResult?.receiver ?? null;
+// ── Admin wallets ─────────────────────────────────────────────────────────────
+export const selectAdminWallets        = (state) => state.wallet.adminWallets.wallets;
+export const selectAdminWalletsTotal   = (state) => state.wallet.adminWallets.total;
+export const selectAdminWalletsLoading = (state) => state.wallet.adminWalletsLoading;
 
 export default walletSlice.reducer;

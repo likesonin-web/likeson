@@ -1,169 +1,338 @@
 "use client";
 
-import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { WifiOff, RefreshCcw, ShieldAlert, ChevronRight } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import Container from '@/components/ui/Container';
+import { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { WifiOff, RefreshCcw, Router, Signal, Globe } from "lucide-react";
 
-const NoInternetPage = () => {
+const ecgPath = "M0 35H35L48 8L58 62L68 35H95L108 20L118 50L128 35H190";
+
+const diagnostics = [
+  { icon: Router, label: "Router Status", hint: "Restart your router" },
+  { icon: Signal, label: "Signal Strength", hint: "Move closer to Wi-Fi" },
+  { icon: Globe, label: "DNS Resolution", hint: "Check network settings" },
+];
+
+export default function NoInternetPage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 3000);
+    return () => clearInterval(id);
+  }, []);
 
   const handleRefresh = () => {
+    if (isRefreshing) return;
     setIsRefreshing(true);
-    // Simulate a check before re-establishing the "pulse"
-    setTimeout(() => {
-      window.location.reload();
-    }, 1500);
+    setTimeout(() => window.location.reload(), 1800);
   };
 
-  // The exact medical ECG path used for telemetry animations
-  const ecgPath = "M0 40H60L70 10L85 70L100 40H125L135 25L145 55L155 40H240";
-
   return (
-    <main className="min-h-screen flex items-center justify-center bg-base-100 p-6 overflow-hidden transition-colors duration-300">
-      <Container>
-        <div className="max-w-md mx-auto text-center">
-          
-          {/* --- ANIMATED HEARTBEAT (ECG) SECTION --- */}
-          <div className="relative flex justify-center mb-16 scale-110 md:scale-125">
-            <svg 
-              width="240" 
-              height="80" 
-              viewBox="0 0 240 80" 
-              fill="none" 
-              className="drop-shadow-[0_0_15px_rgba(var(--primary),0.2)]"
-            >
-              {/* Background "Flatline" Reference */}
-              <path
-                d={ecgPath}
-                stroke="var(--color-base-300)"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="opacity-50"
-              />
-              
-              {/* Animated Glowing Pulse Line - Primary Color */}
-              <motion.path
-                d={ecgPath}
-                stroke="var(--color-primary)"
-                strokeWidth="3"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                initial={{ pathLength: 0, opacity: 0 }}
-                animate={{ 
-                  pathLength: [0, 0.3, 0],
-                  pathOffset: [0, 1.2],
-                  opacity: [0, 1, 0]
-                }}
-                transition={{
-                  duration: 2.5,
-                  repeat: Infinity,
-                  ease: "linear",
-                }}
-              />
+    <main
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: "var(--base-100)",
+        padding: "1.5rem",
+        fontFamily: "var(--font-family-poppins, sans-serif)",
+        transition: "background-color 0.3s ease",
+      }}
+    >
+      <div style={{ maxWidth: 380, width: "100%", textAlign: "center" }}>
 
-              {/* Glowing Telemetry Dot */}
-              <motion.circle
-                r="4"
-                fill="var(--color-primary)"
-                initial={{ offsetDistance: "0%" }}
-                animate={{ offsetDistance: "100%" }}
-                transition={{
-                  duration: 2.5,
-                  repeat: Infinity,
-                  ease: "linear",
-                }}
-                style={{
-                  offsetPath: `path('${ecgPath}')`,
-                  filter: "drop-shadow(0 0 8px var(--color-primary))"
-                }}
-              />
-            </svg>
+        {/* ── ECG + Icon cluster ── */}
+        <div style={{ position: "relative", display: "flex", justifyContent: "center", marginBottom: "2.5rem" }}>
 
-            {/* Floating Warning Badge - Accent Color */}
-            <motion.div 
-              initial={{ scale: 0, rotate: -20 }}
-              animate={{ scale: 1, rotate: 0 }}
-              transition={{ type: "spring", stiffness: 260, damping: 20 }}
-              className="absolute -top-6 right-[10%] bg-accent text-white p-3.5 rounded-2xl shadow-2xl border-4 border-base-100"
-            >
-              <WifiOff size={24} />
-            </motion.div>
-          </div>
-
-          {/* --- TEXT CONTENT --- */}
+          {/* Faint glow disc */}
           <motion.div
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="space-y-4"
+            animate={{ scale: [1, 1.08, 1], opacity: [0.12, 0.22, 0.12] }}
+            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+            style={{
+              position: "absolute",
+              inset: 0,
+              margin: "auto",
+              width: 160,
+              height: 160,
+              borderRadius: "50%",
+              background: "radial-gradient(circle, var(--primary) 0%, transparent 70%)",
+              pointerEvents: "none",
+            }}
+          />
+
+          <svg width="200" height="70" viewBox="0 0 190 70" fill="none" style={{ position: "relative", zIndex: 1 }}>
+            {/* Ghost trace */}
+            <path d={ecgPath} stroke="var(--base-300)" strokeWidth="1.5" strokeLinecap="round" opacity="0.5" />
+
+            {/* Animated primary trace */}
+            <motion.path
+              d={ecgPath}
+              stroke="var(--primary)"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              fill="none"
+              initial={{ pathLength: 0, opacity: 0 }}
+              animate={{
+                pathLength: [0, 0.45, 0],
+                pathOffset: [0, 1.15],
+                opacity: [0, 1, 0],
+              }}
+              transition={{ duration: 2.2, repeat: Infinity, ease: "linear" }}
+            />
+
+            {/* Dot rider */}
+            <motion.circle
+              r="3.5"
+              fill="var(--primary)"
+              initial={{ offsetDistance: "0%" }}
+              animate={{ offsetDistance: "100%" }}
+              transition={{ duration: 2.2, repeat: Infinity, ease: "linear" }}
+              style={{
+                offsetPath: `path('${ecgPath}')`,
+                filter: "drop-shadow(0 0 6px var(--primary))",
+              }}
+            />
+          </svg>
+
+          {/* WifiOff badge */}
+          <motion.div
+            initial={{ scale: 0, rotate: -20 }}
+            animate={{ scale: 1, rotate: 0 }}
+            transition={{ type: "spring", stiffness: 260, damping: 18, delay: 0.2 }}
+            style={{
+              position: "absolute",
+              top: -8,
+              right: "8%",
+              backgroundColor: "var(--accent)",
+              color: "var(--accent-content)",
+              padding: "0.45rem",
+              borderRadius: "var(--r-box, 1rem)",
+              border: "2px solid var(--base-100)",
+              boxShadow: "0 4px 14px color-mix(in srgb, var(--accent), transparent 55%)",
+              display: "flex",
+            }}
           >
-            <h1 className="text-4xl md:text-5xl font-black text-base-content tracking-tighter uppercase leading-none">
-              Pulse <br /> <span className="text-primary">Interrupted.</span>
-            </h1>
-            <p className="text-base-content/50 text-sm md:text-base mb-10 leading-relaxed font-black uppercase tracking-tight max-w-xs mx-auto">
-              Your connection has flatlined. Please verify network status to continue.
-            </p>
-          </motion.div>
-
-          {/* --- ACTION BUTTONS --- */}
-          <div className="flex flex-col gap-5 mt-10">
-            <Button 
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-              className="btn-primary-cta h-16 text-[11px] font-black uppercase tracking-[0.25em] shadow-xl shadow-primary/20"
-            >
-              <div className="flex items-center justify-center gap-3">
-                <motion.div
-                  animate={isRefreshing ? { rotate: 360 } : {}}
-                  transition={{ duration: 1, repeat: isRefreshing ? Infinity : 0, ease: "linear" }}
-                >
-                  <RefreshCcw className="w-5 h-5" />
-                </motion.div>
-                <span>{isRefreshing ? "Re-establishing Pulse..." : "Retry Connection"}</span>
-              </div>
-            </Button>
-
-            <div className="flex items-center justify-center gap-3 py-3 px-6 bg-base-200 border border-base-300 rounded-full">
-              <div className="w-2 h-2 rounded-full bg-accent animate-pulse shadow-[0_0_8px_var(--color-accent)]" />
-              <ShieldAlert size={14} className="text-accent" />
-              <span className="text-[9px] font-black text-base-content/40 uppercase tracking-[0.2em]">
-                Secure Offline Protocol Active
-              </span>
-            </div>
-          </div>
-
-          {/* --- DIAGNOSTIC TIPS (Surgical Glass) --- */}
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.5 }}
-            className="mt-12 space-y-3"
-          >
-            {[
-              "Verify Wi-Fi or Cellular data status",
-              "Restart router or toggle Airplane mode",
-              "Check secondary connection nodes"
-            ].map((tip, i) => (
-              <motion.div 
-                key={i} 
-                whileHover={{ x: 8 }}
-                className="glass-card flex items-center justify-between p-5 text-left group cursor-default border border-base-300 shadow-sm"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-2 h-2 rounded-full bg-primary group-hover:scale-150 transition-all duration-300" />
-                  <span className="text-[10px] font-black text-base-content/70 uppercase tracking-widest">{tip}</span>
-                </div>
-                <ChevronRight size={14} className="text-base-content/20 group-hover:text-primary group-hover:translate-x-1 transition-all" />
-              </motion.div>
-            ))}
+            <WifiOff size={18} />
           </motion.div>
         </div>
-      </Container>
+
+        {/* ── Headline ── */}
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15, duration: 0.5 }}
+          style={{ marginBottom: "2rem" }}
+        >
+          <h1
+            style={{
+              fontSize: "clamp(1.6rem, 5vw, 2.2rem)",
+              fontWeight: 800,
+              fontFamily: "var(--font-family-montserrat, sans-serif)",
+              color: "var(--base-content)",
+              letterSpacing: "-0.02em",
+              lineHeight: 1.15,
+              margin: "0 0 0.5rem",
+            }}
+          >
+            Pulse{" "}
+            <span style={{ color: "var(--primary)" }}>Interrupted</span>
+          </h1>
+          <p
+            style={{
+              fontSize: "0.8125rem",
+              color: "color-mix(in oklch, var(--base-content) 55%, transparent)",
+              lineHeight: 1.65,
+              maxWidth: 240,
+              margin: "0 auto",
+            }}
+          >
+            Your connection has flatlined. Check your network to restore the signal.
+          </p>
+        </motion.div>
+
+        {/* ── Retry button ── */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          style={{ marginBottom: "0.875rem" }}
+        >
+          <button
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            style={{
+              width: "100%",
+              height: "3rem",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "0.5rem",
+              backgroundColor: "var(--primary)",
+              color: "var(--primary-content)",
+              border: "none",
+              borderRadius: "var(--r-field, 0.5rem)",
+              fontFamily: "var(--font-family-poppins, sans-serif)",
+              fontSize: "0.8125rem",
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              cursor: isRefreshing ? "not-allowed" : "pointer",
+              opacity: isRefreshing ? 0.65 : 1,
+              boxShadow: "0 4px 16px color-mix(in srgb, var(--primary), transparent 60%)",
+              transition: "filter 0.2s, transform 0.15s, box-shadow 0.2s",
+            }}
+            onMouseEnter={(e) => { if (!isRefreshing) e.currentTarget.style.filter = "brightness(1.1)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.filter = "none"; }}
+            onMouseDown={(e) => { e.currentTarget.style.transform = "scale(0.96)"; }}
+            onMouseUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+          >
+            <motion.div
+              animate={isRefreshing ? { rotate: 360 } : { rotate: 0 }}
+              transition={{ duration: 0.9, repeat: isRefreshing ? Infinity : 0, ease: "linear" }}
+            >
+              <RefreshCcw size={16} />
+            </motion.div>
+            <span>{isRefreshing ? "Retrying…" : "Retry Connection"}</span>
+          </button>
+        </motion.div>
+
+        {/* ── Offline pill ── */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.45 }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "0.5rem",
+            padding: "0.5rem 1rem",
+            backgroundColor: "color-mix(in srgb, var(--base-200), transparent 30%)",
+            border: "1px solid var(--base-300)",
+            borderRadius: "9999px",
+            marginBottom: "1.75rem",
+          }}
+        >
+          <motion.span
+            animate={{ opacity: [1, 0.3, 1] }}
+            transition={{ duration: 1.4, repeat: Infinity }}
+            style={{
+              display: "inline-block",
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              backgroundColor: "var(--accent)",
+            }}
+          />
+          <span
+            style={{
+              fontSize: "0.65rem",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              color: "color-mix(in oklch, var(--base-content) 50%, transparent)",
+            }}
+          >
+            Offline Mode Active
+          </span>
+        </motion.div>
+
+        {/* ── Diagnostics list ── */}
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.55 }}
+          style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}
+        >
+          {diagnostics.map(({ icon: Icon, label, hint }, i) => (
+            <motion.div
+              key={i}
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.6 + i * 0.1 }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "0.7rem 0.9rem",
+                backgroundColor: "var(--base-100)",
+                border: "1px solid var(--base-300)",
+                borderRadius: "var(--r-box, 1rem)",
+                cursor: "default",
+                transition: "border-color 0.2s, box-shadow 0.2s",
+              }}
+              whileHover={{
+                borderColor: "color-mix(in srgb, var(--primary), transparent 55%)",
+                boxShadow: "0 2px 12px color-mix(in srgb, var(--primary), transparent 82%)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
+                <div
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: "calc(var(--r-box, 1rem) * 0.6)",
+                    backgroundColor: "color-mix(in srgb, var(--primary), transparent 88%)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "var(--primary)",
+                    flexShrink: 0,
+                  }}
+                >
+                  <Icon size={14} />
+                </div>
+                <div style={{ textAlign: "left" }}>
+                  <p style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--base-content)", margin: 0, lineHeight: 1.3 }}>
+                    {label}
+                  </p>
+                  <p style={{ fontSize: "0.625rem", color: "color-mix(in oklch, var(--base-content) 45%, transparent)", margin: 0, lineHeight: 1.3 }}>
+                    {hint}
+                  </p>
+                </div>
+              </div>
+
+              {/* Animated status dots */}
+              <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                {[0, 1, 2].map((d) => (
+                  <motion.span
+                    key={d}
+                    animate={{ opacity: [0.2, 1, 0.2] }}
+                    transition={{
+                      duration: 1.2,
+                      repeat: Infinity,
+                      delay: d * 0.25 + i * 0.15,
+                    }}
+                    style={{
+                      display: "inline-block",
+                      width: 5,
+                      height: 5,
+                      borderRadius: "50%",
+                      backgroundColor: "color-mix(in srgb, var(--primary), transparent 30%)",
+                    }}
+                  />
+                ))}
+              </div>
+            </motion.div>
+          ))}
+        </motion.div>
+
+        {/* ── Footer note ── */}
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 1 }}
+          style={{
+            marginTop: "1.75rem",
+            fontSize: "0.625rem",
+            color: "color-mix(in oklch, var(--base-content) 35%, transparent)",
+            letterSpacing: "0.04em",
+          }}
+        >
+          Error code: NET::ERR_CONNECTION_LOST
+        </motion.p>
+      </div>
     </main>
   );
-};
-
-export default NoInternetPage;
+}

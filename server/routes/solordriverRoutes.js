@@ -892,10 +892,10 @@ router.get(
       .lean();
 
     // Mask account number
-    if (partner.bankDetails?.accountLast4) {
-      partner.bankDetails.maskedAccount = `XXXX XXXX XXXX ${partner.bankDetails.accountLast4}`;
-    }
-    delete partner.bankDetails?.accountNumber;
+   if (partner.bankDetails?.accountNumber) {
+  partner.bankDetails.maskedAccount = `XXXX XXXX XXXX ${partner.bankDetails.accountNumber.slice(-4)}`;
+  delete partner.bankDetails.accountNumber;
+}
 
     res.json({ success: true, data: partner });
   })
@@ -927,8 +927,7 @@ router.post(
       {
         $set: {
           'bankDetails.accountHolderName': accountHolderName.trim(),
-          'bankDetails.accountNumber':     accountNumber.trim(),
-          'bankDetails.accountLast4':      accountNumber.trim().slice(-4),
+        'bankDetails.accountNumber':     accountNumber.trim(),
           'bankDetails.ifscCode':          ifscCode.toUpperCase().trim(),
           'bankDetails.bankName':          bankName.trim(),
           'bankDetails.upiId':             upiId?.trim() || undefined,
@@ -945,7 +944,7 @@ router.post(
 
     createAuditLog({
       level: 'info', category: 'user',
-      message: `Solo partner submitted bank details: XXXX${accountNumber.slice(-4)}`,
+      message: 'Solo partner updated bank details', 
       actor: buildActor(req),
       relatedEntity: { model: 'User', entityId: req.user._id, label: req.user.email },
     });
@@ -1493,6 +1492,186 @@ router.patch(
   })
 );
 
+
+// ── DISPATCH ──────────────────────────────────────────────────────────────────
+
+/** GET /dispatch/status */
+router.get(
+  '/dispatch/status',
+  ...partnerGuard,
+  asyncHandler(async (req, res) => {
+    const partner = await SoloDriverPartner
+      .findById(req.soloPartner._id)
+      .select('isAvailable availabilityHours partnershipStatus isOnboardingComplete kyc.isVerified driverProfile')
+      .populate('driverProfile', 'status isActive isVerified shift')
+      .lean();
+
+    res.json({
+      success: true,
+      data: {
+        status:               partner.driverProfile?.status || (partner.isAvailable ? 'Available' : 'Offline'),
+        isDispatchable:       (
+          partner.partnershipStatus === 'active' &&
+          partner.isAvailable &&
+          partner.isOnboardingComplete &&
+          !!partner.driverProfile
+        ),
+        shift:                partner.driverProfile?.shift || null,
+        partnershipStatus:    partner.partnershipStatus,
+        isOnboardingComplete: partner.isOnboardingComplete,
+        kycVerified:          partner.kyc?.isVerified || false,
+        lastLocationUpdate:   null,
+      },
+    });
+  })
+);
+
+/** PATCH /dispatch/status — status: 'Available' | 'Offline' | 'On-Break' */
+router.patch(
+  '/dispatch/status',
+  ...partnerGuard,
+  requireActive,
+  asyncHandler(async (req, res) => {
+    const { status } = req.body;
+    const valid = ['Available', 'Offline', 'On-Break'];
+    if (!valid.includes(status)) {
+      return res.status(422).json({ success: false, message: `status must be one of: ${valid.join(', ')}` });
+    }
+
+    if (status === 'Available') {
+      const p = req.soloPartner;
+      if (!p.isOnboardingComplete)
+        return res.status(403).json({ success: false, message: 'Complete onboarding before going online' });
+      if (!p.kyc?.isVerified)
+        return res.status(403).json({ success: false, message: 'KYC verification required before going online' });
+      if (!p.driverProfile)
+        return res.status(403).json({ success: false, message: 'Dispatch profile not created. Contact support.' });
+    }
+
+    const isAvailable = status === 'Available';
+
+    await SoloDriverPartner.findByIdAndUpdate(
+      req.soloPartner._id,
+      { $set: { isAvailable, updatedBy: req.user._id } }
+    );
+
+    if (req.soloPartner.driverProfile) {
+      await Driver.findByIdAndUpdate(req.soloPartner.driverProfile, {
+        $set: { status, 'shift.isAvailableNow': isAvailable },
+      });
+    }
+
+    res.json({ success: true, message: `Status: ${status}`, data: { status } });
+  })
+);
+
+/** PATCH /dispatch/shift — shiftType?, startTime?, endTime?, daysAvailable? */
+router.patch(
+  '/dispatch/shift',
+  ...partnerGuard,
+  requireActive,
+  asyncHandler(async (req, res) => {
+    const allowed = ['shiftType', 'startTime', 'endTime', 'daysAvailable'];
+    const updates = pick(req.body, allowed);
+
+    if (!Object.keys(updates).length) {
+      return res.status(422).json({ success: false, message: 'No shift fields provided' });
+    }
+
+    const driverUpdate = { updatedBy: req.user._id };
+    for (const [k, v] of Object.entries(updates)) {
+      driverUpdate[`shift.${k}`] = v;
+    }
+
+    // Sync to companion Driver doc if exists
+    if (req.soloPartner.driverProfile) {
+      await Driver.findByIdAndUpdate(req.soloPartner.driverProfile, { $set: driverUpdate });
+    }
+
+    // Mirror on SoloDriverPartner availabilityHours if startTime/endTime provided
+    const sdpUpdate = { updatedBy: req.user._id };
+    if (updates.startTime) sdpUpdate['availabilityHours.start'] = updates.startTime;
+    if (updates.endTime)   sdpUpdate['availabilityHours.end']   = updates.endTime;
+
+    if (Object.keys(sdpUpdate).length > 1) {
+      await SoloDriverPartner.findByIdAndUpdate(req.soloPartner._id, { $set: sdpUpdate });
+    }
+
+    await invalidateSdpCache(req.soloPartner._id);
+
+    res.json({ success: true, message: 'Shift updated', data: updates });
+  })
+);
+
+// ── PERFORMANCE & REWARDS ─────────────────────────────────────────────────────
+
+/** GET /performance */
+router.get(
+  '/performance',
+  ...partnerGuard,
+  asyncHandler(async (req, res) => {
+    const partner = await SoloDriverPartner
+      .findById(req.soloPartner._id)
+      .select('stats rating partnerSince profileCompletionPercent')
+      .populate('driverProfile', 'performance rewards.tier')
+      .lean();
+
+    res.json({
+      success: true,
+      data: {
+        stats:                partner.stats,
+        rating:               partner.rating,
+        partnerSince:         partner.partnerSince,
+        profileCompletion:    partner.profileCompletionPercent,
+        driverPerformance:    partner.driverProfile?.performance || null,
+        tier:                 partner.driverProfile?.rewards?.tier || 'Bronze',
+      },
+    });
+  })
+);
+
+/** GET /rewards */
+router.get(
+  '/rewards',
+  ...partnerGuard,
+  asyncHandler(async (req, res) => {
+    const partner = await SoloDriverPartner
+      .findById(req.soloPartner._id)
+      .populate('user', 'coins coinsEarned coinsRedeemed')
+      .populate('driverProfile', 'rewards')
+      .lean();
+
+    res.json({
+      success: true,
+      data: {
+        coinBalance:   partner.user?.coins || 0,
+        coinsEarned:   partner.user?.coinsEarned || 0,
+        coinsRedeemed: partner.user?.coinsRedeemed || 0,
+        tier:          partner.driverProfile?.rewards?.tier || 'Bronze',
+        badges:        partner.driverProfile?.rewards?.badges || [],
+        rewardHistory: partner.driverProfile?.rewards?.history || [],
+      },
+    });
+  })
+);
+
+/** GET /rewards/badges */
+router.get(
+  '/rewards/badges',
+  ...partnerGuard,
+  asyncHandler(async (req, res) => {
+    const partner = await SoloDriverPartner
+      .findById(req.soloPartner._id)
+      .populate('driverProfile', 'rewards.badges')
+      .lean();
+
+    res.json({
+      success: true,
+      data: partner.driverProfile?.rewards?.badges || [],
+    });
+  })
+);
+
 // ── §16  Admin Routes ─────────────────────────────────────────────────────────
 // GET    /api/solo-driver/admin/list                → list all partners (paginated, filtered)
 // POST   /api/solo-driver/admin/create
@@ -1913,10 +2092,10 @@ router.get(
     }
 
     // Mask bank account for safety
-    if (partner.bankDetails?.accountNumber) {
-      partner.bankDetails.maskedAccount = `XXXX${partner.bankDetails.accountLast4}`;
-      delete partner.bankDetails.accountNumber;
-    }
+   if (partner.bankDetails?.accountNumber) {
+  partner.bankDetails.maskedAccount = `XXXX${partner.bankDetails.accountNumber.slice(-4)}`;
+  delete partner.bankDetails.accountNumber;
+}
 
     res.json({ success: true, data: partner });
   })
@@ -2468,6 +2647,97 @@ router.post(
     });
 
     res.json({ success: true, message: 'Admin notes updated' });
+  })
+);
+
+// ── ADMIN: Award Badge ────────────────────────────────────────────────────────
+/** PATCH /admin/:id/rewards/award-badge */
+router.patch(
+  '/admin/:id/rewards/award-badge',
+  ...adminGuard,
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { badgeId, name, description, iconUrl } = req.body;
+
+    if (!badgeId || !name) {
+      return res.status(422).json({ success: false, message: 'badgeId and name required' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid partner ID' });
+    }
+
+    const partner = await SoloDriverPartner.findById(id).populate('user', 'name email');
+    if (!partner) return res.status(404).json({ success: false, message: 'Partner not found' });
+
+    if (!partner.driverProfile) {
+      return res.status(422).json({ success: false, message: 'No driver profile linked to this partner' });
+    }
+
+    await Driver.findByIdAndUpdate(partner.driverProfile, {
+      $push: {
+        'rewards.badges': {
+          badgeId, name, description, iconUrl,
+          earnedAt: new Date(),
+          isActive: true,
+        },
+      },
+    });
+
+    createAuditLog({
+      level: 'info', category: 'user',
+      message: `Admin awarded badge "${name}" to solo partner: ${partner.user.email}`,
+      actor: buildActor(req),
+      relatedEntity: { model: 'User', entityId: partner.user._id },
+      metadata: { badgeId, name },
+    });
+
+    res.json({ success: true, message: `Badge "${name}" awarded` });
+  })
+);
+
+// ── ADMIN: Adjust Coins ───────────────────────────────────────────────────────
+/** PATCH /admin/:id/rewards/adjust-coins */
+router.patch(
+  '/admin/:id/rewards/adjust-coins',
+  ...adminGuard,
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { type, amount, description } = req.body;
+
+    if (!['ADMIN_CREDIT', 'ADMIN_DEBIT'].includes(type)) {
+      return res.status(422).json({ success: false, message: 'type must be ADMIN_CREDIT or ADMIN_DEBIT' });
+    }
+    const amt = Number(amount);
+    if (isNaN(amt) || amt <= 0) {
+      return res.status(422).json({ success: false, message: 'amount must be positive number' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid partner ID' });
+    }
+
+    const partner = await SoloDriverPartner.findById(id).populate('user', 'name email coins');
+    if (!partner) return res.status(404).json({ success: false, message: 'Partner not found' });
+
+    const delta      = type === 'ADMIN_CREDIT' ? amt : -amt;
+    const newBalance = Math.max(0, (partner.user.coins || 0) + delta);
+
+    await User.findByIdAndUpdate(partner.user._id, {
+      $set: { coins: newBalance },
+      $inc: {
+        coinsEarned:   type === 'ADMIN_CREDIT' ? amt : 0,
+        coinsRedeemed: type === 'ADMIN_DEBIT'  ? amt : 0,
+      },
+    });
+
+    createAuditLog({
+      level: 'info', category: 'user',
+      message: `Admin ${type} ${amt} coins for solo partner: ${partner.user.email}`,
+      actor: buildActor(req),
+      relatedEntity: { model: 'User', entityId: partner.user._id },
+      metadata: { type, amount: amt, description, newBalance },
+    });
+
+    res.json({ success: true, message: 'Coins adjusted', data: { newBalance } });
   })
 );
 

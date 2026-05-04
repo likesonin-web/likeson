@@ -1,200 +1,216 @@
 import mongoose from 'mongoose';
+import { customAlphabet } from 'nanoid';
+
 const { Schema } = mongoose;
 
-/**
- * Booking Model — Likeson.in
- *
- * Single unified booking document for ALL service types:
- *   - full_care_ride       (transport + care assistant + doctor visit bundled)
- *   - transport_only       (patient transportation)
- *   - care_assistant_only  (care assistant escort)
- *   - doctor_consultation  (in-person / video / home visit)
- *   - diagnostic           (lab test booking / home sample collection)
- *   - pharmacy_order       (medicine delivery — links to PharmacyOrder)
- *   - blood_bank           (blood unit request)
- *
- * Each type uses its own sub-document section; unused sections remain null.
- * Billing is always on the root: grossAmount, discount, tax, netAmount.
- *
- * State machine: pending → confirmed → in_progress → completed
- *                                   ↘ cancelled
- *                                   ↘ no_show
- */
+const generateBookingCode = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 8);
 
-// ── Enums ─────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOKING MODEL — Likeson.in
+//
+// BOOKING TYPES:
+//   full_care_ride       → Doctor + Care Assistant + Transport (complete package)
+//   doctor_consultation  → In-person doctor visit at hospital/clinic
+//   doctor_online        → Video/audio consultation
+//   physiotherapist      → Physio at clinic or home visit
+//   care_assistant       → Care assistant services alone (no doctor)
+//   diagnostic_center    → Lab tests at center (patient travels)
+//   diagnostic_home      → Lab technician visits patient at home
+//   patient_transport    → Standalone transport booking (no medical service)
+//   follow_up            → Follow-up visit linked to a parent booking
+// ─────────────────────────────────────────────────────────────────────────────
 
-const SERVICE_TYPES = [
-  'full_care_ride', 'transport_only', 'care_assistant_only',
-  'doctor_consultation', 'diagnostic', 'pharmacy_order', 'blood_bank',
+// ── Enums & Constants ─────────────────────────────────────────────────────────
+
+export const BOOKING_TYPES = [
+  'full_care_ride',
+  'doctor_consultation',
+  'doctor_online',
+  'physiotherapist',
+  'care_assistant',
+  'diagnostic_center',
+  'diagnostic_home',
+  'patient_transport',
+  'follow_up',
 ];
 
-const BOOKING_STATUSES = [
-  'pending', 'confirmed', 'assigned', 'in_progress',
-  'completed', 'cancelled', 'no_show', 'refund_initiated', 'refunded',
+export const BOOKING_STATUSES = [
+  'draft',
+  'pending',
+  'confirmed',
+  'in_progress',
+  'completed',
+  'cancelled',
+  'no_show',
+  'refund_pending',
+  'refunded',
 ];
 
-const PAYMENT_STATUSES = ['unpaid', 'paid', 'partial', 'refunded', 'failed'];
+export const PAYMENT_STATUSES = [
+  'unpaid',
+  'pending',
+  'paid',
+  'partially_paid',
+  'failed',
+  'refunded',
+  'partially_refunded',
+  'waived',
+];
+
+export const CANCELLATION_ACTORS = [
+  'customer',
+  'doctor',
+  'hospital',
+  'care_assistant',
+  'driver',
+  'lab_partner',
+  'admin',
+  'system',
+];
 
 // ── Sub-Schemas ───────────────────────────────────────────────────────────────
 
-// Shared address snapshot (captured at booking time — not linked to live address)
-const addressSnapshotSchema = new Schema(
+const geoPointSchema = new Schema(
   {
-    label:       { type: String }, // "Home", "Hospital", etc.
-    street:      { type: String },
-    city:        { type: String },
-    state:       { type: String },
-    pinCode:     { type: String },
-    coordinates: { type: [Number] }, // [lng, lat]
-    googleMapsUrl:{ type: String },
+    type:        { type: String, enum: ['Point'], default: 'Point' },
+    coordinates: { type: [Number], required: true }, // [lng, lat]
+    label:       { type: String, trim: true },
+    address:     { type: String, trim: true },
+    city:        { type: String, trim: true },
+    pincode:     { type: String, trim: true },
   },
   { _id: false }
 );
 
-// ── Transport Sub-document ─────────────────────────────────────────────────────
-const transportInfoSchema = new Schema(
+const fareBreakdownSchema = new Schema(
   {
-    driver:              { type: Schema.Types.ObjectId, ref: 'Driver', default: null },
-    vehicleSnapshot: {
-      registrationNumber: { type: String },
-      make:               { type: String },
-      model:              { type: String },
-      color:              { type: String },
-      vehicleType:        { type: String },
+    consultationFee:   { type: Number, default: 0, min: 0 },
+    careAssistantFee:  { type: Number, default: 0, min: 0 },
+    transportFee:      { type: Number, default: 0, min: 0 },
+    diagnosticFee:     { type: Number, default: 0, min: 0 },
+    homeCollectionFee: { type: Number, default: 0, min: 0 },
+    platformFee:       { type: Number, default: 0, min: 0 },
+    taxes:             { type: Number, default: 0, min: 0 },
+    discount:          { type: Number, default: 0, min: 0 },
+    couponDiscount:    { type: Number, default: 0, min: 0 },
+    walletApplied:     { type: Number, default: 0, min: 0 },
+    totalAmount:       { type: Number, default: 0, min: 0 },
+    amountPaid:        { type: Number, default: 0, min: 0 },
+    refundAmount:      { type: Number, default: 0, min: 0 },
+    currency:          { type: String, default: 'INR' },
+  },
+  { _id: false }
+);
+
+const paymentSchema = new Schema(
+  {
+    gateway:       { type: String, enum: ['Razorpay', 'Cashfree', 'PayU', 'PhonePe', 'Wallet', 'Cash', 'Manual'] },
+    transactionId: { type: String, trim: true },
+    orderId:       { type: String, trim: true },
+    paymentMode:   { type: String, enum: ['UPI', 'Card', 'NetBanking', 'Wallet', 'Cash', 'EMI', 'Other'] },
+    amount:        { type: Number, required: true, min: 0 },
+    status:        { type: String, enum: ['initiated', 'success', 'failed', 'refunded'], default: 'initiated' },
+    paidAt:        { type: Date },
+    refundedAt:    { type: Date },
+    refundId:      { type: String },
+    notes:         { type: String },
+  },
+  { _id: true, timestamps: true }
+);
+
+const patientInfoSchema = new Schema(
+  {
+    name:       { type: String, required: true, trim: true },
+    age:        { type: Number, min: 0, max: 150 },
+    gender:     { type: String, enum: ['Male', 'Female', 'Other', 'Prefer Not to Say'] },
+    phone:      { type: String },
+    bloodGroup: { type: String, enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'Unknown'] },
+    weight:     { type: Number, min: 0 },
+    isSelf:     { type: Boolean, default: true },
+  },
+  { _id: false }
+);
+
+const documentSchema = new Schema(
+  {
+    docType: {
+      type: String,
+      enum: ['prescription', 'lab_report', 'discharge_summary', 'id_proof', 'insurance', 'other'],
     },
-    pickupAddress:       { type: addressSnapshotSchema },
-    dropAddress:         { type: addressSnapshotSchema },
-    distanceKm:          { type: Number, default: 0 },
-    estimatedDurationMin:{ type: Number, default: 0 },
-    farePerKm:           { type: Number }, // locked from PlatformPricingConfig at booking time
-    baseFare:            { type: Number },
-    waitingCharges:      { type: Number, default: 0 },
-    nightSurcharge:      { type: Number, default: 0 },
-    driverStartedAt:     { type: Date },
-    driverArrivedAt:     { type: Date },
-    rideStartedAt:       { type: Date },
-    rideEndedAt:         { type: Date },
-    otp:                 { type: String, select: false }, // ride start OTP
-    otpVerified:         { type: Boolean, default: false },
-    liveTrackingUrl:     { type: String },
+    url:          { type: String, required: true },
+    originalName: { type: String },
+    uploadedAt:   { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
+
+const diagnosticDetailsSchema = new Schema(
+  {
+    labPartner:         { type: Schema.Types.ObjectId, ref: 'LabPartnerProfile' },
+    tests:              [{ type: Schema.Types.ObjectId }],
+    testNames:          [{ type: String, trim: true }],
+    packages:           [{ type: Schema.Types.ObjectId }],
+    packageNames:       [{ type: String, trim: true }],
+    sampleCollectedAt:  { type: Date },
+    reportDeliveryMode: { type: String, enum: ['Digital (App)', 'Email', 'WhatsApp', 'Physical Copy'] },
+    reportUrl:          { type: String },
+    reportReadyAt:      { type: Date },
+    technicianName:     { type: String },
   },
   { _id: false }
 );
 
-// ── Care Assistant Sub-document ────────────────────────────────────────────────
-const careAssistantInfoSchema = new Schema(
+const onlineConsultationSchema = new Schema(
   {
-    careAssistant:   { type: Schema.Types.ObjectId, ref: 'CareAssistantProfile', default: null },
-    assignedAt:      { type: Date },
-    arrivedAt:       { type: Date },
-    taskStartedAt:   { type: Date },
-    taskCompletedAt: { type: Date },
-    payoutAmount:    { type: Number }, // locked from PlatformPricingConfig
-    isPaid:          { type: Boolean, default: false },
-    paidAt:          { type: Date },
+    platform:        { type: String, enum: ['Likeson Chat', 'Google Meet', 'Zoom', 'Jitsi', 'Other'], default: 'Likeson Chat' },
+    meetingLink:     { type: String },
+    meetingId:       { type: String },
+    meetingPass:     { type: String, select: false },
+    startedAt:       { type: Date },
+    endedAt:         { type: Date },
+    durationMinutes: { type: Number },
+    recordingUrl:    { type: String, select: false },
   },
   { _id: false }
 );
 
-// ── Doctor Consultation Sub-document ──────────────────────────────────────────
-const consultationInfoSchema = new Schema(
-  {
-    doctor:              { type: Schema.Types.ObjectId, ref: 'DoctorProfile', default: null },
-    hospital:            { type: Schema.Types.ObjectId, ref: 'Hospital', default: null },
-    consultationType:    { type: String, enum: ['in_person', 'video', 'home_visit', 'follow_up'] },
-    scheduledAt:         { type: Date },
-    startedAt:           { type: Date },
-    endedAt:             { type: Date },
-    durationMinutes:     { type: Number },
-    meetingLink:         { type: String }, // For video consultations
-    specialization:      { type: String },
-    reasonForVisit:      { type: String, maxlength: 500 },
-    doctorNotes:         { type: String, maxlength: 2000 },
-    prescriptionUrl:     { type: String },
-    followUpDue:         { type: Date },
-    honorariumAmount:    { type: Number }, // locked from PlatformPricingConfig
-    honorariumPaid:      { type: Boolean, default: false },
-    honorariumPaidAt:    { type: Date },
-  },
-  { _id: false }
-);
-
-// ── Diagnostic Sub-document ───────────────────────────────────────────────────
-const diagnosticInfoSchema = new Schema(
-  {
-    labPartner:             { type: Schema.Types.ObjectId, ref: 'LabPartner', default: null },
-    isHomeSampleCollection: { type: Boolean, default: false },
-    collectionAddress:      { type: addressSnapshotSchema },
-    phlebotomist:           { type: String },
-    collectionScheduledAt:  { type: Date },
-    collectionDoneAt:       { type: Date },
-    testsRequested: [
-      {
-        testName:     { type: String, trim: true, required: true },
-        testCode:     { type: String, trim: true },
-        price:        { type: Number },
-        reportUrl:    { type: String },
-        reportReady:  { type: Boolean, default: false },
-        reportReadyAt:{ type: Date },
-      },
-    ],
-    prescriptionUrl:     { type: String },
-    allReportsReady:     { type: Boolean, default: false },
-    reportsReadyAt:      { type: Date },
-    reportDeliveryMethod:{ type: String, enum: ['digital', 'physical', 'both'], default: 'digital' },
-    commissionAmount:    { type: Number }, // earned from lab
-  },
-  { _id: false }
-);
-
-// ── Blood Bank Sub-document ───────────────────────────────────────────────────
-const bloodBankInfoSchema = new Schema(
-  {
-    bloodGroup:         { type: String, enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] },
-    componentRequired:  { type: String, enum: ['Whole Blood', 'PRBC', 'Platelets', 'FFP', 'Cryoprecipitate'] },
-    unitsRequired:      { type: Number, default: 1 },
-    hospital:           { type: Schema.Types.ObjectId, ref: 'Hospital' },
-    patientName:        { type: String, trim: true },
-    requestedForDate:   { type: Date },
-    fulfilledAt:        { type: Date },
-    notes:              { type: String },
-  },
-  { _id: false }
-);
-
-// ── Timeline Event Sub-document ────────────────────────────────────────────────
-const timelineEventSchema = new Schema(
-  {
-    status:    { type: String, enum: BOOKING_STATUSES },
-    note:      { type: String },
-    actorType: { type: String, enum: ['system', 'customer', 'driver', 'care_assistant', 'doctor', 'admin'] },
-    actor:     { type: Schema.Types.ObjectId, ref: 'User' },
-  },
-  { _id: true, timestamps: { createdAt: true, updatedAt: false } }
-);
-
-// ── Cancellation Sub-document ─────────────────────────────────────────────────
 const cancellationSchema = new Schema(
   {
-    cancelledBy:   { type: Schema.Types.ObjectId, ref: 'User' },
-    cancelledByRole:{ type: String },
-    reason:        { type: String },
-    refundPercent: { type: Number, default: 0 },
-    refundAmount:  { type: Number, default: 0 },
-    refundStatus:  { type: String, enum: ['none', 'pending', 'processed'], default: 'none' },
-    refundedAt:    { type: Date },
-    refundTxnId:   { type: String },
+    cancelledBy:       { type: String, enum: CANCELLATION_ACTORS },
+    cancelledByUserId: { type: Schema.Types.ObjectId, ref: 'User' },
+    reason:            { type: String, trim: true },
+    refundEligible:    { type: Boolean, default: false },
+    refundPercent:     { type: Number, min: 0, max: 100 },
+    cancelledAt:       { type: Date, default: Date.now },
   },
   { _id: false }
 );
 
-// ── Rating Sub-document ────────────────────────────────────────────────────────
+const statusLogSchema = new Schema(
+  {
+    fromStatus: { type: String },
+    toStatus:   { type: String, required: true },
+    changedBy:  { type: Schema.Types.ObjectId, ref: 'User' },
+    reason:     { type: String },
+    changedAt:  { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
+
 const ratingSchema = new Schema(
   {
-    ratedAt:     { type: Date, default: Date.now },
-    ratingValue: { type: Number, min: 1, max: 5 },
-    review:      { type: String, maxlength: 500 },
-    ratedBy:     { type: Schema.Types.ObjectId, ref: 'User' },
+    doctorRating:            { type: Number, min: 1, max: 5 },
+    doctorComment:           { type: String, trim: true },
+    careAssistantRating:     { type: Number, min: 1, max: 5 },
+    careAssistantComment:    { type: String, trim: true },
+    driverRating:            { type: Number, min: 1, max: 5 },
+    driverComment:           { type: String, trim: true },
+    labRating:               { type: Number, min: 1, max: 5 },
+    labComment:              { type: String, trim: true },
+    overallRating:           { type: Number, min: 1, max: 5 },
+    overallComment:          { type: String, trim: true },
+    ratedAt:                 { type: Date },
+    isPublic:                { type: Boolean, default: true },
   },
   { _id: false }
 );
@@ -203,186 +219,376 @@ const ratingSchema = new Schema(
 
 const bookingSchema = new Schema(
   {
-    // ── Reference Number ────────────────────────────────────────────────────
-    bookingNumber: {
-      type:   String,
-      unique: true,
-      index:  true,
-      // Generated in pre-save: LKS-BKG-<base36-ts><rand>
+    // ── Identity ──────────────────────────────────────────────────────────────
+    bookingCode: {
+      type:      String,
+      unique:    true,
+      sparse:    true,        // ← prevents null duplicate key collision
+      uppercase: true,
+      trim:      true,
+      index:     true,
     },
 
-    // ── Service Type ────────────────────────────────────────────────────────
-    serviceType: {
+    bookingType: {
       type:     String,
       required: true,
-      enum:     SERVICE_TYPES,
+      enum:     BOOKING_TYPES,
       index:    true,
     },
 
-    // ── Parties Involved ────────────────────────────────────────────────────
-    customer:     { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    /**
-     * If a family member is the patient (Family Plan), store separately.
-     * patient === customer for solo plans.
-     */
-    patient:      { type: Schema.Types.ObjectId, ref: 'User', default: null },
-    patientName:  { type: String, trim: true }, // denormalised for quick reads
-
-    // ── Subscription Context ────────────────────────────────────────────────
-    /**
-     * If this booking was made under a subscription, store plan details.
-     * Pay-per-service bookings leave this null.
-     */
-    subscriptionPlan: {
-      plan:     { type: Schema.Types.ObjectId, ref: 'SubscriptionPlan', default: null },
-      planSlug: { type: String },
-      isCoveredByPlan: { type: Boolean, default: false },
+    // ── Parties ───────────────────────────────────────────────────────────────
+    customer: {
+      type:     Schema.Types.ObjectId,
+      ref:      'User',
+      required: true,
+      index:    true,
     },
 
-    // ── Scheduling ──────────────────────────────────────────────────────────
-    scheduledAt:   { type: Date, required: true, index: true },
-    scheduledDate: { type: String }, // "YYYY-MM-DD" for quick filter
-    scheduledTime: { type: String }, // "HH:MM" for display
+    patientInfo: {
+      type:     patientInfoSchema,
+      required: true,
+    },
 
-    // ── Status & Lifecycle ──────────────────────────────────────────────────
+    // ── Medical Service Providers ─────────────────────────────────────────────
+    doctor: {
+      type:    Schema.Types.ObjectId,
+      ref:     'DoctorProfile',
+      default: null,
+      index:   true,
+    },
+
+    hospital: {
+      type:    Schema.Types.ObjectId,
+      ref:     'Hospital',
+      default: null,
+      index:   true,
+    },
+
+    careAssistant: {
+      type:    Schema.Types.ObjectId,
+      ref:     'CareAssistantProfile',
+      default: null,
+      index:   true,
+    },
+
+    // ── Consultation Details ──────────────────────────────────────────────────
+    consultationType: {
+      type:    String,
+      enum:    ['inPerson', 'video', 'homeVisit', null],
+      default: null,
+    },
+
+    scheduledAt: {
+      type:     Date,
+      required: true,
+      index:    true,
+    },
+
+    slotId: {
+      type:    Schema.Types.ObjectId,
+      default: null,
+    },
+
+    onlineConsultation: {
+      type:    onlineConsultationSchema,
+      default: null,
+    },
+
+    // ── Location ──────────────────────────────────────────────────────────────
+    patientLocation: {
+      type:    geoPointSchema,
+      default: null,
+    },
+
+    destinationLocation: {
+      type:    geoPointSchema,
+      default: null,
+    },
+
+    // ── Diagnostic Details ────────────────────────────────────────────────────
+    diagnosticDetails: {
+      type:    diagnosticDetailsSchema,
+      default: null,
+    },
+
+    // ── Follow-up Chain ───────────────────────────────────────────────────────
+    followUpParentBooking: {
+      type:    Schema.Types.ObjectId,
+      ref:     'Booking',
+      default: null,
+      index:   true,
+    },
+
+    followUpDiscountPercent: {
+      type:    Number,
+      default: 0,
+      min:     0,
+      max:     100,
+    },
+
+    // ── Ride Linkage ──────────────────────────────────────────────────────────
+    rides: [
+      {
+        type: Schema.Types.ObjectId,
+        ref:  'Ride',
+      },
+    ],
+
+    primaryRide: {
+      type:    Schema.Types.ObjectId,
+      ref:     'Ride',
+      default: null,
+      index:   true,
+    },
+
+    returnRide: {
+      type:    Schema.Types.ObjectId,
+      ref:     'Ride',
+      default: null,
+    },
+
+    // ── Patient Documents ─────────────────────────────────────────────────────
+    documents: {
+      type:    [documentSchema],
+      default: [],
+    },
+
+    // ── Pricing & Payment ─────────────────────────────────────────────────────
+    fareBreakdown: {
+      type:    fareBreakdownSchema,
+      default: () => ({}),
+    },
+
+    pricingSource: {
+      type: String,
+      enum: ['hospital', 'doctor', 'platform'],
+    },
+
+    paymentStatus: {
+      type:    String,
+      enum:    PAYMENT_STATUSES,
+      default: 'unpaid',
+      index:   true,
+    },
+
+    payments: {
+      type:    [paymentSchema],
+      default: [],
+    },
+
+    couponCode:    { type: String, uppercase: true, trim: true },
+    coinsRedeemed: { type: Number, default: 0, min: 0 },
+
+    // ── Status & Lifecycle ────────────────────────────────────────────────────
     status: {
       type:    String,
       enum:    BOOKING_STATUSES,
       default: 'pending',
       index:   true,
     },
-    timeline: { type: [timelineEventSchema], default: [] },
 
-    // ── Service-Specific Sub-documents ──────────────────────────────────────
-    transport:      { type: transportInfoSchema,       default: null },
-    careAssistant:  { type: careAssistantInfoSchema,   default: null },
-    consultation:   { type: consultationInfoSchema,    default: null },
-    diagnostic:     { type: diagnosticInfoSchema,      default: null },
-    bloodBank:      { type: bloodBankInfoSchema,       default: null },
-    /**
-     * For pharmacy orders, we link to a separate PharmacyOrder document
-     * to avoid embedding large item arrays here.
-     */
-    pharmacyOrder:  { type: Schema.Types.ObjectId, ref: 'PharmacyOrder', default: null },
-
-    // ── Billing ──────────────────────────────────────────────────────────────
-    billing: {
-      /**
-       * Pricing snapshot (locked at booking creation from PlatformPricingConfig).
-       * This ensures price changes don't affect already-booked services.
-       */
-      grossAmount:       { type: Number, default: 0 },
-      discountPercent:   { type: Number, default: 0 },
-      discountAmount:    { type: Number, default: 0 },
-      couponCode:        { type: String },
-      couponDiscount:    { type: Number, default: 0 },
-      coinsUsed:         { type: Number, default: 0 },
-      coinsDiscount:     { type: Number, default: 0 },  // coins * (1/COINS_PER_RUPEE)
-      taxPercent:        { type: Number, default: 0 },
-      taxAmount:         { type: Number, default: 0 },
-      netAmount:         { type: Number, default: 0 },  // What customer pays
-      platformFee:       { type: Number, default: 0 },  // Likeson's cut
-      partnerPayout:     { type: Number, default: 0 },  // Transport / Lab / etc.
-      currency:          { type: String, default: 'INR' },
+    statusLog: {
+      type:    [statusLogSchema],
+      default: [],
     },
 
-    // ── Payment ───────────────────────────────────────────────────────────────
-    payment: {
-      status:    { type: String, enum: PAYMENT_STATUSES, default: 'unpaid' },
-      method:    { type: String, enum: ['upi', 'card', 'netbanking', 'wallet', 'cash', 'subscription_credit', null], default: null },
-      gatewayOrderId: { type: String },
-      gatewayPaymentId: { type: String },
-      paidAt:    { type: Date },
-      paidAmount:{ type: Number, default: 0 },
+    cancellation: {
+      type:    cancellationSchema,
+      default: null,
     },
 
-    // ── Cancellation ──────────────────────────────────────────────────────────
-    cancellation: { type: cancellationSchema, default: null },
+    completedAt: { type: Date },
 
-    // ── Ratings ───────────────────────────────────────────────────────────────
-    customerRating:  { type: ratingSchema, default: null },
-    providerRating:  { type: ratingSchema, default: null },
+    // ── Rating ────────────────────────────────────────────────────────────────
+    rating:  { type: ratingSchema, default: null },
+    isRated: { type: Boolean, default: false, index: true },
 
-    // ── Source ────────────────────────────────────────────────────────────────
-    bookingSource: {
-      type:    String,
-      enum:    ['app_android', 'app_ios', 'web', 'admin_panel', 'whatsapp', 'phone_call'],
-      default: 'web',
+    // ── Staff Snapshots ───────────────────────────────────────────────────────
+    doctorSnapshot: {
+      name:               { type: String },
+      specialization:     { type: String },
+      registrationNumber: { type: String },
+      profilePhotoUrl:    { type: String },
     },
 
-    // ── Notes ─────────────────────────────────────────────────────────────────
-    customerNotes: { type: String, maxlength: 500 },
-    adminNotes:    { type: String, select: false },
+    careAssistantSnapshot: {
+      name:     { type: String },
+      photoUrl: { type: String },
+      phone:    { type: String },
+    },
 
-    // ── Audit ─────────────────────────────────────────────────────────────────
+    // ── Notifications ─────────────────────────────────────────────────────────
+    notificationsSent: {
+      bookingConfirmation: { type: Boolean, default: false },
+      reminderSent:        { type: Boolean, default: false },
+      rideStarted:         { type: Boolean, default: false },
+      completionSummary:   { type: Boolean, default: false },
+    },
+
+    // ── Admin / Internal ──────────────────────────────────────────────────────
+    assignedAdminId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    internalNotes:   { type: String, trim: true, select: false },
+    isTestBooking:   { type: Boolean, default: false },
+
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   {
     timestamps: true,
-    toJSON:   { virtuals: true },
-    toObject: { virtuals: true },
+    toJSON:     { virtuals: true },
+    toObject:   { virtuals: true },
   }
 );
 
 // ── Virtuals ──────────────────────────────────────────────────────────────────
 
+bookingSchema.virtual('isActive').get(function () {
+  return ['pending', 'confirmed', 'in_progress'].includes(this.status);
+});
+
 bookingSchema.virtual('isCompleted').get(function () {
   return this.status === 'completed';
 });
 
-bookingSchema.virtual('isCancellable').get(function () {
-  return ['pending', 'confirmed', 'assigned'].includes(this.status);
+bookingSchema.virtual('isCancelled').get(function () {
+  return ['cancelled', 'no_show'].includes(this.status);
 });
 
-bookingSchema.virtual('fullRefundEligible').get(function () {
-  if (!this.scheduledAt) return false;
-  const hoursAhead = (this.scheduledAt - new Date()) / (1000 * 60 * 60);
-  return hoursAhead > 24;
+bookingSchema.virtual('requiresTransport').get(function () {
+  return ['full_care_ride', 'patient_transport', 'diagnostic_home'].includes(this.bookingType);
 });
 
-// ── Pre-save Middleware ───────────────────────────────────────────────────────
+bookingSchema.virtual('requiresDoctor').get(function () {
+  return [
+    'full_care_ride',
+    'doctor_consultation',
+    'doctor_online',
+    'physiotherapist',
+    'follow_up',
+  ].includes(this.bookingType);
+});
 
-bookingSchema.pre('save', function () {
-  // Generate booking number
-  if (this.isNew && !this.bookingNumber) {
-    const ts   = Date.now().toString(36).slice(-6).toUpperCase();
-    const rand = Math.random().toString(36).slice(-3).toUpperCase();
-    this.bookingNumber = `LKS-BKG-${ts}${rand}`;
+bookingSchema.virtual('requiresCareAssistant').get(function () {
+  return ['full_care_ride', 'care_assistant'].includes(this.bookingType);
+});
+
+bookingSchema.virtual('amountDue').get(function () {
+  const total = this.fareBreakdown?.totalAmount ?? 0;
+  const paid  = this.fareBreakdown?.amountPaid  ?? 0;
+  return Math.max(0, total - paid);
+});
+
+// ── Pre-validate ──────────────────────────────────────────────────────────────
+
+bookingSchema.pre('validate', function () {
+  if (this.bookingType === 'full_care_ride') {
+    if (!this.doctor)          throw new Error('full_care_ride requires doctor');
+    if (!this.careAssistant)   throw new Error('full_care_ride requires careAssistant');
+    if (!this.patientLocation) throw new Error('full_care_ride requires patientLocation');
   }
 
-  // Derive scheduledDate and scheduledTime
-  if (this.isModified('scheduledAt') && this.scheduledAt) {
-    const d = new Date(this.scheduledAt);
-    this.scheduledDate = d.toISOString().slice(0, 10);
-    this.scheduledTime = d.toTimeString().slice(0, 5);
+  if (this.bookingType === 'doctor_online' && !this.doctor) {
+    throw new Error('doctor_online requires doctor');
   }
 
-  // Push timeline event on status change
-  if (this.isModified('status')) {
-    this.timeline.push({ status: this.status, actorType: 'system' });
+  if (this.bookingType === 'follow_up' && !this.followUpParentBooking) {
+    throw new Error('follow_up bookings must reference a followUpParentBooking');
   }
 
-  // Compute netAmount
-  if (this.isModified('billing')) {
-    const b = this.billing;
-    const totalDiscount = (b.discountAmount || 0) + (b.couponDiscount || 0) + (b.coinsDiscount || 0);
-    b.netAmount = Math.max(0, +(b.grossAmount - totalDiscount + b.taxAmount).toFixed(2));
+  if (this.bookingType === 'diagnostic_home' && !this.patientLocation) {
+    throw new Error('diagnostic_home requires patientLocation');
+  }
+
+  if (this.bookingType === 'patient_transport') {
+    if (!this.patientLocation)     throw new Error('patient_transport requires patientLocation (pickup)');
+    if (!this.destinationLocation) throw new Error('patient_transport requires destinationLocation (dropoff)');
+  }
+});
+
+// ── Pre-save ──────────────────────────────────────────────────────────────────
+
+bookingSchema.pre('save', async function () {
+  // Auto-generate bookingCode
+  if (this.isNew && !this.bookingCode) {
+    let code, exists;
+    do {
+      code   = `BK-${generateBookingCode()}`;
+      exists = await mongoose.model('Booking').exists({ bookingCode: code });
+    } while (exists);
+    this.bookingCode = code;
+  }
+
+  // Append to statusLog on status change
+  if (this.isModified('status') && !this.isNew) {
+    this.statusLog.push({
+      fromStatus: this._previousStatus || null,
+      toStatus:   this.status,
+      changedBy:  this.updatedBy || null,
+    });
+  }
+
+  this._previousStatus = this.status;
+
+  // Sync isRated
+  if (this.isModified('rating') && this.rating?.overallRating) {
+    this.isRated        = true;
+    this.rating.ratedAt = this.rating.ratedAt ?? new Date();
+  }
+
+  // Auto-set completedAt
+  if (this.isModified('status') && this.status === 'completed' && !this.completedAt) {
+    this.completedAt = new Date();
+  }
+
+  // Doctor snapshot on first assignment
+  if (this.isModified('doctor') && this.doctor && !this.doctorSnapshot?.name) {
+    const DoctorProfile = mongoose.model('DoctorProfile');
+    const doc = await DoctorProfile.findById(this.doctor)
+      .populate('user', 'name')
+      .select('specialization registrationNumber profilePhotoUrl')
+      .lean();
+    if (doc) {
+      this.doctorSnapshot = {
+        name:               doc.user?.name,
+        specialization:     doc.specialization,
+        registrationNumber: doc.registrationNumber,
+        profilePhotoUrl:    doc.profilePhotoUrl,
+      };
+    }
+  }
+
+  // Care assistant snapshot on first assignment
+  if (this.isModified('careAssistant') && this.careAssistant && !this.careAssistantSnapshot?.name) {
+    const CareAssistantProfile = mongoose.model('CareAssistantProfile');
+    const ca = await CareAssistantProfile.findById(this.careAssistant)
+      .select('fullName photoUrl phone')
+      .lean();
+    if (ca) {
+      this.careAssistantSnapshot = {
+        name:     ca.fullName,
+        photoUrl: ca.photoUrl,
+        phone:    ca.phone,
+      };
+    }
   }
 });
 
 // ── Indexes ───────────────────────────────────────────────────────────────────
 
 bookingSchema.index({ customer: 1, status: 1 });
-bookingSchema.index({ customer: 1, scheduledAt: -1 });
-bookingSchema.index({ serviceType: 1, status: 1 });
-bookingSchema.index({ scheduledDate: 1, serviceType: 1 });
-bookingSchema.index({ 'transport.driver': 1, status: 1 });
-bookingSchema.index({ 'careAssistant.careAssistant': 1, status: 1 });
-bookingSchema.index({ 'consultation.doctor': 1, status: 1 });
-bookingSchema.index({ 'consultation.hospital': 1, scheduledAt: -1 });
-bookingSchema.index({ 'payment.status': 1 });
+bookingSchema.index({ customer: 1, bookingType: 1 });
+bookingSchema.index({ doctor: 1, scheduledAt: 1 });
+bookingSchema.index({ doctor: 1, status: 1 });
+bookingSchema.index({ hospital: 1, scheduledAt: 1 });
+bookingSchema.index({ careAssistant: 1, status: 1 });
+bookingSchema.index({ status: 1, scheduledAt: 1 });
+bookingSchema.index({ paymentStatus: 1 });
+bookingSchema.index({ scheduledAt: 1 });
+bookingSchema.index({ followUpParentBooking: 1 });
+bookingSchema.index({ rides: 1 });
+bookingSchema.index({ 'diagnosticDetails.labPartner': 1 });
 bookingSchema.index({ createdAt: -1 });
+bookingSchema.index({ bookingType: 1, status: 1, scheduledAt: 1 });
 
 const Booking = mongoose.model('Booking', bookingSchema);
 export default Booking;

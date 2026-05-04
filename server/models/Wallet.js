@@ -10,7 +10,7 @@ export const TRANSFER_LIMITS = {
 export const WITHDRAWAL_LIMITS = {
   MIN_AMOUNT:  100,
   MAX_AMOUNT:  50_000,
-  DAILY_LIMIT: 1_00_000,
+  DAILY_LIMIT: 100_000, // FIX BUG 8: was 1_00_000 (misleading Indian separator) → explicit 100_000
 };
 
 export const WITHDRAWABLE_PURPOSES = new Set([
@@ -46,8 +46,8 @@ const bankAccountSchema = new Schema(
     isPrimary:  { type: Boolean, default: false },
     isVerified: { type: Boolean, default: false },
     verifiedAt: { type: Date },
-    razorpayFundAccountId: { type: String },
-    razorpayContactId:     { type: String },
+    razorpayFundAccountId: { type: String }, // Razorpay fund account ID for payouts
+    // REMOVED: razorpayContactId — contact created per payout, not stored per account
     addedAt:   { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
   },
@@ -59,7 +59,6 @@ const bankAccountSchema = new Schema(
 // ─────────────────────────────────────────────────────────────────────────────
 const withdrawalRequestSchema = new Schema(
   {
-    // index removed here — defined once via schema.index() below
     requestId: {
       type:    String,
       default: () => `WDR-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -67,10 +66,9 @@ const withdrawalRequestSchema = new Schema(
     amount: { type: Number, required: true, min: 1 },
     bankAccountId:     { type: Schema.Types.ObjectId },
     accountHolderName: { type: String },
-    accountNumber:     { type: String },
+    accountNumber:     { type: String }, // stores last-4 digits only
     ifscCode:          { type: String },
     bankName:          { type: String },
-    // index removed here — defined once via schema.index() below
     status: {
       type:    String,
       enum:    ['Pending', 'Approved', 'Completed', 'Failed', 'Rejected'],
@@ -78,7 +76,7 @@ const withdrawalRequestSchema = new Schema(
     },
     razorpayPayoutId:     { type: String },
     razorpayPayoutStatus: { type: String },
-    walletTransactionId: { type: String },
+    // REMOVED: walletTransactionId — no method ever sets this field
     reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     reviewedAt: { type: Date },
     adminNote:  { type: String, trim: true },
@@ -95,7 +93,6 @@ const withdrawalRequestSchema = new Schema(
 // ─────────────────────────────────────────────────────────────────────────────
 const walletTransactionSchema = new Schema(
   {
-    // index removed here — defined once via schema.index() below
     transactionId: {
       type:     String,
       required: true,
@@ -121,21 +118,15 @@ const walletTransactionSchema = new Schema(
         'Admin_Credit',
         'Admin_Debit',
         'Cashback',
-        'P2P_Send',
-        'P2P_Receive',
+        // REMOVED: P2P_Send, P2P_Receive — UPI P2P not supported via Razorpay payout
         'Withdrawal_Debit',
         'Withdrawal_Reversal',
       ],
     },
-    // index removed here — defined once via schema.index() below
-    pairTxnId:         { type: String },
-    counterpartyId:    { type: Schema.Types.ObjectId, ref: 'User' },
-    counterpartyUpiId: { type: String },
-    transferMode: {
-      type: String,
-      enum: ['upi_id', 'phone', 'qr'],
-    },
-    // index removed here — defined once via schema.index() below
+    // REMOVED: pairTxnId       — P2P pairing, no longer needed
+    // REMOVED: counterpartyId  — P2P pairing, no longer needed
+    // REMOVED: counterpartyUpiId — UPI handled by Razorpay, not stored
+    // REMOVED: transferMode    — P2P UPI field, no longer needed
     withdrawalRequestId: { type: String },
     referenceId: { type: Schema.Types.ObjectId, refPath: 'transactions.onModel' },
     onModel: {
@@ -164,7 +155,6 @@ const walletTransactionSchema = new Schema(
 // ─────────────────────────────────────────────────────────────────────────────
 const walletSchema = new Schema(
   {
-    // index removed here — defined once via schema.index() below
     user: {
       type:     Schema.Types.ObjectId,
       ref:      'User',
@@ -184,14 +174,7 @@ const walletSchema = new Schema(
       default: 0,
       min:     [0, 'Withdrawable balance cannot be negative'],
     },
-    // index removed here — defined once via schema.index() below
-    upiId: {
-      type:      String,
-      unique:    true,
-      sparse:    true,
-      trim:      true,
-      lowercase: true,
-    },
+    // REMOVED: upiId — UPI handled entirely by Razorpay, not stored on wallet
     bankAccounts: {
       type:    [bankAccountSchema],
       default: [],
@@ -206,8 +189,7 @@ const walletSchema = new Schema(
     totalDebited:      { type: Number, default: 0 },
     totalWithdrawn:    { type: Number, default: 0 },
     lastTransactionAt: { type: Date },
-    dailyTransferTotal: { type: Number, default: 0 },
-    dailyTransferDate:  { type: String },
+    // REMOVED: dailyTransferTotal, dailyTransferDate — P2P transfer tracking, no longer needed
     transactions: { type: [walletTransactionSchema], default: [] },
     isActive: { type: Boolean, default: true },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
@@ -269,7 +251,9 @@ walletSchema.pre('validate', function () {
 
 walletSchema.pre('save', async function () {
   if (this.isModified('transactions') && this.transactions.length > 0) {
+    // FIX BUG 6: capture _newTxnCount before clearing it, default to 1 only once
     const newCount = this._newTxnCount ?? 1;
+    this._newTxnCount = undefined; // clear BEFORE save triggers to prevent double-count
     const newTxns  = this.transactions.slice(-newCount);
 
     for (const txn of newTxns) {
@@ -282,6 +266,9 @@ walletSchema.pre('save', async function () {
       if (txn.type === 'Credit' && WITHDRAWABLE_PURPOSES.has(txn.purpose)) {
         this.withdrawableBalance = +(this.withdrawableBalance + txn.amount).toFixed(2);
       }
+      // FIX BUG 1: Withdrawal_Reversal is NOT in WITHDRAWABLE_PURPOSES — correct.
+      // But track withdrawableBalanceAfter on the txn here directly while we have the
+      // updated value, so the second save in credit() gets the right snapshot.
       if (txn.type === 'Credit' && txn.purpose === 'Withdrawal_Reversal') {
         this.withdrawableBalance = +(this.withdrawableBalance + txn.amount).toFixed(2);
       }
@@ -292,6 +279,10 @@ walletSchema.pre('save', async function () {
         );
         this.totalWithdrawn = +(this.totalWithdrawn + txn.amount).toFixed(2);
       }
+
+      // FIX BUG 1: set withdrawableBalanceAfter inline here so credit()'s second save
+      // is no longer needed — value is accurate at pre-save time
+      txn.withdrawableBalanceAfter = this.withdrawableBalance;
     }
 
     const latest = this.transactions[this.transactions.length - 1];
@@ -305,8 +296,6 @@ walletSchema.pre('save', async function () {
   if (this.withdrawalRequests.length > 500) {
     this.withdrawalRequests = this.withdrawalRequests.slice(-500);
   }
-
-  this._newTxnCount = undefined;
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -335,23 +324,13 @@ walletSchema.methods.credit = async function (amount, purpose, options = {}) {
     description:              options.description,
     initiatedBy:              options.initiatedBy,
     note:                     options.note,
-    pairTxnId:                options.pairTxnId,
-    counterpartyId:           options.counterpartyId,
-    counterpartyUpiId:        options.counterpartyUpiId,
-    transferMode:             options.transferMode,
     withdrawalRequestId:      options.withdrawalRequestId,
     timestamp:                new Date(),
   });
 
   this._newTxnCount = 1;
-  const saved = await this.save();
-
-  const lastTxn = saved.transactions[saved.transactions.length - 1];
-  if (lastTxn) {
-    lastTxn.withdrawableBalanceAfter = saved.withdrawableBalance;
-    await saved.save();
-  }
-  return saved;
+  // FIX BUG 1: withdrawableBalanceAfter now set in pre-save hook — second save removed
+  return this.save();
 };
 
 walletSchema.methods.debit = async function (amount, purpose, options = {}) {
@@ -388,10 +367,6 @@ walletSchema.methods.debit = async function (amount, purpose, options = {}) {
     description:              options.description,
     initiatedBy:              options.initiatedBy,
     note:                     options.note,
-    pairTxnId:                options.pairTxnId,
-    counterpartyId:           options.counterpartyId,
-    counterpartyUpiId:        options.counterpartyUpiId,
-    transferMode:             options.transferMode,
     withdrawalRequestId:      options.withdrawalRequestId,
     timestamp:                new Date(),
   });
@@ -487,7 +462,7 @@ walletSchema.methods.requestWithdrawal = async function ({
     amount,
     bankAccountId:     bankAccount._id,
     accountHolderName: bankAccount.accountHolderName,
-    accountNumber:     bankAccount.accountNumber.slice(-4),
+    accountNumber:     bankAccount.accountNumber.slice(-4), // store last-4 only
     ifscCode:          bankAccount.ifscCode,
     bankName:          bankAccount.bankName,
     status:            'Pending',
@@ -515,21 +490,26 @@ walletSchema.methods.completeWithdrawal = async function ({
 
   const { amount } = request;
 
+  // FIX BUG 2: debit FIRST, then mark Completed only if debit succeeds
+  // Previously: status set to Completed → save → debit (if debit throws, stuck as Completed)
   this.lockedBalance = Math.max(0, +(this.lockedBalance - amount).toFixed(2));
 
+  // FIX BUG 3: request.accountNumber already holds last-4 digits only (set in requestWithdrawal)
+  // Description must NOT re-apply XXXX prefix — just use the stored masked value directly
+  await this.debit(amount, 'Withdrawal_Debit', {
+    description:         `Bank withdrawal to XXXX${request.accountNumber}`,
+    initiatedBy:         reviewedBy,
+    withdrawalRequestId: requestId,
+  });
+
+  // Mark Completed only after debit succeeds
   request.status           = 'Completed';
   request.razorpayPayoutId = razorpayPayoutId;
   request.reviewedBy       = reviewedBy;
   request.reviewedAt       = new Date();
   request.completedAt      = new Date();
 
-  await this.save();
-
-  return this.debit(amount, 'Withdrawal_Debit', {
-    description:         `Bank withdrawal to XXXX${request.accountNumber}`,
-    initiatedBy:         reviewedBy,
-    withdrawalRequestId: requestId,
-  });
+  return this.save();
 };
 
 walletSchema.methods.rejectWithdrawal = async function ({
@@ -546,9 +526,13 @@ walletSchema.methods.rejectWithdrawal = async function ({
   const { amount } = request;
 
   this.lockedBalance = Math.max(0, +(this.lockedBalance - amount).toFixed(2));
+
+  // FIX BUG 4: call getDailyWithdrawalTotal() first to reset stale date before decrementing
+  // Previously: direct decrement on dailyWithdrawalTotal without date check → wrong value if next day
+  const currentDailyTotal = this.getDailyWithdrawalTotal();
   this.dailyWithdrawalTotal = Math.max(
     0,
-    +(this.dailyWithdrawalTotal - amount).toFixed(2)
+    +(currentDailyTotal - amount).toFixed(2)
   );
 
   request.status     = 'Rejected';
@@ -573,9 +557,12 @@ walletSchema.methods.failWithdrawal = async function ({
   const { amount } = request;
 
   this.lockedBalance = Math.max(0, +(this.lockedBalance - amount).toFixed(2));
+
+  // FIX BUG 4 (same pattern): reset stale date before decrementing
+  const currentDailyTotal = this.getDailyWithdrawalTotal();
   this.dailyWithdrawalTotal = Math.max(
     0,
-    +(this.dailyWithdrawalTotal - amount).toFixed(2)
+    +(currentDailyTotal - amount).toFixed(2)
   );
 
   request.status        = 'Failed';
@@ -594,26 +581,9 @@ walletSchema.methods.failWithdrawal = async function ({
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Daily Transfer / Withdrawal Helpers
+// Daily Withdrawal Helpers
+// REMOVED: getDailyTransferTotal, incrementDailyTransfer — P2P transfer tracking removed
 // ─────────────────────────────────────────────────────────────────────────────
-
-walletSchema.methods.getDailyTransferTotal = function () {
-  const today = todayIST();
-  if (this.dailyTransferDate !== today) {
-    this.dailyTransferTotal = 0;
-    this.dailyTransferDate  = today;
-  }
-  return this.dailyTransferTotal;
-};
-
-walletSchema.methods.incrementDailyTransfer = function (amount) {
-  const today = todayIST();
-  if (this.dailyTransferDate !== today) {
-    this.dailyTransferTotal = 0;
-    this.dailyTransferDate  = today;
-  }
-  this.dailyTransferTotal = +(this.dailyTransferTotal + amount).toFixed(2);
-};
 
 walletSchema.methods.getDailyWithdrawalTotal = function () {
   const today = todayIST();
@@ -634,14 +604,13 @@ walletSchema.methods.incrementDailyWithdrawal = function (amount) {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Indexes  — single source of truth, no inline index: true for these fields
+// Indexes
 // ─────────────────────────────────────────────────────────────────────────────
 
- 
- 
+walletSchema.index({ user: 1 });
 walletSchema.index({ 'transactions.transactionId': 1 });
 walletSchema.index({ 'transactions.timestamp': -1 });
-walletSchema.index({ 'transactions.pairTxnId': 1 });
+// REMOVED: transactions.pairTxnId index — P2P field removed
 walletSchema.index({ 'transactions.withdrawalRequestId': 1 });
 walletSchema.index({ 'withdrawalRequests.requestId': 1 });
 walletSchema.index({ 'withdrawalRequests.status': 1 });

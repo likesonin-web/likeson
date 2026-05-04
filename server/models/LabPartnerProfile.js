@@ -143,19 +143,32 @@ const complianceDocSchema = new Schema(
  */
 const labTestSchema = new Schema(
   {
-    testCode:        { type: String, trim: true },        // e.g. "CBC-001"
+    testCode:        { type: String, trim: true },
     testName:        { type: String, required: true, trim: true },
-    category:        { type: String, trim: true },         // e.g. "Haematology"
-    sampleType:      { type: String, trim: true },         // Blood, Urine, Swab …
-    turnaroundHours: { type: Number },                     // Typical TAT in hours
-    mrpPrice:        { type: Number, required: true, min: 0 },
-    partnerPrice:    { type: Number, min: 0 },             // Our negotiated price
+    category:        { type: String, trim: true },
+    sampleType:      { type: String, trim: true },
+    turnaroundHours: { type: Number },
+
+    mrpPrice:        { type: Number, required: true, min: 0 },  // patient pays this
+    partnerPrice:    { type: Number, required: true, min: 0 },  // you pay lab this
+    discountedPrice: { type: Number, min: 0 },                  // optional: you charge patient less than MRP
+
     homeCollectionAvailable: { type: Boolean, default: false },
     isActive:        { type: Boolean, default: true },
     reportTemplateUrl: { type: String },
   },
-  { _id: true }
+  {
+    _id: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  }
 );
+
+// Your earning per test
+labTestSchema.virtual('platformMargin').get(function () {
+  const chargedToPatient = this.discountedPrice ?? this.mrpPrice;
+  return +(chargedToPatient - this.partnerPrice).toFixed(2);
+});
 
 /**
  * Package / Panel offered by the lab

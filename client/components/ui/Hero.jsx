@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, memo, useState } from "react";
+import React, { useEffect, useMemo, memo, useState, useRef } from "react";
 import { useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
@@ -10,13 +10,9 @@ import {
   ArrowRight,
   ExternalLink,
   Star,
-  ShieldCheck,
   ChevronDown,
   Zap,
   TrendingUp,
-  Wifi,
-  Battery,
-  Signal,
 } from "lucide-react";
 
 import Container from "./Container";
@@ -63,9 +59,10 @@ const floatDelay = (delay) => ({
 
 // ─── Sub-Components ────────────────────────────────────────────────────────────
 
+// BUG 3 FIX: z-50 → z-0. Background was rendering above all content.
 const Background = memo(() => (
   <div
-    className="absolute inset-0 pointer-events-none z-50 overflow-hidden"
+    className="absolute inset-0 pointer-events-none z-0 overflow-hidden"
     aria-hidden="true"
   >
     {/* Grid Layer */}
@@ -296,6 +293,9 @@ function SignalBars({ strength = 4 }) {
 
 // ─── WiFi SVG ────────────────────────────────────────────────────────────────
 
+// BUG 6 FIX: WifiIcon used hardcoded #1c1c1e (near-black) for stroke/fill,
+// making it invisible on the phone's dark screen. Changed to white to match
+// SignalBars and BatteryIcon which already correctly use white/light colors.
 function WifiIcon({ connected = true }) {
   return (
     <svg
@@ -306,11 +306,11 @@ function WifiIcon({ connected = true }) {
       aria-label={connected ? "WiFi connected" : "WiFi disconnected"}
     >
       {/* Dot */}
-      <circle cx="8" cy="10.6" r="1.15" fill="#1c1c1e" />
+      <circle cx="8" cy="10.6" r="1.15" fill="white" />
       {/* Inner arc */}
       <path
         d="M5.2 7.4a3.9 3.9 0 0 1 5.6 0"
-        stroke="#1c1c1e"
+        stroke="white"
         strokeWidth="1.35"
         strokeLinecap="round"
         fill="none"
@@ -319,7 +319,7 @@ function WifiIcon({ connected = true }) {
       {/* Outer arc */}
       <path
         d="M2.3 4.3a8 8 0 0 1 11.4 0"
-        stroke="#1c1c1e"
+        stroke="white"
         strokeWidth="1.35"
         strokeLinecap="round"
         fill="none"
@@ -351,7 +351,7 @@ function BatteryIcon({ level = 1, charging = false }) {
         width="23"
         height="12"
         rx="2.8"
-        stroke="#1c1c1e"
+        stroke="white"
         strokeWidth="1"
         opacity="0.32"
       />
@@ -389,16 +389,16 @@ function BatteryIcon({ level = 1, charging = false }) {
   );
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+// ─── Phone Status Bar ─────────────────────────────────────────────────────────
 
-  function PhoneStatusBar() {
+function PhoneStatusBar() {
   const [time, setTime] = useState(() => format12Hour(new Date()));
   const [battery, setBattery] = useState({ level: 1, charging: false, supported: false });
   const [signal, setSignal] = useState(4);
   const [wifiConnected, setWifiConnected] = useState(true);
   const [batteryPct, setBatteryPct] = useState(null);
 
-  // ── Time (every second) ────────────────────────────────────────────────────
+  // ── Time (every second) ──────────────────────────────────────────────────
   useEffect(() => {
     const tick = () => setTime(format12Hour(new Date()));
     tick();
@@ -406,11 +406,19 @@ function BatteryIcon({ level = 1, charging = false }) {
     return () => clearInterval(id);
   }, []);
 
-  // ── Battery API ────────────────────────────────────────────────────────────
-  const readBattery = useCallback(async () => {
+  // BUG 4 FIX: Battery API cleanup was returning a Promise which resolved the
+  // cleanup function *after* unmount. Store the cleanup fn in a ref so the
+  // effect's return fires it synchronously on unmount.
+  const batteryCleanupRef = useRef(null);
+
+  useEffect(() => {
     if (!navigator.getBattery) return;
-    try {
-      const b = await navigator.getBattery();
+
+    let cancelled = false;
+
+    navigator.getBattery().then((b) => {
+      if (cancelled) return;
+
       const update = () => {
         setBattery({ level: b.level, charging: b.charging, supported: true });
         setBatteryPct(Math.round(b.level * 100));
@@ -418,19 +426,22 @@ function BatteryIcon({ level = 1, charging = false }) {
       update();
       b.addEventListener("levelchange", update);
       b.addEventListener("chargingchange", update);
-      return () => {
+
+      // Store cleanup so unmount can run it synchronously
+      batteryCleanupRef.current = () => {
         b.removeEventListener("levelchange", update);
         b.removeEventListener("chargingchange", update);
       };
-    } catch (_) {}
+    }).catch(() => {});
+
+    return () => {
+      cancelled = true;
+      batteryCleanupRef.current?.();
+      batteryCleanupRef.current = null;
+    };
   }, []);
 
-  useEffect(() => {
-    const cleanup = readBattery();
-    return () => { cleanup?.then?.(fn => fn?.()); };
-  }, [readBattery]);
-
-  // ── Network / Signal ───────────────────────────────────────────────────────
+  // ── Network / Signal ─────────────────────────────────────────────────────
   const readNetwork = useCallback(() => {
     const conn =
       navigator.connection ||
@@ -485,14 +496,14 @@ function BatteryIcon({ level = 1, charging = false }) {
 
   return (
     <div
-      className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between"
-      style={{ padding: "13px 20px 0", height: "46px" }}
+      className="absolute top-0 left-0 right-0 z-30 flex items-center px-4 pl-6 py-1 justify-between"
+      
     >
       {/* Time */}
       <span
         style={{
           fontFamily: "-apple-system, 'SF Pro Display', 'Helvetica Neue', sans-serif",
-          fontSize: "13px",
+          fontSize: "10px",
           fontWeight: 700,
           letterSpacing: "-0.3px",
           color: "white",
@@ -503,7 +514,7 @@ function BatteryIcon({ level = 1, charging = false }) {
 
       {/* Icons cluster */}
       <div className="flex items-center gap-[5px]">
-        <SignalBars strength={signal} />
+        <SignalBars  strength={signal} />
         <WifiIcon connected={wifiConnected} />
         <div className="flex items-center gap-[3px]">
           {battery.supported && batteryPct !== null && (
@@ -526,7 +537,9 @@ function BatteryIcon({ level = 1, charging = false }) {
   );
 }
 
-const MediaCard = memo(({ media,  activeTo }) => {
+// BUG 5 FIX: destructure all props actually passed at the call site.
+// badge and analyticsTag were passed but missing from destructuring — dead props.
+const MediaCard = memo(({ media, badge, analyticsTag, activeTo }) => {
   if (!media?.url) return null;
 
   const scheduleLabel = activeTo
@@ -540,6 +553,7 @@ const MediaCard = memo(({ media,  activeTo }) => {
     <div
       className="relative w-full max-w-[380px] lg:max-w-none flex justify-center lg:justify-end scale-[0.80] sm:scale-90 lg:scale-100 origin-center lg:origin-right"
       aria-hidden="true"
+      data-analytics={analyticsTag}
     >
       {/* ── Realistic Mobile Phone Mockup ───────────────────────────────── */}
       <motion.div
@@ -551,10 +565,7 @@ const MediaCard = memo(({ media,  activeTo }) => {
         {/* Phone outer shell */}
         <div
           className="relative"
-          style={{
-            width: "280px",
-            height: "580px",
-          }}
+          style={{ width: "300px", height: "580px" }}
         >
           {/* Outer frame / chassis */}
           <div
@@ -578,23 +589,14 @@ const MediaCard = memo(({ media,  activeTo }) => {
           {/* Inner bezel */}
           <div
             className="absolute z-10"
-            style={{
-              inset: "8px",
-              borderRadius: "38px",
-              background: "#000",
-            }}
+            style={{ inset: "8px", borderRadius: "38px", background: "#000" }}
           />
 
-          {/* Screen area — clips the media content */}
+          {/* Screen area */}
           <div
             className="absolute z-20 overflow-hidden bg-black"
-            style={{
-              inset: "8px",
-              borderRadius: "38px",
-            }}
+            style={{ inset: "8px", borderRadius: "38px" }}
           >
-   
-
             {/* Status Bar */}
             <PhoneStatusBar />
 
@@ -611,10 +613,7 @@ const MediaCard = memo(({ media,  activeTo }) => {
                 className="w-full h-full object-cover"
               />
             ) : media.type === "lottie" ? (
-              // Lottie support via @lottiefiles/react-lottie-player or dotlottie-react
               <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-base-300 to-base-200">
-                {/* Replace with your Lottie player component */}
-                {/* Example: <Player autoplay loop src={media.url} style={{ width: "100%", height: "100%" }} /> */}
                 <div className="text-center p-6">
                   <div className="w-16 h-16 mx-auto mb-3 rounded-full bg-primary/20 flex items-center justify-center">
                     <Zap size={28} className="text-primary" />
@@ -635,8 +634,6 @@ const MediaCard = memo(({ media,  activeTo }) => {
             <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(to_top,rgba(0,0,0,0.72)_0%,transparent_48%)]" />
             <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(to_bottom,rgba(0,0,0,0.30)_0%,transparent_36%)]" />
 
-         
-
             {/* Bottom overlay content inside phone screen */}
             <div className="absolute bottom-0 left-0 right-0 z-30 p-4 pb-8">
               <div className="flex items-center justify-between">
@@ -650,79 +647,22 @@ const MediaCard = memo(({ media,  activeTo }) => {
                     {scheduleLabel}
                   </span>
                 </div>
-
-                 
               </div>
             </div>
-
-            
           </div>
 
           {/* Physical button details — volume buttons left */}
-          <div
-            className="absolute z-0"
-            style={{
-              left: "-3px",
-              top: "100px",
-              width: "3px",
-              height: "28px",
-              borderRadius: "3px 0 0 3px",
-              background: "linear-gradient(180deg, #2a2a2e, #1a1a1d)",
-              boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)",
-            }}
-          />
-          <div
-            className="absolute z-0"
-            style={{
-              left: "-3px",
-              top: "138px",
-              width: "3px",
-              height: "52px",
-              borderRadius: "3px 0 0 3px",
-              background: "linear-gradient(180deg, #2a2a2e, #1a1a1d)",
-              boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)",
-            }}
-          />
-          <div
-            className="absolute z-0"
-            style={{
-              left: "-3px",
-              top: "200px",
-              width: "3px",
-              height: "52px",
-              borderRadius: "3px 0 0 3px",
-              background: "linear-gradient(180deg, #2a2a2e, #1a1a1d)",
-              boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)",
-            }}
-          />
+          <div className="absolute z-0" style={{ left: "-3px", top: "100px", width: "3px", height: "28px", borderRadius: "3px 0 0 3px", background: "linear-gradient(180deg, #2a2a2e, #1a1a1d)", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)" }} />
+          <div className="absolute z-0" style={{ left: "-3px", top: "138px", width: "3px", height: "52px", borderRadius: "3px 0 0 3px", background: "linear-gradient(180deg, #2a2a2e, #1a1a1d)", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)" }} />
+          <div className="absolute z-0" style={{ left: "-3px", top: "200px", width: "3px", height: "52px", borderRadius: "3px 0 0 3px", background: "linear-gradient(180deg, #2a2a2e, #1a1a1d)", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)" }} />
 
           {/* Power button right */}
-          <div
-            className="absolute z-0"
-            style={{
-              right: "-3px",
-              top: "140px",
-              width: "3px",
-              height: "68px",
-              borderRadius: "0 3px 3px 0",
-              background: "linear-gradient(180deg, #2a2a2e, #1a1a1d)",
-              boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)",
-            }}
-          />
+          <div className="absolute z-0" style={{ right: "-3px", top: "140px", width: "3px", height: "68px", borderRadius: "0 3px 3px 0", background: "linear-gradient(180deg, #2a2a2e, #1a1a1d)", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)" }} />
 
           {/* Screen glare/reflection */}
-          <div
-            className="absolute z-20 pointer-events-none rounded-[38px]"
-            style={{
-              inset: "8px",
-              background:
-                "linear-gradient(135deg, rgba(255,255,255,0.06) 0%, transparent 40%)",
-            }}
-          />
+          <div className="absolute z-20 pointer-events-none rounded-[38px]" style={{ inset: "8px", background: "linear-gradient(135deg, rgba(255,255,255,0.06) 0%, transparent 40%)" }} />
         </div>
       </motion.div>
-
-    
 
       {/* Schedule Widget */}
       {activeTo && (
@@ -757,9 +697,7 @@ const MediaCard = memo(({ media,  activeTo }) => {
             <Zap size={12} />
           </div>
           <div>
-            <p className="text-[9px] font-bold uppercase tracking-widest text-base-content/40">
-              Response
-            </p>
+            <p className="text-[9px] font-bold uppercase tracking-widest text-base-content/40">Response</p>
             <p className="text-xs font-black text-success">&lt; 2 hrs</p>
           </div>
         </div>
@@ -769,8 +707,7 @@ const MediaCard = memo(({ media,  activeTo }) => {
       <div
         className="absolute inset-0 z-0 pointer-events-none"
         style={{
-          background:
-            "radial-gradient(ellipse 60% 50% at 50% 50%, color-mix(in oklch, var(--primary) 18%, transparent), transparent 70%)",
+          background: "radial-gradient(ellipse 60% 50% at 50% 50%, color-mix(in oklch, var(--primary) 18%, transparent), transparent 70%)",
           filter: "blur(32px)",
         }}
       />
@@ -807,11 +744,16 @@ export default function Hero() {
   const loading = useSelector(selectLoadingActiveHero);
   const reduceMotion = useReducedMotion();
 
+  // BUG 2 FIX: removed `loading` from dependency array. Including it caused an
+  // infinite loop: loading flips false after fetch → effect re-runs → if hero
+  // is still null (e.g. 404) it dispatches again endlessly.
+  // We only want to fetch once on mount when hero is absent.
   useEffect(() => {
-    if (!hero && !loading) {
+    if (!hero) {
       dispatch(fetchActiveHero());
     }
-  }, [dispatch, hero, loading]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dispatch]);
 
   const headlineNode = useMemo(
     () => buildHeadline(hero?.headline, hero?.highlightedText),
@@ -849,7 +791,7 @@ export default function Hero() {
           <div className="relative z-10 w-full">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-6 items-center">
 
-              {/* ── Typographic Content ─────────────────────────────────────────── */}
+              {/* ── Typographic Content ── */}
               <motion.div
                 variants={variants.stagger}
                 initial="hidden"
@@ -864,9 +806,7 @@ export default function Hero() {
                 {hero.badge?.text && (
                   <motion.div
                     variants={variants.fadeUp}
-                    className={`flex ${
-                      centred ? "justify-center" : "justify-center lg:justify-start"
-                    }`}
+                    className={`flex ${centred ? "justify-center" : "justify-center lg:justify-start"}`}
                   >
                     <div
                       className="inline-flex items-center badge-success gap-2 px-3.5 py-1.5 rounded-full border backdrop-blur-md"
@@ -877,10 +817,7 @@ export default function Hero() {
                         <span className="relative inline-flex rounded-full h-2 w-2 bg-success" />
                       </span>
                       {hero.badge.icon && (
-                        <span
-                          className="text-sm leading-none select-none"
-                          aria-hidden="true"
-                        >
+                        <span className="text-sm leading-none select-none" aria-hidden="true">
                           {hero.badge.icon}
                         </span>
                       )}
@@ -893,14 +830,12 @@ export default function Hero() {
 
                 {/* Main Value Proposition */}
                 <motion.div variants={variants.fadeUp} className="space-y-4">
-                  <h1 className="font-black leading-[1.08] tracking-tight text-[clamp(2.4rem,5.2vw,4.8rem)]">
+                  <h1 className="font-black leading-[1.08] tracking-tight  ">
                     {headlineNode}
                   </h1>
 
                   {(hero.subheadline || hero.description) && (
-                    <div
-                      className={`max-w-xl mx-auto ${centred ? "" : "lg:mx-0"}`}
-                    >
+                    <div className={`max-w-xl mx-auto ${centred ? "" : "lg:mx-0"}`}>
                       {hero.subheadline && (
                         <p className="text-base font-semibold mb-1 text-primary">
                           {hero.subheadline}
@@ -919,11 +854,7 @@ export default function Hero() {
                 {sortedBtns.length > 0 && (
                   <motion.div
                     variants={variants.fadeUp}
-                    className={`flex flex-wrap gap-3 pt-1 ${
-                      centred
-                        ? "justify-center"
-                        : "justify-center lg:justify-start"
-                    }`}
+                    className={`flex flex-wrap gap-3 pt-1 ${centred ? "justify-center" : "justify-center lg:justify-start"}`}
                   >
                     {sortedBtns.map((btn, i) => (
                       <CtaButton key={btn._id ?? i} btn={btn} />
@@ -935,7 +866,7 @@ export default function Hero() {
                 <TrustRow priority={hero.priority} centred={centred} />
               </motion.div>
 
-              {/* ── Visual Media Area — Mobile Phone Mockup ──────────────────── */}
+              {/* ── Visual Media Area ── */}
               {hasMedia && (
                 <motion.div
                   variants={variants.fadeLeft}

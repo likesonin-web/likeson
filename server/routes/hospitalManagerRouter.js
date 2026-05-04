@@ -536,24 +536,49 @@ router.patch(
 
 /**
  * GET /hospital-manager/doctors/search
- * Search all verified doctors on the platform (NOT yet linked) to add them.
- * Query: ?q=name_or_email&specialization=
+ * Search doctors eligible to be linked to THIS hospital only.
+ *
+ * Eligible = ALL of:
+ *   1. DoctorProfile.primaryHospital === hospital._id
+ *      (doctor belongs to this hospital but not yet in linkedDoctors)
+ *   OR
+ *   2. User.createdBy === req.user._id
+ *      (doctor account was created by this hospital manager via create-and-link
+ *       but somehow not in linkedDoctors — edge case recovery)
+ *
+ *   AND NOT already in hospital.linkedDoctors
+ *
+ * This ensures NO cross-hospital doctor data leaks.
  */
 router.get(
   '/doctors/search',
   asyncHandler(async (req, res) => {
     const { q = '', specialization = '', page = 1, limit = 10 } = req.query;
 
-    const hospital = await resolveHospital(req.user._id, 'linkedDoctors');
+    const hospital = await resolveHospital(req.user._id, 'linkedDoctors _id');
 
+    // Step 1 — find User IDs created by this hospital manager
+    const createdUserIds = await User.find(
+      { createdBy: req.user._id, role: 'doctor' },
+      '_id'
+    ).lean();
+    const createdUserIdSet = createdUserIds.map(u => u._id);
+
+    // Step 2 — build DoctorProfile filter
+    // Eligible: primaryHospital is this hospital OR user was created by this manager
+    // AND: not already linked
     const filter = {
-      isVerified:        true,
-      isActive:          true,
-      partnershipStatus: 'Active',
       _id:               { $nin: hospital.linkedDoctors },
+      isActive:          true,
+      $or: [
+        { primaryHospital: hospital._id },
+        { user: { $in: createdUserIdSet } },
+      ],
     };
 
     if (specialization) filter.specialization = specialization;
+
+    const skip = (Number(page) - 1) * Number(limit);
 
     const doctors = await DoctorProfile.find(filter)
       .populate({
@@ -568,15 +593,20 @@ router.get(
             }
           : {},
       })
-      .select('user specialization experienceYears rating consultationTypes profilePhotoUrl primaryHospital')
+      .select(
+        'user specialization experienceYears rating consultationTypes ' +
+        'profilePhotoUrl primaryHospital isVerified isActive partnershipStatus'
+      )
+      .skip(skip)
       .limit(Number(limit))
-      .skip((Number(page) - 1) * Number(limit));
+      .lean();
 
-    const filtered = doctors.filter((d) => d.user !== null);
+    // Filter out null user refs (search mismatch from populate match)
+    const filtered = doctors.filter(d => d.user !== null);
 
     res.json({ success: true, data: filtered, count: filtered.length });
   })
-); 
+);
 
 /**
  * GET /hospital-manager/doctors/stats
@@ -778,16 +808,14 @@ router.get(
       isVerified     = '',
     } = req.query;
 
-    const skip = (Number(page) - 1) * Number(limit);
-
-    // Build filter on DoctorProfile
-    const filter = {
-      _id: { $in: hospital.linkedDoctors },
-    };
+    // Build DoctorProfile filter
+    const filter = { _id: { $in: hospital.linkedDoctors } };
     if (specialization) filter.specialization = specialization;
     if (isVerified !== '') filter.isVerified = isVerified === 'true';
 
-    let query = DoctorProfile.find(filter)
+    // Phase 1 — fetch ALL matching profiles with user populated
+    // Must fetch all first so search-filter on user fields gives correct total
+    const allDoctors = await DoctorProfile.find(filter)
       .populate({
         path:   'user',
         select: 'name email phone avatar isActive isBlocked',
@@ -805,26 +833,25 @@ router.get(
         'consultationTypes rating isVerified isActive isOnline ' +
         'weeklyAvailability partnershipStatus profilePhotoUrl'
       )
-      .skip(skip)
-      .limit(Number(limit))
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
-    const [doctors, total] = await Promise.all([
-      query,
-      DoctorProfile.countDocuments(filter),
-    ]);
+    // Phase 2 — drop nulled user refs (populate match miss = search mismatch)
+    const matched = allDoctors.filter(d => d.user !== null);
 
-    // Filter out nulled user refs (search mismatch)
-    const filtered = doctors.filter((d) => d.user !== null);
+    // Phase 3 — paginate in-memory on correct set
+    const total  = matched.length;
+    const skip   = (Number(page) - 1) * Number(limit);
+    const paged  = matched.slice(skip, skip + Number(limit));
 
     res.json({
       success: true,
-      data:    filtered,
+      data:    paged,
       pagination: {
         total,
-        page:     Number(page),
-        limit:    Number(limit),
-        pages:    Math.ceil(total / Number(limit)),
+        page:  Number(page),
+        limit: Number(limit),
+        pages: Math.ceil(total / Number(limit)),
       },
     });
   })

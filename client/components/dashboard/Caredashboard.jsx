@@ -48,6 +48,8 @@ const SECTIONS = [
       { name: "Dashboard",              href: "/care-assistant/dashboard",   icon: LayoutDashboard },
       { name: "Performance & Earnings", href: "/care-assistant/performance", icon: TrendingUp },
       { name: "Activity Summary",       href: "/care-assistant/stats",       icon: Activity },
+            {name:"Work Calendar", href:"/care-assistant/calendar", icon:<CalendarCheck size={18} />},
+      
     ],
   },
   {

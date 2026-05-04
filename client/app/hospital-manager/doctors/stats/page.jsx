@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useMemo } from "react";
+import { useDispatch, useSelector } from "react-redux";
 import { motion } from "framer-motion";
 import {
   Users, BadgeCheck, Activity, Wifi, WifiOff, Stethoscope,
-  TrendingUp, BarChart3, PieChart, RefreshCw, ChevronRight,
-  UserCheck, UserX, Loader2, Building2, Video, Home, Award
+  BarChart3, PieChart, RefreshCw, ChevronRight,
+  UserX, Loader2, Building2, Video, Home, Award
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -13,24 +14,17 @@ import {
   AreaChart, Area
 } from "recharts";
 
-// ─── Mock Data ────────────────────────────────────────────────────────────────
-const MOCK_STATS = {
-  total: 24, verified: 19, active: 22, online: 7, unverified: 5,
-  bySpecialization: [
-    { _id: "Cardiologist", count: 5 },
-    { _id: "Neurologist", count: 3 },
-    { _id: "Pediatrician", count: 4 },
-    { _id: "Orthopedic Surgeon", count: 3 },
-    { _id: "Dermatologist", count: 2 },
-    { _id: "General Physician", count: 4 },
-    { _id: "Gynecologist", count: 2 },
-    { _id: "Psychiatry", count: 1 },
-  ]
-};
+import {
+  fetchDoctorStats,
+  selectDoctorStats,
+  isLoading,
+  getError,
+} from "@/store/slices/hospitalManagerSlice";
 
+// ─── Static chart data (not from DB — illustrative) ───────────────────────────
 const CONSULT_TYPE_DATA = [
   { name: "In-Person", value: 18, icon: Building2 },
-  { name: "Video", value: 12, icon: Video },
+  { name: "Video",     value: 12, icon: Video },
   { name: "Home Visit", value: 6, icon: Home },
 ];
 
@@ -42,18 +36,6 @@ const ACTIVITY_DATA = [
   { day: "Fri", consultations: 71, online: 16 },
   { day: "Sat", consultations: 45, online: 10 },
   { day: "Sun", consultations: 22, online: 5 },
-];
-
-const KYC_DATA = [
-  { name: "Verified", value: 19, color: "var(--success)" },
-  { name: "Pending", value: 3, color: "var(--warning)" },
-  { name: "Unverified", value: 2, color: "var(--error)" },
-];
-
-const RADIAL_DATA = [
-  { name: "Active", value: Math.round(22 / 24 * 100), fill: "var(--success)" },
-  { name: "Verified", value: Math.round(19 / 24 * 100), fill: "var(--primary)" },
-  { name: "Online", value: Math.round(7 / 24 * 100), fill: "var(--info)" },
 ];
 
 const PIE_COLORS = [
@@ -87,7 +69,10 @@ const StatCard = ({ label, value, subLabel, icon: Icon, color, note, delay = 0 }
     className="card p-5 flex flex-col gap-3"
   >
     <div className="flex items-start justify-between">
-      <div className={`w-10 h-10 rounded-[var(--r-field)] flex items-center justify-center`} style={{ background: `color-mix(in srgb, ${color} 15%, transparent)` }}>
+      <div
+        className="w-10 h-10 rounded-[var(--r-field)] flex items-center justify-center"
+        style={{ background: `color-mix(in srgb, ${color} 15%, transparent)` }}
+      >
         <Icon size={18} style={{ color }} />
       </div>
       <ChevronRight size={14} className="text-[var(--base-content)]/30 mt-1" />
@@ -97,11 +82,15 @@ const StatCard = ({ label, value, subLabel, icon: Icon, color, note, delay = 0 }
       <p className="text-sm font-semibold text-[var(--base-content)] mt-0.5">{label}</p>
       {subLabel && <p className="text-xs text-[var(--base-content)]/50 mt-0.5">{subLabel}</p>}
     </div>
-    {note && <p className="text-[10px] text-[var(--base-content)]/35 leading-snug border-t border-[var(--base-300)] pt-2">{note}</p>}
+    {note && (
+      <p className="text-[10px] text-[var(--base-content)]/35 leading-snug border-t border-[var(--base-300)] pt-2">
+        {note}
+      </p>
+    )}
   </motion.div>
 );
 
-// ─── Chart Card Wrapper ───────────────────────────────────────────────────────
+// ─── Chart Card ───────────────────────────────────────────────────────────────
 const ChartCard = ({ title, subtitle, note, children, delay = 0 }) => (
   <motion.div
     initial={{ opacity: 0, y: 18 }}
@@ -114,29 +103,66 @@ const ChartCard = ({ title, subtitle, note, children, delay = 0 }) => (
       {subtitle && <p className="text-xs text-[var(--base-content)]/50">{subtitle}</p>}
     </div>
     {children}
-    {note && <p className="text-[10px] text-[var(--base-content)]/35 leading-snug border-t border-[var(--base-300)] pt-2">{note}</p>}
+    {note && (
+      <p className="text-[10px] text-[var(--base-content)]/35 leading-snug border-t border-[var(--base-300)] pt-2">
+        {note}
+      </p>
+    )}
   </motion.div>
 );
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function StaffStats() {
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const dispatch   = useDispatch();
+  const stats      = useSelector(selectDoctorStats);
+  const loading    = useSelector(isLoading(fetchDoctorStats));
+  const error      = useSelector(getError(fetchDoctorStats));
 
-  const loadStats = (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
-    setTimeout(() => {
-      setStats(MOCK_STATS);
-      setLoading(false);
-      setRefreshing(false);
-    }, 800);
-  };
+  useEffect(() => {
+    dispatch(fetchDoctorStats());
+  }, [dispatch]);
 
-  useEffect(() => { loadStats(); }, []);
+  const handleRefresh = () => dispatch(fetchDoctorStats());
 
-  if (loading) {
+  // ── Derived data (safe defaults when stats null) ──────────────────────────
+  const total          = stats?.total          ?? 0;
+  const verified       = stats?.verified       ?? 0;
+  const active         = stats?.active         ?? 0;
+  const online         = stats?.online         ?? 0;
+  const unverified     = stats?.unverified     ?? 0;
+  const bySpec         = stats?.bySpecialization ?? [];
+  const specCount      = bySpec.length;
+
+  // BUG FIX: sort BEFORE deriving max — original sorted then compared to [0] of unsorted
+  const sortedSpec = useMemo(
+    () => [...bySpec].sort((a, b) => b.count - a.count),
+    [bySpec]
+  );
+  const maxSpecCount = sortedSpec[0]?.count ?? 1; // avoid /0
+
+  const specBarData = useMemo(
+    () => sortedSpec.map(s => ({
+      name:     s._id.length > 12 ? s._id.slice(0, 11) + "…" : s._id,
+      fullName: s._id,
+      count:    s.count,
+    })),
+    [sortedSpec]
+  );
+
+  const KYC_DATA = useMemo(() => [
+    { name: "Verified",   value: verified,              color: "var(--success)" },
+    { name: "Pending",    value: unverified,             color: "var(--warning)" },
+    { name: "Unverified", value: total - verified - unverified < 0 ? 0 : total - verified - unverified, color: "var(--error)" },
+  ], [verified, unverified, total]);
+
+  const RADIAL_DATA = useMemo(() => [
+    { name: "Active",   value: total ? Math.round(active   / total * 100) : 0, fill: "var(--success)" },
+    { name: "Verified", value: total ? Math.round(verified / total * 100) : 0, fill: "var(--primary)" },
+    { name: "Online",   value: total ? Math.round(online   / total * 100) : 0, fill: "var(--info)" },
+  ], [active, verified, online, total]);
+
+  // ── Loading ───────────────────────────────────────────────────────────────
+  if (loading && !stats) {
     return (
       <div className="min-h-screen bg-[var(--base-100)] flex items-center justify-center" data-theme="hospital">
         <div className="flex flex-col items-center gap-3">
@@ -147,25 +173,68 @@ export default function StaffStats() {
     );
   }
 
+  // ── Error ─────────────────────────────────────────────────────────────────
+  if (error && !stats) {
+    return (
+      <div className="min-h-screen bg-[var(--base-100)] flex items-center justify-center" data-theme="hospital">
+        <div className="flex flex-col items-center gap-3 text-center px-4">
+          <p className="text-sm font-semibold text-[var(--error)]">Failed to load stats</p>
+          <p className="text-xs text-[var(--base-content)]/50">{error}</p>
+          <button onClick={handleRefresh} className="btn-secondary text-xs px-4 py-2 mt-1">
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── KPI card configs ──────────────────────────────────────────────────────
   const topCards = [
-    { label: "Total Doctors", value: stats.total, subLabel: "Linked to hospital", icon: Users, color: "var(--primary)", note: "All DoctorProfile records in the linkedDoctors array of this hospital", delay: 0 },
-    { label: "Verified Doctors", value: stats.verified, subLabel: `${Math.round(stats.verified / stats.total * 100)}% of total`, icon: BadgeCheck, color: "var(--success)", note: "Doctors with kycStatus === 'verified' — cleared for digital bookings", delay: 0.05 },
-    { label: "Active Doctors", value: stats.active, subLabel: `${stats.total - stats.active} inactive`, icon: Activity, color: "var(--info)", note: "Doctors with isActive: true — currently accepting consultations", delay: 0.1 },
-    { label: "Currently Online", value: stats.online, subLabel: "Right now", icon: Wifi, color: "var(--accent)", note: "Doctors with isOnline: true — live presence indicator updated on login/logout", delay: 0.15 },
+    {
+      label: "Total Doctors", value: total,
+      subLabel: "Linked to hospital", icon: Users, color: "var(--primary)",
+      note: "All DoctorProfile records in the linkedDoctors array of this hospital", delay: 0,
+    },
+    {
+      label: "Verified Doctors", value: verified,
+      subLabel: total ? `${Math.round(verified / total * 100)}% of total` : "—",
+      icon: BadgeCheck, color: "var(--success)",
+      note: "Doctors with kycStatus === 'verified' — cleared for digital bookings", delay: 0.05,
+    },
+    {
+      label: "Active Doctors", value: active,
+      subLabel: `${total - active} inactive`, icon: Activity, color: "var(--info)",
+      note: "Doctors with isActive: true — currently accepting consultations", delay: 0.1,
+    },
+    {
+      label: "Currently Online", value: online,
+      subLabel: "Right now", icon: Wifi, color: "var(--accent)",
+      note: "Doctors with isOnline: true — live presence indicator", delay: 0.15,
+    },
   ];
 
   const secondaryCards = [
-    { label: "Unverified", value: stats.unverified, subLabel: "KYC pending", icon: UserX, color: "var(--warning)", note: "Doctors who haven't completed KYC — cannot accept digital bookings", delay: 0.2 },
-    { label: "Offline", value: stats.total - stats.online, subLabel: "Not active now", icon: WifiOff, color: "var(--base-content)", note: "Total linked doctors minus currently online count", delay: 0.25 },
-    { label: "Specializations", value: stats.bySpecialization.length, subLabel: "Unique types", icon: Stethoscope, color: "var(--secondary)", note: "Number of distinct medical specializations across all linked doctors", delay: 0.3 },
-    { label: "Avg. per Spec.", value: (stats.total / stats.bySpecialization.length).toFixed(1), subLabel: "Doctors/speciality", icon: Award, color: "var(--chart-5)", note: "Average doctors per specialization — useful for identifying gaps in coverage", delay: 0.35 },
+    {
+      label: "Unverified", value: unverified,
+      subLabel: "KYC pending", icon: UserX, color: "var(--warning)",
+      note: "Doctors who haven't completed KYC — cannot accept digital bookings", delay: 0.2,
+    },
+    {
+      label: "Offline", value: total - online,
+      subLabel: "Not active now", icon: WifiOff, color: "var(--base-content)",
+      note: "Total linked doctors minus currently online count", delay: 0.25,
+    },
+    {
+      label: "Specializations", value: specCount,
+      subLabel: "Unique types", icon: Stethoscope, color: "var(--secondary)",
+      note: "Number of distinct medical specializations across all linked doctors", delay: 0.3,
+    },
+    {
+      label: "Avg. per Spec.", value: specCount ? (total / specCount).toFixed(1) : "—",
+      subLabel: "Doctors/speciality", icon: Award, color: "var(--chart-5)",
+      note: "Average doctors per specialization — useful for identifying gaps in coverage", delay: 0.35,
+    },
   ];
-
-  const specBarData = stats.bySpecialization.map(s => ({
-    name: s._id.length > 12 ? s._id.slice(0, 11) + "…" : s._id,
-    fullName: s._id,
-    count: s.count
-  }));
 
   return (
     <div className="min-h-screen bg-[var(--base-100)] p-4 md:p-6 lg:p-8" data-theme="hospital">
@@ -179,16 +248,20 @@ export default function StaffStats() {
             </div>
             <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--primary)]">Analytics</span>
           </div>
-          <h1 className="text-2xl md:text-3xl font-black text-[var(--base-content)] font-montserrat tracking-tight">Staff Statistics</h1>
-          <p className="text-sm text-[var(--base-content)]/50 mt-1">Real-time overview of all doctors linked to your hospital</p>
+          <h1 className="text-2xl md:text-3xl font-black text-[var(--base-content)] font-montserrat tracking-tight">
+            Staff Statistics
+          </h1>
+          <p className="text-sm text-[var(--base-content)]/50 mt-1">
+            Real-time overview of all doctors linked to your hospital
+          </p>
         </div>
         <button
-          onClick={() => loadStats(true)}
-          disabled={refreshing}
+          onClick={handleRefresh}
+          disabled={loading}
           className="btn-secondary flex items-center gap-2 text-xs px-5 py-2.5 self-start sm:self-auto"
         >
-          <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
-          {refreshing ? "Refreshing…" : "Refresh Stats"}
+          <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+          {loading ? "Refreshing…" : "Refresh Stats"}
         </button>
       </div>
 
@@ -209,24 +282,29 @@ export default function StaffStats() {
         <ChartCard
           title="Doctors by Specialization"
           subtitle="Distribution across all medical fields"
-          note="Aggregated from DoctorProfile.specialization for all linked doctors. Use this to identify understaffed departments"
+          note="Aggregated from DoctorProfile.specialization for all linked doctors"
           delay={0.4}
-          className="lg:col-span-2"
         >
           <div className="h-52">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={specBarData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" />
-                <XAxis dataKey="name" tick={{ fontSize: 10, fill: "var(--base-content)", opacity: 0.6 }} />
-                <YAxis tick={{ fontSize: 10, fill: "var(--base-content)", opacity: 0.6 }} allowDecimals={false} />
-                <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="count" name="Doctors" radius={[4, 4, 0, 0]}>
-                  {specBarData.map((_, i) => (
-                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            {specBarData.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-xs text-[var(--base-content)]/40">
+                No specialization data
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={specBarData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" />
+                  <XAxis dataKey="name" tick={{ fontSize: 10, fill: "var(--base-content)", opacity: 0.6 }} />
+                  <YAxis tick={{ fontSize: 10, fill: "var(--base-content)", opacity: 0.6 }} allowDecimals={false} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar dataKey="count" name="Doctors" radius={[4, 4, 0, 0]}>
+                    {specBarData.map((_, i) => (
+                      <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </ChartCard>
 
@@ -234,13 +312,18 @@ export default function StaffStats() {
         <ChartCard
           title="KYC / Verification Status"
           subtitle="Breakdown by verification state"
-          note="Verified = kycStatus 'verified'. Pending = 'pending' or 'under-review'. Unverified = 'not-submitted' or 'rejected'"
+          note="Verified = kycStatus 'verified'. Pending = unverified count from API."
           delay={0.45}
         >
           <div className="h-52">
             <ResponsiveContainer width="100%" height="100%">
               <RePieChart>
-                <Pie data={KYC_DATA} cx="50%" cy="45%" innerRadius={48} outerRadius={70} paddingAngle={3} dataKey="value">
+                <Pie
+                  data={KYC_DATA}
+                  cx="50%" cy="45%"
+                  innerRadius={48} outerRadius={70}
+                  paddingAngle={3} dataKey="value"
+                >
                   {KYC_DATA.map((entry, i) => <Cell key={i} fill={entry.color} />)}
                 </Pie>
                 <Tooltip content={<CustomTooltip />} />
@@ -258,20 +341,19 @@ export default function StaffStats() {
         <ChartCard
           title="Weekly Consultation Activity"
           subtitle="Consultations & online doctors per day"
-          note="Illustrative trend data — connect to your bookings/appointments collection for live values. Useful for staffing decisions"
+          note="Illustrative trend data — connect to bookings collection for live values"
           delay={0.5}
-          className="lg:col-span-2"
         >
           <div className="h-52">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={ACTIVITY_DATA} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="consultGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.3} />
+                    <stop offset="5%"  stopColor="var(--primary)" stopOpacity={0.3} />
                     <stop offset="95%" stopColor="var(--primary)" stopOpacity={0.02} />
                   </linearGradient>
                   <linearGradient id="onlineGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--accent)" stopOpacity={0.3} />
+                    <stop offset="5%"  stopColor="var(--accent)" stopOpacity={0.3} />
                     <stop offset="95%" stopColor="var(--accent)" stopOpacity={0.02} />
                   </linearGradient>
                 </defs>
@@ -280,8 +362,10 @@ export default function StaffStats() {
                 <YAxis tick={{ fontSize: 11, fill: "var(--base-content)", opacity: 0.6 }} />
                 <Tooltip content={<CustomTooltip />} />
                 <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
-                <Area type="monotone" dataKey="consultations" name="Consultations" stroke="var(--primary)" strokeWidth={2} fill="url(#consultGrad)" />
-                <Area type="monotone" dataKey="online" name="Online Doctors" stroke="var(--accent)" strokeWidth={2} fill="url(#onlineGrad)" />
+                <Area type="monotone" dataKey="consultations" name="Consultations"
+                  stroke="var(--primary)" strokeWidth={2} fill="url(#consultGrad)" />
+                <Area type="monotone" dataKey="online" name="Online Doctors"
+                  stroke="var(--accent)" strokeWidth={2} fill="url(#onlineGrad)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -291,13 +375,18 @@ export default function StaffStats() {
         <ChartCard
           title="Consultation Types"
           subtitle="Offered across linked doctors"
-          note="Counts doctors who have inPerson / video / homeVisit enabled in their consultationTypes. A doctor can offer multiple types"
+          note="Illustrative — connect to DoctorProfile.consultationTypes for live values"
           delay={0.55}
         >
           <div className="h-52">
             <ResponsiveContainer width="100%" height="100%">
               <RePieChart>
-                <Pie data={CONSULT_TYPE_DATA} cx="50%" cy="45%" innerRadius={44} outerRadius={68} paddingAngle={4} dataKey="value">
+                <Pie
+                  data={CONSULT_TYPE_DATA}
+                  cx="50%" cy="45%"
+                  innerRadius={44} outerRadius={68}
+                  paddingAngle={4} dataKey="value"
+                >
                   {CONSULT_TYPE_DATA.map((_, i) => <Cell key={i} fill={PIE_COLORS[i]} />)}
                 </Pie>
                 <Tooltip content={<CustomTooltip />} />
@@ -308,18 +397,27 @@ export default function StaffStats() {
         </ChartCard>
       </div>
 
-      {/* Radial availability */}
+      {/* Radial + Spec table */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+
+        {/* Radial availability */}
         <ChartCard
           title="Capacity Utilization Overview"
           subtitle="Active, Verified & Online rates against total staff"
-          note="Radial bars show percentage of total linked doctors (24) who are Active, Verified, and currently Online respectively"
+          note="Radial bars show % of total linked doctors who are Active, Verified, and Online"
           delay={0.6}
         >
           <div className="h-52">
             <ResponsiveContainer width="100%" height="100%">
               <RadialBarChart cx="50%" cy="50%" innerRadius="20%" outerRadius="85%" data={RADIAL_DATA}>
-                <RadialBar minAngle={15} background clockWise dataKey="value" cornerRadius={4} label={{ position: "insideStart", fill: "var(--base-content)", fontSize: 11 }} />
+                <RadialBar
+                  minAngle={15}
+                  background
+                  clockWise
+                  dataKey="value"
+                  cornerRadius={4}
+                  label={{ position: "insideStart", fill: "var(--base-content)", fontSize: 11 }}
+                />
                 <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
                 <Tooltip content={<CustomTooltip />} formatter={(v) => [`${v}%`]} />
               </RadialBarChart>
@@ -331,27 +429,39 @@ export default function StaffStats() {
         <ChartCard
           title="Specialization Breakdown"
           subtitle="Ranked by doctor count"
-          note="Derived from DoctorProfile.specialization aggregation. Top specializations indicate where your hospital has the most coverage"
+          note="Derived from DoctorProfile.specialization aggregation via /doctors/stats"
           delay={0.65}
         >
           <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
-            {stats.bySpecialization.sort((a, b) => b.count - a.count).map((s, i) => (
-              <div key={s._id} className="flex items-center gap-3">
-                <span className="text-[10px] font-bold text-[var(--base-content)]/40 w-4 text-right">{i + 1}</span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-xs font-semibold text-[var(--base-content)] truncate">{s._id}</span>
-                    <span className="text-xs font-bold text-[var(--base-content)]/70 ml-2 flex-shrink-0">{s.count}</span>
-                  </div>
-                  <div className="progress-bar h-1.5">
-                    <div
-                      className="progress-bar-fill"
-                      style={{ width: `${(s.count / stats.bySpecialization[0].count) * 100}%`, background: PIE_COLORS[i % PIE_COLORS.length] }}
-                    />
+            {sortedSpec.length === 0 ? (
+              <p className="text-xs text-[var(--base-content)]/40 text-center py-6">No data yet</p>
+            ) : (
+              sortedSpec.map((s, i) => (
+                <div key={s._id} className="flex items-center gap-3">
+                  <span className="text-[10px] font-bold text-[var(--base-content)]/40 w-4 text-right">
+                    {i + 1}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs font-semibold text-[var(--base-content)] truncate">{s._id}</span>
+                      <span className="text-xs font-bold text-[var(--base-content)]/70 ml-2 flex-shrink-0">
+                        {s.count}
+                      </span>
+                    </div>
+                    <div className="progress-bar h-1.5">
+                      <div
+                        className="progress-bar-fill"
+                        style={{
+                          // BUG FIX: use pre-computed maxSpecCount not stats.bySpecialization[0].count
+                          width: `${(s.count / maxSpecCount) * 100}%`,
+                          background: PIE_COLORS[i % PIE_COLORS.length],
+                        }}
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </ChartCard>
       </div>

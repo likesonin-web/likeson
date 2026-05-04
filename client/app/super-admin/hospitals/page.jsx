@@ -100,22 +100,22 @@ const CHART_COLORS = ['#6366f1','#22d3ee','#f59e0b','#10b981','#f43f5e','#a78bfa
 const Badge = ({ children, color }) => {
 const map = {
   indigo:
-    "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-600",
+    "  text-indigo-700  dark:border-indigo-900/40  dark:bg-indigo-100 dark:text-indigo-600",
 
   green:
-    "bg-green-100 text-green-700 dark:bg-green-600 dark:text-green-300",
+    "border-green-100 text-green-700 dark:border-green-600 bg-green-100 dark:bg-green-100 dark:text-green-600",
 
   red:
-    "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-600",
+    "border-red-100 text-red-700 bg-red-100 dark:bg-red-900/40 dark:text-red-600",
 
   yellow:
-    "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300",
+    "border-yellow-100 text-yellow-700 bg-yellow-100 dark:bg-yellow-900/40 dark:text-yellow-600",
 
   gray:
-    "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+    "border-gray-100 text-gray-700  dark:border-gray-800 bg-gray-100 dark:bg-gray-800 dark:text-gray-600",
 
   cyan:
-    "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300",
+    "border-cyan-100 text-cyan-700 dark:border-cyan-900/40 bg-cyan-100 dark:bg-cyan-100 dark:text-cyan-600",
 };
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${map[color]}`}>
@@ -335,7 +335,7 @@ const HospitalCard = ({ hospital, isSelected, onClick }) => {
           : 'border-[color:var(--base-300)] bg-[color:var(--base-100)] hover:border-[color:var(--primary)]/40 hover:bg-[color:var(--base-200)]/60'
       }`}
     >
-      {isSelected && <span className="absolute left-0 top-0 bottom-0 w-1 bg-[color:var(--primary)] rounded-l-xl" />}
+      {isSelected && <span className="absolute left-0 top-0 bottom-0 w-0.5  bg-[color:var(--primary)] rounded-l-xl" />}
       <div className="px-4 py-3 pl-5">
         <div className="flex items-start gap-3">
           {hospital.logo ? (

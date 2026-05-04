@@ -187,10 +187,11 @@ const hospitalSchema = new Schema(
       },
     },
 
-    location: {
-      type:        { type: String, enum: ['Point'], default: 'Point' },
-      coordinates: { type: [Number], default: [80.648, 16.506] },
-    },
+   location: {
+  type:        { type: String, enum: ['Point'], default: 'Point' },
+  coordinates: { type: [Number], default: [80.648, 16.506] },
+ 
+},
     googleMapsUrl: { type: String },
 
     // ── Services & Specialties ────────────────────────────────────────────────
@@ -415,6 +416,7 @@ hospitalSchema.index(
 // hospitalSchema.index({ slug: 1 });
 hospitalSchema.index({ linkedDoctors: 1 });
 hospitalSchema.index({ isVerified: 1, isActive: 1 });
+hospitalSchema.index({ location: '2dsphere' });          // line near bottom
 
 const Hospital = mongoose.model('Hospital', hospitalSchema);
 export default Hospital;

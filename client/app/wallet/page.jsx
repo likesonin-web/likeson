@@ -3,25 +3,29 @@
 /**
  * WalletPage — Likeson Healthcare
  *
- * Fully corrected to match:
- *   • walletRouter.js   — all routes, correct payloads
- *   • walletSlice.js    — all thunks, all selectors
- *   • globals.css       — CSS variables, .card, .glass-card, .btn-*, .badge-*, etc.
+ * Corrected to match:
+ *   • walletRouter.js   — Razorpay-only, P2P removed
+ *   • walletSlice.js    — all thunks, corrected selectors
  *
- * Key fixes over previous version:
- *   1. completeWithdrawal — NO razorpayPayoutId input; server calls Razorpay X internally.
- *      Admin only supplies { requestId, walletId }.
- *   2. All new selectors imported: selectLockedBalance, selectNonWithdrawable,
- *      selectWithdrawalLimits, selectVerifiedBankAccounts, selectLookupReceiver,
- *      selectLookupIsSelf, selectTransfers, selectTransfersTotal,
- *      selectAdminWithdrawalsPage, selectAdminWithdrawalsLimit,
- *      selectWithdrawalsLimit, patchWalletBalance.
- *   3. WithdrawModal reads selectVerifiedBankAccounts directly.
- *   4. WithdrawablePanel renders withdrawableSources + note from server.
- *   5. AdminWithdrawalsPanel Approved row → single "Initiate Payout" button (no payout ID field).
- *   6. StatsRow uses selectNonWithdrawable for "Withdrawn" stat.
- *   7. All CSS uses variables / utility classes from globals.css.
- *   8. TransactionRow shows withdrawableBalanceBefore snapshot.
+ * Bug fixes over previous version:
+ *   1.  P2P Send / Receive removed — router has no /transfer, /lookup, /upi-id endpoints.
+ *   2.  ReceiveModal removed — UPI ID no longer stored on wallet.
+ *   3.  SendModal removed — P2P transfer removed from router.
+ *   4.  P2PHistoryPanel removed — /transfers endpoint removed.
+ *   5.  BalanceCard: Send + Receive buttons removed; replaced with Withdraw.
+ *   6.  FILTER_OPTIONS: P2P_Send, P2P_Receive removed from filter list.
+ *   7.  TABS: 'p2p' tab removed; 'admin' tab added for admin roles.
+ *   8.  verifyWalletTopup payload: amount renamed to displayAmount — server
+ *       fetches authoritative amount from Razorpay; client value is UI-only.
+ *   9.  AddBankModal toast text corrected: "verified and added" not "pending".
+ *   10. AdminWithdrawalsPanel: no razorpayPayoutId input — server handles payout.
+ *   11. completeWithdrawal response: reads data.payoutId / data.status (not razorpayPayoutId).
+ *   12. adminVerifyBankAccount: razorpayContactId field removed from payload.
+ *   13. selectWithdrawalsPage / limit selectors now correctly sourced.
+ *   14. StatsRow uses selectNonWithdrawable correctly.
+ *   15. TransactionRow PURPOSE_META: P2P entries kept for historical display of
+ *       old txns but not in filters/tabs.
+ *   16. Admin panel (AdminWithdrawalsPanel, AdminVerifyBankModal) fully implemented.
  */
 
 import {
@@ -35,24 +39,19 @@ import {
   Wallet, Plus, ArrowUpRight, ArrowDownLeft, RefreshCw,
   ShieldCheck, Filter, ChevronDown, X, CheckCircle2,
   AlertCircle, Loader2, CreditCard, Banknote, History,
-  Star, Clock, Zap, Send, QrCode, Eye, EyeOff, Copy,
-  CheckCheck, Smartphone, BarChart3, Activity, ArrowRight,
-  Building2, Trash2, Info, BanknoteIcon, LockKeyhole,
-  RotateCcw, ListChecks, UserCog, TrendingUp,
+  Star, Clock, Zap, Eye, EyeOff, Copy, CheckCheck,
+  BarChart3, Activity, ArrowRight, Building2, Trash2,
+  Info, BanknoteIcon, LockKeyhole, RotateCcw, ListChecks,
+  TrendingUp, UserCog, ShieldAlert, ToggleLeft, ToggleRight,
 } from 'lucide-react';
 
 import {
   // Core
   fetchWalletDetails,
-  fetchMyUpiId,
   fetchWithdrawableBalance,
   // Top-up
   initializeWalletTopup,
   verifyWalletTopup,
-  // Lookup + P2P
-  lookupTransferTarget,
-  transferMoney,
-  fetchTransferHistory,
   // Bank accounts
   fetchBankAccounts,
   addBankAccount,
@@ -70,9 +69,13 @@ import {
   failWithdrawal,
   // Admin bank verify
   adminVerifyBankAccount,
+  // Admin wallet ops
+  adminCreditWallet,
+  adminDebitWallet,
+  fetchAdminWallets,
+  toggleWalletActive,
   // Actions
   clearWalletErrors,
-  clearLookupResult,
   clearActiveWithdrawal,
   patchWalletBalance,
   // Selectors — core
@@ -82,7 +85,6 @@ import {
   selectWalletActionLoading,
   selectWalletError,
   selectWalletTransactions,
-  selectMyUpiId,
   // Selectors — withdrawable
   selectWithdrawableInfo,
   selectWithdrawableBalance,
@@ -100,58 +102,46 @@ import {
   // Selectors — withdrawals (user)
   selectWithdrawals,
   selectWithdrawalsTotal,
-  selectWithdrawalsLimit,
   selectWithdrawalsLoading,
   selectWithdrawalActing,
-  selectActiveWithdrawal,
   // Selectors — admin
   selectAdminWithdrawals,
   selectAdminWithdrawalsTotal,
   selectAdminWithdrawalsLoading,
-  selectAdminWithdrawalsPage,
-  selectAdminWithdrawalsLimit,
-  // Selectors — P2P
-  selectTransfers,
-  selectTransfersTotal,
-  selectTransferHistory,
-  selectHistoryLoading,
-  // Selectors — lookup
-  selectLookupResult,
-  selectLookupLoading,
-  selectLookupIsSelf,
-  selectLookupReceiver,
+  selectAdminWallets,
+  selectAdminWalletsTotal,
+  selectAdminWalletsLoading,
 } from '@/store/slices/walletSlice';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
 // ─────────────────────────────────────────────────────────────────────────────
 
-const RAZORPAY_KEY_ID = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_SJTh9WQJSGGnIT';
-
-const QUICK_AMOUNTS          = [100, 200, 500, 1000, 2000, 5000];
-const QUICK_TRANSFER_AMOUNTS = [50, 100, 200, 500, 1000];
-const QUICK_WITHDRAW_AMOUNTS = [500, 1000, 2000, 5000, 10000];
-const PER_PAGE               = 12;
+const RAZORPAY_KEY_ID    = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_SV43jVcrs5wKAM';
+const QUICK_AMOUNTS      = [100, 200, 500, 1000, 2000, 5000];
+const QUICK_WD_AMOUNTS   = [500, 1000, 2000, 5000, 10_000];
+const PER_PAGE           = 12;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Display metadata
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PURPOSE_META = {
-  Add_Money:           { label: 'Top Up',        color: 'text-emerald-500', bg: 'bg-emerald-500/10', Icon: Plus          },
-  Booking_Payment:     { label: 'Booking',        color: 'text-sky-500',     bg: 'bg-sky-500/10',     Icon: CreditCard    },
-  Medicine_Purchase:   { label: 'Pharmacy',       color: 'text-violet-500',  bg: 'bg-violet-500/10',  Icon: Banknote      },
-  Refund:              { label: 'Refund',          color: 'text-cyan-500',    bg: 'bg-cyan-500/10',    Icon: ArrowDownLeft },
-  Referral_Bonus:      { label: 'Referral',        color: 'text-amber-500',   bg: 'bg-amber-500/10',   Icon: Star          },
-  Subscription_Fee:    { label: 'Subscription',   color: 'text-rose-500',    bg: 'bg-rose-500/10',    Icon: RefreshCw     },
-  Coin_Conversion:     { label: 'Coins',           color: 'text-yellow-500',  bg: 'bg-yellow-500/10',  Icon: Star          },
-  Admin_Credit:        { label: 'Admin Credit',   color: 'text-emerald-500', bg: 'bg-emerald-500/10', Icon: CheckCircle2  },
-  Admin_Debit:         { label: 'Admin Debit',    color: 'text-rose-500',    bg: 'bg-rose-500/10',    Icon: AlertCircle   },
-  Cashback:            { label: 'Cashback',        color: 'text-lime-500',    bg: 'bg-lime-500/10',    Icon: TrendingUp    },
-  P2P_Send:            { label: 'Sent',            color: 'text-rose-500',    bg: 'bg-rose-500/10',    Icon: ArrowUpRight  },
-  P2P_Receive:         { label: 'Received',        color: 'text-emerald-500', bg: 'bg-emerald-500/10', Icon: ArrowDownLeft },
-  Withdrawal_Debit:    { label: 'Withdrawal',      color: 'text-orange-500',  bg: 'bg-orange-500/10',  Icon: BanknoteIcon  },
-  Withdrawal_Reversal: { label: 'Reversal',        color: 'text-teal-500',    bg: 'bg-teal-500/10',    Icon: RotateCcw     },
+  Add_Money:           { label: 'Top Up',       color: 'text-emerald-500', bg: 'bg-emerald-500/10', Icon: Plus         },
+  Booking_Payment:     { label: 'Booking',       color: 'text-sky-500',     bg: 'bg-sky-500/10',     Icon: CreditCard   },
+  Medicine_Purchase:   { label: 'Pharmacy',      color: 'text-violet-500',  bg: 'bg-violet-500/10',  Icon: Banknote     },
+  Refund:              { label: 'Refund',         color: 'text-cyan-500',    bg: 'bg-cyan-500/10',    Icon: ArrowDownLeft},
+  Referral_Bonus:      { label: 'Referral',       color: 'text-amber-500',   bg: 'bg-amber-500/10',   Icon: Star         },
+  Subscription_Fee:    { label: 'Subscription',  color: 'text-rose-500',    bg: 'bg-rose-500/10',    Icon: RefreshCw    },
+  Coin_Conversion:     { label: 'Coins',          color: 'text-yellow-500',  bg: 'bg-yellow-500/10',  Icon: Star         },
+  Admin_Credit:        { label: 'Admin Credit',  color: 'text-emerald-500', bg: 'bg-emerald-500/10', Icon: CheckCircle2 },
+  Admin_Debit:         { label: 'Admin Debit',   color: 'text-rose-500',    bg: 'bg-rose-500/10',    Icon: AlertCircle  },
+  Cashback:            { label: 'Cashback',       color: 'text-lime-500',    bg: 'bg-lime-500/10',    Icon: TrendingUp   },
+  // P2P kept in meta for historical transaction display — router no longer creates them
+  P2P_Send:            { label: 'Sent (P2P)',     color: 'text-rose-500',    bg: 'bg-rose-500/10',    Icon: ArrowUpRight },
+  P2P_Receive:         { label: 'Received (P2P)',color: 'text-emerald-500', bg: 'bg-emerald-500/10', Icon: ArrowDownLeft},
+  Withdrawal_Debit:    { label: 'Withdrawal',     color: 'text-orange-500',  bg: 'bg-orange-500/10',  Icon: BanknoteIcon },
+  Withdrawal_Reversal: { label: 'Reversal',       color: 'text-teal-500',    bg: 'bg-teal-500/10',    Icon: RotateCcw    },
 };
 
 const WITHDRAWAL_STATUS_META = {
@@ -162,17 +152,19 @@ const WITHDRAWAL_STATUS_META = {
   Rejected:  { color: 'text-red-500',     bg: 'bg-red-500/10',     label: 'Rejected'  },
 };
 
+// BUG FIX: P2P_Send / P2P_Receive removed from active filter options
+// (they remain in PURPOSE_META for rendering historical transactions)
 const FILTER_OPTIONS = [
-  { key: 'All',               label: 'All'         },
-  { key: 'Credit',            label: 'Credits'     },
-  { key: 'Debit',             label: 'Debits'      },
-  { key: 'Add_Money',         label: 'Top Ups'     },
-  { key: 'Refund',            label: 'Refunds'     },
-  { key: 'P2P_Send',          label: 'Sent'        },
-  { key: 'P2P_Receive',       label: 'Received'    },
-  { key: 'Withdrawal_Debit',  label: 'Withdrawals' },
-  { key: 'Medicine_Purchase', label: 'Pharmacy'    },
-  { key: 'Booking_Payment',   label: 'Bookings'    },
+  { key: 'All',               label: 'All'        },
+  { key: 'Credit',            label: 'Credits'    },
+  { key: 'Debit',             label: 'Debits'     },
+  { key: 'Add_Money',         label: 'Top Ups'    },
+  { key: 'Refund',            label: 'Refunds'    },
+  { key: 'Withdrawal_Debit',  label: 'Withdrawals'},
+  { key: 'Medicine_Purchase', label: 'Pharmacy'   },
+  { key: 'Booking_Payment',   label: 'Bookings'   },
+  { key: 'Referral_Bonus',    label: 'Referral'   },
+  { key: 'Cashback',          label: 'Cashback'   },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -197,7 +189,7 @@ const fmtDate = (d) =>
   });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Razorpay loader (singleton)
+// Razorpay loader (singleton promise)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const loadRazorpay = (() => {
@@ -224,18 +216,15 @@ const fadeUp = {
   visible: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 280, damping: 22 } },
   exit:    { opacity: 0, y: -10, transition: { duration: 0.14 } },
 };
-
 const stagger = {
   hidden:  {},
   visible: { transition: { staggerChildren: 0.055, delayChildren: 0.04 } },
 };
-
 const scaleIn = {
   hidden:  { opacity: 0, scale: 0.93 },
   visible: { opacity: 1, scale: 1, transition: { type: 'spring', stiffness: 320, damping: 24 } },
   exit:    { opacity: 0, scale: 0.93, transition: { duration: 0.13 } },
 };
-
 const slideLeft = {
   hidden:  { opacity: 0, x: 24 },
   visible: { opacity: 1, x: 0, transition: { type: 'spring', stiffness: 300, damping: 24 } },
@@ -249,13 +238,19 @@ const slideLeft = {
 function useWalletOps() {
   const dispatch = useDispatch();
 
+  /**
+   * Full Razorpay top-up flow.
+   * displayAmount is used ONLY for the success toast — it is passed as
+   * `displayAmount` to verifyWalletTopup and never sent to the server.
+   */
   const handleAddMoney = useCallback(
     async (amount, { onProcessing, onSuccess, onError, onDismiss } = {}) => {
       try {
         const loaded = await loadRazorpay();
         if (!loaded) throw new Error('Payment gateway failed to load. Please refresh.');
         onProcessing?.();
-        const { rzpOrder } = await dispatch(initializeWalletTopup({ amount })).unwrap();
+        const result = await dispatch(initializeWalletTopup({ amount })).unwrap();
+        const { rzpOrder } = result;
         const options = {
           key:         RAZORPAY_KEY_ID,
           amount:      rzpOrder.amount,
@@ -265,11 +260,12 @@ function useWalletOps() {
           order_id:    rzpOrder.id,
           handler: async (resp) => {
             try {
+              // BUG FIX #8: pass displayAmount, not amount — server ignores amount
               await dispatch(verifyWalletTopup({
                 razorpay_order_id:   resp.razorpay_order_id,
                 razorpay_payment_id: resp.razorpay_payment_id,
                 razorpay_signature:  resp.razorpay_signature,
-                amount,
+                displayAmount:       amount,
               })).unwrap();
               onSuccess?.();
             } catch (e) {
@@ -329,7 +325,7 @@ const Spinner = ({ size = 4 }) => <Loader2 className={`h-${size} w-${size} anima
 const ModalOverlay = ({ onClose, children }) => (
   <motion.div
     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-    className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/70 backdrop-blur-md"
+    className="fixed inset-0 z-[200]  flex items-end sm:items-center justify-center p-4 bg-black/70 backdrop-blur-md"
     onClick={(e) => e.target === e.currentTarget && onClose()}
     aria-modal="true" role="dialog"
   >
@@ -360,33 +356,33 @@ AnimatedBalance.displayName = 'AnimatedBalance';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Balance Card
+// BUG FIX #2 & #3: Send + Receive buttons removed — P2P removed from router.
+//                  Replaced with Withdraw button.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BalanceCard = memo(({ onAddMoney, onSend, onReceive }) => {
-  const balance    = useSelector(selectWalletBalance);
-  const wallet     = useSelector(selectWalletData);
-  const isLoading  = useSelector(selectWalletLoading);
-  const wdAvail    = useSelector(selectWithdrawableAvailable);
-  const locked     = useSelector(selectLockedBalance);
+const BalanceCard = memo(({ onAddMoney, onWithdraw }) => {
+  const balance   = useSelector(selectWalletBalance);
+  const wallet    = useSelector(selectWalletData);
+  const isLoading = useSelector(selectWalletLoading);
+  const wdAvail   = useSelector(selectWithdrawableAvailable);
+  const locked    = useSelector(selectLockedBalance);
   const [hidden, setHidden] = useState(false);
 
   return (
     <motion.div
       variants={fadeUp}
-      className="relative overflow-hidden rounded-2xl border border-white/10 shadow-primary"
+      className="relative overflow-hidden rounded-2xl border border-white/10 shadow-2xl"
       style={{ background: 'linear-gradient(140deg,#1d4ed8 0%,#1e3a8a 50%,#0f172a 100%)' }}
     >
-      {/* decorative blobs */}
       <div className="pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-white/[0.04] blur-[50px]" />
       <div className="pointer-events-none absolute bottom-0 left-0 h-52 w-52 rounded-full bg-blue-400/10 blur-[50px]" />
-      {/* dot grid */}
       <div
         className="pointer-events-none absolute inset-0 opacity-[0.04]"
         style={{ backgroundImage: 'radial-gradient(circle,#fff 1px,transparent 1px)', backgroundSize: '20px 20px' }}
       />
 
       <div className="relative z-10 p-6 sm:p-8">
-        {/* header row */}
+        {/* header */}
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/15 ring-1 ring-white/20">
@@ -423,7 +419,7 @@ const BalanceCard = memo(({ onAddMoney, onSend, onReceive }) => {
                 key={hidden ? 'h' : 's'}
                 initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
                 className="font-black text-white leading-none"
-                style={{ fontSize: 'clamp(2rem,8vw,3.2rem)', fontFamily: 'var(--font-family-montserrat,sans-serif)' }}
+                style={{ fontSize: 'clamp(2rem,8vw,3.2rem)' }}
               >
                 {hidden ? '₹ ••••••' : <AnimatedBalance value={balance} />}
               </motion.p>
@@ -431,7 +427,7 @@ const BalanceCard = memo(({ onAddMoney, onSend, onReceive }) => {
           )}
         </div>
 
-        {/* withdrawable mini-bar */}
+        {/* withdrawable strip */}
         <div className="mt-4 flex items-center gap-3 rounded-xl bg-white/8 px-4 py-3 ring-1 ring-white/10">
           <LockKeyhole className="h-3.5 w-3.5 shrink-0 text-white/40" />
           <div className="flex-1 min-w-0">
@@ -444,26 +440,22 @@ const BalanceCard = memo(({ onAddMoney, onSend, onReceive }) => {
           </div>
         </div>
 
-        {/* action buttons */}
+        {/* action buttons — BUG FIX: Send/Receive removed */}
         <div className="mt-5 flex flex-wrap gap-2.5">
-          {[
-            { label: 'Add Money', Icon: Plus,   onClick: onAddMoney, primary: true  },
-            { label: 'Send',      Icon: Send,   onClick: onSend,     primary: false },
-            { label: 'Receive',   Icon: QrCode, onClick: onReceive,  primary: false },
-          ].map(({ label, Icon, onClick, primary }) => (
-            <motion.button
-              key={label}
-              onClick={onClick}
-              whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
-              className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-[12px] font-bold uppercase tracking-wide transition-all ${
-                primary
-                  ? 'bg-white text-blue-700 shadow-[0_4px_16px_rgba(0,0,0,0.25)] hover:bg-white/90'
-                  : 'bg-white/10 text-white ring-1 ring-white/20 hover:bg-white/20'
-              }`}
-            >
-              <Icon className="h-3.5 w-3.5" />{label}
-            </motion.button>
-          ))}
+          <motion.button
+            onClick={onAddMoney}
+            whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
+            className="flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-[12px] font-bold uppercase tracking-wide text-blue-700 shadow-[0_4px_16px_rgba(0,0,0,0.25)] hover:bg-white/90 transition-all"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add Money
+          </motion.button>
+          <motion.button
+            onClick={onWithdraw}
+            whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
+            className="flex items-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-[12px] font-bold uppercase tracking-wide text-white ring-1 ring-white/20 hover:bg-white/20 transition-all"
+          >
+            <BanknoteIcon className="h-3.5 w-3.5" /> Withdraw
+          </motion.button>
         </div>
 
         <div className="mt-5 flex items-center gap-1.5 text-white/25">
@@ -512,17 +504,12 @@ const WithdrawablePanel = memo(({ onWithdraw }) => {
           <BanknoteIcon className="h-4 w-4 text-warning" />
           <h3 className="text-[11px] font-black uppercase tracking-[0.14em] text-base-content">Withdrawable Balance</h3>
         </div>
-        <button
-          onClick={() => dispatch(fetchWithdrawableBalance())}
-          className="text-base-content/30 hover:text-base-content transition-colors"
-          aria-label="Refresh"
-        >
+        <button onClick={() => dispatch(fetchWithdrawableBalance())} className="text-base-content/30 hover:text-base-content transition-colors" aria-label="Refresh">
           <RefreshCw className="h-3.5 w-3.5" />
         </button>
       </div>
 
       <div className="p-5 space-y-4">
-        {/* progress */}
         <div>
           <div className="flex items-end justify-between mb-2">
             <div>
@@ -540,13 +527,12 @@ const WithdrawablePanel = memo(({ onWithdraw }) => {
           </div>
         </div>
 
-        {/* breakdown grid */}
         <div className="grid grid-cols-2 gap-3">
           {[
             { label: 'Total Balance',    value: fmt(balance),   color: 'text-base-content'    },
             { label: 'Withdrawable',     value: fmt(wdBalance), color: 'text-warning'          },
             { label: 'Locked',           value: fmt(locked),    color: 'text-error'            },
-            { label: 'Non-Withdrawable', value: fmt(nonWd),     color: 'text-base-content/50' },
+            { label: 'Platform Only',    value: fmt(nonWd),     color: 'text-base-content/50' },
           ].map(({ label, value, color }) => (
             <div key={label} className="rounded-xl bg-base-200 px-3 py-3">
               <p className="text-[10px] text-base-content/40 uppercase tracking-wider">{label}</p>
@@ -555,7 +541,6 @@ const WithdrawablePanel = memo(({ onWithdraw }) => {
           ))}
         </div>
 
-        {/* limits */}
         {limits && (
           <div className="rounded-xl border border-base-300 bg-base-200/60 px-4 py-3 space-y-1.5">
             <p className="text-[10px] font-black uppercase tracking-wider text-base-content/40">Withdrawal Limits</p>
@@ -566,7 +551,6 @@ const WithdrawablePanel = memo(({ onWithdraw }) => {
           </div>
         )}
 
-        {/* eligible sources — comes from server */}
         <div className="flex items-start gap-2 rounded-xl bg-warning/6 border border-warning/15 px-3 py-2.5">
           <Info className="h-3.5 w-3.5 shrink-0 text-warning mt-0.5" />
           <p className="text-[11px] text-base-content/55 leading-relaxed">
@@ -579,8 +563,8 @@ const WithdrawablePanel = memo(({ onWithdraw }) => {
           onClick={onWithdraw}
           whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
           disabled={wdAvail < 100}
-          className="btn-primary-cta w-full flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100 bg-warning text-warning-content hover:brightness-110"
-          style={{ background: 'var(--warning)' }}
+          className="w-full flex items-center justify-center gap-2 rounded-xl py-3 text-[13px] font-black uppercase tracking-wider disabled:opacity-40 disabled:cursor-not-allowed"
+          style={{ background: 'var(--warning,#f59e0b)', color: '#000' }}
         >
           <BanknoteIcon className="h-4 w-4" />
           Withdraw to Bank
@@ -609,11 +593,10 @@ const BankAccountsPanel = memo(({ onAddNew }) => {
         <div className="flex items-center gap-2">
           <Building2 className="h-4 w-4 text-info" />
           <h3 className="text-[11px] font-black uppercase tracking-[0.14em] text-base-content">Bank Accounts</h3>
-          <span className="badge badge-info">{accounts.length}/3</span>
+          <span className="text-[11px] font-bold text-base-content/30">{accounts.length}/3</span>
         </div>
         {accounts.length < 3 && (
-          <button
-            onClick={onAddNew}
+          <button onClick={onAddNew}
             className="flex items-center gap-1 rounded-lg bg-info/10 px-3 py-1.5 text-[11px] font-bold text-info hover:bg-info/20 transition-colors"
           >
             <Plus className="h-3 w-3" /> Add
@@ -624,7 +607,7 @@ const BankAccountsPanel = memo(({ onAddNew }) => {
       <div className="p-4 space-y-3">
         {loading && accounts.length === 0 ? (
           Array.from({ length: 2 }).map((_, i) => (
-            <div key={i} className="skeleton h-16 w-full rounded-xl" />
+            <div key={i} className="h-16 w-full animate-pulse rounded-xl bg-base-200" />
           ))
         ) : accounts.length === 0 ? (
           <div className="flex flex-col items-center py-10 text-center gap-3">
@@ -632,14 +615,13 @@ const BankAccountsPanel = memo(({ onAddNew }) => {
               <Building2 className="h-5 w-5 text-base-content/20" />
             </div>
             <p className="text-sm font-bold text-base-content/40">No bank accounts added</p>
-            <button onClick={onAddNew} className="rounded-xl bg-info/10 px-4 py-2 text-[12px] font-bold text-info hover:bg-info/20 transition-colors">
-              Add your first account
-            </button>
+            <button onClick={onAddNew}
+              className="rounded-xl bg-info/10 px-4 py-2 text-[12px] font-bold text-info hover:bg-info/20 transition-colors"
+            >Add your first account</button>
           </div>
         ) : (
           accounts.map((acc) => (
-            <motion.div
-              key={acc._id} layout
+            <motion.div key={acc._id} layout
               className="flex items-center gap-3 rounded-xl border border-base-300 bg-base-200 p-3.5 hover:border-info/30 transition-colors"
             >
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-info/10">
@@ -651,7 +633,7 @@ const BankAccountsPanel = memo(({ onAddNew }) => {
                   {acc.isPrimary  && <Pill color="text-info"    bg="bg-info/10">Primary</Pill>}
                   {acc.isVerified
                     ? <Pill color="text-success" bg="bg-success/10">Verified</Pill>
-                    : <Pill color="text-warning" bg="bg-warning/10">Pending</Pill>
+                    : <Pill color="text-warning" bg="bg-warning/10">Unverified</Pill>
                   }
                 </div>
                 <p className="text-[11px] text-base-content/45 mt-0.5 truncate">
@@ -663,8 +645,7 @@ const BankAccountsPanel = memo(({ onAddNew }) => {
                 {!acc.isPrimary && (
                   <button
                     onClick={() => dispatch(setPrimaryBankAccount({ bankAccountId: acc._id }))}
-                    disabled={acting}
-                    title="Set as primary"
+                    disabled={acting} title="Set as primary"
                     className="rounded-lg p-1.5 text-base-content/30 hover:text-warning hover:bg-warning/10 transition-colors disabled:opacity-50"
                   >
                     <Star className="h-3.5 w-3.5" />
@@ -672,8 +653,7 @@ const BankAccountsPanel = memo(({ onAddNew }) => {
                 )}
                 <button
                   onClick={() => dispatch(removeBankAccount({ bankAccountId: acc._id }))}
-                  disabled={acting}
-                  title="Remove account"
+                  disabled={acting} title="Remove account"
                   className="rounded-lg p-1.5 text-base-content/30 hover:text-error hover:bg-error/10 transition-colors disabled:opacity-50"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -693,17 +673,21 @@ BankAccountsPanel.displayName = 'BankAccountsPanel';
 // ─────────────────────────────────────────────────────────────────────────────
 
 const UserWithdrawalsPanel = memo(({ onNewWithdrawal }) => {
-  const dispatch   = useDispatch();
-  const requests   = useSelector(selectWithdrawals);
-  const total      = useSelector(selectWithdrawalsTotal);
-  const loading    = useSelector(selectWithdrawalsLoading);
-  const acting     = useSelector(selectWithdrawalActing);
+  const dispatch  = useDispatch();
+  const requests  = useSelector(selectWithdrawals);
+  const total     = useSelector(selectWithdrawalsTotal);
+  const loading   = useSelector(selectWithdrawalsLoading);
+  const acting    = useSelector(selectWithdrawalActing);
 
   const [statusFilter, setStatusFilter] = useState('');
   const [page, setPage]                 = useState(1);
 
   useEffect(() => {
-    dispatch(fetchWithdrawals({ page, limit: 10, ...(statusFilter ? { status: statusFilter } : {}) }));
+    dispatch(fetchWithdrawals({
+      page,
+      limit: 10,
+      ...(statusFilter ? { status: statusFilter } : {}),
+    }));
   }, [dispatch, page, statusFilter]);
 
   const handleCancel = (requestId) => {
@@ -717,21 +701,22 @@ const UserWithdrawalsPanel = memo(({ onNewWithdrawal }) => {
         <div className="flex items-center gap-2">
           <ListChecks className="h-4 w-4 text-warning" />
           <h3 className="text-[11px] font-black uppercase tracking-[0.14em] text-base-content">My Withdrawals</h3>
-          {total > 0 && <span className="badge badge-warning">{total}</span>}
+          {total > 0 && (
+            <span className="rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-black text-warning">{total}</span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <select
             value={statusFilter}
             onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
-            className="input-field py-1 text-[11px] font-bold"
+            className="rounded-lg border border-base-300 bg-base-200 px-2 py-1 text-[11px] font-bold text-base-content"
           >
             <option value="">All</option>
             {['Pending', 'Approved', 'Completed', 'Failed', 'Rejected'].map((s) => (
               <option key={s} value={s}>{s}</option>
             ))}
           </select>
-          <button
-            onClick={onNewWithdrawal}
+          <button onClick={onNewWithdrawal}
             className="flex items-center gap-1 rounded-lg bg-warning/10 px-3 py-1.5 text-[11px] font-bold text-warning hover:bg-warning/20 transition-colors"
           >
             <Plus className="h-3 w-3" /> New
@@ -742,7 +727,7 @@ const UserWithdrawalsPanel = memo(({ onNewWithdrawal }) => {
       <div className="p-4 space-y-2.5">
         {loading && requests.length === 0 ? (
           Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="skeleton h-14 w-full rounded-xl" />
+            <div key={i} className="h-14 w-full animate-pulse rounded-xl bg-base-200" />
           ))
         ) : requests.length === 0 ? (
           <div className="flex flex-col items-center py-10 text-center gap-3">
@@ -769,11 +754,12 @@ const UserWithdrawalsPanel = memo(({ onNewWithdrawal }) => {
                   <p className="text-[11px] text-base-content/45 mt-0.5 truncate">
                     XXXX{r.accountNumber} · {r.bankName || r.ifscCode} · {fmtDate(r.requestedAt)}
                   </p>
+                  {r.razorpayPayoutId && (
+                    <p className="text-[10px] text-base-content/30 mt-0.5">Payout: {r.razorpayPayoutId}</p>
+                  )}
                 </div>
                 {r.status === 'Pending' && (
-                  <button
-                    onClick={() => handleCancel(r.requestId)}
-                    disabled={acting}
+                  <button onClick={() => handleCancel(r.requestId)} disabled={acting}
                     title="Cancel request"
                     className="shrink-0 rounded-lg p-1.5 text-base-content/30 hover:text-error hover:bg-error/10 transition-colors disabled:opacity-50"
                   >
@@ -787,8 +773,7 @@ const UserWithdrawalsPanel = memo(({ onNewWithdrawal }) => {
 
         {requests.length < total && (
           <button
-            onClick={() => setPage((p) => p + 1)}
-            disabled={loading}
+            onClick={() => setPage((p) => p + 1)} disabled={loading}
             className="w-full rounded-xl border border-base-300 bg-base-200 py-2.5 text-[11px] font-bold uppercase tracking-wider text-base-content/50 hover:text-base-content transition-all disabled:opacity-50"
           >
             {loading ? 'Loading…' : `Load More · ${total - requests.length} remaining`}
@@ -800,7 +785,236 @@ const UserWithdrawalsPanel = memo(({ onNewWithdrawal }) => {
 });
 UserWithdrawalsPanel.displayName = 'UserWithdrawalsPanel';
 
- 
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin: Withdrawals Panel
+// BUG FIX #10: No razorpayPayoutId input — server handles Razorpay X call.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AdminWithdrawalsPanel = memo(() => {
+  const dispatch  = useDispatch();
+  const requests  = useSelector(selectAdminWithdrawals);
+  const total     = useSelector(selectAdminWithdrawalsTotal);
+  const loading   = useSelector(selectAdminWithdrawalsLoading);
+  const acting    = useSelector(selectWithdrawalActing);
+
+  const [statusFilter, setStatusFilter] = useState('Pending');
+  const [adminNote, setAdminNote]       = useState('');
+  const [failReason, setFailReason]     = useState('');
+  const [activeId, setActiveId]         = useState(null);
+
+  useEffect(() => {
+    dispatch(fetchAdminWithdrawals({ status: statusFilter, page: 1, limit: 20 }));
+  }, [dispatch, statusFilter]);
+
+  const act = (fn) => async (item) => {
+    setActiveId(item.request.requestId);
+    try { await fn(item); }
+    finally { setActiveId(null); }
+  };
+
+  const handleApprove = act(({ request, walletId }) =>
+    dispatch(approveWithdrawal({ requestId: request.requestId, walletId }))
+  );
+
+  // BUG FIX: complete only sends { walletId } — NO razorpayPayoutId
+  const handleComplete = act(({ request, walletId }) =>
+    dispatch(completeWithdrawal({ requestId: request.requestId, walletId }))
+  );
+
+  const handleReject = act(({ request, walletId }) => {
+    const note = prompt('Rejection reason (optional):') ?? '';
+    return dispatch(rejectWithdrawal({ requestId: request.requestId, walletId, adminNote: note }));
+  });
+
+  const handleFail = act(({ request, walletId }) => {
+    const reason = prompt('Failure reason (optional):') ?? '';
+    return dispatch(failWithdrawal({ requestId: request.requestId, walletId, failureReason: reason }));
+  });
+
+  return (
+    <motion.div variants={fadeUp} className="card overflow-hidden">
+      <div className="flex items-center justify-between border-b border-base-300 bg-base-200/60 px-5 py-4">
+        <div className="flex items-center gap-2">
+          <ShieldAlert className="h-4 w-4 text-error" />
+          <h3 className="text-[11px] font-black uppercase tracking-[0.14em] text-base-content">Admin: Withdrawal Queue</h3>
+          {total > 0 && (
+            <span className="rounded-full bg-error/10 px-2 py-0.5 text-[10px] font-black text-error">{total}</span>
+          )}
+        </div>
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
+          className="rounded-lg border border-base-300 bg-base-200 px-2 py-1 text-[11px] font-bold text-base-content"
+        >
+          {['Pending', 'Approved', 'Completed', 'Failed', 'Rejected'].map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="p-4 space-y-3">
+        {loading && requests.length === 0 ? (
+          Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-20 w-full animate-pulse rounded-xl bg-base-200" />
+          ))
+        ) : requests.length === 0 ? (
+          <div className="flex flex-col items-center py-10 text-center gap-3">
+            <p className="text-sm font-bold text-base-content/40">No {statusFilter} requests</p>
+          </div>
+        ) : (
+          requests.map((item) => {
+            const { request, user, walletId } = item;
+            const meta = WITHDRAWAL_STATUS_META[request.status] ?? WITHDRAWAL_STATUS_META.Pending;
+            const isThis = activeId === request.requestId;
+
+            return (
+              <motion.div key={request.requestId} layout
+                className="rounded-xl border border-base-300 bg-base-200 p-4 space-y-3"
+              >
+                {/* user + amount */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-bold text-base-content">{user?.name || 'Unknown User'}</p>
+                    <p className="text-[11px] text-base-content/45 truncate">{user?.email} · {user?.phone}</p>
+                    <p className="text-[10px] text-base-content/30 mt-0.5">{request.requestId}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-[15px] font-black text-base-content">{fmt(request.amount)}</p>
+                    <Pill color={meta.color} bg={meta.bg}>{meta.label}</Pill>
+                  </div>
+                </div>
+
+                {/* bank info */}
+                <div className="flex items-center gap-2 rounded-lg bg-base-100 px-3 py-2">
+                  <Building2 className="h-3.5 w-3.5 text-base-content/30" />
+                  <p className="text-[11px] text-base-content/60 truncate">
+                    XXXX{request.accountNumber} · {request.ifscCode} · {request.bankName || '—'}
+                  </p>
+                </div>
+
+                <p className="text-[10px] text-base-content/35">{fmtDate(request.requestedAt)}</p>
+
+                {/* action buttons */}
+                {request.status === 'Pending' && (
+                  <div className="flex gap-2 flex-wrap">
+                    <button onClick={() => handleApprove(item)} disabled={acting}
+                      className="flex items-center gap-1.5 rounded-lg bg-sky-500/10 px-3 py-2 text-[11px] font-bold text-sky-500 hover:bg-sky-500/20 disabled:opacity-50 transition-colors"
+                    >
+                      {isThis ? <Spinner size={3} /> : <CheckCircle2 className="h-3.5 w-3.5" />} Approve
+                    </button>
+                    <button onClick={() => handleReject(item)} disabled={acting}
+                      className="flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-2 text-[11px] font-bold text-red-500 hover:bg-red-500/20 disabled:opacity-50 transition-colors"
+                    >
+                      {isThis ? <Spinner size={3} /> : <X className="h-3.5 w-3.5" />} Reject
+                    </button>
+                  </div>
+                )}
+
+                {request.status === 'Approved' && (
+                  <div className="flex gap-2 flex-wrap">
+                    {/* BUG FIX: "Initiate Payout" — no payout ID input field */}
+                    <button onClick={() => handleComplete(item)} disabled={acting}
+                      className="flex items-center gap-1.5 rounded-lg bg-emerald-500/10 px-3 py-2 text-[11px] font-bold text-emerald-500 hover:bg-emerald-500/20 disabled:opacity-50 transition-colors"
+                    >
+                      {isThis ? <Spinner size={3} /> : <Zap className="h-3.5 w-3.5" />}
+                      Initiate Payout via Razorpay
+                    </button>
+                    <button onClick={() => handleFail(item)} disabled={acting}
+                      className="flex items-center gap-1.5 rounded-lg bg-rose-500/10 px-3 py-2 text-[11px] font-bold text-rose-500 hover:bg-rose-500/20 disabled:opacity-50 transition-colors"
+                    >
+                      {isThis ? <Spinner size={3} /> : <AlertCircle className="h-3.5 w-3.5" />} Mark Failed
+                    </button>
+                  </div>
+                )}
+
+                {request.razorpayPayoutId && (
+                  <p className="text-[10px] text-base-content/30">
+                    Payout ID: {request.razorpayPayoutId} · {request.razorpayPayoutStatus}
+                  </p>
+                )}
+              </motion.div>
+            );
+          })
+        )}
+      </div>
+    </motion.div>
+  );
+});
+AdminWithdrawalsPanel.displayName = 'AdminWithdrawalsPanel';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin: Verify Bank Account Modal
+// BUG FIX #12: razorpayContactId removed from payload
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AdminVerifyBankModal = memo(({ open, onClose, walletId, bankAccountId, maskedAccount }) => {
+  const dispatch = useDispatch();
+  const acting   = useSelector(selectBankAccountActing);
+  const [fundAccountId, setFundAccountId] = useState('');
+  const [err, setErr] = useState('');
+
+  const handleSubmit = async () => {
+    if (!fundAccountId.trim()) { setErr('Razorpay Fund Account ID is required'); return; }
+    setErr('');
+    try {
+      // BUG FIX: only razorpayFundAccountId sent — razorpayContactId removed from schema
+      await dispatch(adminVerifyBankAccount({
+        walletId,
+        bankAccountId,
+        razorpayFundAccountId: fundAccountId.trim(),
+      })).unwrap();
+      setFundAccountId('');
+      onClose();
+    } catch (e) { setErr(e?.message || 'Verification failed'); }
+  };
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <ModalOverlay onClose={onClose}>
+          <motion.div variants={scaleIn} initial="hidden" animate="visible" exit="exit"
+            className="w-full max-w-sm overflow-hidden rounded-2xl border border-info/20 bg-base-100 shadow-2xl"
+          >
+            <div className="h-1 bg-gradient-to-r from-info to-primary" />
+            <div className="flex items-center justify-between px-6 py-5 pb-4">
+              <div>
+                <h2 className="font-black text-lg text-base-content">Verify Bank Account</h2>
+                <p className="mt-0.5 text-[11px] text-base-content/45">{maskedAccount}</p>
+              </div>
+              <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-xl bg-base-300">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="px-6 pb-7 space-y-4">
+              <div>
+                <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-base-content/45">
+                  Razorpay Fund Account ID
+                </label>
+                <input
+                  className="w-full rounded-xl border border-base-300 bg-base-200 px-4 py-3 text-sm font-medium text-base-content focus:border-info/50 focus:outline-none focus:ring-1 focus:ring-info/30"
+                  placeholder="fa_xxxxxxxxxxxxx"
+                  value={fundAccountId}
+                  onChange={(e) => setFundAccountId(e.target.value)}
+                />
+                <p className="mt-1.5 text-[11px] text-base-content/35">
+                  Get this from Razorpay X dashboard after creating the fund account.
+                </p>
+              </div>
+              <ErrorBox msg={err} />
+              <motion.button
+                onClick={handleSubmit} disabled={acting || !fundAccountId.trim()}
+                whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
+                className="w-full flex items-center justify-center gap-2 rounded-xl bg-info py-3 text-[13px] font-black uppercase tracking-wider text-white disabled:opacity-50"
+              >
+                {acting ? <><Spinner /> Verifying…</> : <><CheckCircle2 className="h-4 w-4" /> Verify Account</>}
+              </motion.button>
+            </div>
+          </motion.div>
+        </ModalOverlay>
+      )}
+    </AnimatePresence>
+  );
+});
+AdminVerifyBankModal.displayName = 'AdminVerifyBankModal';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Transaction Row
 // ─────────────────────────────────────────────────────────────────────────────
@@ -811,9 +1025,10 @@ const TransactionRow = memo(({ txn }) => {
   };
   const isCredit = txn.type === 'Credit';
   const statusCls =
-    txn.status === 'Success' ? 'bg-success/10 text-success' :
-    txn.status === 'Pending' ? 'bg-warning/10 text-warning' :
-                               'bg-error/10 text-error';
+    txn.status === 'Success'  ? 'bg-success/10 text-success' :
+    txn.status === 'Pending'  ? 'bg-warning/10 text-warning' :
+    txn.status === 'Reversed' ? 'bg-teal-500/10 text-teal-500' :
+                                'bg-error/10 text-error';
 
   return (
     <motion.div
@@ -852,12 +1067,12 @@ const TxnSkeleton = () => (
   <div className="flex flex-col gap-1 p-2">
     {Array.from({ length: 5 }).map((_, i) => (
       <div key={i} className="flex items-center gap-3.5 rounded-xl p-3">
-        <div className="skeleton h-10 w-10 shrink-0 rounded-xl" />
+        <div className="h-10 w-10 shrink-0 animate-pulse rounded-xl bg-base-200" />
         <div className="flex-1 space-y-2">
-          <div className="skeleton h-3 w-2/3 rounded" />
-          <div className="skeleton h-2.5 w-1/3 rounded" />
+          <div className="h-3 w-2/3 animate-pulse rounded bg-base-200" />
+          <div className="h-2.5 w-1/3 animate-pulse rounded bg-base-200" />
         </div>
-        <div className="skeleton h-4 w-14 rounded" />
+        <div className="h-4 w-14 animate-pulse rounded bg-base-200" />
       </div>
     ))}
   </div>
@@ -903,11 +1118,12 @@ const TransactionHistory = memo(() => {
         <div className="flex items-center gap-2">
           <History className="h-4 w-4 text-primary" />
           <h3 className="text-[11px] font-black uppercase tracking-[0.14em] text-base-content">All Transactions</h3>
-          {filtered.length > 0 && <span className="badge badge-primary">{filtered.length}</span>}
+          {filtered.length > 0 && (
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-black text-primary">{filtered.length}</span>
+          )}
         </div>
         <div ref={ref} className="relative">
-          <button
-            onClick={() => setOpen((o) => !o)}
+          <button onClick={() => setOpen((o) => !o)}
             className="flex items-center gap-1.5 rounded-lg border border-base-300 bg-base-200 px-3 py-1.5 text-[11px] font-bold text-base-content hover:border-primary/40 transition-colors"
           >
             <Filter className="h-3 w-3" />{active.label}
@@ -918,13 +1134,12 @@ const TransactionHistory = memo(() => {
               <motion.ul
                 initial={{ opacity: 0, y: 5, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 5, scale: 0.96 }}
-                className="absolute right-0 top-full z-50 mt-2 w-44 overflow-hidden rounded-xl border border-base-300 bg-base-100 shadow-xl"
+                className="absolute right-0 top-full z-[200]  mt-2 w-44 overflow-hidden rounded-xl border border-base-300 bg-base-100 shadow-xl"
                 role="listbox"
               >
                 {FILTER_OPTIONS.map((opt) => (
                   <li key={opt.key}>
-                    <button
-                      role="option" aria-selected={filter === opt.key}
+                    <button role="option" aria-selected={filter === opt.key}
                       onClick={() => { setFilter(opt.key); setPage(1); setOpen(false); }}
                       className={`w-full px-4 py-2.5 text-left text-[12px] font-medium transition-colors ${filter === opt.key ? 'bg-primary/10 text-primary' : 'text-base-content hover:bg-base-200'}`}
                     >
@@ -968,8 +1183,7 @@ const TransactionHistory = memo(() => {
 
       {hasMore && (
         <div className="border-t border-base-300 p-4">
-          <button
-            onClick={() => setPage((p) => p + 1)}
+          <button onClick={() => setPage((p) => p + 1)}
             className="w-full rounded-xl border border-base-300 bg-base-200 py-2.5 text-[11px] font-black uppercase tracking-widest text-base-content/50 hover:text-base-content transition-all"
           >
             Load More · {filtered.length - paginated.length} remaining
@@ -980,49 +1194,6 @@ const TransactionHistory = memo(() => {
   );
 });
 TransactionHistory.displayName = 'TransactionHistory';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// P2P History Panel
-// ─────────────────────────────────────────────────────────────────────────────
-
-const P2PHistoryPanel = memo(() => {
-  const dispatch   = useDispatch();
-  const transfers  = useSelector(selectTransfers);
-  const total      = useSelector(selectTransfersTotal);
-  const { page: curPage, limit } = useSelector(selectTransferHistory);
-  const loading    = useSelector(selectHistoryLoading);
-
-  useEffect(() => { dispatch(fetchTransferHistory({ page: 1, limit: 20 })); }, [dispatch]);
-
-  if (loading && transfers.length === 0) return <TxnSkeleton />;
-
-  if (transfers.length === 0) {
-    return (
-      <div className="flex flex-col items-center py-12 text-center gap-3">
-        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-base-200">
-          <Send className="h-5 w-5 text-base-content/20" />
-        </div>
-        <p className="text-sm font-bold text-base-content/40">No P2P transfers yet</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-1">
-      {transfers.map((txn) => <TransactionRow key={txn._id || txn.pairTxnId} txn={txn} />)}
-      {transfers.length < total && (
-        <button
-          onClick={() => dispatch(fetchTransferHistory({ page: curPage + 1, limit }))}
-          disabled={loading}
-          className="w-full mt-2 rounded-xl border border-base-300 bg-base-200 py-2.5 text-[11px] font-bold uppercase tracking-wider text-base-content/50 hover:text-base-content transition-all disabled:opacity-50"
-        >
-          {loading ? 'Loading…' : `Load More · ${total - transfers.length} remaining`}
-        </button>
-      )}
-    </div>
-  );
-});
-P2PHistoryPanel.displayName = 'P2PHistoryPanel';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Insights Panel
@@ -1067,7 +1238,7 @@ const InsightsPanel = memo(() => {
               <span className="text-error font-bold">−{fmtCompact(vals.debit)}</span>
             </div>
           </div>
-          {[['credit', 'from-success to-secondary'], ['debit', 'from-error to-warning']].map(([k, grad]) => (
+          {[['credit', 'from-success to-emerald-400'], ['debit', 'from-error to-rose-400']].map(([k, grad]) => (
             <div key={k} className="h-2 w-full rounded-full bg-base-300 overflow-hidden mb-1">
               <motion.div
                 initial={{ width: 0 }} animate={{ width: `${(vals[k] / maxVal) * 100}%` }}
@@ -1085,21 +1256,22 @@ InsightsPanel.displayName = 'InsightsPanel';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stats Row
+// BUG FIX #4 (selectNonWithdrawable) and BUG FIX #11 (label)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const StatsRow = memo(() => {
-  const txns   = useSelector(selectWalletTransactions);
-  const nonWd  = useSelector(selectNonWithdrawable);
+  const txns  = useSelector(selectWalletTransactions);
+  const nonWd = useSelector(selectNonWithdrawable);
 
   const stats = useMemo(() => {
     const credits = txns.filter((t) => t.type === 'Credit').reduce((s, t) => s + t.amount, 0);
     const debits  = txns.filter((t) => t.type === 'Debit').reduce((s, t) => s + t.amount, 0);
     const success = txns.filter((t) => t.status === 'Success').length;
     return [
-      { label: 'Total In',     value: fmtCompact(credits), color: 'text-success', bg: 'bg-success/10', Icon: ArrowDownLeft, sub: 'All time'   },
-      { label: 'Total Out',    value: fmtCompact(debits),  color: 'text-error',   bg: 'bg-error/10',   Icon: ArrowUpRight,  sub: 'All time'   },
-      { label: 'Transactions', value: success,             color: 'text-primary', bg: 'bg-primary/10', Icon: Activity,      sub: 'Successful' },
-      { label: 'Non-Wthdwbl',  value: fmtCompact(nonWd),  color: 'text-warning', bg: 'bg-warning/10', Icon: BanknoteIcon,  sub: 'Platform only' },
+      { label: 'Total Credited',    value: fmtCompact(credits), color: 'text-success', bg: 'bg-success/10', Icon: ArrowDownLeft, sub: 'All time'     },
+      { label: 'Total Debited',     value: fmtCompact(debits),  color: 'text-error',   bg: 'bg-error/10',   Icon: ArrowUpRight,  sub: 'All time'     },
+      { label: 'Transactions',      value: success,             color: 'text-primary', bg: 'bg-primary/10', Icon: Activity,      sub: 'Successful'   },
+      { label: 'Platform Balance',  value: fmtCompact(nonWd),   color: 'text-warning', bg: 'bg-warning/10', Icon: BanknoteIcon,  sub: 'Non-withdrawable' },
     ];
   }, [txns, nonWd]);
 
@@ -1107,7 +1279,7 @@ const StatsRow = memo(() => {
     <motion.div variants={stagger} className="grid grid-cols-2 sm:grid-cols-4 gap-3">
       {stats.map(({ label, value, color, bg, Icon, sub }) => (
         <motion.div key={label} variants={fadeUp}
-          className="card p-4 flex flex-col gap-2 hover:-translate-y-0.5 transition-transform cursor-default"
+          className="rounded-2xl border border-base-300 bg-base-100 p-4 flex flex-col gap-2 hover:-translate-y-0.5 transition-transform cursor-default"
         >
           <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${bg}`}>
             <Icon className={`h-4 w-4 ${color}`} />
@@ -1126,22 +1298,22 @@ StatsRow.displayName = 'StatsRow';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tab Bar
+// BUG FIX #6: 'p2p' tab removed. 'admin' tab added.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TABS = [
   { key: 'all',      label: 'History',  Icon: History     },
-  { key: 'p2p',      label: 'P2P',      Icon: Send        },
   { key: 'bank',     label: 'Bank',     Icon: Building2   },
   { key: 'withdraw', label: 'Withdraw', Icon: BanknoteIcon },
   { key: 'insights', label: 'Insights', Icon: BarChart3   },
- 
+  { key: 'admin',    label: 'Admin',    Icon: UserCog     },
 ];
 
 const TabBar = memo(({ active, onChange }) => (
-  <div className="flex gap-1 items-center justify-center overflow-x-auto rounded-xl bg-base-200 p-1 no-scrollbar" role="tablist">
+  <div className="flex gap-1 items-center overflow-x-auto rounded-xl bg-base-200 p-1 no-scrollbar" role="tablist">
     {TABS.map(({ key, label, Icon }) => (
       <button key={key} role="tab" aria-selected={active === key} onClick={() => onChange(key)}
-        className={`flex shrink-0 w-auto items-center justify-center gap-1.5 rounded-[calc(0.75rem-3px)] px-3 py-2 text-[11px] font-bold uppercase tracking-wide transition-all ${
+        className={`flex shrink-0 items-center gap-1.5 rounded-[calc(0.75rem-3px)] px-3 py-2 text-[11px] font-bold uppercase tracking-wide transition-all ${
           active === key
             ? 'bg-base-100 text-base-content shadow-sm'
             : 'text-base-content/45 hover:text-base-content'
@@ -1154,305 +1326,6 @@ const TabBar = memo(({ active, onChange }) => (
   </div>
 ));
 TabBar.displayName = 'TabBar';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Receive Modal
-// ─────────────────────────────────────────────────────────────────────────────
-
-const ReceiveModal = memo(({ open, onClose }) => {
-  const dispatch = useDispatch();
-  const myUpiId  = useSelector(selectMyUpiId);
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => { if (open && !myUpiId) dispatch(fetchMyUpiId()); }, [open, myUpiId, dispatch]);
-
-  const handleCopy = () => {
-    if (!myUpiId) return;
-    navigator.clipboard.writeText(myUpiId);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <AnimatePresence>
-      {open && (
-        <ModalOverlay onClose={onClose}>
-          <motion.div variants={scaleIn} initial="hidden" animate="visible" exit="exit"
-            className="w-full max-w-sm overflow-hidden rounded-2xl border border-primary/20 bg-base-100 shadow-2xl"
-          >
-            <div className="h-1 bg-gradient-to-r from-primary via-secondary to-accent" />
-            <div className="flex items-center justify-between px-6 py-5">
-              <div>
-                <h2 className="font-black text-xl text-base-content">Receive Money</h2>
-                <p className="mt-0.5 text-[11px] uppercase tracking-tight text-base-content/45">Share your UPI ID</p>
-              </div>
-              <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-xl bg-base-300 hover:opacity-80">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="px-6 pb-8 flex flex-col items-center gap-5">
-              <div className="flex h-44 w-44 items-center justify-center rounded-2xl border-2 border-dashed border-primary/30 bg-primary/5">
-                <div className="flex flex-col items-center gap-2 text-primary/50">
-                  <QrCode className="h-12 w-12" />
-                  <p className="text-[11px] font-bold uppercase tracking-wider">QR Code</p>
-                </div>
-              </div>
-              <div className="w-full rounded-xl border border-base-300 bg-base-200 px-4 py-3 flex items-center justify-between gap-3">
-                {myUpiId ? (
-                  <>
-                    <p className="text-sm font-bold text-base-content truncate">{myUpiId}</p>
-                    <button
-                      onClick={handleCopy}
-                      className={`shrink-0 rounded-full p-1.5 transition-colors ${copied ? 'text-success' : 'text-base-content/40 hover:text-primary'}`}
-                    >
-                      {copied ? <CheckCheck className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                    </button>
-                  </>
-                ) : (
-                  <div className="skeleton h-4 w-40 rounded" />
-                )}
-              </div>
-              <p className="text-center text-[12px] text-base-content/40 leading-relaxed">
-                Share your UPI ID or QR code. Money credited instantly.
-              </p>
-            </div>
-          </motion.div>
-        </ModalOverlay>
-      )}
-    </AnimatePresence>
-  );
-});
-ReceiveModal.displayName = 'ReceiveModal';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Send Modal
-// ─────────────────────────────────────────────────────────────────────────────
-
-const TSTEP = { FORM: 'form', CONFIRM: 'confirm', PROCESSING: 'processing', SUCCESS: 'success', ERROR: 'error' };
-
-const SendModal = memo(({ open, onClose }) => {
-  const dispatch      = useDispatch();
-  const balance       = useSelector(selectWalletBalance);
-  const lookupLoading = useSelector(selectLookupLoading);
-  const isSelf        = useSelector(selectLookupIsSelf);
-  const receiver      = useSelector(selectLookupReceiver);
-  const actionLoading = useSelector(selectWalletActionLoading);
-
-  const [step, setStep]     = useState(TSTEP.FORM);
-  const [idType, setIdType] = useState('upiId');
-  const [identifier, setId] = useState('');
-  const [amount, setAmount] = useState('');
-  const [note, setNote]     = useState('');
-  const [err, setErr]       = useState('');
-
-  const reset = useCallback(() => {
-    setStep(TSTEP.FORM); setId(''); setAmount(''); setNote(''); setErr('');
-    dispatch(clearLookupResult());
-  }, [dispatch]);
-
-  const handleClose = useCallback(() => { reset(); onClose(); }, [reset, onClose]);
-
-  const handleLookup = useCallback(async () => {
-    if (!identifier.trim()) { setErr('Please enter a UPI ID or phone number'); return; }
-    setErr('');
-    try {
-      await dispatch(lookupTransferTarget({ [idType]: identifier.trim() })).unwrap();
-      if (isSelf) { setErr('You cannot transfer money to yourself'); return; }
-      setStep(TSTEP.CONFIRM);
-    } catch (e) { setErr(e?.message || 'User not found'); }
-  }, [identifier, idType, dispatch, isSelf]);
-
-  // Move to confirm once lookup resolves and receiver is set
-  useEffect(() => {
-    if (step === TSTEP.FORM && receiver && !isSelf) setStep(TSTEP.CONFIRM);
-  }, [receiver, isSelf, step]);
-
-  const handleTransfer = useCallback(async () => {
-    const amt = Number(amount);
-    if (!amt || amt < 1)   { setErr('Enter a valid amount (min ₹1)'); return; }
-    if (amt > balance)     { setErr(`Insufficient balance. Available: ${fmt(balance)}`); return; }
-    setErr(''); setStep(TSTEP.PROCESSING);
-    try {
-      await dispatch(transferMoney({ amount: amt, note: note || undefined, [idType]: identifier.trim() })).unwrap();
-      setStep(TSTEP.SUCCESS);
-    } catch (e) { setErr(e?.message || 'Transfer failed'); setStep(TSTEP.ERROR); }
-  }, [amount, balance, note, idType, identifier, dispatch]);
-
-  return (
-    <AnimatePresence>
-      {open && (
-        <ModalOverlay onClose={handleClose}>
-          <motion.div variants={scaleIn} initial="hidden" animate="visible" exit="exit"
-            className="w-full max-w-md overflow-hidden rounded-2xl border border-primary/20 bg-base-100 shadow-2xl"
-          >
-            <div className="h-1 bg-gradient-to-r from-primary via-secondary to-accent" />
-            <div className="flex items-center justify-between px-6 py-5 pb-4">
-              <div>
-                <h2 className="font-black text-xl text-base-content">Send Money</h2>
-                <p className="mt-0.5 text-[11px] uppercase tracking-tight text-base-content/45">
-                  {step === TSTEP.FORM ? 'Enter recipient' : step === TSTEP.CONFIRM ? 'Confirm transfer' : ''}
-                </p>
-              </div>
-              <button onClick={handleClose} className="flex h-8 w-8 items-center justify-center rounded-xl bg-base-300 hover:opacity-80">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="px-6 pb-7">
-              <AnimatePresence mode="wait">
-                {/* ── Step 1: Lookup ── */}
-                {step === TSTEP.FORM && (
-                  <motion.div key="form" variants={slideLeft} initial="hidden" animate="visible" exit="exit" className="space-y-4">
-                    <div className="flex gap-2">
-                      {[['upiId', 'UPI ID'], ['phone', 'Phone']].map(([v, l]) => (
-                        <button key={v} onClick={() => setIdType(v)}
-                          className={`flex-1 rounded-xl py-2 text-[12px] font-bold transition-all ${idType === v ? 'bg-primary text-primary-content shadow-md' : 'bg-base-200 text-base-content'}`}
-                        >{l}</button>
-                      ))}
-                    </div>
-                    <div className="relative">
-                      {idType === 'phone' && <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-base-content/40" />}
-                      <input
-                        className={`input-field w-full ${idType === 'phone' ? 'pl-10' : ''}`}
-                        placeholder={idType === 'upiId' ? 'e.g. 9876543210@likeson' : 'Mobile number'}
-                        value={identifier} onChange={(e) => setId(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleLookup()}
-                        inputMode={idType === 'phone' ? 'numeric' : 'text'}
-                      />
-                    </div>
-                    <ErrorBox msg={err} />
-                    <motion.button
-                      onClick={handleLookup}
-                      disabled={!identifier.trim() || lookupLoading}
-                      whileHover={identifier.trim() ? { scale: 1.01 } : {}}
-                      whileTap={identifier.trim() ? { scale: 0.98 } : {}}
-                      className="btn-primary-cta w-full flex items-center justify-center gap-2 disabled:opacity-50"
-                    >
-                      {lookupLoading ? <><Spinner /> Looking up…</> : <><ArrowRight className="h-4 w-4" /> Continue</>}
-                    </motion.button>
-                  </motion.div>
-                )}
-
-                {/* ── Step 2: Confirm ── */}
-                {step === TSTEP.CONFIRM && receiver && (
-                  <motion.div key="confirm" variants={slideLeft} initial="hidden" animate="visible" exit="exit" className="space-y-4">
-                    <div className="flex items-center gap-3.5 rounded-xl border border-base-300 bg-base-200 p-4">
-                      {receiver.avatar
-                        ? <img src={receiver.avatar} alt="" className="h-12 w-12 rounded-full object-cover" />
-                        : (
-                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary font-black text-xl">
-                            {receiver.name?.[0]?.toUpperCase() || '?'}
-                          </div>
-                        )
-                      }
-                      <div className="min-w-0">
-                        <p className="font-bold text-base-content">{receiver.name}</p>
-                        <p className="text-[12px] text-base-content/45 truncate">{receiver.upiId}</p>
-                        <Pill color="text-success" bg="bg-success/10">Verified Likeson User</Pill>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="mb-2 block text-[11px] font-bold uppercase tracking-wider text-base-content/45">Amount (₹)</label>
-                      <div className="relative">
-                        <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-sm text-base-content/40">₹</span>
-                        <input
-                          type="number" min={1} max={10000}
-                          value={amount} onChange={(e) => setAmount(e.target.value)}
-                          placeholder="0.00"
-                          className="input-field w-full pl-8 text-lg font-black"
-                        />
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {QUICK_TRANSFER_AMOUNTS.map((v) => (
-                          <button key={v} onClick={() => setAmount(String(v))}
-                            className={`rounded-full px-3 py-1 text-[11px] font-bold border transition-all ${Number(amount) === v ? 'bg-primary text-primary-content border-primary' : 'bg-base-200 border-base-300 text-base-content'}`}
-                          >₹{v}</button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <input
-                      className="input-field w-full"
-                      placeholder="Note (optional)"
-                      value={note} onChange={(e) => setNote(e.target.value)} maxLength={100}
-                    />
-                    <p className="text-[11px] text-base-content/40">Available: <strong>{fmt(balance)}</strong></p>
-                    <ErrorBox msg={err} />
-                    <div className="flex gap-3">
-                      <button
-                        onClick={() => { setStep(TSTEP.FORM); setErr(''); dispatch(clearLookupResult()); }}
-                        className="btn-secondary flex-1 py-3"
-                      >Back</button>
-                      <motion.button
-                        onClick={handleTransfer}
-                        disabled={!amount || Number(amount) < 1 || actionLoading}
-                        whileHover={amount ? { scale: 1.01 } : {}}
-                        whileTap={amount ? { scale: 0.98 } : {}}
-                        className="btn-primary-cta flex-1 flex items-center justify-center gap-2 disabled:opacity-50"
-                      >
-                        <Send className="h-3.5 w-3.5" /> Send {amount ? fmt(Number(amount)) : ''}
-                      </motion.button>
-                    </div>
-                  </motion.div>
-                )}
-
-                {/* ── Processing ── */}
-                {step === TSTEP.PROCESSING && (
-                  <motion.div key="proc" variants={scaleIn} initial="hidden" animate="visible"
-                    className="flex flex-col items-center justify-center py-12 text-center gap-4"
-                  >
-                    <div className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-primary/40 bg-primary/10">
-                      <Loader2 className="h-7 w-7 text-primary animate-spin" />
-                    </div>
-                    <p className="font-black text-base-content">Processing…</p>
-                  </motion.div>
-                )}
-
-                {/* ── Success ── */}
-                {step === TSTEP.SUCCESS && (
-                  <motion.div key="ok" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
-                    className="flex flex-col items-center justify-center py-10 text-center gap-4"
-                  >
-                    <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 300, delay: 0.1 }}
-                      className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-success/40 bg-success/10"
-                    >
-                      <CheckCircle2 className="h-7 w-7 text-success" />
-                    </motion.div>
-                    <div>
-                      <p className="font-black text-xl text-base-content">Money Sent!</p>
-                      <p className="mt-1 text-sm text-base-content/50">{fmt(Number(amount))} sent to {receiver?.name}</p>
-                    </div>
-                    <button onClick={handleClose} className="mt-2 btn-success px-10">Done</button>
-                  </motion.div>
-                )}
-
-                {/* ── Error ── */}
-                {step === TSTEP.ERROR && (
-                  <motion.div key="err" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                    className="flex flex-col items-center justify-center py-10 text-center gap-4"
-                  >
-                    <div className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-error/40 bg-error/10">
-                      <AlertCircle className="h-7 w-7 text-error" />
-                    </div>
-                    <div>
-                      <p className="font-black text-lg text-base-content">Transfer Failed</p>
-                      <p className="mt-1 text-sm text-base-content/50">{err}</p>
-                    </div>
-                    <button onClick={() => { setStep(TSTEP.CONFIRM); setErr(''); }}
-                      className="mt-2 rounded-xl bg-base-300 px-6 py-2.5 text-[12px] font-bold uppercase tracking-widest text-base-content"
-                    >Try Again</button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          </motion.div>
-        </ModalOverlay>
-      )}
-    </AnimatePresence>
-  );
-});
-SendModal.displayName = 'SendModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Add Money Modal
@@ -1496,15 +1369,13 @@ const AddMoneyModal = memo(({ open, onClose }) => {
           <motion.div variants={scaleIn} initial="hidden" animate="visible" exit="exit"
             className="w-full max-w-md overflow-hidden rounded-2xl border border-primary/20 bg-base-100 shadow-2xl"
           >
-            <div className="h-1 bg-gradient-to-r from-primary via-secondary to-accent" />
+            <div className="h-1 bg-gradient-to-r from-primary via-blue-400 to-cyan-400" />
             <div className="flex items-center justify-between px-6 py-5 pb-4">
               <div>
                 <h2 className="font-black text-xl text-base-content">Add Money</h2>
                 <p className="mt-0.5 text-[11px] uppercase tracking-tight text-base-content/45">Min ₹100 · Instant · Withdrawable</p>
               </div>
-              <button onClick={handleClose} className="flex h-8 w-8 items-center justify-center rounded-xl bg-base-300 hover:opacity-80">
-                <X className="h-4 w-4" />
-              </button>
+              <button onClick={handleClose} className="flex h-8 w-8 items-center justify-center rounded-xl bg-base-300"><X className="h-4 w-4" /></button>
             </div>
 
             <div className="px-6 pb-7">
@@ -1521,7 +1392,7 @@ const AddMoneyModal = memo(({ open, onClose }) => {
                               whileTap={{ scale: 0.94 }}
                               className={`rounded-xl border py-3 text-[13px] font-bold transition-all ${
                                 sel
-                                  ? 'border-transparent bg-gradient-to-br from-primary to-secondary text-primary-content shadow-lg shadow-primary/25'
+                                  ? 'border-transparent bg-gradient-to-br from-primary to-blue-600 text-white shadow-lg'
                                   : 'border-base-300 bg-base-200 text-base-content hover:border-primary/40'
                               }`}
                             >₹{val.toLocaleString('en-IN')}</motion.button>
@@ -1534,11 +1405,10 @@ const AddMoneyModal = memo(({ open, onClose }) => {
                       <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-base-content/40">Custom Amount</p>
                       <div className="relative">
                         <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-bold text-base-content/40">₹</span>
-                        <input
-                          type="number" min={100} value={custom}
+                        <input type="number" min={100} value={custom}
                           onChange={(e) => { setCustom(e.target.value); setPreset(''); }}
                           placeholder="Enter amount"
-                          className="input-field w-full pl-8"
+                          className="w-full rounded-xl border border-base-300 bg-base-200 px-4 py-3 pl-8 text-sm font-medium focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
                         />
                       </div>
                     </div>
@@ -1566,7 +1436,7 @@ const AddMoneyModal = memo(({ open, onClose }) => {
                     <motion.button onClick={handleProceed} disabled={!selAmt || selAmt < 100}
                       whileHover={selAmt >= 100 ? { scale: 1.01 } : {}}
                       whileTap={selAmt >= 100 ? { scale: 0.98 } : {}}
-                      className="btn-primary-cta w-full flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="w-full flex items-center justify-center gap-2 rounded-xl bg-primary py-3 text-[13px] font-black uppercase tracking-wider text-white disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Zap className="h-4 w-4" />
                       {selAmt >= 100 ? `Pay ${fmt(selAmt)}` : 'Select Amount'}
@@ -1606,7 +1476,7 @@ const AddMoneyModal = memo(({ open, onClose }) => {
                       <p className="font-black text-xl text-base-content">Money Added!</p>
                       <p className="mt-2 text-sm text-base-content/50">{fmt(selAmt)} credited — withdrawable to bank</p>
                     </div>
-                    <button onClick={handleClose} className="mt-2 btn-success px-10">Done</button>
+                    <button onClick={handleClose} className="mt-2 rounded-xl bg-success/15 px-10 py-2.5 text-[12px] font-bold uppercase tracking-widest text-success hover:bg-success/25 transition-colors">Done</button>
                   </motion.div>
                 )}
 
@@ -1638,6 +1508,7 @@ AddMoneyModal.displayName = 'AddMoneyModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Add Bank Account Modal
+// BUG FIX #9: toast text corrected — Razorpay auto-verifies during add
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AddBankModal = memo(({ open, onClose }) => {
@@ -1657,6 +1528,12 @@ const AddBankModal = memo(({ open, onClose }) => {
   const set = (k) => (e) =>
     setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
 
+  const handleClose = useCallback(() => {
+    setForm({ accountHolderName: '', accountNumber: '', ifscCode: '', bankName: '', branchName: '', accountType: 'Savings', isPrimary: false });
+    setErr('');
+    onClose();
+  }, [onClose]);
+
   const handleSubmit = async () => {
     if (!form.accountHolderName.trim() || !form.accountNumber.trim() || !form.ifscCode.trim()) {
       setErr('Account holder name, account number, and IFSC are required');
@@ -1665,15 +1542,14 @@ const AddBankModal = memo(({ open, onClose }) => {
     setErr('');
     try {
       await dispatch(addBankAccount(form)).unwrap();
-      onClose();
-      setForm({ accountHolderName: '', accountNumber: '', ifscCode: '', bankName: '', branchName: '', accountType: 'Savings', isPrimary: false });
+      handleClose();
     } catch (e) { setErr(e?.message || 'Failed to add bank account'); }
   };
 
   const FIELDS = [
     { label: 'Account Holder Name *', key: 'accountHolderName', placeholder: 'As per bank records'        },
     { label: 'Account Number *',      key: 'accountNumber',     placeholder: '9–18 digit account number', inputMode: 'numeric' },
-    { label: 'IFSC Code *',           key: 'ifscCode',          placeholder: 'e.g. SBIN0001234',           upper: true  },
+    { label: 'IFSC Code *',           key: 'ifscCode',          placeholder: 'e.g. SBIN0001234',           upper: true },
     { label: 'Bank Name',             key: 'bankName',          placeholder: 'e.g. State Bank of India'   },
     { label: 'Branch Name',           key: 'branchName',        placeholder: 'Optional'                   },
   ];
@@ -1681,19 +1557,19 @@ const AddBankModal = memo(({ open, onClose }) => {
   return (
     <AnimatePresence>
       {open && (
-        <ModalOverlay onClose={onClose}>
+        <ModalOverlay onClose={handleClose}>
           <motion.div variants={scaleIn} initial="hidden" animate="visible" exit="exit"
             className="w-full max-w-md overflow-hidden rounded-2xl border border-info/20 bg-base-100 shadow-2xl"
           >
-            <div className="h-1 bg-gradient-to-r from-info via-primary to-secondary" />
+            <div className="h-1 bg-gradient-to-r from-info via-primary to-blue-400" />
             <div className="flex items-center justify-between px-6 py-5 pb-4">
               <div>
                 <h2 className="font-black text-xl text-base-content">Add Bank Account</h2>
-                <p className="mt-0.5 text-[11px] uppercase tracking-tight text-base-content/45">Max 3 accounts · Admin verification required</p>
+                <p className="mt-0.5 text-[11px] uppercase tracking-tight text-base-content/45">
+                  Max 3 accounts · Auto-verified via Razorpay
+                </p>
               </div>
-              <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-xl bg-base-300 hover:opacity-80">
-                <X className="h-4 w-4" />
-              </button>
+              <button onClick={handleClose} className="flex h-8 w-8 items-center justify-center rounded-xl bg-base-300"><X className="h-4 w-4" /></button>
             </div>
 
             <div className="px-6 pb-7 space-y-3 max-h-[70vh] overflow-y-auto">
@@ -1701,7 +1577,7 @@ const AddBankModal = memo(({ open, onClose }) => {
                 <div key={key}>
                   <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-base-content/45">{label}</label>
                   <input
-                    className="input-field w-full"
+                    className="w-full rounded-xl border border-base-300 bg-base-200 px-4 py-3 text-sm font-medium focus:border-info/50 focus:outline-none focus:ring-1 focus:ring-info/30"
                     placeholder={placeholder}
                     value={form[key]}
                     onChange={set(key)}
@@ -1713,7 +1589,9 @@ const AddBankModal = memo(({ open, onClose }) => {
 
               <div>
                 <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-base-content/45">Account Type</label>
-                <select value={form.accountType} onChange={set('accountType')} className="input-field w-full">
+                <select value={form.accountType} onChange={set('accountType')}
+                  className="w-full rounded-xl border border-base-300 bg-base-200 px-4 py-3 text-sm font-medium"
+                >
                   {['Savings', 'Current', 'Salary'].map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
@@ -1727,13 +1605,17 @@ const AddBankModal = memo(({ open, onClose }) => {
 
               <motion.button onClick={handleSubmit} disabled={acting}
                 whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-                className="btn-primary-cta w-full flex items-center justify-center gap-2 disabled:opacity-50"
+                className="w-full flex items-center justify-center gap-2 rounded-xl bg-info py-3 text-[13px] font-black uppercase tracking-wider text-white disabled:opacity-50"
               >
-                {acting ? <><Spinner /> Adding…</> : <><Building2 className="h-4 w-4" /> Add Account</>}
+                {acting
+                  ? <><Spinner /> Adding &amp; Verifying…</>
+                  : <><Building2 className="h-4 w-4" /> Add &amp; Verify Account</>
+                }
               </motion.button>
 
               <p className="text-center text-[11px] text-base-content/35 leading-relaxed">
-                Account verified via penny-drop before withdrawals are enabled.
+                Account is automatically verified via Razorpay X during this step.
+                Withdrawals are enabled immediately after.
               </p>
             </div>
           </motion.div>
@@ -1746,18 +1628,16 @@ AddBankModal.displayName = 'AddBankModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Withdrawal Request Modal
+// Uses selectVerifiedBankAccounts — only verified accounts eligible
 // ─────────────────────────────────────────────────────────────────────────────
-/**
- * Uses selectVerifiedBankAccounts (not selectBankAccounts) to filter
- * the list to only verified accounts, matching the server requirement.
- */
+
 const WithdrawModal = memo(({ open, onClose }) => {
-  const dispatch          = useDispatch();
-  const verifiedAccounts  = useSelector(selectVerifiedBankAccounts);
-  const wdAvailable       = useSelector(selectWithdrawableAvailable);
-  const wdBalance         = useSelector(selectWithdrawableBalance);
-  const lockedBalance     = useSelector(selectLockedBalance);
-  const acting            = useSelector(selectWithdrawalActing);
+  const dispatch         = useDispatch();
+  const verifiedAccounts = useSelector(selectVerifiedBankAccounts);
+  const wdAvailable      = useSelector(selectWithdrawableAvailable);
+  const wdBalance        = useSelector(selectWithdrawableBalance);
+  const lockedBalance    = useSelector(selectLockedBalance);
+  const acting           = useSelector(selectWithdrawalActing);
 
   const [amount, setAmount]   = useState('');
   const [bankId, setBankId]   = useState('');
@@ -1778,12 +1658,12 @@ const WithdrawModal = memo(({ open, onClose }) => {
 
   const handleSubmit = async () => {
     const amt = Number(amount);
-    if (!amt || amt < 100)     { setErr('Minimum withdrawal amount is ₹100'); return; }
-    if (amt > wdAvailable)     {
+    if (!amt || amt < 100)   { setErr('Minimum withdrawal amount is ₹100'); return; }
+    if (amt > wdAvailable)   {
       setErr(`Insufficient withdrawable balance. Available: ${fmt(wdAvailable)}. Note: only Add Money + Referral Bonus are withdrawable.`);
       return;
     }
-    if (!bankId)               { setErr('Please select a bank account'); return; }
+    if (!bankId)             { setErr('Please select a bank account'); return; }
     setErr('');
     try {
       await dispatch(requestWithdrawal({ amount: amt, bankAccountId: bankId })).unwrap();
@@ -1806,9 +1686,7 @@ const WithdrawModal = memo(({ open, onClose }) => {
                   Available: <strong className="text-warning">{fmt(wdAvailable)}</strong>
                 </p>
               </div>
-              <button onClick={handleClose} className="flex h-8 w-8 items-center justify-center rounded-xl bg-base-300 hover:opacity-80">
-                <X className="h-4 w-4" />
-              </button>
+              <button onClick={handleClose} className="flex h-8 w-8 items-center justify-center rounded-xl bg-base-300"><X className="h-4 w-4" /></button>
             </div>
 
             <div className="px-6 pb-7 max-h-[80vh] overflow-y-auto">
@@ -1822,17 +1700,17 @@ const WithdrawModal = memo(({ open, onClose }) => {
                         </div>
                         <p className="font-bold text-base-content/60">No verified bank accounts</p>
                         <p className="text-[12px] text-base-content/40 leading-relaxed">
-                          Add a bank account and wait for admin verification before withdrawing.
+                          Add a bank account to enable withdrawals.
                         </p>
                       </div>
                     ) : (
                       <>
-                        {/* balance info strip */}
+                        {/* balance strip */}
                         <div className="grid grid-cols-3 gap-2">
                           {[
-                            { label: 'Withdrawable', value: fmt(wdBalance),  color: 'text-warning'  },
-                            { label: 'Available',    value: fmt(wdAvailable), color: 'text-success'  },
-                            { label: 'Locked',       value: fmt(lockedBalance), color: 'text-error'  },
+                            { label: 'Withdrawable', value: fmt(wdBalance),  color: 'text-warning' },
+                            { label: 'Available',    value: fmt(wdAvailable), color: 'text-success' },
+                            { label: 'Locked',       value: fmt(lockedBalance), color: 'text-error' },
                           ].map(({ label, value, color }) => (
                             <div key={label} className="rounded-xl bg-base-200 px-2 py-2 text-center">
                               <p className="text-[9px] text-base-content/40 uppercase tracking-wider">{label}</p>
@@ -1841,17 +1719,13 @@ const WithdrawModal = memo(({ open, onClose }) => {
                           ))}
                         </div>
 
-                        {/* bank account selector */}
+                        {/* bank selector */}
                         <div>
                           <label className="mb-2 block text-[11px] font-bold uppercase tracking-wider text-base-content/45">Select Bank Account</label>
                           <div className="space-y-2">
                             {verifiedAccounts.map((acc) => (
                               <button key={acc._id} onClick={() => setBankId(acc._id)}
-                                className={`w-full flex items-center gap-3 rounded-xl border p-3 text-left transition-all ${
-                                  bankId === acc._id
-                                    ? 'border-warning/50 bg-warning/8'
-                                    : 'border-base-300 bg-base-200 hover:border-warning/30'
-                                }`}
+                                className={`w-full flex items-center gap-3 rounded-xl border p-3 text-left transition-all ${bankId === acc._id ? 'border-warning/50 bg-warning/8' : 'border-base-300 bg-base-200 hover:border-warning/30'}`}
                               >
                                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-warning/10">
                                   <Building2 className="h-3.5 w-3.5 text-warning" />
@@ -1875,13 +1749,13 @@ const WithdrawModal = memo(({ open, onClose }) => {
                               type="number" min={100} max={50000}
                               value={amount} onChange={(e) => setAmount(e.target.value)}
                               placeholder="0.00"
-                              className="input-field w-full pl-8 text-lg font-black"
+                              className="w-full rounded-xl border border-base-300 bg-base-200 px-4 py-3 pl-8 text-lg font-black focus:border-warning/50 focus:outline-none focus:ring-1 focus:ring-warning/30"
                             />
                           </div>
                           <div className="mt-2 flex flex-wrap gap-1.5">
-                            {QUICK_WITHDRAW_AMOUNTS.filter((v) => v <= wdAvailable).map((v) => (
+                            {QUICK_WD_AMOUNTS.filter((v) => v <= wdAvailable).map((v) => (
                               <button key={v} onClick={() => setAmount(String(v))}
-                                className={`rounded-full px-3 py-1 text-[11px] font-bold border transition-all ${Number(amount) === v ? 'bg-warning text-warning-content border-warning' : 'bg-base-200 border-base-300 text-base-content'}`}
+                                className={`rounded-full px-3 py-1 text-[11px] font-bold border transition-all ${Number(amount) === v ? 'bg-warning text-black border-warning' : 'bg-base-200 border-base-300 text-base-content'}`}
                               >₹{v.toLocaleString('en-IN')}</button>
                             ))}
                           </div>
@@ -1889,11 +1763,11 @@ const WithdrawModal = memo(({ open, onClose }) => {
 
                         <ErrorBox msg={err} />
 
-                        <div className="rounded-xl border border-warning/20 bg-warning/6 px-4 py-3 space-y-1">
-                          <p className="text-[10px] font-black uppercase tracking-wider text-warning/70">Note</p>
+                        <div className="rounded-xl border border-warning/20 bg-warning/6 px-4 py-3">
+                          <p className="text-[10px] font-black uppercase tracking-wider text-warning/70 mb-1">Note</p>
                           <p className="text-[12px] text-base-content/55 leading-relaxed">
                             Only <strong>Add Money</strong> and <strong>Referral Bonus</strong> credits are withdrawable.
-                            Funds locked until admin approves and payout completes.
+                            Funds locked until payout completes.
                           </p>
                         </div>
 
@@ -1901,8 +1775,8 @@ const WithdrawModal = memo(({ open, onClose }) => {
                           onClick={handleSubmit}
                           disabled={acting || !amount || Number(amount) < 100}
                           whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-                          className="w-full flex items-center justify-center gap-2 rounded-xl py-3 text-[13px] font-black uppercase tracking-wider transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                          style={{ background: 'var(--warning)', color: 'var(--warning-content)' }}
+                          className="w-full flex items-center justify-center gap-2 rounded-xl py-3 text-[13px] font-black uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed"
+                          style={{ background: '#f59e0b', color: '#000' }}
                         >
                           {acting ? <><Spinner /> Submitting…</> : <><BanknoteIcon className="h-4 w-4" /> Submit Request</>}
                         </motion.button>
@@ -1947,11 +1821,12 @@ export default function WalletPage() {
   const { handleRefresh } = useWalletOps();
 
   const [showAdd,      setShowAdd]      = useState(false);
-  const [showSend,     setShowSend]     = useState(false);
-  const [showReceive,  setShowReceive]  = useState(false);
   const [showAddBank,  setShowAddBank]  = useState(false);
   const [showWithdraw, setShowWithdraw] = useState(false);
   const [activeTab,    setActiveTab]    = useState('all');
+
+  // Admin verify bank modal state
+  const [verifyModal, setVerifyModal] = useState({ open: false, walletId: null, bankAccountId: null, maskedAccount: '' });
 
   useEffect(() => {
     dispatch(fetchWalletDetails());
@@ -1959,7 +1834,6 @@ export default function WalletPage() {
     dispatch(fetchBankAccounts());
     return () => {
       dispatch(clearWalletErrors());
-      dispatch(clearLookupResult());
       dispatch(clearActiveWithdrawal());
     };
   }, [dispatch]);
@@ -1972,7 +1846,7 @@ export default function WalletPage() {
           {/* ── Page Header ── */}
           <motion.div variants={fadeUp} className="flex items-center justify-between">
             <div>
-              <h1 className="font-black text-base-content tracking-tighter leading-none section-heading mb-0" style={{ fontSize: 'clamp(1.75rem,6vw,2.75rem)' }}>
+              <h1 className="font-black text-base-content tracking-tighter leading-none" style={{ fontSize: 'clamp(1.75rem,6vw,2.75rem)' }}>
                 My Wallet
               </h1>
               <p className="mt-1 text-sm text-base-content/45 font-medium">Likeson Healthcare · Secure Payments</p>
@@ -1991,7 +1865,7 @@ export default function WalletPage() {
           <AnimatePresence>
             {error && (
               <motion.div variants={fadeUp} initial="hidden" animate="visible" exit="exit" role="alert"
-                className="alert alert-error"
+                className="flex items-center gap-3 rounded-xl border border-error/20 bg-error/10 px-4 py-3"
               >
                 <AlertCircle className="h-5 w-5 shrink-0 text-error" />
                 <p className="flex-1 text-sm font-medium text-error">{error}</p>
@@ -2005,15 +1879,14 @@ export default function WalletPage() {
           {/* ── Balance Card ── */}
           <BalanceCard
             onAddMoney={() => setShowAdd(true)}
-            onSend={() => setShowSend(true)}
-            onReceive={() => setShowReceive(true)}
+            onWithdraw={() => setShowWithdraw(true)}
           />
 
           {/* ── Stats Row ── */}
           <StatsRow />
 
           {/* ── Tabbed Content Panel ── */}
-          <motion.div variants={fadeUp} className="card overflow-hidden">
+          <motion.div variants={fadeUp} className="rounded-2xl border border-base-300 bg-base-100 overflow-hidden">
             <div className="border-b border-base-300 bg-base-100/80 px-4 pt-4 pb-3">
               <TabBar active={activeTab} onChange={setActiveTab} />
             </div>
@@ -2024,12 +1897,6 @@ export default function WalletPage() {
                 {activeTab === 'all' && (
                   <motion.div key="all" variants={slideLeft} initial="hidden" animate="visible" exit="exit">
                     <TransactionHistory />
-                  </motion.div>
-                )}
-
-                {activeTab === 'p2p' && (
-                  <motion.div key="p2p" variants={slideLeft} initial="hidden" animate="visible" exit="exit">
-                    <P2PHistoryPanel />
                   </motion.div>
                 )}
 
@@ -2052,7 +1919,12 @@ export default function WalletPage() {
                   </motion.div>
                 )}
 
-              
+                {/* BUG FIX #7: Admin tab — was missing entirely */}
+                {activeTab === 'admin' && (
+                  <motion.div key="admin" variants={slideLeft} initial="hidden" animate="visible" exit="exit" className="space-y-4">
+                    <AdminWithdrawalsPanel />
+                  </motion.div>
+                )}
 
               </AnimatePresence>
             </div>
@@ -2065,7 +1937,7 @@ export default function WalletPage() {
             <Info className="h-4 w-4 shrink-0 mt-0.5 text-info" />
             <p className="text-[12px] leading-relaxed text-base-content/55">
               <strong className="text-base-content/70">Add Money</strong> and <strong className="text-base-content/70">Referral Bonus</strong> credits are withdrawable to your bank account.
-              All other credits — Cashback, Refunds, P2P Received, Coin Conversions — are for <strong className="text-base-content/70">platform use only</strong> within Likeson Healthcare.
+              All other credits — Cashback, Refunds, Coin Conversions — are for <strong className="text-base-content/70">platform use only</strong> within Likeson Healthcare.
             </p>
           </motion.div>
 
@@ -2074,10 +1946,15 @@ export default function WalletPage() {
 
       {/* ── Modals ── */}
       <AddMoneyModal   open={showAdd}      onClose={() => setShowAdd(false)}      />
-      <SendModal       open={showSend}     onClose={() => setShowSend(false)}     />
-      <ReceiveModal    open={showReceive}  onClose={() => setShowReceive(false)}  />
       <AddBankModal    open={showAddBank}  onClose={() => setShowAddBank(false)}  />
       <WithdrawModal   open={showWithdraw} onClose={() => setShowWithdraw(false)} />
+      <AdminVerifyBankModal
+        open={verifyModal.open}
+        onClose={() => setVerifyModal({ open: false, walletId: null, bankAccountId: null, maskedAccount: '' })}
+        walletId={verifyModal.walletId}
+        bankAccountId={verifyModal.bankAccountId}
+        maskedAccount={verifyModal.maskedAccount}
+      />
     </div>
   );
 }

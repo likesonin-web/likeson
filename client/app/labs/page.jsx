@@ -23,6 +23,8 @@ import {
   selectLabError,
   selectCustomerSearchResults,
 } from "@/store/slices/labSlice";
+import Banner from "../../components/Banner";
+import Container from "../../components/ui/Container";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -96,12 +98,15 @@ const SkeletonCard = () => (
 const LabCard = ({ lab, index, isCustomer }) => {
   const href = isCustomer ? `/labs/customer/${lab._id}` : `/labs/${lab._id}`;
   return (
+
     <motion.div
       initial={{ opacity: 0, y: 24 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.05, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
       className="group relative"
     >
+     
+
       <Link href={href} className="block h-full">
         <div className="card h-full overflow-hidden cursor-pointer transition-all duration-300">
           {/* Cover */}
@@ -287,9 +292,10 @@ export default function LabsPage() {
 
   return (
     <div data-theme="lab" className="min-h-screen bg-[var(--base-100)]">
-
+        <Container className="mt-4">
+ <Banner position="Lab_Page" />
       {/* ════ HERO ════════════════════════════════════════════════ */}
-      <div className="relative overflow-hidden">
+      <div className="relative  mb-10 ">
         {/* Layered background */}
         <div className="absolute inset-0 bg-gradient-to-br from-[var(--primary)]/8 via-[var(--base-100)] to-[var(--secondary)]/6 pointer-events-none" />
 
@@ -334,7 +340,7 @@ export default function LabsPage() {
               </span>
             </motion.div>
 
-            <h1 className="font-montserrat font-black text-4xl md:text-5xl lg:text-6xl leading-[1.08] mb-4">
+            <h1 className="font-poppins font-black text-4xl md:text-5xl lg:text-6xl leading-[1.08] mb-4">
               <span className="text-[var(--base-content)]">Find the </span>
               <span className="text-gradient-primary">Right Lab</span>
               <br />
@@ -358,7 +364,7 @@ export default function LabsPage() {
                 { label: "Cities",       val: "80+" },
               ].map(({ label, val }) => (
                 <div key={label} className="text-center">
-                  <div className="text-xl font-black text-[var(--primary)] font-montserrat">{val}</div>
+                  <div className="text-xl font-black text-[var(--primary)] font-poppins">{val}</div>
                   <div className="text-[10px] text-[var(--base-content)]/45 uppercase tracking-wider font-semibold mt-0.5">{label}</div>
                 </div>
               ))}
@@ -379,7 +385,7 @@ export default function LabsPage() {
                   value={search}
                   onChange={(e) => { setSearch(e.target.value); setPage(1); }}
                   placeholder={isCustomer ? "Search by test name, lab name, city…" : "Search labs, tests, cities…"}
-                  className="flex-1 bg-transparent text-sm text-[var(--base-content)] placeholder:text-[var(--base-content)]/32 outline-none py-2"
+                  className="flex-1 bg-transparent text-sm  outline-none text-[var(--base-content)] placeholder:text-[var(--base-content)]/32 outline-none py-2"
                 />
                 {search && (
                   <button onClick={() => setSearch("")}
@@ -461,7 +467,7 @@ export default function LabsPage() {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <div className="w-1 h-5 rounded-full bg-gradient-to-b from-[var(--accent)] to-[var(--primary)]" />
-              <h2 className="font-montserrat font-black text-base text-[var(--base-content)]">Featured Labs</h2>
+              <h2 className="font-poppins font-black text-base text-[var(--base-content)]">Featured Labs</h2>
             </div>
             <Link href={isCustomer ? "/labs/customer" : "/labs/featured"}
               className="text-xs font-bold text-[var(--primary)] flex items-center gap-0.5 hover:gap-1.5 transition-all">
@@ -537,7 +543,7 @@ export default function LabsPage() {
               <div className="w-20 h-20 rounded-3xl bg-[var(--primary)]/7 flex items-center justify-center mx-auto mb-5">
                 <FlaskConical size={30} className="text-[var(--primary)]/40" />
               </div>
-              <h3 className="font-montserrat font-black text-xl text-[var(--base-content)] mb-2">No labs found</h3>
+              <h3 className="font-poppins font-black text-xl text-[var(--base-content)] mb-2">No labs found</h3>
               <p className="text-sm text-[var(--base-content)]/45">Try different filters or a broader search term.</p>
               <button onClick={clearFilters} className="btn-primary-cta mt-5 text-xs px-6 py-2.5">Clear Filters</button>
             </motion.div>
@@ -608,6 +614,7 @@ export default function LabsPage() {
           </div>
         </div>
       </section>
+      </Container>
     </div>
   );
 }

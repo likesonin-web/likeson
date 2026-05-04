@@ -41,7 +41,6 @@ export const DRIVER_DASHBOARD_LINKS = [
     icon: <UserRound />,
     links: [
       { name: "View Profile",    href: "/driver/profile",          icon: <UserRound size={18} /> },
-      { name: "Edit Profile",    href: "/driver/profile/edit",     icon: <PenLine size={18} />   },
       { name: "Change Password", href: "/driver/profile/password", icon: <KeyRound size={18} />  },
     ],
   },
@@ -64,7 +63,6 @@ export const DRIVER_DASHBOARD_LINKS = [
     icon: <Clock />,
     links: [
       { name: "Shift Settings", href: "/driver/shift",  icon: <Clock size={18} />       },
-      { name: "Update Status",  href: "/driver/status", icon: <ToggleRight size={18} /> },
     ],
   },
 
@@ -131,7 +129,7 @@ export const DRIVER_DASHBOARD_LINKS = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const DRIVER_TOP_RIGHT_LINKS = [
-  { name: "Status",   href: "/driver/status",   icon: <ToggleRight size={18} /> },
+  { name: "Status",   href: "/driver/shift",   icon: <ToggleRight size={18} /> },
   { name: "Location", href: "/driver/location", icon: <MapPin size={18} />      },
   { name: "Rewards",  href: "/driver/rewards",  icon: <Star size={18} />        },
 ];

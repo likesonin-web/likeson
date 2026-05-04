@@ -354,18 +354,22 @@ export default function LabDetailPage() {
             {(lab.homeCollectionFee ?? 0) > 0 && <InfoChip icon={Navigation} label="Home Fee" value={`₹${lab.homeCollectionFee}`}/>}
           </div>
 
-          {isCustomer && (
-            <div className="flex gap-3 mt-5">
-              <button onClick={() => setActiveTab("tests")}
-                className="btn-primary-cta text-xs px-6 py-2.5 flex items-center gap-2 flex-1 justify-center">
-                <TestTube size={13}/> Book a Test
-              </button>
-              <button onClick={() => setActiveTab("packages")}
-                className="btn-secondary text-xs px-5 py-2.5 flex items-center gap-2">
-                <Package size={13}/> Packages
-              </button>
-            </div>
-          )}
+        {isCustomer && (
+  <div className="flex gap-3 mt-5">
+    <Link
+      href={`/book-appointment?type=diagnostic_center&lab=${id}`}
+      className="btn-primary-cta text-xs px-6 py-2.5 flex items-center gap-2 flex-1 justify-center"
+    >
+      <TestTube size={13}/> Book a Test
+    </Link>
+    <Link
+      href={`/book-appointment?type=diagnostic_home&lab=${id}`}
+      className="btn-secondary text-xs px-5 py-2.5 flex items-center gap-2"
+    >
+      <Home size={13}/> Home Collection
+    </Link>
+  </div>
+)}
         </motion.div>
       </div>
 

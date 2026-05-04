@@ -1730,7 +1730,10 @@ const getMyDoctorProfile = asyncHandler(async (req, res) => {
     .populate('user', 'name avatar email phone')
     .populate('primaryHospital', 'name address slug logo consultationPricing managementModel')
     .populate('otherHospitals',  'name address slug')
-    .populate('managedHospitals','name address slug isVerified');
+    .populate({
+  path: 'ownedHospitals',
+  select: 'name address slug isVerified'
+});
 
   if (!profile) {
     return res.status(404).json({

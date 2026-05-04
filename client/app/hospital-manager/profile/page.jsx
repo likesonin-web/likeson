@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -22,20 +22,17 @@ import {
   Phone,
   Mail,
   Building2,
-  Star,
   Shield,
   Loader2,
   Eye,
-  EyeOff,
-  ToggleLeft,
-  ToggleRight,
   Camera,
-  Download,
   ExternalLink,
   Hash,
   Calendar,
-  Pencil,
   RefreshCw,
+  Navigation,
+  Search,
+  Map,
 } from "lucide-react";
 import {
   fetchHospitalProfile,
@@ -54,14 +51,49 @@ import {
   getError,
 } from "@/store/slices/hospitalManagerSlice";
 
-// ─── Constants ───────────────────────────────────────────────────────────────
+// ─── Google Maps Loader ───────────────────────────────────────────────────────
+
+const MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
+
+let mapsLoaded = false;
+let mapsLoading = false;
+let mapsCallbacks = [];
+
+function loadGoogleMaps() {
+  return new Promise((resolve, reject) => {
+    if (mapsLoaded) return resolve(window.google);
+    mapsCallbacks.push({ resolve, reject });
+    if (mapsLoading) return;
+    mapsLoading = true;
+
+    window.__googleMapsCallback = () => {
+      mapsLoaded = true;
+      mapsLoading = false;
+      mapsCallbacks.forEach(cb => cb.resolve(window.google));
+      mapsCallbacks = [];
+    };
+
+    const script = document.createElement("script");
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${MAPS_KEY}&libraries=places&callback=__googleMapsCallback`;
+    script.async = true;
+    script.defer = true;
+    script.onerror = () => {
+      mapsLoading = false;
+      mapsCallbacks.forEach(cb => cb.reject(new Error("Google Maps failed to load")));
+      mapsCallbacks = [];
+    };
+    document.head.appendChild(script);
+  });
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const NAV_SECTIONS = [
-  { id: "profile",    label: "Hospital Profile", icon: Hospital,   href: "/hospital-manager/profile"        },
-  { id: "location",   label: "Location & GPS",   icon: MapPin,     href: "/hospital-manager/location"       },
-  { id: "hours",      label: "Operating Hours",  icon: Clock,      href: "/hospital-manager/operating-hours"},
-  { id: "gallery",    label: "Gallery & Logo",   icon: ImageIcon,  href: "/hospital-manager/gallery"        },
-  { id: "legal",      label: "Legal & Licenses", icon: FileText,   href: "/hospital-manager/registration"   },
+  { id: "profile",  label: "Hospital Profile", icon: Hospital  },
+  { id: "location", label: "Location & GPS",   icon: MapPin    },
+  { id: "hours",    label: "Operating Hours",  icon: Clock     },
+  { id: "gallery",  label: "Gallery & Logo",   icon: ImageIcon },
+  { id: "legal",    label: "Legal & Licenses", icon: FileText  },
 ];
 
 const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
@@ -75,21 +107,24 @@ const SPECIALTIES_OPTIONS = [
 const ACCREDITATION_OPTIONS = ["NABH","NABL","JCI","ISO","AHPI","Other"];
 
 const FACILITY_FLAGS = [
-  { key: "isEmergencyReady",    label: "Emergency Ready",     icon: "🚑" },
-  { key: "hasICU",              label: "ICU Available",       icon: "🏥" },
-  { key: "hasBloodBank",        label: "Blood Bank",          icon: "🩸" },
-  { key: "hasPharmacy",         label: "In-house Pharmacy",   icon: "💊" },
-  { key: "hasDiagnostics",      label: "Diagnostics Lab",     icon: "🔬" },
-  { key: "hasAmbulance",        label: "Ambulance Service",   icon: "🚑" },
-  { key: "hasWheelchairAccess", label: "Wheelchair Access",   icon: "♿" },
-  { key: "is24x7",              label: "24×7 Open",           icon: "⏰" },
+  { key: "isEmergencyReady",    label: "Emergency Ready",   icon: "🚑" },
+  { key: "hasICU",              label: "ICU Available",     icon: "🏥" },
+  { key: "hasBloodBank",        label: "Blood Bank",        icon: "🩸" },
+  { key: "hasPharmacy",         label: "In-house Pharmacy", icon: "💊" },
+  { key: "hasDiagnostics",      label: "Diagnostics Lab",   icon: "🔬" },
+  { key: "hasAmbulance",        label: "Ambulance Service", icon: "🚐" },
+  { key: "hasWheelchairAccess", label: "Wheelchair Access", icon: "♿" },
+  { key: "is24x7",              label: "24×7 Open",         icon: "⏰" },
 ];
 
-// ─── Utility Components ───────────────────────────────────────────────────────
+const DEFAULT_LAT = 16.506145;
+const DEFAULT_LNG = 80.648018;
+
+// ─── Shared UI Atoms ──────────────────────────────────────────────────────────
 
 const FieldNote = ({ children }) => (
-  <p className="mt-1.5 text-xs text-base-content/50 flex items-start gap-1">
-    <Info size={11} className="mt-0.5 shrink-0 text-primary/60" />
+  <p className="mt-1.5 text-xs text-[var(--base-content)]/50 flex items-start gap-1">
+    <Info size={11} className="mt-0.5 shrink-0 text-[var(--primary)]/60" />
     <span>{children}</span>
   </p>
 );
@@ -97,44 +132,47 @@ const FieldNote = ({ children }) => (
 const SectionHeader = ({ title, subtitle, icon: Icon }) => (
   <div className="mb-8">
     <div className="flex items-center gap-3 mb-2">
-      <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-        <Icon size={20} className="text-primary" />
+      <div className="w-10 h-10 rounded-xl bg-[var(--primary)]/10 border border-[var(--primary)]/20 flex items-center justify-center">
+        <Icon size={20} className="text-[var(--primary)]" />
       </div>
-      <h2 className="text-xl font-bold text-base-content font-montserrat tracking-tight">{title}</h2>
+      <h2 className="text-xl font-bold text-[var(--base-content)] font-montserrat tracking-tight">{title}</h2>
     </div>
-    {subtitle && <p className="text-sm text-base-content/55 ml-13 pl-13">{subtitle}</p>}
+    {subtitle && <p className="text-sm text-[var(--base-content)]/55 ml-13">{subtitle}</p>}
   </div>
 );
 
 const Label = ({ children, required }) => (
-  <label className="block text-xs font-semibold uppercase tracking-widest text-base-content/60 mb-1.5">
-    {children} {required && <span className="text-error">*</span>}
+  <label className="block text-xs font-semibold uppercase tracking-widest text-[var(--base-content)]/60 mb-1.5">
+    {children}{required && <span className="text-[var(--error)] ml-1">*</span>}
   </label>
 );
 
 const Input = ({ className = "", ...props }) => (
   <input
-    className={`w-full px-4 py-2.5 rounded-xl bg-base-200 border border-base-300 text-base-content text-sm
-      placeholder:text-base-content/30 focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/60
-      transition-all duration-200 hover:border-primary/40 ${className}`}
+    className={`w-full px-4 py-2.5 rounded-xl bg-[var(--base-200)] border border-[var(--base-300)]
+      text-[var(--base-content)] text-sm placeholder:text-[var(--base-content)]/30
+      focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/40 focus:border-[var(--primary)]/60
+      transition-all duration-200 hover:border-[var(--primary)]/40 ${className}`}
     {...props}
   />
 );
 
 const Textarea = ({ className = "", ...props }) => (
   <textarea
-    className={`w-full px-4 py-2.5 rounded-xl bg-base-200 border border-base-300 text-base-content text-sm
-      placeholder:text-base-content/30 focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/60
-      transition-all duration-200 hover:border-primary/40 resize-none ${className}`}
+    className={`w-full px-4 py-2.5 rounded-xl bg-[var(--base-200)] border border-[var(--base-300)]
+      text-[var(--base-content)] text-sm placeholder:text-[var(--base-content)]/30
+      focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/40 focus:border-[var(--primary)]/60
+      transition-all duration-200 hover:border-[var(--primary)]/40 resize-none ${className}`}
     {...props}
   />
 );
 
 const Select = ({ className = "", children, ...props }) => (
   <select
-    className={`w-full px-4 py-2.5 rounded-xl bg-base-200 border border-base-300 text-base-content text-sm
-      focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/60
-      transition-all duration-200 hover:border-primary/40 ${className}`}
+    className={`w-full px-4 py-2.5 rounded-xl bg-[var(--base-200)] border border-[var(--base-300)]
+      text-[var(--base-content)] text-sm
+      focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/40 focus:border-[var(--primary)]/60
+      transition-all duration-200 hover:border-[var(--primary)]/40 ${className}`}
     {...props}
   >
     {children}
@@ -147,8 +185,8 @@ const SaveButton = ({ loading, onClick, label = "Save Changes" }) => (
     whileTap={{ scale: 0.97 }}
     onClick={onClick}
     disabled={loading}
-    className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-primary text-primary-content text-sm font-semibold
-      shadow-lg shadow-primary/25 hover:shadow-primary/40 transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
+    className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[var(--primary)] text-[var(--primary-content)]
+      text-sm font-semibold shadow-lg transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
   >
     {loading ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
     {loading ? "Saving…" : label}
@@ -162,21 +200,182 @@ const Toast = ({ message, type = "success", onClose }) => (
     exit={{ opacity: 0, y: -10, scale: 0.95 }}
     className={`flex items-center gap-3 px-4 py-3 rounded-xl border text-sm font-medium shadow-xl ${
       type === "success"
-        ? "bg-success/10 border-success/30 text-success"
-        : "bg-error/10 border-error/30 text-error"
+        ? "bg-[var(--success)]/10 border-[var(--success)]/30 text-[var(--success)]"
+        : "bg-[var(--error)]/10 border-[var(--error)]/30 text-[var(--error)]"
     }`}
   >
     {type === "success" ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
-    {message}
+    <span>{message}</span>
     <button onClick={onClose} className="ml-2 opacity-60 hover:opacity-100"><X size={14} /></button>
   </motion.div>
 );
 
 const Card = ({ children, className = "" }) => (
-  <div className={`bg-base-100 border border-base-300 rounded-2xl shadow-sm ${className}`}>
+  <div className={`bg-[var(--base-100)] border border-[var(--base-300)] rounded-2xl shadow-sm ${className}`}>
     {children}
   </div>
 );
+
+// Toggle component — fixed direction logic
+const Toggle = ({ checked, onChange, colorOn = "bg-[var(--primary)]" }) => (
+  <button
+    type="button"
+    onClick={() => onChange(!checked)}
+    className={`relative w-11 h-6 rounded-full transition-colors duration-300 focus:outline-none ${
+      checked ? colorOn : "bg-[var(--base-300)]"
+    }`}
+  >
+    <span
+      className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-300 ${
+        checked ? "translate-x-5" : "translate-x-0"
+      }`}
+    />
+  </button>
+);
+
+// ─── Google Map Component ─────────────────────────────────────────────────────
+
+const GoogleMapPicker = ({ lat, lng, onLocationChange }) => {
+  const mapRef    = useRef(null);
+  const mapObj    = useRef(null);
+  const markerObj = useRef(null);
+  const acRef     = useRef(null);
+  const inputRef  = useRef(null);
+  const [mapError, setMapError] = useState(null);
+  const [mapReady, setMapReady] = useState(false);
+
+  const centerLat = parseFloat(lat) || DEFAULT_LAT;
+  const centerLng = parseFloat(lng) || DEFAULT_LNG;
+
+  // Init map
+  useEffect(() => {
+    let cancelled = false;
+    loadGoogleMaps()
+      .then((google) => {
+        if (cancelled || !mapRef.current) return;
+
+        const position = { lat: centerLat, lng: centerLng };
+
+        mapObj.current = new google.maps.Map(mapRef.current, {
+          center: position,
+          zoom: 16,
+          mapTypeControl: false,
+          streetViewControl: false,
+          fullscreenControl: true,
+          zoomControlOptions: { position: google.maps.ControlPosition.RIGHT_CENTER },
+          styles: [
+            { featureType: "poi", elementType: "labels", stylers: [{ visibility: "off" }] },
+          ],
+        });
+
+        markerObj.current = new google.maps.Marker({
+          position,
+          map: mapObj.current,
+          draggable: true,
+          animation: google.maps.Animation.DROP,
+          title: "Hospital Location",
+        });
+
+        // Marker drag end → update coords
+        markerObj.current.addListener("dragend", () => {
+          const pos = markerObj.current.getPosition();
+          onLocationChange(pos.lat(), pos.lng());
+        });
+
+        // Map click → move marker
+        mapObj.current.addListener("click", (e) => {
+          const pos = e.latLng;
+          markerObj.current.setPosition(pos);
+          onLocationChange(pos.lat(), pos.lng());
+        });
+
+        // Places Autocomplete on search input
+        if (inputRef.current) {
+          acRef.current = new google.maps.places.Autocomplete(inputRef.current, {
+            types: ["establishment", "geocode"],
+            componentRestrictions: { country: "in" },
+            fields: ["geometry", "name", "formatted_address"],
+          });
+
+          acRef.current.addListener("place_changed", () => {
+            const place = acRef.current.getPlace();
+            if (!place.geometry?.location) return;
+            const loc = place.geometry.location;
+            mapObj.current.setCenter(loc);
+            mapObj.current.setZoom(17);
+            markerObj.current.setPosition(loc);
+            onLocationChange(loc.lat(), loc.lng());
+          });
+        }
+
+        setMapReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) setMapError("Failed to load Google Maps. Check API key.");
+      });
+
+    return () => { cancelled = true; };
+  }, []); // mount only
+
+  // Sync external lat/lng changes → move marker + recenter
+  useEffect(() => {
+    if (!mapReady || !markerObj.current || !mapObj.current) return;
+    const newLat = parseFloat(lat);
+    const newLng = parseFloat(lng);
+    if (!isNaN(newLat) && !isNaN(newLng)) {
+      const pos = { lat: newLat, lng: newLng };
+      markerObj.current.setPosition(pos);
+      mapObj.current.panTo(pos);
+    }
+  }, [lat, lng, mapReady]);
+
+  if (mapError) {
+    return (
+      <div className="h-64 rounded-xl bg-[var(--base-200)] border border-[var(--error)]/30 flex items-center justify-center">
+        <div className="text-center">
+          <AlertCircle size={28} className="text-[var(--error)] mx-auto mb-2" />
+          <p className="text-sm text-[var(--base-content)]/60">{mapError}</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Places search bar */}
+      <div className="relative">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--base-content)]/40 z-10" />
+        <input
+          ref={inputRef}
+          type="text"
+          placeholder="Search for hospital name, address, or landmark…"
+          className="w-full pl-9 pr-4 py-2.5 rounded-xl bg-[var(--base-200)] border border-[var(--base-300)]
+            text-[var(--base-content)] text-sm placeholder:text-[var(--base-content)]/30
+            focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/40 focus:border-[var(--primary)]/60
+            transition-all duration-200"
+        />
+      </div>
+
+      {/* Map canvas */}
+      <div className="relative rounded-xl overflow-hidden border border-[var(--base-300)] shadow-sm" style={{ height: 340 }}>
+        {!mapReady && (
+          <div className="absolute inset-0 bg-[var(--base-200)] flex items-center justify-center z-10">
+            <Loader2 size={28} className="animate-spin text-[var(--primary)]" />
+          </div>
+        )}
+        <div ref={mapRef} className="w-full h-full" />
+        {mapReady && (
+          <div className="absolute bottom-3 left-3 bg-[var(--base-100)]/90 backdrop-blur-sm border border-[var(--base-300)] rounded-lg px-2.5 py-1.5 text-xs text-[var(--base-content)]/60 shadow">
+            <span className="font-semibold text-[var(--primary)]">Lat:</span> {parseFloat(lat || DEFAULT_LAT).toFixed(6)} &nbsp;
+            <span className="font-semibold text-[var(--primary)]">Lng:</span> {parseFloat(lng || DEFAULT_LNG).toFixed(6)}
+          </div>
+        )}
+      </div>
+
+      <FieldNote>Click on the map or drag the marker to set your exact hospital location. Use the search bar to jump to any address.</FieldNote>
+    </div>
+  );
+};
 
 // ─── Section: Hospital Profile ────────────────────────────────────────────────
 
@@ -185,59 +384,57 @@ const ProfileSection = ({ hospital, dispatch }) => {
   const [form, setForm] = useState({
     name: "", description: "", contact: {}, specialties: [],
     accreditations: [], bedCount: { total: 0, icu: 0 },
-    nabledLabAvailable: false,
-    isEmergencyReady: false, hasICU: false, hasBloodBank: false,
-    hasPharmacy: false, hasDiagnostics: false, hasAmbulance: false,
-    hasWheelchairAccess: false, is24x7: false,
+    nabledLabAvailable: false, isEmergencyReady: false, hasICU: false,
+    hasBloodBank: false, hasPharmacy: false, hasDiagnostics: false,
+    hasAmbulance: false, hasWheelchairAccess: false, is24x7: false,
     facilities: [], acceptedSchemes: [],
   });
-  const [toast, setToast] = useState(null);
+  const [toast, setToast]       = useState(null);
   const [newSpecialty, setNewSpecialty] = useState("");
-  const [newFacility, setNewFacility] = useState("");
-  const [newScheme, setNewScheme] = useState("");
+  const [newFacility, setNewFacility]   = useState("");
+  const [newScheme, setNewScheme]       = useState("");
 
   useEffect(() => {
-    if (hospital) {
-      setForm({
-        name:               hospital.name || "",
-        description:        hospital.description || "",
-        contact:            hospital.contact || {},
-        specialties:        hospital.specialties || [],
-        accreditations:     hospital.accreditations || [],
-        bedCount:           hospital.bedCount || { total: 0, icu: 0 },
-        nabledLabAvailable: hospital.nabledLabAvailable || false,
-        isEmergencyReady:   hospital.isEmergencyReady || false,
-        hasICU:             hospital.hasICU || false,
-        hasBloodBank:       hospital.hasBloodBank || false,
-        hasPharmacy:        hospital.hasPharmacy || false,
-        hasDiagnostics:     hospital.hasDiagnostics || false,
-        hasAmbulance:       hospital.hasAmbulance || false,
-        hasWheelchairAccess:hospital.hasWheelchairAccess || false,
-        is24x7:             hospital.is24x7 || false,
-        facilities:         hospital.facilities || [],
-        acceptedSchemes:    hospital.acceptedSchemes || [],
-      });
-    }
+    if (!hospital) return;
+    setForm({
+      name:                hospital.name                || "",
+      description:         hospital.description         || "",
+      contact:             hospital.contact             || {},
+      specialties:         hospital.specialties         || [],
+      accreditations:      hospital.accreditations      || [],
+      bedCount:            hospital.bedCount            || { total: 0, icu: 0 },
+      nabledLabAvailable:  hospital.nabledLabAvailable  || false,
+      isEmergencyReady:    hospital.isEmergencyReady    || false,
+      hasICU:              hospital.hasICU              || false,
+      hasBloodBank:        hospital.hasBloodBank        || false,
+      hasPharmacy:         hospital.hasPharmacy         || false,
+      hasDiagnostics:      hospital.hasDiagnostics      || false,
+      hasAmbulance:        hospital.hasAmbulance        || false,
+      hasWheelchairAccess: hospital.hasWheelchairAccess || false,
+      is24x7:              hospital.is24x7              || false,
+      facilities:          hospital.facilities          || [],
+      acceptedSchemes:     hospital.acceptedSchemes     || [],
+    });
   }, [hospital]);
 
-  const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
+  const set      = (key, val) => setForm(f => ({ ...f, [key]: val }));
   const setContact = (key, val) => setForm(f => ({ ...f, contact: { ...f.contact, [key]: val } }));
 
-  const addTag = (key, val, setter) => {
+  const addTag    = (key, val, setter) => {
     if (!val.trim()) return;
     setForm(f => ({ ...f, [key]: [...(f[key] || []), val.trim()] }));
     setter("");
   };
-  const removeTag = (key, idx) => setForm(f => ({ ...f, [key]: f[key].filter((_, i) => i !== idx) }));
+  const removeTag = (key, idx) =>
+    setForm(f => ({ ...f, [key]: f[key].filter((_, i) => i !== idx) }));
 
-  const toggleAccreditation = (acc) => {
+  const toggleAccreditation = (acc) =>
     setForm(f => ({
       ...f,
       accreditations: f.accreditations.includes(acc)
         ? f.accreditations.filter(a => a !== acc)
         : [...f.accreditations, acc],
     }));
-  };
 
   const handleSave = async () => {
     const result = await dispatch(updateBasicProfile(form));
@@ -251,33 +448,33 @@ const ProfileSection = ({ hospital, dispatch }) => {
 
       {/* Basic Info */}
       <Card>
-        <div className="p-6 border-b border-base-300">
-          <h3 className="text-sm font-semibold text-base-content/70 uppercase tracking-widest">Basic Information</h3>
+        <div className="p-6 border-b border-[var(--base-300)]">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50">Basic Information</h3>
         </div>
         <div className="p-6 space-y-5">
           <div>
             <Label required>Hospital Name</Label>
             <Input value={form.name} onChange={e => set("name", e.target.value)} placeholder="e.g. Apollo Multispecialty Hospital" />
-            <FieldNote>This is the public-facing name shown on patient-facing pages and search results.</FieldNote>
+            <FieldNote>Public-facing name shown on patient pages and search results.</FieldNote>
           </div>
           <div>
             <Label>About / Description</Label>
             <Textarea rows={4} value={form.description} onChange={e => set("description", e.target.value)}
               placeholder="Describe your hospital's mission, key services, and what sets you apart…" />
-            <FieldNote>Keep this under 1000 characters. Patients read this to understand your hospital's strengths.</FieldNote>
+            <FieldNote>Keep under 1000 characters. Patients read this to understand your hospital's strengths.</FieldNote>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <Label>Total Beds</Label>
               <Input type="number" min={0} value={form.bedCount.total}
                 onChange={e => set("bedCount", { ...form.bedCount, total: Number(e.target.value) })} />
-              <FieldNote>Total inpatient bed capacity of the hospital.</FieldNote>
+              <FieldNote>Total inpatient bed capacity.</FieldNote>
             </div>
             <div>
               <Label>ICU Beds</Label>
               <Input type="number" min={0} value={form.bedCount.icu}
                 onChange={e => set("bedCount", { ...form.bedCount, icu: Number(e.target.value) })} />
-              <FieldNote>Setting this &gt; 0 automatically marks "Has ICU" as enabled.</FieldNote>
+              <FieldNote>Setting &gt; 0 auto-enables "Has ICU" flag.</FieldNote>
             </div>
           </div>
         </div>
@@ -285,22 +482,22 @@ const ProfileSection = ({ hospital, dispatch }) => {
 
       {/* Contact */}
       <Card>
-        <div className="p-6 border-b border-base-300">
-          <h3 className="text-sm font-semibold text-base-content/70 uppercase tracking-widest">Contact Details</h3>
+        <div className="p-6 border-b border-[var(--base-300)]">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50">Contact Details</h3>
         </div>
         <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
           {[
-            { key: "phone",          label: "Primary Phone",     ph: "+91 9XXXXXXXXX",  note: "Main reception number. Shown to patients for appointment inquiries.", icon: Phone },
-            { key: "emergencyPhone", label: "Emergency Phone",   ph: "+91 9XXXXXXXXX",  note: "Direct emergency contact. Listed separately on emergency cards.", icon: Phone },
-            { key: "alternatePhone", label: "Alternate Phone",   ph: "+91 9XXXXXXXXX",  note: "Backup number if primary is unreachable.", icon: Phone },
-            { key: "email",          label: "Official Email",    ph: "info@hospital.com", note: "Used for official correspondence and patient queries.", icon: Mail },
-            { key: "website",        label: "Website URL",       ph: "https://hospital.com", note: "Your official website. Opens in a new tab on your profile.", icon: Globe },
-            { key: "whatsapp",       label: "WhatsApp Number",   ph: "+91 9XXXXXXXXX",  note: "Patients can message this for quick non-emergency queries.", icon: Phone },
+            { key: "phone",          label: "Primary Phone",   ph: "+91 9XXXXXXXXX",     note: "Main reception. Shown to patients for appointment inquiries.", icon: Phone },
+            { key: "emergencyPhone", label: "Emergency Phone", ph: "+91 9XXXXXXXXX",     note: "Direct emergency contact. Listed on emergency cards.",          icon: Phone },
+            { key: "alternatePhone", label: "Alternate Phone", ph: "+91 9XXXXXXXXX",     note: "Backup number if primary is unreachable.",                      icon: Phone },
+            { key: "email",          label: "Official Email",  ph: "info@hospital.com",  note: "Used for official correspondence and patient queries.",          icon: Mail  },
+            { key: "website",        label: "Website URL",     ph: "https://hospital.com", note: "Official website. Opens in new tab on your profile.",         icon: Globe },
+            { key: "whatsapp",       label: "WhatsApp",        ph: "+91 9XXXXXXXXX",     note: "Patients can message for quick non-emergency queries.",          icon: Phone },
           ].map(({ key, label, ph, note, icon: Ico }) => (
             <div key={key}>
               <Label>{label}</Label>
               <div className="relative">
-                <Ico size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
+                <Ico size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--base-content)]/40" />
                 <Input className="pl-9" value={form.contact[key] || ""} onChange={e => setContact(key, e.target.value)} placeholder={ph} />
               </div>
               <FieldNote>{note}</FieldNote>
@@ -311,30 +508,28 @@ const ProfileSection = ({ hospital, dispatch }) => {
 
       {/* Accreditations */}
       <Card>
-        <div className="p-6 border-b border-base-300">
-          <h3 className="text-sm font-semibold text-base-content/70 uppercase tracking-widest">Accreditations & Certifications</h3>
+        <div className="p-6 border-b border-[var(--base-300)]">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50">Accreditations & Certifications</h3>
         </div>
-        <div className="p-6">
+        <div className="p-6 space-y-4">
           <div className="flex flex-wrap gap-2">
             {ACCREDITATION_OPTIONS.map(acc => (
               <button key={acc} onClick={() => toggleAccreditation(acc)}
                 className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 ${
                   form.accreditations.includes(acc)
-                    ? "bg-primary text-primary-content border-primary shadow-lg shadow-primary/20"
-                    : "bg-base-200 text-base-content/60 border-base-300 hover:border-primary/40"
+                    ? "bg-[var(--primary)] text-[var(--primary-content)] border-[var(--primary)] shadow-lg"
+                    : "bg-[var(--base-200)] text-[var(--base-content)]/60 border-[var(--base-300)] hover:border-[var(--primary)]/40"
                 }`}
               >{acc}</button>
             ))}
           </div>
           <FieldNote>Select all certifications your hospital holds. These appear as trust badges on your patient-facing profile.</FieldNote>
-          <div className="mt-4 flex items-center gap-3">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <button onClick={() => set("nabledLabAvailable", !form.nabledLabAvailable)}
-                className={`w-10 h-5.5 rounded-full relative transition-colors duration-300 ${form.nabledLabAvailable ? "bg-primary" : "bg-base-300"}`}>
-                <span className={`absolute top-0.5 w-4.5 h-4.5 rounded-full bg-white shadow transition-transform duration-300 ${form.nabledLabAvailable ? "translate-x-4.5" : "translate-x-0.5"}`} />
-              </button>
-              <span className="text-sm font-medium text-base-content">NABL Lab Available</span>
-            </label>
+          <div className="flex items-center gap-3 pt-2">
+            <Toggle
+              checked={form.nabledLabAvailable}
+              onChange={v => set("nabledLabAvailable", v)}
+            />
+            <span className="text-sm font-medium text-[var(--base-content)]">NABL Lab Available</span>
           </div>
           <FieldNote>Enable if your hospital has a NABL-accredited in-house diagnostic laboratory.</FieldNote>
         </div>
@@ -342,78 +537,79 @@ const ProfileSection = ({ hospital, dispatch }) => {
 
       {/* Specialties */}
       <Card>
-        <div className="p-6 border-b border-base-300">
-          <h3 className="text-sm font-semibold text-base-content/70 uppercase tracking-widest">Medical Specialties</h3>
+        <div className="p-6 border-b border-[var(--base-300)]">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50">Medical Specialties</h3>
         </div>
-        <div className="p-6">
-          <div className="flex gap-2 mb-3">
+        <div className="p-6 space-y-3">
+          <div className="flex gap-2">
             <Select value={newSpecialty} onChange={e => setNewSpecialty(e.target.value)} className="flex-1">
               <option value="">Select a specialty to add…</option>
               {SPECIALTIES_OPTIONS.filter(s => !form.specialties.includes(s)).map(s => <option key={s}>{s}</option>)}
             </Select>
             <button onClick={() => addTag("specialties", newSpecialty, setNewSpecialty)}
-              className="px-4 py-2 rounded-xl bg-primary text-primary-content text-sm font-semibold hover:bg-primary/90 transition-colors">
+              className="px-4 py-2 rounded-xl bg-[var(--primary)] text-[var(--primary-content)] text-sm font-semibold hover:opacity-90 transition-opacity">
               <Plus size={16} />
             </button>
           </div>
           <div className="flex flex-wrap gap-2">
             {form.specialties.map((s, i) => (
-              <span key={i} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-primary/10 text-primary border border-primary/20 text-xs font-semibold">
+              <span key={i} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--primary)]/10 text-[var(--primary)] border border-[var(--primary)]/20 text-xs font-semibold">
                 {s}
-                <button onClick={() => removeTag("specialties", i)} className="hover:text-error transition-colors"><X size={11} /></button>
+                <button onClick={() => removeTag("specialties", i)} className="hover:text-[var(--error)] transition-colors"><X size={11} /></button>
               </span>
             ))}
           </div>
-          <FieldNote>Specialties help patients find the right care. Listed prominently on your hospital page and used in search filters.</FieldNote>
+          <FieldNote>Specialties help patients find the right care. Used in search filters and prominently shown on your hospital page.</FieldNote>
         </div>
       </Card>
 
       {/* Facility Flags */}
       <Card>
-        <div className="p-6 border-b border-base-300">
-          <h3 className="text-sm font-semibold text-base-content/70 uppercase tracking-widest">Facility Features</h3>
+        <div className="p-6 border-b border-[var(--base-300)]">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50">Facility Features</h3>
         </div>
         <div className="p-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
           {FACILITY_FLAGS.map(({ key, label, icon }) => (
             <button key={key} onClick={() => set(key, !form[key])}
               className={`flex items-center gap-2.5 px-3 py-3 rounded-xl border text-left transition-all duration-200 ${
                 form[key]
-                  ? "bg-success/10 border-success/30 text-success"
-                  : "bg-base-200 border-base-300 text-base-content/50 hover:border-primary/30"
+                  ? "bg-[var(--success)]/10 border-[var(--success)]/30 text-[var(--success)]"
+                  : "bg-[var(--base-200)] border-[var(--base-300)] text-[var(--base-content)]/50 hover:border-[var(--primary)]/30"
               }`}>
               <span className="text-lg">{icon}</span>
-              <span className="text-xs font-semibold leading-tight">{label}</span>
-              {form[key] && <CheckCircle2 size={12} className="ml-auto shrink-0" />}
+              <span className="text-xs font-semibold leading-tight flex-1">{label}</span>
+              {form[key] && <CheckCircle2 size={12} className="shrink-0" />}
             </button>
           ))}
         </div>
         <div className="px-6 pb-5">
-          <FieldNote>These features appear as icons on your profile. Only enable features that are currently active and accessible to patients.</FieldNote>
+          <FieldNote>Only enable features currently active and accessible to patients.</FieldNote>
         </div>
       </Card>
 
       {/* Accepted Schemes */}
       <Card>
-        <div className="p-6 border-b border-base-300">
-          <h3 className="text-sm font-semibold text-base-content/70 uppercase tracking-widest">Accepted Insurance & Govt. Schemes</h3>
+        <div className="p-6 border-b border-[var(--base-300)]">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50">Accepted Insurance & Govt. Schemes</h3>
         </div>
-        <div className="p-6">
-          <div className="flex gap-2 mb-3">
-            <Input value={newScheme} onChange={e => setNewScheme(e.target.value)} placeholder="e.g. PMJAY, ESI, CGHS, Arogyasri…"
+        <div className="p-6 space-y-3">
+          <div className="flex gap-2">
+            <Input value={newScheme} onChange={e => setNewScheme(e.target.value)}
+              placeholder="e.g. PMJAY, ESI, CGHS, Arogyasri…"
               onKeyDown={e => e.key === "Enter" && addTag("acceptedSchemes", newScheme, setNewScheme)} />
             <button onClick={() => addTag("acceptedSchemes", newScheme, setNewScheme)}
-              className="px-4 py-2 rounded-xl bg-primary text-primary-content text-sm font-semibold hover:bg-primary/90 transition-colors">
+              className="px-4 py-2 rounded-xl bg-[var(--primary)] text-[var(--primary-content)] text-sm font-semibold hover:opacity-90 transition-opacity">
               <Plus size={16} />
             </button>
           </div>
           <div className="flex flex-wrap gap-2">
             {form.acceptedSchemes.map((s, i) => (
-              <span key={i} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-accent/10 text-accent border border-accent/20 text-xs font-semibold">
-                {s}<button onClick={() => removeTag("acceptedSchemes", i)} className="hover:text-error transition-colors"><X size={11} /></button>
+              <span key={i} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--accent)]/10 text-[var(--accent)] border border-[var(--accent)]/20 text-xs font-semibold">
+                {s}<button onClick={() => removeTag("acceptedSchemes", i)} className="hover:text-[var(--error)] transition-colors"><X size={11} /></button>
               </span>
             ))}
           </div>
-          <FieldNote>Listing accepted schemes helps eligible patients choose your hospital with confidence. Press Enter or click + to add.</FieldNote>
+          <FieldNote>Press Enter or click + to add. Listing schemes helps eligible patients choose your hospital.</FieldNote>
         </div>
       </Card>
 
@@ -436,87 +632,159 @@ const ProfileSection = ({ hospital, dispatch }) => {
 
 const LocationSection = ({ hospital, dispatch }) => {
   const loading = useSelector(isLoading(updateLocation));
-  const [form, setForm] = useState({ lat: "", lng: "", address: {} });
-  const [toast, setToast] = useState(null);
+  const [form, setForm] = useState({
+    lat: "", lng: "", googleMapsUrl: "",
+    address: { line1: "", line2: "", landmark: "", city: "Vijayawada", state: "Andhra Pradesh", pincode: "" },
+  });
+  const [toast, setToast]   = useState(null);
+  const [detecting, setDetecting] = useState(false);
 
   useEffect(() => {
-    if (hospital) {
-      setForm({
-        lat: hospital.location?.coordinates?.[1] || "",
-        lng: hospital.location?.coordinates?.[0] || "",
-        address: hospital.address || {},
-      });
-    }
+    if (!hospital) return;
+    setForm({
+      lat:           hospital.location?.coordinates?.[1]?.toString() || DEFAULT_LAT.toString(),
+      lng:           hospital.location?.coordinates?.[0]?.toString() || DEFAULT_LNG.toString(),
+      googleMapsUrl: hospital.googleMapsUrl || "",
+      address: {
+        line1:    hospital.address?.line1    || "",
+        line2:    hospital.address?.line2    || "",
+        landmark: hospital.address?.landmark || "",
+        city:     hospital.address?.city     || "Vijayawada",
+        state:    hospital.address?.state    || "Andhra Pradesh",
+        pincode:  hospital.address?.pincode  || "",
+      },
+    });
   }, [hospital]);
 
-  const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
   const setAddr = (key, val) => setForm(f => ({ ...f, address: { ...f.address, [key]: val } }));
 
-  const handleGps = () => {
-    if (!navigator.geolocation) return alert("Geolocation not supported.");
-    navigator.geolocation.getCurrentPosition(p => {
-      setForm(f => ({ ...f, lat: p.coords.latitude.toFixed(6), lng: p.coords.longitude.toFixed(6) }));
+  // Called by GoogleMapPicker on marker drag / click / place select
+  const handleMapLocationChange = useCallback((lat, lng) => {
+    setForm(f => ({
+      ...f,
+      lat: lat.toFixed(6),
+      lng: lng.toFixed(6),
+    }));
+
+    // Reverse geocode to fill address fields
+    if (!window.google) return;
+    const geocoder = new window.google.maps.Geocoder();
+    geocoder.geocode({ location: { lat, lng } }, (results, status) => {
+      if (status !== "OK" || !results[0]) return;
+      const components = results[0].address_components;
+      const get = (type) =>
+        components.find(c => c.types.includes(type))?.long_name || "";
+
+      setForm(f => ({
+        ...f,
+        address: {
+          ...f.address,
+          line1:    get("route") || get("sublocality_level_2") || f.address.line1,
+          line2:    get("sublocality_level_1") || get("sublocality") || f.address.line2,
+          landmark: f.address.landmark,
+          city:     get("locality") || f.address.city,
+          state:    get("administrative_area_level_1") || f.address.state,
+          pincode:  get("postal_code") || f.address.pincode,
+        },
+      }));
     });
+  }, []);
+
+  const handleGps = () => {
+    if (!navigator.geolocation) return alert("Geolocation not supported in this browser.");
+    setDetecting(true);
+    navigator.geolocation.getCurrentPosition(
+      p => {
+        handleMapLocationChange(p.coords.latitude, p.coords.longitude);
+        setDetecting(false);
+      },
+      () => {
+        alert("Could not detect location. Please grant location permission.");
+        setDetecting(false);
+      },
+      { enableHighAccuracy: true }
+    );
   };
 
   const handleSave = async () => {
-    const result = await dispatch(updateLocation({ lat: parseFloat(form.lat), lng: parseFloat(form.lng), address: form.address }));
+    const lat = parseFloat(form.lat);
+    const lng = parseFloat(form.lng);
+    if (isNaN(lat) || isNaN(lng)) {
+      return setToast({ msg: "Invalid coordinates. Use the map or enter valid lat/lng.", type: "error" });
+    }
+    // FIX: googleMapsUrl is top-level on hospital, not inside address
+    const result = await dispatch(updateLocation({
+      lat,
+      lng,
+      address:      form.address,
+      googleMapsUrl: form.googleMapsUrl, // passed separately; backend route accepts it
+    }));
     if (!result.error) setToast({ msg: "Location updated successfully.", type: "success" });
     else setToast({ msg: result.payload || "Failed to update location.", type: "error" });
   };
 
   return (
     <div className="space-y-6">
-      <SectionHeader title="Location & GPS" subtitle="Accurate location data ensures patients can navigate to your hospital." icon={MapPin} />
+      <SectionHeader title="Location & GPS" subtitle="Accurate location ensures patients can navigate to your hospital." icon={MapPin} />
 
+      {/* Interactive Map */}
       <Card>
-        <div className="p-6 border-b border-base-300">
-          <h3 className="text-sm font-semibold text-base-content/70 uppercase tracking-widest">GPS Coordinates</h3>
-        </div>
-        <div className="p-6 space-y-5">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <Label required>Latitude</Label>
-              <Input type="number" step="0.000001" value={form.lat} onChange={e => set("lat", e.target.value)} placeholder="e.g. 16.506145" />
-              <FieldNote>Decimal degrees. Range: −90 to 90. Use a GPS app or auto-detect below.</FieldNote>
-            </div>
-            <div>
-              <Label required>Longitude</Label>
-              <Input type="number" step="0.000001" value={form.lng} onChange={e => set("lng", e.target.value)} placeholder="e.g. 80.648018" />
-              <FieldNote>Decimal degrees. Range: −180 to 180. Defaults to Vijayawada if unset.</FieldNote>
-            </div>
-          </div>
-          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} onClick={handleGps}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-primary/40 text-primary text-sm font-semibold
-              hover:bg-primary/5 transition-all duration-200">
-            <MapPin size={15} /> Auto-detect My Location
+        <div className="p-6 border-b border-[var(--base-300)] flex items-center justify-between">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50">Interactive Map</h3>
+          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+            onClick={handleGps} disabled={detecting}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-[var(--primary)]/40 text-[var(--primary)] text-xs font-semibold hover:bg-[var(--primary)]/5 transition-all duration-200 disabled:opacity-60">
+            {detecting ? <Loader2 size={13} className="animate-spin" /> : <Navigation size={13} />}
+            {detecting ? "Detecting…" : "Auto-detect GPS"}
           </motion.button>
-          <FieldNote>Auto-detect uses your browser's GPS. Ensure location permissions are granted. Verify the pin on the map after detecting.</FieldNote>
+        </div>
+        <div className="p-6">
+          <GoogleMapPicker
+            lat={form.lat}
+            lng={form.lng}
+            onLocationChange={handleMapLocationChange}
+          />
+        </div>
+      </Card>
 
-          {/* Map Preview Placeholder */}
-          <div className="h-48 rounded-xl bg-base-200 border border-base-300 flex items-center justify-center overflow-hidden relative">
-            <div className="absolute inset-0 opacity-10 bg-gradient-to-br from-primary to-secondary" />
-            <div className="text-center z-10">
-              <MapPin size={32} className="text-primary mx-auto mb-2 opacity-60" />
-              <p className="text-sm text-base-content/50">Map preview will appear here</p>
-              <p className="text-xs text-base-content/35 mt-1">Lat: {form.lat || "—"} · Lng: {form.lng || "—"}</p>
-            </div>
+      {/* Manual Coordinates */}
+      <Card>
+        <div className="p-6 border-b border-[var(--base-300)]">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50">GPS Coordinates</h3>
+        </div>
+        <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <Label required>Latitude</Label>
+            <Input type="number" step="0.000001"
+              value={form.lat}
+              onChange={e => setForm(f => ({ ...f, lat: e.target.value }))}
+              placeholder="e.g. 16.506145" />
+            <FieldNote>Decimal degrees. Range: −90 to 90.</FieldNote>
+          </div>
+          <div>
+            <Label required>Longitude</Label>
+            <Input type="number" step="0.000001"
+              value={form.lng}
+              onChange={e => setForm(f => ({ ...f, lng: e.target.value }))}
+              placeholder="e.g. 80.648018" />
+            <FieldNote>Decimal degrees. Range: −180 to 180.</FieldNote>
           </div>
         </div>
       </Card>
 
+      {/* Physical Address */}
       <Card>
-        <div className="p-6 border-b border-base-300">
-          <h3 className="text-sm font-semibold text-base-content/70 uppercase tracking-widest">Physical Address</h3>
+        <div className="p-6 border-b border-[var(--base-300)]">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50">Physical Address</h3>
         </div>
         <div className="p-6 space-y-4">
           {[
-            { key: "line1",    label: "Address Line 1", ph: "Building / Street name",    note: "Primary address line. Include building name and street.",    required: true },
-            { key: "line2",    label: "Address Line 2", ph: "Area / Colony",              note: "Secondary address details like area or colony name." },
-            { key: "landmark", label: "Landmark",       ph: "Near…",                     note: "Nearby landmark helps patients locate you easily." },
+            { key: "line1",    label: "Address Line 1", ph: "Building / Street name",    note: "Primary address: building name and street.", required: true },
+            { key: "line2",    label: "Address Line 2", ph: "Area / Colony",              note: "Secondary details like area or colony." },
+            { key: "landmark", label: "Landmark",       ph: "Near…",                     note: "Nearby landmark helps patients locate you." },
             { key: "city",     label: "City",           ph: "Vijayawada",                note: "City of operation. Defaults to Vijayawada." },
-            { key: "state",    label: "State",          ph: "Andhra Pradesh",            note: "State of registration and operation." },
-            { key: "pincode",  label: "PIN Code",       ph: "520001",                    note: "6-digit Indian PIN code. Must start with a non-zero digit.", required: true },
+            { key: "state",    label: "State",          ph: "Andhra Pradesh",            note: "State of registration." },
+            { key: "pincode",  label: "PIN Code",       ph: "520001",                    note: "6-digit Indian PIN code.", required: true },
           ].map(({ key, label, ph, note, required }) => (
             <div key={key}>
               <Label required={required}>{label}</Label>
@@ -524,13 +792,18 @@ const LocationSection = ({ hospital, dispatch }) => {
               <FieldNote>{note}</FieldNote>
             </div>
           ))}
+
+          {/* FIX: googleMapsUrl is top-level field, not inside address */}
           <div>
             <Label>Google Maps URL</Label>
             <div className="relative">
-              <ExternalLink size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
-              <Input className="pl-9" value={form.address.googleMapsUrl || ""} onChange={e => setAddr("googleMapsUrl", e.target.value)} placeholder="https://maps.google.com/…" />
+              <ExternalLink size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--base-content)]/40" />
+              <Input className="pl-9"
+                value={form.googleMapsUrl}
+                onChange={e => setForm(f => ({ ...f, googleMapsUrl: e.target.value }))}
+                placeholder="https://maps.google.com/…" />
             </div>
-            <FieldNote>Paste a direct link from Google Maps. Shown as a "Get Directions" button on your profile page.</FieldNote>
+            <FieldNote>Paste a direct Google Maps share link. Shown as "Get Directions" button on your profile page.</FieldNote>
           </div>
         </div>
       </Card>
@@ -553,23 +826,56 @@ const LocationSection = ({ hospital, dispatch }) => {
 // ─── Section: Operating Hours ─────────────────────────────────────────────────
 
 const HoursSection = ({ dispatch }) => {
-  const loading = useSelector(isLoading(updateOperatingHours));
+  const loading      = useSelector(isLoading(updateOperatingHours));
+  // FIX: select from Redux, fetch on mount
+  const savedHours   = useSelector(selectOperatingHours);
+
   const [hours, setHours] = useState(
     DAYS.map(day => ({ day, openTime: "08:00", closeTime: "20:00", is24Hours: false, isClosed: false }))
   );
   const [is24x7, setIs24x7] = useState(false);
-  const [toast, setToast] = useState(null);
+  const [toast, setToast]   = useState(null);
 
-  const updateDay = (dayName, key, val) => {
+  // FIX: fetch operating hours on mount
+  useEffect(() => {
+    dispatch(fetchOperatingHours());
+  }, [dispatch]);
+
+  // FIX: merge saved hours from Redux into local state
+  useEffect(() => {
+    if (!savedHours) return;
+
+    // savedHours may be { operatingHours: [...], is24x7: bool } or just array
+    const arr     = Array.isArray(savedHours) ? savedHours : savedHours.operatingHours;
+    const flag24  = savedHours.is24x7 ?? false;
+
+    if (arr?.length) {
+      setHours(
+        DAYS.map(day => {
+          const existing = arr.find(d => d.day === day);
+          return existing
+            ? { day, openTime: existing.openTime || "08:00", closeTime: existing.closeTime || "20:00", is24Hours: existing.is24Hours || false, isClosed: existing.isClosed || false }
+            : { day, openTime: "08:00", closeTime: "20:00", is24Hours: false, isClosed: false };
+        })
+      );
+    }
+    setIs24x7(flag24);
+  }, [savedHours]);
+
+  const updateDay = (dayName, key, val) =>
     setHours(h => h.map(d => d.day === dayName ? { ...d, [key]: val } : d));
-  };
 
-  const applyAllWeekdays = (src) => {
-    setHours(h => h.map(d =>
-      ["Monday","Tuesday","Wednesday","Thursday","Friday"].includes(d.day)
-        ? { ...d, openTime: src.openTime, closeTime: src.closeTime, is24Hours: src.is24Hours, isClosed: src.isClosed }
-        : d
-    ));
+  // FIX: applyAllWeekdays uses current hours state correctly
+  const applyAllWeekdays = () => {
+    const monday = hours.find(d => d.day === "Monday");
+    if (!monday) return;
+    setHours(h =>
+      h.map(d =>
+        ["Monday","Tuesday","Wednesday","Thursday","Friday"].includes(d.day)
+          ? { ...d, openTime: monday.openTime, closeTime: monday.closeTime, is24Hours: monday.is24Hours, isClosed: monday.isClosed }
+          : d
+      )
+    );
   };
 
   const handleSave = async () => {
@@ -583,59 +889,101 @@ const HoursSection = ({ dispatch }) => {
       <SectionHeader title="Operating Hours" subtitle="Define when your hospital is open. Patients see these before booking." icon={Clock} />
 
       <Card>
-        <div className="p-6 border-b border-base-300 flex items-center justify-between gap-4">
-          <h3 className="text-sm font-semibold text-base-content/70 uppercase tracking-widest">Weekly Schedule</h3>
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <span className="text-xs font-semibold text-base-content/60">24×7 Hospital</span>
-            <button onClick={() => setIs24x7(v => !v)}
-              className={`relative w-11 h-6 rounded-full transition-colors duration-300 ${is24x7 ? "bg-primary" : "bg-base-300"}`}>
-              <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-300 ${is24x7 ? "translate-x-5" : ""}`} />
-            </button>
-          </label>
+        <div className="p-6 border-b border-[var(--base-300)] flex items-center justify-between gap-4">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50">Weekly Schedule</h3>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-[var(--base-content)]/60">24×7 Hospital</span>
+            <Toggle checked={is24x7} onChange={setIs24x7} />
+          </div>
         </div>
         <div className="p-6">
-          <div className="mb-4 flex items-center gap-3">
-            <button onClick={() => applyAllWeekdays(hours.find(d => d.day === "Monday"))}
-              className="text-xs text-primary font-semibold hover:underline flex items-center gap-1">
-              <RefreshCw size={11} /> Apply Mon–Fri hours to all weekdays
+          <div className="mb-5">
+            <button onClick={applyAllWeekdays}
+              className="text-xs text-[var(--primary)] font-semibold hover:underline flex items-center gap-1">
+              <RefreshCw size={11} /> Apply Monday hours to all weekdays
             </button>
+            <FieldNote>Set open/close times per day. "24hr" overrides times. "Closed" means no bookings that day.</FieldNote>
           </div>
-          <FieldNote>Set the opening and closing time for each day. Mark days as "24 hrs" or "Closed" using the toggles.</FieldNote>
-          <div className="mt-5 space-y-3">
-            {hours.map((d, i) => (
-              <motion.div key={d.day} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }}
-                className={`flex flex-wrap items-center gap-3 p-3 rounded-xl border transition-all duration-200 ${
-                  d.isClosed ? "bg-base-200/50 border-base-300 opacity-60" : "bg-base-100 border-base-300 hover:border-primary/30"
-                }`}>
-                <span className="w-24 text-xs font-bold text-base-content/70">{d.day}</span>
-                <div className="flex items-center gap-2 flex-1">
-                  <Input type="time" className="w-32" disabled={d.isClosed || d.is24Hours}
-                    value={d.openTime} onChange={e => updateDay(d.day, "openTime", e.target.value)} />
-                  <span className="text-base-content/30 text-xs">to</span>
-                  <Input type="time" className="w-32" disabled={d.isClosed || d.is24Hours}
-                    value={d.closeTime} onChange={e => updateDay(d.day, "closeTime", e.target.value)} />
-                </div>
-                <div className="flex items-center gap-3">
-                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                    <button onClick={() => { updateDay(d.day, "is24Hours", !d.is24Hours); if (!d.is24Hours) updateDay(d.day, "isClosed", false); }}
-                      className={`w-9 h-5 rounded-full relative transition-colors duration-200 ${d.is24Hours ? "bg-success" : "bg-base-300"}`}>
-                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${d.is24Hours ? "translate-x-4.5" : "translate-x-0.5"}`} />
-                    </button>
-                    <span className="text-xs font-medium text-base-content/60">24hr</span>
-                  </label>
-                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                    <button onClick={() => { updateDay(d.day, "isClosed", !d.isClosed); if (!d.isClosed) updateDay(d.day, "is24Hours", false); }}
-                      className={`w-9 h-5 rounded-full relative transition-colors duration-200 ${d.isClosed ? "bg-error" : "bg-base-300"}`}>
-                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${d.isClosed ? "translate-x-4.5" : "translate-x-0.5"}`} />
-                    </button>
-                    <span className="text-xs font-medium text-base-content/60">Closed</span>
-                  </label>
-                </div>
-              </motion.div>
-            ))}
+
+          <div className="space-y-3">
+  {hours.map((d, i) => (
+    <motion.div
+      key={d.day}
+      initial={{ opacity: 0, x: -8 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ delay: i * 0.04 }}
+      className={`flex items-center justify-between gap-4 p-3.5 rounded-xl border transition-all duration-200 ${
+        d.isClosed
+          ? "bg-[var(--base-200)]/40 border-[var(--base-300)] opacity-70"
+          : "bg-[var(--base-100)] border-[var(--base-300)] hover:border-[var(--primary)]/30"
+      }`}
+    >
+      {/* Day Label */}
+      <span className="w-24 text-xs font-bold text-[var(--base-content)]/70 shrink-0 uppercase tracking-wide">
+        {d.day}
+      </span>
+
+      {/* Time Inputs / Status Message Container */}
+      <div className="flex-1 flex items-center justify-center min-w-0">
+        {d.isClosed ? (
+          <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--error)]/60 bg-[var(--error)]/5 px-4 py-2 rounded-lg border border-[var(--error)]/10">
+            Closed
+          </span>
+        ) : d.is24Hours ? (
+          <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--success)]/60 bg-[var(--success)]/5 px-4 py-2 rounded-lg border border-[var(--success)]/10">
+            Open 24 Hours
+          </span>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Input 
+              type="time" 
+              className="w-32 h-9 text-sm"
+              value={d.openTime}
+              onChange={e => updateDay(d.day, "openTime", e.target.value)} 
+            />
+            <span className="text-[var(--base-content)]/20 text-[10px] font-bold uppercase">to</span>
+            <Input 
+              type="time" 
+              className="w-32 h-9 text-sm"
+              value={d.closeTime}
+              onChange={e => updateDay(d.day, "closeTime", e.target.value)} 
+            />
           </div>
+        )}
+      </div>
+
+      {/* Toggle Controls - Fixed width ensures vertical alignment */}
+      <div className="flex items-center gap-5 shrink-0 w-[130px] justify-end">
+        <label className="flex flex-col items-center gap-1.5 cursor-pointer group">
+          <Toggle
+            checked={d.is24Hours}
+            colorOn="bg-[var(--success)]"
+            onChange={v => {
+              updateDay(d.day, "is24Hours", v);
+              if (v) updateDay(d.day, "isClosed", false);
+            }}
+          />
+          <span className="text-[9px] font-bold text-[var(--base-content)]/40 group-hover:text-[var(--success)] transition-colors">24H</span>
+        </label>
+
+        <label className="flex flex-col items-center gap-1.5 cursor-pointer group">
+          <Toggle
+            checked={d.isClosed}
+            colorOn="bg-[var(--error)]"
+            onChange={v => {
+              updateDay(d.day, "isClosed", v);
+              if (v) updateDay(d.day, "is24Hours", false);
+            }}
+          />
+          <span className="text-[9px] font-bold text-[var(--base-content)]/40 group-hover:text-[var(--error)] transition-colors">CLOSED</span>
+        </label>
+      </div>
+    </motion.div>
+  ))}
+</div>
+
           <div className="mt-4">
-            <FieldNote>Closed days won't show any booking slots. 24hr days override open/close times. The "24×7 Hospital" toggle overrides all individual day settings.</FieldNote>
+            <FieldNote>The "24×7 Hospital" toggle overrides all individual day settings when enabled.</FieldNote>
           </div>
         </div>
       </Card>
@@ -660,8 +1008,8 @@ const HoursSection = ({ dispatch }) => {
 const GallerySection = ({ hospital, dispatch }) => {
   const logoLoading    = useSelector(isLoading(uploadLogo));
   const galleryLoading = useSelector(isLoading(uploadGalleryImages));
-  const logoRef  = useRef(null);
-  const galRef   = useRef(null);
+  const logoRef = useRef(null);
+  const galRef  = useRef(null);
   const [toast, setToast] = useState(null);
 
   const handleLogoUpload = async (e) => {
@@ -672,6 +1020,7 @@ const GallerySection = ({ hospital, dispatch }) => {
     const result = await dispatch(uploadLogo(fd));
     if (!result.error) setToast({ msg: "Logo uploaded successfully.", type: "success" });
     else setToast({ msg: result.payload || "Upload failed.", type: "error" });
+    e.target.value = "";
   };
 
   const handleGalleryUpload = async (e) => {
@@ -682,6 +1031,7 @@ const GallerySection = ({ hospital, dispatch }) => {
     const result = await dispatch(uploadGalleryImages(fd));
     if (!result.error) setToast({ msg: `${result.payload?.uploaded?.length || 0} image(s) uploaded.`, type: "success" });
     else setToast({ msg: result.payload || "Upload failed.", type: "error" });
+    e.target.value = "";
   };
 
   const handleDelete = async (url) => {
@@ -697,29 +1047,27 @@ const GallerySection = ({ hospital, dispatch }) => {
 
       {/* Logo */}
       <Card>
-        <div className="p-6 border-b border-base-300">
-          <h3 className="text-sm font-semibold text-base-content/70 uppercase tracking-widest">Hospital Logo</h3>
+        <div className="p-6 border-b border-[var(--base-300)]">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50">Hospital Logo</h3>
         </div>
         <div className="p-6 flex flex-col sm:flex-row items-start gap-6">
-          <div className="w-28 h-28 rounded-2xl bg-base-200 border-2 border-dashed border-base-300 flex items-center justify-center overflow-hidden shrink-0">
+          <div className="w-28 h-28 rounded-2xl bg-[var(--base-200)] border-2 border-dashed border-[var(--base-300)] flex items-center justify-center overflow-hidden shrink-0">
             {hospital?.logo
               ? <img src={hospital.logo} alt="logo" className="w-full h-full object-contain p-2" />
-              : <Hospital size={40} className="text-base-content/20" />
-            }
+              : <Hospital size={40} className="text-[var(--base-content)]/20" />}
           </div>
           <div className="flex-1 space-y-3">
             <input ref={logoRef} type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
             <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
               onClick={() => logoRef.current?.click()} disabled={logoLoading}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-content text-sm font-semibold
-                shadow-lg shadow-primary/25 hover:shadow-primary/40 transition-all duration-200 disabled:opacity-60">
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[var(--primary)] text-[var(--primary-content)] text-sm font-semibold shadow-lg transition-all duration-200 disabled:opacity-60">
               {logoLoading ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
               {logoLoading ? "Uploading…" : "Upload Logo"}
             </motion.button>
             <div className="space-y-1">
               <FieldNote>Recommended: Square PNG with transparent background, at least 512×512 px.</FieldNote>
-              <FieldNote>Accepted formats: JPEG, PNG, WebP, GIF. Maximum file size: 10 MB.</FieldNote>
-              <FieldNote>Your logo appears on patient-facing pages, invoices, and appointment emails.</FieldNote>
+              <FieldNote>Accepted: JPEG, PNG, WebP, GIF. Max 10 MB.</FieldNote>
+              <FieldNote>Logo appears on patient pages, invoices, and appointment emails.</FieldNote>
             </div>
           </div>
         </div>
@@ -727,23 +1075,22 @@ const GallerySection = ({ hospital, dispatch }) => {
 
       {/* Gallery */}
       <Card>
-        <div className="p-6 border-b border-base-300 flex items-center justify-between">
+        <div className="p-6 border-b border-[var(--base-300)] flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-semibold text-base-content/70 uppercase tracking-widest">Photo Gallery</h3>
-            <p className="text-xs text-base-content/40 mt-1">{hospital?.images?.length || 0} / 20 images used</p>
+            <h3 className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50">Photo Gallery</h3>
+            <p className="text-xs text-[var(--base-content)]/40 mt-1">{hospital?.images?.length || 0} / 20 images used</p>
           </div>
           <input ref={galRef} type="file" accept="image/*" multiple className="hidden" onChange={handleGalleryUpload} />
           <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
             onClick={() => galRef.current?.click()} disabled={galleryLoading}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-primary/40 text-primary text-sm font-semibold
-              hover:bg-primary/5 transition-all duration-200 disabled:opacity-60">
+            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-[var(--primary)]/40 text-[var(--primary)] text-sm font-semibold hover:bg-[var(--primary)]/5 transition-all duration-200 disabled:opacity-60">
             {galleryLoading ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
             {galleryLoading ? "Uploading…" : "Add Photos"}
           </motion.button>
         </div>
         <div className="p-6">
           {!hospital?.images?.length ? (
-            <div className="h-40 flex flex-col items-center justify-center rounded-xl bg-base-200 border-2 border-dashed border-base-300 text-base-content/30">
+            <div className="h-40 flex flex-col items-center justify-center rounded-xl bg-[var(--base-200)] border-2 border-dashed border-[var(--base-300)] text-[var(--base-content)]/30">
               <ImageIcon size={32} className="mb-2" />
               <p className="text-sm font-medium">No gallery images yet</p>
               <p className="text-xs mt-1">Click "Add Photos" to upload up to 5 at a time</p>
@@ -751,11 +1098,19 @@ const GallerySection = ({ hospital, dispatch }) => {
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
               {hospital.images.map((url, i) => (
-                <motion.div key={url} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: i * 0.05 }}
-                  className="relative group aspect-square rounded-xl overflow-hidden bg-base-200 border border-base-300">
+                <motion.div key={url}
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: i * 0.04 }}
+                  className="relative group aspect-square rounded-xl overflow-hidden bg-[var(--base-200)] border border-[var(--base-300)]">
                   <img src={url} alt={`gallery-${i}`} className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center">
-                    <button onClick={() => handleDelete(url)} className="p-2 rounded-full bg-error/90 text-white hover:bg-error transition-colors">
+                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center gap-2">
+                    <a href={url} target="_blank" rel="noreferrer"
+                      className="p-2 rounded-full bg-white/20 text-white hover:bg-white/30 transition-colors">
+                      <Eye size={14} />
+                    </a>
+                    <button onClick={() => handleDelete(url)}
+                      className="p-2 rounded-full bg-[var(--error)]/90 text-white hover:bg-[var(--error)] transition-colors">
                       <Trash2 size={14} />
                     </button>
                   </div>
@@ -765,9 +1120,9 @@ const GallerySection = ({ hospital, dispatch }) => {
             </div>
           )}
           <div className="mt-4 space-y-1">
-            <FieldNote>Upload up to 5 images at a time. Maximum 20 images total in your gallery.</FieldNote>
-            <FieldNote>High-quality photos of wards, OPD, equipment, and exterior improve patient trust and booking rates.</FieldNote>
-            <FieldNote>Accepted formats: JPEG, PNG, WebP. Max 10 MB per image. Hover over an image to delete it.</FieldNote>
+            <FieldNote>Upload up to 5 images at a time. 20 max total.</FieldNote>
+            <FieldNote>High-quality photos of wards, OPD, and exterior improve patient trust and booking rates.</FieldNote>
+            <FieldNote>Accepted: JPEG, PNG, WebP. Max 10 MB each. Hover over an image to delete.</FieldNote>
           </div>
         </div>
       </Card>
@@ -789,25 +1144,29 @@ const LegalSection = ({ hospital, dispatch }) => {
   const regLoading = useSelector(isLoading(updateRegistration));
   const docLoading = useSelector(isLoading(uploadLicenseDocument));
   const docRef = useRef(null);
-  const [form, setForm] = useState({ licenseNumber: "", gstNumber: "", panNumber: "", licenseExpiry: "" });
+  const [form, setForm]   = useState({ licenseNumber: "", gstNumber: "", panNumber: "", licenseExpiry: "" });
   const [toast, setToast] = useState(null);
 
   useEffect(() => {
-    if (hospital?.registrationDetails) {
-      const r = hospital.registrationDetails;
-      setForm({
-        licenseNumber: r.licenseNumber || "",
-        gstNumber:     r.gstNumber     || "",
-        panNumber:     r.panNumber     || "",
-        licenseExpiry: r.licenseExpiry ? new Date(r.licenseExpiry).toISOString().split("T")[0] : "",
-      });
-    }
+    if (!hospital?.registrationDetails) return;
+    const r = hospital.registrationDetails;
+    setForm({
+      licenseNumber: r.licenseNumber || "",
+      gstNumber:     r.gstNumber     || "",
+      panNumber:     r.panNumber     || "",
+      licenseExpiry: r.licenseExpiry
+        ? new Date(r.licenseExpiry).toISOString().split("T")[0]
+        : "",
+    });
   }, [hospital]);
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
   const handleSave = async () => {
-    const result = await dispatch(updateRegistration({ ...form, licenseExpiry: form.licenseExpiry || undefined }));
+    const result = await dispatch(updateRegistration({
+      ...form,
+      licenseExpiry: form.licenseExpiry || undefined,
+    }));
     if (!result.error) setToast({ msg: "Registration details updated.", type: "success" });
     else setToast({ msg: result.payload || "Update failed.", type: "error" });
   };
@@ -820,110 +1179,110 @@ const LegalSection = ({ hospital, dispatch }) => {
     const result = await dispatch(uploadLicenseDocument(fd));
     if (!result.error) setToast({ msg: "License document uploaded.", type: "success" });
     else setToast({ msg: result.payload || "Upload failed.", type: "error" });
+    e.target.value = "";
   };
 
   return (
     <div className="space-y-6">
       <SectionHeader title="Legal & Licenses" subtitle="Regulatory documents required for platform verification." icon={FileText} />
 
-      <div className="flex items-start gap-3 p-4 rounded-xl bg-warning/8 border border-warning/25">
-        <AlertCircle size={16} className="text-warning mt-0.5 shrink-0" />
-        <p className="text-xs text-base-content/70 leading-relaxed">
-          <span className="font-bold text-warning">Important:</span> Accurate legal information is required for platform verification.
-          Incorrect or expired details may result in your hospital being suspended from the platform.
-          All documents are reviewed by the Likeson compliance team.
+      <div className="flex items-start gap-3 p-4 rounded-xl bg-[var(--warning)]/8 border border-[var(--warning)]/25">
+        <AlertCircle size={16} className="text-[var(--warning)] mt-0.5 shrink-0" />
+        <p className="text-xs text-[var(--base-content)]/70 leading-relaxed">
+          <span className="font-bold text-[var(--warning)]">Important:</span> Inaccurate or expired legal details may result in your hospital being suspended. All documents are reviewed by the Likeson compliance team.
         </p>
       </div>
 
       <Card>
-        <div className="p-6 border-b border-base-300">
-          <h3 className="text-sm font-semibold text-base-content/70 uppercase tracking-widest">Registration Details</h3>
+        <div className="p-6 border-b border-[var(--base-300)]">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50">Registration Details</h3>
         </div>
         <div className="p-6 space-y-5">
           <div>
             <Label required>License Number</Label>
             <div className="relative">
-              <Hash size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
-              <Input className="pl-9" value={form.licenseNumber} onChange={e => set("licenseNumber", e.target.value)}
-                placeholder="e.g. AP/HOS/2024/001234" />
+              <Hash size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--base-content)]/40" />
+              <Input className="pl-9" value={form.licenseNumber} onChange={e => set("licenseNumber", e.target.value)} placeholder="e.g. AP/HOS/2024/001234" />
             </div>
-            <FieldNote>State medical/hospital registration authority license number. This must be unique across the platform.</FieldNote>
+            <FieldNote>State medical/hospital registration authority license number. Must be unique on the platform.</FieldNote>
           </div>
           <div>
             <Label>GST Number</Label>
             <div className="relative">
-              <Hash size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
-              <Input className="pl-9" value={form.gstNumber} onChange={e => set("gstNumber", e.target.value)}
-                placeholder="e.g. 37AABCU9603R1Z2" />
+              <Hash size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--base-content)]/40" />
+              <Input className="pl-9" value={form.gstNumber} onChange={e => set("gstNumber", e.target.value)} placeholder="e.g. 37AABCU9603R1Z2" />
             </div>
-            <FieldNote>15-character GST Identification Number. Required for generating GST-compliant invoices for patients.</FieldNote>
+            <FieldNote>15-character GSTIN. Required for GST-compliant patient invoices.</FieldNote>
           </div>
           <div>
             <Label>PAN Number</Label>
             <div className="relative">
-              <Hash size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
-              <Input className="pl-9 uppercase" value={form.panNumber} onChange={e => set("panNumber", e.target.value.toUpperCase())}
+              <Hash size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--base-content)]/40" />
+              <Input className="pl-9 uppercase" value={form.panNumber}
+                onChange={e => set("panNumber", e.target.value.toUpperCase())}
                 placeholder="e.g. AABCU9603R" maxLength={10} />
             </div>
-            <FieldNote>10-character PAN in format: AAAAA9999A. Used for TDS, settlements, and financial reporting.</FieldNote>
+            <FieldNote>10-character PAN: AAAAA9999A format. Used for TDS, settlements, financial reporting.</FieldNote>
           </div>
           <div>
             <Label>License Expiry Date</Label>
             <div className="relative">
-              <Calendar size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
+              <Calendar size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--base-content)]/40" />
               <Input type="date" className="pl-9" value={form.licenseExpiry} onChange={e => set("licenseExpiry", e.target.value)} />
             </div>
-            <FieldNote>Platform sends automatic renewal reminders 60 and 30 days before expiry. Expired licenses trigger account review.</FieldNote>
+            <FieldNote>Platform sends renewal reminders 60 and 30 days before expiry. Expired licenses trigger account review.</FieldNote>
           </div>
         </div>
       </Card>
 
       {/* Document Upload */}
       <Card>
-        <div className="p-6 border-b border-base-300">
-          <h3 className="text-sm font-semibold text-base-content/70 uppercase tracking-widest">License Document</h3>
+        <div className="p-6 border-b border-[var(--base-300)]">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50">License Document</h3>
         </div>
         <div className="p-6">
           <input ref={docRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={handleDocUpload} />
 
           {hospital?.registrationDetails?.documentUrl ? (
-            <div className="flex items-center gap-4 p-4 rounded-xl bg-success/8 border border-success/25">
-              <div className="w-12 h-12 rounded-xl bg-success/15 flex items-center justify-center">
-                <FileText size={22} className="text-success" />
+            <div className="flex items-center gap-4 p-4 rounded-xl bg-[var(--success)]/8 border border-[var(--success)]/25 mb-4">
+              <div className="w-12 h-12 rounded-xl bg-[var(--success)]/15 flex items-center justify-center shrink-0">
+                <FileText size={22} className="text-[var(--success)]" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-base-content">Document Uploaded</p>
-                <p className="text-xs text-base-content/50 truncate mt-0.5">{hospital.registrationDetails.documentUrl}</p>
+                <p className="text-sm font-semibold text-[var(--base-content)]">Document Uploaded</p>
+                <p className="text-xs text-[var(--base-content)]/50 truncate mt-0.5">
+                  {hospital.registrationDetails.documentUrl}
+                </p>
               </div>
               <div className="flex items-center gap-2">
                 <a href={hospital.registrationDetails.documentUrl} target="_blank" rel="noreferrer"
-                  className="p-2 rounded-lg hover:bg-base-200 transition-colors text-primary">
+                  className="p-2 rounded-lg hover:bg-[var(--base-200)] transition-colors text-[var(--primary)]">
                   <Eye size={16} />
                 </a>
-                <button onClick={() => docRef.current?.click()} className="p-2 rounded-lg hover:bg-base-200 transition-colors text-base-content/60">
+                <button onClick={() => docRef.current?.click()}
+                  className="p-2 rounded-lg hover:bg-[var(--base-200)] transition-colors text-[var(--base-content)]/60">
                   <RefreshCw size={16} />
                 </button>
               </div>
             </div>
           ) : (
-            <div className="h-32 flex flex-col items-center justify-center rounded-xl bg-base-200 border-2 border-dashed border-base-300">
-              <Upload size={24} className="text-base-content/30 mb-2" />
-              <p className="text-sm text-base-content/50">No document uploaded yet</p>
+            <div className="h-32 flex flex-col items-center justify-center rounded-xl bg-[var(--base-200)] border-2 border-dashed border-[var(--base-300)] mb-4">
+              <Upload size={24} className="text-[var(--base-content)]/30 mb-2" />
+              <p className="text-sm text-[var(--base-content)]/50">No document uploaded yet</p>
             </div>
           )}
 
           <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} disabled={docLoading}
             onClick={() => docRef.current?.click()}
-            className="mt-4 flex items-center gap-2 px-5 py-2.5 rounded-xl border border-primary/40 text-primary text-sm font-semibold
-              hover:bg-primary/5 transition-all duration-200 disabled:opacity-60">
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl border border-[var(--primary)]/40 text-[var(--primary)] text-sm font-semibold hover:bg-[var(--primary)]/5 transition-all duration-200 disabled:opacity-60">
             {docLoading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
             {docLoading ? "Uploading…" : hospital?.registrationDetails?.documentUrl ? "Replace Document" : "Upload Document"}
           </motion.button>
 
           <div className="mt-3 space-y-1">
-            <FieldNote>Accepted formats: PDF, JPEG, PNG, WebP. Maximum file size: 10 MB.</FieldNote>
+            <FieldNote>Accepted: PDF, JPEG, PNG, WebP. Max 10 MB.</FieldNote>
             <FieldNote>Upload a scanned copy or digital certificate of your hospital registration license.</FieldNote>
-            <FieldNote>Document is reviewed by the Likeson compliance team during verification. Keep it up to date on renewal.</FieldNote>
+            <FieldNote>Reviewed by the Likeson compliance team during verification.</FieldNote>
           </div>
         </div>
       </Card>
@@ -963,40 +1322,40 @@ export default function FacilityManagement() {
   };
 
   return (
-    <div className="min-h-screen bg-base-200/50" data-theme="hospital">
-      {/* Page Header */}
-      <div className="bg-base-100 border-b border-base-300 sticky top-0 z-30">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between gap-4">
+    <div className="min-h-screen bg-[var(--base-200)]/50" data-theme="hospital">
+      {/* Sticky Header */}
+      <div className="bg-[var(--base-100)] border-b border-[var(--base-300)] sticky top-0 z-30">
+        <div className="max-w-7xl mx-auto  py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-              <Building2 size={18} className="text-primary" />
+            <div className="w-9 h-9 rounded-xl bg-[var(--primary)]/10 border border-[var(--primary)]/20 flex items-center justify-center">
+              <Building2 size={18} className="text-[var(--primary)]" />
             </div>
             <div>
-              <h1 className="text-base font-bold text-base-content font-montserrat leading-tight">Facility Management</h1>
-              <p className="text-xs text-base-content/45">{hospital?.name || "Loading…"}</p>
+              <h1 className="text-base font-bold text-[var(--base-content)] font-montserrat leading-tight">Facility Management</h1>
+              <p className="text-xs text-[var(--base-content)]/45">{hospital?.name || "Loading…"}</p>
             </div>
           </div>
           {hospital?.isVerified ? (
-            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-success/10 border border-success/25 text-success text-xs font-bold">
+            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--success)]/10 border border-[var(--success)]/25 text-[var(--success)] text-xs font-bold">
               <Shield size={11} /> Verified
             </span>
           ) : (
-            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-warning/10 border border-warning/25 text-warning text-xs font-bold">
+            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--warning)]/10 border border-[var(--warning)]/25 text-[var(--warning)] text-xs font-bold">
               <AlertCircle size={11} /> Pending Verification
             </span>
           )}
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+      <div className="max-w-7xl mx-auto 6 py-6">
         <div className="flex flex-col lg:flex-row gap-6">
 
-          {/* Sidebar Nav */}
+          {/* Sidebar */}
           <aside className="lg:w-60 shrink-0">
             <div className="sticky top-24">
               <Card className="overflow-hidden">
-                <div className="px-4 py-3 border-b border-base-300">
-                  <p className="text-xs font-bold uppercase tracking-widest text-base-content/40">Sections</p>
+                <div className="px-4 py-3 border-b border-[var(--base-300)]">
+                  <p className="text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/40">Sections</p>
                 </div>
                 <nav className="p-2 space-y-0.5">
                   {NAV_SECTIONS.map(({ id, label, icon: Ico }) => {
@@ -1009,12 +1368,12 @@ export default function FacilityManagement() {
                         onClick={() => setActive(id)}
                         className={`w-full flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-xl text-left text-sm font-medium transition-all duration-200 ${
                           isActive
-                            ? "bg-primary text-primary-content shadow-md shadow-primary/25"
-                            : "text-base-content/60 hover:bg-base-200 hover:text-base-content"
+                            ? "bg-[var(--primary)] text-[var(--primary-content)] shadow-md"
+                            : "text-[var(--base-content)]/60 hover:bg-[var(--base-200)] hover:text-[var(--base-content)]"
                         }`}
                       >
                         <span className="flex items-center gap-2.5">
-                          <Ico size={15} className={isActive ? "text-primary-content/80" : "text-base-content/40"} />
+                          <Ico size={15} className={isActive ? "text-[var(--primary-content)]/80" : "text-[var(--base-content)]/40"} />
                           {label}
                         </span>
                         <ChevronRight size={13} className={`transition-transform duration-200 ${isActive ? "opacity-80" : "opacity-30"}`} />
@@ -1023,16 +1382,21 @@ export default function FacilityManagement() {
                   })}
                 </nav>
 
-                {/* Mini Progress */}
-                <div className="px-4 py-4 border-t border-base-300">
+                {/* Progress bar */}
+                <div className="px-4 py-4 border-t border-[var(--base-300)]">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-semibold text-base-content/50">Profile Complete</span>
-                    <span className="text-xs font-bold text-primary">{hospital?.onboarding?.isComplete ? "100%" : "—"}</span>
+                    <span className="text-xs font-semibold text-[var(--base-content)]/50">Profile Complete</span>
+                    <span className="text-xs font-bold text-[var(--primary)]">
+                      {hospital?.onboarding?.isComplete ? "100%" : "—"}
+                    </span>
                   </div>
-                  <div className="h-1.5 bg-base-300 rounded-full overflow-hidden">
-                    <motion.div className="h-full bg-gradient-to-r from-primary to-secondary rounded-full"
-                      initial={{ width: 0 }} animate={{ width: hospital?.onboarding?.isComplete ? "100%" : "40%" }}
-                      transition={{ duration: 0.8, ease: "easeOut" }} />
+                  <div className="h-1.5 bg-[var(--base-300)] rounded-full overflow-hidden">
+                    <motion.div
+                      className="h-full bg-gradient-to-r from-[var(--primary)] to-[var(--secondary)] rounded-full"
+                      initial={{ width: 0 }}
+                      animate={{ width: hospital?.onboarding?.isComplete ? "100%" : "40%" }}
+                      transition={{ duration: 0.8, ease: "easeOut" }}
+                    />
                   </div>
                 </div>
               </Card>
