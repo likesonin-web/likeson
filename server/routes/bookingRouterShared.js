@@ -54,7 +54,7 @@ export {
   rideBookedSms, driverAssignedSms, rideStartedSms, rideCompletedSms,
   rideCancelledSms, careAssistantAssignedSms, appointmentConfirmedSms,
   otpSms, paymentSuccessfulSms, newCareRequestToAssistantSms,
-} from '../utils/smsTemplates.js';
+} from '../utils/Smstemplates.js';
 export { protect, authorize } from '../middleware/authMiddleware.js';
 
 // ── Razorpay ──────────────────────────────────────────────────────────────────

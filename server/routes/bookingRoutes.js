@@ -47,7 +47,7 @@ import {
   driverAssignedSms, rideStartedSms, rideCompletedSms,
   careAssistantAssignedSms, appointmentConfirmedSms,
   otpSms, newCareRequestToAssistantSms,
-} from '../utils/smsTemplates.js';
+} from '../utils/Smstemplates.js';
 import { generateOpHtml, buildOpZipBuffer } from '../utils/opDocumentGenerator.js';
 import { opConfirmationEmailTemplate }       from '../utils/opEmailTemplates.js';
 
