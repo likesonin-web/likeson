@@ -1,4 +1,3 @@
-// constants/hospitalmangerlinks.js
 import React from "react";
 import {
   LayoutDashboard,
@@ -25,6 +24,9 @@ import {
   SquareUserRound,
   Shield,
   Settings,
+  ClipboardList,
+  CalendarCheck,
+  FileClock,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -43,7 +45,18 @@ export const HOSPITAL_MANAGER_DASHBOARD_LINKS = [
     ],
   },
 
-  // ── 2. Clinical Profile ──────────────────────────────────────────────────
+  // ── 2. Medical Logistics (NEW: Integrated from Booking Router) ───────────
+  {
+    title: "Patient Operations",
+    icons: <ClipboardList size={20} />,
+    links: [
+      { name: "Upcoming Bookings",  href: "/hospital-manager/bookings/upcoming",  icon: <CalendarCheck size={18} /> },
+      { name: "All OP Records",     href: "/hospital-manager/ops",               icon: <ClipboardList size={18} /> },
+      { name: "Follow-up Tracker",  href: "/hospital-manager/ops/valid-followups", icon: <FileClock size={18} />     },
+    ],
+  },
+
+  // ── 3. Clinical Profile ──────────────────────────────────────────────────
   {
     title: "Facility Management",
     icons: <Hospital size={20} />,
@@ -56,7 +69,7 @@ export const HOSPITAL_MANAGER_DASHBOARD_LINKS = [
     ],
   },
 
-  // ── 3. Doctor Network ────────────────────────────────────────────────────
+  // ── 4. Doctor Network ────────────────────────────────────────────────────
   {
     title: "Medical Staff",
     icons: <Stethoscope size={20} />,
@@ -68,7 +81,7 @@ export const HOSPITAL_MANAGER_DASHBOARD_LINKS = [
     ],
   },
 
-  // ── 4. Financials ────────────────────────────────────────────────────────
+  // ── 5. Financials ────────────────────────────────────────────────────────
   {
     title: "Commercials",
     icons: <CircleDollarSign size={20} />,
@@ -77,7 +90,7 @@ export const HOSPITAL_MANAGER_DASHBOARD_LINKS = [
     ],
   },
 
-  // ── 5. Account & Security ────────────────────────────────────────────────
+  // ── 6. Account & Security ────────────────────────────────────────────────
   {
     title: "Settings & Security",
     icons: <Settings2 size={20} />,
@@ -91,17 +104,18 @@ export const HOSPITAL_MANAGER_DASHBOARD_LINKS = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TOP-RIGHT QUICK ACCESS
+// TOP-RIGHT QUICK ACCESS (Updated with Booking actions)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const HOSPITAL_MANAGER_TOP_RIGHT_LINKS = [
   { name: "Dashboard", icon: <LayoutDashboard size={18} />, href: "/hospital-manager/dashboard" },
   {
-    name: "Staff Actions",
+    name: "Quick Actions",
     icon: <UserCog size={18} />,
     links: [
-      { name: "Link Doctor",   href: "/hospital-manager/doctors/search", icon: <Users size={18} /> },
-      { name: "Update Prices", href: "/hospital-manager/pricing",        icon: <CircleDollarSign size={18} /> },
+      { name: "Confirm Appts", href: "/hospital-manager/bookings/upcoming", icon: <CalendarCheck size={18} /> },
+      { name: "Link Doctor",   href: "/hospital-manager/doctors/search",   icon: <Users size={18} /> },
+      { name: "Update Prices", href: "/hospital-manager/pricing",          icon: <CircleDollarSign size={18} /> },
     ],
   },
 ];
@@ -113,8 +127,8 @@ export const HOSPITAL_MANAGER_TOP_RIGHT_LINKS = [
 export const HOSPITAL_MANAGER_PROFILE_LINKS = [
   { name: "Manager Profile", href: "/hospital-manager/settings/account", icon: <UserRound size={18} />  },
   { name: "Active Sessions", href: "/hospital-manager/security/sessions", icon: <ShieldCheck size={18} /> },
-    { name: 'Settings',    href: '/settings',            icon: <Settings/>        },
-    { name: 'My Account',  href: '/settings/account',    icon: <SquareUserRound /> },
-    { name: 'Security',    href: '/settings/security',   icon: <Shield />          },
+  { name: 'Settings',    href: '/settings',            icon: <Settings size={18}/>        },
+  { name: 'My Account',  href: '/settings/account',    icon: <SquareUserRound size={18} /> },
+  { name: 'Security',    href: '/settings/security',   icon: <Shield size={18} />          },
   { name: "Logout",          href: "/logout",                            icon: <LogOut size={18} />      },
 ];

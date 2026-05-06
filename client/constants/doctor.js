@@ -20,17 +20,21 @@ import {
   // Misc
   LifeBuoy, MessageSquare, Video, Phone,
   UserRound,
+  // OP / Booking (new)
+  FolderOpen, FilePlus2, CheckCircle2, History,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DOCTOR SIDEBAR NAVIGATION
-// Mirrors routes in hospitalRoutes.js (Doctor Self-Service + shared routes)
+// Routes backed by:
+//   GET  /doctor/ops              → all OPs for this doctor
+//   GET  /doctor/ops/:opNumber    → single OP detail
+//   PATCH /:bookingId/op/complete → mark OP complete + notes/prescription
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const DOCTOR_DASHBOARD_LINKS = [
 
   // ── 1. Overview ──────────────────────────────────────────────────────────
-  // Personal performance metrics, today's schedule summary, rating snapshot.
   {
     title: "Overview",
     icons: <LayoutDashboard />,
@@ -43,7 +47,6 @@ export const DOCTOR_DASHBOARD_LINKS = [
   },
 
   // ── 2. My Profile ────────────────────────────────────────────────────────
-  // Mirrors: GET/PUT /doctors/me  →  /doctors/:id/profile
   {
     title: "My Profile",
     icons: <UserCog />,
@@ -58,7 +61,6 @@ export const DOCTOR_DASHBOARD_LINKS = [
   },
 
   // ── 3. Appointments & Schedule ───────────────────────────────────────────
-  // Mirrors: GET/PUT /doctors/:id/availability
   {
     title: "Appointments & Schedule",
     icons: <CalendarCheck />,
@@ -82,8 +84,49 @@ export const DOCTOR_DASHBOARD_LINKS = [
     ],
   },
 
-  // ── 5. My Hospitals ──────────────────────────────────────────────────────
-  // Mirrors: GET /doctors/me/hospitals
+  // ── 5. OP Records (Booking-linked) ───────────────────────────────────────
+  // Backed by:
+  //   GET  /doctor/ops                  → lists all OPs (filter: status, hospitalId, patientId, date)
+  //   GET  /doctor/ops/:opNumber        → single OP detail + follow-up chain
+  //   PATCH /:bookingId/op/complete     → mark complete + save notes/prescription/diagnosisCode
+  {
+    title: "OP Records",
+    icons: <FolderOpen />,
+    links: [
+      {
+        name: "All OP Records",
+        href: "/doctor/ops",
+        icon: <FolderOpen size={18} />,
+        // → GET /doctor/ops (paginated, filterable)
+      },
+      {
+        name: "Pending / Scheduled",
+        href: "/doctor/ops?status=scheduled",
+        icon: <FilePlus2 size={18} />,
+        // → GET /doctor/ops?status=scheduled
+      },
+      {
+        name: "In Progress",
+        href: "/doctor/ops?status=in_progress",
+        icon: <Activity size={18} />,
+        // → GET /doctor/ops?status=in_progress
+      },
+      {
+        name: "Completed OPs",
+        href: "/doctor/ops?status=completed",
+        icon: <CheckCircle2 size={18} />,
+        // → GET /doctor/ops?status=completed
+      },
+      {
+        name: "Follow-Up OPs",
+        href: "/doctor/ops/follow-ups",
+        icon: <History size={18} />,
+        // → GET /doctor/ops?isFollowUp=true  (client-side filter on ops list)
+      },
+    ],
+  },
+
+  // ── 6. My Hospitals ──────────────────────────────────────────────────────
   {
     title: "My Hospitals",
     icons: <Hospital />,
@@ -95,8 +138,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
     ],
   },
 
-  // ── 6. Finance & Earnings ────────────────────────────────────────────────
-  // Mirrors: PUT /doctors/:id/bank  |  GET /doctors/:id/platform-fee info
+  // ── 7. Finance & Earnings ────────────────────────────────────────────────
   {
     title: "Finance & Earnings",
     icons: <Landmark />,
@@ -109,8 +151,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
     ],
   },
 
-  // ── 7. KYC & Verification ────────────────────────────────────────────────
-  // Mirrors: PUT /doctors/:id/kyc
+  // ── 8. KYC & Verification ────────────────────────────────────────────────
   {
     title: "KYC & Verification",
     icons: <ShieldCheck />,
@@ -121,8 +162,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
     ],
   },
 
-  // ── 8. Settings ──────────────────────────────────────────────────────────
-  // Mirrors: PUT /doctors/:id/settings (notifPrefs, onboarding, isOnline)
+  // ── 9. Settings ──────────────────────────────────────────────────────────
   {
     title: "Settings",
     icons: <Settings2 />,
@@ -135,7 +175,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
     ],
   },
 
-  // ── 9. Support ───────────────────────────────────────────────────────────
+  // ── 10. Support ──────────────────────────────────────────────────────────
   {
     title: "Support",
     icons: <LifeBuoy />,
@@ -158,6 +198,9 @@ export const DOCTOR_TOP_RIGHT_LINKS = [
       { name: "My Appointments", href: "/doctor/appointments",  icon: <CalendarClock size={18} /> },
       { name: "Availability",    href: "/doctor/availability",  icon: <Clock size={18} />         },
       { name: "My Hospitals",    href: "/doctor/hospitals",     icon: <Hospital size={18} />      },
+      // OP quick actions
+      { name: "All OP Records",  href: "/doctor/ops",           icon: <FolderOpen size={18} />    },
+      { name: "Pending OPs",     href: "/doctor/ops?status=scheduled", icon: <FilePlus2 size={18} /> },
     ],
   },
 ];
@@ -172,6 +215,9 @@ export const DOCTOR_SEARCH_LINKS = [
     { name: "Dashboard",           href: "/doctor/dashboard",            icon: <LayoutDashboard size={18} /> },
     { name: "Appointments",        href: "/doctor/appointments",         icon: <CalendarCheck size={18} />   },
     { name: "Availability",        href: "/doctor/availability",         icon: <Clock size={18} />           },
+    { name: "All OP Records",      href: "/doctor/ops",                  icon: <FolderOpen size={18} />      },
+    { name: "Pending OPs",         href: "/doctor/ops?status=scheduled", icon: <FilePlus2 size={18} />       },
+    { name: "Completed OPs",       href: "/doctor/ops?status=completed", icon: <CheckCircle2 size={18} />    },
     { name: "KYC Status",          href: "/doctor/kyc",                  icon: <ShieldCheck size={18} />     },
     { name: "Bank Details",        href: "/doctor/finance/bank",         icon: <CreditCard size={18} />      },
     { name: "Earnings",            href: "/doctor/finance/earnings",     icon: <Wallet size={18} />          },
@@ -182,6 +228,8 @@ export const DOCTOR_SEARCH_LINKS = [
     { name: "Update Availability", href: "/doctor/availability",         icon: <CalendarDays size={18} />    },
     { name: "Upload KYC Docs",     href: "/doctor/kyc/aadhaar",          icon: <ScanLine size={18} />        },
     { name: "Update Bank Details", href: "/doctor/finance/bank",         icon: <CreditCard size={18} />      },
+    // OP quick actions — maps to PATCH /:bookingId/op/complete (done from OP detail page)
+    { name: "Complete an OP",      href: "/doctor/ops?status=in_progress", icon: <CheckCircle2 size={18} /> },
   ],
 ];
 

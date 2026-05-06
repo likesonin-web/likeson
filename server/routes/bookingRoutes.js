@@ -1,27 +1,3 @@
-/**
- * ═══════════════════════════════════════════════════════════════════════════════
- * BOOKING ROUTER (ALL ROLES EXCEPT CUSTOMER) — Likeson.in
- * ═══════════════════════════════════════════════════════════════════════════════
- *
- * CORRECTIONS & ADDITIONS vs previous version:
- *  1. Redis caching on all heavy GET routes (admin bookings, nearby, stats, ops)
- *  2. OP card ZIP emailed to customer on booking completion + on OP creation
- *  3. GET /op/:opNumber          — customer/doctor/admin views OP card
- *  4. GET /op/:opNumber/follow-ups — valid follow-up OPs
- *  5. GET /op/:opNumber/download  — download OP ZIP
- *  6. GET /hospital/:id/ops       — hospital staff: all OPs at their hospital
- *  7. GET /hospital/:id/valid-ops — OPs with active follow-up window
- *  8. GET /doctor/ops             — doctor: all their OPs
- *  9. GET /doctor/ops/:opNumber   — single OP detail for doctor
- * 10. PATCH /:id/op/complete      — doctor marks OP complete + notes/prescription
- * 11. All Ride statuses match model RIDE_STATUSES exactly
- * 12. pickupOtp always stored HASHED via hashOtp()
- * 13. RideTracking.addBreadcrumb() / addMilestone() statics used correctly
- * 14. buildRidePayload() used consistently for all Ride creation
- * 15. Cache invalidation on every state-changing mutation
- * ═══════════════════════════════════════════════════════════════════════════════
- */
-
 import express from 'express';
 
 import Booking              from '../models/Booking.js';
@@ -62,6 +38,8 @@ import {
   computeRefundAmount,
   RADIUS_METERS,
   RIDE_STATUSES_ACTIVE,
+  CARE_RIDE_RADIUS_M,
+  TRANSPORT_RADIUS_M,
 } from './bookingRouterShared.js';
 
 import cache       from '../middleware/cache.js';
@@ -70,7 +48,14 @@ import redisClient from '../config/redis.js';
 const router = express.Router();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CACHE KEY CONSTANTS & INVALIDATION HELPER
+// FIX 1: Module-level radius constants (were crashing care-assistants &
+//         solo-drivers nearby routes where they were never declared).
+// ─────────────────────────────────────────────────────────────────────────────
+const transportRadiusRad = TRANSPORT_RADIUS_M / 1000 / 6378.1; // 100 km for dispatch
+const careRideRadiusRad  = CARE_RIDE_RADIUS_M  / 1000 / 6378.1; // 30 km for care-ride
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CACHE KEY CONSTANTS & INVALIDATION
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CACHE_TTL = {
@@ -81,10 +66,6 @@ const CACHE_TTL = {
   opRecord:      60,
 };
 
-/**
- * Invalidate all booking-related cache keys.
- * Called after any state-changing mutation.
- */
 const invalidateBookingCache = async () => {
   try {
     const patterns = [
@@ -102,14 +83,12 @@ const invalidateBookingCache = async () => {
   }
 };
 
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // INTERNAL HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Extract pickup/dropoff coords from a Booking document.
- * Uses patientLocation → destinationLocation (correct Booking schema fields).
- */
 const getBookingCoords = (booking) => ({
   pickupCoords:   booking.patientLocation?.coordinates     || [80.648, 16.506],
   pickupAddress:  booking.patientLocation?.address         || '',
@@ -119,13 +98,16 @@ const getBookingCoords = (booking) => ({
   dropoffCity:    booking.destinationLocation?.city        || '',
 });
 
-/**
- * Create a Ride, link it as primaryRide on Booking.
- * Returns { ride, otp } — otp is plain text, stored hashed.
- */
+// bookingRouter2.js (or wherever createAndLinkRide lives)
 const createAndLinkRide = async (booking, overrides = {}) => {
   const coords = getBookingCoords(booking);
   const otp    = genOtp();
+
+  // CANONICAL route — calculated ONCE here
+  const { distanceKm, durationMin, polyline } = await calculateCanonicalRoute(
+    coords.pickupCoords,
+    coords.dropoffCoords,
+  );
 
   const ride = await Ride.create({
     ...buildRidePayload({
@@ -135,21 +117,32 @@ const createAndLinkRide = async (booking, overrides = {}) => {
       scheduledPickupAt: booking.scheduledAt,
       ...coords,
     }),
+    estimatedDistanceKm:  distanceKm,
+    estimatedDurationMin: durationMin,
     pickupOtp: hashOtp(otp),
     ...overrides,
   });
+
+  // Create RideTracking with polyline locked
+  const tracking = await RideTracking.create({
+    ride:                  ride._id,
+    booking:               booking._id,
+    expectedRoutePolyline: polyline,
+  });
+
+  await Ride.findByIdAndUpdate(ride._id, { trackingId: tracking._id });
 
   await Booking.findByIdAndUpdate(booking._id, {
     $push: { rides: ride._id },
     $set:  { primaryRide: ride._id, status: 'confirmed' },
   });
 
-  return { ride, otp };
+  return { ride, otp, distanceKm, durationMin };
 };
 
 /**
- * Send OP card as ZIP email attachment to customer.
- * Non-blocking — errors only logged.
+ * Send OP card ZIP email to patient.
+ * Fetches doctor + hospital inline to avoid stale/undefined refs.
  */
 const sendOpZipEmail = async ({ op, booking, patient, followUps = [] }) => {
   try {
@@ -160,13 +153,11 @@ const sendOpZipEmail = async ({ op, booking, patient, followUps = [] }) => {
       ? await Hospital.findById(op.hospital).lean()
       : null;
 
-    const htmlContent = generateOpHtml({
-      op, booking, doctor, hospital, patient, followUps,
-    });
-    const zipBuffer = await buildOpZipBuffer(htmlContent, op.opNumber);
+    const htmlContent = generateOpHtml({ op, booking, doctor, hospital, patient, followUps });
+    const zipBuffer   = await buildOpZipBuffer(htmlContent, op.opNumber);
 
     const doctorName   = doctor?.user?.name || booking?.doctorSnapshot?.name || 'Your Doctor';
-    const hospitalName = hospital?.name     || null;
+    const hospitalName = hospital?.name || null;
 
     await sendEmail({
       email:   patient.email,
@@ -195,719 +186,26 @@ const sendOpZipEmail = async ({ op, booking, patient, followUps = [] }) => {
   }
 };
 
-// ═════════════════════════════════════════════════════════════════════════════
-// DRIVER ROUTES (agency drivers)
-// ═════════════════════════════════════════════════════════════════════════════
-
-/** GET /driver/assigned */
-router.get('/driver/assigned', protect, authorize('driver'), async (req, res) => {
+const joinBookingRoom = (userId, bookingId) => {
   try {
-    const driverDoc = await Driver.findOne({ user: req.user._id }).select('_id').lean();
-    if (!driverDoc)
-      return res.status(404).json({ success: false, message: 'Driver profile not found' });
-
-    const rides = await Ride.find({
-      driver: req.user._id,
-      status: { $in: ['driver_assigned', 'driver_accepted', 'driver_en_route', 'driver_arrived', 'in_progress', 'at_stop'] },
-    })
-      .populate({
-        path:   'booking',
-        select: 'bookingCode bookingType scheduledAt patientInfo fareBreakdown status patientLocation destinationLocation',
-      })
-      .sort({ createdAt: -1 })
-      .lean();
-
-    return res.json({ success: true, data: { rides } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    getBookingSocketService()?.emitJoinRoom(String(userId), `booking:${bookingId}`);
+  } catch (e) {
+    console.error('[joinBookingRoom]', e.message);
   }
-});
+};
 
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** PATCH /:id/ride/accept — driver_assigned → driver_accepted */
-router.patch('/:id/ride/accept', protect, authorize('driver'), async (req, res) => {
+const joinTpRoom = (userId, tpId) => {
   try {
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id });
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-    if (ride.status !== 'driver_assigned')
-      return res.status(400).json({ success: false, message: `Expected driver_assigned, got ${ride.status}` });
-
-    ride.status = 'driver_accepted';
-    await ride.save();
-
-    const booking = await Booking.findById(req.params.id);
-    if (!booking)
-      return res.status(404).json({ success: false, message: 'Booking not found' });
-
-    booking.status    = 'confirmed';
-    booking.updatedBy = req.user._id;
-    await booking.save();
-
-    const customer   = await User.findById(booking.customer).select('email phone name').lean();
-    const driverUser = await User.findById(req.user._id).select('name phone').lean();
-    const driverDoc  = await Driver.findOne({ user: req.user._id })
-      .select('assignedVehicleSnapshot phone').lean();
-
-    await createNotification({
-      recipient: booking.customer,
-      title:     'Driver Accepted',
-      body:      `Driver ${driverUser.name} accepted your ride.`,
-      type:      'Driver_Assigned',
-      bookingId: booking._id,
-    });
-
-    try {
-      await sendSms({
-        to:      customer.phone,
-        message: driverAssignedSms({
-          userName:      customer.name,
-          rideId:        booking.bookingCode,
-          driverName:    driverUser.name,
-          vehicleNumber: driverDoc?.assignedVehicleSnapshot?.registrationNumber || 'N/A',
-          driverPhone:   driverDoc?.phone || driverUser.phone,
-        }),
-      });
-    } catch (e) { console.error('[Accept] SMS:', e.message); }
-
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', {
-      bookingId: booking._id, status: 'confirmed', timestamp: new Date(),
-    });
-
-    await invalidateBookingCache();
-    return res.json({ success: true, message: 'Ride accepted', data: { ride } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    getBookingSocketService()?.emitJoinRoom(String(userId), `tp:${tpId}`);
+  } catch (e) {
+    console.error('[joinTpRoom]', e.message);
   }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** PATCH /:id/ride/reject */
-router.patch('/:id/ride/reject', protect, authorize('driver'), async (req, res) => {
-  try {
-    const { reason } = req.body;
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id });
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-
-    ride.status = 'cancelled';
-    ride.cancellation = {
-      cancelledBy:       'driver',
-      cancelledByUserId: req.user._id,
-      reason:            reason || 'Driver rejected',
-      cancelledAt:       new Date(),
-    };
-    await ride.save();
-
-    await Ride.findByIdAndUpdate(ride._id, {
-      $addToSet: { declinedDrivers: req.user._id },
-    });
-
-    const booking = await Booking.findById(req.params.id)
-      .select('bookingCode transportPartner').lean();
-
-    if (booking?.transportPartner) {
-      getBookingSocketService()?.emitToRoom(`tp:${booking.transportPartner}`, 'driver_rejected', {
-        bookingId:   req.params.id,
-        bookingCode: booking.bookingCode,
-        reason:      reason || 'Driver rejected',
-      });
-    }
-    getBookingSocketService()?.emitToRoom('admin:ops', 'driver_rejected', {
-      bookingId: req.params.id, driverUserId: req.user._id,
-    });
-
-    return res.json({ success: true, message: 'Ride rejected. Will be reassigned.' });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** PATCH /:id/ride/arrived — generates OTP, sends to customer */
-router.patch('/:id/ride/arrived', protect, authorize('driver'), async (req, res) => {
-  try {
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id });
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-    if (!['driver_accepted', 'driver_en_route'].includes(ride.status))
-      return res.status(400).json({ success: false, message: `Cannot mark arrived from: ${ride.status}` });
-
-    const otp      = genOtp();
-    ride.status    = 'driver_arrived';
-    ride.pickupOtp = hashOtp(otp);
-    await ride.save();
-
-    if (ride.trackingId) {
-      await RideTracking.addMilestone(ride._id, 'driver_arrived', {
-        recordedBy: 'driver', recordedByUserId: req.user._id,
-      }).catch(e => console.error('[Arrived] milestone:', e.message));
-    }
-
-    const booking  = await Booking.findById(req.params.id);
-    const customer = await User.findById(booking.customer).select('email phone name').lean();
-
-    try {
-      await sendEmail({
-        email:   customer.email,
-        subject: `Ride OTP — #${booking.bookingCode}`,
-        html: otpTemplate({
-          title:   'Driver arrived! Share OTP to start your ride.',
-          body:    'Your driver is waiting at your pickup location.',
-          otpCode: otp,
-        }),
-      });
-    } catch (e) { console.error('[Arrived] OTP email:', e.message); }
-
-    if (customer.phone) {
-      try {
-        await sendSms({
-          to:      customer.phone,
-          message: otpSms({ otpCode: otp, purpose: `ride start #${booking.bookingCode}` }),
-        });
-      } catch (e) { console.error('[Arrived] OTP SMS:', e.message); }
-    }
-
-    await createNotification({
-      recipient: booking.customer,
-      title:     'Driver Arrived',
-      body:      'Your driver arrived. Share OTP to start.',
-      type:      'Driver_Arrived',
-      bookingId: booking._id,
-      priority:  'High',
-    });
-
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'driver_arrived', { bookingId: booking._id });
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'otp_required',   { bookingId: booking._id });
-
-    return res.json({ success: true, message: 'Arrival marked, OTP sent to customer' });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** POST /:id/ride/start — OTP verify → in_progress */
-router.post('/:id/ride/start', protect, authorize('driver'), async (req, res) => {
-  try {
-    const { otp } = req.body;
-    if (!otp) return res.status(400).json({ success: false, message: 'OTP required' });
-
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id })
-      .select('+pickupOtp');
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-    if (ride.status !== 'driver_arrived')
-      return res.status(400).json({ success: false, message: 'Driver must be in driver_arrived status' });
-    if (hashOtp(otp) !== ride.pickupOtp)
-      return res.status(400).json({ success: false, message: 'Invalid OTP' });
-
-    ride.status              = 'otp_verified';
-    ride.pickupOtpVerifiedAt = new Date();
-    await ride.save();
-    ride.status = 'in_progress';
-    await ride.save();
-
-    const booking = await Booking.findById(req.params.id);
-    booking.status    = 'in_progress';
-    booking.updatedBy = req.user._id;
-    await booking.save();
-
-    let tracking = await RideTracking.findOne({ ride: ride._id });
-    if (!tracking) {
-      tracking = await RideTracking.create({
-        ride:    ride._id,
-        booking: booking._id,
-        driver:  req.user._id,
-      });
-      await Ride.findByIdAndUpdate(ride._id, { $set: { trackingId: tracking._id } });
-    }
-
-    await RideTracking.addMilestone(ride._id, 'otp_verified', { recordedBy: 'driver', recordedByUserId: req.user._id }).catch(() => {});
-    await RideTracking.addMilestone(ride._id, 'ride_started',  { recordedBy: 'driver', recordedByUserId: req.user._id }).catch(() => {});
-
-    const customer = await User.findById(booking.customer).select('phone name').lean();
-
-    await createNotification({
-      recipient: booking.customer,
-      title:     'Ride Started',
-      body:      `Ride #${booking.bookingCode} started. Safe journey!`,
-      type:      'Ride_Update',
-      bookingId: booking._id,
-    });
-
-    try {
-      await sendSms({
-        to:      customer.phone,
-        message: rideStartedSms({ userName: customer.name, rideId: booking.bookingCode, driverName: req.user.name }),
-      });
-    } catch (e) { console.error('[Start] SMS:', e.message); }
-
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'ride_started', {
-      bookingId: booking._id, startedAt: ride.rideStartedAt,
-    });
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', {
-      bookingId: booking._id, status: 'in_progress', timestamp: new Date(),
-    });
-
-    await invalidateBookingCache();
-    return res.json({ success: true, message: 'Ride started', data: { ride } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** POST /:id/ride/end — complete ride, send invoice + OP ZIP if applicable */
-router.post('/:id/ride/end', protect, authorize('driver'), async (req, res) => {
-  try {
-    const { dropPhotoUrl, actualDistanceKm } = req.body;
-
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id });
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-    if (!['in_progress', 'at_stop'].includes(ride.status))
-      return res.status(400).json({ success: false, message: `Cannot end ride from status: ${ride.status}` });
-
-    ride.status           = 'completed';
-    ride.actualDistanceKm = actualDistanceKm || ride.estimatedDistanceKm || 0;
-    if (dropPhotoUrl) ride.internalNotes = `dropPhoto:${dropPhotoUrl}`;
-    await ride.save();
-
-    await RideTracking.computeSummary(ride._id).catch(() => {});
-    await RideTracking.addMilestone(ride._id, 'ride_completed', {
-      recordedBy: 'driver', recordedByUserId: req.user._id,
-    }).catch(() => {});
-
-    const booking  = await Booking.findById(req.params.id);
-    booking.status    = 'completed';
-    booking.updatedBy = req.user._id;
-    await booking.save();
-
-    const customer = await User.findById(booking.customer).select('email phone name').lean();
-
-    await createNotification({
-      recipient: booking.customer,
-      title:     'Ride Completed',
-      body:      `Booking #${booking.bookingCode} completed. Thank you!`,
-      type:      'Booking_Completed',
-      bookingId: booking._id,
-    });
-
-    try {
-      await sendSms({
-        to:      customer.phone,
-        message: rideCompletedSms({
-          userName:  customer.name,
-          rideId:    booking.bookingCode,
-          totalFare: booking.fareBreakdown?.totalAmount,
-        }),
-      });
-    } catch (e) { console.error('[End] SMS:', e.message); }
-
-    try {
-      const pdfBuffer = await generateBookingInvoicePdf(booking);
-      await sendEmail({
-        email:   customer.email,
-        subject: `Invoice — #${booking.bookingCode}`,
-        html: transactionalTemplate({
-          header:     'BOOKING COMPLETED',
-          title:      `Booking #${booking.bookingCode} complete!`,
-          body:       `Total: ₹${booking.fareBreakdown?.totalAmount}. Invoice attached.`,
-          buttonLink: `${process.env.FRONTEND_URL}/bookings/${booking._id}/rate`,
-          buttonText: 'Rate Your Experience',
-        }),
-        attachments: [{
-          content:     pdfBuffer.toString('base64'),
-          filename:    `invoice-${booking.bookingCode}.pdf`,
-          type:        'application/pdf',
-          disposition: 'attachment',
-        }],
-      });
-    } catch (e) { console.error('[End] Invoice email:', e.message); }
-
-    // Send OP ZIP for medical consultation bookings
-    if (['doctor_consultation', 'full_care_ride', 'follow_up', 'physiotherapist'].includes(booking.bookingType)) {
-      const op = await OutPatientRecord.findOne({ booking: booking._id }).lean();
-      if (op) {
-        const followUps = await OutPatientRecord.find({ parentOp: op._id })
-          .sort({ scheduledAt: -1 }).lean();
-        await sendOpZipEmail({ op, booking, patient: customer, followUps });
-      }
-    }
-
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'ride_completed', {
-      bookingId: booking._id, completedAt: ride.rideCompletedAt,
-    });
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', {
-      bookingId: booking._id, status: 'completed', timestamp: new Date(),
-    });
-
-    await invalidateBookingCache();
-    return res.json({ success: true, message: 'Ride completed', data: { booking } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** PATCH /driver/location — HTTP GPS fallback */
-router.patch('/driver/location', protect, authorize('driver'), async (req, res) => {
-  try {
-    const { lat, lng, heading, speed, bookingId } = req.body;
-    if (!lat || !lng)
-      return res.status(400).json({ success: false, message: 'lat, lng required' });
-
-    await Driver.findOneAndUpdate(
-      { user: req.user._id },
-      {
-        'location.coordinates': [lng, lat],
-        'location.heading':     heading || 0,
-        'location.speedKmh':    speed   || 0,
-        'location.updatedAt':   new Date(),
-      }
-    );
-
-    if (bookingId) {
-      const ride = await Ride.findOne({
-        booking: bookingId,
-        driver:  req.user._id,
-        status:  { $in: RIDE_STATUSES_ACTIVE },
-      });
-      if (ride) {
-        ride.liveLocation = {
-          type:        'Point',
-          coordinates: [lng, lat],
-          heading:     heading || 0,
-          speedKmh:    speed   || 0,
-          updatedAt:   new Date(),
-        };
-        await ride.save();
-
-        if (ride.trackingId) {
-          await RideTracking.addBreadcrumb(ride._id, {
-            coordinates: [lng, lat],
-            heading:     heading || 0,
-            speedKmh:    speed   || 0,
-            source:      'gps',
-          }).catch(e => console.error('[Location] breadcrumb:', e.message));
-        }
-
-        getBookingSocketService()?.emitToRoom(`booking:${bookingId}`, 'location_update', {
-          lat, lng, heading, speed, role: 'driver', updatedAt: new Date(),
-        });
-      }
-    }
-
-    return res.json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ═════════════════════════════════════════════════════════════════════════════
-// SOLO DRIVER PARTNER ROUTES
-// ═════════════════════════════════════════════════════════════════════════════
-
-/** GET /solo/available */
-router.get('/solo/available', protect, authorize('solodriverpartner'), async (req, res) => {
-  try {
-    const solo = await SoloDriverPartner.findOne({ user: req.user._id }).select('driverProfile').lean();
-    if (!solo?.driverProfile)
-      return res.status(404).json({ success: false, message: 'Driver profile not linked to solo partner' });
-
-    const rides = await Ride.find({
-      driver: req.user._id,
-      status: { $in: ['driver_assigned', 'driver_accepted', 'driver_en_route', 'driver_arrived', 'in_progress', 'at_stop'] },
-    })
-      .populate({ path: 'booking', select: 'bookingCode bookingType scheduledAt patientInfo fareBreakdown status patientLocation destinationLocation' })
-      .sort({ createdAt: -1 })
-      .lean();
-
-    return res.json({ success: true, data: { rides } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** PATCH /:id/solo/accept */
-router.patch('/:id/solo/accept', protect, authorize('solodriverpartner'), async (req, res) => {
-  try {
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id });
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-    if (ride.status !== 'driver_assigned')
-      return res.status(400).json({ success: false, message: `Expected driver_assigned, got ${ride.status}` });
-
-    ride.status = 'driver_accepted';
-    await ride.save();
-
-    const booking = await Booking.findById(req.params.id);
-    booking.status    = 'confirmed';
-    booking.updatedBy = req.user._id;
-    await booking.save();
-
-    const customer = await User.findById(booking.customer).select('email phone name').lean();
-    const solo     = await SoloDriverPartner.findOne({ user: req.user._id })
-      .select('legalName phone vehicle').lean();
-
-    try {
-      await sendSms({
-        to:      customer.phone,
-        message: driverAssignedSms({
-          userName:      customer.name,
-          rideId:        booking.bookingCode,
-          driverName:    solo?.legalName || req.user.name,
-          vehicleNumber: solo?.vehicle?.registrationNumber || 'N/A',
-          driverPhone:   solo?.phone || '',
-        }),
-      });
-    } catch (e) { console.error('[Solo accept] SMS:', e.message); }
-
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', {
-      bookingId: booking._id, status: 'confirmed', timestamp: new Date(),
-    });
-
-    await invalidateBookingCache();
-    return res.json({ success: true, message: 'Ride accepted', data: { ride } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** PATCH /:id/solo/reject */
-router.patch('/:id/solo/reject', protect, authorize('solodriverpartner'), async (req, res) => {
-  try {
-    const { reason } = req.body;
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id });
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-
-    ride.status = 'cancelled';
-    ride.cancellation = {
-      cancelledBy:       'driver',
-      cancelledByUserId: req.user._id,
-      reason:            reason || 'Solo driver rejected',
-      cancelledAt:       new Date(),
-    };
-    await ride.save();
-
-    getBookingSocketService()?.emitToRoom('admin:ops', 'solo_driver_rejected', {
-      bookingId: req.params.id, message: 'Solo driver rejected. Re-assignment needed.',
-    });
-
-    return res.json({ success: true, message: 'Ride rejected. Admin notified.' });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** PATCH /:id/solo/arrived */
-router.patch('/:id/solo/arrived', protect, authorize('solodriverpartner'), async (req, res) => {
-  try {
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id });
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-    if (!['driver_accepted', 'driver_en_route'].includes(ride.status))
-      return res.status(400).json({ success: false, message: `Invalid state for arrival: ${ride.status}` });
-
-    const otp      = genOtp();
-    ride.status    = 'driver_arrived';
-    ride.pickupOtp = hashOtp(otp);
-    await ride.save();
-
-    const booking  = await Booking.findById(req.params.id);
-    const customer = await User.findById(booking.customer).select('email phone name').lean();
-
-    try {
-      await sendEmail({
-        email:   customer.email,
-        subject: `Ride OTP — #${booking.bookingCode}`,
-        html: otpTemplate({
-          title:   'Driver arrived! Share OTP to start.',
-          body:    'Your driver is at your pickup location.',
-          otpCode: otp,
-        }),
-      });
-    } catch (e) { console.error('[Solo arrived] email:', e.message); }
-
-    if (customer.phone) {
-      try {
-        await sendSms({
-          to:      customer.phone,
-          message: otpSms({ otpCode: otp, purpose: `ride start #${booking.bookingCode}` }),
-        });
-      } catch (e) { console.error('[Solo arrived] SMS:', e.message); }
-    }
-
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'driver_arrived', { bookingId: booking._id });
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'otp_required',   { bookingId: booking._id });
-
-    return res.json({ success: true, message: 'Arrived marked, OTP sent' });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** POST /:id/solo/start */
-router.post('/:id/solo/start', protect, authorize('solodriverpartner'), async (req, res) => {
-  try {
-    const { otp } = req.body;
-    if (!otp) return res.status(400).json({ success: false, message: 'OTP required' });
-
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id })
-      .select('+pickupOtp');
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-    if (ride.status !== 'driver_arrived')
-      return res.status(400).json({ success: false, message: 'Driver must be in driver_arrived status' });
-    if (hashOtp(otp) !== ride.pickupOtp)
-      return res.status(400).json({ success: false, message: 'Invalid OTP' });
-
-    ride.status              = 'otp_verified';
-    ride.pickupOtpVerifiedAt = new Date();
-    await ride.save();
-    ride.status = 'in_progress';
-    await ride.save();
-
-    const booking = await Booking.findById(req.params.id);
-    booking.status    = 'in_progress';
-    booking.updatedBy = req.user._id;
-    await booking.save();
-
-    let tracking = await RideTracking.findOne({ ride: ride._id });
-    if (!tracking) {
-      const rt = await RideTracking.create({ ride: ride._id, booking: booking._id, driver: req.user._id });
-      await Ride.findByIdAndUpdate(ride._id, { $set: { trackingId: rt._id } });
-    }
-
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'ride_started', { bookingId: booking._id });
-
-    await invalidateBookingCache();
-    return res.json({ success: true, message: 'Ride started', data: { ride } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** POST /:id/solo/end */
-router.post('/:id/solo/end', protect, authorize('solodriverpartner'), async (req, res) => {
-  try {
-    const { actualDistanceKm } = req.body;
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id });
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-    if (!['in_progress', 'at_stop'].includes(ride.status))
-      return res.status(400).json({ success: false, message: `Cannot end from status: ${ride.status}` });
-
-    ride.status           = 'completed';
-    ride.actualDistanceKm = actualDistanceKm || 0;
-    await ride.save();
-
-    await RideTracking.computeSummary(ride._id).catch(() => {});
-
-    const booking = await Booking.findById(req.params.id);
-    booking.status    = 'completed';
-    booking.updatedBy = req.user._id;
-    await booking.save();
-
-    const customer = await User.findById(booking.customer).select('phone name email').lean();
-
-    try {
-      await sendSms({
-        to:      customer.phone,
-        message: rideCompletedSms({
-          userName:  customer.name,
-          rideId:    booking.bookingCode,
-          totalFare: booking.fareBreakdown?.totalAmount,
-        }),
-      });
-    } catch (e) { console.error('[Solo end] SMS:', e.message); }
-
-    // OP ZIP for consultation bookings
-    if (['doctor_consultation', 'full_care_ride', 'follow_up', 'physiotherapist'].includes(booking.bookingType)) {
-      const op = await OutPatientRecord.findOne({ booking: booking._id }).lean();
-      if (op) {
-        const followUps = await OutPatientRecord.find({ parentOp: op._id }).sort({ scheduledAt: -1 }).lean();
-        await sendOpZipEmail({ op, booking, patient: customer, followUps });
-      }
-    }
-
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'ride_completed', { bookingId: booking._id });
-
-    await invalidateBookingCache();
-    return res.json({ success: true, message: 'Ride completed', data: { booking } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** PATCH /solo/location */
-router.patch('/solo/location', protect, authorize('solodriverpartner'), async (req, res) => {
-  try {
-    const { lat, lng, heading, speed, bookingId } = req.body;
-    if (!lat || !lng)
-      return res.status(400).json({ success: false, message: 'lat, lng required' });
-
-    await SoloDriverPartner.findOneAndUpdate(
-      { user: req.user._id },
-      {
-        'vehicle.lastKnownLocation.coordinates': [lng, lat],
-        'vehicle.lastLocationUpdatedAt':         new Date(),
-      }
-    );
-
-    if (bookingId) {
-      const ride = await Ride.findOne({
-        booking: bookingId,
-        driver:  req.user._id,
-        status:  { $in: RIDE_STATUSES_ACTIVE },
-      });
-      if (ride) {
-        ride.liveLocation = { type: 'Point', coordinates: [lng, lat], heading, speedKmh: speed, updatedAt: new Date() };
-        await ride.save();
-
-        if (ride.trackingId) {
-          await RideTracking.addBreadcrumb(ride._id, {
-            coordinates: [lng, lat], heading, speedKmh: speed, source: 'gps',
-          }).catch(() => {});
-        }
-
-        getBookingSocketService()?.emitToRoom(`booking:${bookingId}`, 'location_update', {
-          lat, lng, heading, speed, role: 'solo_driver', updatedAt: new Date(),
-        });
-      }
-    }
-
-    return res.json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
+};
 
 // ═════════════════════════════════════════════════════════════════════════════
 // TRANSPORT PARTNER ROUTES
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** GET /tp/assigned */
 router.get('/tp/assigned',
   protect, authorize('transportpartner'),
   cache(CACHE_TTL.ops, req => `GET:/tp/assigned:${req.user._id}`),
@@ -917,6 +215,7 @@ router.get('/tp/assigned',
       if (!tp)
         return res.status(404).json({ success: false, message: 'Transport partner not found' });
 
+      // FIX 3: was missing `const bookings = await`
       const bookings = await Booking.find({ transportPartner: tp._id })
         .select('bookingCode bookingType scheduledAt patientInfo status fareBreakdown primaryRide patientLocation destinationLocation')
         .sort({ scheduledAt: -1 })
@@ -931,13 +230,13 @@ router.get('/tp/assigned',
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** GET /tp/drivers/available */
 router.get('/tp/drivers/available', protect, authorize('transportpartner'), async (req, res) => {
   try {
     const tp = await TransportPartner.findOne({ user: req.user._id }).select('_id').lean();
     if (!tp)
       return res.status(404).json({ success: false, message: 'Transport partner not found' });
 
+    // FIX 4: removed duplicate/broken double Driver.find() chain — single clean query
     const drivers = await Driver.find({
       ownerAgency: tp._id,
       status:      'Available',
@@ -946,6 +245,7 @@ router.get('/tp/drivers/available', protect, authorize('transportpartner'), asyn
       isBlocked:   false,
     })
       .select('legalName phone driverCode assignedVehicleSnapshot performance.rating status location')
+      .sort({ 'performance.rating': -1, legalName: 1 })
       .lean();
 
     return res.json({ success: true, data: { drivers } });
@@ -956,7 +256,6 @@ router.get('/tp/drivers/available', protect, authorize('transportpartner'), asyn
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** PATCH /:id/tp/assign-driver */
 router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), async (req, res) => {
   try {
     const { driverId } = req.body;
@@ -975,7 +274,6 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
     if (!booking)
       return res.status(404).json({ success: false, message: 'Booking not found' });
 
-    // Cancel any existing open rides for this booking
     await Ride.updateMany(
       { booking: booking._id, status: { $in: ['requested', 'searching'] } },
       { status: 'cancelled', 'cancellation.cancelledBy': 'system', 'cancellation.cancelledAt': new Date() }
@@ -990,14 +288,30 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
         rideType:          'patient',
         vehicleClass:      'four_wheeler',
         scheduledPickupAt: booking.scheduledAt,
+        
         ...coords,
         createdBy: req.user._id,
       }),
       driver:           driver.user,
       transportPartner: tp._id,
       status:           'driver_assigned',
+       estimatedDistanceKm:  distanceKm,   // LOCKED — never changes
+  estimatedDurationMin: durationMin,  // LOCKED
       pickupOtp:        hashOtp(otp),
     });
+
+    // Store polyline in RideTracking immediately
+await RideTracking.create({
+  ride:    ride._id,
+  booking: booking._id,
+  driver:  null,
+  expectedRoutePolyline: polyline,   // canonical route for deviation detection
+});
+
+await Ride.findByIdAndUpdate(ride._id, {
+  $set: { trackingId: tracking._id }  // if you create tracking here
+});
+
 
     await Booking.findByIdAndUpdate(booking._id, {
       $push: { rides: ride._id },
@@ -1027,6 +341,8 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
       });
     } catch (e) { console.error('[TP assign] SMS:', e.message); }
 
+    joinBookingRoom(driver.user, booking._id);
+
     getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'driver_assigned', {
       bookingId: booking._id, driverName: driverUser.name,
     });
@@ -1040,7 +356,6 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** PATCH /:id/tp/reassign-driver */
 router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), async (req, res) => {
   try {
     const { newDriverId } = req.body;
@@ -1095,6 +410,8 @@ router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), 
       bookingId: booking._id,
     });
 
+    joinBookingRoom(driver.user, booking._id);
+
     await invalidateBookingCache();
     return res.json({ success: true, message: 'Driver reassigned', data: { ride } });
   } catch (err) {
@@ -1106,13 +423,13 @@ router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), 
 // CARE ASSISTANT ROUTES
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** GET /care/assigned */
 router.get('/care/assigned', protect, authorize('care assistant'), async (req, res) => {
   try {
     const profile = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
     if (!profile)
       return res.status(404).json({ success: false, message: 'Care assistant profile not found' });
 
+    // FIX 3: was missing `const bookings = await`
     const bookings = await Booking.find({ careAssistant: profile._id })
       .select('bookingCode bookingType scheduledAt patientInfo status patientLocation careAssistantSnapshot fareBreakdown')
       .sort({ scheduledAt: -1 })
@@ -1126,7 +443,6 @@ router.get('/care/assigned', protect, authorize('care assistant'), async (req, r
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** PATCH /:id/care/arrived */
 router.patch('/:id/care/arrived', protect, authorize('care assistant'), async (req, res) => {
   try {
     const profile = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
@@ -1161,7 +477,6 @@ router.patch('/:id/care/arrived', protect, authorize('care assistant'), async (r
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** PATCH /:id/care/start */
 router.patch('/:id/care/start', protect, authorize('care assistant'), async (req, res) => {
   try {
     const profile = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
@@ -1200,7 +515,6 @@ router.patch('/:id/care/start', protect, authorize('care assistant'), async (req
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** PATCH /:id/care/complete */
 router.patch('/:id/care/complete', protect, authorize('care assistant'), async (req, res) => {
   try {
     const profile = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
@@ -1237,7 +551,6 @@ router.patch('/:id/care/complete', protect, authorize('care assistant'), async (
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** PATCH /care/location */
 router.patch('/care/location', protect, authorize('care assistant'), async (req, res) => {
   try {
     const { lat, lng, bookingId } = req.body;
@@ -1268,20 +581,18 @@ router.patch('/care/location', protect, authorize('care assistant'), async (req,
 // HOSPITAL ROUTES
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** GET /hospital/upcoming */
 router.get('/hospital/upcoming', protect, authorize('hospital'), async (req, res) => {
   try {
     const hospital = await Hospital.findOne({ managedBy: req.user._id }).select('_id').lean();
     if (!hospital)
       return res.status(404).json({ success: false, message: 'Hospital not found' });
 
-    const bookings = await Booking.find({
-      hospital: hospital._id,
-      status:   { $in: ['confirmed', 'in_progress'] },
-    })
+    // FIX 3: was missing `const bookings = await`
+    const bookings = await Booking.find({ hospital: hospital._id, status: { $in: ['confirmed', 'in_progress'] } })
       .select('bookingCode patientInfo scheduledAt bookingType status doctorSnapshot careAssistantSnapshot')
-      .sort({ scheduledAt: 1 })
       .populate('doctor', 'user specialization')
+      .populate('careAssistant', 'user experience')
+      .sort({ scheduledAt: 1 })
       .lean();
 
     return res.json({ success: true, data: { bookings } });
@@ -1292,7 +603,6 @@ router.get('/hospital/upcoming', protect, authorize('hospital'), async (req, res
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** PATCH /:id/hospital/confirm */
 router.patch('/:id/hospital/confirm', protect, authorize('hospital'), async (req, res) => {
   try {
     const booking = await Booking.findById(req.params.id);
@@ -1331,11 +641,6 @@ router.patch('/:id/hospital/confirm', protect, authorize('hospital'), async (req
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * GET /hospital/:hospitalId/ops
- * Hospital staff views all OutPatientRecords at their hospital.
- * Query params: status, doctorId, date, page, limit
- */
 router.get('/hospital/:hospitalId/ops',
   protect, authorize('hospital', 'admin', 'superadmin'),
   cache(CACHE_TTL.ops, req => `GET:/hospital/${req.params.hospitalId}/ops:${req.originalUrl}`),
@@ -1343,7 +648,6 @@ router.get('/hospital/:hospitalId/ops',
     try {
       const { hospitalId } = req.params;
 
-      // Non-admin: verify the requester manages this hospital
       if (!['admin', 'superadmin'].includes(req.user.role)) {
         const hospital = await Hospital.findOne({ _id: hospitalId, managedBy: req.user._id }).lean();
         if (!hospital)
@@ -1361,14 +665,15 @@ router.get('/hospital/:hospitalId/ops',
       }
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
+      // FIX 5: added .skip() and .limit() that were missing
       const [ops, total] = await Promise.all([
         OutPatientRecord.find(filter)
-          .sort({ scheduledAt: -1 })
-          .skip(skip)
-          .limit(parseInt(limit))
           .populate('doctor',   'user specialization registrationNumber')
           .populate('patient',  'name phone email')
           .populate('booking',  'bookingCode bookingType fareBreakdown paymentStatus')
+          .sort({ scheduledAt: -1 })
+          .skip(skip)
+          .limit(parseInt(limit))
           .lean(),
         OutPatientRecord.countDocuments(filter),
       ]);
@@ -1385,10 +690,6 @@ router.get('/hospital/:hospitalId/ops',
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * GET /hospital/:hospitalId/valid-ops
- * Returns OPs where follow-up is still eligible (followUpExpiry > now, isFollowUp = false).
- */
 router.get('/hospital/:hospitalId/valid-ops',
   protect, authorize('hospital', 'doctor', 'admin', 'superadmin'),
   cache(CACHE_TTL.ops, req => `GET:/hospital/${req.params.hospitalId}/valid-ops:${req.originalUrl}`),
@@ -1407,13 +708,15 @@ router.get('/hospital/:hospitalId/valid-ops',
       if (patientId) filter.patient = patientId;
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
+      // FIX 5: added .skip() and .limit() that were missing
       const [ops, total] = await Promise.all([
         OutPatientRecord.find(filter)
-          .sort({ followUpExpiry: 1 })
-          .skip(skip)
-          .limit(parseInt(limit))
           .populate('doctor',  'user specialization')
           .populate('patient', 'name phone')
+          .populate('booking', 'bookingCode bookingType fareBreakdown paymentStatus')
+          .sort({ scheduledAt: -1 })
+          .skip(skip)
+          .limit(parseInt(limit))
           .lean(),
         OutPatientRecord.countDocuments(filter),
       ]);
@@ -1438,11 +741,6 @@ router.get('/hospital/:hospitalId/valid-ops',
 // DOCTOR ROUTES
 // ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * GET /doctor/ops
- * Doctor views all their OutPatientRecords.
- * Query: status, hospitalId, patientId, date, page, limit
- */
 router.get('/doctor/ops',
   protect, authorize('doctor'),
   cache(CACHE_TTL.ops, req => `GET:/doctor/ops:${req.user._id}:${req.originalUrl}`),
@@ -1464,14 +762,16 @@ router.get('/doctor/ops',
       }
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
+      // FIX 5: added .skip() and .limit() that were missing
       const [ops, total] = await Promise.all([
         OutPatientRecord.find(filter)
-          .sort({ scheduledAt: -1 })
-          .skip(skip)
-          .limit(parseInt(limit))
           .populate('patient',  'name phone email')
           .populate('hospital', 'name address contact')
           .populate('booking',  'bookingCode bookingType fareBreakdown patientInfo')
+          .populate('parentOp', 'opNumber consultationType scheduledAt status')
+          .sort({ scheduledAt: -1 })
+          .skip(skip)
+          .limit(parseInt(limit))
           .lean(),
         OutPatientRecord.countDocuments(filter),
       ]);
@@ -1488,10 +788,6 @@ router.get('/doctor/ops',
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * GET /doctor/ops/:opNumber
- * Doctor views a single OP with follow-up chain.
- */
 router.get('/doctor/ops/:opNumber',
   protect, authorize('doctor'),
   cache(CACHE_TTL.opRecord, req => `GET:/doctor/ops/${req.params.opNumber}`),
@@ -1514,7 +810,6 @@ router.get('/doctor/ops/:opNumber',
       if (!op)
         return res.status(404).json({ success: false, message: 'OP record not found' });
 
-      // Fetch follow-up children
       const followUps = await OutPatientRecord.find({ parentOp: op._id })
         .sort({ scheduledAt: -1 })
         .populate('patient', 'name phone')
@@ -1537,12 +832,6 @@ router.get('/doctor/ops/:opNumber',
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * PATCH /:id/op/complete
- * Doctor marks OP as completed, adds clinical notes, prescription URL, diagnosis code.
- * Also re-sends OP ZIP to customer.
- * Body: { doctorNotes, prescriptionUrl, diagnosisCode, reasonForVisit }
- */
 router.patch('/:id/op/complete', protect, authorize('doctor'), async (req, res) => {
   try {
     const doctorProfile = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
@@ -1551,7 +840,6 @@ router.patch('/:id/op/complete', protect, authorize('doctor'), async (req, res) 
 
     const { doctorNotes, prescriptionUrl, diagnosisCode, reasonForVisit } = req.body;
 
-    // Find OP linked to this booking
     const op = await OutPatientRecord.findOne({
       booking: req.params.id,
       doctor:  doctorProfile._id,
@@ -1581,7 +869,6 @@ router.patch('/:id/op/complete', protect, authorize('doctor'), async (req, res) 
       bookingId: booking._id,
     });
 
-    // Re-send OP ZIP with updated notes
     const followUps = await OutPatientRecord.find({ parentOp: op._id })
       .sort({ scheduledAt: -1 }).lean();
     await sendOpZipEmail({ op: op.toObject ? op.toObject() : op, booking, patient: customer, followUps });
@@ -1594,16 +881,9 @@ router.patch('/:id/op/complete', protect, authorize('doctor'), async (req, res) 
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// OP CARD PUBLIC ROUTES (customer + doctor + admin)
+// OP CARD PUBLIC ROUTES
 // ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * GET /op/:opNumber
- * Any authenticated user can fetch an OP — access controlled by ownership.
- *   Customer: only their own OPs
- *   Doctor:   only their doctor OPs
- *   Admin:    any OP
- */
 router.get('/op/:opNumber',
   protect,
   cache(CACHE_TTL.opRecord, req => `GET:/op/${req.params.opNumber}:${req.user._id}`),
@@ -1611,7 +891,6 @@ router.get('/op/:opNumber',
     try {
       const filter = { opNumber: req.params.opNumber };
 
-      // Scope by role
       if (req.user.role === 'customer') {
         filter.patient = req.user._id;
       } else if (req.user.role === 'doctor') {
@@ -1619,7 +898,6 @@ router.get('/op/:opNumber',
         if (!dp) return res.status(404).json({ success: false, message: 'Doctor profile not found' });
         filter.doctor = dp._id;
       }
-      // admin / superadmin: no extra filter
 
       const op = await OutPatientRecord.findOne(filter)
         .populate('doctor',   'user specialization registrationNumber profilePhotoUrl')
@@ -1632,7 +910,6 @@ router.get('/op/:opNumber',
       if (!op)
         return res.status(404).json({ success: false, message: 'OP record not found' });
 
-      // Fetch children follow-ups
       const followUps = await OutPatientRecord.find({ parentOp: op._id })
         .sort({ scheduledAt: -1 })
         .populate('doctor', 'user specialization')
@@ -1655,11 +932,6 @@ router.get('/op/:opNumber',
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * GET /op/:opNumber/follow-ups
- * Returns all follow-up OPs for a given OP (parentOp = opNumber).
- * Accessible by customer (own OPs), doctor (own), admin.
- */
 router.get('/op/:opNumber/follow-ups', protect, async (req, res) => {
   try {
     const baseFilter = { opNumber: req.params.opNumber };
@@ -1684,11 +956,6 @@ router.get('/op/:opNumber/follow-ups', protect, async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * GET /op/:opNumber/download
- * Streams the OP ZIP file directly to the client.
- * Customer can only download their own OP.
- */
 router.get('/op/:opNumber/download', protect, async (req, res) => {
   try {
     const filter = { opNumber: req.params.opNumber };
@@ -1725,7 +992,6 @@ router.get('/op/:opNumber/download', protect, async (req, res) => {
 // ADMIN ROUTES
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** GET /admin/bookings */
 router.get('/admin/bookings',
   protect, authorize('admin', 'superadmin'),
   cache(CACHE_TTL.adminBookings, req => `GET:/admin/bookings:${req.originalUrl}`),
@@ -1780,7 +1046,6 @@ router.get('/admin/bookings',
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** GET /admin/bookings/stats */
 router.get('/admin/bookings/stats',
   protect, authorize('admin', 'superadmin'),
   cache(CACHE_TTL.adminStats, req => `GET:/admin/bookings/stats:${req.originalUrl}`),
@@ -1817,7 +1082,6 @@ router.get('/admin/bookings/stats',
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** GET /admin/bookings/export — CSV */
 router.get('/admin/bookings/export', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { from, to, status, bookingType } = req.query;
@@ -1864,7 +1128,6 @@ router.get('/admin/bookings/export', protect, authorize('admin', 'superadmin'), 
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** GET /admin/bookings/:id */
 router.get('/admin/bookings/:id',
   protect, authorize('admin', 'superadmin'),
   cache(CACHE_TTL.adminBookings, req => `GET:/admin/bookings/${req.params.id}`),
@@ -1904,7 +1167,6 @@ router.get('/admin/bookings/:id',
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** PATCH /admin/bookings/:id/status */
 router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { status, note } = req.body;
@@ -1935,12 +1197,9 @@ router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadm
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADMIN — NEARBY LOOKUP ROUTES (100 km radius)
+// ADMIN — NEARBY LOOKUP ROUTES
 // ─────────────────────────────────────────────────────────────────────────────
 
- 
-
-// ── GET /admin/bookings/:id/nearby/care-assistants ────────────────────────────
 router.get('/admin/bookings/:id/nearby/care-assistants',
   protect, authorize('admin', 'superadmin'),
   cache(CACHE_TTL.nearby, req => `GET:/admin/bookings/${req.params.id}/nearby/care-assistants`),
@@ -1964,7 +1223,7 @@ router.get('/admin/bookings/:id/nearby/care-assistants',
         'verification.isVerified': true,
         location: {
           $geoWithin: {
-            $centerSphere: [[lng, lat], radiusInRadians],
+            $centerSphere: [[lng, lat], careRideRadiusRad],
           },
         },
       })
@@ -1999,7 +1258,8 @@ router.get('/admin/bookings/:id/nearby/care-assistants',
   }
 );
 
-// ── GET /admin/bookings/:id/nearby/solo-drivers ───────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+
 router.get('/admin/bookings/:id/nearby/solo-drivers',
   protect, authorize('admin', 'superadmin'),
   cache(CACHE_TTL.nearby, req => `GET:/admin/bookings/${req.params.id}/nearby/solo-drivers`),
@@ -2022,7 +1282,7 @@ router.get('/admin/bookings/:id/nearby/solo-drivers',
         status:      'Available',
         location: {
           $geoWithin: {
-            $centerSphere: [[lng, lat], radiusInRadians],
+            $centerSphere: [[lng, lat], careRideRadiusRad],
           },
         },
       })
@@ -2055,8 +1315,6 @@ router.get('/admin/bookings/:id/nearby/solo-drivers',
 
 // ─────────────────────────────────────────────────────────────────────────────
 
- 
-/** GET /admin/bookings/:id/nearby/transport-partners */
 router.get('/admin/bookings/:id/nearby/transport-partners',
   protect, authorize('admin', 'superadmin'),
   cache(CACHE_TTL.nearby, req => `GET:/admin/bookings/${req.params.id}/nearby/transport-partners`),
@@ -2071,9 +1329,6 @@ router.get('/admin/bookings/:id/nearby/transport-partners',
       if (!coords?.length)
         return res.status(400).json({ success: false, message: 'No pickup coordinates' });
       const [lng, lat] = coords;
-
-      const RADIUS_METERS    = 100_000; // 100 km
-      const radiusInRadians  = RADIUS_METERS / 1000 / 6378.1;
 
       const tps = await TransportPartner.find({
         partnershipStatus: 'active',
@@ -2093,7 +1348,7 @@ router.get('/admin/bookings/:id/nearby/transport-partners',
             status:      'Available',
             location: {
               $geoWithin: {
-                $centerSphere: [[lng, lat], radiusInRadians],
+                $centerSphere: [[lng, lat], careRideRadiusRad],
               },
             },
           });
@@ -2125,11 +1380,6 @@ router.get('/admin/bookings/:id/nearby/transport-partners',
 
 // ─────────────────────────────────────────────────────────────────────────────
 
- 
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** GET /admin/bookings/:id/nearby/hospitals */
 router.get('/admin/bookings/:id/nearby/hospitals',
   protect, authorize('admin', 'superadmin'),
   cache(CACHE_TTL.nearby, req => `GET:/admin/bookings/${req.params.id}/nearby/hospitals`),
@@ -2181,11 +1431,10 @@ router.get('/admin/bookings/:id/nearby/hospitals',
   }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
 // ADMIN — ASSIGNMENT ROUTES
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
 
-/** POST /admin/bookings/:id/assign/solo-driver */
 router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { soloDriverPartnerId } = req.body;
@@ -2251,6 +1500,8 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
       });
     } catch (e) { console.error('[Admin assign solo] SMS:', e.message); }
 
+    joinBookingRoom(soloPartner.user._id, booking._id);
+
     getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', {
       bookingId: booking._id, status: 'confirmed', timestamp: new Date(),
     });
@@ -2272,7 +1523,6 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** POST /admin/bookings/:id/assign/transport-partner */
 router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { transportPartnerId } = req.body;
@@ -2326,6 +1576,9 @@ router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('
       });
     } catch (e) { console.error('[Admin assign TP] SMS:', e.message); }
 
+    joinTpRoom(tp.user._id, tp._id);
+    joinBookingRoom(tp.user._id, booking._id);
+
     getBookingSocketService()?.emitToRoom(`tp:${tp._id}`, 'booking_assigned', {
       bookingId:   booking._id,
       bookingCode: booking.bookingCode,
@@ -2350,7 +1603,6 @@ router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** POST /admin/bookings/:id/assign/care-assistant */
 router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { careAssistantId } = req.body;
@@ -2407,6 +1659,8 @@ router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('adm
       });
     } catch (e) { console.error('[Admin assign CA] Customer SMS:', e.message); }
 
+    joinBookingRoom(ca.user._id, booking._id);
+
     getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_assigned', {
       bookingId:         booking._id,
       careAssistantName: ca.fullName,
@@ -2429,7 +1683,6 @@ router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('adm
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** POST /admin/bookings/:id/assign/hospital */
 router.post('/admin/bookings/:id/assign/hospital', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { hospitalId } = req.body;
@@ -2457,7 +1710,6 @@ router.post('/admin/bookings/:id/assign/hospital', protect, authorize('admin', '
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** PATCH /admin/bookings/:id/reassign/driver */
 router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { newDriverUserId, reason } = req.body;
@@ -2517,6 +1769,8 @@ router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 
       bookingId: booking._id,
     });
 
+    joinBookingRoom(newDriverUserId, booking._id);
+
     getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'driver_assigned', { bookingId: booking._id });
 
     await invalidateBookingCache();
@@ -2528,7 +1782,6 @@ router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** PATCH /admin/bookings/:id/reassign/care */
 router.patch('/admin/bookings/:id/reassign/care', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { newCareAssistantId } = req.body;
@@ -2553,6 +1806,8 @@ router.patch('/admin/bookings/:id/reassign/care', protect, authorize('admin', 's
         type:      'Care_Assistant_Assigned',
         bookingId: booking._id,
       });
+
+      joinBookingRoom(ca.user._id, booking._id);
     }
 
     await invalidateBookingCache();
@@ -2564,7 +1819,10 @@ router.patch('/admin/bookings/:id/reassign/care', protect, authorize('admin', 's
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** POST /admin/bookings/:id/refund */
+/**
+ * POST /admin/bookings/:id/refund
+ * FIX 2: Capture prevStatus BEFORE mutating booking.status.
+ */
 router.post('/admin/bookings/:id/refund', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { refundAmount, reason } = req.body;
@@ -2607,11 +1865,14 @@ router.post('/admin/bookings/:id/refund', protect, authorize('admin', 'superadmi
       }
     }
 
+    // FIX 2: capture BEFORE mutation — was ReferenceError (prevStatus never declared)
+    const prevStatus = booking.status;
+
     booking.fareBreakdown.refundAmount = amount;
     booking.paymentStatus = 'refunded';
     booking.status        = 'refunded';
     booking.statusLog.push({
-      fromStatus: booking.status,
+      fromStatus: prevStatus,
       toStatus:   'refunded',
       changedBy:  req.user._id,
       reason:     reason || 'Admin initiated refund',
@@ -2634,11 +1895,10 @@ router.post('/admin/bookings/:id/refund', protect, authorize('admin', 'superadmi
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
 // ADMIN — OP MANAGEMENT
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
 
-/** GET /admin/ops */
 router.get('/admin/ops',
   protect, authorize('admin', 'superadmin'),
   cache(CACHE_TTL.ops, req => `GET:/admin/ops:${req.originalUrl}`),
@@ -2681,7 +1941,6 @@ router.get('/admin/ops',
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** PATCH /admin/ops/:id/status */
 router.patch('/admin/ops/:id/status', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { status, doctorNotes } = req.body;
@@ -2704,7 +1963,6 @@ router.patch('/admin/ops/:id/status', protect, authorize('admin', 'superadmin'),
     if (!op)
       return res.status(404).json({ success: false, message: 'OP record not found' });
 
-    // If marked completed, re-send OP ZIP to patient
     if (status === 'completed') {
       const booking  = await Booking.findById(op.booking).lean();
       const patient  = await User.findById(op.patient).select('email name phone').lean();

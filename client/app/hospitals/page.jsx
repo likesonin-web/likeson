@@ -5,32 +5,15 @@ import { useSelector, useDispatch } from "react-redux";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
 import {
-  Search,
-  Filter,
-  LayoutGrid,
-  List,
-  Star,
-  ArrowUpRight,
-  ShieldCheck,
-  Bed,
-  Stethoscope,
-  Zap,
-  Phone,
-  MapPin,
-  X,
-  Info,
-  Activity,
-  Navigation,
-  Loader2,
+  Search, Filter, LayoutGrid, List, Star, ArrowUpRight,
+  ShieldCheck, Bed, Stethoscope, Zap, Phone, MapPin, X,
+  Info, Activity, Navigation, Loader2, Building2, ChevronRight,
 } from "lucide-react";
 import Link from "next/link";
 import {
-  fetchAllHospitals,
-  fetchNearbyHospitals,
-  selectHospitals,
-  selectNearbyHospitals,
-  selectIsLoadingHospitals,
-  selectIsLoadingNearbyHospitals,
+  fetchAllHospitals, fetchNearbyHospitals,
+  selectHospitals, selectNearbyHospitals,
+  selectIsLoadingHospitals, selectIsLoadingNearbyHospitals,
 } from "@/store/slices/hospitalSlice";
 import Container from "../../components/ui/Container";
 import Banner from "../../components/Banner";
@@ -38,13 +21,38 @@ import Banner from "../../components/Banner";
 const GOOGLE_MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
 const MotionImage = motion(Image);
 
-// ─── Geocode: address string → { lat, lng } ───────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// DESIGN TOKENS — all CSS vars, zero hardcoded colors
+// Hospital theme: navy (h 245) per global.css [data-theme="hospital"]
+// ─────────────────────────────────────────────────────────────────────────────
+const T = {
+  accent:        'var(--primary)',
+  accentContent: 'var(--primary-content)',
+  secondary:     'var(--secondary)',
+  base100:       'var(--base-100)',
+  base200:       'var(--base-200)',
+  base300:       'var(--base-300)',
+  baseContent:   'var(--base-content)',
+  success:       'var(--success)',
+  error:         'var(--error)',
+  warning:       'var(--warning)',
+
+  accentBg:     'color-mix(in srgb, var(--primary) 8%,  transparent)',
+  accentBgMid:  'color-mix(in srgb, var(--primary) 14%, transparent)',
+  accentBorder: 'color-mix(in srgb, var(--primary) 25%, transparent)',
+  accentShadow: 'color-mix(in srgb, var(--primary) 28%, transparent)',
+  accentGrad:   'linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%)',
+  errorBg:      'color-mix(in srgb, var(--error)   10%, transparent)',
+  successBg:    'color-mix(in srgb, var(--success) 10%, transparent)',
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
 async function geocodeAddress(address) {
   if (!GOOGLE_MAPS_KEY) return null;
   try {
-    const res  = await fetch(
-      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${GOOGLE_MAPS_KEY}`
-    );
+    const res  = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${GOOGLE_MAPS_KEY}`);
     const data = await res.json();
     if (data.status === "OK" && data.results?.[0]) {
       const { lat, lng } = data.results[0].geometry.location;
@@ -54,21 +62,16 @@ async function geocodeAddress(address) {
   return null;
 }
 
-// ─── Places Autocomplete: input string → suggestion list ─────────────────────
-// Uses the Places Autocomplete API to get location suggestions as the user types.
-// Biased to India (components=country:in).
 async function fetchPlaceSuggestions(input) {
   if (!GOOGLE_MAPS_KEY || input.trim().length < 2) return [];
   try {
-    const res  = await fetch(
-      `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&key=${GOOGLE_MAPS_KEY}&components=country:in&types=(regions)`
-    );
+    const res  = await fetch(`https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&key=${GOOGLE_MAPS_KEY}&components=country:in&types=(regions)`);
     const data = await res.json();
     if (data.status === "OK" && data.predictions?.length) {
       return data.predictions.map((p) => ({
-        placeId:     p.place_id,
-        description: p.description,
-        mainText:    p.structured_formatting?.main_text    || p.description,
+        placeId:       p.place_id,
+        description:   p.description,
+        mainText:      p.structured_formatting?.main_text      || p.description,
         secondaryText: p.structured_formatting?.secondary_text || "",
       }));
     }
@@ -76,112 +79,228 @@ async function fetchPlaceSuggestions(input) {
   return [];
 }
 
-// ─── Hospital Card ────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// HOSPITAL CARD
+// ─────────────────────────────────────────────────────────────────────────────
 const HospitalCard = ({ hospital, viewMode }) => {
-  const [isHovered, setIsHovered] = useState(false);
-  const cardHeight = viewMode === "grid" ? "h-[540px]" : "md:h-[320px] h-auto";
+  const [hovered, setHovered] = useState(false);
+  const isListMode = viewMode === "list";
 
   return (
     <motion.div
       layout
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-      className={`group relative w-full ${cardHeight} rounded-md overflow-hidden bg-base-100 border border-base-300 transition-all duration-500 hover:border-error shadow-sm hover:shadow-xl flex ${viewMode === "list" ? "flex-col md:flex-row" : "flex-col"}`}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      className="group relative rounded-2xl overflow-hidden flex"
+      style={{
+        flexDirection:  isListMode ? undefined : 'column',
+        background:     T.base100,
+        border:         `1px solid var(--base-300)`,
+        boxShadow:      '0 1px 8px rgba(0,0,0,0.04)',
+        transition:     'box-shadow 0.25s, border-color 0.25s',
+        minHeight:      isListMode ? 220 : 'auto',
+      }}
+      whileHover={{
+        y: -3,
+        boxShadow: `0 16px 40px ${T.accentShadow}`,
+        borderColor: T.accent,
+      }}
     >
-      <div className={`relative ${viewMode === "list" ? "md:w-1/3 w-full h-48 md:h-full" : "h-56"} overflow-hidden z-0`}>
+      {/* Top accent bar on hover */}
+      <div
+        className="absolute top-0 left-0 right-0 h-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10"
+        style={{ background: T.accentGrad }}
+        aria-hidden="true"
+      />
+
+      {/* ── IMAGE ─────────────────────────────────────────────────────── */}
+      <div
+        className="relative overflow-hidden flex-shrink-0"
+        style={{
+          width:  isListMode ? 240 : '100%',
+          height: isListMode ? '100%' : 200,
+          minHeight: isListMode ? 220 : 200,
+        }}
+      >
         <MotionImage
-          animate={{ scale: isHovered ? 1.05 : 1 }}
-          transition={{ duration: 0.8, ease: "easeOut" }}
+          animate={{ scale: hovered ? 1.06 : 1 }}
+          transition={{ duration: 0.7, ease: "easeOut" }}
           src={hospital.logo || hospital.images?.[0] || "/api/placeholder/800/600"}
-          alt={hospital.name || "Hospital Image"}
+          alt={hospital.name || "Hospital"}
           fill
-          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+          sizes="(max-width: 768px) 100vw, 300px"
           className="object-cover"
         />
-        <div className={`absolute inset-0 bg-gradient-to-t from-base-100 ${viewMode === "list" ? "via-transparent" : "via-base-100/60"} to-transparent opacity-40`} />
-      </div>
+        {/* Gradient overlay */}
+        <div
+          className="absolute inset-0"
+          style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.45) 0%, transparent 60%)' }}
+          aria-hidden="true"
+        />
 
-      <div className="absolute top-4 inset-x-4 flex justify-between items-start z-20">
-        <div className="flex flex-col gap-2">
-          {hospital.isVerified && (
-            <div className="w-8 h-8 rounded-md bg-success text-success-content flex items-center justify-center shadow-lg border border-success/20">
-              <ShieldCheck size={18} />
-            </div>
-          )}
-        </div>
-        <div className="flex flex-col items-end gap-1.5">
-          <div className="bg-base-100/95 border border-base-300 px-3 py-1.5 rounded-md flex items-center gap-2 shadow-sm">
-            <Star size={12} className="text-accent fill-accent" />
-            <span className="text-xs font-bold text-base-content">
-              {hospital.rating?.averageRating?.toFixed(1) || "0.0"}
-            </span>
+        {/* Verified badge */}
+        {hospital.isVerified && (
+          <div
+            className="absolute top-3 left-3 w-8 h-8 rounded-xl flex items-center justify-center shadow-lg"
+            style={{ background: 'var(--success)', color: 'var(--success-content)' }}
+            aria-label="Verified hospital"
+          >
+            <ShieldCheck size={16} />
+          </div>
+        )}
+
+        {/* Rating + distance — float top right */}
+        <div className="absolute top-3 right-3 flex flex-col gap-1.5 items-end">
+          <div
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl backdrop-blur-md text-[11px] font-black"
+            style={{
+              background: 'color-mix(in srgb, var(--base-100) 90%, transparent)',
+              border: '1px solid var(--base-300)',
+              color: 'var(--base-content)',
+            }}
+          >
+            <Star size={11} style={{ fill: 'var(--warning)', color: 'var(--warning)' }} aria-hidden="true" />
+            {hospital.rating?.averageRating?.toFixed(1) || "0.0"}
           </div>
           {hospital.distance && (
-            <div className="bg-error/10 border border-error/20 px-2.5 py-1 rounded-md flex items-center gap-1.5">
-              <MapPin size={10} className="text-error" />
-              <span className="text-[10px] font-bold text-error">{hospital.distance}</span>
+            <div
+              className="flex items-center gap-1 px-2 py-1 rounded-xl text-[10px] font-black"
+              style={{ background: T.accentBg, color: T.accent, border: `1px solid ${T.accentBorder}` }}
+            >
+              <MapPin size={9} aria-hidden="true" /> {hospital.distance}
             </div>
           )}
         </div>
+
+        {/* ER badge — bottom of image */}
+        {hospital.isEmergencyReady && (
+          <div
+            className="absolute bottom-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[9px] font-black uppercase tracking-widest"
+            style={{ background: T.errorBg, color: 'var(--error)', border: `1px solid color-mix(in srgb, var(--error) 30%, transparent)` }}
+            aria-label="Emergency ready 24/7"
+          >
+            <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: 'var(--error)' }} aria-hidden="true" />
+            ER 24/7
+          </div>
+        )}
       </div>
 
-      <div className={`relative z-10 p-5 flex flex-col justify-end flex-grow transition-all duration-500 ${viewMode === "grid" ? "transform translate-y-[30px] group-hover:translate-y-0 bg-base-100 border-t border-base-300" : "bg-base-100"}`}>
-        <div className="flex items-center gap-2 mb-2">
-          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-error/10 text-error text-[10px] font-bold uppercase border border-error/20">
-            <span className="h-1.5 w-1.5 rounded-full bg-error animate-pulse" />
-            Active Registry
-          </div>
-          <span className="text-base-content/50 text-[11px] font-bold uppercase tracking-tight flex items-center gap-1">
-            <MapPin size={12} className="text-error" /> {hospital.address?.city || "Vijayawada"}
+      {/* ── CONTENT ───────────────────────────────────────────────────── */}
+      <div className="flex flex-col flex-1 p-5">
+        {/* Location tag */}
+        <div className="flex items-center gap-1.5 mb-2">
+          <MapPin size={10} style={{ color: T.accent, opacity: 0.7 }} aria-hidden="true" />
+          <span className="text-[10px] font-black uppercase tracking-widest opacity-50">
+            {hospital.address?.city || "Vijayawada"}
           </span>
+          {hospital.hospitalType && (
+            <>
+              <span className="opacity-20 text-[10px]">·</span>
+              <span
+                className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full"
+                style={{ background: T.accentBg, color: T.accent }}
+              >
+                {hospital.hospitalType}
+              </span>
+            </>
+          )}
         </div>
 
-        <h3 className="text-xl font-bold text-base-content leading-tight mb-4 group-hover:text-error transition-colors tracking-tight">
+        {/* Name */}
+        <h3
+          className="font-black text-[16px] leading-tight mb-3 tracking-tight group-hover:opacity-80 transition-opacity"
+          style={{ color: 'var(--base-content)' }}
+        >
           {hospital.name}
         </h3>
 
-        <div className="grid grid-cols-3 gap-0 border border-base-300 mb-4 bg-base-200/30 rounded-md overflow-hidden">
-          <div className="flex flex-col items-center p-2 border-r border-base-300">
-            <Bed size={14} className="text-error mb-1" />
-            <span className="text-base-content font-bold text-xs">{hospital.bedCount?.total || 0}</span>
-            <span className="text-[8px] font-bold uppercase text-base-content/40 tracking-widest">Beds</span>
-          </div>
-          <div className="flex flex-col items-center p-2 border-r border-base-300">
-            <Stethoscope size={14} className="text-error mb-1" />
-            <span className="text-base-content font-bold text-xs">{hospital.specialties?.length || 0}</span>
-            <span className="text-[8px] font-bold uppercase text-base-content/40 tracking-widest">Depts</span>
-          </div>
-          <div className="flex flex-col items-center p-2">
-            <Zap
-              size={14}
-              className={hospital.isEmergencyReady ? "text-error mb-1" : "text-base-content/20 mb-1"}
-              fill={hospital.isEmergencyReady ? "currentColor" : "none"}
-            />
-            <span className="text-base-content font-bold text-xs">{hospital.isEmergencyReady ? "24/7" : "N/A"}</span>
-            <span className="text-[8px] font-bold uppercase text-base-content/40 tracking-widest">ER</span>
-          </div>
+        {/* Stats row */}
+        <div
+          className="grid grid-cols-3 gap-0 rounded-xl overflow-hidden mb-4"
+          style={{ border: `1px solid var(--base-300)`, background: T.accentBg }}
+        >
+          {[
+            { Icon: Bed,        value: hospital.bedCount?.total || 0,         label: 'Beds'  },
+            { Icon: Stethoscope,value: hospital.specialties?.length || 0,     label: 'Depts' },
+            { Icon: Zap,        value: hospital.isEmergencyReady ? '24/7' : '–', label: 'ER', filled: hospital.isEmergencyReady },
+          ].map(({ Icon, value, label, filled }, i) => (
+            <div
+              key={label}
+              className="flex flex-col items-center py-3"
+              style={{ borderRight: i < 2 ? `1px solid var(--base-300)` : 'none' }}
+            >
+              <Icon
+                size={13}
+                style={{
+                  color:        filled ? 'var(--error)' : T.accent,
+                  fill:         filled ? 'var(--error)' : 'none',
+                  marginBottom: 4,
+                  opacity:      filled === false ? 0.3 : 1,
+                }}
+                aria-hidden="true"
+              />
+              <span className="text-[13px] font-black leading-none" style={{ color: T.accent }}>{value}</span>
+              <span className="text-[8px] font-black uppercase tracking-widest mt-0.5 opacity-40">{label}</span>
+            </div>
+          ))}
         </div>
 
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <Link
-              href={`/hospitals/${hospital.slug}`}
-              className="flex-grow h-11 rounded-md bg-neutral text-neutral-content font-bold text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-error transition-all duration-300"
-            >
-              Visit Portal <ArrowUpRight size={14} />
-            </Link>
-            <a
-              href={`tel:${hospital.contact?.phone}`}
-              className="w-11 h-11 rounded-md border border-base-300 flex items-center justify-center text-base-content hover:bg-error hover:text-white transition-colors"
-            >
-              <Phone size={18} />
-            </a>
+        {/* Accreditations */}
+        {hospital.accreditations?.length > 0 && (
+          <div className="flex flex-wrap gap-1 mb-4">
+            {hospital.accreditations.slice(0, 3).map(acc => (
+              <span
+                key={acc}
+                className="text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full"
+                style={{ background: T.accentBg, color: T.accent, border: `1px solid ${T.accentBorder}` }}
+              >
+                {acc}
+              </span>
+            ))}
           </div>
+        )}
+
+        {/* CTA footer */}
+        <div className="flex items-center gap-2 mt-auto">
           <Link
             href={`/hospitals/${hospital.slug}`}
-            className="w-full h-10 border border-dashed border-base-300 text-base-content/60 font-bold text-[9px] uppercase tracking-[0.2em] flex items-center justify-center gap-2 hover:border-error hover:text-error transition-all rounded-md"
+            className="flex-1 h-10 rounded-xl font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-1.5 transition-all"
+            style={{
+              background: T.accentGrad,
+              color:      'var(--primary-content)',
+              boxShadow:  `0 4px 14px ${T.accentShadow}`,
+            }}
+            aria-label={`Visit ${hospital.name} portal`}
           >
-            <Info size={14} /> Dispatch Details
+            View Hospital <ArrowUpRight size={13} aria-hidden="true" />
+          </Link>
+
+          {hospital.contact?.phone && (
+            <a
+              href={`tel:${hospital.contact.phone}`}
+              aria-label={`Call ${hospital.name}`}
+              className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 border transition-all hover:opacity-80"
+              style={{
+                border:     `1px solid var(--base-300)`,
+                background: 'var(--base-200)',
+                color:      'var(--base-content)',
+              }}
+            >
+              <Phone size={16} aria-hidden="true" />
+            </a>
+          )}
+
+          <Link
+            href={`/hospitals/${hospital.slug}`}
+            aria-label={`More info about ${hospital.name}`}
+            className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 border transition-all hover:opacity-80"
+            style={{
+              border:     `1px solid ${T.accentBorder}`,
+              background: T.accentBg,
+              color:      T.accent,
+            }}
+          >
+            <Info size={15} aria-hidden="true" />
           </Link>
         </div>
       </div>
@@ -189,42 +308,100 @@ const HospitalCard = ({ hospital, viewMode }) => {
   );
 };
 
-// ─── Filter Sidebar ───────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// SKELETON CARD
+// ─────────────────────────────────────────────────────────────────────────────
+const SkeletonCard = ({ viewMode }) => (
+  <div
+    className="rounded-2xl overflow-hidden flex"
+    style={{
+      flexDirection: viewMode === 'list' ? undefined : 'column',
+      border: '1px solid var(--base-300)',
+      background: 'var(--base-100)',
+    }}
+  >
+    <div
+      className="skeleton flex-shrink-0"
+      style={{
+        width:  viewMode === 'list' ? 240 : '100%',
+        height: viewMode === 'list' ? 220 : 200,
+      }}
+    />
+    <div className="p-5 flex flex-col gap-3 flex-1">
+      <div className="h-3 w-1/3 rounded-lg skeleton" />
+      <div className="h-5 w-3/4 rounded-lg skeleton" />
+      <div className="h-14 rounded-xl skeleton" />
+      <div className="h-10 rounded-xl skeleton mt-auto" />
+    </div>
+  </div>
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FILTER SIDEBAR
+// ─────────────────────────────────────────────────────────────────────────────
 const FilterSidebar = ({ activeFilter, setActiveFilter, erOnly, setErOnly, onClose }) => {
-  const categories = ["All", "Multi-Specialty", "Super-Specialty", "Clinic", "Diagnostic Center", "Government"];
+  const categories = ["All", "Multi-Specialty", "Super-Specialty", "Clinic", "Nursing Home", "Government"];
+
   return (
-    <div className="space-y-8 w-64">
+    <div className="space-y-6 w-56">
       <div>
-        <h3 className="text-[10px] font-bold uppercase tracking-[0.3em] text-base-content/30 mb-5 flex items-center gap-2">
-          <Filter size={14} /> Filter Registry
-        </h3>
-        <div className="flex flex-col gap-1.5">
-          {categories.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => { setActiveFilter(cat); onClose?.(); }}
-              className={`text-left px-4 py-3 rounded-md text-[11px] font-bold uppercase tracking-wider transition-all ${
-                activeFilter === cat
-                  ? "bg-error text-white shadow-lg shadow-error/20"
-                  : "hover:bg-base-200 text-base-content/60"
-              }`}
-            >
-              {cat}
-            </button>
-          ))}
+        <p className="text-[10px] font-black uppercase tracking-[0.3em] opacity-40 mb-4 flex items-center gap-2">
+          <Filter size={12} aria-hidden="true" /> Hospital Type
+        </p>
+        <div className="flex flex-col gap-1">
+          {categories.map((cat) => {
+            const active = activeFilter === cat;
+            return (
+              <button
+                key={cat}
+                onClick={() => { setActiveFilter(cat); onClose?.(); }}
+                className="text-left px-3 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-wide transition-all"
+                style={{
+                  background:  active ? T.accentGrad  : 'transparent',
+                  color:       active ? 'var(--primary-content)' : 'var(--base-content)',
+                  opacity:     active ? 1 : 0.6,
+                  boxShadow:   active ? `0 4px 12px ${T.accentShadow}` : 'none',
+                }}
+                aria-pressed={active}
+              >
+                {cat}
+              </button>
+            );
+          })}
         </div>
       </div>
-      <div className="p-5 border border-base-300 rounded-md bg-base-200/50">
-        <h4 className="text-[10px] font-bold uppercase tracking-widest mb-4 opacity-40">Priority Status</h4>
+
+      {/* Emergency filter */}
+      <div
+        className="p-4 rounded-xl"
+        style={{ border: `1px solid var(--base-300)`, background: 'var(--base-200)' }}
+      >
+        <p className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-3">Priority</p>
         <label className="flex items-center gap-3 cursor-pointer group">
-          <input
-            type="checkbox"
-            checked={erOnly}
-            onChange={(e) => setErOnly(e.target.checked)}
-            className="w-4 h-4 rounded-md border-base-300 text-error focus:ring-error transition-all"
-          />
-          <span className="text-[11px] font-bold uppercase tracking-wide text-base-content/80 group-hover:text-error transition-colors">
-            Emergency Ready
+          <div
+            className="w-5 h-5 rounded-lg flex items-center justify-center border-2 transition-all flex-shrink-0"
+            style={{
+              borderColor: erOnly ? T.accent : 'var(--base-300)',
+              background:  erOnly ? T.accentBgMid : 'transparent',
+            }}
+            onClick={() => setErOnly(p => !p)}
+            role="checkbox"
+            aria-checked={erOnly}
+            tabIndex={0}
+          >
+            {erOnly && (
+              <div
+                className="w-2.5 h-2.5 rounded-sm"
+                style={{ background: T.accent }}
+                aria-hidden="true"
+              />
+            )}
+          </div>
+          <span
+            className="text-[11px] font-black uppercase tracking-wide transition-colors"
+            style={{ color: erOnly ? T.accent : 'var(--base-content)', opacity: erOnly ? 1 : 0.7 }}
+          >
+            Emergency Ready Only
           </span>
         </label>
       </div>
@@ -232,145 +409,129 @@ const FilterSidebar = ({ activeFilter, setActiveFilter, erOnly, setErOnly, onClo
   );
 };
 
-// ─── Location Input with Autocomplete ────────────────────────────────────────
-const LocationInputWithSuggestions = ({ onSelect, onClear, hasValue }) => {
+// ─────────────────────────────────────────────────────────────────────────────
+// LOCATION INPUT WITH AUTOCOMPLETE
+// ─────────────────────────────────────────────────────────────────────────────
+const LocationInput = ({ onSelect, onClear, hasValue }) => {
   const [inputVal,    setInputVal]    = useState("");
   const [suggestions, setSuggestions] = useState([]);
-  const [showDropdown, setShowDropdown] = useState(false);
-  const [sugLoading,  setSugLoading]  = useState(false);
+  const [showDrop,    setShowDrop]    = useState(false);
+  const [loading,     setLoading]     = useState(false);
   const [activeIdx,   setActiveIdx]   = useState(-1);
   const debounceRef = useRef(null);
   const wrapperRef  = useRef(null);
 
-  // Debounced fetch suggestions as user types
   const handleChange = (e) => {
     const val = e.target.value;
     setInputVal(val);
     setActiveIdx(-1);
-
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-
-    if (val.trim().length < 2) {
-      setSuggestions([]);
-      setShowDropdown(false);
-      return;
-    }
-
-    setSugLoading(true);
+    clearTimeout(debounceRef.current);
+    if (val.trim().length < 2) { setSuggestions([]); setShowDrop(false); return; }
+    setLoading(true);
     debounceRef.current = setTimeout(async () => {
       const results = await fetchPlaceSuggestions(val);
       setSuggestions(results);
-      setShowDropdown(results.length > 0);
-      setSugLoading(false);
+      setShowDrop(results.length > 0);
+      setLoading(false);
     }, 300);
   };
 
-  // Select a suggestion
-  const handleSelect = (suggestion) => {
-    setInputVal(suggestion.mainText);
+  const handleSelect = (s) => {
+    setInputVal(s.mainText);
     setSuggestions([]);
-    setShowDropdown(false);
-    onSelect(suggestion.description); // pass full description to geocode
+    setShowDrop(false);
+    onSelect(s.description);
   };
 
-  // Keyboard navigation
   const handleKeyDown = (e) => {
-    if (!showDropdown) {
-      if (e.key === "Enter" && inputVal.trim().length > 2) {
-        onSelect(inputVal.trim());
-      }
+    if (!showDrop) {
+      if (e.key === "Enter" && inputVal.trim().length > 2) onSelect(inputVal.trim());
       return;
     }
-    if (e.key === "ArrowDown") {
+    if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx(i => Math.min(i + 1, suggestions.length - 1)); }
+    else if (e.key === "ArrowUp")  { e.preventDefault(); setActiveIdx(i => Math.max(i - 1, -1)); }
+    else if (e.key === "Enter") {
       e.preventDefault();
-      setActiveIdx((i) => Math.min(i + 1, suggestions.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActiveIdx((i) => Math.max(i - 1, -1));
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (activeIdx >= 0 && suggestions[activeIdx]) {
-        handleSelect(suggestions[activeIdx]);
-      } else if (inputVal.trim().length > 2) {
-        setShowDropdown(false);
-        onSelect(inputVal.trim());
-      }
-    } else if (e.key === "Escape") {
-      setShowDropdown(false);
-    }
+      if (activeIdx >= 0 && suggestions[activeIdx]) handleSelect(suggestions[activeIdx]);
+      else if (inputVal.trim().length > 2) { setShowDrop(false); onSelect(inputVal.trim()); }
+    } else if (e.key === "Escape") setShowDrop(false);
   };
 
-  // Close dropdown on outside click
   useEffect(() => {
-    const handler = (e) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) {
-        setShowDropdown(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    const h = (e) => { if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setShowDrop(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
   }, []);
 
-  const handleClearClick = () => {
-    setInputVal("");
-    setSuggestions([]);
-    setShowDropdown(false);
-    onClear();
-  };
-
   return (
-    <div ref={wrapperRef} className="relative flex-1 min-w-[220px] max-w-sm">
-      {/* Input */}
-      <div className="flex items-center gap-2 h-10 px-4 rounded-md border border-base-300 bg-base-100 focus-within:border-error transition-colors">
-        <MapPin size={14} className="text-base-content/40 shrink-0" />
+    <div ref={wrapperRef} className="relative flex-1 min-w-[200px] max-w-sm">
+      <div
+        className="flex items-center gap-2 h-10 px-4 rounded-xl border transition-colors"
+        style={{
+          background:  'var(--base-100)',
+          border:      `1px solid var(--base-300)`,
+          outline:     'none',
+        }}
+      >
+        <MapPin size={13} style={{ color: T.accent, opacity: 0.6, flexShrink: 0 }} aria-hidden="true" />
         <input
           type="text"
           value={inputVal}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
-          onFocus={() => suggestions.length > 0 && setShowDropdown(true)}
-          placeholder="Enter city, area or place…"
-          className="flex-1 bg-transparent text-xs text-base-content placeholder:text-base-content/30 outline-none font-bold"
+          onFocus={() => suggestions.length > 0 && setShowDrop(true)}
+          placeholder="City, area or landmark…"
+          aria-label="Search by location"
           autoComplete="off"
+          className="flex-1 bg-transparent text-[12px] font-bold outline-none"
+          style={{ color: 'var(--base-content)', fontFamily: 'var(--font-family-poppins)' }}
         />
-        {sugLoading && <Loader2 size={12} className="animate-spin text-error shrink-0" />}
-        {(inputVal || hasValue) && !sugLoading && (
-          <button onClick={handleClearClick} className="text-base-content/30 hover:text-error transition-colors shrink-0">
+        {loading && <Loader2 size={12} className="animate-spin flex-shrink-0" style={{ color: T.accent }} aria-hidden="true" />}
+        {(inputVal || hasValue) && !loading && (
+          <button
+            onClick={() => { setInputVal(""); setSuggestions([]); setShowDrop(false); onClear(); }}
+            aria-label="Clear location"
+            className="flex-shrink-0 transition-opacity hover:opacity-60"
+            style={{ color: 'var(--base-content)', opacity: 0.4 }}
+          >
             <X size={12} />
           </button>
         )}
       </div>
 
-      {/* Suggestions dropdown */}
       <AnimatePresence>
-        {showDropdown && suggestions.length > 0 && (
+        {showDrop && suggestions.length > 0 && (
           <motion.div
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.15 }}
-            className="absolute top-[calc(100%+4px)] left-0 right-0 z-[200] bg-base-100 border border-base-300 rounded-md shadow-xl overflow-hidden"
+            transition={{ duration: 0.14 }}
+            role="listbox"
+            aria-label="Location suggestions"
+            className="absolute top-[calc(100%+6px)] left-0 right-0 z-[200] rounded-2xl shadow-2xl overflow-hidden"
+            style={{ background: 'var(--base-100)', border: '1px solid var(--base-300)' }}
           >
             {suggestions.map((s, idx) => (
               <button
                 key={s.placeId}
+                role="option"
+                aria-selected={activeIdx === idx}
                 onMouseDown={(e) => { e.preventDefault(); handleSelect(s); }}
-                className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-colors border-b border-base-300 last:border-0
-                  ${activeIdx === idx ? "bg-error/10" : "hover:bg-base-200"}`}
+                className="w-full text-left px-4 py-3 flex items-start gap-3 transition-colors border-b last:border-0"
+                style={{
+                  background:  activeIdx === idx ? T.accentBg : 'transparent',
+                  borderColor: 'var(--base-300)',
+                }}
               >
-                <MapPin size={14} className="text-error mt-0.5 shrink-0" />
+                <MapPin size={13} style={{ color: T.accent, marginTop: 2, flexShrink: 0 }} aria-hidden="true" />
                 <div className="min-w-0">
-                  <p className="text-xs font-bold text-base-content truncate">{s.mainText}</p>
+                  <p className="text-[12px] font-black truncate" style={{ color: 'var(--base-content)' }}>{s.mainText}</p>
                   {s.secondaryText && (
-                    <p className="text-[10px] text-base-content/40 truncate mt-0.5">{s.secondaryText}</p>
+                    <p className="text-[10px] truncate mt-0.5" style={{ color: 'var(--base-content)', opacity: 0.4 }}>{s.secondaryText}</p>
                   )}
                 </div>
               </button>
             ))}
-            <div className="px-4 py-2 bg-base-200/50 flex items-center justify-end gap-1">
-              <span className="text-[9px] text-base-content/30 uppercase tracking-widest font-bold">Powered by</span>
-              <span className="text-[9px] font-bold text-base-content/40">Google</span>
-            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -378,63 +539,106 @@ const LocationInputWithSuggestions = ({ onSelect, onClear, hasValue }) => {
   );
 };
 
-// ─── Location Bar ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// LOCATION BAR
+// ─────────────────────────────────────────────────────────────────────────────
 const LocationBar = ({ mode, manualAddress, locationLabel, onUseGPS, onManualSearch, onClear, gpsLoading, gpsError }) => {
+  const isActive = mode === "user" || mode === "nearby";
   return (
-    <div className="flex flex-wrap items-center gap-3 py-4 border-b border-base-300 mb-8">
+    <div
+      className="flex flex-wrap items-center gap-3 py-4 mb-6 border-b"
+      style={{ borderColor: 'var(--base-300)' }}
+    >
       {/* GPS button */}
-      <button
+      <motion.button
+        whileHover={{ scale: 1.02 }}
+        whileTap={{ scale: 0.97 }}
         onClick={onUseGPS}
         disabled={gpsLoading || mode === "user"}
-        className={`flex items-center gap-2 h-10 px-4 rounded-md border text-[11px] font-bold uppercase tracking-wider transition-all outline-none disabled:opacity-50 disabled:cursor-not-allowed
-          ${mode === "nearby" || mode === "user"
-            ? "bg-error text-white border-error shadow-lg shadow-error/20"
-            : "bg-base-100 text-base-content border-base-300 hover:border-error hover:text-error"
-          }`}
+        aria-label={isActive ? "Location active" : "Use my current location"}
+        className="flex items-center gap-2 h-10 px-4 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all disabled:opacity-60"
+        style={{
+          background:  isActive ? T.accentGrad  : 'var(--base-200)',
+          color:       isActive ? 'var(--primary-content)' : 'var(--base-content)',
+          border:      isActive ? 'none' : `1px solid var(--base-300)`,
+          boxShadow:   isActive ? `0 4px 14px ${T.accentShadow}` : 'none',
+        }}
       >
         {gpsLoading
-          ? <Loader2 size={14} className="animate-spin" />
-          : <Navigation size={14} />
+          ? <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+          : <Navigation size={14} aria-hidden="true" />
         }
-        {mode === "user"   ? "Location Active ✓"
-        : mode === "nearby" ? "Near Me ✓"
-        : "Use My Location"}
-      </button>
+        {mode === "user" ? "Location Active ✓" : mode === "nearby" ? "Near Me ✓" : "Use My Location"}
+      </motion.button>
 
-      {/* Address input with autocomplete */}
-      <LocationInputWithSuggestions
-        onSelect={onManualSearch}
-        onClear={onClear}
-        hasValue={mode === "manual" || mode === "manual-near"}
-      />
+      {/* Location search */}
+      <LocationInput onSelect={onManualSearch} onClear={onClear} hasValue={mode === "manual" || mode === "manual-near"} />
 
-      {/* Search button */}
-      <button
-        onClick={() => {}} // search fires on suggestion select or Enter in input
-        className="flex items-center gap-2 h-10 px-4 rounded-md border border-base-300 bg-base-100 text-[11px] font-bold uppercase tracking-wider hover:border-error hover:text-error transition-colors outline-none"
+      {/* Status */}
+      <span
+        className="text-[10px] font-black uppercase tracking-wider opacity-40"
+        aria-live="polite"
+        style={{ color: 'var(--base-content)' }}
       >
-        <Search size={14} /> Search
-      </button>
-
-      {/* Status label */}
-      <span className="text-[10px] font-bold uppercase tracking-wider text-base-content/30">
-        {mode === "user"
-          ? `📍 ${locationLabel || "Your saved location"} · 100 km radius`
-          : mode === "nearby"
-          ? "📍 Current location · 100 km radius"
-          : mode === "manual" || mode === "manual-near"
-          ? `🔍 Near "${manualAddress}" · 100 km radius`
-          : "All hospitals"}
+        {mode === "user"         ? `📍 ${locationLabel || "Saved location"} · 100 km`
+        : mode === "nearby"      ? "📍 Current location · 100 km"
+        : mode === "manual-near" ? `🔍 Near "${manualAddress}" · 100 km`
+        : mode === "manual"      ? `🔍 "${manualAddress}"`
+        : "All hospitals"}
       </span>
 
       {gpsError && (
-        <span className="text-[10px] text-error font-bold">{gpsError}</span>
+        <span className="text-[10px] font-black" style={{ color: 'var(--error)' }} role="alert">
+          {gpsError}
+        </span>
       )}
     </div>
   );
 };
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// TRUST STATS BAR
+// ─────────────────────────────────────────────────────────────────────────────
+const TrustBar = memo(function TrustBar() {
+  const stats = [
+    { label: 'Verified Hospitals', value: '200+',  icon: ShieldCheck },
+    { label: 'Cities Covered',     value: '15+',   icon: MapPin      },
+    { label: 'Total Beds',         value: '5000+', icon: Bed         },
+    { label: 'Avg Rating',         value: '4.7★',  icon: Star        },
+  ];
+  return (
+    <div
+      className="grid grid-cols-2 md:grid-cols-4 border-y mb-8"
+      style={{ borderColor: 'var(--base-300)' }}
+    >
+      {stats.map(({ label, value, icon: Icon }, i) => (
+        <div
+          key={label}
+          className="flex flex-col items-center justify-center py-5 gap-1 text-center"
+          style={{ borderRight: i < stats.length - 1 ? `1px solid var(--base-300)` : 'none' }}
+        >
+          <div
+            className="w-8 h-8 rounded-xl flex items-center justify-center mb-1"
+            style={{ background: T.accentBg }}
+            aria-hidden="true"
+          >
+            <Icon size={14} style={{ color: T.accent }} />
+          </div>
+          <span className="text-[17px] font-black leading-none" style={{ color: T.accent }}>{value}</span>
+          <span className="text-[9px] font-black uppercase tracking-widest opacity-40" style={{ color: 'var(--base-content)' }}>
+            {label}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+});
+
+import { memo } from "react";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN PAGE
+// ─────────────────────────────────────────────────────────────────────────────
 const HospitalsPage = () => {
   const dispatch = useDispatch();
 
@@ -449,7 +653,6 @@ const HospitalsPage = () => {
   const [viewMode,      setViewMode]      = useState("grid");
   const [erOnly,        setErOnly]        = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-
   const [mode,          setMode]          = useState("all");
   const [manualAddress, setManualAddress] = useState("");
   const [locationLabel, setLocationLabel] = useState("");
@@ -460,14 +663,13 @@ const HospitalsPage = () => {
   const hospitals    = isNearbyMode ? nearbyHospitals : allHospitals;
   const loading      = isNearbyMode ? loadingNearby   : loadingAll;
 
-  // ── Initial fetch ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (user?.location?.coordinates) {
-      const [lng, lat] = user.location.coordinates; // GeoJSON: [lng, lat]
+      const [lng, lat] = user.location.coordinates;
       if (lng !== 0 || lat !== 0) {
         dispatch(fetchNearbyHospitals({ lat, lng, limit: 20 }));
         setMode("user");
-        setLocationLabel(user.lastKnownAddress || "your saved location");
+        setLocationLabel(user.lastKnownAddress || "Your location");
         return;
       }
     }
@@ -476,17 +678,9 @@ const HospitalsPage = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?._id]);
 
-  // ── GPS ───────────────────────────────────────────────────────────────────
-  // CoreLocation kCLErrorLocationUnknown:
-  //   This is a transient error — the device temporarily can't determine location.
-  //   We handle it by showing a clear message and letting the user enter manually.
-  //   We do NOT retry automatically to avoid spamming the GPS stack.
   const handleUseGPS = useCallback(() => {
-    if (mode === "user") return; // already have saved coords
-    if (!navigator.geolocation) {
-      setGpsError("Geolocation not supported. Enter your area below.");
-      return;
-    }
+    if (mode === "user") return;
+    if (!navigator.geolocation) { setGpsError("Geolocation not supported. Enter your area below."); return; }
     setGpsLoading(true);
     setGpsError("");
     navigator.geolocation.getCurrentPosition(
@@ -498,28 +692,14 @@ const HospitalsPage = () => {
       },
       (err) => {
         setGpsLoading(false);
-        // err.code 1 = PERMISSION_DENIED
-        // err.code 2 = POSITION_UNAVAILABLE (kCLErrorLocationUnknown maps to this)
-        // err.code 3 = TIMEOUT
-        if (err.code === 1) {
-          setGpsError("Location permission denied. Enter your area manually.");
-        } else if (err.code === 2) {
-          // kCLErrorLocationUnknown — device can't determine location right now
-          // Silently fallback; don't crash, just prompt manual entry
-          setGpsError("Device couldn't determine location. Enter your area manually.");
-        } else {
-          setGpsError("Location request timed out. Enter your area manually.");
-        }
+        if (err.code === 1) setGpsError("Permission denied. Enter your area manually.");
+        else if (err.code === 2) setGpsError("Device can't determine location. Enter manually.");
+        else setGpsError("Location timed out. Enter your area manually.");
       },
-      {
-        timeout:            8000,
-        maximumAge:         60000,
-        enableHighAccuracy: false, // false avoids GPS chip on mobile = fewer errors
-      }
+      { timeout: 8000, maximumAge: 60000, enableHighAccuracy: false }
     );
   }, [dispatch, mode]);
 
-  // ── Manual / Autocomplete search ──────────────────────────────────────────
   const handleManualSearch = useCallback(async (address) => {
     setGpsError("");
     const coords = await geocodeAddress(address);
@@ -527,14 +707,12 @@ const HospitalsPage = () => {
       dispatch(fetchNearbyHospitals({ lat: coords.lat, lng: coords.lng, limit: 20 }));
       setMode("manual-near");
     } else {
-      // Geocoding failed → fall back to city text filter on all-hospitals
       dispatch(fetchAllHospitals({ city: address, limit: 20 }));
       setMode("manual");
     }
     setManualAddress(address);
   }, [dispatch]);
 
-  // ── Clear ─────────────────────────────────────────────────────────────────
   const handleClear = useCallback(() => {
     setGpsError("");
     setManualAddress("");
@@ -550,15 +728,12 @@ const HospitalsPage = () => {
     setMode("all");
   }, [dispatch, user, allHospitals]);
 
-  // ── Client-side filter ────────────────────────────────────────────────────
   const filteredHospitals = useMemo(() => {
     if (!hospitals?.length) return [];
     return hospitals.filter((h) => {
-      const matchesSearch =
-        h.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        h.address?.city?.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesSearch   = h.name?.toLowerCase().includes(searchTerm.toLowerCase()) || h.address?.city?.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesCategory = activeFilter === "All" || h.hospitalType === activeFilter;
-      const matchesER = erOnly ? h.isEmergencyReady === true : true;
+      const matchesER       = erOnly ? h.isEmergencyReady === true : true;
       return matchesSearch && matchesCategory && matchesER;
     });
   }, [hospitals, searchTerm, activeFilter, erOnly]);
@@ -566,25 +741,38 @@ const HospitalsPage = () => {
   return (
     <Container className="mt-4">
       <Banner position="Home_Top" />
-      <main className="min-h-screen bg-base-100">
+      <main className="min-h-screen" style={{ background: 'var(--base-100)' }}>
 
-        {/* Mobile sidebar overlay */}
+        {/* ── MOBILE SIDEBAR OVERLAY ────────────────────────────────── */}
         <AnimatePresence>
           {isSidebarOpen && (
             <>
               <motion.div
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 onClick={() => setIsSidebarOpen(false)}
-                className="fixed inset-0 bg-base-content/60 backdrop-blur-sm z-[100] lg:hidden"
+                className="fixed inset-0 z-[100] lg:hidden"
+                style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }}
               />
               <motion.div
                 initial={{ x: "-100%" }} animate={{ x: 0 }} exit={{ x: "-100%" }}
-                className="fixed left-0 top-0 bottom-0 w-[300px] bg-base-100 z-[101] p-6 lg:hidden shadow-2xl border-r border-base-300"
+                transition={{ type: 'spring', damping: 28, stiffness: 240 }}
+                className="fixed left-0 top-0 bottom-0 w-[280px] z-[101] p-6 shadow-2xl lg:hidden"
+                style={{ background: 'var(--base-100)', borderRight: '1px solid var(--base-300)' }}
               >
-                <div className="flex justify-between items-center mb-8">
-                  <span className="font-bold text-xs uppercase tracking-[0.3em] opacity-40">Navigation</span>
-                  <button onClick={() => setIsSidebarOpen(false)} className="p-2 bg-base-200 rounded-md text-error">
-                    <X size={20} />
+                <div className="flex items-center justify-between mb-8">
+                  <span
+                    className="text-[10px] font-black uppercase tracking-[0.3em] opacity-40"
+                    style={{ color: 'var(--base-content)' }}
+                  >
+                    Filters
+                  </span>
+                  <button
+                    onClick={() => setIsSidebarOpen(false)}
+                    aria-label="Close filter sidebar"
+                    className="w-8 h-8 rounded-xl flex items-center justify-center transition-colors hover:opacity-70"
+                    style={{ background: 'var(--base-200)', color: 'var(--base-content)' }}
+                  >
+                    <X size={16} />
                   </button>
                 </div>
                 <FilterSidebar
@@ -597,148 +785,244 @@ const HospitalsPage = () => {
           )}
         </AnimatePresence>
 
-        {/* Page header */}
-        <header className="py-6 border-b border-base-300 bg-base-100 relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-96 h-96 bg-error/5 rounded-full -mr-48 -mt-48 blur-3xl pointer-events-none" />
-          <div className="container-custom relative z-10">
-            <div className="flex flex-col md:flex-row md:items-end justify-between gap-10">
-              <div className="max-w-2xl">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="w-8 h-8 rounded-md bg-error/10 flex items-center justify-center text-error">
-                    <Activity size={18} />
-                  </div>
-                  <span className="text-[10px] font-bold uppercase tracking-[0.4em] text-error">Hospitals Registry</span>
+        {/* ── HERO ──────────────────────────────────────────────────── */}
+        <section
+          className="relative overflow-hidden py-10 md:py-14"
+          style={{ background: `linear-gradient(180deg, color-mix(in srgb, var(--primary) 5%, transparent) 0%, var(--base-100) 100%)` }}
+        >
+          {/* Decorative blob */}
+          <div
+            className="absolute -top-24 -right-24 w-80 h-80 rounded-full pointer-events-none"
+            style={{ background: 'color-mix(in srgb, var(--secondary) 7%, transparent)', filter: 'blur(48px)' }}
+            aria-hidden="true"
+          />
+
+          <Container className="relative z-10">
+            <div className="flex flex-col md:flex-row md:items-end gap-8 md:gap-12">
+              {/* Left: heading */}
+              <div className="flex-1 max-w-xl">
+                <div
+                  className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest mb-5 border"
+                  style={{ background: T.accentBg, color: T.accent, borderColor: T.accentBorder }}
+                  aria-hidden="true"
+                >
+                  <Building2 size={11} /> Hospital Registry
                 </div>
-                <h1 className="text-4xl md:text-6xl font-bold tracking-tighter text-base-content mb-4 leading-none uppercase">
-                  Find a <span className="text-error">Hospital</span>
+
+                <h1
+                  className="text-3xl md:text-5xl font-black tracking-tight leading-tight mb-4"
+                  style={{ color: 'var(--base-content)' }}
+                >
+                  Find a{' '}
+                  <span
+                    style={{
+                      background:           T.accentGrad,
+                      WebkitBackgroundClip: 'text',
+                      WebkitTextFillColor:  'transparent',
+                      backgroundClip:       'text',
+                    }}
+                  >
+                    Hospital
+                  </span>
                 </h1>
-                <p className="text-base-content/50 text-sm md:text-lg font-medium max-w-lg leading-relaxed">
-                  Connect with verified healthcare facilities, specialized surgical centers, and diagnostic nodes across the network.
+
+                <p
+                  className="text-sm leading-relaxed max-w-md"
+                  style={{ color: 'var(--base-content)', opacity: 0.55 }}
+                >
+                  Verified healthcare facilities, surgical centers, and diagnostic hubs across the network. Find emergency-ready hospitals near you.
                 </p>
               </div>
 
-              <div className="w-full max-w-lg relative group">
-                <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-base-content/30 group-focus-within:text-error transition-colors" size={20} />
-                <input
-                  type="text"
-                  placeholder="Search facility name or city..."
-                  className="w-full pl-14 pr-6 py-5 bg-base-200 border border-base-300 rounded-md focus:bg-base-100 focus:border-error outline-none text-sm font-bold transition-all shadow-sm"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
+              {/* Right: search */}
+              <div className="w-full max-w-md">
+                <div
+                  className="relative flex items-center rounded-2xl overflow-hidden"
+                  style={{ border: `2px solid ${T.accentBorder}`, background: 'var(--base-100)', boxShadow: `0 8px 32px ${T.accentShadow}` }}
+                >
+                  <Search
+                    className="absolute left-4"
+                    size={18}
+                    style={{ color: T.accent, opacity: 0.6 }}
+                    aria-hidden="true"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Search hospital name or city…"
+                    aria-label="Search hospitals"
+                    className="w-full pl-12 pr-4 py-4 bg-transparent text-sm font-bold outline-none"
+                    style={{ color: 'var(--base-content)', fontFamily: 'var(--font-family-poppins)' }}
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                  {searchTerm && (
+                    <button
+                      onClick={() => setSearchTerm("")}
+                      aria-label="Clear search"
+                      className="absolute right-4 opacity-40 hover:opacity-70 transition-opacity"
+                      style={{ color: 'var(--base-content)' }}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        </header>
+          </Container>
+        </section>
 
-        <div className="container-custom py-10">
+        {/* ── TRUST BAR ─────────────────────────────────────────────── */}
+        <TrustBar />
+
+        {/* ── MAIN CONTENT ──────────────────────────────────────────── */}
+        <Container className="py-6">
+
+          {/* Mobile filter button */}
           <div className="flex lg:hidden mb-6">
-            <button
+            <motion.button
+              whileTap={{ scale: 0.97 }}
               onClick={() => setIsSidebarOpen(true)}
-              className="w-full flex items-center justify-center gap-3 px-4 py-4 bg-neutral text-neutral-content rounded-md font-bold text-[11px] uppercase tracking-[0.2em] shadow-xl hover:bg-error transition-all"
+              className="flex-1 flex items-center justify-center gap-2.5 py-3.5 rounded-xl font-black text-[11px] uppercase tracking-widest"
+              style={{
+                background:  T.accentGrad,
+                color:       'var(--primary-content)',
+                boxShadow:   `0 4px 14px ${T.accentShadow}`,
+              }}
+              aria-label="Open filter sidebar"
             >
-              <Filter size={18} /> Browse Categories
-            </button>
+              <Filter size={16} aria-hidden="true" /> Browse Categories
+            </motion.button>
           </div>
 
-          <div className="flex flex-col w-full lg:flex-row gap-10">
-            <aside className="hidden lg:block shrink-0">
-              <div className="sticky top-32">
-                <FilterSidebar
-                  activeFilter={activeFilter} setActiveFilter={setActiveFilter}
-                  erOnly={erOnly} setErOnly={setErOnly}
-                />
-              </div>
+          <div className="flex gap-8">
+            {/* Desktop sidebar */}
+            <aside className="hidden lg:block flex-shrink-0 sticky top-28 self-start" aria-label="Hospital filters">
+              <FilterSidebar
+                activeFilter={activeFilter} setActiveFilter={setActiveFilter}
+                erOnly={erOnly} setErOnly={setErOnly}
+              />
             </aside>
 
-            <section className="flex-grow">
+            {/* Main section */}
+            <section className="flex-1 min-w-0">
               <LocationBar
-                mode={mode}
-                manualAddress={manualAddress}
-                locationLabel={locationLabel}
-                onUseGPS={handleUseGPS}
-                onManualSearch={handleManualSearch}
-                onClear={handleClear}
-                gpsLoading={gpsLoading}
-                gpsError={gpsError}
+                mode={mode} manualAddress={manualAddress} locationLabel={locationLabel}
+                onUseGPS={handleUseGPS} onManualSearch={handleManualSearch} onClear={handleClear}
+                gpsLoading={gpsLoading} gpsError={gpsError}
               />
 
-              <div className="flex justify-between items-center mb-10 pb-5 border-b border-base-300">
+              {/* Results header */}
+              <div
+                className="flex items-center justify-between mb-6 pb-4 border-b"
+                style={{ borderColor: 'var(--base-300)' }}
+              >
                 <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-error animate-pulse" />
-                  <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-base-content/40">
-                    Registry:{" "}
-                    <span className="text-base-content">
-                      {filteredHospitals.length} Hospital{filteredHospitals.length !== 1 ? "s" : ""} Online
-                    </span>
+                  <span
+                    className="w-2 h-2 rounded-full animate-pulse"
+                    style={{ background: T.accent }}
+                    aria-hidden="true"
+                  />
+                  <p
+                    className="text-[11px] font-black uppercase tracking-wider"
+                    style={{ color: 'var(--base-content)', opacity: 0.5 }}
+                    aria-live="polite"
+                  >
+                    <span style={{ color: T.accent, opacity: 1 }}>{filteredHospitals.length}</span>
+                    {' '}Hospital{filteredHospitals.length !== 1 ? "s" : ""} found
                   </p>
                 </div>
-                <div className="flex bg-base-200 p-1 rounded-md border border-base-300 shadow-inner">
-                  <button
-                    onClick={() => setViewMode("grid")}
-                    className={`p-2 rounded-md transition-all ${viewMode === "grid" ? "bg-error text-white shadow-md" : "text-base-content/30 hover:text-error"}`}
-                  >
-                    <LayoutGrid size={18} />
-                  </button>
-                  <button
-                    onClick={() => setViewMode("list")}
-                    className={`p-2 rounded-md transition-all ${viewMode === "list" ? "bg-error text-white shadow-md" : "text-base-content/30 hover:text-error"}`}
-                  >
-                    <List size={18} />
-                  </button>
+
+                {/* View toggle */}
+                <div
+                  className="flex p-1 rounded-xl border"
+                  style={{ background: 'var(--base-200)', borderColor: 'var(--base-300)' }}
+                  role="group"
+                  aria-label="View mode"
+                >
+                  {[
+                    { mode: "grid", Icon: LayoutGrid, label: "Grid view" },
+                    { mode: "list", Icon: List,       label: "List view" },
+                  ].map(({ mode: m, Icon, label }) => (
+                    <button
+                      key={m}
+                      onClick={() => setViewMode(m)}
+                      aria-label={label}
+                      aria-pressed={viewMode === m}
+                      className="p-2 rounded-lg transition-all"
+                      style={{
+                        background: viewMode === m ? T.accentGrad : 'transparent',
+                        color:      viewMode === m ? 'var(--primary-content)' : 'var(--base-content)',
+                        opacity:    viewMode === m ? 1 : 0.4,
+                      }}
+                    >
+                      <Icon size={16} aria-hidden="true" />
+                    </button>
+                  ))}
                 </div>
               </div>
 
+              {/* Grid / List */}
               {loading ? (
-                <div className={`grid gap-8 ${viewMode === "grid" ? "grid-cols-1 md:grid-cols-2 lg:grid-cols-3" : "grid-cols-1"}`}>
-                  {[...Array(6)].map((_, i) => (
-                    <div key={i} className="h-[500px] rounded-md bg-base-200 animate-pulse border border-base-300" />
-                  ))}
+                <div className={`grid gap-5 ${viewMode === "grid" ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3" : "grid-cols-1"}`}>
+                  {Array.from({ length: 6 }).map((_, i) => <SkeletonCard key={i} viewMode={viewMode} />)}
                 </div>
               ) : (
-                <motion.div
-                  layout
-                  className={`grid gap-6 md:gap-8 ${viewMode === "grid" ? "grid-cols-1 md:grid-cols-2 lg:grid-cols-3" : "grid-cols-1"}`}
-                >
-                  <AnimatePresence mode="popLayout">
+                <AnimatePresence mode="popLayout">
+                  <motion.div
+                    layout
+                    className={`grid gap-5 ${viewMode === "grid" ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3" : "grid-cols-1"}`}
+                  >
                     {filteredHospitals.map((hospital) => (
                       <motion.div
                         key={hospital._id}
                         layout
                         initial={{ opacity: 0, scale: 0.98 }}
                         animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.95 }}
-                        transition={{ duration: 0.4 }}
+                        exit={{ opacity: 0, scale: 0.96 }}
+                        transition={{ duration: 0.3 }}
                       >
                         <HospitalCard hospital={hospital} viewMode={viewMode} />
                       </motion.div>
                     ))}
-                  </AnimatePresence>
-                </motion.div>
+                  </motion.div>
+                </AnimatePresence>
               )}
 
+              {/* Empty state */}
               {!loading && filteredHospitals.length === 0 && (
-                <div className="py-24 text-center border border-dashed border-base-300 rounded-md bg-base-200/30">
-                  <div className="bg-error/10 w-20 h-20 rounded-md flex items-center justify-center mx-auto mb-6 text-error">
-                    <X size={40} />
+                <motion.div
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex flex-col items-center justify-center py-20 text-center rounded-2xl border border-dashed"
+                  style={{ borderColor: 'var(--base-300)', background: 'var(--base-200)' }}
+                >
+                  <div
+                    className="w-20 h-20 rounded-3xl flex items-center justify-center mb-5 mx-auto"
+                    style={{ background: T.accentBg }}
+                    aria-hidden="true"
+                  >
+                    <Building2 size={32} style={{ color: T.accent, opacity: 0.6 }} />
                   </div>
-                  <h3 className="text-2xl font-bold uppercase tracking-tighter mb-2">Zero Matches Found</h3>
-                  <p className="text-sm text-base-content/50 mb-8 font-medium">
+                  <h3 className="font-black text-lg mb-2" style={{ color: 'var(--base-content)' }}>
+                    No Hospitals Found
+                  </h3>
+                  <p className="text-sm mb-6 max-w-xs" style={{ color: 'var(--base-content)', opacity: 0.5 }}>
                     {isNearbyMode
                       ? "No hospitals found within 100 km of your location."
-                      : "No medical facilities match your current filters."}
+                      : "No facilities match your current filters."}
                   </p>
                   <button
                     onClick={() => { setSearchTerm(""); setActiveFilter("All"); setErOnly(false); handleClear(); }}
-                    className="px-8 py-4 bg-error text-white text-[11px] font-bold uppercase tracking-[0.2em] rounded-md hover:bg-neutral transition-all shadow-lg shadow-error/20"
+                    className="px-6 py-2.5 rounded-xl font-black text-sm"
+                    style={{ background: T.accentGrad, color: 'var(--primary-content)' }}
                   >
-                    Reset Registry Filters
+                    Reset All Filters
                   </button>
-                </div>
+                </motion.div>
               )}
             </section>
           </div>
-        </div>
+        </Container>
       </main>
     </Container>
   );

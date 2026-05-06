@@ -1,396 +1,327 @@
 "use client";
 
-/**
- * Services.jsx — Likeson.in Services Grid
- * Corrected: now links to story routes, expanded to 7 services matching
- * the project document and StoryPage routes.
- * Performance: React.memo, useCallback, framer-motion only for hover spotlight.
- */
-
-import React, { useCallback, memo } from "react";
+import React, { useCallback, memo, useRef, useState } from "react";
 import Link from "next/link";
+import { motion } from "framer-motion";
 import {
-  Stethoscope,
-  Ambulance,
-  HeartHandshake,
-  Pill,
-  Microscope,
-  Zap,
-  Activity,
-  CheckCircle2,
-  ChevronRight,
+  Stethoscope, Ambulance, HeartHandshake, Pill,
+  Microscope, Zap, Activity, CheckCircle2,
+  ArrowUpRight, ChevronRight, Sparkles,
 } from "lucide-react";
 
-// Import routes from StoryPage — single source of truth.
-// Adjust this import path to match your project structure.
-// import { SERVICE_ROUTES } from "@/app/(pages)/story/StoryPage";
+const BOOK = (type) => `/book-appointment?type=${type}`;
+const HOW_IT_WORKS = "/how-it-works";
 
-// ─── Route Constants (mirrors StoryPage.SERVICE_ROUTES) ───────────────────────
-const SERVICE_ROUTES = {
-  fullCareRide: "/services/full-care-ride",
-  doctorConsultation: "/services/doctor-consultation",
-  doctorOnline: "/services/doctor-online",
-  physiotherapist: "/services/physiotherapist",
-  careAssistant: "/services/care-assistant",
-  diagnostics: "/services/diagnostics",
-  pharmacy: "/services/pharmacy",
-  transport: "/services/transport",
-  followUp: "/services/follow-up",
-  bloodBank: "/services/blood-bank",
-  storyPage: "/how-it-works",   // ← full StoryPage route
-};
-
-// ─── Services Data ─────────────────────────────────────────────────────────────
-// 7 services matching the project DPR and mind-map exactly.
 const SERVICES_DATA = [
   {
-    id: "full-care-ride",
-    title: "Full Care Ride",
-    description:
-      "Complete door-to-hospital-and-back experience with a verified care assistant, GPS-tracked vehicle, and 13-step care journey.",
-    icon: Ambulance,
-    href: SERVICE_ROUTES.fullCareRide,
-    storyHref: `${SERVICE_ROUTES.storyPage}#full-care-ride`,
-    cssVar: "--warning",
-    styleMap: {
-      bg: "bg-warning/15",
-      text: "text-warning",
-      hoverBorder: "group-hover:border-warning/50",
-      hoverText: "group-hover:text-warning",
-    },
-    features: [
-      "13-Step Care Journey",
-      "Live GPS Vehicle Tracking",
-      "Care Assistant Included",
-      "Medicines Collected En Route",
-      "Safe Return Confirmation",
-    ],
+    id: "full_care_ride", title: "Full Care Ride",
+    tagline: "Door-to-door with a dedicated care assistant",
+    description: "13-step care journey — verified assistant, GPS-tracked vehicle, medicines collected en route, safe return confirmed.",
+    icon: Ambulance, href: BOOK("full_care_ride"), storyHref: `${HOW_IT_WORKS}#full-care-ride`,
+    palette: { glow: "rgba(249,115,22,0.32)", border: "rgba(249,115,22,0.5)", text: "#f97316", light: "rgba(249,115,22,0.10)" },
     badge: "Most Popular",
+    features: ["13-Step Care Journey", "Live GPS Tracking", "En-Route Pharmacy", "Safe Return Confirmed"],
   },
   {
-    id: "doctor-consultation",
-    title: "Doctor Consultations",
-    description:
-      "Connect with board-certified specialists for in-person hospital visits, home visits, or scheduled clinic appointments.",
-    icon: Stethoscope,
-    href: SERVICE_ROUTES.doctorConsultation,
-    storyHref: `${SERVICE_ROUTES.storyPage}#doctor-consultation`,
-    cssVar: "--info",
-    styleMap: {
-      bg: "bg-info/15",
-      text: "text-info",
-      hoverBorder: "group-hover:border-info/50",
-      hoverText: "group-hover:text-info",
-    },
-    features: [
-      "In-Person & Home Visits",
-      "Choose Specialization & Hospital",
-      "Digital Prescription Management",
-      "Specialist Referrals",
-      "Follow-up Care Tracking",
-    ],
+    id: "doctor_consultation", title: "Doctor Consultation",
+    tagline: "In-person visit at hospital or clinic",
+    description: "Book board-certified specialists for in-person visits, home visits, or scheduled clinic appointments.",
+    icon: Stethoscope, href: BOOK("doctor_consultation"), storyHref: `${HOW_IT_WORKS}#doctor-consultation`,
+    palette: { glow: "rgba(14,165,233,0.32)", border: "rgba(14,165,233,0.5)", text: "#0ea5e9", light: "rgba(14,165,233,0.10)" },
+    features: ["Choose Hospital & Doctor", "In-Person & Home Visits", "Digital Prescriptions", "Follow-Up Tracking"],
   },
   {
-    id: "doctor-online",
-    title: "Online Consultation",
-    description:
-      "Video or audio appointments with qualified doctors — ideal for NRIs managing parents remotely, follow-ups, and chronic care.",
-    icon: Zap,
-    href: SERVICE_ROUTES.doctorOnline,
-    storyHref: `${SERVICE_ROUTES.storyPage}#doctor-online`,
-    cssVar: "--primary",
-    styleMap: {
-      bg: "bg-primary/15",
-      text: "text-primary",
-      hoverBorder: "group-hover:border-primary/50",
-      hoverText: "group-hover:text-primary",
-    },
-    features: [
-      "24/7 Video & Audio Calls",
-      "Upload Patient History",
-      "Likeson Chatbot Link",
-      "NRI-Friendly Scheduling",
-      "Instant Booking Confirmation",
-    ],
+    id: "doctor_online", title: "Online Consultation",
+    tagline: "Video call with your doctor from anywhere",
+    description: "Video or audio appointments — ideal for NRIs managing parents remotely, follow-ups, and chronic care.",
+    icon: Zap, href: BOOK("doctor_online"), storyHref: `${HOW_IT_WORKS}#doctor-online`,
+    palette: { glow: "rgba(139,92,246,0.32)", border: "rgba(139,92,246,0.5)", text: "#8b5cf6", light: "rgba(139,92,246,0.10)" },
+    badge: "NRI Friendly",
+    features: ["24/7 Video & Audio", "Upload Patient History", "Instant Confirmation", "NRI-Friendly Scheduling"],
   },
   {
-    id: "physiotherapist",
-    title: "Physiotherapist",
-    description:
-      "Certified physiotherapy sessions at the clinic or in the comfort of your home — ideal for post-surgical recovery and mobility support.",
-    icon: Activity,
-    href: SERVICE_ROUTES.physiotherapist,
-    storyHref: `${SERVICE_ROUTES.storyPage}#physiotherapist`,
-    cssVar: "--error",
-    styleMap: {
-      bg: "bg-error/15",
-      text: "text-error",
-      hoverBorder: "group-hover:border-error/50",
-      hoverText: "group-hover:text-error",
-    },
-    features: [
-      "Clinic or Home Visit",
-      "Certified Physiotherapists",
-      "Post-Surgical Recovery",
-      "Mobility & Pain Management",
-      "Automated Follow-up Reminders",
-    ],
+    id: "physiotherapist", title: "Physiotherapy",
+    tagline: "Clinic or home session by a certified therapist",
+    description: "Post-surgical recovery, mobility support, chronic pain — certified physio sessions at clinic or your home.",
+    icon: Activity, href: BOOK("physiotherapist"), storyHref: `${HOW_IT_WORKS}#physiotherapist`,
+    palette: { glow: "rgba(239,68,68,0.32)", border: "rgba(239,68,68,0.5)", text: "#ef4444", light: "rgba(239,68,68,0.10)" },
+    features: ["Certified Physiotherapists", "Clinic or Home Visit", "Post-Surgery Recovery", "Auto Follow-Up Reminders"],
   },
   {
-    id: "care-assistant",
-    title: "Care Assistants",
-    description:
-      "Background-verified professionals who escort patients, manage queues, handle billing, and ensure safe return — so no one faces a hospital alone.",
-    icon: HeartHandshake,
-    href: SERVICE_ROUTES.careAssistant,
-    storyHref: `${SERVICE_ROUTES.storyPage}#care-assistant`,
-    cssVar: "--success",
-    styleMap: {
-      bg: "bg-success/15",
-      text: "text-success",
-      hoverBorder: "group-hover:border-success/50",
-      hoverText: "group-hover:text-success",
-    },
-    features: [
-      "Hospital Queue Management",
-      "Billing & Admin Assistance",
-      "Elderly Companionship",
-      "Post-Surgical Support",
-      "Medication Reminders",
-    ],
+    id: "care_assistant", title: "Care Assistant",
+    tagline: "Background-verified professional at your side",
+    description: "Verified care assistants who escort patients, manage queues, handle billing — so no one faces a hospital alone.",
+    icon: HeartHandshake, href: BOOK("care_assistant"), storyHref: `${HOW_IT_WORKS}#care-assistant`,
+    palette: { glow: "rgba(16,185,129,0.32)", border: "rgba(16,185,129,0.5)", text: "#10b981", light: "rgba(16,185,129,0.10)" },
+    features: ["Queue Management", "Billing Assistance", "Elderly Companionship", "Medication Reminders"],
   },
   {
-    id: "diagnostics",
-    title: "Diagnostic Services",
-    description:
-      "NABL-accredited lab tests with home sample collection and digital reports delivered straight to your patient dashboard.",
-    icon: Microscope,
-    href: SERVICE_ROUTES.diagnostics,
-    storyHref: `${SERVICE_ROUTES.storyPage}#diagnostics`,
-    cssVar: "--secondary",
-    styleMap: {
-      bg: "bg-secondary/15",
-      text: "text-secondary",
-      hoverBorder: "group-hover:border-secondary/50",
-      hoverText: "group-hover:text-secondary",
-    },
-    features: [
-      "NABL Accredited Partners",
-      "Home Sample Collection",
-      "Fast Digital Reports (6–48hr)",
-      "Full Body Checkup Packages",
-      "Physician Report Review Add-on",
-    ],
+    id: "diagnostic_home", title: "Home Diagnostics",
+    tagline: "Lab technician at your doorstep",
+    description: "NABL-accredited lab tests with home sample collection. Digital reports delivered to your dashboard in 6-48 hrs.",
+    icon: Microscope, href: BOOK("diagnostic_home"), storyHref: `${HOW_IT_WORKS}#diagnostics`,
+    palette: { glow: "rgba(6,182,212,0.32)", border: "rgba(6,182,212,0.5)", text: "#06b6d4", light: "rgba(6,182,212,0.10)" },
+    badge: "Home Visit",
+    features: ["NABL Accredited Labs", "Home Sample Collection", "Reports in 6-48 hrs", "Full Body Packages"],
   },
   {
-    id: "pharmacy",
-    title: "Pharmacy Delivery",
-    description:
-      "Verified medication delivery with strict cold-chain maintenance — including auto-refill plans for chronic patients.",
-    icon: Pill,
-    href: SERVICE_ROUTES.pharmacy,
-    storyHref: `${SERVICE_ROUTES.storyPage}#pharmacy`,
-    cssVar: "--warning",
-    styleMap: {
-      bg: "bg-warning/15",
-      text: "text-warning",
-      hoverBorder: "group-hover:border-warning/50",
-      hoverText: "group-hover:text-warning",
-    },
-    features: [
-      "Express 2-Hour Delivery",
-      "Cold-Chain Management",
-      "Chronic Medicine Auto-Refill",
-      "Authenticity Guarantee",
-      "Prescription Digitization",
-    ],
+    id: "pharmacy", title: "Pharmacy Delivery",
+    tagline: "Verified medicines, delivered fast",
+    description: "Express delivery with cold-chain maintenance — including auto-refill plans for chronic patients.",
+    icon: Pill, href: BOOK("pharmacy"), storyHref: `${HOW_IT_WORKS}#pharmacy`,
+    palette: { glow: "rgba(245,158,11,0.32)", border: "rgba(245,158,11,0.5)", text: "#f59e0b", light: "rgba(245,158,11,0.10)" },
+    features: ["2-Hour Express Delivery", "Cold-Chain Maintained", "Auto-Refill Chronic", "Prescription Digitization"],
   },
 ];
 
-// ─── Background Component ──────────────────────────────────────────────────────
-const AuroraBackground = memo(() => (
-  <div
-    className="absolute inset-0 pointer-events-none z-0 overflow-hidden bg-base-100"
-    aria-hidden="true"
-  >
-    <div className="absolute top-[-10%] right-[-10%] w-[600px] h-[600px] bg-primary/[0.06] rounded-full blur-[120px]" />
-    <div className="absolute bottom-[-10%] left-[-10%] w-[500px] h-[500px] bg-secondary/[0.06] rounded-full blur-[100px]" />
+const SpotlightCard = memo(({ service, index }) => {
+  const Icon = service.icon;
+  const cardRef = useRef(null);
+  const [hovered, setHovered] = useState(false);
+
+  // Spotlight only - removed tilt calculations
+  const handleMouseMove = useCallback((e) => {
+    const el = cardRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    el.style.setProperty("--spot-x", x + "px");
+    el.style.setProperty("--spot-y", y + "px");
+  }, []);
+
+  const handleMouseEnter = useCallback(() => setHovered(true), []);
+  const handleMouseLeave = useCallback(() => setHovered(false), []);
+
+  const { palette } = service;
+
+  return (
+    <motion.li
+      ref={cardRef}
+      onMouseMove={handleMouseMove}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      initial={{ opacity: 0, y: 40 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: "-60px" }}
+      transition={{ duration: 0.55, delay: index * 0.08, ease: [0.22, 1, 0.36, 1] }}
+      // Card remains static (scale only), no rotateX or rotateY
+      animate={{ scale: hovered ? 1.015 : 1 }}
+      style={{ listStyle: "none", "--spot-x": "50%", "--spot-y": "50%" }}
+      className="relative rounded-2xl will-change-transform"
+      aria-labelledby={"svc-title-" + service.id}
+    >
+      {/* Glow border */}
+      <motion.div
+        className="absolute inset-0 rounded-2xl pointer-events-none"
+        animate={{
+          boxShadow: hovered
+            ? "0 0 0 1.5px " + palette.border + ", 0 20px 56px -10px " + palette.glow + ", 0 6px 18px -4px " + palette.glow
+            : "0 0 0 1px var(--base-300), 0 4px 12px -4px rgba(0,0,0,0.06)",
+        }}
+        transition={{ duration: 0.3 }}
+      />
+
+      <div className="relative h-full rounded-2xl overflow-hidden flex flex-col" style={{ background: "var(--base-100)" }}>
+        {/* Spotlight overlay */}
+        <div
+          className="absolute inset-0 rounded-2xl pointer-events-none transition-opacity duration-300"
+          style={{
+            opacity: hovered ? 1 : 0,
+            background: "radial-gradient(180px circle at var(--spot-x) var(--spot-y), " + palette.glow + ", transparent 80%)",
+          }}
+        />
+
+        <div className="relative z-10 flex flex-col flex-1 p-7">
+          {/* Header */}
+          <div className="flex items-start justify-between mb-7">
+            <motion.div
+              animate={{ scale: hovered ? 1.1 : 1, rotate: hovered ? 5 : 0 }}
+              transition={{ duration: 0.3 }}
+              className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 transition-colors duration-300"
+              style={{
+                background: hovered ? palette.light : "var(--base-200)",
+                boxShadow: hovered ? "0 0 16px " + palette.glow : "none",
+              }}
+            >
+              <Icon size={26} style={{ color: palette.text }} strokeWidth={1.6} />
+            </motion.div>
+
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {service.badge && (
+                <span
+                  className="text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full"
+                  style={{ background: palette.light, color: palette.text, border: "1px solid " + palette.border, fontFamily: "'Poppins', sans-serif" }}
+                >
+                  {service.badge}
+                </span>
+              )}
+              <Link
+                href={service.storyHref}
+                className="w-9 h-9 rounded-full border flex items-center justify-center transition-all duration-300 hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+                style={{ borderColor: "var(--base-300)", color: "var(--base-content)", opacity: 0.4 }}
+                aria-label={"How " + service.title + " works"}
+              >
+                <ChevronRight size={16} />
+              </Link>
+            </div>
+          </div>
+
+          {/* Text */}
+          <div className="mb-6">
+            <p className="text-[10px] font-black uppercase tracking-[0.16em] mb-1.5"
+              style={{ color: palette.text, fontFamily: "'Poppins', sans-serif" }}>
+              {service.tagline}
+            </p>
+            <h2
+              id={"svc-title-" + service.id}
+              className="text-[1.3rem] font-black leading-tight tracking-tight mb-3"
+              style={{ fontFamily: "'Montserrat', sans-serif", color: "var(--base-content)" }}
+            >
+              {service.title}
+            </h2>
+            <p className="text-sm leading-relaxed"
+              style={{ color: "var(--base-content)", opacity: 0.55, fontFamily: "'Poppins', sans-serif" }}>
+              {service.description}
+            </p>
+          </div>
+
+          {/* Feature pills */}
+          <div className="flex flex-wrap gap-2 mb-7 mt-auto">
+            {service.features.map((f) => (
+              <span
+                key={f}
+                className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1 rounded-full transition-all duration-300"
+                style={{
+                  background: hovered ? palette.light : "var(--base-200)",
+                  color: hovered ? palette.text : "var(--base-content)",
+                  border: "1px solid " + (hovered ? palette.border : "var(--base-300)"),
+                  fontFamily: "'Poppins', sans-serif",
+                }}
+              >
+                <CheckCircle2 size={10} style={{ flexShrink: 0 }} />
+                {f}
+              </span>
+            ))}
+          </div>
+
+          {/* CTA */}
+          <Link href={service.href} aria-label={"Book " + service.title}>
+            <motion.div
+              className="relative w-full flex items-center justify-between px-5 py-3.5 rounded-xl overflow-hidden font-black text-sm cursor-pointer"
+              style={{ fontFamily: "'Poppins', sans-serif" }}
+              animate={{ background: hovered ? palette.text : "var(--base-200)", color: hovered ? "#ffffff" : palette.text }}
+              transition={{ duration: 0.28 }}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.97 }}
+            >
+              <span>Book Now</span>
+              <motion.span animate={{ x: hovered ? 3 : 0 }} transition={{ duration: 0.22 }}>
+                <ArrowUpRight size={16} />
+              </motion.span>
+            </motion.div>
+          </Link>
+        </div>
+      </div>
+    </motion.li>
+  );
+});
+SpotlightCard.displayName = "SpotlightCard";
+
+const AmbientBG = memo(() => (
+  <div className="absolute inset-0 pointer-events-none overflow-hidden" aria-hidden="true">
+    <div className="absolute top-[-15%] right-[-8%] w-[700px] h-[700px] rounded-full blur-[140px]" style={{ background: "rgba(14,165,233,0.05)" }} />
+    <div className="absolute bottom-[-10%] left-[-8%] w-[600px] h-[600px] rounded-full blur-[120px]" style={{ background: "rgba(16,185,129,0.05)" }} />
+    <div className="absolute top-[40%] left-[40%] w-[400px] h-[400px] rounded-full blur-[100px]" style={{ background: "rgba(139,92,246,0.04)" }} />
   </div>
 ));
-AuroraBackground.displayName = "AuroraBackground";
+AmbientBG.displayName = "AmbientBG";
 
-// ─── Service Card ──────────────────────────────────────────────────────────────
-const ServiceCard = memo(({ service }) => {
-  const Icon = service.icon;
+const SectionHeader = memo(() => (
+  <motion.header
+    className="max-w-3xl mb-20"
+    initial={{ opacity: 0, y: 30 }}
+    whileInView={{ opacity: 1, y: 0 }}
+    viewport={{ once: true }}
+    transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+  >
+    <div className="flex items-center gap-3 mb-6">
+      <div className="flex items-center gap-2 px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-[0.15em] border"
+        style={{ background: "rgba(14,165,233,0.08)", borderColor: "rgba(14,165,233,0.25)", color: "#0ea5e9", fontFamily: "'Poppins', sans-serif" }}>
+        <Sparkles size={11} />
+        Our Services
+      </div>
+    </div>
+    <h2 className="text-4xl md:text-5xl lg:text-[3.5rem] font-black tracking-tight leading-[1.08] mb-6"
+      style={{ fontFamily: "'Montserrat', sans-serif", color: "var(--base-content)" }}>
+      Modern Healthcare,{" "}
+      <br className="hidden sm:block" />
+      <span className="text-gradient-primary">Right at Your Door.</span>
+    </h2>
+    <p className="text-base md:text-lg leading-relaxed mb-8 max-w-xl"
+      style={{ color: "var(--base-content)", opacity: 0.6, fontFamily: "'Poppins', sans-serif" }}>
+      <strong style={{ color: "var(--base-content)", opacity: 1 }}>Likeson.in</strong> brings{" "}
+      <span style={{ color: "var(--primary)", fontWeight: 700 }}>expert doctors</span> and{" "}
+      <span style={{ color: "var(--primary)", fontWeight: 700 }}>essential medical services</span>{" "}
+      directly to your home. Skip the waiting rooms — book below.
+    </p>
+    <Link href={HOW_IT_WORKS}
+      className="inline-flex items-center gap-2 text-sm font-bold transition-all duration-300 hover:gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg"
+      style={{ color: "var(--primary)", fontFamily: "'Poppins', sans-serif" }}>
+      See how each service works
+      <ArrowUpRight size={15} />
+    </Link>
+  </motion.header>
+));
+SectionHeader.displayName = "SectionHeader";
 
-  return (
-    <li
-      className="group relative h-full rounded-[var(--r-box)] border border-base-300 bg-base-100 transition-all duration-500 hover:border-transparent hover:shadow-[var(--shadow-md)] overflow-hidden list-none"
-      aria-labelledby={`service-title-${service.id}`}
-    >
-      <div className="relative z-10 p-8 flex flex-col h-full">
-        {/* Icon & Story Link */}
-        <div className="flex justify-between items-start mb-10">
-          <div
-            className={`p-4 rounded-2xl transition-all duration-500 group-hover:scale-110 group-hover:rotate-3 shadow-sm ${service.styleMap.bg} ${service.styleMap.text}`}
-            aria-hidden="true"
-          >
-            <Icon size={32} strokeWidth={1.5} />
-          </div>
-
-          {/* Badge (conditionally shown) */}
-          {service.badge && (
-            <span className="badge badge-warning text-[10px] py-1 px-2">
-              {service.badge}
-            </span>
-          )}
-
-          {/* Arrow — links to story section */}
-          <Link
-            href={service.storyHref}
-            className={`h-10 w-10 rounded-full border border-base-300 flex items-center justify-center text-base-content/30 transition-all duration-300 ${service.styleMap.hoverText} ${service.styleMap.hoverBorder} hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2`}
-            aria-label={`Read the ${service.title} story and how it works`}
-            tabIndex={0}
-          >
-            <ChevronRight size={20} />
-          </Link>
-        </div>
-
-        {/* Content */}
-        <h1
-          id={`service-title-${service.id}`}
-          className="text-2xl font-black   mb-4 group-hover:translate-x-1 transition-transform duration-300 font-montserrat text-base-content"
-        >
-          {service.title}
-        </h1>
-
-        <p className="text-base-content/60 leading-relaxed text-sm mb-8 font-poppins">
-          {service.description}
+const BottomCTA = memo(() => (
+  <motion.div
+    className="mt-20 relative rounded-3xl overflow-hidden"
+    initial={{ opacity: 0, y: 30 }}
+    whileInView={{ opacity: 1, y: 0 }}
+    viewport={{ once: true }}
+    transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+    style={{ background: "linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%)" }}
+  >
+    <div className="relative flex flex-col sm:flex-row items-center justify-between gap-6 px-8 py-10">
+      <div>
+        <p className="text-white/60 text-sm font-semibold mb-1" style={{ fontFamily: "'Poppins', sans-serif" }}>
+          Not sure which service you need?
         </p>
-
-        {/* Feature List */}
-        <ul
-          className="space-y-4 pt-6 border-t border-base-300 mt-auto"
-          aria-label={`Features of ${service.title}`}
-        >
-          {service.features.map((feature) => (
-            <li key={feature} className="flex items-center gap-3 group/item">
-              <CheckCircle2
-                size={16}
-                className={`shrink-0 opacity-70 group-hover/item:opacity-100 transition-opacity ${service.styleMap.text}`}
-                aria-hidden="true"
-              />
-              <span className="text-xs font-medium text-base-content/70 group-hover/item:text-base-content transition-colors font-poppins">
-                {feature}
-              </span>
-            </li>
-          ))}
-        </ul>
-
-        {/* Book CTA */}
-        <div className="mt-8">
-          <Link
-            href={service.href}
-            className={`inline-flex items-center gap-2 text-sm font-semibold font-poppins transition-all duration-300 ${service.styleMap.text} opacity-0 group-hover:opacity-100 group-hover:translate-x-1`}
-            aria-label={`Book ${service.title} on Likeson.in`}
-          >
-            Book Now
-            <ChevronRight size={14} />
-          </Link>
-        </div>
+        <p className="text-white text-xl font-black tracking-tight" style={{ fontFamily: "'Montserrat', sans-serif" }}>
+          Talk to our care team — we'll guide you.
+        </p>
       </div>
-    </li>
-  );
-});
-ServiceCard.displayName = "ServiceCard";
-
-// ─── Main Export ───────────────────────────────────────────────────────────────
-const Services = memo(() => {
-  return (
-    <section
-      className="relative min-h-screen text-base-content bg-base-100 overflow-hidden"
-      aria-labelledby="services-section-heading"
-      id="services"
-    >
-      <AuroraBackground />
-
-      <div className="relative z-10 container-custom py-20 lg:py-28">
-
-        {/* Header */}
-        <header className="max-w-3xl mb-16">
-          <h2
-            id="services-section-heading"
-            className="text-2xl md:text-5xl font-black tracking-tight leading-[1.1] mb-6 font-montserrat"
-          >
-            Modern Healthcare,{" "}
-            <br />
-            <span className="text-gradient-primary">
-              Right at Your Door.
-            </span>
-          </h2>
-
-          <p className="text-responsive-base text-base-content/70 max-w-2xl leading-relaxed font-poppins">
-            <strong className="text-base-content">Likeson.in</strong> makes
-            healthcare easy by bringing{" "}
-            <span className="text-primary font-semibold">expert doctors</span>{" "}
-            and{" "}
-            <span className="text-primary font-semibold">
-              essential medical services
-            </span>{" "}
-            directly to your home. Skip the waiting rooms — choose a service
-            below to get{" "}
-            <strong className="text-base-content">
-              professional care today.
-            </strong>
-          </p>
-
-          {/* Story page CTA */}
-          <div className="mt-6">
-            <Link
-              href={SERVICE_ROUTES.storyPage}
-              className="inline-flex items-center gap-2 text-sm font-semibold text-primary font-poppins hover:gap-3 transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg px-1 py-1"
-              aria-label="Read the full story of how each Likeson.in service works"
-            >
-              See how each service works →
-              <ChevronRight size={14} aria-hidden="true" />
-            </Link>
-          </div>
-        </header>
-
-        {/* Services Grid — 7 services */}
-        <ul
-          className="grid gap-6 md:gap-8 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3"
-          aria-label="Likeson.in healthcare services"
+      <Link href="/contact" aria-label="Contact the Likeson.in team">
+        <motion.div
+          whileHover={{ scale: 1.04 }}
+          whileTap={{ scale: 0.97 }}
+          className="flex items-center gap-2.5 px-7 py-3.5 rounded-2xl font-black text-sm whitespace-nowrap cursor-pointer"
+          style={{ background: "rgba(255,255,255,0.18)", color: "#ffffff", border: "1.5px solid rgba(255,255,255,0.35)", backdropFilter: "blur(12px)", fontFamily: "'Poppins', sans-serif" }}
         >
-          {SERVICES_DATA.map((service) => (
-            <ServiceCard key={service.id} service={service} />
-          ))}
-        </ul>
+          Talk to Our Team
+          <ChevronRight size={16} />
+        </motion.div>
+      </Link>
+    </div>
+  </motion.div>
+));
+BottomCTA.displayName = "BottomCTA";
 
-        {/* Bottom CTA strip */}
-        <div
-          className="mt-16 rounded-2xl border border-base-300 p-8 text-center"
-          style={{
-            background:
-              "linear-gradient(135deg, var(--base-200) 0%, var(--base-100) 100%)",
-          }}
-        >
-          <p className="text-base-content/60 font-poppins mb-4 text-sm">
-            Not sure which service you need?
-          </p>
-          <Link
-            href="/contact"
-            className="btn-primary-cta inline-flex items-center gap-2"
-            aria-label="Talk to the Likeson.in team for help choosing the right service"
-          >
-            Talk to Our Team
-            <ChevronRight size={16} aria-hidden="true" />
-          </Link>
-        </div>
-      </div>
-    </section>
-  );
-});
-
+const Services = memo(() => (
+  <section id="services" className="relative min-h-screen bg-base-100 text-base-content overflow-hidden" aria-labelledby="services-heading">
+    <AmbientBG />
+    <div className="relative z-10 container-custom py-24 lg:py-32">
+      <SectionHeader />
+      <ul className="grid gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3" aria-label="Likeson.in healthcare services">
+        {SERVICES_DATA.map((service, i) => (
+          <SpotlightCard key={service.id} service={service} index={i} />
+        ))}
+      </ul>
+      <BottomCTA />
+    </div>
+  </section>
+));
 Services.displayName = "Services";
 export default Services;

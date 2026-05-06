@@ -8,7 +8,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search, MapPin, Star, X, Video,
   Home, Stethoscope, Users, SlidersHorizontal, RefreshCw,
-  Navigation2, Zap, Award, Languages, ArrowRight, BadgeCheck, Activity
+  Navigation2, Zap, Award, Languages, ArrowRight, BadgeCheck,
+  Activity, ChevronRight, Filter, TrendingUp, Clock,
 } from 'lucide-react';
 import {
   fetchNearbyDoctors,
@@ -23,20 +24,39 @@ import {
   selectDoctorPage,
   selectDoctorPages,
   selectIsLoadingDoctors,
-  selectIsLoadingNearbyDoctors,
 } from '@/store/slices/hospitalSlice';
+import Container from '@/components/ui/Container';
 
-// ── Theme ──────────────────────────────────────────────────────────────────
-const THEME = {
-  accent:      '#4f46e5',
-  accentLight: 'rgba(79,70,229,0.07)',
-  accentMid:   'rgba(79,70,229,0.15)',
-  gradient:    'linear-gradient(90deg,#4f46e5,#818cf8)',
-  gradientFull:'linear-gradient(135deg,#4f46e5 0%,#818cf8 100%)',
-  shadow:      'rgba(79,70,229,0.35)',
+// ─────────────────────────────────────────────────────────────────────────────
+// DESIGN TOKENS — all via CSS vars, zero hardcoded colors
+// Doctor theme: royal blue (h 250) per global.css [data-theme="doctor"]
+// ─────────────────────────────────────────────────────────────────────────────
+const T = {
+  // Primary uses CSS var tokens — adapts to dark mode automatically
+  accent:        'var(--primary)',
+  accentContent: 'var(--primary-content)',
+  secondary:     'var(--secondary)',
+  base100:       'var(--base-100)',
+  base200:       'var(--base-200)',
+  base300:       'var(--base-300)',
+  baseContent:   'var(--base-content)',
+  success:       'var(--success)',
+  warning:       'var(--warning)',
+
+  // Computed opacity mixes
+  accentBg:    'color-mix(in srgb, var(--primary) 8%,  transparent)',
+  accentBgMid: 'color-mix(in srgb, var(--primary) 14%, transparent)',
+  accentBgSm:  'color-mix(in srgb, var(--primary) 5%,  transparent)',
+  accentBorder:'color-mix(in srgb, var(--primary) 25%, transparent)',
+  accentShadow:'color-mix(in srgb, var(--primary) 28%, transparent)',
+  accentGrad:  'linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%)',
+  successBg:   'color-mix(in srgb, var(--success) 10%, transparent)',
+  warningBg:   'color-mix(in srgb, var(--warning) 10%, transparent)',
 };
 
-// ── Specializations ────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// SPECIALIZATIONS
+// ─────────────────────────────────────────────────────────────────────────────
 const SPECIALIZATIONS = [
   { label: 'All',                value: '',                    icon: '🩺' },
   { label: 'General Physician',  value: 'General Physician',   icon: '👨‍⚕️' },
@@ -54,10 +74,10 @@ const SPECIALIZATIONS = [
 ];
 
 const SORT_OPTIONS = [
-  { label: 'Top Rated',   value: '-rating.averageRating' },
-  { label: 'Experience',  value: '-experienceYears'      },
-  { label: 'Newest',      value: '-createdAt'            },
-  { label: 'Lowest Fee',  value: 'fees.inPersonFee'      },
+  { label: 'Top Rated',   value: '-rating.averageRating', icon: Star       },
+  { label: 'Experience',  value: '-experienceYears',      icon: Award      },
+  { label: 'Newest',      value: '-createdAt',            icon: Clock      },
+  { label: 'Lowest Fee',  value: 'fees.inPersonFee',      icon: TrendingUp },
 ];
 
 const CONSULT_TYPES = [
@@ -66,44 +86,52 @@ const CONSULT_TYPES = [
   { label: 'Home Visit',value: 'homeVisit', icon: Home        },
 ];
 
-// ── Animation variants ─────────────────────────────────────────────────────
-const containerVariants = {
-  hidden: { opacity: 0 },
-  show:   { opacity: 1, transition: { staggerChildren: 0.07 } },
-};
-const cardVariants = {
-  hidden: { opacity: 0, y: 24, scale: 0.97 },
-  show:   { opacity: 1, y: 0, scale: 1, transition: { type: 'spring', damping: 20, stiffness: 260 } },
-  exit:   { opacity: 0, y: -12, scale: 0.96, transition: { duration: 0.18 } },
-};
-const fadeSlide = {
-  hidden: { opacity: 0, x: -10 },
-  show:   { opacity: 1, x: 0, transition: { duration: 0.25 } },
+// Per-consult-type accent colors (static — not role-themed, semantic meaning)
+const CONSULT_COLORS = {
+  inPerson:  { bg: 'color-mix(in srgb, var(--success)  12%, transparent)', text: 'var(--success)',  border: 'color-mix(in srgb, var(--success) 30%, transparent)'  },
+  video:     { bg: 'color-mix(in srgb, var(--primary)  12%, transparent)', text: 'var(--primary)',  border: 'color-mix(in srgb, var(--primary) 30%, transparent)'  },
+  homeVisit: { bg: 'color-mix(in srgb, var(--warning)  12%, transparent)', text: 'var(--warning)',  border: 'color-mix(in srgb, var(--warning) 30%, transparent)'  },
 };
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// ANIMATION VARIANTS
+// ─────────────────────────────────────────────────────────────────────────────
+const containerVar = {
+  hidden: { opacity: 0 },
+  show:   { opacity: 1, transition: { staggerChildren: 0.06 } },
+};
+const cardVar = {
+  hidden: { opacity: 0, y: 20, scale: 0.98 },
+  show:   { opacity: 1, y: 0,  scale: 1,    transition: { type: 'spring', damping: 22, stiffness: 280 } },
+  exit:   { opacity: 0, y: -8, scale: 0.97, transition: { duration: 0.16 } },
+};
+const fadeIn = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0, transition: { duration: 0.28 } } };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
 const fmtFee    = (fee) => fee > 0 ? `₹${fee.toLocaleString('en-IN')}` : 'Free';
 const fmtRating = (r)   => (r ?? 0).toFixed(1);
+const stripDr   = (name = '') => name.replace(/^dr\.?\s*/i, '').trim();
 
-/**
- * Strip a leading "Dr." / "dr." prefix so the card's own "Dr." label
- * never produces "Dr. Dr. Venkata …"
- */
-const stripDrPrefix = (name = '') => name.replace(/^dr\.?\s*/i, '').trim();
-
-// ── StarRow ────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// STAR ROW
+// ─────────────────────────────────────────────────────────────────────────────
 const StarRow = memo(({ rating, total }) => (
   <div className="flex items-center gap-1.5">
     <div className="flex gap-0.5">
       {[1,2,3,4,5].map(s => (
         <Star
           key={s}
-          size={12}
-          className={s <= Math.round(rating ?? 0) ? 'fill-amber-400 text-amber-400' : 'text-base-300'}
+          size={11}
+          style={{
+            fill:   s <= Math.round(rating ?? 0) ? 'var(--warning)' : 'transparent',
+            color:  s <= Math.round(rating ?? 0) ? 'var(--warning)' : 'var(--base-300)',
+          }}
         />
       ))}
     </div>
-    <span className="text-[11px] font-bold" style={{ color: THEME.accent }}>
+    <span className="text-[11px] font-black" style={{ color: T.accent }}>
       {fmtRating(rating)}
     </span>
     {total > 0 && (
@@ -112,25 +140,30 @@ const StarRow = memo(({ rating, total }) => (
   </div>
 ));
 
-// ── ConsultBadge ───────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSULT BADGE
+// ─────────────────────────────────────────────────────────────────────────────
 const ConsultBadge = memo(({ type }) => {
   const map = {
-    inPerson:  { Icon: Stethoscope, label: 'In-Person', color: '#10b981' },
-    video:     { Icon: Video,       label: 'Video',     color: '#4f46e5' },
-    homeVisit: { Icon: Home,        label: 'Home',      color: '#f59e0b' },
+    inPerson:  { Icon: Stethoscope, label: 'In-Person' },
+    video:     { Icon: Video,       label: 'Video'     },
+    homeVisit: { Icon: Home,        label: 'Home'      },
   };
-  const { Icon, label, color } = map[type];
+  const { Icon, label } = map[type];
+  const c = CONSULT_COLORS[type];
   return (
     <span
       className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest border"
-      style={{ background: `${color}12`, color, borderColor: `${color}25` }}
+      style={{ background: c.bg, color: c.text, borderColor: c.border }}
     >
       <Icon size={9} /> {label}
     </span>
   );
 });
 
-// ── DoctorCard ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// DOCTOR CARD — premium redesign
+// ─────────────────────────────────────────────────────────────────────────────
 const DoctorCard = memo(function DoctorCard({ doctor }) {
   const {
     _id, profilePhotoUrl, isOnline, isVerified, specialization,
@@ -138,19 +171,15 @@ const DoctorCard = memo(function DoctorCard({ doctor }) {
     languagesSpoken, availability, user: doctorUser,
   } = doctor;
 
-  // user.name may already contain "Dr." prefix — strip before re-adding
-  const cleanName   = stripDrPrefix(doctorUser?.name ?? '');
+  const cleanName   = stripDr(doctorUser?.name ?? '');
   const displayName = cleanName || 'Unknown Doctor';
 
-  // Always prefer profilePhotoUrl → user.avatar → generated avatar
   const photo = profilePhotoUrl
     || doctorUser?.avatar
-    || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=4f46e5&color=fff`;
+    || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=2563eb&color=fff`;
 
-  // unoptimized only for ui-avatars (external, no Next.js image domain config needed)
   const isGeneratedAvatar = photo.includes('ui-avatars.com');
 
-  // Only include enabled consult types
   const consultTypes = useMemo(() => {
     const types = [];
     if (consultationTypes?.inPerson)  types.push('inPerson');
@@ -159,7 +188,6 @@ const DoctorCard = memo(function DoctorCard({ doctor }) {
     return types;
   }, [consultationTypes]);
 
-  // Lowest fee across enabled types only
   const lowestFee = useMemo(() => {
     const vals = [];
     if (consultationTypes?.inPerson  && fees?.inPersonFee  > 0) vals.push(fees.inPersonFee);
@@ -168,247 +196,315 @@ const DoctorCard = memo(function DoctorCard({ doctor }) {
     return vals.length > 0 ? Math.min(...vals) : 0;
   }, [fees, consultationTypes]);
 
-  // Today's availability
   const todayAvail = useMemo(() => {
     const day = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
     return availability?.find(a => a.day === day);
   }, [availability]);
 
-  // stats is excluded from public API — show rating count as a proxy
-  const ratingCount = rating?.totalRatings ?? 0;
+  const isAvailableToday = todayAvail?.slots?.length > 0;
 
   return (
     <motion.div
-      variants={cardVariants}
+      variants={cardVar}
       layout
-      className="group relative rounded-2xl border bg-base-100 overflow-hidden transition-all duration-300 hover:-translate-y-1"
-      style={{ borderColor: 'var(--base-300)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}
-      whileHover={{ boxShadow: `0 16px 40px ${THEME.shadow}`, borderColor: THEME.accent }}
+      className="group relative rounded-2xl overflow-hidden flex flex-col"
+      style={{
+        background:   T.base100,
+        border:       `1px solid var(--base-300)`,
+        boxShadow:    '0 1px 8px rgba(0,0,0,0.04)',
+        transition:   'box-shadow 0.25s, border-color 0.25s, transform 0.25s',
+      }}
+      whileHover={{
+        y: -3,
+        boxShadow: `0 16px 40px ${T.accentShadow}`,
+        borderColor: T.accent,
+      }}
     >
-      {/* Hover top stripe */}
+      {/* Top gradient accent bar */}
       <div
         className="absolute top-0 left-0 right-0 h-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-        style={{ background: THEME.gradient }}
+        style={{ background: T.accentGrad }}
+        aria-hidden="true"
       />
 
-      <Link href={`/doctors/${_id}`} className="block p-4">
+      {/* Available today pill — floats top-right */}
+      {isAvailableToday && (
+        <div
+          className="absolute top-3 right-3 z-10 flex items-center gap-1 px-2 py-1 rounded-full text-[9px] font-black uppercase tracking-widest"
+          style={{ background: T.successBg, color: T.success }}
+          aria-label="Available today"
+        >
+          <span
+            className="w-1.5 h-1.5 rounded-full animate-pulse"
+            style={{ background: T.success }}
+            aria-hidden="true"
+          />
+          Today
+        </div>
+      )}
 
-        {/* Header row */}
-        <div className="flex items-start gap-3.5 mb-3">
-          {/* Avatar */}
+      <Link href={`/doctors/${_id}`} className="block p-5 flex-1">
+
+        {/* ── HEADER ─────────────────────────────────────────────────── */}
+        <div className="flex items-start gap-4 mb-4">
+
+          {/* Avatar with online indicator */}
           <div className="relative flex-shrink-0">
             <div
-              className="w-16 h-16 rounded-2xl overflow-hidden border-2"
-              style={{ borderColor: isOnline ? '#10b981' : 'var(--base-300)' }}
+              className="w-[68px] h-[68px] rounded-2xl overflow-hidden"
+              style={{
+                border: `2px solid ${isOnline ? 'var(--success)' : 'var(--base-300)'}`,
+                boxShadow: isOnline ? `0 0 0 3px ${T.successBg}` : 'none',
+              }}
             >
               <Image
                 src={photo}
                 alt={`Dr. ${displayName}`}
-                width={64}
-                height={64}
+                width={68}
+                height={68}
                 className="w-full h-full object-cover"
                 unoptimized={isGeneratedAvatar}
               />
             </div>
             {isOnline && (
-              <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-60" />
-                <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-green-500 border-2 border-base-100" />
+              <span className="absolute -bottom-1 -right-1 flex h-3.5 w-3.5" aria-label="Online">
+                <span
+                  className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-60"
+                  style={{ background: 'var(--success)' }}
+                  aria-hidden="true"
+                />
+                <span
+                  className="relative inline-flex rounded-full h-3.5 w-3.5 border-2 border-base-100"
+                  style={{ background: 'var(--success)' }}
+                  aria-hidden="true"
+                />
               </span>
             )}
           </div>
 
-          {/* Name / spec / fee */}
+          {/* Name block */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-start justify-between gap-2 mb-0.5">
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <h3 className="font-black text-[14px] truncate leading-tight">
-                    Dr. {displayName}
-                  </h3>
-                  {isVerified && (
-                    <BadgeCheck size={14} style={{ color: THEME.accent, flexShrink: 0 }} />
-                  )}
-                </div>
-                <p className="text-[11px] font-bold truncate" style={{ color: THEME.accent }}>
-                  {specialization}
-                </p>
-              </div>
-              {/* Fee badge */}
-              <div
-                className="flex-shrink-0 px-2.5 py-1 rounded-xl text-center"
-                style={{ background: THEME.accentLight }}
-              >
-                <p className="text-[8px] font-black uppercase tracking-widest opacity-50 leading-none">from</p>
-                <p className="text-[13px] font-black leading-tight" style={{ color: THEME.accent }}>
-                  {fmtFee(lowestFee)}
-                </p>
-              </div>
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <h3 className="font-black text-[15px] leading-tight truncate">
+                Dr. {displayName}
+              </h3>
+              {isVerified && (
+                <BadgeCheck size={15} style={{ color: T.accent, flexShrink: 0 }} aria-label="Verified" />
+              )}
             </div>
-            {/* Use totalReviews for review count display */}
+            <p
+              className="text-[12px] font-bold mb-2 truncate"
+              style={{ color: T.accent }}
+            >
+              {specialization}
+            </p>
             <StarRow rating={rating?.averageRating} total={rating?.totalReviews ?? 0} />
           </div>
         </div>
 
-        {/* Stats row */}
-        <div
-          className="flex items-center gap-3 mb-3 py-2.5 rounded-xl px-3"
-          style={{ background: THEME.accentLight }}
-        >
-          <div className="flex items-center gap-1.5">
-            <Award size={12} style={{ color: THEME.accent }} />
-            <span className="text-[11px] font-black">{experienceYears}y exp</span>
-          </div>
-          <div className="w-px h-4 bg-base-300" />
-          {/* stats excluded from public API — show totalRatings as activity proxy */}
-          <div className="flex items-center gap-1.5">
-            <Users size={12} style={{ color: THEME.accent }} />
-            <span className="text-[11px] font-black">
-              {ratingCount > 0 ? `${ratingCount} ratings` : 'New'}
-            </span>
-          </div>
-          {todayAvail?.slots?.length > 0 && (
-            <>
-              <div className="w-px h-4 bg-base-300" />
-              <div className="flex items-center gap-1.5">
-                <Activity size={12} className="text-green-500" />
-                <span className="text-[11px] font-black text-green-600">Available today</span>
-              </div>
-            </>
-          )}
-        </div>
+        {/* ── STAT ROW ─────────────────────────────────────────────── */}
+       <div
+  className="flex items-stretch justify-between mb-4 rounded-xl p-3"
+  style={{ background: T.accentBgSm, border: `1px solid ${T.accentBorder}` }}
+>
+  {/* Experience */}
+  <div className="flex flex-1 flex-col items-center gap-1">
+    <span className="text-[8px] font-black uppercase tracking-widest opacity-40">Exp</span>
+    <span className="text-[13px] font-black leading-none" style={{ color: T.accent }}>
+      {experienceYears}y
+    </span>
+  </div>
 
-        {/* Consult type badges */}
+  {/* Separator 1 */}
+  <div className="w-px bg-current opacity-20" style={{ backgroundColor: T.accentBorder }} aria-hidden="true" />
+
+  {/* Ratings */}
+  <div className="flex flex-1 flex-col items-center gap-1">
+    <span className="text-[8px] font-black uppercase tracking-widest opacity-40">Ratings</span>
+    <span className="text-[13px] font-black leading-none" style={{ color: T.accent }}>
+      {(rating?.totalRatings ?? 0) > 0 ? rating.totalRatings : '–'}
+    </span>
+  </div>
+
+  {/* Separator 2 */}
+  <div className="w-px bg-current opacity-20" style={{ backgroundColor: T.accentBorder }} aria-hidden="true" />
+
+  {/* Fee */}
+  <div className="flex flex-1 flex-col items-center gap-1">
+    <span className="text-[8px] font-black uppercase tracking-widest opacity-40">From</span>
+    <span className="text-[13px] font-black leading-none" style={{ color: T.accent }}>
+      {fmtFee(lowestFee)}
+    </span>
+  </div>
+</div>
+
+        {/* ── CONSULT BADGES ──────────────────────────────────────── */}
         {consultTypes.length > 0 && (
-          <div className="flex flex-wrap gap-1 mb-2.5">
+          <div className="flex flex-wrap gap-1.5 mb-3">
             {consultTypes.map(t => <ConsultBadge key={t} type={t} />)}
           </div>
         )}
 
-        {/* Languages */}
+        {/* ── LANGUAGES ───────────────────────────────────────────── */}
         {languagesSpoken?.length > 0 && (
           <div className="flex items-center gap-1.5">
-            <Languages size={11} className="opacity-40" />
-            <span className="text-[10px] opacity-40 font-medium">
+            <Languages size={10} className="opacity-30 flex-shrink-0" aria-hidden="true" />
+            <span className="text-[10px] opacity-40 font-medium truncate">
               {languagesSpoken.slice(0, 3).join(' · ')}
             </span>
           </div>
         )}
       </Link>
 
-      {/* CTA footer */}
+      {/* ── CTA FOOTER ──────────────────────────────────────────────── */}
       <div
-        className="flex items-center justify-between px-4 py-2.5 border-t"
-        style={{ borderColor: 'var(--base-300)', background: 'var(--base-200)' }}
+        className="flex items-center justify-between px-5 py-3 border-t"
+        style={{ borderColor: 'var(--base-300)', background: T.base200 }}
       >
         <Link
           href={`/doctors/${_id}`}
-          className="text-[11px] font-black uppercase tracking-wider flex items-center gap-1 transition-colors"
-          style={{ color: THEME.accent }}
+          className="text-[11px] font-black uppercase tracking-wider flex items-center gap-1 transition-colors hover:opacity-80"
+          style={{ color: T.accent }}
+          aria-label={`View profile of Dr. ${displayName}`}
         >
-          View Profile <ArrowRight size={11} />
+          View Profile <ChevronRight size={11} />
         </Link>
-      <Link href={`/book-appointment?doctor=${_id}&type=doctor_consultation&name=${encodeURIComponent(displayName)}&spec=${encodeURIComponent(specialization || '')}`}>
-  <motion.button
-    whileHover={{ scale: 1.04 }}
-    whileTap={{ scale: 0.96 }}
-    className="px-3.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-white"
-    style={{ background: THEME.gradient }}
-  >
-    Book Now
-  </motion.button>
-</Link>
+
+        <Link
+          href={`/book-appointment?doctor=${_id}&type=doctor_consultation&name=${encodeURIComponent(displayName)}&spec=${encodeURIComponent(specialization || '')}`}
+          aria-label={`Book appointment with Dr. ${displayName}`}
+        >
+          <motion.button
+            whileHover={{ scale: 1.04 }}
+            whileTap={{ scale: 0.95 }}
+            className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest border-0 cursor-pointer"
+            style={{
+              background: T.accentGrad,
+              color:      'var(--primary-content)',
+              boxShadow:  `0 4px 14px ${T.accentShadow}`,
+            }}
+          >
+            Book Now
+          </motion.button>
+        </Link>
       </div>
     </motion.div>
   );
 });
 
-// ── SkeletonCard ───────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// SKELETON CARD
+// ─────────────────────────────────────────────────────────────────────────────
 const SkeletonCard = () => (
-  <div className="rounded-2xl border border-base-300 bg-base-100 p-4 space-y-3">
-    <div className="flex gap-3.5">
-      <div className="w-16 h-16 rounded-2xl skeleton" />
+  <div
+    className="rounded-2xl p-5 space-y-4"
+    style={{ border: '1px solid var(--base-300)', background: 'var(--base-100)' }}
+  >
+    <div className="flex gap-4">
+      <div className="w-[68px] h-[68px] rounded-2xl skeleton" />
       <div className="flex-1 space-y-2">
         <div className="h-4 w-3/4 rounded-lg skeleton" />
         <div className="h-3 w-1/2 rounded-lg skeleton" />
         <div className="h-3 w-2/3 rounded-lg skeleton" />
       </div>
     </div>
-    <div className="h-10 rounded-xl skeleton" />
-    <div className="flex gap-2">
+    <div className="h-12 rounded-xl skeleton" />
+    <div className="flex gap-1.5">
       <div className="h-5 w-16 rounded-full skeleton" />
-      <div className="h-5 w-16 rounded-full skeleton" />
+      <div className="h-5 w-14 rounded-full skeleton" />
     </div>
+    <div className="h-10 rounded-xl skeleton" />
   </div>
 );
 
-// ── FilterPanel ────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// FILTER PANEL
+// ─────────────────────────────────────────────────────────────────────────────
 const FilterPanel = memo(function FilterPanel({ filters, onChange, onClose }) {
   return (
     <motion.div
-      initial={{ opacity: 0, x: 20 }}
+      initial={{ opacity: 0, x: 16 }}
       animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: 20 }}
-      className="rounded-2xl border border-base-300 bg-base-100 p-5 space-y-5 sticky top-24"
+      exit={{ opacity: 0, x: 16 }}
+      className="rounded-2xl p-5 space-y-5 sticky top-24"
+      style={{ border: '1px solid var(--base-300)', background: 'var(--base-100)' }}
     >
       <div className="flex items-center justify-between">
-        <h3 className="font-black text-sm uppercase tracking-wider" style={{ color: THEME.accent }}>
-          Filters
-        </h3>
-        <button onClick={onClose} className="p-1 rounded-lg hover:bg-base-200 transition-colors">
-          <X size={14} />
+        <div className="flex items-center gap-2">
+          <div
+            className="w-7 h-7 rounded-lg flex items-center justify-center"
+            style={{ background: T.accentBg }}
+            aria-hidden="true"
+          >
+            <Filter size={13} style={{ color: T.accent }} />
+          </div>
+          <h3 className="font-black text-sm uppercase tracking-wider" style={{ color: T.accent }}>
+            Filters
+          </h3>
+        </div>
+        <button
+          onClick={onClose}
+          aria-label="Close filters"
+          className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors hover:bg-base-200"
+          style={{ color: 'var(--base-content)', opacity: 0.5 }}
+        >
+          <X size={13} />
         </button>
       </div>
 
       {/* Consultation type */}
       <div>
-        <p className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-2">Consultation</p>
-        <div className="space-y-1.5">
-          {CONSULT_TYPES.map(({ label, value, icon: Icon }) => (
-            <label key={value} className="flex items-center gap-2.5 cursor-pointer">
-              <div
-                className="w-4 h-4 rounded flex items-center justify-center border-2 transition-all"
+        <p className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-2.5">Consultation</p>
+        <div className="space-y-2">
+          {CONSULT_TYPES.map(({ label, value, icon: Icon }) => {
+            const active = filters.consultationType === value;
+            return (
+              <button
+                key={value}
+                onClick={() => onChange('consultationType', active ? '' : value)}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-all"
                 style={{
-                  borderColor: filters.consultationType === value ? THEME.accent : 'var(--base-300)',
-                  background:  filters.consultationType === value ? THEME.accentLight : 'transparent',
+                  background:  active ? T.accentBg  : 'transparent',
+                  borderColor: active ? T.accent     : 'var(--base-300)',
+                  color:       active ? T.accent     : 'var(--base-content)',
                 }}
-                onClick={() => onChange('consultationType', filters.consultationType === value ? '' : value)}
               >
-                {filters.consultationType === value && (
-                  <div className="w-2 h-2 rounded-sm" style={{ background: THEME.accent }} />
+                <div
+                  className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0"
+                  style={{ background: active ? T.accentBgMid : 'var(--base-200)' }}
+                  aria-hidden="true"
+                >
+                  <Icon size={12} style={{ color: active ? T.accent : 'var(--base-content)', opacity: active ? 1 : 0.4 }} />
+                </div>
+                <span className="text-[12px] font-bold">{label}</span>
+                {active && (
+                  <div
+                    className="ml-auto w-4 h-4 rounded-full flex items-center justify-center"
+                    style={{ background: T.accent }}
+                    aria-hidden="true"
+                  >
+                    <X size={8} style={{ color: 'var(--primary-content)' }} />
+                  </div>
                 )}
-              </div>
-              <Icon
-                size={12}
-                style={{
-                  color:   filters.consultationType === value ? THEME.accent : 'var(--base-content)',
-                  opacity: filters.consultationType === value ? 1 : 0.4,
-                }}
-              />
-              <span
-                className="text-[12px] font-bold"
-                style={{ color: filters.consultationType === value ? THEME.accent : 'inherit' }}
-              >
-                {label}
-              </span>
-            </label>
-          ))}
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {/* Min rating */}
       <div>
-        <p className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-2">Min Rating</p>
-        <div className="flex gap-1.5">
+        <p className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-2.5">Min Rating</p>
+        <div className="grid grid-cols-4 gap-1.5">
           {[0, 3, 4, 4.5].map(r => (
             <button
               key={r}
               onClick={() => onChange('rating', filters.rating === r ? 0 : r)}
-              className="flex-1 py-1.5 rounded-lg text-[10px] font-black border transition-all"
+              className="py-2 rounded-xl text-[10px] font-black border transition-all"
               style={{
-                borderColor: filters.rating === r ? THEME.accent : 'var(--base-300)',
-                background:  filters.rating === r ? THEME.accentLight : 'transparent',
-                color:       filters.rating === r ? THEME.accent : 'inherit',
+                borderColor: filters.rating === r ? T.accent : 'var(--base-300)',
+                background:  filters.rating === r ? T.accentBg : 'transparent',
+                color:       filters.rating === r ? T.accent : 'var(--base-content)',
               }}
             >
               {r === 0 ? 'Any' : `${r}★`}
@@ -419,38 +515,45 @@ const FilterPanel = memo(function FilterPanel({ filters, onChange, onClose }) {
 
       {/* Sort */}
       <div>
-        <p className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-2">Sort By</p>
-        <div className="space-y-1">
-          {SORT_OPTIONS.map(({ label, value }) => (
-            <button
-              key={value}
-              onClick={() => onChange('sort', value)}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[11px] font-bold border transition-all"
-              style={{
-                borderColor: filters.sort === value ? THEME.accent : 'transparent',
-                background:  filters.sort === value ? THEME.accentLight : 'var(--base-200)',
-                color:       filters.sort === value ? THEME.accent : 'inherit',
-              }}
-            >
-              {label}
-              {filters.sort === value && <Zap size={10} style={{ color: THEME.accent }} />}
-            </button>
-          ))}
+        <p className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-2.5">Sort By</p>
+        <div className="space-y-1.5">
+          {SORT_OPTIONS.map(({ label, value, icon: Icon }) => {
+            const active = filters.sort === value;
+            return (
+              <button
+                key={value}
+                onClick={() => onChange('sort', value)}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[11px] font-bold border transition-all"
+                style={{
+                  borderColor: active ? T.accent    : 'transparent',
+                  background:  active ? T.accentBg  : 'var(--base-200)',
+                  color:       active ? T.accent     : 'var(--base-content)',
+                }}
+              >
+                <Icon size={12} style={{ color: active ? T.accent : 'var(--base-content)', opacity: active ? 1 : 0.4 }} />
+                {label}
+                {active && <Zap size={10} className="ml-auto" style={{ color: T.accent }} aria-hidden="true" />}
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {/* Reset */}
       <button
         onClick={() => onChange('reset')}
-        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-base-300 text-[11px] font-black opacity-40 hover:opacity-80 transition-opacity"
+        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed text-[11px] font-black transition-opacity hover:opacity-80"
+        style={{ borderColor: 'var(--base-300)', color: 'var(--base-content)', opacity: 0.45 }}
       >
-        <RefreshCw size={12} /> Reset Filters
+        <RefreshCw size={12} aria-hidden="true" /> Reset Filters
       </button>
     </motion.div>
   );
 });
 
-// ── NearbyBanner ───────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// NEARBY BANNER
+// ─────────────────────────────────────────────────────────────────────────────
 const NearbyBanner = memo(function NearbyBanner({ count, onDismiss }) {
   return (
     <motion.div
@@ -458,10 +561,14 @@ const NearbyBanner = memo(function NearbyBanner({ count, onDismiss }) {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -10 }}
       className="relative overflow-hidden rounded-2xl p-4 flex items-center justify-between gap-4 mb-6"
-      style={{ background: THEME.gradient }}
+      style={{ background: T.accentGrad }}
     >
       <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0">
+        <div
+          className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+          style={{ background: 'rgba(255,255,255,0.2)' }}
+          aria-hidden="true"
+        >
           <Navigation2 size={18} className="text-white" />
         </div>
         <div>
@@ -471,19 +578,58 @@ const NearbyBanner = memo(function NearbyBanner({ count, onDismiss }) {
       </div>
       <button
         onClick={onDismiss}
-        className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0 hover:bg-white/30 transition-colors"
+        aria-label="Dismiss nearby banner"
+        className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 transition-colors hover:bg-white/30"
+        style={{ background: 'rgba(255,255,255,0.15)' }}
       >
         <X size={13} className="text-white" />
       </button>
-      <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full bg-white/5 pointer-events-none" />
-      <div className="absolute -right-2 -bottom-4 w-12 h-12 rounded-full bg-white/5 pointer-events-none" />
+      <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full pointer-events-none" style={{ background: 'rgba(255,255,255,0.05)' }} />
     </motion.div>
   );
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// TRUST STATS BAR — builds social proof above fold
+// ─────────────────────────────────────────────────────────────────────────────
+const TrustBar = memo(function TrustBar() {
+  const stats = [
+    { label: 'Verified Doctors',     value: '500+', icon: BadgeCheck },
+    { label: 'Specializations',      value: '12',   icon: Stethoscope },
+    { label: 'Appointments Booked',  value: '10K+', icon: Activity },
+    { label: 'Average Rating',       value: '4.8★', icon: Star },
+  ];
+  return (
+    <div
+      className="grid grid-cols-2 md:grid-cols-4 gap-0 border-y"
+      style={{ borderColor: 'var(--base-300)' }}
+    >
+      {stats.map(({ label, value, icon: Icon }, i) => (
+        <div
+          key={label}
+          className="flex flex-col items-center justify-center py-5 gap-1 text-center"
+          style={{
+            borderRight: i < stats.length - 1 ? `1px solid var(--base-300)` : 'none',
+          }}
+        >
+          <div
+            className="w-8 h-8 rounded-xl flex items-center justify-center mb-1"
+            style={{ background: T.accentBg }}
+            aria-hidden="true"
+          >
+            <Icon size={14} style={{ color: T.accent }} />
+          </div>
+          <span className="text-[17px] font-black leading-none" style={{ color: T.accent }}>{value}</span>
+          <span className="text-[9px] font-bold uppercase tracking-widest opacity-40">{label}</span>
+        </div>
+      ))}
+    </div>
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN PAGE
-// ═══════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
 export default function DoctorsPage() {
   const dispatch = useDispatch();
   const user     = useSelector((s) => s.user?.user) ?? null;
@@ -497,13 +643,13 @@ export default function DoctorsPage() {
   const pages                 = useSelector(selectDoctorPages);
   const isLoadingAll          = useSelector(selectIsLoadingDoctors);
 
-  const [searchQuery,      setSearchQuery]      = useState('');
-  const [selectedSpec,     setSelectedSpec]      = useState('');
-  const [showFilters,      setShowFilters]       = useState(false);
-  const [showNearbyBanner, setShowNearbyBanner]  = useState(false);
-  const [currentPage,      setCurrentPage]       = useState(1);
-  const [activeTab,        setActiveTab]         = useState('all');
-  const [filters,          setFilters]           = useState({
+  const [searchQuery,      setSearchQuery]     = useState('');
+  const [selectedSpec,     setSelectedSpec]    = useState('');
+  const [showFilters,      setShowFilters]     = useState(false);
+  const [showNearbyBanner, setShowNearbyBanner]= useState(false);
+  const [currentPage,      setCurrentPage]    = useState(1);
+  const [activeTab,        setActiveTab]       = useState('all');
+  const [filters,          setFilters]         = useState({
     consultationType: '',
     rating: 0,
     sort:   '-rating.averageRating',
@@ -511,11 +657,11 @@ export default function DoctorsPage() {
 
   const searchTimer = useRef(null);
   const topRef      = useRef(null);
+  const specScrollRef = useRef(null);
 
-  // ── Fetch nearby on mount if location available ─────────────────────────
+  // Fetch nearby on mount
   useEffect(() => {
     const coords = user?.location?.coordinates;
-    // coords = [lng, lat]; skip if default [0,0]
     if (coords && (coords[0] !== 0 || coords[1] !== 0)) {
       const [lng, lat] = coords;
       dispatch(fetchNearbyDoctors({ lat, lng, distance: 10000, limit: 6 }));
@@ -523,32 +669,20 @@ export default function DoctorsPage() {
     }
   }, [dispatch, user?.location?.coordinates]);
 
-  // ── Main fetch ──────────────────────────────────────────────────────────
   const fetchDoctors = useCallback(() => {
     if (searchQuery.trim().length >= 2) {
-      dispatch(searchDoctors({
-        q:              searchQuery,
-        specialization: selectedSpec || undefined,
-        page:           currentPage,
-        limit:          12,
-      }));
+      dispatch(searchDoctors({ q: searchQuery, specialization: selectedSpec || undefined, page: currentPage, limit: 12 }));
       setActiveTab('search');
     } else if (selectedSpec) {
       dispatch(fetchDoctorsBySpecialization({
-        spec:             selectedSpec,
-        rating:           filters.rating           || undefined,
-        consultationType: filters.consultationType || undefined,
-        page:             currentPage,
-        limit:            12,
+        spec: selectedSpec, rating: filters.rating || undefined,
+        consultationType: filters.consultationType || undefined, page: currentPage, limit: 12,
       }));
       setActiveTab('spec');
     } else {
       dispatch(fetchAllDoctors({
-        rating:           filters.rating           || undefined,
-        consultationType: filters.consultationType || undefined,
-        sort:             filters.sort             || undefined,
-        page:             currentPage,
-        limit:            12,
+        rating: filters.rating || undefined, consultationType: filters.consultationType || undefined,
+        sort: filters.sort || undefined, page: currentPage, limit: 12,
       }));
       setActiveTab('all');
     }
@@ -556,7 +690,6 @@ export default function DoctorsPage() {
 
   useEffect(() => { fetchDoctors(); }, [fetchDoctors]);
 
-  // ── Search debounce ─────────────────────────────────────────────────────
   const handleSearch = useCallback((val) => {
     setSearchQuery(val);
     setCurrentPage(1);
@@ -587,116 +720,179 @@ export default function DoctorsPage() {
     setSearchQuery('');
   }, []);
 
-  // ── Displayed list ──────────────────────────────────────────────────────
   const displayedDoctors = useMemo(() => {
     if (activeTab === 'search' && searchQuery.trim().length >= 2) return searchResults;
     if (activeTab === 'spec'   && selectedSpec)                   return specializationDoctors;
     return doctors;
   }, [activeTab, searchQuery, searchResults, specializationDoctors, doctors, selectedSpec]);
 
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (filters.consultationType) count++;
+    if (filters.rating > 0) count++;
+    if (filters.sort !== '-rating.averageRating') count++;
+    return count;
+  }, [filters]);
+
   return (
-    <main id="main-content" className="min-h-screen" style={{ background: 'var(--base-100)' }}>
+    <div id="main-content" style={{ background: 'var(--base-100)', minHeight: '100vh' }}>
 
-      {/* ── HERO ─────────────────────────────────────────────────────── */}
+      {/* ── HERO ───────────────────────────────────────────────────────── */}
       <section
-        className="relative overflow-hidden py-12 md:py-16"
-        style={{ background: `linear-gradient(180deg, ${THEME.accentLight} 0%, transparent 100%)` }}
+        className="relative overflow-hidden"
+        style={{
+          background: `linear-gradient(180deg, ${T.accentBgSm} 0%, var(--base-100) 100%)`,
+          paddingTop: '3rem',
+          paddingBottom: '2.5rem',
+        }}
       >
+        {/* Decorative circles */}
         <div
-          className="absolute -top-20 -right-20 w-72 h-72 rounded-full blur-3xl pointer-events-none"
-          style={{ background: 'rgba(129,140,248,0.12)' }}
+          className="absolute -top-24 -right-24 w-80 h-80 rounded-full pointer-events-none"
+          style={{ background: 'color-mix(in srgb, var(--secondary) 7%, transparent)', filter: 'blur(40px)' }}
+          aria-hidden="true"
         />
         <div
-          className="absolute -bottom-10 -left-10 w-48 h-48 rounded-full blur-3xl pointer-events-none"
-          style={{ background: 'rgba(79,70,229,0.08)' }}
+          className="absolute -bottom-16 -left-16 w-56 h-56 rounded-full pointer-events-none"
+          style={{ background: `color-mix(in srgb, var(--primary) 5%, transparent)`, filter: 'blur(32px)' }}
+          aria-hidden="true"
         />
 
-        <div className="container-custom relative z-10">
+        <Container className="relative z-10">
           <motion.div
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 18 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
+            transition={{ duration: 0.45 }}
             className="max-w-2xl mx-auto text-center mb-8"
           >
+            {/* Eyebrow pill */}
             <div
-              className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest mb-4 border"
-              style={{ background: THEME.accentLight, color: THEME.accent, borderColor: `${THEME.accent}25` }}
+              className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest mb-5 border"
+              style={{ background: T.accentBg, color: T.accent, borderColor: T.accentBorder }}
+              aria-hidden="true"
             >
-              <Stethoscope size={11} /> Find Your Doctor
+              <Stethoscope size={11} />
+              Find Your Doctor
             </div>
-            <h1 className="text-3xl md:text-4xl lg:text-5xl font-black tracking-tight mb-3">
+
+            <h1
+              className="text-3xl md:text-4xl lg:text-5xl font-black tracking-tight mb-4 leading-tight"
+              style={{ color: 'var(--base-content)' }}
+            >
               Expert Care,{' '}
               <span
                 style={{
-                  background:             THEME.gradient,
-                  WebkitBackgroundClip:   'text',
-                  WebkitTextFillColor:    'transparent',
-                  backgroundClip:         'text',
+                  background:           T.accentGrad,
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor:  'transparent',
+                  backgroundClip:       'text',
                 }}
               >
                 Right Here
               </span>
             </h1>
-            <p className="text-sm opacity-60 max-w-md mx-auto">
-              Connect with top-rated doctors near you. Book consultations in minutes.
+            <p className="text-sm leading-relaxed max-w-md mx-auto" style={{ color: 'var(--base-content)', opacity: 0.55 }}>
+              Connect with verified, top-rated doctors near you. Book consultations in minutes — in-person, video, or home visit.
             </p>
           </motion.div>
 
-          {/* Search bar */}
+          {/* ── SEARCH BAR ─────────────────────────────────────────── */}
           <motion.div
-            initial={{ opacity: 0, y: 16 }}
+            initial={{ opacity: 0, y: 14 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.1 }}
+            transition={{ duration: 0.45, delay: 0.1 }}
             className="max-w-2xl mx-auto"
           >
             <div
-              className="flex items-center gap-3 p-2 rounded-2xl border-2 bg-base-100 shadow-lg"
-              style={{ borderColor: `${THEME.accent}30` }}
+              className="flex items-center gap-2 p-2 rounded-2xl"
+              style={{
+                background:  'var(--base-100)',
+                border:      `2px solid ${T.accentBorder}`,
+                boxShadow:   `0 8px 32px ${T.accentShadow}`,
+              }}
             >
+              {/* Search icon */}
               <div
                 className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center"
-                style={{ background: THEME.accentLight }}
+                style={{ background: T.accentBg }}
+                aria-hidden="true"
               >
-                <Search size={16} style={{ color: THEME.accent }} />
+                <Search size={16} style={{ color: T.accent }} />
               </div>
+
               <input
                 type="search"
                 value={searchQuery}
                 onChange={e => handleSearch(e.target.value)}
                 placeholder="Search doctors by name or specialization…"
-                className="flex-1 bg-transparent text-sm font-medium outline-none placeholder:opacity-30"
                 aria-label="Search doctors"
+                className="flex-1 bg-transparent text-sm font-medium outline-none"
+                style={{
+                  color: 'var(--base-content)',
+                  fontFamily: 'var(--font-family-poppins)',
+                }}
               />
+
               {searchQuery && (
                 <button
                   onClick={() => handleSearch('')}
-                  className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-base-200 transition-colors"
+                  aria-label="Clear search"
+                  className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors hover:bg-base-200"
                 >
-                  <X size={14} />
+                  <X size={13} style={{ color: 'var(--base-content)', opacity: 0.5 }} />
                 </button>
               )}
+
+              {/* Filter toggle */}
               <button
                 onClick={() => setShowFilters(p => !p)}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-[12px] border transition-all"
+                aria-label={`Toggle filters${activeFilterCount > 0 ? `, ${activeFilterCount} active` : ''}`}
+                aria-expanded={showFilters}
+                className="relative flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-[12px] border transition-all"
                 style={{
-                  background:  showFilters ? THEME.accentLight : 'var(--base-200)',
-                  color:       showFilters ? THEME.accent       : 'inherit',
-                  borderColor: showFilters ? `${THEME.accent}40` : 'var(--base-300)',
+                  background:  showFilters ? T.accentBg  : 'var(--base-200)',
+                  color:       showFilters ? T.accent     : 'var(--base-content)',
+                  borderColor: showFilters ? T.accent     : 'var(--base-300)',
                 }}
-                aria-label="Toggle filters"
               >
-                <SlidersHorizontal size={14} />
+                <SlidersHorizontal size={14} aria-hidden="true" />
                 <span className="hidden sm:inline">Filters</span>
+                {activeFilterCount > 0 && (
+                  <span
+                    className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full text-[9px] font-black flex items-center justify-center"
+                    style={{ background: T.accent, color: 'var(--primary-content)' }}
+                    aria-hidden="true"
+                  >
+                    {activeFilterCount}
+                  </span>
+                )}
               </button>
             </div>
           </motion.div>
-        </div>
+        </Container>
       </section>
 
-      {/* ── SPECIALIZATION TABS ─────────────────────────────────────── */}
-      <section className="border-b border-base-300 sticky top-[64px] z-30 bg-base-100/95 backdrop-blur-md">
-        <div className="container-custom">
-          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none py-3 -mx-1 px-1">
+      {/* ── TRUST STATS ──────────────────────────────────────────────── */}
+      <TrustBar />
+
+      {/* ── SPECIALIZATION TABS ──────────────────────────────────────── */}
+      <div
+        className="sticky z-30 border-b"
+        style={{
+          top: 'var(--header-height, 72px)',
+          background: 'color-mix(in srgb, var(--base-100) 94%, transparent)',
+          backdropFilter: 'blur(16px)',
+          borderColor: 'var(--base-300)',
+        }}
+      >
+        <Container>
+          <div
+            ref={specScrollRef}
+            className="flex items-center gap-1.5 overflow-x-auto py-3 -mx-1 px-1"
+            style={{ scrollbarWidth: 'none' }}
+            aria-label="Filter by specialization"
+            role="tablist"
+          >
             {SPECIALIZATIONS.map(({ label, value, icon }) => {
               const isActive = selectedSpec === value;
               return (
@@ -705,33 +901,33 @@ export default function DoctorsPage() {
                   onClick={() => handleSpecChange(value)}
                   whileHover={{ scale: 1.03 }}
                   whileTap={{ scale: 0.96 }}
+                  role="tab"
+                  aria-selected={isActive}
+                  aria-label={`Filter by ${label}`}
                   className="flex-shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-[11px] font-black uppercase tracking-wide border transition-all"
                   style={{
-                    background:  isActive ? THEME.gradient   : 'var(--base-200)',
-                    color:       isActive ? '#fff'            : 'var(--base-content)',
-                    borderColor: isActive ? 'transparent'     : 'var(--base-300)',
-                    boxShadow:   isActive ? `0 4px 16px ${THEME.shadow}` : 'none',
-                    opacity:     isActive ? 1 : 0.7,
+                    background:  isActive ? T.accentGrad   : 'var(--base-200)',
+                    color:       isActive ? 'var(--primary-content)' : 'var(--base-content)',
+                    borderColor: isActive ? 'transparent'   : 'var(--base-300)',
+                    boxShadow:   isActive ? `0 4px 16px ${T.accentShadow}` : 'none',
+                    opacity:     isActive ? 1 : 0.65,
                   }}
                 >
-                  <span>{icon}</span>
+                  <span aria-hidden="true">{icon}</span>
                   {label}
                 </motion.button>
               );
             })}
           </div>
-        </div>
-      </section>
+        </Container>
+      </div>
 
       {/* ── MAIN CONTENT ─────────────────────────────────────────────── */}
-      <div className="container-custom py-6 md:py-8" ref={topRef}>
+      <Container className="py-6 md:py-8" ref={topRef}>
 
         <AnimatePresence>
           {showNearbyBanner && nearbyDoctors.length > 0 && (
-            <NearbyBanner
-              count={nearbyDoctors.length}
-              onDismiss={() => setShowNearbyBanner(false)}
-            />
+            <NearbyBanner count={nearbyDoctors.length} onDismiss={() => setShowNearbyBanner(false)} />
           )}
         </AnimatePresence>
 
@@ -745,12 +941,9 @@ export default function DoctorsPage() {
                 animate={{ opacity: 1, width: 260 }}
                 exit={{ opacity: 0, width: 0 }}
                 className="hidden lg:block flex-shrink-0 overflow-hidden"
+                aria-label="Filter panel"
               >
-                <FilterPanel
-                  filters={filters}
-                  onChange={handleFilterChange}
-                  onClose={() => setShowFilters(false)}
-                />
+                <FilterPanel filters={filters} onChange={handleFilterChange} onClose={() => setShowFilters(false)} />
               </motion.aside>
             )}
           </AnimatePresence>
@@ -766,25 +959,23 @@ export default function DoctorsPage() {
                   exit={{ opacity: 0, height: 0 }}
                   className="lg:hidden mb-5 overflow-hidden"
                 >
-                  <FilterPanel
-                    filters={filters}
-                    onChange={handleFilterChange}
-                    onClose={() => setShowFilters(false)}
-                  />
+                  <FilterPanel filters={filters} onChange={handleFilterChange} onClose={() => setShowFilters(false)} />
                 </motion.div>
               )}
             </AnimatePresence>
 
-            {/* Results header */}
+            {/* ── RESULTS HEADER ──────────────────────────────────── */}
             <div className="flex items-center justify-between mb-5">
-              <motion.div variants={fadeSlide} initial="hidden" animate="show">
+              <motion.div variants={fadeIn} initial="hidden" animate="show">
                 {isLoadingAll ? (
-                  <div className="h-5 w-40 rounded-lg skeleton" />
+                  <div className="h-5 w-40 rounded-lg skeleton" aria-hidden="true" />
                 ) : (
-                  <p className="text-sm font-bold">
-                    <span className="font-black" style={{ color: THEME.accent }}>{total}</span>
+                  <p className="text-sm font-bold" style={{ color: 'var(--base-content)' }}>
+                    <span className="font-black" style={{ color: T.accent }}>{total}</span>
                     {' '}doctor{total !== 1 ? 's' : ''} found
-                    {selectedSpec && <span className="opacity-40"> in {selectedSpec}</span>}
+                    {selectedSpec && (
+                      <span style={{ opacity: 0.4 }}> in {selectedSpec}</span>
+                    )}
                   </p>
                 )}
               </motion.div>
@@ -792,9 +983,14 @@ export default function DoctorsPage() {
               <select
                 value={filters.sort}
                 onChange={e => handleFilterChange('sort', e.target.value)}
-                className="text-[11px] font-bold border border-base-300 rounded-xl px-3 py-2 bg-base-200 outline-none"
-                style={{ color: THEME.accent }}
                 aria-label="Sort doctors"
+                className="text-[11px] font-bold rounded-xl px-3 py-2 outline-none cursor-pointer border"
+                style={{
+                  background:  'var(--base-200)',
+                  borderColor: 'var(--base-300)',
+                  color:       T.accent,
+                  fontFamily:  'var(--font-family-poppins)',
+                }}
               >
                 {SORT_OPTIONS.map(({ label, value }) => (
                   <option key={value} value={value}>{label}</option>
@@ -802,62 +998,64 @@ export default function DoctorsPage() {
               </select>
             </div>
 
-            {/* Nearby sub-section (after banner dismissed) */}
+            {/* Nearby sub-section */}
             {!showNearbyBanner && nearbyDoctors.length > 0
               && activeTab === 'all' && !selectedSpec && !searchQuery && (
               <div className="mb-8">
                 <div className="flex items-center gap-2 mb-4">
-                  <MapPin size={15} style={{ color: THEME.accent }} />
-                  <h2
-                    className="font-black text-sm uppercase tracking-wider"
-                    style={{ color: THEME.accent }}
+                  <div
+                    className="w-6 h-6 rounded-lg flex items-center justify-center"
+                    style={{ background: T.accentBg }}
+                    aria-hidden="true"
                   >
+                    <MapPin size={12} style={{ color: T.accent }} />
+                  </div>
+                  <h2 className="font-black text-sm uppercase tracking-wider" style={{ color: T.accent }}>
                     Near You
                   </h2>
-                  <div className="flex-1 h-px bg-base-300" />
+                  <div className="flex-1 h-px" style={{ background: 'var(--base-300)' }} aria-hidden="true" />
                 </div>
                 <motion.div
-                  variants={containerVariants}
+                  variants={containerVar}
                   initial="hidden"
                   animate="show"
-                  className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4"
+                  className="grid grid-cols-1 sm:grid-cols-2 gap-4"
                 >
-                  {nearbyDoctors.slice(0, 3).map(doc => (
+                  {nearbyDoctors.slice(0, 2).map(doc => (
                     <DoctorCard key={doc._id} doctor={doc} />
                   ))}
                 </motion.div>
               </div>
             )}
 
-            {/* Main grid */}
+            {/* ── GRID ──────────────────────────────────────────── */}
             {isLoadingAll ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                 {Array.from({ length: 9 }).map((_, i) => <SkeletonCard key={i} />)}
               </div>
             ) : displayedDoctors.length === 0 ? (
               <motion.div
-                initial={{ opacity: 0, y: 20 }}
+                initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="flex flex-col items-center justify-center py-20 text-center"
               >
                 <div
                   className="w-20 h-20 rounded-3xl flex items-center justify-center mb-5 mx-auto"
-                  style={{ background: THEME.accentLight }}
+                  style={{ background: T.accentBg }}
+                  aria-hidden="true"
                 >
-                  <Stethoscope size={32} style={{ color: THEME.accent, opacity: 0.6 }} />
+                  <Stethoscope size={32} style={{ color: T.accent, opacity: 0.6 }} />
                 </div>
-                <h3 className="font-black text-lg mb-2">No doctors found</h3>
-                <p className="text-sm opacity-50 mb-5 max-w-xs">
+                <h3 className="font-black text-lg mb-2" style={{ color: 'var(--base-content)' }}>
+                  No doctors found
+                </h3>
+                <p className="text-sm mb-6 max-w-xs" style={{ color: 'var(--base-content)', opacity: 0.5 }}>
                   Try adjusting your search or filters to find available doctors.
                 </p>
                 <button
-                  onClick={() => {
-                    handleSearch('');
-                    handleSpecChange('');
-                    handleFilterChange('reset');
-                  }}
-                  className="px-6 py-2.5 rounded-xl font-black text-sm text-white"
-                  style={{ background: THEME.gradient }}
+                  onClick={() => { handleSearch(''); handleSpecChange(''); handleFilterChange('reset'); }}
+                  className="px-6 py-2.5 rounded-xl font-black text-sm"
+                  style={{ background: T.accentGrad, color: 'var(--primary-content)' }}
                 >
                   Clear all filters
                 </button>
@@ -866,7 +1064,7 @@ export default function DoctorsPage() {
               <AnimatePresence mode="popLayout">
                 <motion.div
                   key={`${activeTab}-${selectedSpec}-${currentPage}`}
-                  variants={containerVariants}
+                  variants={containerVar}
                   initial="hidden"
                   animate="show"
                   className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4"
@@ -878,50 +1076,60 @@ export default function DoctorsPage() {
               </AnimatePresence>
             )}
 
-            {/* Pagination */}
+            {/* ── PAGINATION ─────────────────────────────────────── */}
             {pages > 1 && !isLoadingAll && (
-              <motion.div
+              <motion.nav
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="flex items-center justify-center gap-2 mt-8"
+                className="flex items-center justify-center gap-2 mt-10"
+                aria-label="Pagination"
               >
                 <button
                   onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                   disabled={page <= 1}
-                  className="px-4 py-2 rounded-xl text-[12px] font-black border border-base-300 disabled:opacity-30 hover:border-base-content/40 transition-all"
+                  aria-label="Previous page"
+                  className="px-4 py-2 rounded-xl text-[12px] font-black border disabled:opacity-30 transition-all hover:border-base-content/40"
+                  style={{ borderColor: 'var(--base-300)', color: 'var(--base-content)', background: 'var(--base-100)' }}
                 >
                   Prev
                 </button>
+
                 {Array.from({ length: Math.min(5, pages) }, (_, i) => {
                   const p = Math.max(1, Math.min(page - 2, pages - 4)) + i;
+                  const isCurrentPage = p === page;
                   return (
                     <button
                       key={p}
                       onClick={() => setCurrentPage(p)}
+                      aria-label={`Page ${p}`}
+                      aria-current={isCurrentPage ? 'page' : undefined}
                       className="w-9 h-9 rounded-xl text-[12px] font-black border transition-all"
                       style={{
-                        background:  p === page ? THEME.gradient  : 'transparent',
-                        color:       p === page ? '#fff'          : 'inherit',
-                        borderColor: p === page ? 'transparent'   : 'var(--base-300)',
-                        boxShadow:   p === page ? `0 4px 14px ${THEME.shadow}` : 'none',
+                        background:  isCurrentPage ? T.accentGrad   : 'transparent',
+                        color:       isCurrentPage ? 'var(--primary-content)' : 'var(--base-content)',
+                        borderColor: isCurrentPage ? 'transparent'   : 'var(--base-300)',
+                        boxShadow:   isCurrentPage ? `0 4px 14px ${T.accentShadow}` : 'none',
                       }}
                     >
                       {p}
                     </button>
                   );
                 })}
+
                 <button
                   onClick={() => setCurrentPage(p => Math.min(pages, p + 1))}
                   disabled={page >= pages}
-                  className="px-4 py-2 rounded-xl text-[12px] font-black border border-base-300 disabled:opacity-30 hover:border-base-content/40 transition-all"
+                  aria-label="Next page"
+                  className="px-4 py-2 rounded-xl text-[12px] font-black border disabled:opacity-30 transition-all hover:border-base-content/40"
+                  style={{ borderColor: 'var(--base-300)', color: 'var(--base-content)', background: 'var(--base-100)' }}
                 >
                   Next
                 </button>
-              </motion.div>
+              </motion.nav>
             )}
           </div>
         </div>
-      </div>
-    </main>
+      </Container>
+    </div>
   );
 }

@@ -28,6 +28,7 @@ import {
   Ambulance, RotateCcw, Home, FileText, CreditCard,
   Activity, Package, Shield, IndianRupee,
   MessageCircle, ThumbsUp, RefreshCw, Copy, ExternalLink, Info,
+  Navigation2,
 } from 'lucide-react';
 
 import {
@@ -45,6 +46,8 @@ import {
   selectRateBooking,
   selectRateBookingLoading,
 } from '@/store/slices/bookingSlice';
+
+
 
 // ─── Google Maps Singleton ────────────────────────────────────────────────────
 // Ensures the Maps script is injected exactly once per page lifetime,
@@ -748,6 +751,18 @@ export default function BookingDetailsPage() {
                     Rate
                   </button>
                 )}
+                {['full_care_ride', 'patient_transport', 'diagnostic_home'].includes(booking.bookingType) &&
+ ['confirmed', 'in_progress'].includes(booking.status) && (
+  <Link
+    href={`/my-bookings/${booking._id}/live`}
+    className="btn btn-info btn-sm gap-1.5"
+    aria-label="Track live location"
+  >
+    <Navigation2 size={13} aria-hidden="true" />
+    Track
+  </Link>
+)}
+
               </div>
             </div>
           </div>
@@ -1103,25 +1118,35 @@ export default function BookingDetailsPage() {
               )}
 
               {/* CTAs */}
-              {(canCancel || canRate) && (
-                <div className="space-y-3">
-                  {canRate && (
-                    <button onClick={() => setShowRating(true)} className="btn btn-primary w-full gap-2">
-                      <Star size={15} aria-hidden="true" />
-                      Rate Your Experience
-                    </button>
-                  )}
-                  {canCancel && (
-                    <button
-                      onClick={() => setShowCancel(true)}
-                      className="btn btn-outline w-full gap-2 text-error border-error/40 hover:bg-error hover:text-error-content hover:border-error"
-                    >
-                      <X size={15} aria-hidden="true" />
-                      Cancel Booking
-                    </button>
-                  )}
-                </div>
-              )}
+            {(canCancel || canRate || (['full_care_ride','patient_transport','diagnostic_home'].includes(booking.bookingType) && ['confirmed','in_progress'].includes(booking.status))) && (
+  <div className="space-y-3">
+    {['full_care_ride','patient_transport','diagnostic_home'].includes(booking.bookingType) &&
+     ['confirmed','in_progress'].includes(booking.status) && (
+      <Link
+        href={`/my-bookings/${booking._id}/live`}
+        className="btn btn-info w-full gap-2"
+      >
+        <Navigation2 size={15} aria-hidden="true" />
+        Track Live Location
+      </Link>
+    )}
+    {canRate && (
+      <button onClick={() => setShowRating(true)} className="btn btn-primary w-full gap-2">
+        <Star size={15} aria-hidden="true" />
+        Rate Your Experience
+      </button>
+    )}
+    {canCancel && (
+      <button
+        onClick={() => setShowCancel(true)}
+        className="btn btn-outline w-full gap-2 text-error border-error/40 hover:bg-error hover:text-error-content hover:border-error"
+      >
+        <X size={15} aria-hidden="true" />
+        Cancel Booking
+      </button>
+    )}
+  </div>
+)}
 
               {/* Quick Links */}
               <nav className="card p-4 space-y-1" aria-label="Quick links">

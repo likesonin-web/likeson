@@ -34,7 +34,7 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
-import { Server }           from 'socket.io';   // FIX: named import as requested
+import { Server }           from 'socket.io';
 import jwt                  from 'jsonwebtoken';
 import mongoose             from 'mongoose';
 
@@ -59,7 +59,7 @@ let _instance = null;
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const LOCATION_THROTTLE_MS = 2000; // 2 s between location pushes per socket
+const LOCATION_THROTTLE_MS = 2000; // 2s between location pushes per socket
 const MAX_PATH_POINTS      = 500;  // cap breadcrumb trail per RideTracking doc
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -127,7 +127,7 @@ const canJoinRoom = async (user, room) => {
     if (['admin', 'superadmin'].includes(role)) return { allowed: true };
 
     const booking = await Booking.findById(bookingId)
-      .select('customer transport.driver careAssistant.careAssistant assignedTP')
+      .select('customer transportPartner careAssistant primaryRide')
       .lean();
 
     if (!booking) return { allowed: false, reason: 'Booking not found' };
@@ -135,14 +135,8 @@ const canJoinRoom = async (user, room) => {
     // Customer
     if (booking.customer?.toString() === userId) return { allowed: true };
 
-    // Driver (agency or solo) — check via Driver profile OR Ride assignment
+    // Driver (agency or solo) — check via Ride assignment
     if (['driver', 'solodriverpartner'].includes(role)) {
-      // Check if Driver profile linked
-      const driver = await Driver.findOne({ user: userId }).select('_id').lean();
-      if (driver && booking.transport?.driver?.toString() === driver._id.toString())
-        return { allowed: true };
-
-      // Also allow if a Ride doc links this driver to this booking
       const ride = await Ride.findOne({ booking: bookingId, driver: userId })
         .select('_id')
         .lean();
@@ -154,18 +148,14 @@ const canJoinRoom = async (user, room) => {
       const caProfile = await CareAssistantProfile.findOne({ user: userId })
         .select('_id')
         .lean();
-      if (
-        caProfile &&
-        booking.careAssistant?.careAssistant?.toString() === caProfile._id.toString()
-      )
+      if (caProfile && booking.careAssistant?.toString() === caProfile._id.toString())
         return { allowed: true };
     }
 
-    // Transport partner — can monitor bookings in their fleet
+    // Transport partner — can monitor bookings assigned to their fleet
     if (role === 'transportpartner') {
       const tp = await TransportPartner.findOne({ user: userId }).select('_id').lean();
-      // FIX: check booking.assignedTP (root field, not booking.transport.assignedTP)
-      if (tp && booking.assignedTP?.toString() === tp._id.toString())
+      if (tp && booking.transportPartner?.toString() === tp._id.toString())
         return { allowed: true };
     }
 
@@ -238,6 +228,48 @@ class BookingSocketService {
    */
   emitToAdminOps(event, payload) {
     this.emitToRoom('admin:ops', event, payload);
+  }
+
+  /**
+   * Force a user's socket(s) to join a room server-side.
+   * Used after driver/CA/TP assignment so they receive room events immediately
+   * without waiting for the client to emit join_booking_room.
+   *
+   * Called from routers via joinBookingRoom / joinTpRoom helpers:
+   *   getBookingSocketService()?.emitJoinRoom(String(userId), `booking:${bookingId}`);
+   *   getBookingSocketService()?.emitJoinRoom(String(userId), `tp:${tpId}`);
+   *
+   * If user not currently connected → socketIds is empty → no-op (safe).
+   * Client will join via join_booking_room event on next reconnect.
+   *
+   * @param {string} userId
+   * @param {string} room  — e.g. "booking:abc123" | "tp:xyz"
+   */
+  emitJoinRoom(userId, room) {
+    const socketIds = this.getSocketIdsByUser(String(userId));
+    if (!socketIds.length) return; // user offline — no-op, safe
+
+    for (const id of socketIds) {
+      // Socket.io v4: io.in(socketId).socketsJoin(room) — server-side join
+      this.io.in(id).socketsJoin(room);
+
+      // Track in connectedClients map so getStats() + joinedRooms stay accurate
+      this.connectedClients.get(id)?.joinedRooms.add(room);
+
+      console.log(`[Socket] Server-joined ${id} (${userId}) → ${room}`);
+    }
+
+    // Notify others in booking room that participant joined
+    if (room.startsWith('booking:')) {
+      const meta = this.connectedClients.get(socketIds[0]);
+      if (meta) {
+        this.io.to(room).emit('participant_joined', {
+          role:      meta.role,
+          name:      meta.name,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    }
   }
 
   // ── Setup: attach all listeners to incoming socket ────────────────────────
@@ -356,10 +388,10 @@ class BookingSocketService {
      * Rate-limited: 1 push per LOCATION_THROTTLE_MS per socket (silently dropped).
      *
      * Writes:
-     *   Driver.location                  (agency driver)
+     *   Driver.location                              (agency driver)
      *   SoloDriverPartner.vehicle.lastKnownLocation  (solo)
      *   Ride.liveLocation
-     *   RideTracking.currentLocation + .path (capped at MAX_PATH_POINTS)
+     *   RideTracking breadcrumbs (capped at MAX_PATH_POINTS)
      *
      * Emits:
      *   location_update → booking:{bookingId}
@@ -379,73 +411,69 @@ class BookingSocketService {
         const coords = [lng, lat];
 
         // ── Update driver live location ───────────────────────────────────
-        if (['driver', 'solodriverpartner'].includes(role)) {
-          if (role === 'driver') {
-            await Driver.findOneAndUpdate(
-              { user: userId },
-              {
-                'location.coordinates': coords,
-                'location.heading':     heading ?? 0,
-                'location.speedKmh':    speed   ?? 0,
-                'location.updatedAt':   new Date(),
-              }
-            );
-          } else {
-            // Solo driver partner
-            await SoloDriverPartner.findOneAndUpdate(
-              { user: userId },
-              {
-                'vehicle.lastKnownLocation.coordinates': coords,
-                'vehicle.lastLocationUpdatedAt':         new Date(),
-              }
-            );
-          }
+        if (role === 'driver') {
+          await Driver.findOneAndUpdate(
+            { user: userId },
+            {
+              'location.coordinates': coords,
+              'location.heading':     heading ?? 0,
+              'location.speedKmh':    speed   ?? 0,
+              'location.updatedAt':   new Date(),
+            }
+          );
+        } else if (role === 'solodriverpartner') {
+          await SoloDriverPartner.findOneAndUpdate(
+            { user: userId },
+            {
+              'vehicle.lastKnownLocation.coordinates': coords,
+              'vehicle.lastLocationUpdatedAt':         new Date(),
+            }
+          );
         }
 
-        // ── Update Ride + RideTracking ─────────────────────────────────────
+        // ── Update Ride + RideTracking ────────────────────────────────────
         if (bookingId && mongoose.Types.ObjectId.isValid(bookingId)) {
           const ride = await Ride.findOne({
             booking: bookingId,
             driver:  userId,
-            status:  { $in: ['En-Route', 'Arrived', 'Started'] },
-          }).select('_id liveLocation').lean();
+            status:  {
+              $in: [
+                'driver_assigned', 'driver_accepted', 'driver_en_route',
+                'driver_arrived',  'otp_verified',    'in_progress', 'at_stop',
+              ],
+            },
+          }).select('_id trackingId liveLocation').lean();
 
           if (ride) {
             // Update live location on Ride
             await Ride.findByIdAndUpdate(ride._id, {
-              liveLocation: { type: 'Point', coordinates: coords },
+              liveLocation: {
+                type:        'Point',
+                coordinates: coords,
+                heading:     heading ?? 0,
+                speedKmh:    speed   ?? 0,
+                updatedAt:   new Date(),
+              },
             });
 
-            // Append to tracking path — capped at MAX_PATH_POINTS
-            await RideTracking.findOneAndUpdate(
-              { ride: ride._id },
-              {
-                currentLocation: { type: 'Point', coordinates: coords },
-                $push: {
-                  path: {
-                    $each: [{
-                      lat,
-                      lng,
-                      speed:     speed   ?? 0,
-                      heading:   heading ?? 0,
-                      timestamp: new Date(),
-                    }],
-                    $slice: -MAX_PATH_POINTS,
-                  },
-                },
-                'metrics.lastUpdateAt': new Date(),
-              },
-              { upsert: true }
-            );
+            // Append breadcrumb to RideTracking — capped at MAX_PATH_POINTS
+            if (ride.trackingId) {
+              await RideTracking.addBreadcrumb(ride._id, {
+                coordinates: coords,
+                heading:     heading ?? 0,
+                speedKmh:    speed   ?? 0,
+                source:      'gps',
+              }).catch(e => console.error('[driver_location] breadcrumb:', e.message));
+            }
 
             // Emit to booking room
             this.io.to(`booking:${bookingId}`).emit('location_update', {
               lat,
               lng,
-              heading:    heading ?? 0,
-              speed:      speed   ?? 0,
-              role:       role === 'solodriverpartner' ? 'solo_driver' : 'driver',
-              updatedAt:  new Date().toISOString(),
+              heading:   heading ?? 0,
+              speed:     speed   ?? 0,
+              role:      role === 'solodriverpartner' ? 'solo_driver' : 'driver',
+              updatedAt: new Date().toISOString(),
             });
           }
         }
@@ -529,8 +557,8 @@ class BookingSocketService {
 
     // ── request_booking_state ────────────────────────────────────────────────
     /**
-     * Client can request a snapshot of the booking state at any time.
-     * Useful after reconnect — avoids client needing to call REST endpoint.
+     * Client requests snapshot of booking state.
+     * Useful after reconnect — avoids extra REST call.
      * Payload: { bookingId }
      */
     socket.on('request_booking_state', async ({ bookingId } = {}) => {
@@ -540,7 +568,6 @@ class BookingSocketService {
           return;
         }
 
-        // Check room access
         const room = `booking:${bookingId}`;
         const { allowed, reason } = await canJoinRoom({ _id: userId, role }, room);
         if (!allowed) {
@@ -549,7 +576,7 @@ class BookingSocketService {
         }
 
         const booking = await Booking.findById(bookingId)
-          .select('status scheduledAt serviceType patientName billing.netAmount transport.driver careAssistant.careAssistant')
+          .select('status scheduledAt bookingType patientInfo fareBreakdown primaryRide')
           .lean();
 
         if (!booking) {
@@ -559,13 +586,18 @@ class BookingSocketService {
 
         const activeRide = await Ride.findOne({
           booking: bookingId,
-          status:  { $in: ['Assigned', 'Accepted', 'En-Route', 'Arrived', 'Started'] },
-        }).select('status liveLocation driver').lean();
+          status: {
+            $in: [
+              'driver_assigned', 'driver_accepted', 'driver_en_route',
+              'driver_arrived',  'otp_verified',    'in_progress', 'at_stop',
+            ],
+          },
+        }).select('status liveLocation driverSnapshot vehicleSnapshot trackingId').lean();
 
         let tracking = null;
-        if (activeRide) {
-          tracking = await RideTracking.findOne({ ride: activeRide._id })
-            .select('currentLocation metrics')
+        if (activeRide?.trackingId) {
+          tracking = await RideTracking.findById(activeRide.trackingId)
+            .select('currentEtaMinutes totalDistanceKm hasActiveSos')
             .lean();
         }
 
@@ -574,16 +606,17 @@ class BookingSocketService {
           bookingStatus: booking.status,
           ride: activeRide
             ? {
-                status:       activeRide.status,
-                liveLocation: activeRide.liveLocation,
+                status:         activeRide.status,
+                liveLocation:   activeRide.liveLocation,
+                driverSnapshot: activeRide.driverSnapshot,
+                vehicleSnapshot:activeRide.vehicleSnapshot,
               }
             : null,
           tracking: tracking
             ? {
-                currentLocation:   tracking.currentLocation,
-                remainingDistance: tracking.metrics?.remainingDistanceMeter,
-                remainingDuration: tracking.metrics?.remainingDurationSecond,
-                lastUpdatedAt:     tracking.metrics?.lastUpdateAt,
+                currentEtaMinutes: tracking.currentEtaMinutes,
+                totalDistanceKm:   tracking.totalDistanceKm,
+                hasActiveSos:      tracking.hasActiveSos,
               }
             : null,
           _serverTime: new Date().toISOString(),
@@ -596,8 +629,8 @@ class BookingSocketService {
 
     // ── otp_resend_request ───────────────────────────────────────────────────
     /**
-     * Customer requests OTP resend via socket (alternative to REST).
-     * Server notifies the booking room so driver app can re-display OTP screen.
+     * Customer requests OTP resend via socket.
+     * Notifies driver side to re-display OTP screen.
      * Payload: { bookingId }
      */
     socket.on('otp_resend_request', async ({ bookingId } = {}) => {
@@ -608,7 +641,6 @@ class BookingSocketService {
         const { allowed } = await canJoinRoom({ _id: userId, role }, room);
         if (!allowed) return;
 
-        // Notify driver side to re-show OTP entry
         socket.to(room).emit('otp_resend_requested', {
           bookingId,
           requestedBy: 'customer',
@@ -671,7 +703,6 @@ class BookingSocketService {
 
     for (const [, meta] of this.connectedClients) {
       byRole[meta.role] = (byRole[meta.role] || 0) + 1;
-
       for (const room of meta.joinedRooms) {
         rooms[room] = (rooms[room] || 0) + 1;
       }
@@ -687,14 +718,13 @@ class BookingSocketService {
 
   /**
    * Get all socket IDs for a given userId.
-   * Useful when you want to target a specific user across multiple tabs.
    * @param {string} userId
-   * @returns {string[]} socketIds
+   * @returns {string[]}
    */
   getSocketIdsByUser(userId) {
     const ids = [];
     for (const [socketId, meta] of this.connectedClients) {
-      if (meta.userId === userId) ids.push(socketId);
+      if (meta.userId === String(userId)) ids.push(socketId);
     }
     return ids;
   }
@@ -706,7 +736,7 @@ class BookingSocketService {
    */
   isUserOnline(userId) {
     for (const [, meta] of this.connectedClients) {
-      if (meta.userId === userId) return true;
+      if (meta.userId === String(userId)) return true;
     }
     return false;
   }
@@ -718,7 +748,7 @@ class BookingSocketService {
    * @param {object} payload
    */
   emitToUser(userId, event, payload) {
-    const socketIds = this.getSocketIdsByUser(userId);
+    const socketIds = this.getSocketIdsByUser(String(userId));
     for (const id of socketIds) {
       this.emitToSocket(id, event, payload);
     }
@@ -744,18 +774,12 @@ class BookingSocketService {
  * import { initBookingSocket } from './services/bookingSocketService.js';
  *
  * const httpServer = http.createServer(app);
- *
  * const io = new Server(httpServer, {
- *   cors: {
- *     origin:  process.env.FRONTEND_URL,
- *     methods: ['GET', 'POST'],
- *   },
+ *   cors: { origin: process.env.FRONTEND_URL, methods: ['GET','POST'] },
  *   pingTimeout:  60000,
  *   pingInterval: 25000,
  * });
- *
  * initBookingSocket(io);
- *
  * httpServer.listen(process.env.PORT || 5000);
  */
 export const initBookingSocket = (io) => {
@@ -774,21 +798,19 @@ export const initBookingSocket = (io) => {
         socket.handshake.auth?.token ||
         socket.handshake.headers?.authorization?.replace('Bearer ', '');
 
-      if (!token) {
+      if (!token)
         return next(new Error('AUTH_MISSING: No token provided'));
-      }
 
       const decoded = verifySocketToken(token);
-      if (!decoded?._id) {
+      if (!decoded?._id)
         return next(new Error('AUTH_INVALID: Token invalid or expired'));
-      }
 
       // Verify user exists + not blocked
       const user = await User.findById(decoded._id)
         .select('name role isBlocked')
         .lean();
 
-      if (!user)         return next(new Error('AUTH_USER_NOT_FOUND'));
+      if (!user)          return next(new Error('AUTH_USER_NOT_FOUND'));
       if (user.isBlocked) return next(new Error('AUTH_BLOCKED: Account suspended'));
 
       // Attach decoded user to socket
@@ -830,8 +852,5 @@ export const initBookingSocket = (io) => {
  */
 export const getBookingSocketService = () => _instance;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// RE-EXPORT Server so callers can import from here if needed
-// (Keeps server.js import surface small)
-// ─────────────────────────────────────────────────────────────────────────────
+// Re-export Server so callers can import from here if needed
 export { Server };

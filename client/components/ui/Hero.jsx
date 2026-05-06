@@ -135,19 +135,30 @@ const Fallback = memo(() => (
 ));
 Fallback.displayName = "Fallback";
 
+// ─── CtaButton — uses global.css .btn variants ──────────────────────────────
 const CtaButton = memo(({ btn }) => {
+
+  // Map DB variant → global.css .btn classes
   const getVariantClass = (variant) => {
     switch (variant) {
-      case "primary":
-        return "btn-primary-cta";
-      case "secondary":
-        return "btn-secondary";
-      case "outline":
-        return "btn-secondary";
-      case "ghost":
-        return "text-primary hover:bg-base-200 px-6 py-3 font-bold text-sm uppercase tracking-wider rounded-[var(--r-field)] transition-colors duration-200";
+      case 'primary':
+        // Gradient CTA — most prominent, hero's main action
+        return 'btn btn-lg btn-primary-cta';
+
+      case 'secondary':
+        // Solid secondary colour fill
+        return 'btn btn-lg btn-secondary';
+
+      case 'outline':
+        // Transparent + primary border → fills on hover
+        return 'btn btn-lg btn-outline';
+
+      case 'ghost':
+        // No bg, no border — lightest option
+        return 'btn btn-lg btn-ghost';
+
       default:
-        return "btn-primary-cta";
+        return 'btn btn-lg btn-primary-cta';
     }
   };
 
@@ -155,14 +166,12 @@ const CtaButton = memo(({ btn }) => {
     <motion.span
       whileHover={{ scale: 1.03, y: -2 }}
       whileTap={{ scale: 0.97 }}
-      className={`inline-flex w-full sm:w-auto h-12 sm:h-13 items-center justify-center gap-2 cursor-pointer select-none ${getVariantClass(btn.variant)}`}
+      className={`w-full sm:w-auto ${getVariantClass(btn.variant)}`}
     >
       {btn.label}
-      {btn.isExternal ? (
-        <ExternalLink size={14} aria-hidden="true" />
-      ) : (
-        <ArrowRight size={14} aria-hidden="true" />
-      )}
+      {btn.isExternal
+        ? <ExternalLink size={15} aria-hidden="true" />
+        : <ArrowRight    size={15} aria-hidden="true" />}
     </motion.span>
   );
 
@@ -190,6 +199,8 @@ const CtaButton = memo(({ btn }) => {
     </Link>
   );
 });
+CtaButton.displayName = "CtaButton";
+
 CtaButton.displayName = "CtaButton";
 
 const TrustRow = memo(({ priority, centred }) => (

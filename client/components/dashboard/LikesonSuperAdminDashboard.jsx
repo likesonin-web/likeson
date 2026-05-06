@@ -57,13 +57,12 @@ const bellRingingVariant = {
  * Uses next-themes. Renders nothing until mounted to avoid hydration flash.
  */
 const ThemeToggle = memo(function ThemeToggle() {
-  const { theme, setTheme, resolvedTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => setMounted(true), []);
 
   if (!mounted) {
-    // Placeholder keeps layout stable during SSR
     return (
       <div
         className="w-10 h-10 rounded-xl border border-base-300 skeleton"
@@ -72,29 +71,19 @@ const ThemeToggle = memo(function ThemeToggle() {
     );
   }
 
-  const cycle = () => {
-    if (theme === "system") setTheme("light");
-    else if (theme === "light") setTheme("dark");
-    else setTheme("system");
+  // Simplified toggle logic: strictly between light and dark
+  const toggleTheme = () => {
+    setTheme(theme === "dark" ? "light" : "dark");
   };
 
-  const Icon =
-    theme === "system"
-      ? Monitor
-      : resolvedTheme === "dark"
-      ? Moon
-      : Sun;
+  // Determine Icon based on the current theme state
+  const Icon = theme === "dark" ? Moon : Sun;
 
-  const label =
-    theme === "system"
-      ? "System theme — click for Light"
-      : theme === "light"
-      ? "Light theme — click for Dark"
-      : "Dark theme — click for System";
+  const label = `Switch to ${theme === "dark" ? "light" : "dark"} mode`;
 
   return (
     <button
-      onClick={cycle}
+      onClick={toggleTheme}
       aria-label={label}
       title={label}
       className="p-2.5 rounded-xl border border-base-300 text-base-content/50 hover:bg-primary/5 hover:text-primary transition-all duration-200"

@@ -271,6 +271,34 @@ const bookingSchema = new Schema(
       index:   true,
     },
 
+    transportPartner: {
+  type:    Schema.Types.ObjectId,
+  ref:     'TransportPartner',
+  default: null,
+  index:   true,
+},
+
+driver:{
+  type:    Schema.Types.ObjectId,
+  ref:     'DriverProfile',
+  default: null,
+  index:   true,
+},
+solodriverpartner: {
+  type:    Schema.Types.ObjectId,
+  ref:     'SoloDriverPartner',
+  default: null,
+  index:   true,
+},
+
+labPartner: {
+  type:    Schema.Types.ObjectId,
+  ref:     'LabPartnerProfile',
+  default: null,
+  index:   true,
+},
+
+
     // ── Consultation Details ──────────────────────────────────────────────────
     consultationType: {
       type:    String,

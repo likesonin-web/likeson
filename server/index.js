@@ -184,6 +184,11 @@ app.use('/api/hospital-manager', hospitalManagerRouter);
 
 import availabilityRouter from './routes/availabilityRouter.js';
 app.use('/api/availability', availabilityRouter);
+
+import booking1Routes from './routes/bookingrouterpaert1.js';
+app.use('/api/bookings', booking1Routes);
+import rideRequestRouter from './routes/rideRequestRouter.js';
+app.use('/api/ride-requests', rideRequestRouter);
 /* ---------------- Logs ---------------- */
 
 app.use(morgan(NODE_ENV === "development" ? "dev" : "combined"));

@@ -1,25 +1,4 @@
-/**
- * BOOKING ROUTER — SHARED IMPORTS, HELPERS & MIDDLEWARE — Likeson.in
- *
- * FIXES:
- *  1. resolveServiceComponents() maps all BOOKING_TYPES (pharmacy/blood_bank REMOVED from customer-facing)
- *  2. hashOtp() for Ride.pickupOtp
- *  3. buildFareBreakdown() correct schema fields
- *  4. buildRidePayload() GeoJSON pickup/dropoff
- *  5. computeRefundAmount() uses PlatformPricingConfig.refundPolicy
- *  6. processWalletPayment() debits Wallet correctly
- *  7. decrementSubscriptionUsage() for cancellation reversal
- *  8. getHospitals() — list all active verified hospitals
- *  9. getDoctorsByHospital() — doctors with specialization for a hospital
- * 10. checkHospitalOrDoctorAvailability() — combined availability check
- * 11. resolveTransportFare() — km-based fare with subscription override (12₹ default)
- * 12. resolveKmRate() — subscription plan km rate OR 12₹/km
- * 13. checkFollowUpEligibility() — same hospital + same doctor strict check
- * 14. checkSubscriptionConsultation() — valid count check
- * 15. getLabsWithTests() — list labs + tests
- * 16. autoAssignCareAssistant() — nearest available care assistant (no customer pick)
- * 17. computeReturnFare() — optional return home charge
- */
+ 
 
 import crypto   from 'crypto';
 import Razorpay from 'razorpay';
@@ -75,7 +54,11 @@ export const RIDE_STATUSES_ACTIVE = [
 ];
 
 export const RADIUS_METERS = 100_000;
+// CARE-RIDE radius: only search within 30km for requesting a new ride
+export const CARE_RIDE_RADIUS_M = 30_000;   // 30 km
 
+// Transport search radius for booking dispatch
+export const TRANSPORT_RADIUS_M = 100_000;  // 100 km (replaces RADIUS_METERS for dispatch)
 /**
  * CUSTOMER-FACING BOOKING TYPES
  * pharmacy + blood_bank removed — not available to customers directly.
@@ -226,6 +209,21 @@ export const getDoctorsByHospital = async (hospitalId) => {
       hospitalManaged: isHospitalManaged,
     };
   });
+};
+
+// ADD new export below resolveKmRate
+export const resolveCareRideKmRate = async (userId) => {
+  // Same as resolveKmRate but uses care_ride rate from config if exists
+  const { default: PlatformPricingConfig } = await import('../models/PlatformPricingConfig.js');
+  const config = await PlatformPricingConfig.getGlobal();
+  
+  // Try user subscription first
+  const { ratePerKm, source } = await resolveKmRate(userId);
+  if (source === 'subscription') return { ratePerKm, source };
+
+  // Fall back to config care_ride rate or 21 default
+  const careRate = config?.transport?.careRideRatePerKm ?? 21;
+  return { ratePerKm: careRate, source: 'care_ride_default' };
 };
 
 // ── Availability Helpers ──────────────────────────────────────────────────────
@@ -598,13 +596,13 @@ export const checkFollowUpEligibility = async ({ customerId, doctorId, hospitalI
     patient:        customerId,
     doctor:         doctorId,
     isFollowUp:     false,
-    status:         { $in: ['scheduled', 'completed'] },
+    status: { $in: ['scheduled', 'in_progress', 'completed'] },
     followUpExpiry: { $gt: new Date() },
   };
 
   // Strict hospital match if provided
   if (hospitalId) query.hospital = hospitalId;
-
+    query.hospital = hospitalId ?? null;
   const recentOp = await OutPatientRecord.findOne(query)
     .sort({ createdAt: -1 })
     .lean();
@@ -961,3 +959,48 @@ export const resolveServiceComponents = (bookingType) => ({
   needsWaitingOption: bookingType === 'patient_transport', // show waiting charge option
   canAddDoctor:       bookingType === 'patient_transport', // transport can optionally add doctor + OP
 });
+
+
+// bookingRouterShared.js — add this helper
+import axios from 'axios';
+
+const GMAPS_KEY = process.env.GOOGLE_MAPS_KEY;
+
+/**
+ * Calculate canonical route once. Returns { distanceKm, durationMin, polyline }.
+ * Store on Ride at creation. Never recalculate — all parties read from DB.
+ */
+export const calculateCanonicalRoute = async (pickupCoords, dropoffCoords) => {
+  if (!GMAPS_KEY || !pickupCoords?.length || !dropoffCoords?.length) {
+    // Fallback: haversine straight-line
+    const dist = haversineKm(pickupCoords, dropoffCoords);
+    return { distanceKm: +dist.toFixed(2), durationMin: Math.round(dist * 3), polyline: null };
+  }
+
+  try {
+    const url = 'https://maps.googleapis.com/maps/api/directions/json';
+    const res = await axios.get(url, {
+      params: {
+        origin:      `${pickupCoords[1]},${pickupCoords[0]}`,
+        destination: `${dropoffCoords[1]},${dropoffCoords[0]}`,
+        mode:        'driving',
+        key:         GMAPS_KEY,
+      },
+      timeout: 8000,
+    });
+
+    const route = res.data?.routes?.[0];
+    if (!route) throw new Error('No route found');
+
+    const leg = route.legs[0];
+    return {
+      distanceKm:  +(leg.distance.value / 1000).toFixed(2),
+      durationMin: Math.round(leg.duration.value / 60),
+      polyline:    route.overview_polyline.points, // encoded polyline
+    };
+  } catch (err) {
+    console.error('[calculateCanonicalRoute] failed:', err.message);
+    const dist = haversineKm(pickupCoords, dropoffCoords);
+    return { distanceKm: +dist.toFixed(2), durationMin: Math.round(dist * 3), polyline: null };
+  }
+};

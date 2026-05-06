@@ -11,12 +11,13 @@ import {
   Search, Calendar, Menu, X, ChevronRight, LogOut, Bell,
   ShoppingCart, ShieldCheck, Pill, UserRound, Hospital,
   Gem, Microscope, WalletIcon, MapPin, Locate, Loader2, Navigation,
-  Pencil, User, Monitor, Moon, Sun,
+  Pencil, User, Moon, Sun,
   LayoutDashboard, Truck, FlaskConical, Building2, HeartPulse,
   BadgeDollarSign, UserCog, Package, Activity,
   Car,
   ClipboardList,
   IndianRupee,
+  Droplets,
 } from 'lucide-react';
 import { useSelector, useDispatch } from 'react-redux';
 
@@ -69,7 +70,6 @@ const AnimatePresence = dynamic(
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const GOOGLE_MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
-const THEME_KEY = 'likeson-theme';
 const HEADER_HEIGHT_VAR = '--header-height';
 
 // ── Customer nav links ───────────────────────────────────────────────────────
@@ -78,36 +78,36 @@ const CUSTOMER_NAV_LINKS = [
     name: 'Buy Medicines',
     href: '/pharmacy/buy-medicines',
     icon: Pill,
-    accent: '#0d9488',
-    bg: 'rgba(13,148,136,0.07)',
-    barGradient: 'linear-gradient(90deg,#0d9488,#06b6d4)',
-    pillBg: 'rgba(13,148,136,0.12)',
-    pillText: '#0d9488',
-    shadowColor: 'rgba(13,148,136,0.35)',
+    accent: '#059669',
+    bg: 'rgba(5,150,105,0.07)',
+    barGradient: 'linear-gradient(90deg,#059669,#10b981)',
+    pillBg: 'rgba(5,150,105,0.12)',
+    pillText: '#059669',
+    shadowColor: 'rgba(5,150,105,0.30)',
     label: 'Pharmacy',
   },
   {
     name: 'Find Doctors',
     href: '/doctors',
     icon: UserRound,
-    accent: '#4f46e5',
-    bg: 'rgba(79,70,229,0.07)',
-    barGradient: 'linear-gradient(90deg,#4f46e5,#818cf8)',
-    pillBg: 'rgba(79,70,229,0.12)',
-    pillText: '#4f46e5',
-    shadowColor: 'rgba(79,70,229,0.35)',
+    accent: '#2563eb',
+    bg: 'rgba(37,99,235,0.07)',
+    barGradient: 'linear-gradient(90deg,#2563eb,#60a5fa)',
+    pillBg: 'rgba(37,99,235,0.12)',
+    pillText: '#2563eb',
+    shadowColor: 'rgba(37,99,235,0.28)',
     label: 'Doctors',
   },
   {
     name: 'Find Hospitals',
     href: '/hospitals',
     icon: Hospital,
-    accent: '#dc2626',
-    bg: 'rgba(220,38,38,0.06)',
-    barGradient: 'linear-gradient(90deg,#dc2626,#f87171)',
-    pillBg: 'rgba(220,38,38,0.1)',
-    pillText: '#dc2626',
-    shadowColor: 'rgba(220,38,38,0.35)',
+    accent: '#1d4ed8',
+    bg: 'rgba(29,78,216,0.07)',
+    barGradient: 'linear-gradient(90deg,#1d4ed8,#3b82f6)',
+    pillBg: 'rgba(29,78,216,0.12)',
+    pillText: '#1d4ed8',
+    shadowColor: 'rgba(29,78,216,0.28)',
     label: 'Hospitals',
   },
   {
@@ -115,11 +115,11 @@ const CUSTOMER_NAV_LINKS = [
     href: '/subscriptions',
     icon: Gem,
     accent: '#d97706',
-    bg: 'rgba(217,119,6,0.06)',
-    barGradient: 'linear-gradient(90deg,#d97706,#fbbf24)',
+    bg: 'rgba(217,119,6,0.07)',
+    barGradient: 'linear-gradient(90deg,#d97706,#f59e0b)',
     pillBg: 'rgba(217,119,6,0.12)',
     pillText: '#b45309',
-    shadowColor: 'rgba(217,119,6,0.35)',
+    shadowColor: 'rgba(217,119,6,0.28)',
     label: 'Subscriptions',
   },
   {
@@ -127,154 +127,108 @@ const CUSTOMER_NAV_LINKS = [
     href: '/labs',
     icon: Microscope,
     accent: '#7c3aed',
-    bg: 'rgba(124,58,237,0.06)',
+    bg: 'rgba(124,58,237,0.07)',
     barGradient: 'linear-gradient(90deg,#7c3aed,#a78bfa)',
     pillBg: 'rgba(124,58,237,0.12)',
     pillText: '#7c3aed',
-    shadowColor: 'rgba(124,58,237,0.35)',
+    shadowColor: 'rgba(124,58,237,0.28)',
     label: 'Labs',
   },
   {
-  name: 'Search',
-  href: '/search',
-  icon: Search,
-  accent: '#0ea5e9',
-  bg: 'rgba(14,165,233,0.07)',
-  barGradient: 'linear-gradient(90deg,#0ea5e9,#38bdf8)',
-  pillBg: 'rgba(14,165,233,0.12)',
-  pillText: '#0ea5e9',
-  shadowColor: 'rgba(14,165,233,0.35)',
-  label: 'Search',
-},
+    name: 'Blood Bank',
+    href: '/blood-bank',
+    icon: Droplets,
+    accent: '#be123c',
+    bg: 'rgba(190,18,60,0.07)',
+    barGradient: 'linear-gradient(90deg,#be123c,#f43f5e)',
+    pillBg: 'rgba(190,18,60,0.12)',
+    pillText: '#be123c',
+    shadowColor: 'rgba(190,18,60,0.28)',
+    label: 'Blood Bank',
+  },
 ];
 
-// ── Role-based theme palettes — use CSS vars from role data-theme ─────────────
 const ROLE_PALETTES = {
   superadmin: {
-    accent: 'var(--primary)',
-    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    accent: 'var(--primary)', bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
     barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
-    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
-    pillText: 'var(--primary)',
-    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
-    label: 'Super Admin',
-    icon: ShieldCheck,
-    dataTheme: 'superadmin',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)', pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 30%, transparent)', label: 'Super Admin',
+    icon: ShieldCheck, dataTheme: 'superadmin',
   },
   admin: {
-    accent: 'var(--primary)',
-    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    accent: 'var(--primary)', bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
     barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
-    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
-    pillText: 'var(--primary)',
-    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
-    label: 'Admin',
-    icon: UserCog,
-    dataTheme: 'admin',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)', pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 30%, transparent)', label: 'Admin',
+    icon: UserCog, dataTheme: 'admin',
   },
   doctor: {
-    accent: 'var(--primary)',
-    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    accent: 'var(--primary)', bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
     barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
-    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
-    pillText: 'var(--primary)',
-    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
-    label: 'Doctor',
-    icon: HeartPulse,
-    dataTheme: 'doctor',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)', pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 30%, transparent)', label: 'Doctor',
+    icon: HeartPulse, dataTheme: 'doctor',
   },
   transportpartner: {
-    accent: 'var(--primary)',
-    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    accent: 'var(--primary)', bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
     barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
-    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
-    pillText: 'var(--primary)',
-    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
-    label: 'Transport Partner',
-    icon: Truck,
-    dataTheme: 'transport',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)', pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 30%, transparent)', label: 'Transport Partner',
+    icon: Truck, dataTheme: 'transportpartner',
   },
   driver: {
-    accent: 'var(--primary)',
-    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    accent: 'var(--primary)', bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
     barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
-    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
-    pillText: 'var(--primary)',
-    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
-    label: 'Driver',
-    icon: Truck,
-    dataTheme: 'transport',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)', pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 30%, transparent)', label: 'Driver',
+    icon: Truck, dataTheme: 'driver',
   },
   solodriverpartner: {
-    accent: 'var(--accent)',
-    bg: 'color-mix(in srgb, var(--primary) 8%, var(--base-100))',
+    accent: 'var(--primary)', bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
     barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
-    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
-    pillText: 'var(--primary)',
-    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
-    label: 'Solo Driver',
-    icon: Navigation,
-    dataTheme: 'solodriverpartner',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)', pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 30%, transparent)', label: 'Solo Driver',
+    icon: Navigation, dataTheme: 'solodriverpartner',
   },
   customer: null,
   pharmacy: {
-    accent: 'var(--primary)',
-    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    accent: 'var(--primary)', bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
     barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
-    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
-    pillText: 'var(--primary)',
-    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
-    label: 'Pharmacy',
-    icon: Pill,
-    dataTheme: 'pharmacy',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)', pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 30%, transparent)', label: 'Pharmacy',
+    icon: Pill, dataTheme: 'pharmacy',
   },
   'care assistant': {
-    accent: 'var(--primary)',
-    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    accent: 'var(--primary)', bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
     barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
-    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
-    pillText: 'var(--primary)',
-    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
-    label: 'Care Assistant',
-    icon: HeartPulse,
-    dataTheme: 'care-assistant',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)', pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 30%, transparent)', label: 'Care Assistant',
+    icon: HeartPulse, dataTheme: 'care-assistant',
   },
   finance: {
-    accent: 'var(--primary)',
-    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    accent: 'var(--primary)', bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
     barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
-    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
-    pillText: 'var(--primary)',
-    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
-    label: 'Finance',
-    icon: BadgeDollarSign,
-    dataTheme: 'finance',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)', pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 30%, transparent)', label: 'Finance',
+    icon: BadgeDollarSign, dataTheme: 'finance',
   },
   'lab partner': {
-    accent: 'var(--primary)',
-    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    accent: 'var(--primary)', bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
     barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
-    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
-    pillText: 'var(--primary)',
-    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
-    label: 'Lab Partner',
-    icon: FlaskConical,
-    dataTheme: 'lab',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)', pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 30%, transparent)', label: 'Lab Partner',
+    icon: FlaskConical, dataTheme: 'lab',
   },
   hospital: {
-    accent: 'var(--primary)',
-    bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
+    accent: 'var(--primary)', bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
     barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
-    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)',
-    pillText: 'var(--primary)',
-    shadowColor: 'color-mix(in srgb, var(--primary) 35%, transparent)',
-    label: 'Hospital',
-    icon: Building2,
-    dataTheme: 'hospital',
+    pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)', pillText: 'var(--primary)',
+    shadowColor: 'color-mix(in srgb, var(--primary) 30%, transparent)', label: 'Hospital',
+    icon: Building2, dataTheme: 'hospital',
   },
 };
 
-// ── Role-specific bottom navigation links ─────────────────────────────────────
 const ROLE_BOTTOM_NAV = {
   superadmin: [
     { name: 'Dashboard', href: '/admin/dashboard',  icon: LayoutDashboard },
@@ -283,9 +237,9 @@ const ROLE_BOTTOM_NAV = {
     { name: 'Finances',  href: '/admin/finance',    icon: BadgeDollarSign },
   ],
   admin: [
-    { name: 'Dashboard', href: '/admin/dashboard',  icon: LayoutDashboard },
-    { name: 'Orders',    href: '/admin/orders',     icon: Package         },
-    { name: 'Reports',   href: '/admin/reports',    icon: Activity        },
+    { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutDashboard },
+    { name: 'Orders',    href: '/admin/orders',    icon: Package         },
+    { name: 'Reports',   href: '/admin/reports',   icon: Activity        },
   ],
   doctor: [
     { name: 'Dashboard',    href: '/doctor/dashboard',    icon: LayoutDashboard },
@@ -316,8 +270,8 @@ const ROLE_BOTTOM_NAV = {
   ],
   'care assistant': [
     { name: 'Dashboard', href: '/care-assistant/dashboard', icon: LayoutDashboard },
-    { name: 'Patients',  href: '/care-assistant/patients',            icon: UserRound       },
-    { name: 'Schedule',  href: '/care-assistant/schedule',            icon: Calendar        },
+    { name: 'Patients',  href: '/care-assistant/patients',  icon: UserRound       },
+    { name: 'Schedule',  href: '/care-assistant/schedule',  icon: Calendar        },
   ],
   finance: [
     { name: 'Dashboard',    href: '/finance/dashboard',    icon: LayoutDashboard },
@@ -338,8 +292,7 @@ const ROLE_BOTTOM_NAV = {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getActivePalette = (pathname) => {
-  let best = null;
-  let bestLen = 0;
+  let best = null, bestLen = 0;
   for (const link of CUSTOMER_NAV_LINKS) {
     if (pathname === link.href || pathname.startsWith(link.href + '/')) {
       if (link.href.length > bestLen) { best = link; bestLen = link.href.length; }
@@ -348,28 +301,16 @@ const getActivePalette = (pathname) => {
   return best;
 };
 
-const getRolePalette = (role) => {
-  if (!role) return null;
-  return ROLE_PALETTES[role] ?? null;
-};
+const getRolePalette = (role) => (!role ? null : ROLE_PALETTES[role] ?? null);
 
 const buildAvatarUrl = (name) =>
   `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'User')}&background=2563eb&color=fff`;
 
 function preconnectOrigins() {
   if (typeof document === 'undefined') return;
-  const origins = [
-    'https://ui-avatars.com',
-    'https://maps.googleapis.com',
-    'https://maps.gstatic.com',
-  ];
-  origins.forEach((href) => {
+  ['https://ui-avatars.com', 'https://maps.googleapis.com', 'https://maps.gstatic.com'].forEach((href) => {
     if (document.querySelector(`link[rel="preconnect"][href="${href}"]`)) return;
-    const link = Object.assign(document.createElement('link'), {
-      rel: 'preconnect',
-      href,
-      crossOrigin: 'anonymous',
-    });
+    const link = Object.assign(document.createElement('link'), { rel: 'preconnect', href, crossOrigin: 'anonymous' });
     document.head.appendChild(link);
   });
 }
@@ -383,10 +324,8 @@ function loadGoogleMaps() {
     const existing = document.querySelector('script[src*="maps.googleapis.com"]');
     if (existing) { existing.addEventListener('load', () => resolve(true)); return; }
     const script = document.createElement('script');
-    // Use new Places API (v=beta required for AutocompleteSuggestion)
     script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&libraries=places&v=beta`;
-    script.async = true;
-    script.defer = true;
+    script.async = true; script.defer = true;
     script.onload  = () => resolve(true);
     script.onerror = () => { _mapsLoadPromise = null; resolve(false); };
     document.head.appendChild(script);
@@ -397,25 +336,25 @@ function loadGoogleMaps() {
 // ── Framer variants ──────────────────────────────────────────────────────────
 const DROPDOWN_VARIANTS = {
   hidden: { opacity: 0, y: -8, scale: 0.96 },
-  show:   { opacity: 1, y: 0,  scale: 1,    transition: { type: 'spring', damping: 25, stiffness: 300 } },
+  show:   { opacity: 1, y: 0,  scale: 1, transition: { type: 'spring', damping: 25, stiffness: 300 } },
   exit:   { opacity: 0, y: -8, scale: 0.96, transition: { duration: 0.15, ease: 'easeInOut' } },
 };
 const LOCATION_DROPDOWN_VARIANTS = {
   hidden: { opacity: 0, y: -6, scale: 0.97 },
-  show:   { opacity: 1, y: 0,  scale: 1,    transition: { type: 'spring', damping: 28, stiffness: 320 } },
+  show:   { opacity: 1, y: 0,  scale: 1, transition: { type: 'spring', damping: 28, stiffness: 320 } },
   exit:   { opacity: 0, y: -6, scale: 0.97, transition: { duration: 0.15, ease: 'easeInOut' } },
 };
 const MOBILE_MENU_VARIANTS = {
   hidden: { opacity: 0, x: '100%' },
-  show:   { opacity: 1, x: 0,      transition: { type: 'spring', damping: 30, stiffness: 200, when: 'beforeChildren' } },
+  show:   { opacity: 1, x: 0, transition: { type: 'spring', damping: 30, stiffness: 200, when: 'beforeChildren' } },
   exit:   { opacity: 0, x: '100%', transition: { duration: 0.3, ease: 'easeInOut' } },
 };
 const BOTTOM_NAV_VARIANTS = {
   hidden: { opacity: 0, y: 80 },
-  show:   { opacity: 1, y: 0,  transition: { type: 'spring', damping: 26, stiffness: 260, delay: 0.1 } },
+  show:   { opacity: 1, y: 0, transition: { type: 'spring', damping: 26, stiffness: 260, delay: 0.1 } },
 };
-const STAGGER  = { show: { transition: { staggerChildren: 0.08 } } };
-const FADE_UP  = { hidden: { opacity: 0, y: 15 }, show: { opacity: 1, y: 0, transition: { duration: 0.3 } } };
+const STAGGER = { show: { transition: { staggerChildren: 0.08 } } };
+const FADE_UP = { hidden: { opacity: 0, y: 15 }, show: { opacity: 1, y: 0, transition: { duration: 0.3 } } };
 const BELL_RING = {
   ring: { rotate: [0, 15, -15, 10, -10, 5, -5, 0], transition: { duration: 1.5, repeat: Infinity, repeatDelay: 2 } },
   idle: { rotate: 0 },
@@ -425,32 +364,19 @@ const CART_FLOAT = {
   idle:  { y: 0 },
 };
 
- 
-
-// ── FIX: New Google Maps AutocompleteSuggestion API hook ──────────────────────
+// ── Google Maps Autocomplete hook ────────────────────────────────────────────
 function useGoogleMapsAutocomplete() {
-  const ensureLoaded = useCallback(async () => {
-    return loadGoogleMaps();
-  }, []);
+  const ensureLoaded = useCallback(async () => loadGoogleMaps(), []);
 
-  // FIX: Use new AutocompleteSuggestion API (replaces deprecated AutocompleteService)
   const fetchSuggestions = useCallback(async (value, onResult) => {
     if (!value?.trim()) { onResult([]); return; }
-
     const loaded = await ensureLoaded();
     if (!loaded) { onResult([]); return; }
-
     try {
-      // New API: google.maps.places.AutocompleteSuggestion
       const { AutocompleteSuggestion } = await google.maps.importLibrary('places');
-
       const { suggestions } = await AutocompleteSuggestion.fetchAutocompleteSuggestions({
-        input: value,
-        includedRegionCodes: ['in'],
-        includedPrimaryTypes: ['geocode', 'establishment'],
+        input: value, includedRegionCodes: ['in'], includedPrimaryTypes: ['geocode', 'establishment'],
       });
-
-      // Normalize to shape compatible with existing SuggestionsList component
       const normalized = (suggestions ?? []).map((s) => {
         const place = s.placePrediction;
         return {
@@ -460,14 +386,11 @@ function useGoogleMapsAutocomplete() {
             main_text: place.mainText?.toString() ?? '',
             secondary_text: place.secondaryText?.toString() ?? '',
           },
-          // Store raw place for geocoding
           _placePrediction: place,
         };
       });
-
       onResult(normalized);
-    } catch (err) {
-      // Fallback: try legacy AutocompleteService if new API unavailable
+    } catch {
       try {
         if (window.google?.maps?.places?.AutocompleteService) {
           const svc = new window.google.maps.places.AutocompleteService();
@@ -477,42 +400,30 @@ function useGoogleMapsAutocomplete() {
               onResult(status === window.google.maps.places.PlacesServiceStatus.OK ? predictions ?? [] : []);
             }
           );
-        } else {
-          onResult([]);
-        }
-      } catch {
-        if (process.env.NODE_ENV === 'development') console.error('Maps autocomplete fallback error:', err);
-        onResult([]);
-      }
+        } else { onResult([]); }
+      } catch { onResult([]); }
     }
   }, [ensureLoaded]);
 
   return { fetchSuggestions, ensureService: ensureLoaded };
 }
 
-// ── Custom hook: header data ──────────────────────────────────────────────────
+// ── Header data hook ─────────────────────────────────────────────────────────
 function useHeaderData() {
   const dispatch = useDispatch();
-
   const user          = useSelector(selectUser);
   const token         = useSelector(selectToken);
   const unreadCount   = useSelector(selectUnreadCount) ?? 0;
   const cartItems     = useSelector(selectCartItems)   ?? [];
   const walletBalance = useSelector(selectWalletBalance) ?? 0;
-
   const cartCount = useMemo(
     () => (Array.isArray(cartItems) ? cartItems.reduce((a, i) => a + (i.quantity ?? 0), 0) : 0),
     [cartItems]
   );
-
   useEffect(() => {
     if (!token) return;
-    dispatch(getProfile());
-    dispatch(fetchNotifications());
-    dispatch(getWallet());
-    dispatch(fetchCart());
+    dispatch(getProfile()); dispatch(fetchNotifications()); dispatch(getWallet()); dispatch(fetchCart());
   }, [token, dispatch]);
-
   return { user, token, unreadCount, cartCount, walletBalance };
 }
 
@@ -520,40 +431,42 @@ function useHeaderData() {
 // SUB-COMPONENTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ── ThemeToggle ───────────────────────────────────────────────────────────────
+const ThemeToggle = memo(function ThemeToggle({ compact = false }) {
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return <div className={cn('rounded-xl border border-base-300 skeleton', compact ? 'w-8 h-8' : 'w-10 h-10')} aria-hidden="true" />;
+  const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
+  const Icon = theme === 'dark' ? Moon : Sun;
+  const label = `Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`;
+  return (
+    <button onClick={toggleTheme} aria-label={label} title={label}
+      className={cn(
+        'rounded-xl border border-base-300 text-base-content/50 hover:bg-primary/5 hover:text-primary transition-all duration-200 flex items-center justify-center',
+        compact ? 'w-8 h-8' : 'p-2.5'
+      )}>
+      <Icon size={compact ? 15 : 18} />
+    </button>
+  );
+});
+
 // ── WalletWidget ──────────────────────────────────────────────────────────────
 const WalletWidget = memo(function WalletWidget({ walletBalance, isMobile = false, accent }) {
   const accentColor = accent ?? 'var(--warning)';
   return (
-    <Link
-      href="/wallet"
-      aria-label={`Wallet balance ₹${walletBalance}. Go to wallet.`}
+    <Link href="/wallet" aria-label={`Wallet balance ₹${walletBalance}. Go to wallet.`}
       className={cn(
-        'flex items-center gap-2 rounded-full border transition-all duration-200',
-        'hover:scale-[1.02] active:scale-[0.98]',
+        'flex items-center gap-2 rounded-full border transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]',
         isMobile ? 'w-full px-4 py-3' : 'px-3 py-1.5'
       )}
-      style={{
-        borderColor: `color-mix(in srgb, ${accentColor} 30%, transparent)`,
-        background:  `color-mix(in srgb, ${accentColor} 8%, transparent)`,
-      }}
-    >
-      <div
-        className="p-1 rounded-full"
-        style={{
-          background: `color-mix(in srgb, ${accentColor} 25%, transparent)`,
-          color: accentColor,
-        }}
-        aria-hidden="true"
-      >
+      style={{ borderColor: `color-mix(in srgb, ${accentColor} 30%, transparent)`, background: `color-mix(in srgb, ${accentColor} 8%, transparent)` }}>
+      <div className="p-1 rounded-full" style={{ background: `color-mix(in srgb, ${accentColor} 25%, transparent)`, color: accentColor }} aria-hidden="true">
         <WalletIcon size={isMobile ? 16 : 13} strokeWidth={2.5} />
       </div>
       <div className="flex flex-col items-start leading-none">
         <span className="text-[8px] font-black uppercase tracking-tighter opacity-50">Balance</span>
-        <span
-          aria-live="polite"
-          className={cn('font-black tracking-tight', isMobile ? 'text-sm' : 'text-[11px]')}
-          style={{ color: accentColor }}
-        >
+        <span aria-live="polite" className={cn('font-black tracking-tight', isMobile ? 'text-sm' : 'text-[11px]')} style={{ color: accentColor }}>
           ₹{(walletBalance ?? 0).toLocaleString('en-IN')}
         </span>
       </div>
@@ -565,44 +478,21 @@ const WalletWidget = memo(function WalletWidget({ walletBalance, isMobile = fals
 const SuggestionsList = memo(function SuggestionsList({ suggestions, onSelect, disabled, accent }) {
   if (!suggestions.length) return null;
   return (
-    <MotionUl
-      role="listbox"
-      aria-label="Location suggestions"
-      initial={{ opacity: 0, height: 0 }}
-      animate={{ opacity: 1, height: 'auto' }}
-      exit={{ opacity: 0, height: 0 }}
-      transition={{ duration: 0.18 }}
-      className="overflow-hidden rounded-xl border border-base-300 bg-base-100"
-    >
+    <MotionUl role="listbox" aria-label="Location suggestions"
+      initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+      transition={{ duration: 0.18 }} className="overflow-hidden rounded-xl border border-base-300 bg-base-100">
       {suggestions.map((s, idx) => (
-        <MotionLi
-          key={s.place_id ?? idx}
-          role="option"
-          aria-selected="false"
-          initial={{ opacity: 0, x: -8 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ delay: idx * 0.035 }}
-        >
-          <button
-            type="button"
-            onClick={() => onSelect(s)}
-            disabled={disabled}
-            className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-base-200/80 transition-colors border-b border-base-300/50 last:border-0 focus-visible:outline-none focus-visible:bg-base-200/80"
-          >
-            <div
-              className="w-7 h-7 rounded-lg flex-shrink-0 flex items-center justify-center"
-              style={{ background: `color-mix(in srgb, ${accent} 15%, transparent)`, color: accent }}
-              aria-hidden="true"
-            >
+        <MotionLi key={s.place_id ?? idx} role="option" aria-selected="false"
+          initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: idx * 0.035 }}>
+          <button type="button" onClick={() => onSelect(s)} disabled={disabled}
+            className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-base-200/80 transition-colors border-b border-base-300/50 last:border-0 focus-visible:outline-none focus-visible:bg-base-200/80">
+            <div className="w-7 h-7 rounded-lg flex-shrink-0 flex items-center justify-center"
+              style={{ background: `color-mix(in srgb, ${accent} 15%, transparent)`, color: accent }} aria-hidden="true">
               <MapPin size={12} />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-[12px] font-bold truncate leading-tight">
-                {s.structured_formatting?.main_text ?? s.description}
-              </p>
-              <p className="text-[10px] opacity-40 truncate leading-tight">
-                {s.structured_formatting?.secondary_text}
-              </p>
+              <p className="text-[12px] font-bold truncate leading-tight">{s.structured_formatting?.main_text ?? s.description}</p>
+              <p className="text-[10px] opacity-40 truncate leading-tight">{s.structured_formatting?.secondary_text}</p>
             </div>
           </button>
         </MotionLi>
@@ -612,13 +502,10 @@ const SuggestionsList = memo(function SuggestionsList({ suggestions, onSelect, d
 });
 
 // ── LocationWidget ────────────────────────────────────────────────────────────
-// FIX: Mobile location display — reads from user.lastKnownAddress + shows live
-const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) {
+const LocationWidget = memo(function LocationWidget({ mood, isMobile = false, compact = false }) {
   const dispatch = useDispatch();
-  // FIX: re-select user on every render so address updates reflect immediately
   const user = useSelector(selectUser);
   const { fetchSuggestions, ensureService } = useGoogleMapsAutocomplete();
-
   const loaders = useSelector(selectLoaders);
   const savingAddress = loaders?.locationByAddress ?? false;
   const fetchingGPS   = loaders?.locationByCoords  ?? false;
@@ -632,14 +519,12 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
   const inputRef      = useRef(null);
   const debounceTimer = useRef(null);
 
-  // FIX: derive address fresh from user selector on each render
   const savedAddress = user?.lastKnownAddress ?? null;
-
   const cityLabel = useMemo(() => {
     if (!savedAddress) return 'Set Location';
     const first = savedAddress.split(',')[0]?.trim() ?? savedAddress;
-    return first.length > 18 ? first.slice(0, 16) + '…' : first;
-  }, [savedAddress]);
+    return first.length > (compact ? 12 : 18) ? first.slice(0, compact ? 10 : 16) + '…' : first;
+  }, [savedAddress, compact]);
 
   const regionLabel = useMemo(() => {
     if (!savedAddress) return null;
@@ -648,16 +533,13 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
 
   const nameInitial = useMemo(() => user?.name?.charAt(0).toUpperCase() ?? '?', [user?.name]);
   const firstName   = useMemo(() => user?.name?.split(' ')[0] ?? 'You', [user?.name]);
-
   const accent      = mood?.accent      ?? 'var(--primary)';
   const triggerBg   = mood?.pillBg      ?? 'color-mix(in srgb, var(--primary) 8%, transparent)';
   const triggerGrad = mood?.barGradient ?? 'linear-gradient(135deg, var(--primary), var(--secondary))';
 
   useEffect(() => {
     const handler = (e) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) {
-        setOpen(false); setSuggestions([]); setQuery('');
-      }
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) { setOpen(false); setSuggestions([]); setQuery(''); }
     };
     document.addEventListener('mousedown', handler, { passive: true });
     return () => document.removeEventListener('mousedown', handler);
@@ -671,9 +553,7 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
 
   useEffect(() => {
     if (!open) return;
-    const handler = (e) => {
-      if (e.key === 'Escape') { setOpen(false); setSuggestions([]); setQuery(''); }
-    };
+    const handler = (e) => { if (e.key === 'Escape') { setOpen(false); setSuggestions([]); setQuery(''); } };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [open]);
@@ -687,61 +567,38 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
 
   const geocodeAndDispatch = useCallback(async (address, lat, lng) => {
     try {
-      if (lat && lng) {
-        await dispatch(updateLocationByCoords({ lat, lng, address }));
-      } else {
-        await dispatch(updateLocationByAddress(address));
-      }
-      // FIX: refresh profile after location update so user.lastKnownAddress is fresh
+      if (lat && lng) { await dispatch(updateLocationByCoords({ lat, lng, address })); }
+      else { await dispatch(updateLocationByAddress(address)); }
       dispatch(getProfile());
-    } catch (err) {
-      if (process.env.NODE_ENV === 'development') console.error('Geocode dispatch error:', err);
-    }
+    } catch {}
   }, [dispatch]);
 
-  // FIX: Use new Places API for geocoding selected suggestion
   const handleSelectSuggestion = useCallback(async (suggestion) => {
     const address = suggestion.description;
     setQuery(suggestion.structured_formatting?.main_text ?? address);
     setSuggestions([]);
-
     try {
-      // New API path: use Place.fetchFields for geocoding
       if (suggestion._placePrediction && window.google?.maps) {
         try {
           const place = suggestion._placePrediction.toPlace();
           await place.fetchFields({ fields: ['location'] });
           if (place.location) {
-            const lat = place.location.lat();
-            const lng = place.location.lng();
-            await geocodeAndDispatch(address, lat, lng);
-            setOpen(false); setQuery('');
-            return;
+            await geocodeAndDispatch(address, place.location.lat(), place.location.lng());
+            setOpen(false); setQuery(''); return;
           }
-        } catch {
-          // fall through to legacy geocoder
-        }
+        } catch {}
       }
-
-      // Legacy geocoder fallback
       if (window.google?.maps) {
         const geocoder = new window.google.maps.Geocoder();
         geocoder.geocode({ address }, async (results, status) => {
           if (status === 'OK' && results?.[0]) {
             const loc = results[0].geometry.location;
             await geocodeAndDispatch(address, loc.lat(), loc.lng());
-          } else {
-            await geocodeAndDispatch(address);
-          }
+          } else { await geocodeAndDispatch(address); }
           setOpen(false); setQuery('');
         });
-      } else {
-        await geocodeAndDispatch(address);
-        setOpen(false); setQuery('');
-      }
-    } catch (err) {
-      if (process.env.NODE_ENV === 'development') console.error('Suggestion select error:', err);
-    }
+      } else { await geocodeAndDispatch(address); setOpen(false); setQuery(''); }
+    } catch {}
   }, [geocodeAndDispatch]);
 
   const handleUseCurrentLocation = useCallback(() => {
@@ -755,7 +612,6 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
             geocoder.geocode({ location: { lat, lng } }, async (results, status) => {
               const address = status === 'OK' && results?.[0] ? results[0].formatted_address : undefined;
               await dispatch(updateLocationByCoords({ lat, lng, address }));
-              // FIX: refresh profile so UI updates
               dispatch(getProfile());
               setLocalGPSLoading(false); setOpen(false);
             });
@@ -764,10 +620,7 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
             dispatch(getProfile());
             setLocalGPSLoading(false); setOpen(false);
           }
-        } catch (err) {
-          if (process.env.NODE_ENV === 'development') console.error('GPS geocode error:', err);
-          setLocalGPSLoading(false);
-        }
+        } catch { setLocalGPSLoading(false); }
       },
       () => setLocalGPSLoading(false),
       { timeout: 10000 }
@@ -778,86 +631,42 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
 
   const searchInput = (
     <div className="relative">
-      <label htmlFor={isMobile ? 'location-search-mobile' : 'location-search'} className="sr-only">
-        Search location by area, city or pincode
-      </label>
+      <label htmlFor={isMobile ? 'loc-search-mobile' : 'loc-search'} className="sr-only">Search location</label>
       <Search size={13} className="absolute left-3.5 top-1/2 -translate-y-1/2 opacity-35 pointer-events-none" aria-hidden="true" />
-      <input
-        id={isMobile ? 'location-search-mobile' : 'location-search'}
-        ref={inputRef}
-        value={query}
-        onChange={handleQueryChange}
-        placeholder="Area, city or pincode…"
-        aria-label="Search location"
-        autoComplete="off"
-        className="w-full pl-9 pr-9 py-2.5 rounded-xl text-[12px] font-medium bg-base-200/60 border border-transparent focus:bg-base-100 focus:border-base-300 transition-all outline-none focus-visible:ring-2 focus-visible:ring-offset-1"
-      />
-      {savingAddress && (
-        <Loader2 size={13} className="absolute right-3.5 top-1/2 -translate-y-1/2 animate-spin opacity-40 pointer-events-none" aria-hidden="true" />
-      )}
+      <input id={isMobile ? 'loc-search-mobile' : 'loc-search'} ref={inputRef} value={query} onChange={handleQueryChange}
+        placeholder="Area, city or pincode…" aria-label="Search location" autoComplete="off"
+        className="w-full pl-9 pr-9 py-2.5 rounded-xl text-[12px] font-medium bg-base-200/60 border border-transparent focus:bg-base-100 focus:border-base-300 transition-all outline-none focus-visible:ring-2 focus-visible:ring-offset-1" />
+      {savingAddress && <Loader2 size={13} className="absolute right-3.5 top-1/2 -translate-y-1/2 animate-spin opacity-40 pointer-events-none" aria-hidden="true" />}
     </div>
   );
 
-  // ── MOBILE ───────────────────────────────────────────────────────────────────
+  // MOBILE version
   if (isMobile) {
     return (
-      <div
-        className="rounded-2xl border overflow-hidden"
-        style={{ borderColor: `color-mix(in srgb, ${accent} 25%, transparent)` }}
-        aria-label="Location settings"
-      >
-        {/* FIX: Mobile header shows current address live */}
+      <div className="rounded-2xl border overflow-hidden"
+        style={{ borderColor: `color-mix(in srgb, ${accent} 25%, transparent)` }} aria-label="Location settings">
         <div className="flex items-center gap-3 px-4 py-3" style={{ background: triggerBg }}>
-          <div
-            className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center text-sm font-black text-white shadow-sm"
-            style={{ background: triggerGrad }}
-            aria-hidden="true"
-          >
-            {nameInitial}
-          </div>
+          <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center text-sm font-black text-white shadow-sm"
+            style={{ background: triggerGrad }} aria-hidden="true">{nameInitial}</div>
           <div className="flex-1 min-w-0">
-            <p className="text-[10px] font-black uppercase tracking-widest opacity-40 leading-none mb-0.5">
-              {firstName}'s Location
-            </p>
-            {/* FIX: show saved address — live reactive via Redux selector */}
-            <p className="text-[12px] font-black truncate leading-tight" style={{ color: accent }}>
-              {cityLabel}
-            </p>
-            {regionLabel && (
-              <p className="text-[10px] opacity-40 truncate leading-tight">{regionLabel}</p>
-            )}
-            {/* FIX: show full address below city if set */}
-            {savedAddress && savedAddress.includes(',') && (
-              <p className="text-[9px] opacity-30 truncate leading-tight mt-0.5">{savedAddress}</p>
-            )}
+            <p className="text-[10px] font-black uppercase tracking-widest opacity-40 leading-none mb-0.5">{firstName}'s Location</p>
+            <p className="text-[12px] font-black truncate leading-tight" style={{ color: accent }}>{cityLabel}</p>
+            {regionLabel && <p className="text-[10px] opacity-40 truncate leading-tight">{regionLabel}</p>}
+            {savedAddress && savedAddress.includes(',') && <p className="text-[9px] opacity-30 truncate leading-tight mt-0.5">{savedAddress}</p>}
           </div>
-          <button
-            aria-label="Edit location"
+          <button aria-label="Edit location"
             className="w-8 h-8 rounded-lg flex items-center justify-center transition-all active:scale-90"
             style={{ background: `color-mix(in srgb, ${accent} 15%, transparent)`, color: accent }}
-            onClick={() => {
-              // scroll to search input when pencil tapped
-              setTimeout(() => inputRef.current?.focus(), 100);
-            }}
-          >
+            onClick={() => setTimeout(() => inputRef.current?.focus(), 100)}>
             <Pencil size={13} strokeWidth={2.5} />
           </button>
         </div>
-
         <div className="p-3 flex flex-col gap-2 bg-base-100">
-          <button
-            type="button"
-            onClick={handleUseCurrentLocation}
-            disabled={gpsLoading}
-            aria-label="Use current GPS location"
+          <button type="button" onClick={handleUseCurrentLocation} disabled={gpsLoading} aria-label="Use current GPS location"
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border font-bold text-[12px] transition-all active:scale-[0.98] disabled:opacity-60"
-            style={{ borderColor: `color-mix(in srgb, ${accent} 25%, transparent)`, color: accent, background: triggerBg }}
-          >
-            <div
-              className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-              style={{ background: `color-mix(in srgb, ${accent} 20%, transparent)` }}
-              aria-hidden="true"
-            >
+            style={{ borderColor: `color-mix(in srgb, ${accent} 25%, transparent)`, color: accent, background: triggerBg }}>
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+              style={{ background: `color-mix(in srgb, ${accent} 20%, transparent)` }} aria-hidden="true">
               {gpsLoading ? <Loader2 size={13} className="animate-spin" /> : <Locate size={13} />}
             </div>
             <div className="text-left">
@@ -868,12 +677,7 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
           {searchInput}
           <AnimatePresence>
             {suggestions.length > 0 && (
-              <SuggestionsList
-                suggestions={suggestions}
-                onSelect={handleSelectSuggestion}
-                disabled={savingAddress}
-                accent={accent}
-              />
+              <SuggestionsList suggestions={suggestions} onSelect={handleSelectSuggestion} disabled={savingAddress} accent={accent} />
             )}
           </AnimatePresence>
         </div>
@@ -881,48 +685,93 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
     );
   }
 
-  // ── DESKTOP ──────────────────────────────────────────────────────────────────
+  // COMPACT mobile trigger (inline in header top bar)
+  if (compact) {
+    return (
+      <div className="relative" ref={wrapperRef}>
+        <button onClick={() => setOpen((p) => !p)} aria-expanded={open} aria-haspopup="dialog"
+          aria-label={`Location: ${cityLabel}. Tap to change.`}
+          className="flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded-full border transition-all duration-200 max-w-[130px]"
+          style={{ background: open ? triggerBg : 'var(--base-200)', borderColor: open ? `color-mix(in srgb, ${accent} 50%, transparent)` : 'var(--base-300)' }}>
+          <div className="w-5 h-5 rounded-full flex-shrink-0 flex items-center justify-center text-[9px] font-black text-white"
+            style={{ background: triggerGrad }} aria-hidden="true">{nameInitial}</div>
+          <div className="flex flex-col items-start leading-none min-w-0">
+            <span className="text-[7px] font-black uppercase tracking-[0.15em] opacity-40 leading-none">Location</span>
+            <span className="text-[10px] font-black tracking-tight leading-tight truncate max-w-[80px]"
+              style={{ color: open ? accent : 'var(--base-content)' }}>{cityLabel}</span>
+          </div>
+          {gpsLoading
+            ? <Loader2 size={10} className="animate-spin opacity-50 flex-shrink-0" />
+            : <MapPin size={10} strokeWidth={2.5} style={{ color: accent, opacity: 0.7, flexShrink: 0 }} />
+          }
+        </button>
+
+        <AnimatePresence>
+          {open && (
+            <MotionDiv variants={LOCATION_DROPDOWN_VARIANTS} initial="hidden" animate="show" exit="exit"
+              role="dialog" aria-modal="true" aria-label="Change location"
+              className="absolute left-0 top-full mt-2 w-[300px] z-[200] rounded-2xl shadow-2xl border border-base-300 bg-base-100 overflow-hidden origin-top-left">
+              <div className="px-3 py-3 flex items-center gap-3 border-b border-base-300" style={{ background: triggerBg }}>
+                <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center text-sm font-black text-white shadow"
+                  style={{ background: triggerGrad }} aria-hidden="true">{nameInitial}</div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] font-black uppercase tracking-widest opacity-40 leading-none mb-0.5">{firstName}'s Location</p>
+                  <p className="text-[12px] font-black truncate leading-tight" style={{ color: accent }}>{cityLabel}</p>
+                  {regionLabel && <p className="text-[10px] opacity-40 truncate">{regionLabel}</p>}
+                </div>
+              </div>
+              <div className="p-3 flex flex-col gap-2">
+                <button type="button" onClick={handleUseCurrentLocation} disabled={gpsLoading}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-all disabled:opacity-60"
+                  style={{ borderColor: `color-mix(in srgb, ${accent} 20%, transparent)`, background: triggerBg }}>
+                  <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+                    style={{ background: `color-mix(in srgb, ${accent} 20%, transparent)`, color: accent }} aria-hidden="true">
+                    {gpsLoading ? <Loader2 size={14} className="animate-spin" /> : <Navigation size={14} />}
+                  </div>
+                  <div>
+                    <p className="text-[12px] font-black leading-tight" style={{ color: accent }}>
+                      {gpsLoading ? 'Detecting…' : 'Use Current Location'}
+                    </p>
+                    <p className="text-[10px] opacity-50 font-normal">GPS via browser</p>
+                  </div>
+                </button>
+                <div className="flex items-center gap-2" role="separator" aria-hidden="true">
+                  <div className="flex-1 h-px bg-base-300" />
+                  <span className="text-[9px] font-black uppercase tracking-widest opacity-25">or search</span>
+                  <div className="flex-1 h-px bg-base-300" />
+                </div>
+                {searchInput}
+                <AnimatePresence>
+                  {suggestions.length > 0 && (
+                    <SuggestionsList suggestions={suggestions} onSelect={handleSelectSuggestion} disabled={savingAddress} accent={accent} />
+                  )}
+                </AnimatePresence>
+              </div>
+            </MotionDiv>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  }
+
+  // DESKTOP full version
   return (
     <div className="relative flex-shrink-0" ref={wrapperRef}>
-      <MotionButton
-        whileHover={{ scale: 1.02 }}
-        whileTap={{ scale: 0.97 }}
-        onClick={() => setOpen((p) => !p)}
-        aria-expanded={open}
-        aria-haspopup="dialog"
+      <MotionButton whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+        onClick={() => setOpen((p) => !p)} aria-expanded={open} aria-haspopup="dialog"
         aria-label={`Current location: ${cityLabel}. Click to change.`}
         className="flex items-center gap-2 pl-1.5 pr-2.5 py-1 rounded-full border transition-all duration-200"
-        style={{
-          background:  open ? triggerBg : 'var(--base-200)',
-          borderColor: open ? `color-mix(in srgb, ${accent} 50%, transparent)` : 'var(--base-300)',
-        }}
-      >
-        <div
-          className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-[10px] font-black text-white"
-          style={{ background: triggerGrad }}
-          aria-hidden="true"
-        >
-          {nameInitial}
-        </div>
+        style={{ background: open ? triggerBg : 'var(--base-200)', borderColor: open ? `color-mix(in srgb, ${accent} 50%, transparent)` : 'var(--base-300)' }}>
+        <div className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-[10px] font-black text-white"
+          style={{ background: triggerGrad }} aria-hidden="true">{nameInitial}</div>
         <div className="flex flex-col items-start leading-none">
           <span className="text-[8px] font-black uppercase tracking-[0.15em] opacity-40">{firstName}</span>
-          <span
-            className="text-[11px] font-black tracking-tight leading-tight max-w-[90px] truncate"
-            style={{ color: open ? accent : 'var(--base-content)' }}
-          >
-            {cityLabel}
-          </span>
+          <span className="text-[11px] font-black tracking-tight leading-tight max-w-[90px] truncate"
+            style={{ color: open ? accent : 'var(--base-content)' }}>{cityLabel}</span>
         </div>
         <div className="flex items-center gap-1 ml-0.5" aria-hidden="true">
-          {gpsLoading
-            ? <Loader2 size={11} className="animate-spin opacity-50" />
-            : <MapPin size={11} strokeWidth={2.5} style={{ color: accent, opacity: 0.7 }} />
-          }
-          <MotionDiv
-            initial={{ opacity: 0, width: 0 }}
-            animate={{ opacity: open ? 1 : 0, width: open ? 'auto' : 0 }}
-            className="overflow-hidden"
-          >
+          {gpsLoading ? <Loader2 size={11} className="animate-spin opacity-50" /> : <MapPin size={11} strokeWidth={2.5} style={{ color: accent, opacity: 0.7 }} />}
+          <MotionDiv initial={{ opacity: 0, width: 0 }} animate={{ opacity: open ? 1 : 0, width: open ? 'auto' : 0 }} className="overflow-hidden">
             <Pencil size={10} strokeWidth={2.5} style={{ color: accent }} />
           </MotionDiv>
         </div>
@@ -930,54 +779,29 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
 
       <AnimatePresence>
         {open && (
-          <MotionDiv
-            variants={LOCATION_DROPDOWN_VARIANTS}
-            initial="hidden"
-            animate="show"
-            exit="exit"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Change location"
-            className="absolute left-0 top-full mt-2 w-[320px] z-[200] rounded-2xl shadow-2xl border border-base-300 bg-base-100 overflow-hidden origin-top-left"
-          >
+          <MotionDiv variants={LOCATION_DROPDOWN_VARIANTS} initial="hidden" animate="show" exit="exit"
+            role="dialog" aria-modal="true" aria-label="Change location"
+            className="absolute left-0 top-full mt-2 w-[320px] z-[200] rounded-2xl shadow-2xl border border-base-300 bg-base-100 overflow-hidden origin-top-left">
             <div className="px-4 py-3 flex items-center gap-3 border-b border-base-300" style={{ background: triggerBg }}>
-              <div
-                className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center text-base font-black text-white shadow"
-                style={{ background: triggerGrad }}
-                aria-hidden="true"
-              >
-                {nameInitial}
-              </div>
+              <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center text-base font-black text-white shadow"
+                style={{ background: triggerGrad }} aria-hidden="true">{nameInitial}</div>
               <div className="flex-1 min-w-0">
                 <p className="text-[10px] font-black uppercase tracking-widest opacity-40 leading-none mb-0.5">{firstName}'s Location</p>
                 <p className="text-[13px] font-black truncate leading-tight" style={{ color: accent }}>{cityLabel}</p>
                 {regionLabel && <p className="text-[10px] opacity-40 truncate">{regionLabel}</p>}
               </div>
-              <div
-                className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black"
-                style={{ background: `color-mix(in srgb, ${accent} 18%, transparent)`, color: accent }}
-                aria-hidden="true"
-              >
-                <Pencil size={10} strokeWidth={2.5} />
-                <span>Edit</span>
+              <div className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black"
+                style={{ background: `color-mix(in srgb, ${accent} 18%, transparent)`, color: accent }} aria-hidden="true">
+                <Pencil size={10} strokeWidth={2.5} /><span>Edit</span>
               </div>
             </div>
             <div className="p-3 flex flex-col gap-2.5">
-              <MotionButton
-                whileHover={{ scale: 1.01 }}
-                whileTap={{ scale: 0.98 }}
-                type="button"
-                onClick={handleUseCurrentLocation}
-                disabled={gpsLoading}
-                aria-label="Detect my current location via GPS"
+              <MotionButton whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} type="button"
+                onClick={handleUseCurrentLocation} disabled={gpsLoading} aria-label="Detect my current location via GPS"
                 className="w-full flex items-center gap-3 px-3.5 py-3 rounded-xl border text-left transition-all disabled:opacity-60"
-                style={{ borderColor: `color-mix(in srgb, ${accent} 20%, transparent)`, background: triggerBg }}
-              >
-                <div
-                  className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                  style={{ background: `color-mix(in srgb, ${accent} 20%, transparent)`, color: accent }}
-                  aria-hidden="true"
-                >
+                style={{ borderColor: `color-mix(in srgb, ${accent} 20%, transparent)`, background: triggerBg }}>
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                  style={{ background: `color-mix(in srgb, ${accent} 20%, transparent)`, color: accent }} aria-hidden="true">
                   {gpsLoading ? <Loader2 size={15} className="animate-spin" /> : <Navigation size={15} />}
                 </div>
                 <div>
@@ -995,12 +819,7 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
               {searchInput}
               <AnimatePresence>
                 {suggestions.length > 0 && (
-                  <SuggestionsList
-                    suggestions={suggestions}
-                    onSelect={handleSelectSuggestion}
-                    disabled={savingAddress}
-                    accent={accent}
-                  />
+                  <SuggestionsList suggestions={suggestions} onSelect={handleSelectSuggestion} disabled={savingAddress} accent={accent} />
                 )}
               </AnimatePresence>
             </div>
@@ -1013,26 +832,20 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false }) 
 
 // ── AvatarDropdown ────────────────────────────────────────────────────────────
 const AvatarDropdown = memo(function AvatarDropdown({ user, userAvatar, activePalette, mood, pathname, onLogout }) {
-  const [open, setOpen]   = useState(false);
-  const dropdownRef       = useRef(null);
-  const triggerRef        = useRef(null);
+  const [open, setOpen] = useState(false);
+  const dropdownRef     = useRef(null);
+  const triggerRef      = useRef(null);
   const firstFocusableRef = useRef(null);
 
   useEffect(() => {
-    const handler = (e) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setOpen(false);
-    };
+    const handler = (e) => { if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setOpen(false); };
     document.addEventListener('mousedown', handler, { passive: true });
     return () => document.removeEventListener('mousedown', handler);
   }, []);
-
   useEffect(() => { setOpen(false); }, [pathname]);
-
   useEffect(() => {
     if (!open) return;
-    const handler = (e) => {
-      if (e.key === 'Escape') { setOpen(false); triggerRef.current?.focus(); }
-    };
+    const handler = (e) => { if (e.key === 'Escape') { setOpen(false); triggerRef.current?.focus(); } };
     document.addEventListener('keydown', handler);
     setTimeout(() => firstFocusableRef.current?.focus(), 60);
     return () => document.removeEventListener('keydown', handler);
@@ -1042,26 +855,13 @@ const AvatarDropdown = memo(function AvatarDropdown({ user, userAvatar, activePa
 
   return (
     <div className="relative hidden md:block" ref={dropdownRef}>
-      <MotionButton
-        ref={triggerRef}
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.95 }}
-        onClick={() => setOpen((p) => !p)}
-        aria-expanded={open}
-        aria-haspopup="menu"
+      <MotionButton ref={triggerRef} whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+        onClick={() => setOpen((p) => !p)} aria-expanded={open} aria-haspopup="menu"
         aria-label={`Account menu for ${user.name}`}
         className="relative h-10 w-10 rounded-full p-0 overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
-        style={{ border: `2px solid ${accentColor}`, transition: 'border-color 0.3s' }}
-      >
-        <Image
-          src={userAvatar}
-          alt={`${user.name} profile picture`}
-          fill
-          className="rounded-full object-cover"
-          sizes="40px"
-          priority
-          unoptimized={userAvatar.includes('ui-avatars.com')}
-        />
+        style={{ border: `2px solid ${accentColor}`, transition: 'border-color 0.3s' }}>
+        <Image src={userAvatar} alt={`${user.name} profile picture`} fill className="rounded-full object-cover"
+          sizes="40px" priority unoptimized={userAvatar.includes('ui-avatars.com')} />
         <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5" aria-label="Online">
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-60 bg-green-500" aria-hidden="true" />
           <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-green-500 border-2 border-base-100" aria-hidden="true" />
@@ -1070,40 +870,18 @@ const AvatarDropdown = memo(function AvatarDropdown({ user, userAvatar, activePa
 
       <AnimatePresence>
         {open && (
-          <MotionDiv
-            variants={DROPDOWN_VARIANTS}
-            initial="hidden"
-            animate="show"
-            exit="exit"
-            role="menu"
-            aria-label="Account options"
-            aria-orientation="vertical"
-            className="absolute right-0 mt-3 w-72 z-[110] md:w-sm rounded-xl shadow-2xl border border-base-300 bg-base-100 p-2.5 origin-top-right"
-          >
-            <div
-              className="py-3 px-4 rounded-lg mb-2"
-              style={{ background: activePalette?.pillBg ?? 'var(--base-200)' }}
-            >
+          <MotionDiv variants={DROPDOWN_VARIANTS} initial="hidden" animate="show" exit="exit"
+            role="menu" aria-label="Account options" aria-orientation="vertical"
+            className="absolute right-0 mt-3 w-72 z-[110] md:w-80 rounded-xl shadow-2xl border border-base-300 bg-base-100 p-2.5 origin-top-right">
+            <div className="py-3 px-4 rounded-lg mb-2" style={{ background: activePalette?.pillBg ?? 'var(--base-200)' }}>
               <div className="flex items-center gap-3">
-                <Image
-                  src={userAvatar}
-                  alt=""
-                  width={40}
-                  height={40}
-                  className="rounded-lg object-cover flex-shrink-0"
-                  aria-hidden="true"
-                  unoptimized={userAvatar.includes('ui-avatars.com')}
-                />
+                <Image src={userAvatar} alt="" width={40} height={40} className="rounded-lg object-cover flex-shrink-0"
+                  aria-hidden="true" unoptimized={userAvatar.includes('ui-avatars.com')} />
                 <div className="min-w-0">
                   <p className="text-sm font-black uppercase tracking-tight truncate">{user.name}</p>
                   <p className="text-[10px] opacity-50 truncate">{user.email}</p>
-                  <span
-                    className="mt-1 inline-block px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest"
-                    style={{
-                      background: activePalette?.pillBg  ?? 'var(--primary)',
-                      color:      activePalette?.pillText ?? 'var(--primary-content)',
-                    }}
-                  >
+                  <span className="mt-1 inline-block px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest"
+                    style={{ background: activePalette?.pillBg ?? 'var(--primary)', color: activePalette?.pillText ?? 'var(--primary-content)' }}>
                     {user.role}
                   </span>
                 </div>
@@ -1113,14 +891,9 @@ const AvatarDropdown = memo(function AvatarDropdown({ user, userAvatar, activePa
               <RoleNavLinks ref={firstFocusableRef} user={user} currentPathname={pathname} onLinkClick={() => setOpen(false)} />
             </div>
             <div className="my-2 h-px bg-base-300" role="separator" aria-hidden="true" />
-            <button
-              role="menuitem"
-              onClick={() => { setOpen(false); onLogout(); }}
-              className="w-full flex items-center gap-3 cursor-pointer p-3 text-[13px] font-bold rounded-lg text-error hover:bg-error/10 transition-all focus-visible:outline-none focus-visible:bg-error/10"
-            >
-              <div className="w-8 h-8 rounded-lg bg-error/20 flex items-center justify-center" aria-hidden="true">
-                <LogOut className="w-4 h-4" />
-              </div>
+            <button role="menuitem" onClick={() => { setOpen(false); onLogout(); }}
+              className="w-full flex items-center gap-3 cursor-pointer p-3 text-[13px] font-bold rounded-lg text-error hover:bg-error/10 transition-all focus-visible:outline-none focus-visible:bg-error/10">
+              <div className="w-8 h-8 rounded-lg bg-error/20 flex items-center justify-center" aria-hidden="true"><LogOut className="w-4 h-4" /></div>
               Sign Out
             </button>
           </MotionDiv>
@@ -1134,166 +907,74 @@ const AvatarDropdown = memo(function AvatarDropdown({ user, userAvatar, activePa
 const NavLink = memo(function NavLink({ link, pathname, onHover, onLeave, isHovered }) {
   const isActive = pathname === link.href || pathname.startsWith(link.href + '/');
   return (
-    <Link
-      href={link.href}
-      onMouseEnter={() => onHover(link.name)}
-      onMouseLeave={onLeave}
+    <Link href={link.href} onMouseEnter={() => onHover(link.name)} onMouseLeave={onLeave}
       aria-current={isActive ? 'page' : undefined}
       className="relative px-5 py-3.5 flex items-center gap-2.5 text-[10px] uppercase tracking-[0.18em] font-black transition-all duration-200 rounded-md overflow-hidden focus-visible:outline-none focus-visible:ring-2"
-      style={{
-        color:   (isActive || isHovered) ? link.accent : 'var(--base-content)',
-        opacity: (isActive || isHovered) ? 1 : 0.45,
-        '--tw-ring-color': link.accent,
-      }}
-    >
-      <MotionDiv
-        className="absolute inset-0 rounded-md"
-        animate={{ opacity: (isActive || isHovered) ? 1 : 0 }}
-        transition={{ duration: 0.2 }}
-        style={{ background: link.pillBg }}
-        aria-hidden="true"
-      />
-      <MotionDiv
-        animate={isHovered ? { y: -2, scale: 1.15 } : { y: 0, scale: 1 }}
-        transition={{ type: 'spring', stiffness: 340, damping: 20 }}
+      style={{ color: (isActive || isHovered) ? link.accent : 'var(--base-content)', opacity: (isActive || isHovered) ? 1 : 0.45, '--tw-ring-color': link.accent }}>
+      <MotionDiv className="absolute inset-0 rounded-md" animate={{ opacity: (isActive || isHovered) ? 1 : 0 }} transition={{ duration: 0.2 }}
+        style={{ background: link.pillBg }} aria-hidden="true" />
+      <MotionDiv animate={isHovered ? { y: -2, scale: 1.15 } : { y: 0, scale: 1 }} transition={{ type: 'spring', stiffness: 340, damping: 20 }}
         className="relative z-10 flex-shrink-0"
-        style={{ color: (isActive || isHovered) ? link.accent : 'var(--base-content)', opacity: (isActive || isHovered) ? 1 : 0.4 }}
-        aria-hidden="true"
-      >
+        style={{ color: (isActive || isHovered) ? link.accent : 'var(--base-content)', opacity: (isActive || isHovered) ? 1 : 0.4 }} aria-hidden="true">
         <link.icon size={15} strokeWidth={2.2} />
       </MotionDiv>
       <span className="relative z-10">{link.name}</span>
       <AnimatePresence>
         {isActive && (
-          <MotionDiv
-            key="active-bar"
-            layoutId="active-bar"
-            initial={{ scaleX: 0 }}
-            animate={{ scaleX: 1 }}
-            exit={{ scaleX: 0 }}
-            className="absolute bottom-0 left-3 right-3 h-[3px] rounded-t-full"
-            style={{ background: link.barGradient }}
-            transition={{ type: 'spring', stiffness: 380, damping: 28 }}
-            aria-hidden="true"
-          />
+          <MotionDiv key="active-bar" layoutId="active-bar" initial={{ scaleX: 0 }} animate={{ scaleX: 1 }} exit={{ scaleX: 0 }}
+            className="absolute bottom-0 left-3 right-3 h-[3px] rounded-t-full" style={{ background: link.barGradient }}
+            transition={{ type: 'spring', stiffness: 380, damping: 28 }} aria-hidden="true" />
         )}
       </AnimatePresence>
       <AnimatePresence>
         {isHovered && !isActive && (
-          <MotionDiv
-            key="hover-bar"
-            initial={{ opacity: 0, scaleX: 0 }}
-            animate={{ opacity: 0.5, scaleX: 1 }}
-            exit={{ opacity: 0, scaleX: 0 }}
-            className="absolute bottom-0 left-3 right-3 h-[2px] rounded-t-full"
-            style={{ background: link.barGradient }}
-            aria-hidden="true"
-          />
+          <MotionDiv key="hover-bar" initial={{ opacity: 0, scaleX: 0 }} animate={{ opacity: 0.5, scaleX: 1 }} exit={{ opacity: 0, scaleX: 0 }}
+            className="absolute bottom-0 left-3 right-3 h-[2px] rounded-t-full" style={{ background: link.barGradient }} aria-hidden="true" />
         )}
       </AnimatePresence>
       {isActive && (
-        <MotionDiv
-          initial={{ scale: 0 }}
-          animate={{ scale: 1 }}
+        <MotionDiv initial={{ scale: 0 }} animate={{ scale: 1 }}
           className="relative z-10 w-1.5 h-1.5 rounded-full flex-shrink-0"
-          style={{ background: link.accent, boxShadow: `0 0 6px ${link.accent}` }}
-          aria-hidden="true"
-        />
+          style={{ background: link.accent, boxShadow: `0 0 6px ${link.accent}` }} aria-hidden="true" />
       )}
     </Link>
   );
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// BOTTOM NAVIGATION
-// ═══════════════════════════════════════════════════════════════════════════════
+// ── BottomNav ─────────────────────────────────────────────────────────────────
 const BottomNav = memo(function BottomNav({ links, palette, pathname, dataTheme }) {
   const accent      = palette?.accent      ?? 'var(--primary)';
   const barGradient = palette?.barGradient ?? 'linear-gradient(90deg, var(--primary), var(--secondary))';
   const pillBg      = palette?.pillBg      ?? 'color-mix(in srgb, var(--primary) 12%, transparent)';
-
   if (!links || links.length === 0) return null;
-
   return (
-    <MotionDiv
-      variants={BOTTOM_NAV_VARIANTS}
-      initial="hidden"
-      animate="show"
-      data-theme={dataTheme}
-      className="fixed bottom-0 left-0 right-0 z-[99] safe-bottom"
-      role="navigation"
-      aria-label="Role navigation"
-    >
-      <div
-        className="flex md:hidden items-stretch justify-center overflow-x-auto scrollbar-none gap-1 backdrop-blur-md border-t"
-        style={{
-          background: 'color-mix(in srgb, var(--base-100) 92%, transparent)',
-          borderColor: `color-mix(in srgb, ${accent} 20%, transparent)`,
-        }}
-      >
+    <MotionDiv variants={BOTTOM_NAV_VARIANTS} initial="hidden" animate="show" data-theme={dataTheme}
+      className="fixed bottom-0 left-0 right-0 z-[99] safe-bottom" role="navigation" aria-label="Role navigation">
+      <div className="flex md:hidden items-stretch justify-center overflow-x-auto scrollbar-none gap-1 backdrop-blur-md border-t"
+        style={{ background: 'color-mix(in srgb, var(--base-100) 92%, transparent)', borderColor: `color-mix(in srgb, ${accent} 20%, transparent)` }}>
         {links.map((link) => {
           const isActive = pathname === link.href || pathname.startsWith(link.href + '/');
           const Icon = link.icon;
-
           return (
-            <Link
-              key={link.name}
-              href={link.href}
-              aria-current={isActive ? 'page' : undefined}
-              aria-label={link.name}
-              className="relative flex flex-col items-center justify-center flex-shrink-0 min-w-[72px] min-h-[60px] py-2 px-1 gap-1 transition-all duration-200 focus-visible:outline-none group"
-            >
+            <Link key={link.name} href={link.href} aria-current={isActive ? 'page' : undefined} aria-label={link.name}
+              className="relative flex flex-col items-center justify-center flex-shrink-0 min-w-[72px] min-h-[60px] py-2 px-1 gap-1 transition-all duration-200 focus-visible:outline-none group">
               {isActive && (
-                <MotionDiv
-                  layoutId="bottom-nav-active-pill"
-                  className="absolute inset-x-2 inset-y-1.5 rounded-md"
-                  style={{ background: pillBg }}
-                  transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                  aria-hidden="true"
-                />
+                <MotionDiv layoutId="bottom-nav-active-pill" className="absolute inset-x-2 inset-y-1.5 rounded-md"
+                  style={{ background: pillBg }} transition={{ type: 'spring', stiffness: 380, damping: 30 }} aria-hidden="true" />
               )}
               {isActive && (
-                <MotionDiv
-                  layoutId="bottom-nav-indicator"
-                  className="absolute top-0 left-4 right-4 h-[3px] rounded-b-full"
-                  style={{ background: barGradient }}
-                  transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                  aria-hidden="true"
-                />
+                <MotionDiv layoutId="bottom-nav-indicator" className="absolute top-0 left-4 right-4 h-[3px] rounded-b-full"
+                  style={{ background: barGradient }} transition={{ type: 'spring', stiffness: 380, damping: 30 }} aria-hidden="true" />
               )}
-              <MotionDiv
-                animate={isActive ? { scale: 1.15, y: -1 } : { scale: 1, y: 0 }}
-                whileTap={{ scale: 0.88 }}
+              <MotionDiv animate={isActive ? { scale: 1.15, y: -1 } : { scale: 1, y: 0 }} whileTap={{ scale: 0.88 }}
                 transition={{ type: 'spring', stiffness: 400, damping: 22 }}
-                className="relative z-10 flex items-center justify-center"
-                aria-hidden="true"
-              >
-                {isActive && (
-                  <span
-                    className="absolute inset-0 rounded-full blur-md opacity-40 scale-150"
-                    style={{ background: accent }}
-                    aria-hidden="true"
-                  />
-                )}
-                <Icon
-                  size={15}
-                  strokeWidth={isActive ? 2.5 : 1.8}
-                  style={{
-                    color:   isActive ? accent : 'var(--base-content)',
-                    opacity: isActive ? 1 : 0.45,
-                    transition: 'color 0.25s, opacity 0.25s',
-                  }}
-                />
+                className="relative z-10 flex items-center justify-center" aria-hidden="true">
+                {isActive && <span className="absolute inset-0 rounded-full blur-md opacity-40 scale-150" style={{ background: accent }} aria-hidden="true" />}
+                <Icon size={15} strokeWidth={isActive ? 2.5 : 1.8}
+                  style={{ color: isActive ? accent : 'var(--base-content)', opacity: isActive ? 1 : 0.45, transition: 'color 0.25s, opacity 0.25s' }} />
               </MotionDiv>
-              <span
-                className="relative z-10 text-[9px] font-black uppercase tracking-[0.1em] leading-none transition-all duration-200"
-                style={{
-                  color:   isActive ? accent : 'var(--base-content)',
-                  opacity: isActive ? 1 : 0.4,
-                }}
-              >
-                {link.name}
-              </span>
+              <span className="relative z-10 text-[9px] font-black uppercase tracking-[0.1em] leading-none transition-all duration-200"
+                style={{ color: isActive ? accent : 'var(--base-content)', opacity: isActive ? 1 : 0.4 }}>{link.name}</span>
             </Link>
           );
         })}
@@ -1378,43 +1059,30 @@ const Header = () => {
     if (!mobileOpen) return;
     const menu = document.getElementById('mobile-menu');
     if (!menu) return;
-    const focusables = menu.querySelectorAll(
-      'a[href], button:not([disabled]), input, [tabindex]:not([tabindex="-1"])'
-    );
+    const focusables = menu.querySelectorAll('a[href], button:not([disabled]), input, [tabindex]:not([tabindex="-1"])');
     const first = focusables[0];
     const last  = focusables[focusables.length - 1];
     const trap = (e) => {
       if (e.key !== 'Tab') return;
-      if (e.shiftKey) {
-        if (document.activeElement === first) { e.preventDefault(); last?.focus(); }
-      } else {
-        if (document.activeElement === last) { e.preventDefault(); first?.focus(); }
-      }
+      if (e.shiftKey) { if (document.activeElement === first) { e.preventDefault(); last?.focus(); } }
+      else { if (document.activeElement === last) { e.preventDefault(); first?.focus(); } }
     };
     const escHandler = (e) => { if (e.key === 'Escape') setMobileOpen(false); };
     document.addEventListener('keydown', trap);
     document.addEventListener('keydown', escHandler);
     first?.focus();
-    return () => {
-      document.removeEventListener('keydown', trap);
-      document.removeEventListener('keydown', escHandler);
-    };
+    return () => { document.removeEventListener('keydown', trap); document.removeEventListener('keydown', escHandler); };
   }, [mobileOpen]);
 
   const handleLogout = useCallback(() => {
-    dispatch(logout());
-    setMobileOpen(false);
-    router.push('/');
+    dispatch(logout()); setMobileOpen(false); router.push('/');
   }, [dispatch, router]);
 
   const handleHover  = useCallback((name) => setHoveredLink(name), []);
-  const handleLeave  = useCallback(() => setHoveredLink(null),      []);
-  const toggleMobile = useCallback(() => setMobileOpen((p) => !p),  []);
+  const handleLeave  = useCallback(() => setHoveredLink(null), []);
+  const toggleMobile = useCallback(() => setMobileOpen((p) => !p), []);
 
-  const userAvatar = useMemo(
-    () => user?.avatar || buildAvatarUrl(user?.name),
-    [user?.avatar, user?.name]
-  );
+  const userAvatar = useMemo(() => user?.avatar || buildAvatarUrl(user?.name), [user?.avatar, user?.name]);
 
   const accentStripeStyle = useMemo(() => ({
     background: mood?.barGradient ?? 'linear-gradient(90deg, var(--primary), var(--secondary))',
@@ -1430,9 +1098,7 @@ const Header = () => {
 
   const bookNowStyle = useMemo(() => ({
     background: mood?.barGradient ?? 'var(--primary)',
-    boxShadow:  mood
-      ? `0 4px 18px ${mood.shadowColor}`
-      : '0 4px 12px color-mix(in srgb, var(--primary) 30%, transparent)',
+    boxShadow:  mood ? `0 4px 18px ${mood.shadowColor}` : '0 4px 12px color-mix(in srgb, var(--primary) 30%, transparent)',
   }), [mood]);
 
   const mobileMenuAccentBorder = useMemo(() => ({
@@ -1441,136 +1107,165 @@ const Header = () => {
   }), [mood]);
 
   const RoleIcon = mood?.icon ?? null;
+  const accentColor = mood?.accent ?? 'var(--primary)';
+
+  // ── Mobile sub-bar content ─────────────────────────────────────────────────
+  // Customer + logged in: search bar
+  // Customer + guest:     search bar + login button
+  // Role user:            role title pill (no search)
+  const MobileSubBar = useMemo(() => {
+    if (!isCustomer && rolePalette) {
+      return (
+        <div className="flex md:hidden items-center justify-between px-4 py-2 border-t"
+          style={{ borderColor: `color-mix(in srgb, ${rolePalette.accent} 20%, transparent)`, background: rolePalette.bg }}>
+          <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest"
+            style={{ color: rolePalette.pillText }}>
+            {RoleIcon && <RoleIcon size={13} aria-hidden="true" />}
+            <span>{rolePalette.label} Portal</span>
+          </div>
+          {/* Wallet pill for role users on mobile sub-bar */}
+          <Link href="/wallet"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-black"
+            style={{ borderColor: `color-mix(in srgb, var(--warning) 30%, transparent)`, background: 'color-mix(in srgb, var(--warning) 8%, transparent)', color: 'var(--warning)' }}>
+            <WalletIcon size={11} strokeWidth={2.5} aria-hidden="true" />
+            ₹{(walletBalance ?? 0).toLocaleString('en-IN')}
+          </Link>
+        </div>
+      );
+    }
+
+    // Customer / guest sub-bar
+    return (
+      <div className="flex md:hidden items-center gap-2 px-4 py-2 border-t border-base-300"
+        style={{ background: 'color-mix(in srgb, var(--base-100) 95%, transparent)' }}>
+        {/* Search bar */}
+        <Link href="/search" aria-label="Open search"
+          className="flex flex-1 relative items-center rounded-xl bg-base-200/70 border border-base-300 px-3 py-2 gap-2 active:scale-[0.99] transition-transform">
+          <Search size={14} style={{ color: accentColor, opacity: 0.5 }} aria-hidden="true" />
+          <span className="text-[12px] text-base-content/40 font-medium flex-1 truncate">
+            Search medicines, doctors…
+          </span>
+          <span className="text-[9px] font-black uppercase tracking-widest opacity-30 hidden xs:block">
+            Search
+          </span>
+        </Link>
+
+        {/* Guest: Login button */}
+        {!user && (
+          <Link href="/login" aria-label="Sign in">
+            <MotionButton whileTap={{ scale: 0.95 }}
+              className="flex items-center gap-1.5 h-9 px-3.5 rounded-xl text-[11px] font-black uppercase tracking-wide text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2"
+              style={{ background: mood?.barGradient ?? 'var(--primary)' }}>
+              <User size={13} aria-hidden="true" />
+              Login
+            </MotionButton>
+          </Link>
+        )}
+
+        {/* Logged in customer: wallet compact */}
+        {user && isCustomer && (
+          <Link href="/wallet"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-[10px] font-black whitespace-nowrap"
+            style={{ borderColor: 'color-mix(in srgb, var(--warning) 30%, transparent)', background: 'color-mix(in srgb, var(--warning) 8%, transparent)', color: 'var(--warning)' }}>
+            <WalletIcon size={11} strokeWidth={2.5} aria-hidden="true" />
+            ₹{(walletBalance ?? 0).toLocaleString('en-IN')}
+          </Link>
+        )}
+      </div>
+    );
+  }, [isCustomer, rolePalette, RoleIcon, user, accentColor, mood, walletBalance]);
 
   return (
     <>
       {/* Skip to content */}
-      <a
-        href="#main-content"
-        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[200] focus:px-4 focus:py-2 focus:rounded-lg focus:bg-base-100 focus:text-base-content focus:font-bold focus:shadow-xl"
-      >
+      <a href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[200] focus:px-4 focus:py-2 focus:rounded-lg focus:bg-base-100 focus:text-base-content focus:font-bold focus:shadow-xl">
         Skip to main content
       </a>
 
-      <header
-        ref={headerRef}
-        data-theme={headerDataTheme}
-       className={cn(
-  pathname === '/search' ? 'hidden' : 'sticky top-0 z-[100] w-full backdrop-blur-md border-b border-base-300 transition-all duration-300',
+      <header ref={headerRef} data-theme={headerDataTheme}
+        className={cn(
+          pathname === '/search' ? 'hidden' : 'sticky top-0 z-[100] w-full backdrop-blur-md border-b border-base-300 transition-all duration-300',
           !isCustomer && roleBottomNavLinks && 'mb-0'
         )}
         style={{ background: 'color-mix(in srgb, var(--base-100) 88%, transparent)' }}
-        role="banner"
-      >
+        role="banner">
+
         {/* Accent stripe */}
-        <MotionDiv
-          className="h-0.5 w-full relative z-[101]"
-          style={accentStripeStyle}
-          layout
-          aria-hidden="true"
-        />
+        <MotionDiv className="h-0.5 w-full relative z-[101]" style={accentStripeStyle} layout aria-hidden="true" />
 
-        {/* ── TOP BAR ─────────────────────────────────────────────────── */}
-        <div className="py-2.5 md:py-3 relative z-[101]">
-          <Container className="flex items-center justify-between gap-4">
+        {/* ── TOP BAR ─────────────────────────────────────────────────────── */}
+        {/* MOBILE: Logo+Location LEFT | Cart+Notif+Book+Menu RIGHT */}
+        {/* DESKTOP: Logo+Location LEFT | Search CENTER | Actions RIGHT */}
+        <div className="py-2 md:py-3 relative z-[101]">
+          <Container className="flex items-center justify-between gap-3">
 
-            {/* Left: Logo + Location */}
-            <div className="flex items-center gap-3 flex-shrink-0">
-              <Link
-                href="/"
-                className="flex-shrink-0 group transition-transform active:scale-95"
-                aria-label="Likeson — go to homepage"
-              >
-                <span
-                  className="text-xl md:text-2xl font-black tracking-tighter transition-colors duration-300 block"
-                  style={{ color: mood?.accent ?? 'var(--primary)' }}
-                  aria-label="Likeson.in"
-                >
+            {/* ── LEFT: Logo + Location ── */}
+            <div className="flex items-center gap-2 md:gap-3 flex-shrink-0 min-w-0">
+              <Link href="/" className="flex-shrink-0 group transition-transform active:scale-95" aria-label="Likeson — go to homepage">
+                <span className="text-xl md:text-2xl font-black tracking-tighter transition-colors duration-300 block"
+                  style={{ color: mood?.accent ?? 'var(--primary)' }}>
                   Likeson<span style={{ color: 'var(--warning)' }}>.in</span>
                 </span>
               </Link>
+
+              {/* Desktop: full location widget */}
               <div className="hidden lg:flex items-center">
                 <LocationWidget mood={mood} isMobile={false} />
               </div>
+
+              {/* Mobile: compact location trigger */}
+              <div className="flex lg:hidden items-center">
+                <LocationWidget mood={mood} isMobile={false} compact />
+              </div>
             </div>
 
-            {/* Centre: Search (desktop) — customer/guest only */}
+            {/* ── CENTER: Desktop search (customer/guest) or role title ── */}
             {isCustomer && (
-            <Link
-  href="/search"
-  aria-label="Open search"
-  className="hidden lg:flex flex-1 max-w-sm relative items-center"
->
-  <Search
-    className="absolute left-4 w-4 h-4 pointer-events-none"
-    style={{ color: mood?.accent ?? 'var(--base-content)', opacity: 0.5 }}
-    aria-hidden="true"
-  />
-  <div
-    className="input-field w-full pl-10 text-[13px] text-base-content/40 rounded-xl bg-base-200/50 border-transparent cursor-pointer select-none py-3"
-  >
-    Search services or doctors…
-  </div>
-</Link>
+              <Link href="/search" aria-label="Open search"
+                className="hidden lg:flex flex-1 max-w-sm relative items-center">
+                <Search className="absolute left-4 w-4 h-4 pointer-events-none"
+                  style={{ color: mood?.accent ?? 'var(--base-content)', opacity: 0.5 }} aria-hidden="true" />
+                <div className="input-field w-full pl-10 text-[13px] text-base-content/40 rounded-xl bg-base-200/50 border-transparent cursor-pointer select-none py-3">
+                  Search services or doctors…
+                </div>
+              </Link>
             )}
 
-            {/* Centre: Role title for non-customer */}
             {!isCustomer && rolePalette && (
               <div className="hidden lg:flex flex-1 items-center justify-center">
-                <div
-                  className="flex items-center gap-2.5 px-4 py-2 rounded-full border text-[11px] font-black uppercase tracking-widest"
-                  style={{
-                    background:  rolePalette.pillBg,
-                    borderColor: `color-mix(in srgb, ${rolePalette.accent} 30%, transparent)`,
-                    color:       rolePalette.pillText,
-                  }}
-                  aria-label={`Logged in as ${rolePalette.label}`}
-                >
+                <div className="flex items-center gap-2.5 px-4 py-2 rounded-full border text-[11px] font-black uppercase tracking-widest"
+                  style={{ background: rolePalette.pillBg, borderColor: `color-mix(in srgb, ${rolePalette.accent} 30%, transparent)`, color: rolePalette.pillText }}
+                  aria-label={`Logged in as ${rolePalette.label}`}>
                   {RoleIcon && <RoleIcon size={14} aria-hidden="true" />}
                   {rolePalette.label} Portal
                 </div>
               </div>
             )}
 
-            {/* Right: Actions */}
-            <div className="flex items-center gap-2 md:gap-3" role="navigation" aria-label="Account actions">
-              {user ? (
-                <div className="flex items-center gap-2 lg:gap-3">
+            {/* ── RIGHT: Actions ── */}
+            <div className="flex items-center gap-1.5 md:gap-2 lg:gap-3 flex-shrink-0" role="navigation" aria-label="Account actions">
 
-                  {/* Superadmin badge */}
+              {/* ───── LOGGED IN ───── */}
+              {user ? (
+                <>
+                  {/* Desktop-only: superadmin badge */}
                   {userRole === 'superadmin' && (
-                    <Link
-                      href="/admin/dashboard"
-                      aria-label="Go to admin terminal dashboard"
+                    <Link href="/admin/dashboard" aria-label="Admin dashboard"
                       className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wider border animate-pulse"
-                      style={{
-                        background:  'color-mix(in srgb, var(--primary) 8%, transparent)',
-                        color:       'var(--primary)',
-                        borderColor: 'color-mix(in srgb, var(--primary) 20%, transparent)',
-                      }}
-                    >
+                      style={{ background: 'color-mix(in srgb, var(--primary) 8%, transparent)', color: 'var(--primary)', borderColor: 'color-mix(in srgb, var(--primary) 20%, transparent)' }}>
                       <ShieldCheck size={13} aria-hidden="true" /> Admin
                     </Link>
                   )}
 
-                  {/* Active section pill — customer only */}
+                  {/* Desktop-only: active section pill */}
                   {isCustomer && (
                     <AnimatePresence mode="wait">
                       {activePalette && (
-                        <MotionDiv
-                          key={activePalette.href}
-                          initial={{ opacity: 0, scale: 0.8 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.8 }}
+                        <MotionDiv key={activePalette.href} initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }}
                           aria-label={`Current section: ${activePalette.label}`}
                           className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest border"
-                          style={{
-                            background:  activePalette.pillBg,
-                            color:       activePalette.pillText,
-                            borderColor: `${activePalette.accent}30`,
-                            boxShadow:   `0 0 12px ${activePalette.shadowColor}`,
-                          }}
-                        >
+                          style={{ background: activePalette.pillBg, color: activePalette.pillText, borderColor: `${activePalette.accent}30`, boxShadow: `0 0 12px ${activePalette.shadowColor}` }}>
                           <activePalette.icon size={11} aria-hidden="true" />
                           {activePalette.label}
                         </MotionDiv>
@@ -1578,256 +1273,223 @@ const Header = () => {
                     </AnimatePresence>
                   )}
 
-                  {/* Wallet */}
+                  {/* Desktop-only: Wallet */}
                   <div className="hidden md:flex">
                     <WalletWidget walletBalance={walletBalance} accent={mood?.accent} />
                   </div>
 
-                  {/* Cart — customer/pharmacy only */}
+                  {/* Cart — customer/pharmacy — visible on MOBILE too */}
                   {(isCustomer || userRole === 'pharmacy') && (
-                    <Link
-                      href="/pharmacy/cart"
-                      aria-label={`Shopping cart with ${cartCount} item${cartCount !== 1 ? 's' : ''}`}
-                    >
+                    <Link href="/pharmacy/cart" aria-label={`Shopping cart with ${cartCount} item${cartCount !== 1 ? 's' : ''}`}>
                       <MotionDiv whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} className="relative">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="rounded-full text-base-content/60 hover:bg-base-200"
-                          tabIndex={-1}
-                        >
+                        <button className="relative h-9 w-9 md:h-10 md:w-10 rounded-full flex items-center justify-center text-base-content/60 hover:bg-base-200 transition-colors"
+                          tabIndex={-1} aria-hidden="true">
                           <MotionDiv variants={CART_FLOAT} animate={cartCount > 0 ? 'float' : 'idle'} aria-hidden="true">
-                            <ShoppingCart size={19} aria-hidden="true" />
+                            <ShoppingCart size={18} aria-hidden="true" />
                           </MotionDiv>
-                        </Button>
+                        </button>
                         {cartCount > 0 && (
-                          <MotionSpan
-                            initial={{ scale: 0 }}
-                            animate={{ scale: 1 }}
-                            aria-hidden="true"
-                            className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black text-white shadow-lg"
-                            style={{
-                              background: mood?.accent ?? 'var(--primary)',
-                              boxShadow:  mood ? `0 2px 8px ${mood.shadowColor}` : 'none',
-                            }}
-                          >
+                          <MotionSpan initial={{ scale: 0 }} animate={{ scale: 1 }} aria-hidden="true"
+                            className="absolute -top-1 -right-1 flex items-center justify-center min-w-[16px] h-[16px] md:min-w-[18px] md:h-[18px] px-1 rounded-full text-[9px] md:text-[10px] font-black text-white shadow-lg"
+                            style={{ background: mood?.accent ?? 'var(--primary)', boxShadow: mood ? `0 2px 8px ${mood.shadowColor}` : 'none' }}>
                             {cartCount > 99 ? '99+' : cartCount}
-                            <span
-                              className="absolute inset-0 rounded-full animate-ping opacity-40"
-                              style={{ background: mood?.accent ?? 'var(--primary)' }}
-                              aria-hidden="true"
-                            />
+                            <span className="absolute inset-0 rounded-full animate-ping opacity-40"
+                              style={{ background: mood?.accent ?? 'var(--primary)' }} aria-hidden="true" />
                           </MotionSpan>
                         )}
                       </MotionDiv>
                     </Link>
                   )}
 
-               
-
-                  {/* Notifications */}
-                  <Link
-                    href="/notifications"
-                    aria-label={`Notifications${unreadCount > 0 ? `, ${unreadCount} unread` : ', none unread'}`}
-                  >
+                  {/* Notifications — visible on MOBILE too */}
+                  <Link href="/notifications" aria-label={`Notifications${unreadCount > 0 ? `, ${unreadCount} unread` : ', none unread'}`}>
                     <MotionDiv whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.92 }} className="relative">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="rounded-full text-base-content/60 hover:bg-base-200"
-                        tabIndex={-1}
-                      >
+                      <button className="relative h-9 w-9 md:h-10 md:w-10 rounded-full flex items-center justify-center text-base-content/60 hover:bg-base-200 transition-colors"
+                        tabIndex={-1} aria-hidden="true">
                         <MotionDiv variants={BELL_RING} animate={unreadCount > 0 ? 'ring' : 'idle'} aria-hidden="true">
-                          <Bell size={19} aria-hidden="true" />
+                          <Bell size={18} aria-hidden="true" />
                         </MotionDiv>
                         {unreadCount > 0 && (
                           <>
-                            <span
-                              aria-hidden="true"
-                              className="absolute top-2 right-2.5 w-2 h-2 rounded-full border-2 border-base-100 z-10"
-                              style={{ background: mood?.accent ?? 'var(--accent)' }}
-                            />
-                            <span
-                              aria-hidden="true"
-                              className="absolute top-2 right-2.5 w-2 h-2 rounded-full animate-ping"
-                              style={{ background: mood?.accent ?? 'var(--accent)', opacity: 0.6 }}
-                            />
+                            <span aria-hidden="true" className="absolute top-2 right-2.5 w-2 h-2 rounded-full border-2 border-base-100 z-10"
+                              style={{ background: mood?.accent ?? 'var(--accent)' }} />
+                            <span aria-hidden="true" className="absolute top-2 right-2.5 w-2 h-2 rounded-full animate-ping"
+                              style={{ background: mood?.accent ?? 'var(--accent)', opacity: 0.6 }} />
                           </>
                         )}
-                      </Button>
+                      </button>
                     </MotionDiv>
                   </Link>
 
-                  {/* Avatar Dropdown */}
-                  <AvatarDropdown
-                    user={user}
-                    userAvatar={userAvatar}
-                    activePalette={isCustomer ? activePalette : rolePalette}
-                    mood={mood}
-                    pathname={pathname}
-                    onLogout={handleLogout}
-                  />
-                </div>
-              ) : (
-                /* Guest */
-                <Link href="/login" className="hidden sm:block">
-                  <MotionButton
-                    whileHover={{ scale: 1.03 }}
-                    whileTap={{ scale: 0.96 }}
-                    aria-label="Sign in to your account"
-                    className="rounded-full text-[13px] font-extrabold h-10 px-6 text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2"
-                  >
-                    Login
-                  </MotionButton>
-                </Link>
-              )}
+                  {/* Theme toggle — desktop visible + mobile too */}
+                  <ThemeToggle compact />
 
-              {/* Book Now CTA — customer/guest only */}
-              {isCustomer && (
-                <Link href="/book-appointment">
-                  <MotionButton
-                    whileHover={{ scale: 1.04, y: -1 }}
-                    whileTap={{ scale: 0.95 }}
-                    aria-label="Book a medical appointment"
-                    className="flex items-center h-10 px-4 md:px-6 gap-2 rounded-md text-[12px] font-black uppercase tracking-wide text-white transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
-                    style={bookNowStyle}
-                  >
-                    <Calendar className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
-                    <span className="hidden md:block">Book Now</span>
-                  </MotionButton>
-                </Link>
-              )}
-
-              {/* Mobile menu trigger */}
-              <MotionButton
-                whileTap={{ scale: 0.9 }}
-                onClick={toggleMobile}
-                aria-label={mobileOpen ? 'Close navigation menu' : 'Open navigation menu'}
-                aria-expanded={mobileOpen}
-                aria-controls="mobile-menu"
-                className="md:hidden h-10 w-10 rounded-full flex items-center justify-center bg-base-200 text-base-content z-[110] relative focus-visible:outline-none focus-visible:ring-2"
-                style={{ border: `1.5px solid ${mood ? `color-mix(in srgb, ${mood.accent} 40%, transparent)` : 'var(--base-300)'}` }}
-              >
-                <AnimatePresence mode="wait">
-                  {mobileOpen ? (
-                    <MotionSpan key="x"    initial={{ rotate: -90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ opacity: 0 }} aria-hidden="true"><X    size={20} /></MotionSpan>
-                  ) : (
-                    <MotionSpan key="menu" initial={{ rotate:  90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ opacity: 0 }} aria-hidden="true"><Menu size={20} /></MotionSpan>
+                  {/* Book Now — mobile visible, customer only */}
+                  {isCustomer && (
+                    <Link href="/book-appointment" className="md:hidden" aria-label="Book appointment">
+                      <MotionDiv whileTap={{ scale: 0.92 }}
+                        className="h-9 w-9 rounded-full flex items-center justify-center text-white flex-shrink-0"
+                        style={{ background: mood?.barGradient ?? 'var(--primary)' }}>
+                        <Calendar size={16} aria-hidden="true" />
+                      </MotionDiv>
+                    </Link>
                   )}
-                </AnimatePresence>
-              </MotionButton>
+
+                  {/* Book Now — desktop, customer only */}
+                  {isCustomer && (
+                    <Link href="/book-appointment" className="hidden md:block" aria-label="Book a medical appointment">
+                      <MotionButton whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.95 }}
+                        className="flex items-center h-10 px-4 md:px-6 gap-2 rounded-md text-[12px] font-black uppercase tracking-wide text-white transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+                        style={bookNowStyle}>
+                        <Calendar className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+                        <span className="hidden md:block">Book Now</span>
+                      </MotionButton>
+                    </Link>
+                  )}
+
+                  {/* Desktop: Avatar dropdown */}
+                  <AvatarDropdown user={user} userAvatar={userAvatar}
+                    activePalette={isCustomer ? activePalette : rolePalette}
+                    mood={mood} pathname={pathname} onLogout={handleLogout} />
+
+                  {/* Mobile: Hamburger menu */}
+                  <MotionButton whileTap={{ scale: 0.9 }} onClick={toggleMobile}
+                    aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+                    aria-expanded={mobileOpen} aria-controls="mobile-menu"
+                    className="md:hidden h-9 w-9 rounded-full flex items-center justify-center bg-base-200 text-base-content z-[110] relative focus-visible:outline-none focus-visible:ring-2 flex-shrink-0"
+                    style={{ border: `1.5px solid ${mood ? `color-mix(in srgb, ${mood.accent} 40%, transparent)` : 'var(--base-300)'}` }}>
+                    <AnimatePresence mode="wait">
+                      {mobileOpen
+                        ? <MotionSpan key="x" initial={{ rotate: -90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ opacity: 0 }} aria-hidden="true"><X size={18} /></MotionSpan>
+                        : <MotionSpan key="menu" initial={{ rotate: 90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ opacity: 0 }} aria-hidden="true"><Menu size={18} /></MotionSpan>
+                      }
+                    </AnimatePresence>
+                  </MotionButton>
+                </>
+              ) : (
+                /* ───── GUEST ───── */
+                <>
+                  {/* Desktop: Login */}
+                  <Link href="/login" className="hidden sm:block" aria-label="Sign in">
+                    <MotionButton whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.96 }}
+                      className="rounded-full text-[13px] font-extrabold h-10 px-6 text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2">
+                      Login
+                    </MotionButton>
+                  </Link>
+
+                  {/* Desktop: Book Now */}
+                  {isCustomer && (
+                    <Link href="/book-appointment" className="hidden md:block">
+                      <MotionButton whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.95 }}
+                        aria-label="Book a medical appointment"
+                        className="flex items-center h-10 px-4 md:px-6 gap-2 rounded-md text-[12px] font-black uppercase tracking-wide text-white transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+                        style={bookNowStyle}>
+                        <Calendar className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+                        <span className="hidden md:block">Book Now</span>
+                      </MotionButton>
+                    </Link>
+                  )}
+
+                  {/* Mobile: Theme toggle + Menu */}
+                  <ThemeToggle compact />
+                  <MotionButton whileTap={{ scale: 0.9 }} onClick={toggleMobile}
+                    aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+                    aria-expanded={mobileOpen} aria-controls="mobile-menu"
+                    className="md:hidden h-9 w-9 rounded-full flex items-center justify-center bg-base-200 text-base-content z-[110] relative focus-visible:outline-none focus-visible:ring-2"
+                    style={{ border: '1.5px solid var(--base-300)' }}>
+                    <AnimatePresence mode="wait">
+                      {mobileOpen
+                        ? <MotionSpan key="x" initial={{ rotate: -90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ opacity: 0 }} aria-hidden="true"><X size={18} /></MotionSpan>
+                        : <MotionSpan key="menu" initial={{ rotate: 90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ opacity: 0 }} aria-hidden="true"><Menu size={18} /></MotionSpan>
+                      }
+                    </AnimatePresence>
+                  </MotionButton>
+                </>
+              )}
             </div>
           </Container>
         </div>
 
-        {/* ── DESKTOP NAV — Customer only ──────────────────────────────── */}
+        {/* ── MOBILE SUB-BAR (part 2) ──────────────────────────────────── */}
+        {/* Visible only on mobile. Contains search or role info. */}
+        {MobileSubBar}
+
+        {/* ── DESKTOP NAV — Customer only ─────────────────────────────── */}
         {isCustomer && (
-          <nav
-            className="hidden md:block py-0.5 transition-all duration-400 relative"
-            style={navBarStyle}
-            aria-label="Main navigation"
-          >
+          <nav className="hidden md:block py-0.5 transition-all duration-400 relative" style={navBarStyle} aria-label="Main navigation">
             <Container className="flex items-center justify-center gap-0.5">
               {CUSTOMER_NAV_LINKS.map((link) => (
-                <NavLink
-                  key={link.name}
-                  link={link}
-                  pathname={pathname}
-                  onHover={handleHover}
-                  onLeave={handleLeave}
-                  isHovered={hoveredLink === link.name}
-                />
+                <NavLink key={link.name} link={link} pathname={pathname}
+                  onHover={handleHover} onLeave={handleLeave} isHovered={hoveredLink === link.name} />
               ))}
             </Container>
           </nav>
         )}
       </header>
 
-
-      
-
-      {/* ── BOTTOM NAVIGATION — Non-customer roles, mobile only ──────── */}
+      {/* ── BOTTOM NAVIGATION — Role users, mobile ──────────────────── */}
       {!isCustomer && user && roleBottomNavLinks && (
-        <BottomNav
-          links={roleBottomNavLinks}
-          palette={rolePalette}
-          pathname={pathname}
-          dataTheme={headerDataTheme}
-        />
+        <BottomNav links={roleBottomNavLinks} palette={rolePalette} pathname={pathname} dataTheme={headerDataTheme} />
       )}
+
+      {/* ── CUSTOMER MOBILE BOTTOM NAV ───────────────────────────────── */}
       {isCustomer && (
-  <div className="fixed bottom-0 left-0 right-0 z-[99] flex md:hidden items-center justify-around border-t safe-bottom"
-    style={{ background: 'color-mix(in srgb, var(--base-100) 92%, transparent)', borderColor: 'var(--base-300)', backdropFilter: 'blur(12px)' }}>
-    {CUSTOMER_NAV_LINKS.map(link => {
-      const isActive = pathname === link.href || pathname.startsWith(link.href + '/');
-      const Icon = link.icon;
-      return (
-        <Link key={link.name} href={link.href} aria-label={link.name}
-          className="flex flex-col items-center justify-center flex-1 min-h-[56px] gap-1 py-2">
-          <Icon size={18} strokeWidth={isActive ? 2.5 : 1.8}
-            style={{ color: isActive ? link.accent : 'var(--base-content)', opacity: isActive ? 1 : 0.4 }} />
-          <span className="text-[9px] font-black uppercase tracking-wider"
-            style={{ color: isActive ? link.accent : 'var(--base-content)', opacity: isActive ? 1 : 0.4 }}>
-            {link.label}
-          </span>
-        </Link>
-      );
-    })}
-  </div>
-)}
+        <div className="fixed bottom-0 left-0 right-0 z-[99] flex md:hidden items-center justify-around border-t safe-bottom"
+          style={{ background: 'color-mix(in srgb, var(--base-100) 93%, transparent)', borderColor: 'var(--base-300)', backdropFilter: 'blur(12px)' }}>
+          {CUSTOMER_NAV_LINKS.map((link) => {
+            const isActive = pathname === link.href || pathname.startsWith(link.href + '/');
+            const Icon = link.icon;
+            return (
+              <Link key={link.name} href={link.href} aria-label={link.name}
+                className="flex flex-col items-center justify-center flex-1 min-h-[56px] gap-0.5 py-2 relative">
+                {isActive && (
+                  <span className="absolute top-0 left-2 right-2 h-[2.5px] rounded-b-full"
+                    style={{ background: link.barGradient }} aria-hidden="true" />
+                )}
+                <Icon size={18} strokeWidth={isActive ? 2.5 : 1.8}
+                  style={{ color: isActive ? link.accent : 'var(--base-content)', opacity: isActive ? 1 : 0.4 }} />
+                <span className="text-[8px] font-black uppercase tracking-wider leading-none"
+                  style={{ color: isActive ? link.accent : 'var(--base-content)', opacity: isActive ? 1 : 0.4 }}>
+                  {link.label}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      )}
 
       {/* ── MOBILE FULLSCREEN MENU ───────────────────────────────────── */}
       <AnimatePresence>
         {mobileOpen && (
-          <MotionDiv
-            id="mobile-menu"
-            data-theme={headerDataTheme}
-            variants={MOBILE_MENU_VARIANTS}
-            initial="hidden"
-            animate="show"
-            exit="exit"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Mobile navigation menu"
+          <MotionDiv id="mobile-menu" data-theme={headerDataTheme}
+            variants={MOBILE_MENU_VARIANTS} initial="hidden" animate="show" exit="exit"
+            role="dialog" aria-modal="true" aria-label="Mobile navigation menu"
             className={cn(
               'fixed inset-0 w-full h-full bg-base-100 z-[90] md:hidden',
               !isCustomer && roleBottomNavLinks ? 'pb-[80px]' : ''
             )}
-            style={{ paddingTop: `var(${HEADER_HEIGHT_VAR}, 80px)` }}
-          >
-            <div className="h-full overflow-y-auto px-5 pb-8 pt-4 flex flex-col gap-6">
+            style={{ paddingTop: `var(${HEADER_HEIGHT_VAR}, 80px)` }}>
+            <div className="h-full overflow-y-auto px-5 pb-8 pt-4 flex flex-col gap-5">
 
-              {/* FIX: Location widget in mobile menu — always visible, shows current address */}
+              {/* Location widget in menu */}
               <LocationWidget mood={mood} isMobile />
 
-              {/* User profile */}
+              {/* User profile card */}
               {user ? (
-                <div
-                  className="p-5 rounded-3xl border relative"
-                  style={mobileMenuAccentBorder}
-                >
-                  <div className="flex items-center gap-4 mb-6">
+                <div className="p-5 rounded-3xl border relative" style={mobileMenuAccentBorder}>
+                  <div className="flex items-center gap-4 mb-5">
                     <div className="relative flex-shrink-0">
-                      <Image
-                        src={userAvatar}
-                        alt={`${user.name} profile picture`}
-                        width={64}
-                        height={64}
+                      <Image src={userAvatar} alt={`${user.name} profile picture`} width={64} height={64}
                         className="rounded-2xl object-cover shadow-lg"
                         style={{ border: `3px solid ${mood?.accent ?? 'var(--primary)'}` }}
-                        unoptimized={userAvatar.includes('ui-avatars.com')}
-                      />
+                        unoptimized={userAvatar.includes('ui-avatars.com')} />
                       <span className="absolute -bottom-1 -right-1 h-4 w-4 bg-green-500 border-2 border-base-100 rounded-full" aria-label="Online" />
                     </div>
                     <div>
                       <p className="font-black text-xl tracking-tight leading-tight">{user.name}</p>
                       <p className="text-xs opacity-50 mb-2">{user.email}</p>
-                      <span
-                        className="px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest text-white shadow-md"
-                        style={{ background: mood?.accent ?? 'var(--primary)' }}
-                      >
-                        {user.role}
-                      </span>
+                      <span className="px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest text-white shadow-md"
+                        style={{ background: mood?.accent ?? 'var(--primary)' }}>{user.role}</span>
                     </div>
                   </div>
                   <div className="grid grid-cols-1 gap-1">
@@ -1841,7 +1503,7 @@ const Header = () => {
                   </div>
                   <p className="text-sm font-bold opacity-60">Sign in to manage your appointments and orders</p>
                   <Link href="/login" onClick={() => setMobileOpen(false)} className="w-full">
-                    <Button className="w-full rounded-xl py-6 font-black uppercase tracking-widest">Sign In</Button>
+                    <Button className="w-full rounded-xl py-6 text-white font-black uppercase tracking-widest">Sign In</Button>
                   </Link>
                 </div>
               )}
@@ -1854,38 +1516,22 @@ const Header = () => {
                 <MotionUl variants={STAGGER} className="flex flex-col gap-2" role="list">
                   {(isCustomer ? CUSTOMER_NAV_LINKS : (roleBottomNavLinks ?? [])).map((link) => {
                     const isActive    = pathname === link.href || pathname.startsWith(link.href + '/');
-                    const accent      = isCustomer ? link.accent      : (mood?.accent      ?? 'var(--primary)');
+                    const lAccent     = isCustomer ? link.accent      : (mood?.accent      ?? 'var(--primary)');
                     const shadowColor = isCustomer ? link.shadowColor : (mood?.shadowColor ?? 'color-mix(in srgb, var(--primary) 35%, transparent)');
                     return (
                       <MotionLi key={link.name} variants={FADE_UP}>
-                        <Link
-                          href={link.href}
-                          onClick={() => setMobileOpen(false)}
-                          aria-current={isActive ? 'page' : undefined}
+                        <Link href={link.href} onClick={() => setMobileOpen(false)} aria-current={isActive ? 'page' : undefined}
                           className="flex items-center justify-between p-4 rounded-2xl border transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2"
-                          style={
-                            isActive
-                              ? { background: 'var(--base-100)', borderColor: accent, boxShadow: `0 10px 25px -5px ${shadowColor}` }
-                              : { background: 'transparent', borderColor: 'var(--base-300)' }
-                          }
-                        >
+                          style={isActive
+                            ? { background: 'var(--base-100)', borderColor: lAccent, boxShadow: `0 10px 25px -5px ${shadowColor}` }
+                            : { background: 'transparent', borderColor: 'var(--base-300)' }}>
                           <div className="flex items-center gap-4">
-                            <div
-                              className="w-12 h-12 rounded-2xl flex items-center justify-center shadow-sm"
-                              style={{
-                                background: isActive ? accent : 'var(--base-100)',
-                                color:      isActive ? 'var(--primary-content)' : accent,
-                                border:     isActive ? 'none' : `1px solid color-mix(in srgb, ${accent} 20%, transparent)`,
-                              }}
-                              aria-hidden="true"
-                            >
+                            <div className="w-12 h-12 rounded-2xl flex items-center justify-center shadow-sm"
+                              style={{ background: isActive ? lAccent : 'var(--base-100)', color: isActive ? 'var(--primary-content)' : lAccent, border: isActive ? 'none' : `1px solid color-mix(in srgb, ${lAccent} 20%, transparent)` }} aria-hidden="true">
                               <link.icon size={22} strokeWidth={2.5} />
                             </div>
                             <div className="flex flex-col">
-                              <span
-                                className="font-black text-sm uppercase tracking-tight"
-                                style={{ color: isActive ? accent : 'var(--base-content)' }}
-                              >
+                              <span className="font-black text-sm uppercase tracking-tight" style={{ color: isActive ? lAccent : 'var(--base-content)' }}>
                                 {link.name}
                               </span>
                               {isActive && (
@@ -1895,12 +1541,9 @@ const Header = () => {
                               )}
                             </div>
                           </div>
-                          <ChevronRight
-                            size={18}
+                          <ChevronRight size={18}
                             className={cn('transition-transform', isActive ? 'translate-x-1 opacity-100' : 'opacity-20')}
-                            style={{ color: isActive ? accent : 'inherit' }}
-                            aria-hidden="true"
-                          />
+                            style={{ color: isActive ? lAccent : 'inherit' }} aria-hidden="true" />
                         </Link>
                       </MotionLi>
                     );
@@ -1909,47 +1552,31 @@ const Header = () => {
               </nav>
 
               {/* Action buttons */}
-              <div className="flex flex-col gap-3 mt-4">
+              <div className="flex flex-col gap-3 mt-2">
                 {user && <WalletWidget walletBalance={walletBalance} isMobile accent={mood?.accent} />}
 
-                {/* Cart — customer/pharmacy only in mobile */}
                 {(isCustomer || userRole === 'pharmacy') && (
                   <Link href="/pharmacy/cart" onClick={() => setMobileOpen(false)}>
-                    <MotionButton
-                      whileTap={{ scale: 0.97 }}
-                      aria-label={`View cart with ${cartCount} items`}
-                      className="w-full h-14 rounded-2xl font-black text-sm uppercase tracking-widest bg-base-200 border border-base-300 flex items-center justify-center gap-3 focus-visible:outline-none focus-visible:ring-2"
-                    >
+                    <MotionButton whileTap={{ scale: 0.97 }} aria-label={`View cart with ${cartCount} items`}
+                      className="w-full h-14 rounded-2xl font-black text-sm uppercase tracking-widest bg-base-200 border border-base-300 flex items-center justify-center gap-3 focus-visible:outline-none focus-visible:ring-2">
                       <ShoppingCart size={18} aria-hidden="true" /> My Cart ({cartCount})
                     </MotionButton>
                   </Link>
                 )}
 
-                {/* Book Now — customer only */}
                 {isCustomer && (
                   <Link href="/book-appointment" onClick={() => setMobileOpen(false)}>
-                    <MotionButton
-                      whileTap={{ scale: 0.97 }}
-                      aria-label="Book a medical appointment"
-                      className="w-full h-16 rounded-2xl font-black text-sm uppercase tracking-widest text-white flex items-center justify-center gap-3 transition-all shadow-xl focus-visible:outline-none focus-visible:ring-2"
-                      style={{
-                        background: mood?.barGradient ?? 'var(--primary)',
-                        boxShadow:  mood
-                          ? `0 8px 30px ${mood.shadowColor}`
-                          : '0 8px 20px color-mix(in srgb, var(--primary) 20%, transparent)',
-                      }}
-                    >
+                    <MotionButton whileTap={{ scale: 0.97 }} aria-label="Book a medical appointment"
+                      className="w-full h-14 rounded-2xl mb-20 font-black text-sm uppercase tracking-widest text-white flex items-center justify-center gap-3 transition-all shadow-xl focus-visible:outline-none focus-visible:ring-2"
+                      style={{ background: mood?.barGradient ?? 'var(--primary)', boxShadow: mood ? `0 8px 30px ${mood.shadowColor}` : '0 8px 20px color-mix(in srgb, var(--primary) 20%, transparent)' }}>
                       <Calendar size={20} aria-hidden="true" /> Book Appointment
                     </MotionButton>
                   </Link>
                 )}
 
                 {user && (
-                  <button
-                    onClick={handleLogout}
-                    aria-label="Sign out of your account"
-                    className="w-full h-14 rounded-2xl font-black text-[11px] uppercase tracking-[0.2em] flex items-center justify-center gap-3 transition-all border border-red-500/20 text-red-500 bg-error/10 focus-visible:outline-none focus-visible:ring-2"
-                  >
+                  <button onClick={handleLogout} aria-label="Sign out of your account"
+                    className="w-full h-14 rounded-2xl font-black text-[11px] uppercase tracking-[0.2em] flex items-center justify-center gap-3 transition-all border border-red-500/20 text-red-500 bg-error/10 focus-visible:outline-none focus-visible:ring-2">
                     <LogOut size={16} aria-hidden="true" /> Sign Out
                   </button>
                 )}

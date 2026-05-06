@@ -44,8 +44,7 @@ export default function RootLayout({
         <StoreProvider>
           <ThemeProvider
             attribute="class"
-            defaultTheme="system"
-            enableSystem
+            defaultTheme="light"
           >
             <ConnectivityWrapper>
               <LayoutConditionalWrapper>

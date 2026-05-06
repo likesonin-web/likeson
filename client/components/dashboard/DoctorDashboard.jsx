@@ -580,7 +580,7 @@ const DoctorDashboard = ({ children }) => {
         </header>
 
         {/* ── Page Content ────────────────────────────────────────────────── */}
-        <section className="flex-1 w-full max-w-[1600px] mx-auto p-4 lg:p-6">
+        <section className="flex-1 w-full max-w-[1600px] mx-auto p-2">
 
           {/* Breadcrumbs */}
           <div className="mb-5 flex items-center gap-2.5 text-[10px] font-black uppercase tracking-widest text-base-content/20">

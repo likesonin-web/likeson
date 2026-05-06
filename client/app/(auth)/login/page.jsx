@@ -40,6 +40,7 @@ import {
   clearError,        // ← FIX: was clearErrors (singular in v2 slice)
   patchUser,         // ← NEW: patch isOnline locally after login
 } from '@/store/slices/userSlice';
+import { connectBookingSocket } from '@/store/slices/bookingSlice';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ANIMATION VARIANTS
@@ -609,11 +610,8 @@ const Login = () => {
   const dispatch = useDispatch();
   const router   = useRouter();
 
-  /**
-   * FIX: Pull fine-grained loaders — never use global `loading` for per-button states.
-   * `error` is also sourced from state.user (not state.user.error via a broken selector).
-   */
-  const { error, loaders, user } = useSelector((state) => state.user);
+ 
+const { error, loaders, user } = useSelector((state) => state.user);
 
   const [authMode, setAuthMode] = useState('password');
 
@@ -655,21 +653,22 @@ const Login = () => {
    * Sends { identifier, password } → POST /api/users/login
    * FIX: patchUser({ isOnline: true }) after success so local state is immediately correct
    */
-  const handlePasswordLogin = useCallback(async (e) => {
-    e.preventDefault();
-    if (!formData.identifier?.trim()) {
-      toast.error('Please enter your email, phone, or name.');
-      return;
-    }
-    const result = await dispatch(
-      login({ identifier: formData.identifier, password: formData.password })
-    );
-    if (result.meta.requestStatus === 'fulfilled') {
-      dispatch(patchUser({ isOnline: true }));
-      router.push('/');
-    }
-  }, [dispatch, formData.identifier, formData.password, router]);
-
+// FIX 1 & 2 — handlePasswordLogin: add socket connect after success
+const handlePasswordLogin = useCallback(async (e) => {
+  e.preventDefault();
+  if (!formData.identifier?.trim()) {
+    toast.error('Please enter your email, phone, or name.');
+    return;
+  }
+  const result = await dispatch(
+    login({ identifier: formData.identifier, password: formData.password })
+  );
+  if (result.meta.requestStatus === 'fulfilled') {
+    dispatch(patchUser({ isOnline: true }));
+    dispatch(connectBookingSocket(result.payload.token)); // use token from payload
+    router.push('/');
+  }
+}, [dispatch, formData.identifier, formData.password, router]);
   /**
    * OTP login verify
    * Sends { identifier, otp } → POST /api/users/otp-login
@@ -685,6 +684,7 @@ const Login = () => {
     );
     if (result.meta.requestStatus === 'fulfilled') {
       dispatch(patchUser({ isOnline: true }));
+      dispatch(connectBookingSocket(token));
       router.push('/');
     }
   }, [dispatch, formData.identifier, formData.otp, router]);
@@ -695,17 +695,20 @@ const Login = () => {
    *      requestOtp(email) is for email-verification during SignUp only.
    *      POST /api/users/request-otp-login expects { identifier }.
    */
-  const handleSendLoginOtp = useCallback(async () => {
-    if (!formData.identifier?.trim()) {
-      toast.error('Please enter your email, phone, or name first.');
-      return;
-    }
-    await dispatch(requestOtpLogin(formData.identifier));
-  }, [dispatch, formData.identifier]);
+// FIX 1 — handleSendLoginOtp: remove premature socket connect
+const handleSendLoginOtp = useCallback(async () => {
+  if (!formData.identifier?.trim()) {
+    toast.error('Please enter your email, phone, or name first.');
+    return;
+  }
+  await dispatch(requestOtpLogin(formData.identifier));
+  // NO socket here — token not available yet
+}, [dispatch, formData.identifier]);
 
-  const handleGoogleLogin = useCallback(() => {
-    loginWithGoogle(); // Direct browser redirect — not a Redux thunk
-  }, []);
+// FIX 3 — handleGoogleLogin: remove socket call (browser redirect, no token yet)
+const handleGoogleLogin = useCallback(() => {
+  loginWithGoogle(); // browser redirect — socket handled after redirect lands
+}, []);
 
   const goToForgot   = useCallback(() => setAuthMode('forgot'),   []);
   const goToPassword = useCallback(() => setAuthMode('password'), []);

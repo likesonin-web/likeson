@@ -606,7 +606,7 @@ const HospitalManagerDashboard = ({ children }) => {
         </header>
 
         {/* ── Page body ────────────────────────────────────────────────── */}
-        <section className="flex-1 w-full max-w-[1680px] mx-auto p-4 sm:p-6">
+        <section className="flex-1 w-full max-w-[1680px] mx-auto p-4 ">
 
           {/* Breadcrumbs */}
           <div className="mb-5 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-base-content/25">
@@ -625,7 +625,7 @@ const HospitalManagerDashboard = ({ children }) => {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.28, ease: "easeOut" }}
-            className="rounded-3xl border border-base-300 bg-base-200/35 min-h-[75vh] p-4 sm:p-6 shadow-inner relative overflow-hidden"
+            className="rounded-xl border border-base-300 bg-base-200/35 min-h-[75vh] p-4 sm:p-6 shadow-inner relative overflow-hidden"
           >
             {/* Decorative tint */}
             <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-primary/4 blur-[130px] rounded-full pointer-events-none" />
