@@ -280,12 +280,12 @@ export default function HeroDriver() {
           {/* CTA buttons */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
             <Link href="/driver/dashboard">
-              <button className="btn btn-primary" style={{ gap: '8px', borderRadius: 'var(--r-field)', fontFamily: 'var(--font-family-poppins)', fontWeight: 700 }}>
+              <button className="btn btn-primary text-white" style={{ gap: '8px', borderRadius: 'var(--r-field)', fontFamily: 'var(--font-family-poppins)', fontWeight: 700 }}>
                 <Navigation size={15} strokeWidth={2.5} />
                 Go to Dashboard
               </button>
             </Link>
-            <Link href="/partner/solo/stats">
+            <Link href="/driver/stats">
               <button className="btn btn-outline" style={{ gap: '6px', borderRadius: 'var(--r-field)', fontFamily: 'var(--font-family-poppins)', fontWeight: 700 }}>
                 View Stats
                 <ChevronRight size={14} strokeWidth={2.5} />
@@ -472,7 +472,7 @@ export default function HeroDriver() {
                 {kycValid ? 'All Documents Valid' : 'KYC Pending Review'}
               </div>
               <Link
-                href="/partner/solo/compliance"
+                href="/driver/compliance"
                 style={{
                   display: 'flex',
                   alignItems: 'center',

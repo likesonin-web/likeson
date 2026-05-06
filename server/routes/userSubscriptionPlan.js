@@ -229,28 +229,13 @@ const snapshotLimits = (plan) => ({
 //  SECTION 1 — PLAN CATALOGUE  (read-only, customer-facing)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * GET /api/v1/subscriptions/plans
- * List active plans visible to requesting customer.
- */
 router.get(
     '/plans',
-    protect,
-    authorize('customer', 'admin', 'superadmin'),
     asyncHandler(async (req, res) => {
-        const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
-
-        const filter = isAdmin
-            ? { isActive: true }
-            : {
-                isActive: true,
-                $or: [
-                    { visibleToCustomerOnly: false },
-                    { visibleToCustomerOnly: true, createdByCustomer: req.user._id },
-                ],
-            };
-
-        const plans = await SubscriptionPlan.find(filter)
+        const plans = await SubscriptionPlan.find({
+            isActive: true,
+            visibleToCustomerOnly: false,
+        })
             .sort({ displayOrder: 1 })
             .lean();
 

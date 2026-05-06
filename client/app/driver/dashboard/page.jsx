@@ -330,6 +330,7 @@ export default function DriverDashboard() {
               background: 'linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%)',
               borderBottom: '1px solid rgba(255,255,255,0.1)',
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              marginTop: 27,
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
                 <div style={{

@@ -1260,23 +1260,47 @@ router.patch(
   transportPartnerRoutes,
   async (req, res) => {
     try {
-      const setPayload = {};
-      Object.keys(req.body).forEach((k) => { setPayload[`serviceZones.$.${k}`] = req.body[k]; });
-      setPayload.updatedBy = req.user._id;
-const agency = await TransportPartner.findOneAndUpdate(
-  { _id: req.transportPartner.agency._id, 'serviceZones._id': req.params.zoneId },
-  { $set: setPayload },
-  { new: true }
-).select('serviceZones');  // fetch full array
+      const agency = await TransportPartner.findById(
+        req.transportPartner.agency._id
+      );
 
-if (!agency) return res.status(404).json({ success: false, message: 'Zone not found' });
+      if (!agency) {
+        return res.status(404).json({
+          success: false,
+          message: 'Agency not found',
+        });
+      }
 
-const updated = agency.serviceZones.id(req.params.zoneId);  // find by id
+      const zone = agency.serviceZones.id(req.params.zoneId);
 
-await invalidateTPCache(req.transportPartner.agency._id);
-return res.json({ success: true, data: updated });
+      if (!zone) {
+        return res.status(404).json({
+          success: false,
+          message: 'Zone not found',
+        });
+      }
+
+      Object.keys(req.body).forEach((key) => {
+        zone[key] = req.body[key];
+      });
+
+      agency.updatedBy = req.user._id;
+
+      await agency.save();
+
+      await invalidateTPCache(req.transportPartner.agency._id);
+
+      return res.json({
+        success: true,
+        message: 'Zone updated successfully',
+        data: zone,
+      });
+
     } catch (err) {
-      return res.status(500).json({ success: false, message: err.message });
+      return res.status(500).json({
+        success: false,
+        message: err.message,
+      });
     }
   }
 );

@@ -867,14 +867,14 @@ export default function TpBookingsManagement() {
 
             {/* Search */}
             <div className="relative w-full sm:w-56">
-              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
+              <Search size={13} className="absolute left-3  top-1/3  -translate-y-1/2 text-base-content/40" />
               <input
                 value={searchQ}
                 onChange={e => setSearchQ(e.target.value)}
                 placeholder="Search booking or patient…"
                 className="input-field w-full pl-8 text-xs h-8"
               />
-              <FieldNote>Filter by booking code or patient name</FieldNote>
+              <p className=' text-[6px]'><FieldNote> <span className=' text-[10px]'>Filter by booking code or patient name</span> </FieldNote></p>
             </div>
 
             {/* Status Filter */}
@@ -882,10 +882,10 @@ export default function TpBookingsManagement() {
               <select
                 value={statusFilter}
                 onChange={e => setStatusFilter(e.target.value)}
-                className="input-field w-full text-xs h-8 pr-2"
+                className="input-field w-full  text-xs h-8 pr-2"
                 title="Filter by booking status"
               >
-                <option value="all">All Statuses</option>
+                <option value="all" className=''>All Statuses</option>
                 {Object.entries(STATUS_CONFIG).map(([k, v]) => (
                   <option key={k} value={k}>{v.label}</option>
                 ))}
@@ -987,11 +987,11 @@ export default function TpBookingsManagement() {
           <div className="flex items-start gap-3">
             <Info size={16} className="text-primary mt-0.5 shrink-0" />
             <div className="text-xs text-base-content/70 space-y-1">
-              <p className="font-bold text-primary">How Booking Management Works</p>
-              <p>1. <strong>Assigned Bookings</strong> — Admin dispatches bookings to your fleet via POST /assign/transport-partner.</p>
-              <p>2. <strong>Assign Driver</strong> — You assign an available fleet driver via PATCH /:id/tp/assign-driver. Driver is notified and ride is created.</p>
-              <p>3. <strong>Reassign Driver</strong> — Replace current driver via PATCH /:id/tp/reassign-driver. Old ride cancelled, new ride created.</p>
-              <p>4. <strong>Available Drivers</strong> — Fetched live via GET /tp/drivers/available — only Active, Verified, Available-status drivers shown.</p>
+              <p className="font-bold text-sm text-primary">How Booking Management Works</p>
+              <p className='text-xs'>1. <strong>Assigned Bookings</strong> — Admin dispatches bookings to your fleet via POST /assign/transport-partner.</p>
+              <p className='text-xs'>2. <strong>Assign Driver</strong> — You assign an available fleet driver via PATCH /:id/tp/assign-driver. Driver is notified and ride is created.</p>
+              <p className='text-xs'>3. <strong>Reassign Driver</strong> — Replace current driver via PATCH /:id/tp/reassign-driver. Old ride cancelled, new ride created.</p>
+              <p className='text-xs'>4. <strong>Available Drivers</strong> — Fetched live via GET /tp/drivers/available — only Active, Verified, Available-status drivers shown.</p>
             </div>
           </div>
         </div>

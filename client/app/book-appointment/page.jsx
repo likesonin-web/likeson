@@ -1,16 +1,6 @@
 'use client';
 
-/**
- * BookingSystem.jsx — Likeson.in Customer Booking Wizard
- * FIXED:
- *  1. Full care ride schedule = transport calc (km×rate) + care assistant duration + GST breakdown
- *  2. Doctor online hides hospital, forces video type
- *  3. Consultation type shows fee per type, hides unsupported types
- *  4. Unique step labels per service
- *  5. Map open/close bug fixed (mapKey remount)
- *  6. "Use my location" button in map picker
- *  7. Full care payment shows transport + CA fee + GST separate rows
- */
+ 
 
 import {
   useEffect, useState, useCallback, useRef, useLayoutEffect,
@@ -2449,7 +2439,7 @@ function BookingSuccess({ data, onReset, router }) {
       )}
       <div className="flex gap-3 w-full max-w-sm">
         {data?.bookingId && (
-          <button onClick={() => router.push(`/bookings/${data.bookingId}`)}
+          <button onClick={() => router.push(`/my-bookings/${data.bookingId}`)}
             className="flex-1 py-3 rounded-xl font-black text-sm text-white"
             style={{ background: 'linear-gradient(135deg, var(--primary), var(--secondary))', ...PP }}>
             View Booking

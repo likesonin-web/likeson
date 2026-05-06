@@ -57,6 +57,9 @@ import {
   removeFromDriverAssigned,
 } from '@/store/slices/operationsSlice';
 
+// ── ADDED: fetchDriverMe import ─────────────────────────────────────────────
+import { fetchDriverMe } from '@/store/slices/transportPartnerSlice';
+
 // ── lazy heavy charts (dynamic import → code split) ────────────────────────
 const AnalyticsPanel = dynamic(() => import('./AnalyticsPanelInline'), {
   loading: () => <AnalyticsSkeleton />,
@@ -418,7 +421,6 @@ const RideCard = memo(({ ride, onAction, actionLoading, activeBookingId }) => {
   const StatusIcon = cfg.icon;
   const actions = RIDE_ACTIONS[status] || [];
 
-  // booking._id is correct per API shape
   const bookingId = booking._id;
   const isLoading = actionLoading && activeBookingId === bookingId;
 
@@ -732,8 +734,9 @@ export default function BookingManagement() {
 
   const locationIntervalRef = useRef(null);
 
-  // fetch on mount
+  // ── ADDED: fetch driver profile on mount ──────────────────────────────────
   useEffect(() => {
+    dispatch(fetchDriverMe());
     dispatch(fetchDriverAssigned());
   }, [dispatch]);
 
@@ -1119,12 +1122,10 @@ const perfMetrics = [
   { label: 'Cancellations', value: '2', icon: XCircle, colorVar: 'var(--error)', sub: 'this month' },
 ];
 
-// Note: recharts imported only inside AnalyticsPanel → tree shaken from main bundle
 function AnalyticsPanelInner() {
   const [charts, setCharts] = useState(null);
 
   useEffect(() => {
-    // Dynamic recharts import — keeps main bundle lean
     import('recharts').then((m) => setCharts(m));
   }, []);
 
@@ -1247,5 +1248,4 @@ function AnalyticsPanelInner() {
   );
 }
 
-// Named export required by dynamic() call
 export { AnalyticsPanelInner as AnalyticsPanelInline };
