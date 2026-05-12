@@ -6,19 +6,18 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Calendar, Clock, MapPin, Activity, ChevronRight, Filter,
-  Search, X, Car, User, Stethoscope, FlaskConical, HeartPulse,
-  Video, Dumbbell, RefreshCw, AlertCircle, CheckCircle2, Loader2,
-  Package, Star, ArrowUpRight, SlidersHorizontal, ChevronLeft,
-  ChevronRight as ChevronRightIcon, Home, Ambulance, RotateCcw,
+  Calendar, MapPin, ChevronRight, Search, X, Car, User, 
+  Stethoscope, FlaskConical, HeartPulse, Video, Dumbbell, 
+  RefreshCw, Package, Star, ArrowUpRight, SlidersHorizontal, 
+  ChevronLeft, ChevronRight as ChevronRightIcon, Home, 
+  Ambulance, RotateCcw,
 } from 'lucide-react';
 
 import {
   fetchMyBookings,
   selectMyBookings,
   selectMyBookingsMeta,
-  selectMyBookingsLoading,
-  patchBookingStatus,
+  selectLoading,
 } from '@/store/slices/bookingSlice';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -81,17 +80,6 @@ function StatusBadge({ status }) {
   );
 }
 
-function BookingTypeChip({ type }) {
-  const m = BOOKING_TYPE_META[type] || BOOKING_TYPE_META.patient_transport;
-  const Icon = m.icon;
-  return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border ${m.color} ${m.bg} ${m.border}`}>
-      <Icon size={11} />
-      {m.label}
-    </span>
-  );
-}
-
 function BookingCard({ booking, index }) {
   const router = useRouter();
   const meta   = BOOKING_TYPE_META[booking.bookingType] || BOOKING_TYPE_META.patient_transport;
@@ -104,10 +92,9 @@ function BookingCard({ booking, index }) {
       exit={{ opacity: 0, y: -10 }}
       transition={{ duration: 0.3, delay: index * 0.05 }}
       onClick={() => router.push(`/my-bookings/${booking._id}`)}
-      className="card group cursor-pointer hover:shadow-primary transition-all duration-300"
+      className="card group cursor-pointer hover:shadow-xl hover:shadow-primary/5 transition-all duration-300 border border-base-300 bg-base-100"
     >
       <div className="p-5">
-        {/* Header row */}
         <div className="flex items-start justify-between gap-3 mb-4">
           <div className="flex items-center gap-3 min-w-0">
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${meta.bg} border ${meta.border}`}>
@@ -118,63 +105,52 @@ function BookingCard({ booking, index }) {
               <p className="text-xs text-base-content/50 font-mono mt-0.5">{booking.bookingCode}</p>
             </div>
           </div>
-          <div className="flex flex-col items-end gap-1.5 shrink-0">
-            <StatusBadge status={booking.status} />
-          </div>
+          <StatusBadge status={booking.status} />
         </div>
 
-        {/* Patient */}
-        <div className="flex items-center gap-2 mb-3">
-          <User size={13} className="text-base-content/40 shrink-0" />
-          <span className="text-sm text-base-content/70 truncate">
-            {booking.patientInfo?.name || '—'}
-          </span>
-          {booking.patientInfo?.age && (
-            <span className="text-xs text-base-content/40">• {booking.patientInfo.age}y</span>
+        <div className="space-y-2.5">
+          <div className="flex items-center gap-2">
+            <User size={13} className="text-base-content/40 shrink-0" />
+            <span className="text-sm text-base-content/70 truncate">
+              {booking.patientInfo?.name || '—'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Calendar size={13} className="text-base-content/40 shrink-0" />
+            <span className="text-sm text-base-content/70">
+              {formatDate(booking.scheduledAt)} at {formatTime(booking.scheduledAt)}
+            </span>
+          </div>
+
+          {(booking.hospital || booking.doctor) && (
+            <div className="flex items-center gap-2">
+              <MapPin size={13} className="text-base-content/40 shrink-0" />
+              <span className="text-sm text-base-content/60 truncate">
+                {booking.hospital?.name || booking.doctor?.user?.name || '—'}
+              </span>
+            </div>
           )}
         </div>
 
-        {/* Scheduled */}
-        <div className="flex items-center gap-2 mb-3">
-          <Calendar size={13} className="text-base-content/40 shrink-0" />
-          <span className="text-sm text-base-content/70">
-            {formatDate(booking.scheduledAt)}
-          </span>
-          <span className="text-xs text-base-content/40">
-            {formatTime(booking.scheduledAt)}
-          </span>
-        </div>
+        <div className="divider my-4 opacity-50" />
 
-        {/* Doctor / Hospital if present */}
-        {(booking.doctor || booking.hospital) && (
-          <div className="flex items-center gap-2 mb-3">
-            <MapPin size={13} className="text-base-content/40 shrink-0" />
-            <span className="text-sm text-base-content/60 truncate">
-              {booking.hospital?.name || booking.doctor?.user?.name || '—'}
-            </span>
-          </div>
-        )}
-
-        {/* Divider */}
-        <div className="divider my-3" />
-
-        {/* Footer row */}
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-base-content/40 text-xs mb-0.5">Total Amount</p>
-            <p className="font-black text-base text-base-content">
+            <p className="text-base-content/40 text-[10px] uppercase tracking-wider font-bold mb-0.5">Total Amount</p>
+            <p className="font-black text-lg text-base-content">
               {formatCurrency(booking.fareBreakdown?.totalAmount)}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             {booking.isRated && (
               <span className="inline-flex items-center gap-1 text-xs text-warning font-semibold">
                 <Star size={11} fill="currentColor" />
                 Rated
               </span>
             )}
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${meta.bg} group-hover:bg-primary group-hover:text-primary-content transition-colors duration-200`}>
-              <ChevronRight size={15} className={`${meta.color} group-hover:text-primary-content`} />
+            <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${meta.bg} group-hover:bg-primary group-hover:text-primary-content transition-all duration-300`}>
+              <ChevronRight size={18} className={`${meta.color} group-hover:text-primary-content`} />
             </div>
           </div>
         </div>
@@ -183,51 +159,25 @@ function BookingCard({ booking, index }) {
   );
 }
 
-function EmptyState({ hasFilters, onClear }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.96 }}
-      animate={{ opacity: 1, scale: 1 }}
-      className="col-span-full flex flex-col items-center justify-center py-24 text-center"
-    >
-      <div className="w-20 h-20 rounded-2xl bg-base-200 border border-base-300 flex items-center justify-center mb-5">
-        <Package size={32} className="text-base-content/30" />
-      </div>
-      <h3 className="text-xl font-bold text-base-content mb-2">
-        {hasFilters ? 'No bookings match your filters' : 'No bookings yet'}
-      </h3>
-      <p className="text-base-content/50 text-sm mb-6 max-w-xs">
-        {hasFilters
-          ? 'Try adjusting your search or filters to find what you\'re looking for.'
-          : 'Your booking history will appear here once you make your first booking.'}
-      </p>
-      {hasFilters && (
-        <button onClick={onClear} className="btn btn-outline btn-sm gap-2">
-          <X size={14} />
-          Clear filters
-        </button>
-      )}
-    </motion.div>
-  );
-}
-
 function Skeleton() {
   return (
-    <div className="card p-5 space-y-4">
+    <div className="card p-5 space-y-4 border border-base-300 animate-pulse">
       <div className="flex items-center gap-3">
-        <div className="skeleton w-10 h-10 rounded-xl" />
+        <div className="w-10 h-10 rounded-xl bg-base-300" />
         <div className="space-y-2 flex-1">
-          <div className="skeleton h-4 w-32 rounded" />
-          <div className="skeleton h-3 w-20 rounded" />
+          <div className="h-4 w-32 bg-base-300 rounded" />
+          <div className="h-3 w-20 bg-base-300 rounded" />
         </div>
-        <div className="skeleton h-6 w-20 rounded-full" />
+        <div className="h-6 w-20 bg-base-300 rounded-full" />
       </div>
-      <div className="skeleton h-3 w-48 rounded" />
-      <div className="skeleton h-3 w-40 rounded" />
+      <div className="space-y-2">
+        <div className="h-3 w-48 bg-base-200 rounded" />
+        <div className="h-3 w-40 bg-base-200 rounded" />
+      </div>
       <div className="divider my-0" />
-      <div className="flex justify-between items-center">
-        <div className="skeleton h-5 w-24 rounded" />
-        <div className="skeleton w-8 h-8 rounded-lg" />
+      <div className="flex justify-between items-center pt-2">
+        <div className="h-6 w-24 bg-base-300 rounded" />
+        <div className="w-9 h-9 bg-base-300 rounded-xl" />
       </div>
     </div>
   );
@@ -237,11 +187,11 @@ function Skeleton() {
 
 export default function BookingsPage() {
   const dispatch  = useDispatch();
-  const router    = useRouter();
-
   const bookings  = useSelector(selectMyBookings);
   const meta      = useSelector(selectMyBookingsMeta);
-  const loading   = useSelector(selectMyBookingsLoading);
+  
+  // Using the generic loading selector from your slice
+  const loading   = useSelector(selectLoading('fetchMyBookings'));
 
   const [search,      setSearch]      = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -262,7 +212,6 @@ export default function BookingsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Client-side search filter
   const filtered = search.trim()
     ? bookings.filter((b) =>
         b.bookingCode?.toLowerCase().includes(search.toLowerCase()) ||
@@ -272,7 +221,7 @@ export default function BookingsPage() {
     : bookings;
 
   const hasFilters = !!(search || statusFilter || typeFilter);
-  const totalPages = Math.ceil((meta.total || 0) / LIMIT);
+  const totalPages = Math.ceil((meta?.total || 0) / LIMIT);
 
   const clearFilters = () => {
     setSearch('');
@@ -282,87 +231,74 @@ export default function BookingsPage() {
   };
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: 'var(--base-100)' }}>
+    <div className="min-h-screen bg-base-100">
       {/* ── Page Header ── */}
-      <div className="border-b border-base-300 bg-base-100 sticky top-0 z-20">
-        <div className="container-custom py-4">
+      <div className="border-b border-base-300 bg-base-100/80 backdrop-blur-md sticky top-0 z-20">
+        <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between gap-4">
             <div>
-              <h1 className="section-heading text-2xl md:text-3xl mb-0">My Bookings</h1>
-              <p className="text-base-content/50 text-xs mt-0.5">
-                {meta.total != null ? `${meta.total} booking${meta.total !== 1 ? 's' : ''} total` : ''}
+              <h1 className="text-2xl md:text-3xl font-black text-base-content tracking-tight">My Bookings</h1>
+              <p className="text-base-content/50 text-xs font-medium mt-0.5">
+                {meta?.total != null ? `${meta.total} records found` : 'Loading your history...'}
               </p>
             </div>
 
             <div className="flex items-center gap-2">
               <button
                 onClick={load}
-                disabled={loading}
                 className="btn btn-ghost btn-sm btn-circle"
-                title="Refresh"
               >
-                <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+                <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
               </button>
               <button
-                onClick={() => setShowFilters((p) => !p)}
-                className={`btn btn-sm gap-2 ${showFilters ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => setShowFilters(!showFilters)}
+                className={`btn btn-sm gap-2 ${showFilters ? 'btn-primary' : 'btn-outline border-base-300'}`}
               >
                 <SlidersHorizontal size={14} />
-                Filters
-                {hasFilters && (
-                  <span className="w-4 h-4 rounded-full bg-error text-error-content text-[10px] font-bold flex items-center justify-center">
-                    !
-                  </span>
-                )}
+                <span className="hidden sm:inline">Filters</span>
+                {hasFilters && <span className="badge badge-error badge-xs p-1" />}
               </button>
-            <Link href="/book-appointment" className="btn btn-primary btn-sm gap-2">
+              <Link href="/book" className="btn btn-primary btn-sm gap-2">
                 <ArrowUpRight size={14} />
-                New Booking
+                <span className="hidden sm:inline">New Booking</span>
               </Link>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="container-custom py-6">
-        {/* ── Search + Filters Panel ── */}
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        {/* ── Filters Panel ── */}
         <AnimatePresence>
           {showFilters && (
             <motion.div
-              initial={{ opacity: 0, height: 0, marginBottom: 0 }}
-              animate={{ opacity: 1, height: 'auto', marginBottom: 20 }}
-              exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-              className="overflow-hidden"
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="mb-8"
             >
-              <div className="card p-4 space-y-4">
-                {/* Search bar */}
-                <div className="relative">
-                  <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40 pointer-events-none" />
-                  <input
-                    type="text"
-                    placeholder="Search by code, patient, or hospital…"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    className="input-field w-full pl-9 pr-9"
-                  />
-                  {search && (
-                    <button
-                      onClick={() => setSearch('')}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-base-content/40 hover:text-error"
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
-                </div>
+              <div className="card p-6 bg-base-200/50 border border-base-300 space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase text-base-content/40 ml-1">Search</label>
+                    <div className="relative">
+                      <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/30" />
+                      <input
+                        type="text"
+                        placeholder="ID, Patient, or Hospital..."
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        className="input input-bordered w-full pl-10 bg-base-100"
+                      />
+                    </div>
+                  </div>
 
-                <div className="flex flex-wrap gap-3">
-                  {/* Status filter */}
-                  <div className="flex-1 min-w-[160px]">
-                    <label className="label-text block mb-1.5">Status</label>
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase text-base-content/40 ml-1">Status</label>
                     <select
                       value={statusFilter}
                       onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
-                      className="input-field w-full"
+                      className="select select-bordered w-full bg-base-100"
                     >
                       <option value="">All Statuses</option>
                       {ALL_STATUSES.map((s) => (
@@ -371,116 +307,86 @@ export default function BookingsPage() {
                     </select>
                   </div>
 
-                  {/* Type filter */}
-                  <div className="flex-1 min-w-[180px]">
-                    <label className="label-text block mb-1.5">Booking Type</label>
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase text-base-content/40 ml-1">Category</label>
                     <select
                       value={typeFilter}
                       onChange={(e) => { setTypeFilter(e.target.value); setPage(1); }}
-                      className="input-field w-full"
+                      className="select select-bordered w-full bg-base-100"
                     >
-                      <option value="">All Types</option>
+                      <option value="">All Categories</option>
                       {ALL_TYPES.map((t) => (
                         <option key={t} value={t}>{BOOKING_TYPE_META[t]?.label || t}</option>
                       ))}
                     </select>
                   </div>
-
-                  {/* Clear */}
-                  {hasFilters && (
-                    <div className="flex items-end">
-                      <button onClick={clearFilters} className="btn btn-ghost btn-sm gap-1.5 text-error">
-                        <X size={13} />
-                        Clear all
-                      </button>
-                    </div>
-                  )}
                 </div>
+
+                {hasFilters && (
+                  <div className="flex justify-end">
+                    <button onClick={clearFilters} className="btn btn-ghost btn-xs gap-2 text-error">
+                      <X size={14} /> Reset All Filters
+                    </button>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* ── Active filter chips ── */}
-        {hasFilters && !showFilters && (
-          <div className="flex flex-wrap gap-2 mb-5">
-            {search && (
-              <span className="badge badge-primary gap-1.5">
-                <Search size={10} />
-                "{search}"
-                <button onClick={() => setSearch('')}><X size={10} /></button>
-              </span>
-            )}
-            {statusFilter && (
-              <span className="badge badge-info gap-1.5">
-                {STATUS_META[statusFilter]?.label}
-                <button onClick={() => setStatusFilter('')}><X size={10} /></button>
-              </span>
-            )}
-            {typeFilter && (
-              <span className="badge badge-warning gap-1.5">
-                {BOOKING_TYPE_META[typeFilter]?.label}
-                <button onClick={() => setTypeFilter('')}><X size={10} /></button>
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* ── Grid ── */}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          <AnimatePresence mode="popLayout">
-            {loading ? (
-              Array.from({ length: 6 }).map((_, i) => (
-                <motion.div key={`sk-${i}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                  <Skeleton />
-                </motion.div>
-              ))
-            ) : filtered.length === 0 ? (
-              <EmptyState hasFilters={hasFilters} onClear={clearFilters} />
-            ) : (
-              filtered.map((b, i) => (
-                <BookingCard key={b._id} booking={b} index={i} />
-              ))
-            )}
-          </AnimatePresence>
+        {/* ── Results Grid ── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {loading ? (
+            Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} />)
+          ) : filtered.length > 0 ? (
+            filtered.map((b, i) => <BookingCard key={b._id} booking={b} index={i} />)
+          ) : (
+            <div className="col-span-full py-20 flex flex-col items-center text-center">
+              <div className="w-20 h-20 rounded-3xl bg-base-200 flex items-center justify-center mb-4">
+                <Package size={40} className="text-base-content/20" />
+              </div>
+              <h3 className="text-xl font-bold">No bookings found</h3>
+              <p className="text-base-content/50 max-w-sm mt-2">
+                Try adjusting your filters or search terms to find specific appointments.
+              </p>
+              {hasFilters && (
+                <button onClick={clearFilters} className="btn btn-outline btn-sm mt-6">Clear Filters</button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* ── Pagination ── */}
         {!loading && totalPages > 1 && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="flex items-center justify-center gap-2 mt-8"
-          >
+          <div className="flex items-center justify-center gap-2 mt-12">
             <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              onClick={() => setPage(p => Math.max(1, p - 1))}
               disabled={page === 1}
-              className="btn btn-ghost btn-sm btn-circle"
+              className="btn btn-square btn-ghost btn-sm"
             >
-              <ChevronLeft size={16} />
+              <ChevronLeft size={20} />
             </button>
-
-            {Array.from({ length: Math.min(totalPages, 7) }).map((_, i) => {
-              const pg = i + 1;
-              return (
+            
+            <div className="flex items-center bg-base-200 rounded-xl p-1">
+              {Array.from({ length: totalPages }).map((_, i) => (
                 <button
-                  key={pg}
-                  onClick={() => setPage(pg)}
-                  className={`btn btn-sm btn-circle ${pg === page ? 'btn-primary' : 'btn-ghost'}`}
+                  key={i + 1}
+                  onClick={() => setPage(i + 1)}
+                  className={`btn btn-square btn-sm border-none ${page === i + 1 ? 'btn-primary shadow-lg shadow-primary/20' : 'btn-ghost'}`}
                 >
-                  {pg}
+                  {i + 1}
                 </button>
-              );
-            })}
+              ))}
+            </div>
 
             <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
               disabled={page === totalPages}
-              className="btn btn-ghost btn-sm btn-circle"
+              className="btn btn-square btn-ghost btn-sm"
             >
-              <ChevronRightIcon size={16} />
+              <ChevronRightIcon size={20} />
             </button>
-          </motion.div>
+          </div>
         )}
       </div>
     </div>

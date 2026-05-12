@@ -198,16 +198,9 @@ const pharmacySchema = new Schema(
 // ─────────────────────────────────────────────────────────────────────────────
 const customPlanOptionPricingSchema = new Schema(
   {
-    consultation: {
-      pricePerConsultation: { type: Number, required: true },
-      doctorPricingTiers: [
-        {
-          doctorCount:     { type: Number, required: true },
-          additionalPrice: { type: Number, required: true },
-        },
-      ],
-      maxDoctorsAllowed: { type: Number, default: 5 },
-    },
+   consultation: {
+  pricePerConsultation: { type: Number, required: true },
+},
 
     transport: {
       kmSlabs: [

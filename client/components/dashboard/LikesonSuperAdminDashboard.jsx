@@ -36,11 +36,11 @@ import {
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const PROFILE_LINKS = [
-  { name: "My Profile",       href: "/super-admin/profile",          icon: <UserRound size={16} /> },
-  { name: "Account Settings", href: "/super-admin/account-settings", icon: <Settings2 size={16} /> },
-  { name: "Subscription",     href: "/super-admin/subscription",     icon: <Gem size={16} /> },
-  { name: "Terms & Privacy",  href: "/super-admin/terms-privacy",    icon: <ShieldCheck size={16} /> },
-  { name: "Activity Log",     href: "/super-admin/activity-log",     icon: <HeartPulse size={16} /> },
+  { name: "My Profile",       href: "/super-admin/profile",          icon: <UserRound size={14} /> },
+  { name: "Account Settings", href: "/super-admin/account-settings", icon: <Settings2 size={14} /> },
+  { name: "Subscription",     href: "/super-admin/subscription",     icon: <Gem size={14} /> },
+  { name: "Terms & Privacy",  href: "/super-admin/terms-privacy",    icon: <ShieldCheck size={14} /> },
+  { name: "Activity Log",     href: "/super-admin/activity-log",     icon: <HeartPulse size={14} /> },
 ];
 
 const bellRingingVariant = {
@@ -100,13 +100,13 @@ const NavItem = memo(function NavItem({ link, isActive }) {
     <Link
       href={link.href}
       className={cn(
-        "flex items-center gap-3 px-4 py-3 text-[10px] font-bold uppercase transition-all duration-200 rounded-lg",
+        "flex items-center gap-3 px-4 py-3 text-[9px] font-bold uppercase transition-all duration-200 rounded-lg",
         isActive
           ? "text-primary bg-primary/5 shadow-sm"
           : "text-base-content/40 hover:text-primary hover:bg-base-300"
       )}
     >
-      <span className={cn("transition-transform duration-200", isActive && "scale-110")}>
+      <span className={cn("transition-transform duration-200 ", isActive && "scale-110")}>
         {link.icon}
       </span>
       {link.name}
@@ -150,14 +150,14 @@ const SidebarSection = memo(function SidebarSection({
         <div className="flex items-center gap-4">
           <span
             className={cn(
-              "shrink-0 transition-transform group-hover:scale-110",
+              "shrink-0 transition-transform text-[10px] group-hover:scale-110",
               (isOpen || isParentActive) && "text-primary"
             )}
           >
             {section.icons}
           </span>
           {isSidebarOpen && (
-            <span className="text-[11px] text-left font-bold uppercase tracking-tight">
+            <span className="text-[10px] text-left font-bold uppercase tracking-tight">
               {section.title}
             </span>
           )}
@@ -176,7 +176,7 @@ const SidebarSection = memo(function SidebarSection({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden ml-6 mt-1 border-l border-base-300"
+            className="overflow-hidden ml-6 mt-1 "
           >
             {section.links.map((link, idx) => (
               <NavItem key={idx} link={link} isActive={pathname === link.href} />
@@ -298,12 +298,17 @@ const SuperAdminDashboard = ({ children }) => {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                 >
-                  <Link
-                    href="/super-admin/dashboard"
-                    className="font-black text-xl tracking-tighter hover:text-primary transition-colors"
-                  >
-                    LIKESON<span className="text-secondary">.in</span>
-                  </Link>
+                 <Link
+  href="/super-admin/dashboard"
+  className="flex flex-col group"
+>
+  <span className="font-black text-xl tracking-tighter hover:text-primary transition-colors">
+    LIKESON<span className="text-secondary">.in</span>
+  </span>
+  <span className="text-[10px] uppercase tracking-widest text-muted-foreground -mt-1 font-semibold">
+    Superadmin Dashboard
+  </span>
+</Link>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -384,7 +389,7 @@ const SuperAdminDashboard = ({ children }) => {
               onClick={() => setIsSearchOpen(true)}
               className="flex items-center gap-3 px-4 py-2 bg-base-200/50 border border-base-300 rounded-xl text-base-content/40 hover:border-primary/50 transition-all group"
             >
-              <Search size={16} className="group-hover:text-primary" />
+              <Search size={14} className="group-hover:text-primary" />
               <span className="text-[9px] font-black uppercase tracking-widest hidden md:inline">
                 Command Panel{" "}
                 <span className="ml-2 opacity-30">⌘K</span>
@@ -447,7 +452,7 @@ const SuperAdminDashboard = ({ children }) => {
                     onClick={handleLogout}
                     className="w-full flex items-center gap-3 px-4 py-3 text-[11px] font-black text-error border-t border-base-300 mt-2 rounded-xl hover:bg-error/10 uppercase tracking-widest"
                   >
-                    <LogOut size={16} /> Logout 
+                    <LogOut size={14} /> Logout 
                   </button>
                 </div>
               </div>
@@ -456,7 +461,7 @@ const SuperAdminDashboard = ({ children }) => {
         </header>
 
         {/* Page content */}
-        <section className="flex-1 w-full max-w-[1600px] mx-auto p-4">
+        <section className="flex-1 w-full max-w-[1400px] mx-auto p-4">
           {/* Breadcrumbs */}
           <div className="mb-6 flex items-center gap-3 text-[11px] font-black uppercase tracking-widest text-base-content/20">
             <Link href="/super-admin/dashboard" className="hover:text-primary transition-colors">

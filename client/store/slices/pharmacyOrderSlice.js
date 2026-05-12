@@ -437,6 +437,20 @@ export const fetchOrderById = createAsyncThunk(
   },
 );
 
+export const fetchSimilarMedicines = createAsyncThunk(
+  'pharmacy/fetchSimilarMedicines',
+  async ({ id, limit = 10 } = {}, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`${BASE}/medicines/${id}/similar`, { params: { limit } });
+      return data; // { success, count, medicines }
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 11a. POST /order/upload-prescription
 // Attach an already-uploaded prescription imageUrl to an existing order.
@@ -833,7 +847,9 @@ const initialState = {
   // ── Medicines list ──
   medicines:  [],
   pagination: { total: 0, pages: 1, page: 1, limit: 12 },
-
+  similarMedicines:        [],
+similarMedicinesLoading: false,
+similarMedicinesError:   null,
   // ── Cart ──
   cart: {
     items:      [],
@@ -1261,7 +1277,20 @@ const pharmacyOrderSlice = createSlice({
         state.globalLoading = false;
         state.orderError    = payload;
       });
-
+      builder
+  .addCase(fetchSimilarMedicines.pending, (state) => {
+    state.similarMedicinesLoading = true;
+    state.similarMedicinesError   = null;
+    state.similarMedicines        = [];
+  })
+  .addCase(fetchSimilarMedicines.fulfilled, (state, { payload }) => {
+    state.similarMedicinesLoading = false;
+    state.similarMedicines        = payload.medicines ?? [];
+  })
+  .addCase(fetchSimilarMedicines.rejected, (state, { payload }) => {
+    state.similarMedicinesLoading = false;
+    state.similarMedicinesError   = payload;
+  });
     // ─────────────────────────────────────────────────────────────────────────
     // 11a. uploadOrderPrescription (URL-attach only)
     // ─────────────────────────────────────────────────────────────────────────
@@ -1559,7 +1588,9 @@ export const selectCartPrescriptionSummary = (s) => s.pharmacyOrder.cart.prescri
 // ── Medicines ─────────────────────────────────────────────────────────────────
 export const selectMedicines          = (s) => s.pharmacyOrder.medicines;
 export const selectMedicinePagination = (s) => s.pharmacyOrder.pagination;
-
+export const selectSimilarMedicines        = (s) => s.pharmacyOrder.similarMedicines;
+export const selectSimilarMedicinesLoading = (s) => s.pharmacyOrder.similarMedicinesLoading;
+export const selectSimilarMedicinesError   = (s) => s.pharmacyOrder.similarMedicinesError;
 // ── Orders ────────────────────────────────────────────────────────────────────
 export const selectCurrentOrder     = (s) => s.pharmacyOrder.currentOrder;
 export const selectOrders           = (s) => s.pharmacyOrder.orders;

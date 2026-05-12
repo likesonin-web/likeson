@@ -40,7 +40,7 @@ import {
   clearError,        // ← FIX: was clearErrors (singular in v2 slice)
   patchUser,         // ← NEW: patch isOnline locally after login
 } from '@/store/slices/userSlice';
-import { connectBookingSocket } from '@/store/slices/bookingSlice';
+ 
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ANIMATION VARIANTS
@@ -665,7 +665,7 @@ const handlePasswordLogin = useCallback(async (e) => {
   );
   if (result.meta.requestStatus === 'fulfilled') {
     dispatch(patchUser({ isOnline: true }));
-    dispatch(connectBookingSocket(result.payload.token)); // use token from payload
+     
     router.push('/');
   }
 }, [dispatch, formData.identifier, formData.password, router]);
@@ -684,7 +684,7 @@ const handlePasswordLogin = useCallback(async (e) => {
     );
     if (result.meta.requestStatus === 'fulfilled') {
       dispatch(patchUser({ isOnline: true }));
-      dispatch(connectBookingSocket(token));
+      
       router.push('/');
     }
   }, [dispatch, formData.identifier, formData.otp, router]);

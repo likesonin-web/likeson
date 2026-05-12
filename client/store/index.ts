@@ -35,6 +35,7 @@ import searchReducer from './slices/searchSlice';
 import bookingReducer from './slices/bookingSlice';
 import operationsReducer from './slices/operationsSlice';
 import availabilityReducer from './slices/availabilitySlice';
+import rideRequestReducer from './slices/rideRequestSlice';
 export const store = configureStore({
   reducer: {
     user: userReducer,
@@ -74,6 +75,7 @@ driver: driverReducer,
     booking: bookingReducer,
     operations: operationsReducer,
     availability:availabilityReducer,
+    rideRequest:rideRequestReducer,
   },
   devTools: process.env.NODE_ENV !== "production",
 });

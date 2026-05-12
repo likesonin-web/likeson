@@ -6,107 +6,63 @@ const { Schema } = mongoose;
 // RIDETRACKING MODEL — Likeson.in
 //
 // Write-heavy GPS time-series + milestone events for a single ride.
-// ALWAYS separate from Ride to:
-//   1. Keep Ride document lean (fast reads for dispatch/API)
-//   2. Isolate high-frequency GPS writes (every 3-5 seconds from driver app)
-//   3. Allow independent retention/archival of raw GPS data
-//
-// ONE RideTracking document per Ride.
-//   Ride.trackingId → RideTracking._id (back-ref for fast lookup both ways)
-//
-// BREADCRUMBS:
-//   Capped at MAX_BREADCRUMBS (2000) per ride.
-//   At ~1 ping/5s this covers ~2.7 hours of continuous tracking.
-//   Older entries are dropped when cap is reached (ring buffer via slice).
-//   Production note: for longer rides, emit breadcrumbs to a time-series DB
-//   (InfluxDB / TimescaleDB) and keep only last 200 here for live map display.
-//
-// MILESTONES:
-//   Named events with exact timestamps. Used for:
-//     - Customer-facing "ride timeline" display
-//     - SLA breach detection
-//     - Analytics (average pickup time, etc.)
-//
+// ONE RideTracking document per Ride (1:1, enforced by unique index).
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const MAX_BREADCRUMBS = 2000;
+export const MAX_BREADCRUMBS  = 2000;
+const        MAX_ETA_UPDATES  = 100;  // FIX #14: enforced in $push $slice, not just pre-save
 
 // ── Milestone Names ───────────────────────────────────────────────────────────
 
 export const MILESTONE_NAMES = [
-  // Driver lifecycle
-  'ride_created',            // Booking created, ride requested
-  'driver_search_started',   // System started searching for driver
-  'driver_assigned',         // Driver found + notified
-  'driver_accepted',         // Driver confirmed acceptance
-  'driver_en_route',         // Driver left for pickup
-  'driver_arrived',          // Driver at pickup location
-  'otp_verified',            // Patient verified OTP — ride officially started
-
-  // Journey milestones
-  'ride_started',            // Vehicle moving towards destination
-  'stop_reached',            // Arrived at intermediate stop (dynamic, with stop seq)
-  'stop_departed',           // Left intermediate stop
-  'hospital_arrived',        // Arrived at hospital/clinic/lab
-  'patient_handed_over',     // Patient handed to hospital/care team
-
-  // Care-specific milestones (full_care_ride)
-  'care_assistant_joined',   // Care assistant boarded vehicle
-  'consultation_started',    // Doctor consultation started
-  'consultation_completed',  // Consultation done
-  'pharmacy_collected',      // Medicines collected from pharmacy
-  'break_taken',             // Lunch/break noted (full_care_ride long trips)
-  'diagnosis_completed',     // Diagnosis report received
-
-  // Return journey
-  'return_ride_started',     // Return leg of full_care_ride began
-  'patient_home_reached',    // Patient dropped at home
-
-  // Delivery milestones (pharmacy / blood_bank)
-  'pickup_collected',        // Item collected from source
-  'delivery_attempted',      // Delivery tried but no one home
-  'delivered',               // Item successfully delivered
-  'delivery_otp_verified',   // Delivery OTP confirmed by recipient
-
-  // Exceptions
-  'vehicle_breakdown',       // Vehicle broke down mid-ride
-  'driver_replaced',         // Driver swap during ride
-  'route_deviated',          // Driver significantly off expected route (alert)
-  'sos_triggered',           // Emergency SOS by driver or patient
-  'ride_paused',             // Ride temporarily paused (e.g. traffic, medical stop)
-  'ride_resumed',            // Ride resumed after pause
-
-  // Completion
-  'ride_completed',          // All services done, ride closed
-  'ride_cancelled',          // Ride cancelled
+  'ride_created',
+  'driver_search_started',
+  'driver_assigned',
+  'driver_accepted',
+  'driver_en_route',
+  'driver_arrived',
+  'otp_verified',
+  'ride_started',
+  'stop_reached',
+  'stop_departed',
+  'hospital_arrived',
+  'patient_handed_over',
+  'care_assistant_joined',
+  'consultation_started',
+  'consultation_completed',
+  'pharmacy_collected',
+  'break_taken',
+  'diagnosis_completed',
+  'return_ride_started',
+  'patient_home_reached',
+  'pickup_collected',
+  'delivery_attempted',
+  'delivered',
+  'delivery_otp_verified',
+  'vehicle_breakdown',
+  'driver_replaced',
+  'route_deviated',
+  'sos_triggered',
+  'ride_paused',
+  'ride_resumed',
+  'ride_completed',
+  'ride_cancelled',
 ];
 
 // ── Sub-Schemas ───────────────────────────────────────────────────────────────
 
-/**
- * breadcrumbSchema — single GPS position ping from driver app.
- * Written every 3-5 seconds while ride is active.
- * Kept lean — no _id to reduce index overhead on high-volume array.
- */
 const breadcrumbSchema = new Schema(
   {
-    coordinates: {
-      type:     [Number],   // [lng, lat]
-      required: true,
-    },
-    heading:     { type: Number, min: 0, max: 360 },  // degrees
+    coordinates: { type: [Number], required: true },
+    heading:     { type: Number, min: 0, max: 360 },
     speedKmh:    { type: Number, min: 0 },
-    accuracyM:   { type: Number, min: 0 },             // GPS accuracy in metres
+    accuracyM:   { type: Number, min: 0 },
     timestamp:   { type: Date, required: true, default: Date.now },
     source:      { type: String, enum: ['gps', 'network', 'fused'], default: 'fused' },
   },
   { _id: false }
 );
 
-/**
- * milestoneSchema — named event in the ride lifecycle.
- * Displayed to customer as a timeline. Used for SLA + analytics.
- */
 const milestoneSchema = new Schema(
   {
     name: {
@@ -114,57 +70,19 @@ const milestoneSchema = new Schema(
       required: true,
       enum:     MILESTONE_NAMES,
     },
-
-    /**
-     * occurredAt — when this milestone happened.
-     * Required. Use server time, not device time.
-     */
     occurredAt: {
       type:     Date,
       required: true,
       default:  Date.now,
     },
-
-    /**
-     * coordinates — GPS position when milestone was recorded.
-     * Optional — may be null for server-side milestones (e.g. ride_created).
-     */
-    coordinates: {
-      type:    [Number],  // [lng, lat]
-      default: null,
-    },
-
-    /**
-     * stopSequence — which stop this milestone refers to.
-     * Only set for stop_reached / stop_departed milestones.
-     */
-    stopSequence: {
-      type:    Number,
-      default: null,
-    },
-
-    /**
-     * meta — flexible bag for milestone-specific extra data.
-     * Examples:
-     *   route_deviated: { deviationKm: 2.3 }
-     *   driver_replaced: { newDriverId: '...' }
-     *   sos_triggered:   { sosType: 'medical' }
-     */
-    meta: {
-      type:    Schema.Types.Mixed,
-      default: null,
-    },
-
-    /**
-     * recordedBy — who/what recorded this milestone.
-     * 'driver' = driver app, 'system' = server logic, 'admin' = manual entry
-     */
+    coordinates:  { type: [Number], default: null },
+    stopSequence: { type: Number,   default: null },
+    meta:         { type: Schema.Types.Mixed, default: null },
     recordedBy: {
       type:    String,
       enum:    ['driver', 'system', 'admin', 'customer'],
       default: 'system',
     },
-
     recordedByUserId: {
       type:    Schema.Types.ObjectId,
       ref:     'User',
@@ -174,30 +92,23 @@ const milestoneSchema = new Schema(
   { _id: true }
 );
 
-/**
- * etaUpdateSchema — history of ETA calculations for analytics.
- * Useful for measuring driver punctuality and route efficiency.
- */
 const etaUpdateSchema = new Schema(
   {
-    toWaypoint:        { type: String },   // 'pickup' | 'stop_1' | 'dropoff'
-    etaMinutes:        { type: Number },
-    distanceRemainingKm:{ type: Number },
-    calculatedAt:      { type: Date, default: Date.now },
-    source:            { type: String, enum: ['google_maps', 'osrm', 'estimate'], default: 'estimate' },
+    toWaypoint:          { type: String },
+    etaMinutes:          { type: Number },
+    distanceRemainingKm: { type: Number },
+    calculatedAt:        { type: Date, default: Date.now },
+    source:              { type: String, enum: ['google_maps', 'osrm', 'estimate'], default: 'estimate' },
   },
   { _id: false }
 );
 
-/**
- * sosEventSchema — emergency SOS records. Critical data, never deleted.
- */
 const sosEventSchema = new Schema(
   {
     triggeredBy:       { type: String, enum: ['driver', 'customer', 'care_assistant', 'system'] },
     triggeredByUserId: { type: Schema.Types.ObjectId, ref: 'User' },
     sosType:           { type: String, enum: ['medical', 'safety', 'accident', 'other'] },
-    coordinates:       { type: [Number] },         // [lng, lat] at time of SOS
+    coordinates:       { type: [Number] },
     description:       { type: String },
     resolvedAt:        { type: Date },
     resolvedBy:        { type: Schema.Types.ObjectId, ref: 'User' },
@@ -208,18 +119,14 @@ const sosEventSchema = new Schema(
   { _id: true }
 );
 
-/**
- * routeDeviationSchema — records when driver strays significantly from expected path.
- * Triggers alert to admin and customer.
- */
 const routeDeviationSchema = new Schema(
   {
-    detectedAt:     { type: Date, default: Date.now },
-    coordinates:    { type: [Number] },           // [lng, lat] at deviation point
-    deviationKm:    { type: Number },              // how far from expected route
-    wasAcknowledged:{ type: Boolean, default: false },
-    acknowledgedAt: { type: Date },
-    driverReason:   { type: String },
+    detectedAt:      { type: Date, default: Date.now },
+    coordinates:     { type: [Number] },
+    deviationKm:     { type: Number },
+    wasAcknowledged: { type: Boolean, default: false },
+    acknowledgedAt:  { type: Date },
+    driverReason:    { type: String },
   },
   { _id: true }
 );
@@ -228,23 +135,14 @@ const routeDeviationSchema = new Schema(
 
 const rideTrackingSchema = new Schema(
   {
-    // ── Ride Link ─────────────────────────────────────────────────────────────
-    /**
-     * ride — back-reference to the Ride document.
-     * Required. One RideTracking per Ride.
-     */
     ride: {
       type:     Schema.Types.ObjectId,
       ref:      'Ride',
       required: true,
-      unique:   true,   // enforce 1:1
+      unique:   true,
       index:    true,
     },
 
-    /**
-     * booking — denormalized for direct queries without joining Ride.
-     * e.g. "fetch all tracking for bookings today"
-     */
     booking: {
       type:     Schema.Types.ObjectId,
       ref:      'Booking',
@@ -252,9 +150,6 @@ const rideTrackingSchema = new Schema(
       index:    true,
     },
 
-    /**
-     * driver — denormalized for direct driver-based queries.
-     */
     driver: {
       type:    Schema.Types.ObjectId,
       ref:     'Driver',
@@ -263,14 +158,6 @@ const rideTrackingSchema = new Schema(
     },
 
     // ── GPS Breadcrumbs ───────────────────────────────────────────────────────
-    /**
-     * breadcrumbs — ring buffer of GPS pings.
-     * New pings are pushed; when length exceeds MAX_BREADCRUMBS,
-     * the oldest are sliced off (done in addBreadcrumb static method).
-     *
-     * These are NOT indexed — only accessed as a full array pull.
-     * For production scale, emit to time-series DB and store only last 200 here.
-     */
     breadcrumbs: {
       type:    [breadcrumbSchema],
       default: [],
@@ -280,117 +167,51 @@ const rideTrackingSchema = new Schema(
       type:    Number,
       default: 0,
       min:     0,
-      comment: 'Total GPS pings received including dropped ones (for analytics)',
     },
 
     // ── Milestones ────────────────────────────────────────────────────────────
-    /**
-     * milestones — ordered list of named ride events.
-     * New milestones pushed as ride progresses.
-     * Used to render customer-facing ride timeline.
-     */
     milestones: {
       type:    [milestoneSchema],
       default: [],
     },
 
     // ── ETA ───────────────────────────────────────────────────────────────────
-    /**
-     * currentEtaMinutes — latest calculated ETA to the NEXT waypoint.
-     * Written on each GPS recalculation.
-     * Also stored on Ride.currentEtaMinutes for fast API reads without join.
-     */
-    currentEtaMinutes: {
-      type:    Number,
-      default: null,
-    },
+    currentEtaMinutes: { type: Number, default: null },
+    currentEtaTarget:  { type: String, default: null },
 
-    currentEtaTarget: {
-      type:    String,  // 'pickup' | 'stop_1' | 'dropoff'
-      default: null,
-    },
-
+    // FIX #14: etaUpdates cap enforced at DB level via $slice in addEtaUpdate static.
+    // pre-save cap remains as safety net but $push $slice is the primary guard.
     etaUpdates: {
       type:    [etaUpdateSchema],
       default: [],
-      comment: 'History of ETA calculations — capped at 100 entries',
     },
 
     // ── Route Summary ─────────────────────────────────────────────────────────
-    /**
-     * totalDistanceKm — running sum of GPS ping-to-ping distances.
-     * Updated on each breadcrumb push.
-     */
-    totalDistanceKm: {
-      type:    Number,
-      default: 0,
-      min:     0,
-    },
+    totalDistanceKm:       { type: Number, default: 0, min: 0 },
+    expectedRoutePolyline: { type: String, default: null },
+    actualRoutePolyline:   { type: String, default: null },
 
-    /**
-     * expectedRoutePolyline — encoded Google Maps polyline of planned route.
-     * Set once at ride start. Used for deviation detection.
-     */
-    expectedRoutePolyline: {
-      type:    String,
-      default: null,
-    },
-
-    /**
-     * actualRoutePolyline — encoded polyline of actual path taken.
-     * Generated from breadcrumbs at ride completion.
-     */
-    actualRoutePolyline: {
-      type:    String,
-      default: null,
-    },
-
-    // ── SOS & Safety ─────────────────────────────────────────────────────────
-    sosEvents: {
-      type:    [sosEventSchema],
-      default: [],
-    },
-
-    hasActiveSos: {
-      type:    Boolean,
-      default: false,
-      index:   true,  // indexed for quick admin dashboard alert queries
-    },
+    // ── SOS ───────────────────────────────────────────────────────────────────
+    sosEvents:    { type: [sosEventSchema], default: [] },
+    hasActiveSos: { type: Boolean, default: false, index: true },
 
     // ── Route Deviations ──────────────────────────────────────────────────────
-    routeDeviations: {
-      type:    [routeDeviationSchema],
-      default: [],
-    },
+    routeDeviations:            { type: [routeDeviationSchema], default: [] },
+    hasUnacknowledgedDeviation: { type: Boolean, default: false, index: true },
 
-    hasUnacknowledgedDeviation: {
-      type:    Boolean,
-      default: false,
-      index:   true,
-    },
-
-    // ── Summary Stats (populated at completion) ───────────────────────────────
-    /**
-     * summary — computed when ride reaches 'completed' status.
-     * Denormalized for reporting without re-processing breadcrumbs.
-     */
+    // ── Summary (populated at ride completion) ────────────────────────────────
     summary: {
       totalDistanceKm:    { type: Number },
-      totalDurationMin:   { type: Number },
+      totalDurationMin:   { type: Number },  // FIX #12: now computed in computeSummary
       avgSpeedKmh:        { type: Number },
       maxSpeedKmh:        { type: Number },
-      pickupWaitMin:      { type: Number }, // driver_arrived → otp_verified
-      totalStopWaitMin:   { type: Number }, // sum of all stop waits
+      pickupWaitMin:      { type: Number },
+      totalStopWaitMin:   { type: Number },
       totalPingsReceived: { type: Number },
       isCompleted:        { type: Boolean, default: false },
       completedAt:        { type: Date },
     },
 
-    // ── Archival ──────────────────────────────────────────────────────────────
-    /**
-     * isArchived — true when breadcrumbs have been offloaded to cold storage.
-     * Admin queries should check this flag before requesting breadcrumb data.
-     */
     isArchived: { type: Boolean, default: false, index: true },
     archivedAt: { type: Date },
   },
@@ -424,58 +245,60 @@ rideTrackingSchema.virtual('hasSosEvents').get(function () {
 // ── Static Methods ────────────────────────────────────────────────────────────
 
 /**
- * addBreadcrumb — push a GPS ping, maintain ring buffer cap.
+ * addBreadcrumb — push GPS ping, maintain ring buffer cap.
  *
- * Usage:
- *   await RideTracking.addBreadcrumb(rideId, { coordinates: [lng, lat], speedKmh: 40, heading: 180 });
+ * FIX #13: Single DB op — no separate findOne. We use $push $slice $inc together.
+ * Incremental distance calculated from last breadcrumb pulled in the same update
+ * is not feasible in one op without transactions. Accepted trade-off: distance
+ * accumulation done via separate lean fetch only when needed, otherwise rely on
+ * computeSummary at ride end using full breadcrumb array.
+ *
+ * For production scale: pipe breadcrumbs to InfluxDB/TimescaleDB and store only
+ * last 200 here for live map display.
+ *
+ * @param {ObjectId|string} rideId  - Ride._id (NOT booking ID)
+ * @param {{ coordinates, heading?, speedKmh?, accuracyM?, source? }} pingData
  */
 rideTrackingSchema.statics.addBreadcrumb = async function (rideId, pingData) {
   const { coordinates, heading, speedKmh, accuracyM, source } = pingData;
 
-  // Calculate incremental distance from last position
-  const tracking = await this.findOne({ ride: rideId })
-    .select('breadcrumbs totalDistanceKm breadcrumbCount')
-    .lean();
-
-  if (!tracking) throw new Error(`RideTracking not found for ride: ${rideId}`);
-
-  let incrementalKm = 0;
-  const last = tracking.breadcrumbs?.[tracking.breadcrumbs.length - 1];
-  if (last?.coordinates?.length === 2) {
-    incrementalKm = haversineKm(last.coordinates, coordinates);
+  if (!coordinates || coordinates.length !== 2) {
+    throw new Error('addBreadcrumb: coordinates [lng, lat] required');
   }
 
   const breadcrumb = {
     coordinates,
-    heading,
-    speedKmh,
-    accuracyM,
-    source: source ?? 'fused',
+    heading:   heading   ?? 0,
+    speedKmh:  speedKmh  ?? 0,
+    accuracyM: accuracyM ?? null,
+    source:    source    ?? 'fused',
     timestamp: new Date(),
   };
 
-  const update = {
-    $push: {
-      breadcrumbs: {
-        $each:  [breadcrumb],
-        $slice: -MAX_BREADCRUMBS, // keep latest MAX_BREADCRUMBS, drop oldest
+  // FIX #13: single atomic op — $push with $slice keeps ring buffer,
+  // $inc bumps counter. No separate findOne round trip.
+  // Distance accumulation deferred to computeSummary (acceptable for our scale).
+  return this.findOneAndUpdate(
+    { ride: rideId },
+    {
+      $push: {
+        breadcrumbs: {
+          $each:  [breadcrumb],
+          $slice: -MAX_BREADCRUMBS,
+        },
       },
+      $inc: { breadcrumbCount: 1 },
     },
-    $inc: {
-      totalDistanceKm: incrementalKm,
-      breadcrumbCount: 1,
-    },
-  };
-
-  return this.findOneAndUpdate({ ride: rideId }, update, { new: true })
-    .select('totalDistanceKm breadcrumbCount currentEtaMinutes');
+    { new: true }
+  ).select('breadcrumbCount currentEtaMinutes totalDistanceKm');
 };
 
 /**
  * addMilestone — record a named lifecycle event.
  *
- * Usage:
- *   await RideTracking.addMilestone(rideId, 'driver_arrived', { coordinates: [lng, lat] });
+ * @param {ObjectId|string} rideId
+ * @param {string} name — must be in MILESTONE_NAMES
+ * @param {{ coordinates?, stopSequence?, meta?, recordedBy?, recordedByUserId? }} opts
  */
 rideTrackingSchema.statics.addMilestone = async function (
   rideId,
@@ -504,17 +327,48 @@ rideTrackingSchema.statics.addMilestone = async function (
 };
 
 /**
- * triggerSos — record an SOS event and set hasActiveSos = true.
+ * addEtaUpdate — push ETA recalculation, capped at MAX_ETA_UPDATES.
  *
- * Usage:
- *   await RideTracking.triggerSos(rideId, { triggeredBy: 'driver', sosType: 'medical', coordinates: [lng, lat] });
+ * FIX #14: $slice in $push enforces cap at DB level — bypasses pre-save,
+ * works correctly even when called via findOneAndUpdate directly.
+ *
+ * @param {ObjectId|string} rideId
+ * @param {{ toWaypoint, etaMinutes, distanceRemainingKm, source? }} etaData
+ */
+rideTrackingSchema.statics.addEtaUpdate = async function (rideId, etaData) {
+  const { toWaypoint, etaMinutes, distanceRemainingKm, source } = etaData;
+
+  const entry = {
+    toWaypoint,
+    etaMinutes,
+    distanceRemainingKm,
+    source:       source ?? 'estimate',
+    calculatedAt: new Date(),
+  };
+
+  return this.findOneAndUpdate(
+    { ride: rideId },
+    {
+      $push: {
+        etaUpdates: {
+          $each:  [entry],
+          $slice: -MAX_ETA_UPDATES,  // FIX #14: DB-level cap, not pre-save only
+        },
+      },
+      $set: {
+        currentEtaMinutes: etaMinutes,
+        currentEtaTarget:  toWaypoint,
+      },
+    },
+    { new: true }
+  ).select('currentEtaMinutes currentEtaTarget');
+};
+
+/**
+ * triggerSos — record SOS event, set hasActiveSos = true.
  */
 rideTrackingSchema.statics.triggerSos = async function (rideId, sosData) {
-  const sosEvent = {
-    ...sosData,
-    triggeredAt: new Date(),
-    isResolved:  false,
-  };
+  const sosEvent = { ...sosData, triggeredAt: new Date(), isResolved: false };
 
   return this.findOneAndUpdate(
     { ride: rideId },
@@ -527,18 +381,18 @@ rideTrackingSchema.statics.triggerSos = async function (rideId, sosData) {
 };
 
 /**
- * resolveSos — mark SOS as resolved.
+ * resolveSos — mark SOS resolved.
  */
 rideTrackingSchema.statics.resolveSos = async function (rideId, sosEventId, resolvedBy, resolutionNotes) {
   return this.findOneAndUpdate(
     { ride: rideId, 'sosEvents._id': sosEventId },
     {
       $set: {
-        'sosEvents.$.isResolved':     true,
-        'sosEvents.$.resolvedAt':     new Date(),
-        'sosEvents.$.resolvedBy':     resolvedBy,
-        'sosEvents.$.resolutionNotes':resolutionNotes,
-        hasActiveSos:                 false,
+        'sosEvents.$.isResolved':      true,
+        'sosEvents.$.resolvedAt':      new Date(),
+        'sosEvents.$.resolvedBy':      resolvedBy,
+        'sosEvents.$.resolutionNotes': resolutionNotes,
+        hasActiveSos:                  false,
       },
     },
     { new: true }
@@ -547,10 +401,20 @@ rideTrackingSchema.statics.resolveSos = async function (rideId, sosEventId, reso
 
 /**
  * computeSummary — called when ride completes.
- * Derives stats from breadcrumbs and milestones.
+ *
+ * FIX #12: totalDurationMin now computed from Ride.rideStartedAt / rideCompletedAt
+ * fetched directly inside this static — no longer null.
+ *
+ * @param {ObjectId|string} rideId  - Ride._id
  */
 rideTrackingSchema.statics.computeSummary = async function (rideId) {
-  const tracking = await this.findOne({ ride: rideId }).lean();
+  const [tracking, ride] = await Promise.all([
+    this.findOne({ ride: rideId }).lean(),
+    mongoose.model('Ride').findById(rideId)
+      .select('rideStartedAt rideCompletedAt')
+      .lean(),
+  ]);
+
   if (!tracking) return null;
 
   const crumbs = tracking.breadcrumbs ?? [];
@@ -561,16 +425,24 @@ rideTrackingSchema.statics.computeSummary = async function (rideId) {
     : 0;
   const maxSpeed = speeds.length ? Math.max(...speeds) : 0;
 
+  // FIX #12: compute totalDurationMin from Ride timestamps
+  let totalDurationMin = null;
+  if (ride?.rideStartedAt && ride?.rideCompletedAt) {
+    totalDurationMin = Math.round(
+      (new Date(ride.rideCompletedAt) - new Date(ride.rideStartedAt)) / 60000
+    );
+  }
+
   // Pickup wait = driver_arrived → otp_verified
-  const arrivedMs = tracking.milestones?.find(m => m.name === 'driver_arrived')?.occurredAt;
-  const otpMs     = tracking.milestones?.find(m => m.name === 'otp_verified')?.occurredAt;
+  const arrivedMs  = tracking.milestones?.find(m => m.name === 'driver_arrived')?.occurredAt;
+  const otpMs      = tracking.milestones?.find(m => m.name === 'otp_verified')?.occurredAt;
   const pickupWaitMin = arrivedMs && otpMs
     ? Math.round((new Date(otpMs) - new Date(arrivedMs)) / 60000)
     : 0;
 
   // Total stop wait
-  const stopDeparted = tracking.milestones?.filter(m => m.name === 'stop_departed') ?? [];
   const stopArrived  = tracking.milestones?.filter(m => m.name === 'stop_reached')  ?? [];
+  const stopDeparted = tracking.milestones?.filter(m => m.name === 'stop_departed') ?? [];
   let totalStopWaitMin = 0;
   for (let i = 0; i < Math.min(stopArrived.length, stopDeparted.length); i++) {
     totalStopWaitMin += Math.round(
@@ -578,9 +450,16 @@ rideTrackingSchema.statics.computeSummary = async function (rideId) {
     );
   }
 
+  // Recompute totalDistanceKm from breadcrumbs using haversine
+  let totalDistanceKm = 0;
+  for (let i = 1; i < crumbs.length; i++) {
+    totalDistanceKm += haversineKm(crumbs[i - 1].coordinates, crumbs[i].coordinates);
+  }
+  totalDistanceKm = +totalDistanceKm.toFixed(2);
+
   const summary = {
-    totalDistanceKm:    +tracking.totalDistanceKm.toFixed(2),
-    totalDurationMin:   null, // computed by caller from Ride timestamps
+    totalDistanceKm,
+    totalDurationMin,   // FIX #12: no longer null
     avgSpeedKmh:        avgSpeed,
     maxSpeedKmh:        maxSpeed,
     pickupWaitMin,
@@ -592,7 +471,7 @@ rideTrackingSchema.statics.computeSummary = async function (rideId) {
 
   return this.findOneAndUpdate(
     { ride: rideId },
-    { $set: { summary } },
+    { $set: { summary, totalDistanceKm } },
     { new: true }
   ).select('summary');
 };
@@ -600,17 +479,17 @@ rideTrackingSchema.statics.computeSummary = async function (rideId) {
 // ── Pre-save ──────────────────────────────────────────────────────────────────
 
 rideTrackingSchema.pre('save', function () {
-  // Cap etaUpdates at 100 entries
-  if (this.isModified('etaUpdates') && this.etaUpdates.length > 100) {
-    this.etaUpdates = this.etaUpdates.slice(-100);
+  // Safety net cap for etaUpdates (primary cap is $slice in addEtaUpdate)
+  if (this.isModified('etaUpdates') && this.etaUpdates.length > MAX_ETA_UPDATES) {
+    this.etaUpdates = this.etaUpdates.slice(-MAX_ETA_UPDATES);
   }
 
-  // Sync hasActiveSos from sosEvents array
+  // Sync hasActiveSos
   if (this.isModified('sosEvents')) {
     this.hasActiveSos = this.sosEvents.some(e => !e.isResolved);
   }
 
-  // Sync hasUnacknowledgedDeviation from routeDeviations array
+  // Sync hasUnacknowledgedDeviation
   if (this.isModified('routeDeviations')) {
     this.hasUnacknowledgedDeviation = this.routeDeviations.some(d => !d.wasAcknowledged);
   }
@@ -627,10 +506,6 @@ rideTrackingSchema.index({ createdAt: -1 });
 
 // ── Utility — Haversine distance ──────────────────────────────────────────────
 
-/**
- * haversineKm — great-circle distance between two [lng, lat] points.
- * Used to accumulate totalDistanceKm from GPS pings.
- */
 function haversineKm([lng1, lat1], [lng2, lat2]) {
   const R    = 6371;
   const dLat = toRad(lat2 - lat1);

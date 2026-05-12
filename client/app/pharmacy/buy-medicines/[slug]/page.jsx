@@ -32,6 +32,9 @@ import {
   selectMedicineError,
 } from '@/store/slices/medicineSlice';
 import {
+  fetchSimilarMedicines,
+  selectSimilarMedicines,
+  selectSimilarMedicinesLoading,
   addToCart,
   placeDirectOrder,
   verifyDirectPayment,
@@ -454,8 +457,9 @@ const FullscreenZoomModal = React.memo(({ images, activeIdx, onIdxChange, onClos
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape')     onClose();
-      if (e.key === 'ArrowRight') onIdxChange((i) => Math.min(i + 1, images.length - 1));
-      if (e.key === 'ArrowLeft')  onIdxChange((i) => Math.max(i - 1, 0));
+      i// in useEffect inside FullscreenZoomModal:
+if (e.key === 'ArrowRight') onIdxChange((i) => Math.min(i + 1, images.length - 1));
+if (e.key === 'ArrowLeft')  onIdxChange((i) => Math.max(i - 1, 0));
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -1142,7 +1146,8 @@ export default function MedicineDetails() {
   const coupon          = useSelector(selectCoupon);
   const couponLoading   = useSelector(selectCouponLoading);
   const couponError     = useSelector(selectCouponError);
-
+  const similarMedicines        = useSelector(selectSimilarMedicines);
+  const similarMedicinesLoading = useSelector(selectSimilarMedicinesLoading);
   // ── Auth / subscription ──
   const user                 = useSelector((state) => state.user?.user) ?? null;
   const subscriptionDiscount = useSelector((s) => s.user?.subscription?.pharmacyDiscount ?? 0);
@@ -1170,7 +1175,9 @@ export default function MedicineDetails() {
       dispatch(clearCoupon());
     };
   }, [slug, dispatch]);
-
+useEffect(() => {
+  if (med?._id) dispatch(fetchSimilarMedicines({ id: med._id }));
+}, [med?._id, dispatch]);
   // Clear rx highlight once user uploads
   useEffect(() => {
     if (prescriptionUrl) setRxHighlight(false);
@@ -1256,15 +1263,20 @@ export default function MedicineDetails() {
   }, [med, prescriptionUrl, maxStock, bestStoreId]);
 
   // ── Add to Cart ──
-  const handleAddToCart = useCallback(() => {
-    if (!guardPreFlight()) return;
-    dispatch(addToCart({
+const handleAddToCart = useCallback(async () => {
+  if (!guardPreFlight()) return;
+  try {
+    const result = await dispatch(addToCart({
       medicineId: med._id,
       quantity,
       storeId: bestStoreId,
       ...(prescriptionUrl && { prescription: { imageUrl: prescriptionUrl } }),
-    }));
-  }, [dispatch, med, quantity, bestStoreId, prescriptionUrl, guardPreFlight]);
+    })).unwrap();
+    toast.success('Added to cart successfully.');
+  } catch (err) {
+    toast.error(err?.message || 'Failed to add to cart. Please try again.');
+  }
+}, [dispatch, med, quantity, bestStoreId, prescriptionUrl, guardPreFlight]);
 
   // ── Buy Now ──
   const handleBuyNow = useCallback(() => {
@@ -1295,10 +1307,9 @@ export default function MedicineDetails() {
   const increment = useCallback(() => setQuantity((q) => Math.min(q + 1, maxStock || 999)), [maxStock]);
 
   // Clear coupon when quantity changes (it was validated against the old total)
-  useEffect(() => {
-    if (coupon?.code) dispatch(clearCoupon());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quantity]);
+ useEffect(() => {
+  dispatch(clearCoupon());
+}, [quantity, dispatch]);
 
   // ── Share ──
   const handleShare = useCallback(async () => {
@@ -1707,6 +1718,109 @@ export default function MedicineDetails() {
           </div>
         </div>
       </div>
+
+      {/* Similar Medicines */}
+{/* Similar Medicines */}
+{(similarMedicinesLoading || similarMedicines.length > 0) && (
+  <div className="container-custom pb-10">
+    <h2 className="text-base font-black text-base-content uppercase tracking-widest mb-4 flex items-center gap-2">
+      <RefreshCw className="w-4 h-4 text-primary" /> Similar Medicines
+    </h2>
+ 
+ {!similarMedicinesLoading && similarMedicines.length > 0 && (
+  <p className="text-[10px] text-base-content/40 font-medium -mt-2 mb-4">
+    Medicines with similar salt composition or therapeutic class to{' '}
+    <span className="font-black text-primary">{med.brandName}</span>
+    {med.genericName ? (
+      <> — alternatives containing <span className="font-black text-base-content/60">{med.genericName}</span></>
+    ) : null}
+  </p>
+)}
+    {similarMedicinesLoading ? (
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        {[...Array(5)].map((_, i) => (
+          <div key={i} className="skeleton h-52 rounded-md" />
+        ))}
+      </div>
+    ) : (
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        {similarMedicines.map((item) => {
+          const inv      = getBestInventory(item.inventory);
+          const price    = inv?.pricePerUnit ?? item.mrp;
+          const stock    = (item.inventory ?? []).reduce((s, i) => s + (i.stockQuantity ?? 0), 0);
+          const isLow    = inv?.isLowStock || (stock > 0 && stock < 10);
+          const isOut    = stock === 0;
+          const expiry   = inv?.expiryDate
+            ? new Date(inv.expiryDate).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
+            : null;
+
+          return (
+            <motion.button
+              key={item._id}
+              whileHover={{ y: -2 }}
+              onClick={() => router.push(`/pharmacy/buy-medicines/${item?.slug}`)}
+              className="glass-card p-3 text-left flex flex-col gap-2 hover:border-primary/40 transition-all"
+            >
+              {/* Image */}
+              <div className="aspect-square rounded-md bg-base-200 overflow-hidden flex items-center justify-center relative">
+                {item.images?.[0]?.url
+                  ? <img src={item.images[0].url} alt={item.brandName} className="w-full h-full object-contain p-2" loading="lazy" />
+                  : <Pill className="w-8 h-8 text-primary/20" />}
+                {/* Stock badge overlay */}
+                <span className={`absolute top-1.5 right-1.5 text-[8px] font-black px-1.5 py-0.5 rounded-md ${
+                  isOut  ? 'bg-error text-white' :
+                  isLow  ? 'bg-warning text-white' :
+                           'bg-success text-white'
+                }`}>
+                  {isOut ? 'Out' : isLow ? 'Low' : 'In Stock'}
+                </span>
+              </div>
+
+              {/* Name + generic */}
+              <div className="min-w-0">
+                <p className="text-[11px] font-black text-base-content truncate">{item.brandName}</p>
+                <p className="text-[9px] text-base-content/40 truncate italic">{item.genericName}</p>
+              </div>
+
+              {/* Dosage + packaging */}
+              <div className="space-y-0.5">
+                {item.dosage && (
+                  <p className="text-[9px] text-base-content/50 flex items-center gap-1">
+                    <Pill className="w-2.5 h-2.5 text-primary/50 shrink-0" />
+                    {item.dosage}
+                  </p>
+                )}
+                {item.packaging && (
+                  <p className="text-[9px] text-base-content/50 flex items-center gap-1 truncate">
+                    <Package className="w-2.5 h-2.5 text-primary/50 shrink-0" />
+                    {item.packaging}
+                  </p>
+                )}
+                {expiry && (
+                  <p className="text-[9px] text-base-content/40 flex items-center gap-1">
+                    <Clock className="w-2.5 h-2.5 text-primary/50 shrink-0" />
+                    Exp: {expiry}
+                  </p>
+                )}
+              </div>
+
+              {/* Price + MRP */}
+              <div className="flex items-end justify-between mt-auto pt-1 border-t border-base-200">
+                <div>
+                  <p className="text-xs font-black text-primary">₹{price}</p>
+                  {item.mrp && item.mrp !== price && (
+                    <p className="text-[9px] text-base-content/30 line-through">₹{item.mrp}</p>
+                  )}
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-base-content/30" />
+              </div>
+            </motion.button>
+          );
+        })}
+      </div>
+    )}
+  </div>
+)}
 
       {/* Modals */}
       <AnimatePresence>

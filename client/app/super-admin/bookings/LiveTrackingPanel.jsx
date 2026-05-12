@@ -228,7 +228,7 @@ function TabBtn({ active, onClick, icon: Icon, label, dot }) {
 // MAP CANVAS
 // ─────────────────────────────────────────────────────────────────────────────
 
-function MapCanvas({ booking, tracking, liveLocation, activeLayers, style }) {
+function MapCanvas({ booking, tracking, mapRoutePolyline, liveLocation, activeLayers, style }){
   const mapRef         = useRef(null);
   const mapObj         = useRef(null);
   const routeRef       = useRef(null);
@@ -252,7 +252,7 @@ function MapCanvas({ booking, tracking, liveLocation, activeLayers, style }) {
 
   const pickupCoords  = booking?.patientLocation?.coordinates;
   const dropoffCoords = booking?.destinationLocation?.coordinates;
-  const polylineStr   = tracking?.expectedRoutePolyline ?? null;
+const polylineStr = tracking?.expectedRoutePolyline ?? mapRoutePolyline ?? null;
 
   useEffect(() => {
     if (!GMAPS_KEY) { setLoading(false); setError(true); return; }
@@ -683,8 +683,8 @@ function FloatingInfoPanel({
   const [open, setOpen] = useState(false);
   const [tab,  setTab]  = useState('map');
 
-  const pickupCoords  = booking?.patientLocation?.coordinates;
-  const dropoffCoords = booking?.destinationLocation?.coordinates;
+  const pickupCoords  = booking?.patientLocation?.coordinates  ?? mapRoute?.pickupCoords;
+const dropoffCoords = booking?.destinationLocation?.coordinates ?? mapRoute?.dropoffCoords;
 
   return (
     <div className="flex flex-col items-end gap-2 w-full max-w-sm">
@@ -1621,12 +1621,7 @@ function NormalPanel({
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function LiveTrackingPanel({
-  booking,
-  liveLocation,
-  socketConnected,
-  userRole = 'admin',
-}) {
+export default function LiveTrackingPanel({ booking, mapRoute, liveLocation, socketConnected }) {
   const [tracking,     setTracking]     = useState(null);
   const [trackLoading, setTrackLoading] = useState(false);
   const [trackError,   setTrackError]   = useState(null);
@@ -1637,8 +1632,10 @@ export default function LiveTrackingPanel({
   const rideId       = ride?._id;
   const rideStatus   = ride?.status ?? 'unknown';
   const isActive     = ACTIVE_STATUSES.has(rideStatus);
-  const canonicalKm  = ride?.estimatedDistanceKm;
-  const canonicalMin = ride?.estimatedDurationMin;
+ const canonicalKm  = mapRoute?.estimatedDistKm  ?? ride?.estimatedDistanceKm;
+const canonicalMin = mapRoute?.estimatedMinutes  ?? ride?.estimatedDurationMin;
+// Also pull polyline from mapRoute if tracking not loaded yet
+const mapRoutePolyline = mapRoute?.polyline ?? null;
   const actualKm     = ride?.actualDistanceKm;
   const etaMin       = ride?.currentEtaMinutes;
   const driverName   = ride?.driverSnapshot?.legalName ?? ride?.driverSnapshot?.name ?? '—';
@@ -1724,12 +1721,13 @@ export default function LiveTrackingPanel({
           >
             {/* MAP fills entire background */}
             <div className="absolute inset-0 z-0">
-              <MapCanvas
-                booking={booking}
-                tracking={tracking}
-                liveLocation={liveLocation}
-                activeLayers={activeLayers}
-              />
+             <MapCanvas
+  booking={booking}
+  tracking={tracking}
+  mapRoutePolyline={mapRoutePolyline}   // ← ADD
+  liveLocation={liveLocation}
+  activeLayers={activeLayers}
+/>
             </div>
 
             {/* Floating UI overlay */}

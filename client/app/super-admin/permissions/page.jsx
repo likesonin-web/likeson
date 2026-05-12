@@ -41,17 +41,19 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Only these 4 roles may be assigned through this UI panel */
-const ALLOWED_ROLES = ['superadmin', 'admin', 'customer', 'care assistant'];
+const ALLOWED_ROLES = ['superadmin', 'admin', 'finance','customer'];
 
 const ROLE_META = {
   superadmin:       { label: 'Superadmin',    color: 'error',   icon: '👑' },
   admin:            { label: 'Admin',          color: 'warning', icon: '🛡️' },
   customer:         { label: 'Customer',       color: 'info',    icon: '👤' },
+  hospital:         { label: 'Hospital',       color: 'primary', icon: '🏥' },
+  solodriverpartner: { label: 'Solo Driver',    color: 'primary', icon: '🚘' },
   'care assistant': { label: 'Care Assistant', color: 'success', icon: '🩺' },
   doctor:           { label: 'Doctor',         color: 'primary', icon: '⚕️' },
-  driver:           { label: 'Driver',         color: 'neutral', icon: '🚗' },
+  driver:           { label: 'Driver',         color: 'error', icon: '🚗' },
   pharmacy:         { label: 'Pharmacy',       color: 'accent',  icon: '💊' },
-  transportpartner: { label: 'Transport',      color: 'neutral', icon: '🚛' },
+  transportpartner: { label: 'Transport',      color: 'error', icon: '🚛' },
   'lab partner':    { label: 'Lab Partner',    color: 'info',    icon: '🔬' },
   finance:          { label: 'Finance',        color: 'warning', icon: '💰' },
 };
@@ -310,7 +312,7 @@ const RoleDonut = memo(function RoleDonut({ users }) {
         </div>
         <ul className="flex flex-col gap-1.5 flex-1 min-w-0">
           {data.map((d) => (
-            <li key={d.name} className="flex items-center gap-2 text-xs text-base-content/65">
+            <li key={d.name} className="flex items-center gap-2 text-[10px] text-base-content/65">
               <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: d.fill }} />
               <span className="truncate">{d.name}</span>
               <span className="ml-auto font-bold text-base-content tabular-nums">{d.value}</span>
@@ -376,7 +378,7 @@ function FiltersBar({ filters, onSearch, onFilter, onRefetch, loading }) {
           onChange={handleChange}
           defaultValue={filters.search}
           aria-label="Search users"
-          className="w-full h-10 pl-10 pr-9 rounded-xl border border-base-300 bg-base-200/60 text-sm text-base-content placeholder:text-base-content/35 outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary transition-all"
+          className="w-full h-10 pl-10 pr-9 rounded-xl border border-base-300 bg-base-200/60 text-xs text-base-content placeholder:text-base-content/35 outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary transition-all"
         />
         {filters.search && (
           <button
@@ -396,7 +398,7 @@ function FiltersBar({ filters, onSearch, onFilter, onRefetch, loading }) {
           value={filters.role}
           onChange={(e) => onFilter('role', e.target.value)}
           aria-label="Filter by role"
-          className="h-10 pl-9 pr-8 rounded-xl border border-base-300 bg-base-200/60 text-sm text-base-content outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary cursor-pointer appearance-none min-w-[160px] transition-all"
+          className="h-10 pl-9 pr-8 rounded-xl border border-base-300 bg-base-200/60 text-xs text-base-content outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary cursor-pointer appearance-none min-w-[160px] transition-all"
         >
           <option value="">All Roles</option>
           {ALL_ROLES_LIST.map((r) => (
@@ -410,7 +412,7 @@ function FiltersBar({ filters, onSearch, onFilter, onRefetch, loading }) {
         value={filters.isBlocked}
         onChange={(e) => onFilter('isBlocked', e.target.value)}
         aria-label="Filter by status"
-        className="h-10 px-4 rounded-xl border border-base-300 bg-base-200/60 text-sm text-base-content outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary cursor-pointer appearance-none min-w-[140px] transition-all"
+        className="h-10 px-4 rounded-xl border border-base-300 bg-base-200/60 text-xs text-base-content outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary cursor-pointer appearance-none min-w-[140px] transition-all"
       >
         <option value="">All Status</option>
         <option value="false">Active</option>
@@ -422,7 +424,7 @@ function FiltersBar({ filters, onSearch, onFilter, onRefetch, loading }) {
         onClick={onRefetch}
         disabled={loading}
         aria-label="Refresh"
-        className="h-10 px-4 flex items-center gap-2 rounded-xl border-2 border-primary text-primary text-sm font-bold hover:bg-primary hover:text-primary-content transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+        className="h-10 px-4 flex items-center gap-2 rounded-xl border-2 border-primary text-primary text-xs font-bold hover:bg-primary hover:text-primary-content transition-all disabled:opacity-40 disabled:cursor-not-allowed"
       >
         <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} strokeWidth={2} />
         <span className="hidden sm:inline">Refresh</span>
@@ -439,7 +441,7 @@ const RoleBadge = memo(function RoleBadge({ role }) {
   const m = ROLE_META[role] ?? { label: role, color: 'neutral', icon: '?' };
   const cls = BADGE_CLASS[m.color] ?? BADGE_CLASS.neutral;
   return (
-    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${cls}`}>
+    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap ${cls}`}>
       <span aria-hidden>{m.icon}</span>
       {m.label}
     </span>
@@ -502,15 +504,15 @@ const UserRow = memo(function UserRow({ user, onOpenModal, index }) {
 
       {/* Name + email */}
       <td className="px-4 py-3 max-w-[200px]">
-        <p className="text-sm font-semibold text-base-content truncate flex items-center gap-1.5">
+        <p className="text-xs font-semibold text-base-content truncate flex items-center gap-1.5">
           {user.name}
           {user.isEmailVerified && <BadgeCheck className="w-3.5 h-3.5 text-primary flex-shrink-0" />}
         </p>
-        <p className="text-xs text-base-content/40 truncate">{user.email}</p>
+        <p className="text-[10px] text-base-content/40 truncate">{user.email}</p>
       </td>
 
       {/* Phone */}
-      <td className="px-4 py-3 text-xs text-base-content/55 whitespace-nowrap hidden md:table-cell">
+      <td className="px-4 py-3 text-[10px] text-base-content/55 whitespace-nowrap hidden md:table-cell">
         {user.phone ?? <span className="text-base-content/25">—</span>}
       </td>
 
@@ -520,15 +522,15 @@ const UserRow = memo(function UserRow({ user, onOpenModal, index }) {
       {/* Status */}
       <td className="px-4 py-3">
         {user.isBlocked ? (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-error/10 text-error border border-error/30">
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-error/10 text-error border border-error/30">
             <ShieldOff className="w-3 h-3" /> Suspended
           </span>
         ) : user.isOnline ? (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-success/10 text-success border border-success/30">
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-success/10 text-success border border-success/30">
             <Wifi className="w-3 h-3" /> Online
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-info/10 text-info border border-info/30">
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-info/10 text-info border border-info/30">
             <WifiOff className="w-3 h-3" /> Offline
           </span>
         )}
@@ -536,7 +538,7 @@ const UserRow = memo(function UserRow({ user, onOpenModal, index }) {
 
       {/* Last active */}
       <td className="px-4 py-3 hidden lg:table-cell">
-        <div className="flex items-center gap-1.5 text-xs text-base-content/40">
+        <div className="flex items-center gap-1.5 text-[10px] text-base-content/40">
           <Clock className="w-3 h-3 flex-shrink-0" />
           {fmtDate(user.lastActiveAt)}
         </div>
@@ -589,7 +591,7 @@ function UsersTable({ users, loading, onOpenModal }) {
 
   return (
     <div className="overflow-x-auto rounded-2xl border border-base-300/50 shadow-sm">
-      <table className="w-full text-left text-sm" aria-label="Users permission table">
+      <table className="w-full text-left text-xs" aria-label="Users permission table">
         <thead>
           <tr className="border-b border-base-300/50 bg-base-200/50">
             {cols.map((col, i) => (
@@ -621,7 +623,7 @@ function UsersTable({ users, loading, onOpenModal }) {
                     <div className="w-16 h-16 rounded-2xl bg-base-200 flex items-center justify-center">
                       <Shield className="w-8 h-8 text-base-content/20" strokeWidth={1.5} />
                     </div>
-                    <p className="text-base-content/35 text-sm">No users found matching your filters</p>
+                    <p className="text-base-content/35 text-xs">No users found matching your filters</p>
                   </motion.div>
                 </td>
               </tr>
@@ -662,7 +664,7 @@ const Pagination = memo(function Pagination({ currentPage, pages, total, limit, 
     <button
       onClick={() => onPage(n)}
       aria-current={n === currentPage ? 'page' : undefined}
-      className={`min-w-[32px] h-8 px-2 rounded-lg text-sm font-semibold transition-all
+      className={`min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold transition-all
         ${n === currentPage
           ? 'bg-primary text-primary-content shadow-sm'
           : 'border border-base-300 text-base-content/55 hover:bg-base-200 hover:text-base-content'
@@ -674,7 +676,7 @@ const Pagination = memo(function Pagination({ currentPage, pages, total, limit, 
 
   return (
     <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 pt-4 border-t border-base-300/40">
-      <p className="text-xs text-base-content/40">
+      <p className="text-[10px] text-base-content/40">
         Showing <strong className="text-base-content">{from}–{to}</strong> of{' '}
         <strong className="text-base-content">{total}</strong> users
       </p>
@@ -688,14 +690,14 @@ const Pagination = memo(function Pagination({ currentPage, pages, total, limit, 
         {range[0] > 1 && (
           <>
             <PageBtn n={1} />
-            {range[0] > 2 && <span className="px-1 text-base-content/25 text-sm">…</span>}
+            {range[0] > 2 && <span className="px-1 text-base-content/25 text-xs">…</span>}
           </>
         )}
         {range.map((n) => <PageBtn key={n} n={n} />)}
         {range[range.length - 1] < pages && (
           <>
             {range[range.length - 1] < pages - 1 && (
-              <span className="px-1 text-base-content/25 text-sm">…</span>
+              <span className="px-1 text-base-content/25 text-xs">…</span>
             )}
             <PageBtn n={pages} />
           </>
@@ -789,8 +791,8 @@ function UserSummary({ user, accentKey = 'neutral' }) {
       <img src={avatarSrc(user)} alt={user.name} width={36} height={36}
         className="w-9 h-9 rounded-full object-cover border border-base-300" />
       <div className="min-w-0">
-        <p className="text-sm font-bold text-base-content truncate">{user.name}</p>
-        <p className="text-xs text-base-content/40 truncate">{user.email}</p>
+        <p className="text-xs font-bold text-base-content truncate">{user.name}</p>
+        <p className="text-[10px] text-base-content/40 truncate">{user.email}</p>
       </div>
     </div>
   );
@@ -807,7 +809,7 @@ function RoleModal({ user, onConfirm, onClose, loading }) {
   return (
     <ModalShell title="Change Role" icon={ChevronDown} accentKey="primary" onClose={onClose}>
       <UserSummary user={user} />
-      <p className="text-xs text-base-content/45 mb-3">
+      <p className="text-[10px] text-base-content/45 mb-3">
         Only these roles can be assigned via this panel:
       </p>
 
@@ -822,7 +824,7 @@ function RoleModal({ user, onConfirm, onClose, loading }) {
               role="radio"
               aria-checked={active}
               onClick={() => setSelected(role)}
-              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border text-sm font-semibold transition-all
+              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border text-xs font-semibold transition-all
                 ${active
                   ? 'border-primary bg-primary/10 text-primary shadow-sm'
                   : 'border-base-300 text-base-content/65 hover:border-primary/40 hover:bg-base-200'
@@ -838,7 +840,7 @@ function RoleModal({ user, onConfirm, onClose, loading }) {
 
       {/* Warning if current role is restricted */}
       {!ALLOWED_ROLES.includes(user.role) && (
-        <div className="flex items-start gap-2 p-3 rounded-xl bg-warning/8 border border-warning/25 text-xs text-warning mb-4">
+        <div className="flex items-start gap-2 p-3 rounded-xl bg-warning/8 border border-warning/25 text-[10px] text-warning mb-4">
           <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
           <span>
             Current role <strong>{ROLE_META[user.role]?.label ?? user.role}</strong> is restricted —
@@ -849,13 +851,13 @@ function RoleModal({ user, onConfirm, onClose, loading }) {
 
       <div className="flex gap-2">
         <button onClick={onClose}
-          className="flex-1 h-10 rounded-xl border-2 border-primary text-primary text-sm font-bold hover:bg-primary hover:text-primary-content transition-all">
+          className="flex-1 h-10 rounded-xl border-2 border-primary text-primary text-xs font-bold hover:bg-primary hover:text-primary-content transition-all">
           Cancel
         </button>
         <button
           onClick={() => onConfirm(user._id, selected)}
           disabled={!changed || loading}
-          className="flex-1 h-10 rounded-xl bg-primary text-primary-content text-sm font-bold transition-all hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="flex-1 h-10 rounded-xl bg-primary text-primary-content text-xs font-bold transition-all hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {loading ? 'Saving…' : 'Update Role'}
         </button>
@@ -884,19 +886,19 @@ function SuspendModal({ user, onConfirm, onClose, loading }) {
 
       <div className="flex flex-col gap-3 mb-4">
         <div>
-          <label htmlFor="sr" className="block text-xs font-semibold text-base-content/55 mb-1.5">
+          <label htmlFor="sr" className="block text-[10px] font-semibold text-base-content/55 mb-1.5">
             Reason <span className="text-base-content/30">(optional)</span>
           </label>
           <textarea
             id="sr" value={reason} onChange={(e) => setReason(e.target.value)}
             placeholder="Violation of terms, abusive behaviour…"
             rows={3}
-            className="w-full rounded-xl border border-base-300 bg-base-200/60 px-4 py-2.5 text-sm text-base-content resize-none outline-none focus:ring-2 focus:ring-error/30 focus:border-error transition-all"
+            className="w-full rounded-xl border border-base-300 bg-base-200/60 px-4 py-2.5 text-xs text-base-content resize-none outline-none focus:ring-2 focus:ring-error/30 focus:border-error transition-all"
           />
         </div>
 
         <div>
-          <label htmlFor="sd" className="block text-xs font-semibold text-base-content/55 mb-1.5">
+          <label htmlFor="sd" className="block text-[10px] font-semibold text-base-content/55 mb-1.5">
             Duration — <span className="text-error font-bold">{durationDays} days</span>
           </label>
           <input
@@ -904,26 +906,26 @@ function SuspendModal({ user, onConfirm, onClose, loading }) {
             value={durationDays} onChange={(e) => setDuration(Number(e.target.value))}
             className="w-full h-1.5 cursor-pointer accent-error"
           />
-          <p className="text-xs text-base-content/35 mt-1">
+          <p className="text-[10px] text-base-content/35 mt-1">
             Auto-unblock on {fmtDate(unblockDate)}
           </p>
         </div>
       </div>
 
-      <div className="flex items-start gap-2 p-3 rounded-xl bg-error/8 border border-error/25 text-xs text-error mb-4">
+      <div className="flex items-start gap-2 p-3 rounded-xl bg-error/8 border border-error/25 text-[10px] text-error mb-4">
         <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
         <span>All active sessions and push tokens will be revoked immediately.</span>
       </div>
 
       <div className="flex gap-2">
         <button onClick={onClose}
-          className="flex-1 h-10 rounded-xl border-2 border-base-300 text-base-content/70 text-sm font-bold hover:bg-base-200 transition-all">
+          className="flex-1 h-10 rounded-xl border-2 border-base-300 text-base-content/70 text-xs font-bold hover:bg-base-200 transition-all">
           Cancel
         </button>
         <button
           onClick={() => onConfirm({ id: user._id, reason: reason || undefined, durationDays })}
           disabled={loading}
-          className="flex-1 h-10 rounded-xl bg-error text-error-content text-sm font-bold hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+          className="flex-1 h-10 rounded-xl bg-error text-error-content text-xs font-bold hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
         >
           {loading ? 'Suspending…' : 'Suspend User'}
         </button>
@@ -942,13 +944,13 @@ function UnblockModal({ user, onConfirm, onClose, loading }) {
       <UserSummary user={user} accentKey="success" />
 
       {user.blockReason && (
-        <div className="p-3 bg-base-200 rounded-xl mb-4 text-xs text-base-content/55">
+        <div className="p-3 bg-base-200 rounded-xl mb-4 text-[10px] text-base-content/55">
           <p className="font-semibold text-base-content/75 mb-0.5">Suspension reason:</p>
           <p>{user.blockReason}</p>
         </div>
       )}
 
-      <p className="text-sm text-base-content/65 mb-5">
+      <p className="text-xs text-base-content/65 mb-5">
         This will immediately restore full access to{' '}
         <strong className="text-base-content">{user.name}</strong>.
         They will receive an SMS and WhatsApp notification.
@@ -956,12 +958,12 @@ function UnblockModal({ user, onConfirm, onClose, loading }) {
 
       <div className="flex gap-2">
         <button onClick={onClose}
-          className="flex-1 h-10 rounded-xl border-2 border-base-300 text-base-content/70 text-sm font-bold hover:bg-base-200 transition-all">
+          className="flex-1 h-10 rounded-xl border-2 border-base-300 text-base-content/70 text-xs font-bold hover:bg-base-200 transition-all">
           Cancel
         </button>
         <button
           onClick={() => onConfirm(user._id)} disabled={loading}
-          className="flex-1 h-10 rounded-xl bg-success text-success-content text-sm font-bold hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+          className="flex-1 h-10 rounded-xl bg-success text-success-content text-xs font-bold hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
         >
           {loading ? 'Unblocking…' : 'Unblock User'}
         </button>
@@ -979,7 +981,7 @@ function ResetOtpModal({ user, onConfirm, onClose, loading }) {
     <ModalShell title="Reset OTP State" icon={RotateCcw} accentKey="warning" onClose={onClose}>
       <UserSummary user={user} accentKey="warning" />
 
-      <p className="text-sm text-base-content/65 mb-5">
+      <p className="text-xs text-base-content/65 mb-5">
         Clears any pending OTP and expiry from{' '}
         <strong className="text-base-content">{user.name}</strong>'s account,
         unblocking them from OTP-gated flows. Use when a user is stuck in a login loop.
@@ -987,12 +989,12 @@ function ResetOtpModal({ user, onConfirm, onClose, loading }) {
 
       <div className="flex gap-2">
         <button onClick={onClose}
-          className="flex-1 h-10 rounded-xl border-2 border-base-300 text-base-content/70 text-sm font-bold hover:bg-base-200 transition-all">
+          className="flex-1 h-10 rounded-xl border-2 border-base-300 text-base-content/70 text-xs font-bold hover:bg-base-200 transition-all">
           Cancel
         </button>
         <button
           onClick={() => onConfirm(user.email)} disabled={loading}
-          className="flex-1 h-10 rounded-xl bg-warning text-warning-content text-sm font-bold hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+          className="flex-1 h-10 rounded-xl bg-warning text-warning-content text-xs font-bold hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
         >
           {loading ? 'Clearing…' : 'Clear OTP'}
         </button>
@@ -1064,7 +1066,7 @@ export default function PermissionsPage() {
             >
               User Permissions
             </h1>
-            <p className="text-sm text-base-content/45 mt-0.5">
+            <p className="text-xs text-base-content/45 mt-0.5">
               Manage roles, suspend accounts and reset authentication states
             </p>
           </div>
@@ -1077,7 +1079,7 @@ export default function PermissionsPage() {
         {error && (
           <motion.div
             initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
-            className="flex items-center gap-2 p-3 mb-5 rounded-xl bg-error/10 border border-error/25 text-sm text-error"
+            className="flex items-center gap-2 p-3 mb-5 rounded-xl bg-error/10 border border-error/25 text-xs text-error"
           >
             <AlertTriangle className="w-4 h-4 flex-shrink-0" />
             {error}

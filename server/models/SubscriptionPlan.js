@@ -343,7 +343,7 @@ subscriptionPlanSchema.virtual('priceLabel').get(function () {
 });
 
 // ─── Pre-save: recompute custom plan total from option lineTotals ─────────────
-subscriptionPlanSchema.pre('save', function (next) {
+subscriptionPlanSchema.pre('save', async function () {
   if (
     this.planType === 'custom' &&
     Array.isArray(this.customOptions) &&
@@ -361,7 +361,7 @@ subscriptionPlanSchema.pre('save', function (next) {
     this.pricing.billingLabel = '/month';
     this.visibleToCustomerOnly = true; // always private
   }
-  next();
+ 
 });
 
 // ─── Indexes ──────────────────────────────────────────────────────────────────

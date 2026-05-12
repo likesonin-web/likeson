@@ -1,7 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 dotenv.config();
-
+import { Server } from 'socket.io';
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
@@ -16,6 +16,7 @@ import connectDB from "./config/DB.js";
 import "./config/passport.js";
 import redisClient from "./config/redis.js";
 import { initSocket } from "./services/socketService.js";
+import { initBookingSocket } from './services/bookingSocketService.js';
 // Import Routes
 import userRouter               from "./routes/userRoutes.js";
 import notificationRouter       from "./routes/notificationRoutes.js";
@@ -84,6 +85,11 @@ const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:5173",
 ].filter(Boolean);
+
+
+ 
+
+ 
 
 app.use(
   cors({
@@ -188,7 +194,7 @@ app.use('/api/availability', availabilityRouter);
 import booking1Routes from './routes/bookingrouterpaert1.js';
 app.use('/api/bookings', booking1Routes);
 import rideRequestRouter from './routes/rideRequestRouter.js';
-app.use('/api/rides', rideRequestRouter);
+app.use('/api/ride-requests', rideRequestRouter);
 /* ---------------- Logs ---------------- */
 
 app.use(morgan(NODE_ENV === "development" ? "dev" : "combined"));
@@ -234,13 +240,15 @@ app.use((err, req, res, next) => {
 
 /* ---------------- Boot Server ---------------- */
 
-export let io;
+ 
 
 async function startServer() {
   try {
     await connectDB();
 
-    io = initSocket(server);
+    // initSocket creates the ONE io instance — don't create another
+    const io = initSocket(server);   // server = createServer(app) from top of file
+    initBookingSocket(io);           // reuse same io
     app.set("io", io);
 
     server.listen(PORT, "0.0.0.0", () => {

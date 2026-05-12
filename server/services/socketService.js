@@ -139,19 +139,24 @@ async function socketAuthMiddleware(socket, next) {
 // MAIN INIT
 // ═════════════════════════════════════════════════════════════════════════════
 
+// socketService.js — change initSocket signature to accept options
 export function initSocket(httpServer) {
   const io = new Server(httpServer, {
     cors: {
-      origin:      process.env.FRONTEND_URL || '*',
-      methods:     ['GET', 'POST', 'PATCH', 'DELETE', 'PUT'],
+      origin: [
+        process.env.FRONTEND_URL,
+        "http://localhost:3000",
+        "http://localhost:5173",
+      ].filter(Boolean),
+      methods: ['GET', 'POST', 'PATCH', 'DELETE', 'PUT'],
       credentials: true,
     },
     pingTimeout:  60_000,
     pingInterval: 25_000,
   });
 
-  // ── Assign to module-level so getSocket() works ──────────────────────────
   _io = io;
+   
 
   io.use(socketAuthMiddleware);
 

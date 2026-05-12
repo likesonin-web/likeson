@@ -143,7 +143,7 @@ const initialState = {
     forgotPassword:      false,
     resetPassword:       false,
     googleCallback:      false,
-
+isLoggingOut: false,    
     // Profile
     profile:             false,
     updateProfile:       false,
@@ -1222,6 +1222,8 @@ const wipeAuthState = (state) => {
   state.referralValidation = null;
   state.adminUserCoins     = null;
   state.adminUserSessions  = null;
+  // NOTE: intentionally do NOT reset isLoggingOut here —
+  // it stays true until the user successfully logs in again
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1262,27 +1264,29 @@ const userSlice = createSlice({
      *
      * @param action.payload — the error code string from the server
      */
-    autoLogout: (state, action) => {
-      const code = action.payload ?? 'SESSION_EXPIRED';
+   autoLogout: (state, action) => {
+  // ── Guard: only fire once per session ─────────────────
+  if (state.isLoggingOut) return;   // ← swallow all duplicate calls
+  state.isLoggingOut = true;
+  // ──────────────────────────────────────────────────────
 
-      // Show a contextual toast based on the reason
-      const messages = {
-        TOKEN_EXPIRED:      'Your session has expired. Please log in again.',
-        TOKEN_INVALID:      'Invalid session. Please log in again.',
-        SESSION_REVOKED:    'You were signed out from another device.',
-        USER_NOT_FOUND:     'Your account no longer exists.',
-        ACCOUNT_BLOCKED:    'Your account has been suspended.',
-      };
+  const code = action.payload ?? 'SESSION_EXPIRED';
+  const messages = {
+    TOKEN_EXPIRED:   'Your session has expired. Please log in again.',
+    TOKEN_INVALID:   'Invalid session. Please log in again.',
+    SESSION_REVOKED: 'You were signed out from another device.',
+    USER_NOT_FOUND:  'Your account no longer exists.',
+    ACCOUNT_BLOCKED: 'Your account has been suspended.',
+  };
 
-      // Use setTimeout so the toast fires after the state update
-      setTimeout(() => {
-        toast.error(messages[code] ?? 'Session ended. Please log in again.');
-      }, 0);
+  setTimeout(() => {
+    toast.error(messages[code] ?? 'Session ended. Please log in again.');
+  }, 0);
 
-      wipeAuthState(state);
-      state.error = messages[code] ?? 'Session ended.';
-      storage.clearAuth();
-    },
+  wipeAuthState(state);
+  state.error = messages[code] ?? 'Session ended.';
+  storage.clearAuth();
+},
 
     /**
      * Patch user fields locally (e.g. WebSocket push or optimistic update).
@@ -1380,10 +1384,11 @@ const userSlice = createSlice({
           if (key) state.loaders[key] = false;
 
           // ── 1. AUTH: write token + base user ──────────────────────────────
-          if (AUTH_FULFILLED.has(action.type)) {
-            state.user  = action.payload?.user  ?? null;
-            state.token = action.payload?.token ?? null;
-          }
+         if (AUTH_FULFILLED.has(action.type)) {
+  state.user         = action.payload?.user  ?? null;
+  state.token        = action.payload?.token ?? null;
+  state.isLoggingOut = false;   // ← reset the guard on fresh login
+}
 
           // ── 2. PROFILE: full sync ─────────────────────────────────────────
           if (PROFILE_FULFILLED.has(action.type)) {

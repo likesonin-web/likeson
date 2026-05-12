@@ -1,6 +1,19 @@
- 
+/**
+ * bookingRouterShared.js — Likeson.in
+ *
+ * Single source of truth for all shared helpers, constants, and utilities
+ * used across bookingRouter1.js, bookingRouter2.js, and bookingSocketService.js
+ *
+ * FIXES vs previous version:
+ *  - calculateCanonicalRoute moved to top (ES module parse-order fix)
+ *  - resolveCareRideKmRate no longer double-calls resolveKmRate
+ *  - All exports at top-level (no dynamic import cycles for hot paths)
+ *  - computeRefundAmount signature consistent
+ *  - buildRidePayload returns status:'requested' always (callers override)
+ */
 
 import crypto   from 'crypto';
+import axios    from 'axios';
 import Razorpay from 'razorpay';
 
 // ── Model Exports ─────────────────────────────────────────────────────────────
@@ -24,10 +37,10 @@ export { default as Wallet }                from '../models/Wallet.js';
 export { default as PlatformPricingConfig } from '../models/PlatformPricingConfig.js';
 
 // ── Util / Service Exports ────────────────────────────────────────────────────
-export { default as sendEmail }              from '../utils/sendEmail.js';
-export { default as sendSms }               from '../services/Sendsms.js';
+export { default as sendEmail }             from '../utils/sendEmail.js';
+export { default as sendSms }              from '../services/Sendsms.js';
 export { generateBookingInvoicePdf }        from '../utils/bookingInvoiceGenerator.js';
-export { getBookingSocketService }          from '../services/bookingSocketService.js';
+export { getBookingSocketService }         from '../services/bookingSocketService.js';
 export { transactionalTemplate, otpTemplate } from '../utils/emailTemplates.js';
 export {
   rideBookedSms, driverAssignedSms, rideStartedSms, rideCompletedSms,
@@ -42,33 +55,26 @@ export const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
 
-/** Default per-km rate when no subscription plan active */
-export const DEFAULT_KM_RATE = 12; // ₹12/km
+export const DEFAULT_KM_RATE = 12; // ₹12/km fallback
 
-/** Ride status groups (match Ride model RIDE_STATUSES exactly) */
 export const RIDE_STATUSES_ACTIVE = [
   'driver_assigned', 'driver_accepted', 'driver_en_route',
   'driver_arrived',  'otp_verified',    'in_progress', 'at_stop',
 ];
 
-export const RADIUS_METERS = 100_000;
-// CARE-RIDE radius: only search within 30km for requesting a new ride
-export const CARE_RIDE_RADIUS_M = 30_000;   // 30 km
+export const RADIUS_METERS      = 100_000; // 100 km hospital/general search
+export const CARE_RIDE_RADIUS_M =  30_000; // 30 km care-ride driver search
+export const TRANSPORT_RADIUS_M = 100_000; // 100 km dispatch
 
-// Transport search radius for booking dispatch
-export const TRANSPORT_RADIUS_M = 100_000;  // 100 km (replaces RADIUS_METERS for dispatch)
-/**
- * CUSTOMER-FACING BOOKING TYPES
- * pharmacy + blood_bank removed — not available to customers directly.
- */
-// ✅ AFTER
 export const CUSTOMER_BOOKING_TYPES = [
   'full_care_ride',
   'doctor_consultation',
   'doctor_online',
-  'physiotherapist', // TODO: add route before re-enabling
+  'physiotherapist',
   'care_assistant',
   'diagnostic_center',
   'diagnostic_home',
@@ -76,22 +82,20 @@ export const CUSTOMER_BOOKING_TYPES = [
   'follow_up',
 ];
 
-// ── Basic Helpers ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// BASIC HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
 
 /** 6-digit numeric OTP */
 export const genOtp = () => crypto.randomInt(100_000, 999_999).toString();
 
-/**
- * Hash OTP for storage in Ride.pickupOtp (stored hashed, select:false).
- * Compare: hashOtp(submittedOtp) === ride.pickupOtp
- */
 export const hashOtp = (otp) =>
   crypto
     .createHmac('sha256', process.env.OTP_SECRET || 'likeson-otp-secret')
-    .update(String(otp))
+    .update(String(otp).trim())
     .digest('hex');
 
-/** Haversine km between two [lng, lat] pairs */
+/** Haversine km — [lng, lat] pairs */
 export const haversineKm = ([lng1, lat1], [lng2, lat2]) => {
   const R    = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -104,14 +108,21 @@ export const haversineKm = ([lng1, lat1], [lng2, lat2]) => {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-/** Create in-app + push notification */
+/** In-app + push notification — fire-and-forget */
+// In createNotification — add actionUrl + deepLink to Notification.create():
 export const createNotification = async ({
-  recipient, title, body, type, bookingId, priority = 'Medium',
+  recipient, title, body, type, bookingId,
+  priority = 'Medium', otp = undefined,
+  actionUrl = undefined,          // ADD
+  deepLink  = undefined,          // ADD
 }) => {
   const { default: Notification } = await import('../models/Notification.js');
   try {
     await Notification.create({
       recipient, title, body, type, priority,
+      ...(otp       ? { otp }       : {}),
+      ...(actionUrl ? { actionUrl } : {}),   // ADD
+      ...(deepLink  ? { deepLink }  : {}),   // ADD
       relatedEntityType: 'Booking',
       relatedEntityId:   bookingId,
       channels: [{ channel: 'InApp' }, { channel: 'Push' }],
@@ -119,23 +130,189 @@ export const createNotification = async ({
   } catch (e) { console.error('[createNotification]', e.message); }
 };
 
-// ── Hospital Helpers ──────────────────────────────────────────────────────────
+/**
+ * syncBookingStatusFromRide
+ * Single source of truth: ride status → booking status.
+ * Call after ANY Ride.status mutation (HTTP or socket).
+ */
+export const syncBookingStatusFromRide = async (bookingId, rideStatus, updatedBy) => {
+  const { default: BookingModel } = await import('../models/Booking.js');
+
+  const MAP = {
+    driver_assigned: 'confirmed',
+    driver_accepted: 'confirmed',
+    driver_en_route: 'confirmed',
+    driver_arrived:  'confirmed',
+    otp_verified:    'in_progress',
+    in_progress:     'in_progress',
+    at_stop:         'in_progress',
+    completed:       'completed',
+    // cancelled: intentionally omitted — single ride cancel ≠ booking cancel
+  };
+
+  const newStatus = MAP[rideStatus];
+  if (!newStatus) return null;
+
+  return BookingModel.findByIdAndUpdate(
+    bookingId,
+    { $set: { status: newStatus, updatedBy } },
+    { new: true }
+  ).select('_id status bookingCode').lean();
+};
+// ─────────────────────────────────────────────────────────────────────────────
+// CANONICAL ROUTE CALCULATOR
+// Must be defined before any function that calls it (ES module parse order).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const GMAPS_KEY = process.env.GOOGLE_MAPS_KEY;
 
 /**
- * Get all active verified hospitals.
- * Returns id, name, type, managementModel, address, location, contact,
- * specialties, facilities, operatingHours, rating, flags.
+ * calculateCanonicalRoute
  *
- * @param {object} [filters] - Optional: { city, hospitalType, managementModel }
+ * Call ONCE at ride creation. Result stored on:
+ *   RideTracking.expectedRoutePolyline  (locked, never recalculated)
+ *   Ride.estimatedDistanceKm            (locked)
+ *   Ride.estimatedDurationMin           (locked)
+ *
+ * ALL roles read from DB — no party recalculates — everyone sees same map route.
+ *
+ * @param {number[]} pickupCoords  [lng, lat]
+ * @param {number[]} dropoffCoords [lng, lat]
+ * @returns {Promise<{ distanceKm: number, durationMin: number, polyline: string|null }>}
  */
+export const calculateCanonicalRoute = async (pickupCoords, dropoffCoords) => {
+  const safePickup  = pickupCoords  || [80.648, 16.506];
+  const safeDropoff = dropoffCoords || [80.648, 16.506];
+
+  if (!GMAPS_KEY) {
+    const dist = haversineKm(safePickup, safeDropoff);
+    return { distanceKm: +dist.toFixed(2), durationMin: Math.round(dist * 3), polyline: null };
+  }
+
+  try {
+    const res = await axios.get('https://maps.googleapis.com/maps/api/directions/json', {
+      params: {
+        origin:      `${safePickup[1]},${safePickup[0]}`,
+        destination: `${safeDropoff[1]},${safeDropoff[0]}`,
+        mode:        'driving',
+        key:         GMAPS_KEY,
+      },
+      timeout: 8000,
+    });
+
+    const route = res.data?.routes?.[0];
+    if (!route) throw new Error('No route returned');
+
+    const leg = route.legs[0];
+    return {
+      distanceKm:  +(leg.distance.value / 1000).toFixed(2),
+      durationMin: Math.round(leg.duration.value / 60),
+      polyline:    route.overview_polyline.points, // encoded polyline — locked forever
+    };
+  } catch (err) {
+    console.error('[calculateCanonicalRoute] GMaps fail → haversine fallback:', err.message);
+    const dist = haversineKm(safePickup, safeDropoff);
+    return { distanceKm: +dist.toFixed(2), durationMin: Math.round(dist * 3), polyline: null };
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RIDE PAYLOAD BUILDER
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const buildRidePayload = ({
+  bookingId,
+  rideType,
+  vehicleClass,
+  pickupCoords,
+  pickupAddress  = '',
+  pickupCity     = '',
+  dropoffCoords,
+  dropoffAddress = '',
+  dropoffCity    = '',
+  scheduledPickupAt,
+  isReturnRide   = false,
+  createdBy,
+}) => ({
+  booking:   bookingId,
+  rideType,
+  vehicleClass,
+  isReturnRide,
+  pickup:  { type: 'Point', coordinates: pickupCoords,  address: pickupAddress,  city: pickupCity  },
+  dropoff: { type: 'Point', coordinates: dropoffCoords, address: dropoffAddress, city: dropoffCity },
+  scheduledPickupAt,
+  status:    'requested',   // callers override (e.g. 'driver_assigned', 'searching')
+  createdBy,
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// createAndLinkRide — SHARED helper (single definition, used by both routers)
+//
+// Creates Ride + RideTracking with LOCKED canonical route in one atomic sequence.
+// Returns { ride, otp, distanceKm, durationMin, polyline }
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const createAndLinkRide = async (booking, overrides = {}) => {
+  const { default: Ride }         = await import('../models/Ride.js');
+  const { default: RideTracking } = await import('../models/RideTracking.js');
+  const { default: Booking }      = await import('../models/Booking.js');
+
+  const coords = {
+    pickupCoords:   booking.patientLocation?.coordinates     || [80.648, 16.506],
+    pickupAddress:  booking.patientLocation?.address         || '',
+    pickupCity:     booking.patientLocation?.city            || '',
+    dropoffCoords:  booking.destinationLocation?.coordinates || [80.648, 16.506],
+    dropoffAddress: booking.destinationLocation?.address     || '',
+    dropoffCity:    booking.destinationLocation?.city        || '',
+  };
+
+  const otp = genOtp();
+
+  const { distanceKm, durationMin, polyline } = await calculateCanonicalRoute(
+    coords.pickupCoords,
+    coords.dropoffCoords,
+  );
+
+  const ride = await Ride.create({
+    ...buildRidePayload({
+      bookingId:         booking._id,
+      rideType:          'patient',
+      vehicleClass:      'four_wheeler',
+      scheduledPickupAt: booking.scheduledAt,
+      ...coords,
+    }),
+    estimatedDistanceKm:  distanceKm,
+    estimatedDurationMin: durationMin,
+   pickupOtp: hashOtp(otp),
+    ...overrides,
+  });
+
+  const tracking = await RideTracking.create({
+    ride:                  ride._id,
+    booking:               booking._id,
+    expectedRoutePolyline: polyline,    // LOCKED — never overwritten after this
+  });
+
+  await Ride.findByIdAndUpdate(ride._id, { $set: { trackingId: tracking._id } });
+
+  await Booking.findByIdAndUpdate(booking._id, {
+    $push: { rides: ride._id },
+    $set:  { primaryRide: ride._id, status: 'confirmed' },
+  });
+
+  return { ride, otp, distanceKm, durationMin, polyline };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOSPITAL HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const getHospitals = async (filters = {}) => {
   const { default: Hospital } = await import('../models/Hospital.js');
-
   const query = { isActive: true, isVerified: true };
-  if (filters.city)             query['address.city']    = { $regex: filters.city, $options: 'i' };
-  if (filters.hospitalType)     query.hospitalType        = filters.hospitalType;
-  if (filters.managementModel)  query.managementModel     = filters.managementModel;
-
+  if (filters.city)            query['address.city']   = { $regex: filters.city, $options: 'i' };
+  if (filters.hospitalType)    query.hospitalType       = filters.hospitalType;
+  if (filters.managementModel) query.managementModel    = filters.managementModel;
   return Hospital.find(query)
     .select(
       'name slug hospitalType managementModel address location contact ' +
@@ -146,15 +323,6 @@ export const getHospitals = async (filters = {}) => {
     .lean();
 };
 
-/**
- * Get doctors linked to a specific hospital with their specialization,
- * fees (resolved by management model), availability, and rating.
- *
- * For hospital-manager hospitals → fees from hospital.consultationPricing
- * For doctor-owner hospitals     → fees from DoctorProfile.fees
- *
- * @param {string} hospitalId - Hospital._id
- */
 export const getDoctorsByHospital = async (hospitalId) => {
   const { default: Hospital }      = await import('../models/Hospital.js');
   const { default: DoctorProfile } = await import('../models/DoctorProfile.js');
@@ -162,9 +330,8 @@ export const getDoctorsByHospital = async (hospitalId) => {
   const hospital = await Hospital.findById(hospitalId)
     .select('managementModel consultationPricing linkedDoctors isActive isVerified')
     .lean();
-
-  if (!hospital) throw new Error('Hospital not found');
-  if (!hospital.isActive || !hospital.isVerified) throw new Error('Hospital not operational');
+  if (!hospital)                                    throw new Error('Hospital not found');
+  if (!hospital.isActive || !hospital.isVerified)   throw new Error('Hospital not operational');
 
   const doctors = await DoctorProfile.find({
     _id:               { $in: hospital.linkedDoctors },
@@ -179,61 +346,37 @@ export const getDoctorsByHospital = async (hospitalId) => {
     )
     .lean();
 
-  // Resolve effective fees per doctor
   const isHospitalManaged = hospital.managementModel === 'hospital-manager';
 
   return doctors.map((doc) => {
+    const cp = hospital.consultationPricing || {};
     const effectiveFees = isHospitalManaged
       ? {
-          inPersonFee:             hospital.consultationPricing?.inPersonFee  ?? 0,
-          videoFee:                hospital.consultationPricing?.videoFee     ?? 0,
-          homeVisitFee:            hospital.consultationPricing?.homeVisitFee ?? 0,
-          followUpFee:             hospital.consultationPricing?.followUpFee  ?? 0,
-          followUpDiscountPercent: hospital.consultationPricing?.followUpDiscountPercent ?? 0,
-          followUpValidDays:       hospital.consultationPricing?.followUpValidDays       ?? 7,
+          inPersonFee:             cp.inPersonFee  ?? 0,
+          videoFee:                cp.videoFee     ?? 0,
+          homeVisitFee:            cp.homeVisitFee ?? 0,
+          followUpFee:             cp.followUpFee  ?? 0,
+          followUpDiscountPercent: cp.followUpDiscountPercent ?? 0,
+          followUpValidDays:       cp.followUpValidDays       ?? 7,
           source: 'hospital',
         }
       : {
-          inPersonFee:             doc.fees?.inPersonFee              ?? 0,
-          videoFee:                doc.fees?.videoFee                 ?? 0,
-          homeVisitFee:            doc.fees?.homeVisitFee             ?? 0,
-          followUpFee:             doc.fees?.followUpFee              ?? 0,
-          followUpDiscountPercent: doc.fees?.followUpDiscountPercent  ?? 0,
-          followUpValidDays:       doc.fees?.followUpValidDays        ?? 7,
+          inPersonFee:             doc.fees?.inPersonFee             ?? 0,
+          videoFee:                doc.fees?.videoFee                ?? 0,
+          homeVisitFee:            doc.fees?.homeVisitFee            ?? 0,
+          followUpFee:             doc.fees?.followUpFee             ?? 0,
+          followUpDiscountPercent: doc.fees?.followUpDiscountPercent ?? 0,
+          followUpValidDays:       doc.fees?.followUpValidDays       ?? 7,
           source: 'doctor',
         };
-
-    return {
-      ...doc,
-      effectiveFees,
-      hospitalManaged: isHospitalManaged,
-    };
+    return { ...doc, effectiveFees, hospitalManaged: isHospitalManaged };
   });
 };
 
-// ADD new export below resolveKmRate
-export const resolveCareRideKmRate = async (userId) => {
-  // Same as resolveKmRate but uses care_ride rate from config if exists
-  const { default: PlatformPricingConfig } = await import('../models/PlatformPricingConfig.js');
-  const config = await PlatformPricingConfig.getGlobal();
-  
-  // Try user subscription first
-  const { ratePerKm, source } = await resolveKmRate(userId);
-  if (source === 'subscription') return { ratePerKm, source };
+// ─────────────────────────────────────────────────────────────────────────────
+// AVAILABILITY HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
 
-  // Fall back to config care_ride rate or 21 default
-  const careRate = config?.transport?.careRideRatePerKm ?? 21;
-  return { ratePerKm: careRate, source: 'care_ride_default' };
-};
-
-// ── Availability Helpers ──────────────────────────────────────────────────────
-
-/**
- * Check hospital operating hours for a given scheduledAt datetime.
- *
- * @param {object} hospital - Lean hospital doc with operatingHours
- * @param {Date}   scheduledAt
- */
 const checkHospitalHours = (hospital, scheduledAt) => {
   const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   const scheduled = new Date(scheduledAt);
@@ -241,40 +384,30 @@ const checkHospitalHours = (hospital, scheduledAt) => {
   const reqMins   = scheduled.getHours() * 60 + scheduled.getMinutes();
 
   if (hospital.is24x7) return { available: true };
-
   const opDay = hospital.operatingHours?.find(h => h.day === dayName);
-  if (!opDay)        return { available: false, reason: `No schedule found for ${dayName}` };
-  if (opDay.isClosed) return { available: false, reason: `Hospital closed on ${dayName}` };
-  if (opDay.is24Hours) return { available: true };
+  if (!opDay)           return { available: false, reason: `No schedule for ${dayName}` };
+  if (opDay.isClosed)   return { available: false, reason: `Closed on ${dayName}` };
+  if (opDay.is24Hours)  return { available: true };
 
   const [oh, om] = (opDay.openTime  || '00:00').split(':').map(Number);
   const [ch, cm] = (opDay.closeTime || '23:59').split(':').map(Number);
-  const openMins  = oh * 60 + om;
-  const closeMins = ch * 60 + cm;
-
-  if (reqMins < openMins || reqMins >= closeMins) {
-    return { available: false, reason: `Hospital open ${opDay.openTime}–${opDay.closeTime} on ${dayName}` };
+  if (reqMins < oh * 60 + om || reqMins >= ch * 60 + cm) {
+    return { available: false, reason: `Open ${opDay.openTime}–${opDay.closeTime} on ${dayName}` };
   }
   return { available: true };
 };
 
-/**
- * Check doctor slot availability for a scheduledAt datetime.
- *
- * @param {string} doctorProfileId
- * @param {Date}   scheduledAt
- */
 export const checkDoctorAvailability = async (doctorProfileId, scheduledAt) => {
-  const { default: DoctorProfile } = await import('../models/DoctorProfile.js');
-  const { default: Hospital }      = await import('../models/Hospital.js');
+  const { default: DoctorProfile }    = await import('../models/DoctorProfile.js');
+  const { default: Hospital }         = await import('../models/Hospital.js');
+  const { default: OutPatientRecord } = await import('../models/OutPatientRecord.js');
 
   const doctor = await DoctorProfile.findById(doctorProfileId)
     .select('weeklyAvailability primaryHospital partnershipStatus isActive')
     .lean();
-
   if (!doctor) return { available: false, reason: 'Doctor not found' };
   if (doctor.partnershipStatus !== 'Active' || !doctor.isActive)
-    return { available: false, reason: 'Doctor not currently active' };
+    return { available: false, reason: 'Doctor not active' };
 
   const dayNames  = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   const scheduled = new Date(scheduledAt);
@@ -282,21 +415,48 @@ export const checkDoctorAvailability = async (doctorProfileId, scheduledAt) => {
   const reqMins   = scheduled.getHours() * 60 + scheduled.getMinutes();
 
   const dayEntry = doctor.weeklyAvailability?.find(d => d.day === dayName);
-  if (!dayEntry?.isAvailable) return { available: false, reason: `Doctor unavailable on ${dayName}` };
+  if (!dayEntry?.isAvailable) return { available: false, reason: `Unavailable on ${dayName}` };
 
-  const hasSlot = dayEntry.slots?.some(s => {
+  const matchedSlot = dayEntry.slots?.find(s => {
     if (!s.isActive) return false;
     const [sh, sm] = s.startTime.split(':').map(Number);
     const [eh, em] = s.endTime.split(':').map(Number);
     return reqMins >= sh * 60 + sm && reqMins < eh * 60 + em;
   });
-  if (!hasSlot) return { available: false, reason: `No slot at that time on ${dayName}` };
+  if (!matchedSlot) return { available: false, reason: `No slot at that time on ${dayName}` };
 
-  // If doctor belongs to a hospital-managed hospital, also check hospital hours
+  const CONSULT_DURATION_MIN = 20;
+  const slotDate = new Date(scheduled);
+  const [slotSh, slotSm] = matchedSlot.startTime.split(':').map(Number);
+  const [slotEh, slotEm] = matchedSlot.endTime.split(':').map(Number);
+  const slotStart = new Date(new Date(slotDate).setHours(slotSh, slotSm, 0, 0));
+  const slotEnd   = new Date(new Date(slotDate).setHours(slotEh, slotEm, 0, 0));
+
+  const existingInSlot = await OutPatientRecord.find({
+    doctor:      doctorProfileId,
+    status:      { $in: ['scheduled', 'in_progress'] },
+    scheduledAt: { $gte: slotStart, $lt: slotEnd },
+  }).select('scheduledAt').lean();
+
+  if (existingInSlot.length >= matchedSlot.maxPatients) {
+    const times = existingInSlot.map(r => new Date(r.scheduledAt).getTime()).sort((a,b) => b - a);
+    const next  = new Date(times[0] + CONSULT_DURATION_MIN * 60 * 1000);
+    const fmt   = next.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    return { available: false, reason: `Slot full. Next available: ${fmt}` };
+  }
+
+  const overlap = existingInSlot.find(r =>
+    Math.abs(new Date(r.scheduledAt).getTime() - scheduled.getTime()) < CONSULT_DURATION_MIN * 60 * 1000
+  );
+  if (overlap) {
+    const next = new Date(new Date(overlap.scheduledAt).getTime() + CONSULT_DURATION_MIN * 60 * 1000);
+    const fmt  = next.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    return { available: false, reason: `Already booked. Next slot: ${fmt}` };
+  }
+
   if (doctor.primaryHospital) {
     const hospital = await Hospital.findById(doctor.primaryHospital)
-      .select('managementModel operatingHours is24x7 isActive isVerified')
-      .lean();
+      .select('managementModel operatingHours is24x7 isActive isVerified').lean();
     if (hospital?.managementModel === 'hospital-manager') {
       if (!hospital.isActive || !hospital.isVerified)
         return { available: false, reason: 'Hospital not operational' };
@@ -308,55 +468,30 @@ export const checkDoctorAvailability = async (doctorProfileId, scheduledAt) => {
   return { available: true };
 };
 
-/**
- * Combined availability check: hospital hours + doctor slot.
- * If hospitalId provided: validate hospital hours first.
- * If doctorId provided: validate doctor slot.
- *
- * @param {object} params
- * @param {string} [params.hospitalId]
- * @param {string} [params.doctorId]
- * @param {Date}   params.scheduledAt
- */
 export const checkHospitalOrDoctorAvailability = async ({ hospitalId, doctorId, scheduledAt }) => {
   const { default: Hospital } = await import('../models/Hospital.js');
-
-  // Step 1: hospital hours
   if (hospitalId) {
     const hospital = await Hospital.findById(hospitalId)
-      .select('isActive isVerified operatingHours is24x7 managementModel')
-      .lean();
-    if (!hospital)                          return { available: false, reason: 'Hospital not found' };
+      .select('isActive isVerified operatingHours is24x7 managementModel').lean();
+    if (!hospital)                                  return { available: false, reason: 'Hospital not found' };
     if (!hospital.isActive || !hospital.isVerified) return { available: false, reason: 'Hospital not operational' };
-    const hospCheck = checkHospitalHours(hospital, scheduledAt);
-    if (!hospCheck.available) return hospCheck;
+    const check = checkHospitalHours(hospital, scheduledAt);
+    if (!check.available) return check;
   }
-
-  // Step 2: doctor slot
-  if (doctorId) {
-    return checkDoctorAvailability(doctorId, scheduledAt);
-  }
-
+  if (doctorId) return checkDoctorAvailability(doctorId, scheduledAt);
   return { available: true };
 };
 
-// ── Transport / Distance Helpers ──────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// TRANSPORT / FARE HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Resolve per-km rate for this customer.
- * Priority: active subscription plan transport rate → 12₹ default.
- *
- * @param {string} userId
- * @returns {Promise<{ ratePerKm: number, source: 'subscription'|'default' }>}
- */
- 
 export const resolveKmRate = async (userId) => {
-  const { default: UserSubscription } = await import('../models/UserSubscription.js');
-  const { default: SubscriptionPlan } = await import('../models/SubscriptionPlan.js');
+  const { default: UserSubscription }      = await import('../models/UserSubscription.js');
+  const { default: SubscriptionPlan }      = await import('../models/SubscriptionPlan.js');
   const { default: PlatformPricingConfig } = await import('../models/PlatformPricingConfig.js');
 
-  // Get platform default rate from config (not hardcoded constant)
-  const config = await PlatformPricingConfig.getGlobal();
+  const config     = await PlatformPricingConfig.getGlobal();
   const configRate = config?.transport?.defaultRatePerKm ?? DEFAULT_KM_RATE;
 
   const sub = await UserSubscription.findOne({
@@ -368,38 +503,34 @@ export const resolveKmRate = async (userId) => {
   if (!sub) return { ratePerKm: configRate, source: 'default' };
 
   const planRate = sub.limits?.transportRatePerKm;
-  if (planRate != null && planRate > 0) {
-    return { ratePerKm: planRate, source: 'subscription' };
-  }
+  if (planRate != null && planRate > 0) return { ratePerKm: planRate, source: 'subscription' };
 
   if (sub.plan) {
-    const plan = await SubscriptionPlan.findById(sub.plan)
-      .select('transport planType')
-      .lean();
-    if (plan?.transport?.ratePerKm != null && plan.transport.ratePerKm > 0) {
-      return { ratePerKm: plan.transport.ratePerKm, source: 'subscription' };
-    }
+    const plan = await SubscriptionPlan.findById(sub.plan).select('transport').lean();
+    if (plan?.transport?.ratePerKm > 0) return { ratePerKm: plan.transport.ratePerKm, source: 'subscription' };
   }
 
   return { ratePerKm: configRate, source: 'default' };
 };
 
 /**
- * Compute transport fare for a single leg.
- *
- * @param {object} params
- * @param {number} params.distanceKm
- * @param {number} params.ratePerKm
- * @param {number} [params.waitingMinutes=0]    - billable waiting time
- * @param {number} [params.freeWaitingMinutes=5]
- * @param {number} [params.waitingRatePerMin=2]
- * @param {number} [params.baseFare=0]
- * @param {boolean}[params.isNight=false]
- * @param {number} [params.nightSurchargeMultiplier=1.2]
- * @param {boolean}[params.isWheelchair=false]
- * @param {number} [params.wheelchairSurcharge=0]
- * @returns {{ distanceFare, waitingCharge, nightSurcharge, wheelchairSurcharge, totalFare }}
+ * resolveCareRideKmRate
+ * FIX: was calling resolveKmRate then ignoring result, fetching config again.
+ * Now: check subscription first, fallback to config care rate.
  */
+export const resolveCareRideKmRate = async (userId) => {
+  const { default: PlatformPricingConfig } = await import('../models/PlatformPricingConfig.js');
+
+  // Check subscription rate first
+  const { ratePerKm, source } = await resolveKmRate(userId);
+  if (source === 'subscription') return { ratePerKm, source };
+
+  // Fall back to config care-ride rate
+  const config   = await PlatformPricingConfig.getGlobal();
+  const careRate = config?.transport?.careRideRatePerKm ?? 21;
+  return { ratePerKm: careRate, source: 'care_ride_config' };
+};
+
 export const computeLegFare = ({
   distanceKm,
   ratePerKm,
@@ -419,35 +550,9 @@ export const computeLegFare = ({
   const nightSurcharge = isNight ? +(subtotal * (nightSurchargeMultiplier - 1)).toFixed(2) : 0;
   const wheelchairFee  = isWheelchair ? wheelchairSurchargeAmount : 0;
   const totalFare      = +(subtotal + nightSurcharge + wheelchairFee).toFixed(2);
-
   return { distanceFare, waitingCharge, nightSurcharge, wheelchairSurcharge: wheelchairFee, totalFare };
 };
 
-/**
- * Resolve full transport fare breakdown for a booking.
- *
- * full_care_ride:
- *   - Outbound leg: patientLocation → hospital  (always)
- *   - Return  leg:  hospital → patientLocation   (optional, customer chooses)
- *
- * patient_transport:
- *   - Outbound leg: pickup → dropoff             (always)
- *   - Return  leg:  dropoff → pickup             (optional)
- *   - Waiting charge applies if customer requests waiting
- *
- * @param {object} params
- * @param {string} params.bookingType
- * @param {number[]} params.pickupCoords     - [lng, lat]
- * @param {number[]} params.dropoffCoords    - [lng, lat]
- * @param {number}   params.ratePerKm
- * @param {boolean}  [params.includeReturn=false]
- * @param {number}   [params.waitingMinutes=0]    - patient_transport: waiting at destination
- * @param {number}   [params.freeWaitingMinutes=5]
- * @param {number}   [params.waitingRatePerMin=2]
- * @param {boolean}  [params.isNight=false]
- * @param {boolean}  [params.isWheelchair=false]
- * @param {number}   [params.wheelchairSurchargeAmount=0]
- */
 export const resolveTransportFare = ({
   bookingType,
   pickupCoords,
@@ -462,72 +567,28 @@ export const resolveTransportFare = ({
   wheelchairSurchargeAmount = 0,
 }) => {
   const distanceKm = haversineKm(pickupCoords, dropoffCoords);
-
-  const legParams = {
-    distanceKm,
-    ratePerKm,
-    isNight,
-    isWheelchair,
-    wheelchairSurchargeAmount,
-    freeWaitingMinutes,
-    waitingRatePerMin,
-  };
-
-  // Outbound leg — waiting only applies to patient_transport
-  const outbound = computeLegFare({
-    ...legParams,
-    waitingMinutes: bookingType === 'patient_transport' ? waitingMinutes : 0,
-  });
-
-  let returnLeg = null;
-  if (includeReturn) {
-    // Return: same distance, no waiting
-    returnLeg = computeLegFare({ ...legParams, waitingMinutes: 0 });
-  }
-
-  const totalTransportFee = +(
-    outbound.totalFare + (returnLeg?.totalFare ?? 0)
-  ).toFixed(2);
-
-  return {
-    distanceKm:         +distanceKm.toFixed(2),
-    ratePerKm,
-    outbound,
-    returnLeg,
-    includeReturn,
-    totalTransportFee,
-  };
+  const legParams  = { distanceKm, ratePerKm, isNight, isWheelchair, wheelchairSurchargeAmount, freeWaitingMinutes, waitingRatePerMin };
+  const outbound   = computeLegFare({ ...legParams, waitingMinutes: bookingType === 'patient_transport' ? waitingMinutes : 0 });
+  const returnLeg  = includeReturn ? computeLegFare({ ...legParams, waitingMinutes: 0 }) : null;
+  return { distanceKm: +distanceKm.toFixed(2), ratePerKm, outbound, returnLeg, includeReturn, totalTransportFee: +(outbound.totalFare + (returnLeg?.totalFare ?? 0)).toFixed(2) };
 };
 
-// ── Care Assistant Helpers ────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// CARE ASSISTANT HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Auto-assign nearest available, verified care assistant.
- * Customer does NOT select — system assigns automatically.
- *
- * @param {object} params
- * @param {number[]} params.patientCoords  - [lng, lat]
- * @param {string}   params.city
- * @param {number}   [params.maxRadiusKm=20]
- * @returns {Promise<object|null>} CareAssistantProfile lean doc or null
- */
-export const autoAssignCareAssistant = async ({ patientCoords, city, maxRadiusKm = 20 }) => {
+export const autoAssignCareAssistant = async ({ patientCoords, maxRadiusKm = 20 }) => {
   const { default: CareAssistantProfile } = await import('../models/CareAssistantProfile.js');
-
   const [lng, lat] = patientCoords;
-
   const candidates = await CareAssistantProfile.find({
-    isActive:               true,
-    isBlocked:              false,
-    status:                 'Available',
-    'kyc.verificationStatus': 'Verified',
-    'verification.isVerified': true,
-    'availability.isOnline': true,
+    isActive:                   true,
+    isBlocked:                  false,
+    status:                     'Available',
+    'kyc.verificationStatus':   'Verified',
+    'verification.isVerified':  true,
+    'availability.isOnline':    true,
     location: {
-      $near: {
-        $geometry:    { type: 'Point', coordinates: [lng, lat] },
-        $maxDistance: maxRadiusKm * 1000,
-      },
+      $near: { $geometry: { type: 'Point', coordinates: [lng, lat] }, $maxDistance: maxRadiusKm * 1000 },
     },
   })
     .select('user fullName photoUrl phone performance.averageRating location specializations')
@@ -535,84 +596,45 @@ export const autoAssignCareAssistant = async ({ patientCoords, city, maxRadiusKm
     .lean();
 
   if (!candidates.length) return null;
-
-  // Pick highest rated among nearest
   candidates.sort((a, b) => (b.performance?.averageRating ?? 0) - (a.performance?.averageRating ?? 0));
   return candidates[0];
 };
 
-// ── Follow-Up Helpers ─────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// FOLLOW-UP HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Check follow-up eligibility.
- *
- * STRICT RULE:
- *   - Must be same patient + same doctor + same hospital
- *   - If doctor is hospital-managed: consultation must have been at THAT hospital
- *   - If doctor-owner: hospital check optional but doctor must match
- *   - followUpExpiry must be in future
- *   - isFollowUp must be false (original consultation, not another follow-up)
- *
- * @param {object} params
- * @param {string} params.customerId
- * @param {string} params.doctorId        - DoctorProfile._id
- * @param {string} [params.hospitalId]    - Hospital._id (required if hospital-managed doctor)
- */
 export const checkFollowUpEligibility = async ({ customerId, doctorId, hospitalId }) => {
   const { default: OutPatientRecord } = await import('../models/OutPatientRecord.js');
   const { default: DoctorProfile }    = await import('../models/DoctorProfile.js');
   const { default: Hospital }         = await import('../models/Hospital.js');
 
-  // Determine if doctor is hospital-managed
   const doctor = await DoctorProfile.findById(doctorId)
-    .select('primaryHospital partnershipStatus isActive')
-    .lean();
-
-  if (!doctor || doctor.partnershipStatus !== 'Active' || !doctor.isActive) {
+    .select('primaryHospital partnershipStatus isActive').lean();
+  if (!doctor || doctor.partnershipStatus !== 'Active' || !doctor.isActive)
     return { isEligible: false, reason: 'Doctor not active' };
-  }
 
-  // For hospital-managed doctors: hospitalId is REQUIRED and must match primaryHospital
   if (doctor.primaryHospital) {
     const hospital = await Hospital.findById(doctor.primaryHospital)
-      .select('managementModel isActive isVerified')
-      .lean();
-
+      .select('managementModel isActive isVerified').lean();
     if (hospital?.managementModel === 'hospital-manager') {
-      if (!hospitalId) {
-        return { isEligible: false, reason: 'Hospital ID required for this doctor' };
-      }
-      if (hospitalId.toString() !== doctor.primaryHospital.toString()) {
-        return {
-          isEligible: false,
-          reason: 'Follow-up must be at the same hospital as original consultation',
-        };
-      }
+      if (!hospitalId) return { isEligible: false, reason: 'Hospital ID required for this doctor' };
+      if (hospitalId.toString() !== doctor.primaryHospital.toString())
+        return { isEligible: false, reason: 'Follow-up must be at same hospital' };
     }
   }
 
-  // Find a valid parent OP
   const query = {
     patient:        customerId,
     doctor:         doctorId,
     isFollowUp:     false,
-    status: { $in: ['scheduled', 'in_progress', 'completed'] },
+    status:         { $in: ['scheduled', 'in_progress', 'completed'] },
     followUpExpiry: { $gt: new Date() },
   };
-
-  // Strict hospital match if provided
   if (hospitalId) query.hospital = hospitalId;
-    query.hospital = hospitalId ?? null;
-  const recentOp = await OutPatientRecord.findOne(query)
-    .sort({ createdAt: -1 })
-    .lean();
 
-  if (!recentOp) {
-    return {
-      isEligible: false,
-      reason: 'No valid original consultation found for follow-up at this doctor/hospital within the valid window',
-    };
-  }
+  const recentOp = await OutPatientRecord.findOne(query).sort({ createdAt: -1 }).lean();
+  if (!recentOp) return { isEligible: false, reason: 'No valid original consultation found for follow-up' };
 
   return {
     isEligible:     true,
@@ -620,88 +642,67 @@ export const checkFollowUpEligibility = async ({ customerId, doctorId, hospitalI
     followUpFee:    recentOp.followUpFee || 0,
     parentOpNumber: recentOp.opNumber,
     followUpExpiry: recentOp.followUpExpiry,
-    daysRemaining: Math.ceil((new Date(recentOp.followUpExpiry) - new Date()) / (1000 * 60 * 60 * 24)),
+    daysRemaining:  Math.ceil((new Date(recentOp.followUpExpiry) - new Date()) / (1000 * 60 * 60 * 24)),
   };
 };
 
-// ── Subscription Helpers ──────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// SUBSCRIPTION HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Check active subscription consultation allowance.
- * Returns remaining count and whether it covers next consultation.
- *
- * @param {string} userId
- */
 export const checkSubscriptionConsultation = async (userId) => {
   const { default: UserSubscription } = await import('../models/UserSubscription.js');
-
   const sub = await UserSubscription.findOne({
-    user:       userId,
-    status:     { $in: ['Active', 'Trial'] },
-    expiryDate: { $gt: new Date() },
+    user: userId, status: { $in: ['Active', 'Trial'] }, expiryDate: { $gt: new Date() },
   }).lean();
 
   if (!sub) return { allowed: false, sub: null, remaining: 0, isFree: false, reason: 'No active subscription' };
 
   const limit = sub.limits?.consultationsPerMonth ?? 0;
-  if (limit === 0) return { allowed: false, sub, remaining: 0, isFree: false, reason: 'No consultation quota in plan' };
+  if (limit === 0) return { allowed: false, sub, remaining: 0, isFree: false, reason: 'No consultation quota' };
 
-  const now      = new Date();
-  const curMonth = now.getMonth() + 1;
-  const curYear  = now.getFullYear();
-  const usage    = sub.usageHistory?.find(u => u.month === curMonth && u.year === curYear);
-  const used     = usage?.consultationsUsed ?? 0;
+  const now = new Date();
+  const usage = sub.usageHistory?.find(u => u.month === now.getMonth() + 1 && u.year === now.getFullYear());
+  const used  = usage?.consultationsUsed ?? 0;
 
   if (limit === -1) return { allowed: true, sub, remaining: Infinity, isFree: true, reason: 'Unlimited' };
   if (used >= limit) return { allowed: false, sub, remaining: 0, isFree: false, reason: `Monthly quota exhausted (${used}/${limit})` };
-
-  return { allowed: true, sub, remaining: limit - used, isFree: true, reason: `${limit - used} consultations remaining` };
+  return { allowed: true, sub, remaining: limit - used, isFree: true, reason: `${limit - used} remaining` };
 };
 
-/** Increment subscription usage field (e.g. 'consultationsUsed') */
 export const incrementSubscriptionUsage = async (subId, field) => {
   const { default: UserSubscription } = await import('../models/UserSubscription.js');
-  const now      = new Date();
-  const curMonth = now.getMonth() + 1;
-  const curYear  = now.getFullYear();
-  const updated  = await UserSubscription.findOneAndUpdate(
-    { _id: subId, 'usageHistory.month': curMonth, 'usageHistory.year': curYear },
+  const now = new Date();
+  const updated = await UserSubscription.findOneAndUpdate(
+    { _id: subId, 'usageHistory.month': now.getMonth() + 1, 'usageHistory.year': now.getFullYear() },
     { $inc: { [`usageHistory.$.${field}`]: 1 } }
   );
   if (!updated) {
     await UserSubscription.findByIdAndUpdate(subId, {
-      $push: { usageHistory: { month: curMonth, year: curYear, [field]: 1 } },
+      $push: { usageHistory: { month: now.getMonth() + 1, year: now.getFullYear(), [field]: 1 } },
     });
   }
 };
 
-/** Decrement subscription usage field on booking cancellation */
 export const decrementSubscriptionUsage = async (subId, field) => {
   const { default: UserSubscription } = await import('../models/UserSubscription.js');
-  const now      = new Date();
-  const curMonth = now.getMonth() + 1;
-  const curYear  = now.getFullYear();
+  const now = new Date();
   await UserSubscription.findOneAndUpdate(
-    { _id: subId, 'usageHistory.month': curMonth, 'usageHistory.year': curYear },
+    { _id: subId, 'usageHistory.month': now.getMonth() + 1, 'usageHistory.year': now.getFullYear() },
     { $inc: { [`usageHistory.$.${field}`]: -1 } }
   );
 };
 
-// ── Lab Helpers ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// LAB HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Get all approved + active labs with basic info.
- *
- * @param {object} [filters] - Optional: { city, labType, homeCollection }
- */
 export const getLabs = async (filters = {}) => {
   const { default: LabPartnerProfile } = await import('../models/LabPartnerProfile.js');
-
   const query = { status: 'approved', isActive: true };
   if (filters.city)           query['registeredAddress.city'] = { $regex: filters.city, $options: 'i' };
-  if (filters.labType)        query.labType = filters.labType;
-  if (filters.homeCollection) query.sampleCollectionMode = { $in: ['Home Collection', 'Both'] };
-
+  if (filters.labType)        query.labType                   = filters.labType;
+  if (filters.homeCollection) query.sampleCollectionMode      = { $in: ['Home Collection', 'Both'] };
   return LabPartnerProfile.find(query)
     .select(
       'labName labCode labType ownershipType registeredAddress timing ' +
@@ -712,14 +713,8 @@ export const getLabs = async (filters = {}) => {
     .lean();
 };
 
-/**
- * Get a specific lab with full test + package list.
- *
- * @param {string} labId - LabPartnerProfile._id
- */
 export const getLabWithTests = async (labId) => {
   const { default: LabPartnerProfile } = await import('../models/LabPartnerProfile.js');
-
   const lab = await LabPartnerProfile.findOne({ _id: labId, status: 'approved', isActive: true })
     .select(
       'labName labCode labType registeredAddress timing branches ' +
@@ -728,47 +723,32 @@ export const getLabWithTests = async (labId) => {
       'labTests labPackages contactPersons logoUrl'
     )
     .lean();
-
   if (!lab) throw new Error('Lab not found or not operational');
-
-  // Filter to active tests + packages only
   lab.labTests    = (lab.labTests    || []).filter(t => t.isActive);
   lab.labPackages = (lab.labPackages || []).filter(p => p.isActive);
-
   return lab;
 };
 
-// ── Consultation Fee Resolver ─────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSULTATION FEE RESOLVER
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Resolve consultation fee.
- * Priority: follow_up → subscription → hospital → doctor → default(600)
- *
- * IMPORTANT: For follow-up, fee is only valid if same hospital + same doctor
- * (enforced separately via checkFollowUpEligibility before calling this).
- */
 export const resolveConsultationFee = async ({
-  isFollowUp,
-  followUpFee,
-  isCoveredBySubscription,
-  doctorId,
-  hospitalId,
-  consultationType, // 'inPerson' | 'video' | 'homeVisit'
+  isFollowUp, followUpFee, isCoveredBySubscription,
+  doctorId, hospitalId, consultationType,
 }) => {
-  const { default: Hospital }      = await import('../models/Hospital.js');
-  const { default: DoctorProfile } = await import('../models/DoctorProfile.js');
-
   if (isFollowUp)              return { fee: followUpFee || 0, source: 'follow_up' };
   if (isCoveredBySubscription) return { fee: 0,               source: 'subscription' };
 
+  const { default: Hospital }      = await import('../models/Hospital.js');
+  const { default: DoctorProfile } = await import('../models/DoctorProfile.js');
+
   if (hospitalId) {
-    const hosp = await Hospital.findById(hospitalId)
-      .select('managementModel consultationPricing')
-      .lean();
+    const hosp = await Hospital.findById(hospitalId).select('managementModel consultationPricing').lean();
     if (hosp?.managementModel === 'hospital-manager' && hosp.consultationPricing) {
-      const cp = hosp.consultationPricing;
+      const cp     = hosp.consultationPricing;
       const feeMap = { inPerson: cp.inPersonFee, video: cp.videoFee, homeVisit: cp.homeVisitFee };
-      return { fee: feeMap[consultationType] ?? cp.inPersonFee, source: 'hospital' };
+      return { fee: feeMap[consultationType] ?? cp.inPersonFee ?? 0, source: 'hospital' };
     }
   }
 
@@ -783,11 +763,10 @@ export const resolveConsultationFee = async ({
   return { fee: 600, source: 'default' };
 };
 
-// ── Fare Breakdown Builder ────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// FARE BREAKDOWN BUILDER
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Build fareBreakdown object matching Booking.fareBreakdown schema exactly.
- */
 export const buildFareBreakdown = ({
   consultationFee   = 0,
   careAssistantFee  = 0,
@@ -808,7 +787,6 @@ export const buildFareBreakdown = ({
   const taxes       = taxPercent ? +(taxable * (taxPercent / 100)).toFixed(2) : 0;
   const totalAmount = +(taxable + taxes).toFixed(2);
   const amountPaid  = Math.max(0, +(totalAmount - walletApplied).toFixed(2));
-
   return {
     consultationFee, careAssistantFee, transportFee, diagnosticFee,
     pharmacyFee, bloodBankFee, homeCollectionFee, platformFee,
@@ -817,40 +795,10 @@ export const buildFareBreakdown = ({
   };
 };
 
-// ── Ride Payload Builder ──────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// OP NUMBER GENERATOR
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Build Ride document payload matching Ride schema exactly.
- * pickup/dropoff → GeoJSON Points with coordinates: [lng, lat].
- */
-export const buildRidePayload = ({
-  bookingId,
-  rideType,         // 'patient'|'care_assistant'|'diagnostic_tech'|'pharmacy_delivery'|'blood_bank'
-  vehicleClass,     // 'two_wheeler'|'four_wheeler'|'ambulance'
-  pickupCoords,     // [lng, lat]
-  pickupAddress = '',
-  pickupCity    = '',
-  dropoffCoords,    // [lng, lat]
-  dropoffAddress= '',
-  dropoffCity   = '',
-  scheduledPickupAt,
-  isReturnRide  = false,
-  createdBy,
-}) => ({
-  booking:   bookingId,
-  rideType,
-  vehicleClass,
-  isReturnRide,
-  pickup:  { type: 'Point', coordinates: pickupCoords,  address: pickupAddress,  city: pickupCity  },
-  dropoff: { type: 'Point', coordinates: dropoffCoords, address: dropoffAddress, city: dropoffCity },
-  scheduledPickupAt,
-  status:    'requested',
-  createdBy,
-});
-
-// ── OP Number Generator ───────────────────────────────────────────────────────
-
-/** Generate OP number: OP-YYYYMMDD-HOSPCODE-0001 */
 export const generateOpNumber = async (hospitalId) => {
   const { default: OutPatientRecord } = await import('../models/OutPatientRecord.js');
   const { default: Hospital }         = await import('../models/Hospital.js');
@@ -859,34 +807,26 @@ export const generateOpNumber = async (hospitalId) => {
   let hospCode = 'GEN';
   if (hospitalId) {
     const hosp = await Hospital.findById(hospitalId).select('slug name').lean();
-    if (hosp)
-      hospCode = (hosp.slug || hosp.name || 'GEN')
-        .replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 5);
+    if (hosp) hospCode = (hosp.slug || hosp.name || 'GEN').replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 5);
   }
-  const startOfDay = new Date(now);
-  startOfDay.setHours(0, 0, 0, 0);
-  const count = await OutPatientRecord.countDocuments({
-    createdAt: { $gte: startOfDay },
-    ...(hospitalId ? { hospital: hospitalId } : {}),
-  });
+  const startOfDay = new Date(now); startOfDay.setHours(0, 0, 0, 0);
+  const count = await OutPatientRecord.countDocuments({ createdAt: { $gte: startOfDay }, ...(hospitalId ? { hospital: hospitalId } : {}) });
   return `OP-${date}-${hospCode}-${String(count + 1).padStart(4, '0')}`;
 };
 
-// ── Razorpay Helpers ──────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// RAZORPAY HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
 
-/** Create Razorpay order */
 export const createRazorpayOrder = async (amountInRupees, bookingCode, notes = {}) => {
   if (amountInRupees <= 0) return null;
   const order = await razorpay.orders.create({
-    amount:   Math.round(amountInRupees * 100),
-    currency: 'INR',
-    receipt:  bookingCode,
-    notes:    { bookingCode, ...notes },
+    amount: Math.round(amountInRupees * 100), currency: 'INR',
+    receipt: bookingCode, notes: { bookingCode, ...notes },
   });
   return { orderId: order.id, amount: amountInRupees, currency: 'INR' };
 };
 
-/** Verify Razorpay webhook/payment signature */
 export const verifyRazorpaySignature = (orderId, paymentId, signature) => {
   const digest = crypto
     .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
@@ -895,12 +835,10 @@ export const verifyRazorpaySignature = (orderId, paymentId, signature) => {
   return digest === signature;
 };
 
-// ── Wallet Payment ────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// WALLET PAYMENT
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Debit Wallet model for a booking payment.
- * Returns payment record to push into Booking.payments[].
- */
 export const processWalletPayment = async ({ userId, amount, bookingId, bookingCode }) => {
   const { default: Wallet } = await import('../models/Wallet.js');
   const wallet = await Wallet.findOne({ user: userId });
@@ -908,99 +846,44 @@ export const processWalletPayment = async ({ userId, amount, bookingId, bookingC
   if (wallet.availableBalance < amount) throw new Error(`Insufficient wallet balance. Available: ₹${wallet.availableBalance}`);
   await wallet.debit(amount, 'Booking_Payment', {
     referenceId: bookingId, onModel: 'Booking',
-    description: `Payment for booking ${bookingCode}`,
-    initiatedBy: userId,
+    description: `Payment for booking ${bookingCode}`, initiatedBy: userId,
   });
   return {
-    gateway:       'Wallet',
-    transactionId: `WALLET-${Date.now()}`,
-    paymentMode:   'Wallet',
-    amount,
-    status:        'success',
-    paidAt:        new Date(),
+    gateway: 'Wallet', transactionId: `WALLET-${Date.now()}`,
+    paymentMode: 'Wallet', amount, status: 'success', paidAt: new Date(),
   };
 };
 
-// ── Refund Computer ───────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// REFUND COMPUTER
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Compute refund amount using PlatformPricingConfig.refundPolicy.
- */
 export const computeRefundAmount = async (booking) => {
   const { default: PlatformPricingConfig } = await import('../models/PlatformPricingConfig.js');
-  const config = await PlatformPricingConfig.getGlobal();
-  const policy = config?.refundPolicy || {};
+  const config         = await PlatformPricingConfig.getGlobal();
+  const policy         = config?.refundPolicy || {};
   const thresholdHours = policy.rideFullRefundHoursThreshold ?? 24;
   const partialPercent = policy.ridePartialRefundPercent     ?? 50;
   const hoursUntil     = (new Date(booking.scheduledAt) - new Date()) / (1000 * 60 * 60);
   const refundPercent  = hoursUntil >= thresholdHours ? 100 : partialPercent;
-  const totalAmount    = booking.fareBreakdown?.totalAmount ?? 0;
-  const refundAmount   = +((totalAmount * refundPercent) / 100).toFixed(2);
+  const refundAmount   = +((booking.fareBreakdown?.totalAmount ?? 0) * refundPercent / 100).toFixed(2);
   return { refundPercent, refundAmount };
 };
 
-// ── Service Component Resolver ────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// SERVICE COMPONENT RESOLVER
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Resolve which service components a bookingType needs.
- * Maps to Booking model BOOKING_TYPES.
- * pharmacy + blood_bank excluded from customer-facing flow (handled internally).
- */
 export const resolveServiceComponents = (bookingType) => ({
   needsTransport:     ['full_care_ride', 'patient_transport', 'diagnostic_home'].includes(bookingType),
   needsCareAssistant: ['full_care_ride', 'care_assistant'].includes(bookingType),
   needsDoctor:        ['full_care_ride', 'doctor_consultation', 'doctor_online', 'physiotherapist', 'follow_up'].includes(bookingType),
   needsDiagnostic:    ['diagnostic_center', 'diagnostic_home'].includes(bookingType),
-  needsPharmacy:      false,  // pharmacy booking not customer-facing
-  needsBloodBank:     false,  // blood_bank not customer-facing
+  needsPharmacy:      false,
+  needsBloodBank:     false,
   isOnline:           bookingType === 'doctor_online',
   isFollowUpType:     bookingType === 'follow_up',
-  needsReturnOption:  ['full_care_ride', 'patient_transport'].includes(bookingType), // show return home prompt
-  needsWaitingOption: bookingType === 'patient_transport', // show waiting charge option
-  canAddDoctor:       bookingType === 'patient_transport', // transport can optionally add doctor + OP
+  needsReturnOption:  ['full_care_ride', 'patient_transport'].includes(bookingType),
+  needsWaitingOption: bookingType === 'patient_transport',
+  canAddDoctor:       bookingType === 'patient_transport',
 });
-
-
-// bookingRouterShared.js — add this helper
-import axios from 'axios';
-
-const GMAPS_KEY = process.env.GOOGLE_MAPS_KEY;
-
-/**
- * Calculate canonical route once. Returns { distanceKm, durationMin, polyline }.
- * Store on Ride at creation. Never recalculate — all parties read from DB.
- */
-export const calculateCanonicalRoute = async (pickupCoords, dropoffCoords) => {
-  if (!GMAPS_KEY || !pickupCoords?.length || !dropoffCoords?.length) {
-    // Fallback: haversine straight-line
-    const dist = haversineKm(pickupCoords, dropoffCoords);
-    return { distanceKm: +dist.toFixed(2), durationMin: Math.round(dist * 3), polyline: null };
-  }
-
-  try {
-    const url = 'https://maps.googleapis.com/maps/api/directions/json';
-    const res = await axios.get(url, {
-      params: {
-        origin:      `${pickupCoords[1]},${pickupCoords[0]}`,
-        destination: `${dropoffCoords[1]},${dropoffCoords[0]}`,
-        mode:        'driving',
-        key:         GMAPS_KEY,
-      },
-      timeout: 8000,
-    });
-
-    const route = res.data?.routes?.[0];
-    if (!route) throw new Error('No route found');
-
-    const leg = route.legs[0];
-    return {
-      distanceKm:  +(leg.distance.value / 1000).toFixed(2),
-      durationMin: Math.round(leg.duration.value / 60),
-      polyline:    route.overview_polyline.points, // encoded polyline
-    };
-  } catch (err) {
-    console.error('[calculateCanonicalRoute] failed:', err.message);
-    const dist = haversineKm(pickupCoords, dropoffCoords);
-    return { distanceKm: +dist.toFixed(2), durationMin: Math.round(dist * 3), polyline: null };
-  }
-};

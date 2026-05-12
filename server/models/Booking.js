@@ -7,20 +7,7 @@ const generateBookingCode = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BOOKING MODEL — Likeson.in
-//
-// BOOKING TYPES:
-//   full_care_ride       → Doctor + Care Assistant + Transport (complete package)
-//   doctor_consultation  → In-person doctor visit at hospital/clinic
-//   doctor_online        → Video/audio consultation
-//   physiotherapist      → Physio at clinic or home visit
-//   care_assistant       → Care assistant services alone (no doctor)
-//   diagnostic_center    → Lab tests at center (patient travels)
-//   diagnostic_home      → Lab technician visits patient at home
-//   patient_transport    → Standalone transport booking (no medical service)
-//   follow_up            → Follow-up visit linked to a parent booking
 // ─────────────────────────────────────────────────────────────────────────────
-
-// ── Enums & Constants ─────────────────────────────────────────────────────────
 
 export const BOOKING_TYPES = [
   'full_care_ride',
@@ -73,7 +60,7 @@ export const CANCELLATION_ACTORS = [
 const geoPointSchema = new Schema(
   {
     type:        { type: String, enum: ['Point'], default: 'Point' },
-    coordinates: { type: [Number], required: true }, // [lng, lat]
+    coordinates: { type: [Number], required: true },
     label:       { type: String, trim: true },
     address:     { type: String, trim: true },
     city:        { type: String, trim: true },
@@ -199,18 +186,18 @@ const statusLogSchema = new Schema(
 
 const ratingSchema = new Schema(
   {
-    doctorRating:            { type: Number, min: 1, max: 5 },
-    doctorComment:           { type: String, trim: true },
-    careAssistantRating:     { type: Number, min: 1, max: 5 },
-    careAssistantComment:    { type: String, trim: true },
-    driverRating:            { type: Number, min: 1, max: 5 },
-    driverComment:           { type: String, trim: true },
-    labRating:               { type: Number, min: 1, max: 5 },
-    labComment:              { type: String, trim: true },
-    overallRating:           { type: Number, min: 1, max: 5 },
-    overallComment:          { type: String, trim: true },
-    ratedAt:                 { type: Date },
-    isPublic:                { type: Boolean, default: true },
+    doctorRating:         { type: Number, min: 1, max: 5 },
+    doctorComment:        { type: String, trim: true },
+    careAssistantRating:  { type: Number, min: 1, max: 5 },
+    careAssistantComment: { type: String, trim: true },
+    driverRating:         { type: Number, min: 1, max: 5 },
+    driverComment:        { type: String, trim: true },
+    labRating:            { type: Number, min: 1, max: 5 },
+    labComment:           { type: String, trim: true },
+    overallRating:        { type: Number, min: 1, max: 5 },
+    overallComment:       { type: String, trim: true },
+    ratedAt:              { type: Date },
+    isPublic:             { type: Boolean, default: true },
   },
   { _id: false }
 );
@@ -223,7 +210,7 @@ const bookingSchema = new Schema(
     bookingCode: {
       type:      String,
       unique:    true,
-      sparse:    true,        // ← prevents null duplicate key collision
+      sparse:    true,
       uppercase: true,
       trim:      true,
       index:     true,
@@ -272,32 +259,32 @@ const bookingSchema = new Schema(
     },
 
     transportPartner: {
-  type:    Schema.Types.ObjectId,
-  ref:     'TransportPartner',
-  default: null,
-  index:   true,
-},
+      type:    Schema.Types.ObjectId,
+      ref:     'TransportPartner',
+      default: null,
+      index:   true,
+    },
 
-driver:{
-  type:    Schema.Types.ObjectId,
-  ref:     'DriverProfile',
-  default: null,
-  index:   true,
-},
-solodriverpartner: {
-  type:    Schema.Types.ObjectId,
-  ref:     'SoloDriverPartner',
-  default: null,
-  index:   true,
-},
+    driver: {
+      type:    Schema.Types.ObjectId,
+      ref:     'DriverProfile',
+      default: null,
+      index:   true,
+    },
 
-labPartner: {
-  type:    Schema.Types.ObjectId,
-  ref:     'LabPartnerProfile',
-  default: null,
-  index:   true,
-},
+    solodriverpartner: {
+      type:    Schema.Types.ObjectId,
+      ref:     'SoloDriverPartner',
+      default: null,
+      index:   true,
+    },
 
+    labPartner: {
+      type:    Schema.Types.ObjectId,
+      ref:     'LabPartnerProfile',
+      default: null,
+      index:   true,
+    },
 
     // ── Consultation Details ──────────────────────────────────────────────────
     consultationType: {
@@ -487,13 +474,8 @@ bookingSchema.virtual('requiresTransport').get(function () {
 });
 
 bookingSchema.virtual('requiresDoctor').get(function () {
-  return [
-    'full_care_ride',
-    'doctor_consultation',
-    'doctor_online',
-    'physiotherapist',
-    'follow_up',
-  ].includes(this.bookingType);
+  return ['full_care_ride', 'doctor_consultation', 'doctor_online', 'physiotherapist', 'follow_up']
+    .includes(this.bookingType);
 });
 
 bookingSchema.virtual('requiresCareAssistant').get(function () {
@@ -507,29 +489,61 @@ bookingSchema.virtual('amountDue').get(function () {
 });
 
 // ── Pre-validate ──────────────────────────────────────────────────────────────
+// FIX #4: Added missing validations for doctor_consultation, physiotherapist,
+//          care_assistant booking types.
+// FIX #5: follow_up now also requires doctor.
+// FIX #6: returnRide without primaryRide guard added.
 
 bookingSchema.pre('validate', function () {
-  if (this.bookingType === 'full_care_ride') {
+  const t = this.bookingType;
+
+  // full_care_ride: needs doctor + careAssistant + patientLocation
+  if (t === 'full_care_ride') {
     if (!this.doctor)          throw new Error('full_care_ride requires doctor');
     if (!this.careAssistant)   throw new Error('full_care_ride requires careAssistant');
     if (!this.patientLocation) throw new Error('full_care_ride requires patientLocation');
   }
 
-  if (this.bookingType === 'doctor_online' && !this.doctor) {
+  // FIX #4: doctor_consultation requires doctor
+  if (t === 'doctor_consultation' && !this.doctor) {
+    throw new Error('doctor_consultation requires doctor');
+  }
+
+  // doctor_online requires doctor
+  if (t === 'doctor_online' && !this.doctor) {
     throw new Error('doctor_online requires doctor');
   }
 
-  if (this.bookingType === 'follow_up' && !this.followUpParentBooking) {
-    throw new Error('follow_up bookings must reference a followUpParentBooking');
+  // FIX #4: physiotherapist requires doctor (the physio is a doctor profile)
+  if (t === 'physiotherapist' && !this.doctor) {
+    throw new Error('physiotherapist requires doctor (physiotherapist profile)');
   }
 
-  if (this.bookingType === 'diagnostic_home' && !this.patientLocation) {
+  // FIX #4: care_assistant booking requires careAssistant
+  if (t === 'care_assistant' && !this.careAssistant) {
+    throw new Error('care_assistant booking requires careAssistant');
+  }
+
+  // FIX #5: follow_up requires both parentBooking and doctor
+  if (t === 'follow_up') {
+    if (!this.followUpParentBooking) throw new Error('follow_up requires followUpParentBooking');
+    if (!this.doctor)                throw new Error('follow_up requires doctor');
+  }
+
+  // diagnostic_home requires patientLocation
+  if (t === 'diagnostic_home' && !this.patientLocation) {
     throw new Error('diagnostic_home requires patientLocation');
   }
 
-  if (this.bookingType === 'patient_transport') {
+  // patient_transport requires both locations
+  if (t === 'patient_transport') {
     if (!this.patientLocation)     throw new Error('patient_transport requires patientLocation (pickup)');
     if (!this.destinationLocation) throw new Error('patient_transport requires destinationLocation (dropoff)');
+  }
+
+  // FIX #6: returnRide cannot exist without primaryRide
+  if (this.returnRide && !this.primaryRide) {
+    throw new Error('returnRide requires primaryRide to be set first');
   }
 });
 
@@ -539,23 +553,27 @@ bookingSchema.pre('save', async function () {
   // Auto-generate bookingCode
   if (this.isNew && !this.bookingCode) {
     let code, exists;
+    let attempts = 0;
     do {
+      if (attempts++ > 10) throw new Error('bookingCode generation failed');
       code   = `BK-${generateBookingCode()}`;
       exists = await mongoose.model('Booking').exists({ bookingCode: code });
     } while (exists);
     this.bookingCode = code;
   }
 
-  // Append to statusLog on status change
+  // FIX #3: statusLog fromStatus — read from last log entry, not in-memory _previousStatus.
+  // _previousStatus is lost when doc is loaded fresh. Reading from statusLog is reliable.
   if (this.isModified('status') && !this.isNew) {
+    const lastLog   = this.statusLog?.[this.statusLog.length - 1];
+    const fromStatus = lastLog?.toStatus ?? null; // last recorded toStatus = current fromStatus
     this.statusLog.push({
-      fromStatus: this._previousStatus || null,
-      toStatus:   this.status,
-      changedBy:  this.updatedBy || null,
+      fromStatus,
+      toStatus:  this.status,
+      changedBy: this.updatedBy || null,
+      changedAt: new Date(),
     });
   }
-
-  this._previousStatus = this.status;
 
   // Sync isRated
   if (this.isModified('rating') && this.rating?.overallRating) {

@@ -1,12 +1,12 @@
 import type { Metadata } from 'next';
 import { Poppins, Montserrat } from 'next/font/google';
 import './globals.css';
-
 import ConnectivityWrapper from '@/components/ui/ConnectivityWrapper';
 import StoreProvider from '@/store/StoreProvider';
 import LayoutConditionalWrapper from '@/components/ui/LayoutConditionalWrapper';
 import { ThemeProvider } from '@/components/theme-provider';
 import { Toaster } from 'react-hot-toast';
+import AuthSocketBridge from '@/context/AuthSocketBridge'; // ← new thin client component
 
 const poppins = Poppins({
   subsets: ['latin'],
@@ -40,19 +40,24 @@ export default function RootLayout({
       className={`${poppins.variable} ${montserrat.variable} scroll-smooth`}
       suppressHydrationWarning
     >
-   <body className="font-poppins antialiased" suppressHydrationWarning>
+      <body className="font-poppins antialiased" suppressHydrationWarning>
         <StoreProvider>
-          <ThemeProvider
-            attribute="class"
-            defaultTheme="light"
-          >
-            <ConnectivityWrapper>
-              <LayoutConditionalWrapper>
-                {children}
-              </LayoutConditionalWrapper>
-            </ConnectivityWrapper>
+          <ThemeProvider attribute="class" defaultTheme="light">
+            {/*
+              AuthSocketBridge is a 'use client' component that:
+                1. Reads `token` from Redux (selectToken from userSlice)
+                2. Passes it down to SocketProvider
+              This keeps layout.tsx a pure Server Component while still
+              connecting the socket only after the user has a valid JWT.
+            */}
+            <AuthSocketBridge>
+              <ConnectivityWrapper>
+                <LayoutConditionalWrapper>
+                  {children}
+                </LayoutConditionalWrapper>
+              </ConnectivityWrapper>
+            </AuthSocketBridge>
 
-            {/* Move Toaster LAST to avoid layout mismatch edge cases */}
             <Toaster
               position="bottom-right"
               toastOptions={{

@@ -1,6 +1,14 @@
 import mongoose from 'mongoose';
 const { Schema } = mongoose;
 
+// Shared Image Schema for re-use
+const imageSchema = new Schema({
+  url:       { type: String, required: true },
+  caption:   { type: String, trim: true },
+  uploadedAt:{ type: Date, default: Date.now },
+  publicId:  { type: String } // Useful for deleting from S3/Cloudinary later
+}, { _id: true });
+
 // ─── IMMUTABLE: append-only; no update allowed via API ───────────────────────
 const hospitalInstructionSchema = new Schema(
   {
@@ -13,6 +21,8 @@ const hospitalInstructionSchema = new Schema(
       enum: ['diet', 'mobility', 'medication', 'wound_care', 'general', 'emergency'],
       default: 'general',
     },
+    // Added: For scanning physical prescription slips
+    attachments: [imageSchema],
   },
   { _id: true }
 );
@@ -32,6 +42,8 @@ const vitalsEntrySchema = new Schema(
     heightCm:      { type: Number },
     respiratoryRate: { type: Number },             // breaths/min
     notes:         { type: String, maxlength: 300 },
+    // Added: Proof of reading (e.g., photo of the monitor/oximeter)
+    evidenceImages: [imageSchema],
   },
   { _id: true }
 );
@@ -55,6 +67,8 @@ const foodEntrySchema = new Schema(
     refusalReason: { type: String, trim: true, maxlength: 200 },
     recordedBy:    { type: Schema.Types.ObjectId, ref: 'User' },
     notes:         { type: String, maxlength: 200 },
+    // Added: Photo of the plate (before/after)
+    images: [imageSchema],
   },
   { _id: true }
 );
@@ -83,6 +97,8 @@ const medicineAdminSchema = new Schema(
     missedReason:  { type: String, trim: true, maxlength: 200 },
     administeredBy:{ type: Schema.Types.ObjectId, ref: 'User' },
     notes:         { type: String, maxlength: 300 },
+    // Added: Photo of the pill/strip to confirm the correct medicine was given
+    pillImages: [imageSchema],
   },
   { _id: true }
 );
@@ -106,6 +122,8 @@ const careNoteSchema = new Schema(
     isResolved:  { type: Boolean, default: false },
     resolvedAt:  { type: Date },
     resolvedBy:  { type: Schema.Types.ObjectId, ref: 'User' },
+    // Added: Critical for wound care, rashes, or physical injuries
+    observationImages: [imageSchema],
   },
   { _id: true }
 );

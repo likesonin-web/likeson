@@ -1,7 +1,8 @@
 'use client';
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation'; // Added for visibility check
 import { useSelector } from 'react-redux';
 import {
   Mail,
@@ -11,23 +12,18 @@ import {
   ShieldCheck,
   HeartPulse,
 } from 'lucide-react';
-import { FaFacebook } from 'react-icons/fa6';
-import { FaTwitter } from 'react-icons/fa6';
-import { FaInstagram } from 'react-icons/fa6';
-import { FaLinkedin } from 'react-icons/fa6';
+import { FaFacebook, FaTwitter, FaInstagram, FaLinkedin } from 'react-icons/fa6';
 
 // ── Role → data-theme mapping ─────────────────────────────────────────────────
-// Keys must match User.role enum EXACTLY (see user.js model)
 const ROLE_THEME_MAP = {
   doctor:            'doctor',
   hospital:          'hospital',
-  'care assistant':  'care-assistant',   // ← space, not hyphen (User schema)
-  transportpartner:  'transport',        // ← one word (User schema)
-  solodriverpartner: 'transport',        // ← shares transport theme
-  driver:            'transport',        // ← shares transport theme
+  'care assistant':  'care-assistant',
+  transportpartner:  'transport',
+  solodriverpartner: 'transport',
+  driver:            'transport',
   pharmacy:          'pharmacy',
-  'lab partner':     'lab',             // ← space (User schema)
-  // No theme override for these roles → site default
+  'lab partner':     'lab',
   customer:          null,
   superadmin:        null,
   admin:             null,
@@ -35,7 +31,6 @@ const ROLE_THEME_MAP = {
 };
 
 // ── Role-specific footer link sets ────────────────────────────────────────────
-// Keys must match User.role enum EXACTLY
 const ROLE_FOOTER_CONFIG = {
   doctor: {
     label: 'Doctor Portal',
@@ -58,7 +53,6 @@ const ROLE_FOOTER_CONFIG = {
       { name: 'Contact Support',    href: '/contact' },
     ],
   },
-
   hospital: {
     label: 'Hospital Portal',
     services: [
@@ -80,8 +74,6 @@ const ROLE_FOOTER_CONFIG = {
       { name: 'Contact Support',    href: '/contact' },
     ],
   },
-
-  // role: 'care assistant' (with space — User schema)
   'care assistant': {
     label: 'Care Assistant',
     services: [
@@ -103,8 +95,6 @@ const ROLE_FOOTER_CONFIG = {
       { name: 'Contact Support',    href: '/contact' },
     ],
   },
-
-  // role: 'transportpartner' (one word — User schema)
   transportpartner: {
     label: 'Transport Partner',
     services: [
@@ -126,8 +116,6 @@ const ROLE_FOOTER_CONFIG = {
       { name: 'Contact Support',    href: '/contact' },
     ],
   },
-
-  // role: 'solodriverpartner' — shares transport links
   solodriverpartner: {
     label: 'Solo Driver Partner',
     services: [
@@ -149,8 +137,6 @@ const ROLE_FOOTER_CONFIG = {
       { name: 'Contact Support',    href: '/contact' },
     ],
   },
-
-  // role: 'driver'
   driver: {
     label: 'Driver Portal',
     services: [
@@ -172,7 +158,6 @@ const ROLE_FOOTER_CONFIG = {
       { name: 'Contact Support',    href: '/contact' },
     ],
   },
-
   pharmacy: {
     label: 'Pharmacy Portal',
     services: [
@@ -194,8 +179,6 @@ const ROLE_FOOTER_CONFIG = {
       { name: 'Contact Support',    href: '/contact' },
     ],
   },
-
-  // role: 'lab partner' (with space — User schema)
   'lab partner': {
     label: 'Lab Partner',
     services: [
@@ -217,8 +200,6 @@ const ROLE_FOOTER_CONFIG = {
       { name: 'Contact Support',    href: '/contact' },
     ],
   },
-
-  // ── Default: customer / admin / superadmin / finance / guest ──────────────
   default: {
     label: 'Healthcare Platform',
     services: [
@@ -245,17 +226,25 @@ const ROLE_FOOTER_CONFIG = {
 // ── Footer Component ───────────────────────────────────────────────────────────
 const Footer = () => {
   const currentYear = new Date().getFullYear();
+  const pathname = usePathname();
 
-  // Pull authenticated user from Redux (matches User schema)
+  // Pull authenticated user from Redux
   const user = useSelector((s) => s.user?.user) ?? null;
+
+  // Visibility Logic: Hide on search or ride tracking (matching Header)
+  const isHidden = useMemo(() => {
+    return pathname === '/search' || (pathname.startsWith('/rides/') && pathname.endsWith('/tracking'));
+  }, [pathname]);
 
   // Resolve role → theme + link config
   const role      = user?.role ?? null;
   const themeAttr = role ? (ROLE_THEME_MAP[role] ?? null) : null;
   const config    = (role && ROLE_FOOTER_CONFIG[role]) ? ROLE_FOOTER_CONFIG[role] : ROLE_FOOTER_CONFIG.default;
 
+  // Don't render anything if on a hidden route
+  if (isHidden) return null;
+
   return (
-    // data-theme is set only for provider roles; guests/patients use the site default
     <footer
       {...(themeAttr ? { 'data-theme': themeAttr } : {})}
       className="bg-base-200/50 border-t border-base-300 mt-20 transition-colors duration-300 overflow-hidden relative font-sans"
@@ -285,8 +274,6 @@ const Footer = () => {
 
       {/* ── MIDDLE: Links & Branding ── */}
       <div className="container-custom py-20 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-12 lg:gap-8">
-
-        {/* Brand (4 cols) */}
         <div className="lg:col-span-4 space-y-8 pr-0 lg:pr-12">
           <Link href="/" className="inline-block group">
             <h2 className="text-4xl font-bold text-base-content tracking-tighter group-hover:text-primary transition-colors">
@@ -309,7 +296,6 @@ const Footer = () => {
           </div>
         </div>
 
-        {/* Services (2 cols) */}
         <div className="lg:col-span-2">
           <h4 className="font-bold text-xs uppercase tracking-widest text-base-content/40 mb-8">Services</h4>
           <ul className="space-y-4">
@@ -320,26 +306,19 @@ const Footer = () => {
                   className="group flex items-center gap-2 text-sm font-medium text-base-content/70 hover:text-primary transition-colors"
                 >
                   <span>{link.name}</span>
-                  <ArrowUpRight
-                    size={14}
-                    className="opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300 text-primary"
-                  />
+                  <ArrowUpRight size={14} className="opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300 text-primary" />
                 </Link>
               </li>
             ))}
           </ul>
         </div>
 
-        {/* Company (2 cols) */}
         <div className="lg:col-span-2">
           <h4 className="font-bold text-xs uppercase tracking-widest text-base-content/40 mb-8">Company</h4>
           <ul className="space-y-4">
             {config.company.map((link) => (
               <li key={link.name}>
-                <Link
-                  href={link.href}
-                  className="text-sm font-medium text-base-content/70 hover:text-primary transition-colors"
-                >
+                <Link href={link.href} className="text-sm font-medium text-base-content/70 hover:text-primary transition-colors">
                   {link.name}
                 </Link>
               </li>
@@ -347,12 +326,10 @@ const Footer = () => {
           </ul>
         </div>
 
-        {/* Contact (4 cols) */}
         <div className="lg:col-span-4">
           <div className="glass-card p-8 rounded-[var(--radius-box)] space-y-6">
             <h4 className="font-bold text-xs uppercase tracking-widest text-base-content/40 mb-2">Direct Contact</h4>
             <div className="space-y-5">
-
               <div className="flex items-start gap-4 group">
                 <div className="w-10 h-10 rounded-[var(--radius-field)] bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary group-hover:text-white transition-colors duration-300">
                   <MapPin size={18} className="text-primary group-hover:text-white" />
@@ -362,26 +339,20 @@ const Footer = () => {
                   Andhra Pradesh, India
                 </span>
               </div>
-
               <div className="flex items-center gap-4 group">
                 <div className="w-10 h-10 rounded-[var(--radius-field)] bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary group-hover:text-white transition-colors duration-300">
                   <Phone size={18} className="text-primary group-hover:text-white" />
                 </div>
                 <span className="text-sm font-bold text-base-content">+91 800 123 4567</span>
               </div>
-
               <div className="flex items-center gap-4 group">
                 <div className="w-10 h-10 rounded-[var(--radius-field)] bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary group-hover:text-white transition-colors duration-300">
                   <Mail size={18} className="text-primary group-hover:text-white" />
                 </div>
-                <a
-                  href="mailto:support@likeson.in"
-                  className="text-sm font-medium text-primary hover:text-secondary underline decoration-primary/30 underline-offset-4 transition-colors"
-                >
+                <a href="mailto:support@likeson.in" className="text-sm font-medium text-primary hover:text-secondary underline decoration-primary/30 underline-offset-4 transition-colors">
                   support@likeson.in
                 </a>
               </div>
-
             </div>
           </div>
         </div>
@@ -390,36 +361,23 @@ const Footer = () => {
       {/* ── BOTTOM: Legal ── */}
       <div className="border-t border-base-300 py-8 bg-base-100/50 backdrop-blur-sm">
         <div className="container-custom flex flex-col md:flex-row items-center justify-between gap-6">
-
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2 px-3 py-1.5 bg-success/10 rounded-full border border-success/20">
-              <div className="w-2 h-2 rounded-full bg-success animate-pulse shadow-[0_0_8px_var(--color-success)]" />
+              <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
               <span className="text-[10px] font-bold text-success uppercase tracking-wider">System Operational</span>
             </div>
             <p className="text-[11px] text-base-content/40 font-bold uppercase tracking-widest">
               © {currentYear} Likeson Healthcare.
             </p>
           </div>
-
           <div className="flex flex-wrap justify-center items-center gap-6 md:gap-8">
-            <Link
-              href="/privacy"
-              className="text-[11px] font-bold text-base-content/40 hover:text-primary transition-all uppercase tracking-widest hover:underline decoration-primary/30 underline-offset-4"
-            >
-              Privacy
-            </Link>
-            <Link
-              href="/terms"
-              className="text-[11px] font-bold text-base-content/40 hover:text-primary transition-all uppercase tracking-widest hover:underline decoration-primary/30 underline-offset-4"
-            >
-              Terms
-            </Link>
-            <div className="flex items-center gap-2 opacity-50 hover:opacity-100 transition-opacity">
+            <Link href="/privacy" className="text-[11px] font-bold text-base-content/40 hover:text-primary transition-all uppercase tracking-widest">Privacy</Link>
+            <Link href="/terms" className="text-[11px] font-bold text-base-content/40 hover:text-primary transition-all uppercase tracking-widest">Terms</Link>
+            <div className="flex items-center gap-2 opacity-50">
               <ShieldCheck size={14} className="text-primary" />
               <span className="text-[10px] font-bold text-base-content uppercase tracking-wider">ISO 27001</span>
             </div>
           </div>
-
         </div>
       </div>
     </footer>

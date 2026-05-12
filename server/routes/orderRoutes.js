@@ -1735,6 +1735,53 @@ router.post('/order/upload-prescription', protect, asyncHandler(async (req, res)
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GET /api/pharmacy/medicines/:id/similar
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/medicines/:id/similar', cache(300), asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const limitNum = parseInt(req.query.limit, 10) || 10;
+
+  // 1. Fetch the source medicine to get matching criteria
+  const sourceMed = await Medicine.findById(id).select('genericName therapeuticClass saltComposition').lean();
+
+  if (!sourceMed) {
+    return res.status(404).json({ success: false, message: 'Medicine not found.' });
+  }
+
+  // 2. Build a query to find similar medicines
+  // Priority: Same Generic Name > Same Salt Ingredients > Same Therapeutic Class
+  const saltIngredients = sourceMed.saltComposition.map(s => s.ingredient);
+
+  const query = {
+    _id: { $ne: id }, // Exclude the current medicine
+    isDiscontinued: false,
+    $or: [
+      { genericName: sourceMed.genericName },
+      { 'saltComposition.ingredient': { $in: saltIngredients } },
+      { therapeuticClass: sourceMed.therapeuticClass }
+    ]
+  };
+
+  // 3. Execute query with projection to keep response light
+  const similarMedicines = await Medicine.find(query)
+    .select('name slug brandName genericName images mrp packaging dosage inventory')
+    .limit(limitNum)
+    .lean();
+
+  // 4. (Optional) Sort by availability so "In Stock" items appear first
+  const sortedMedicines = similarMedicines.sort((a, b) => {
+    const aStock = (a.inventory ?? []).reduce((sum, inv) => sum + (inv.stockQuantity || 0), 0);
+    const bStock = (b.inventory ?? []).reduce((sum, inv) => sum + (inv.stockQuantity || 0), 0);
+    return bStock - aStock;
+  });
+
+  res.status(200).json({
+    success: true,
+    count: sortedMedicines.length,
+    medicines: sortedMedicines,
+  });
+}));
+// ─────────────────────────────────────────────────────────────────────────────
 // 11b. POST /api/pharmacy/order/upload-prescription/file
 // ─────────────────────────────────────────────────────────────────────────────
 

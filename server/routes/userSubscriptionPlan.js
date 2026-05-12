@@ -115,23 +115,9 @@ const resolveCustomOptionUnitPrice = (optionPrices, optionKey, quantity, extras 
 
     switch (optionKey) {
         case 'consultations': {
-            // Base price per consultation
-            unitPrice = optionPrices?.consultation?.pricePerConsultation ?? 0;
-
-            // Doctor-tier bonus driven by selected doctor count (not qty)
-            const tiers               = optionPrices?.consultation?.doctorPricingTiers ?? [];
-            const selectedDoctorCount = Number(extras.doctorTierCount ?? 0);
-
-            if (tiers.length && selectedDoctorCount > 0) {
-                // Highest tier whose doctorCount <= selectedDoctorCount
-                const matched = [...tiers]
-                    .sort((a, b) => b.doctorCount - a.doctorCount)
-                    .find((t) => t.doctorCount <= selectedDoctorCount);
-                if (matched) unitPrice += matched.additionalPrice ?? 0;
-            }
-            // lineTotal = qty (consults) × unitPrice (base + bonus)
-            break;
-        }
+  unitPrice = optionPrices?.consultation?.pricePerConsultation ?? 0;
+  break;
+}
 
         case 'transport': {
             // kmSlabs: [{km, price}] — price is flat per slab bundle, not per-km
@@ -332,10 +318,7 @@ router.post(
             .optional()
             .isInt({ min: 0 })
             .withMessage('careAssistantTierIndex must be a non-negative integer'),
-        body('options.*.doctorTierCount')
-            .optional()
-            .isInt({ min: 0 })
-            .withMessage('doctorTierCount must be a non-negative integer'),
+         
     ],
     validate,
     asyncHandler(async (req, res) => {
@@ -345,7 +328,7 @@ router.post(
         const optionPrices = config.customPlanOptions;   // admin-controlled prices
         const caps         = config.caps;
 
-        const maxDoctorsAllowed = optionPrices?.consultation?.maxDoctorsAllowed ?? 5;
+         
         const caTiers           = optionPrices?.careAssistant?.pricingTiers ?? [];
 
         const builtOptions = [];
@@ -383,32 +366,21 @@ router.post(
                 careAssistantTierIndex = requestedIdx;
             }
 
-            // consultations: doctorTierCount must be <= qty AND <= maxDoctorsAllowed
-            let doctorTierCount = 0;
-            if (optionKey === 'consultations') {
-                const requestedDocCount = Number(opt.doctorTierCount ?? 0);
-                if (requestedDocCount > qty)
-                    return res.status(400).json({ success: false, message: `doctorTierCount (${requestedDocCount}) cannot exceed consultation quantity (${qty}).` });
-                if (requestedDocCount > maxDoctorsAllowed)
-                    return res.status(400).json({ success: false, message: `doctorTierCount cannot exceed maxDoctorsAllowed (${maxDoctorsAllowed}).` });
-                doctorTierCount = requestedDocCount;
-            }
+             
 
             // ── Server-side unit price resolution ─────────────────────────────
-            const extras    = { careAssistantTierIndex, doctorTierCount };
+            const extras    = { careAssistantTierIndex };
             const unitPrice = resolveCustomOptionUnitPrice(optionPrices, optionKey, qty, extras);
             const lineTotal = +(qty * unitPrice).toFixed(2);
 
-            builtOptions.push({
-                optionKey,
-                label:    label || optionKey,
-                quantity: qty,
-                unitPrice,
-                lineTotal,
-                // Persist extras for edit round-trips
-                ...(optionKey === 'careAssistant'  && { careAssistantTierIndex }),
-                ...(optionKey === 'consultations'  && { doctorTierCount }),
-            });
+           builtOptions.push({
+  optionKey,
+  label:    label || optionKey,
+  quantity: qty,
+  unitPrice,
+  lineTotal,
+  ...(optionKey === 'careAssistant' && { careAssistantTierIndex }),
+});
         }
 
         const totalMonthly = +builtOptions.reduce((s, o) => s + o.lineTotal, 0).toFixed(2);
@@ -509,7 +481,7 @@ router.put(
         const optionPrices = config.customPlanOptions;
         const caps         = config.caps;
 
-        const maxDoctorsAllowed = optionPrices?.consultation?.maxDoctorsAllowed ?? 5;
+         
         const caTiers           = optionPrices?.careAssistant?.pricingTiers ?? [];
 
         const builtOptions = [];
@@ -546,30 +518,22 @@ router.put(
                 careAssistantTierIndex = requestedIdx;
             }
 
-            let doctorTierCount = 0;
-            if (optionKey === 'consultations') {
-                const requestedDocCount = Number(opt.doctorTierCount ?? 0);
-                if (requestedDocCount > qty)
-                    return res.status(400).json({ success: false, message: `doctorTierCount (${requestedDocCount}) cannot exceed consultation quantity (${qty}).` });
-                if (requestedDocCount > maxDoctorsAllowed)
-                    return res.status(400).json({ success: false, message: `doctorTierCount cannot exceed maxDoctorsAllowed (${maxDoctorsAllowed}).` });
-                doctorTierCount = requestedDocCount;
-            }
+             
 
             // ── Server-side unit price resolution ─────────────────────────────
-            const extras    = { careAssistantTierIndex, doctorTierCount };
+            const extras    = { careAssistantTierIndex };
             const unitPrice = resolveCustomOptionUnitPrice(optionPrices, optionKey, qty, extras);
             const lineTotal = +(qty * unitPrice).toFixed(2);
 
             builtOptions.push({
-                optionKey,
-                label:    label || optionKey,
-                quantity: qty,
-                unitPrice,
-                lineTotal,
-                ...(optionKey === 'careAssistant'  && { careAssistantTierIndex }),
-                ...(optionKey === 'consultations'  && { doctorTierCount }),
-            });
+  optionKey,
+  label:    label || optionKey,
+  quantity: qty,
+  unitPrice,
+  lineTotal,
+  ...(optionKey === 'careAssistant' && { careAssistantTierIndex }),
+});
+
         }
 
         if (name) plan.name = name;

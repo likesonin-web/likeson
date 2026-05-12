@@ -1,78 +1,85 @@
-import { createSlice, createAsyncThunk, isAnyOf } from '@reduxjs/toolkit';
-import API   from '../api';
-import toast from 'react-hot-toast';
-import { io } from 'socket.io-client';
+/**
+ * BookingSlice.js — Likeson.in
+ *
+ * Covers EVERY route from bookingRouterCustomer.js:
+ *
+ * ── DISCOVERY ──────────────────────────────────────────────────────────────
+ *  GET  /hospitals
+ *  GET  /hospitals/:hospitalId/doctors
+ *  GET  /hospitals/:hospitalId/availability
+ *  GET  /doctors/:doctorId/availability
+ *  GET  /labs
+ *  GET  /labs/:labId
+ *  GET  /booking-options/:type
+ *  GET  /transport/estimate
+ *  GET  /follow-up/check
+ *
+ * ── BOOKING CREATION ───────────────────────────────────────────────────────
+ *  POST /full-care-ride
+ *  POST /doctor-consultation
+ *  POST /doctor-online
+ *  POST /patient-transport
+ *  POST /physiotherapist
+ *  POST /follow-up
+ *  POST /diagnostic-center
+ *  POST /diagnostic-home
+ *  POST /care-assistant
+ *
+ * ── BOOKING MANAGEMENT ─────────────────────────────────────────────────────
+ *  GET  /my-bookings
+ *  GET  /my-bookings/:bookingId
+ *  POST /my-bookings/:bookingId/cancel
+ *  POST /my-bookings/:bookingId/rate
+ *  GET  /my-bookings/:bookingId/op-download  (blob)
+ */
+
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import toast                              from 'react-hot-toast';
+
+import API from '../api';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SLICE_NAME = 'booking';
+const BASE = '/bookings';
 
-const REQUEST_STATUS = Object.freeze({
-  IDLE:       'idle',
-  LOADING:    'loading',
-  SUCCESS:    'success',
-  FAILED:     'failed',
-});
-
-const SOCKET_STATUS = Object.freeze({
-  DISCONNECTED: 'disconnected',
-  CONNECTING:   'connecting',
-  CONNECTED:    'connected',
-  ERROR:        'error',
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SOCKET SINGLETON (module-level, NOT in Redux state — not serializable)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** @type {import('socket.io-client').Socket|null} */
-let _socket = null;
-
-/**
- * Get or create socket instance.
- * @param {string} token — JWT
- * @returns {import('socket.io-client').Socket}
- */
-const getSocket = (token) => {
-  if (_socket?.connected) return _socket;
-  _socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || process.env.NEXT_PUBLIC_SOCKET_URL, {
-    auth:             { token },
-    transports:       ['websocket'],
-    reconnection:     true,
-    reconnectionDelay: 2000,
-    reconnectionAttempts: 10,
-  });
-  return _socket;
-};
-
-const disconnectSocket = () => {
-  if (_socket) {
-    _socket.disconnect();
-    _socket = null;
-  }
-};
+export const BOOKING_TYPES = [
+  'full_care_ride',
+  'doctor_consultation',
+  'doctor_online',
+  'patient_transport',
+  'physiotherapist',
+  'follow_up',
+  'diagnostic_center',
+  'diagnostic_home',
+  'care_assistant',
+];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const extractErrorMessage = (error, fallback = 'Something went wrong. Please try again.') => {
-  if (!error) return fallback;
-  const serverMsg = error?.response?.data?.message;
-  if (typeof serverMsg === 'string' && serverMsg.trim()) return serverMsg.trim();
-  if (error?.code === 'ERR_NETWORK' || error?.message === 'Network Error')
-    return 'Network error. Please check your connection.';
-  if (error?.code === 'ECONNABORTED') return 'Request timed out. Please try again.';
-  return fallback;
-};
+const mkThunk = (type, fn) =>
+  createAsyncThunk(type, async (arg, api) => {
+    try {
+      return await fn(arg, api);
+    } catch (err) {
+      const msg = err?.response?.data?.message || err.message || 'Something went wrong';
+      toast.error(msg);
+      return api.rejectWithValue(msg);
+    }
+  });
 
-const shouldProceed = (loadingKey) => (_arg, { getState }) => {
-  const keys   = loadingKey.split('.');
-  let   cursor = getState()[SLICE_NAME];
-  for (const k of keys) cursor = cursor?.[k];
-  return cursor !== REQUEST_STATUS.LOADING;
+const downloadBlob = (data, filename, mime = 'application/zip') => {
+  const url  = window.URL.createObjectURL(new Blob([data], { type: mime }));
+  const link = document.createElement('a');
+  link.href  = url;
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -80,706 +87,497 @@ const shouldProceed = (loadingKey) => (_arg, { getState }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const initialState = {
-  // ── Discovery ────────────────────────────────────────────────────────────
-  hospitals: {
-    data:   [],
-    status: REQUEST_STATUS.IDLE,
-    error:  null,
-  },
-  doctorsByHospital: {
-    hospitalId: null,
-    data:       [],
-    status:     REQUEST_STATUS.IDLE,
-    error:      null,
-  },
-  hospitalAvailability: {
-    hospitalId: null,
-    data:       null,
-    status:     REQUEST_STATUS.IDLE,
-    error:      null,
-  },
-  doctorAvailability: {
-    doctorId: null,
-    data:     null,
-    status:   REQUEST_STATUS.IDLE,
-    error:    null,
-  },
-  labs: {
-    data:   [],
-    status: REQUEST_STATUS.IDLE,
-    error:  null,
-  },
-  labDetail: {
-    labId:  null,
-    data:   null,
-    status: REQUEST_STATUS.IDLE,
-    error:  null,
-  },
-  bookingOptions: {
-    type:   null,
-    data:   null,
-    status: REQUEST_STATUS.IDLE,
-    error:  null,
-  },
-  transportEstimate: {
-    data:   null,
-    status: REQUEST_STATUS.IDLE,
-    error:  null,
-  },
-  followUpCheck: {
-    data:   null,
-    status: REQUEST_STATUS.IDLE,
-    error:  null,
-  },
+  // ── Discovery ─────────────────────────────────────────────────────────────
+  hospitals:             [],
+  hospitalDoctors:       [],       // alias: doctorsByHospital
+  hospitalAvailability:  null,
+  doctorAvailability:    null,
+  labs:                  [],
+  selectedLab:           null,     // alias: labDetail
+  bookingOptions:        null,
+  transportEstimate:     null,
+  followUpEligibility:   null,     // alias: followUpCheck
 
-  // ── Create booking ───────────────────────────────────────────────────────
-  createBooking: {
-    bookingType: null,
-    data:        null,
-    status:      REQUEST_STATUS.IDLE,
-    error:       null,
-  },
+  // ── My bookings ───────────────────────────────────────────────────────────
+  myBookings:            [],
+  myBookingsMeta:        { total: 0, page: 1, limit: 10 },
+  selectedBooking:       null,
+  cancelBookingResult:   null,
+  rateBookingResult:     null,
 
-  // ── My bookings list ─────────────────────────────────────────────────────
-  myBookings: {
-    data:   [],
-    total:  0,
-    page:   1,
-    limit:  10,
-    status: REQUEST_STATUS.IDLE,
-    error:  null,
-  },
+  // ── Active booking creation result ────────────────────────────────────────
+  createdBooking:        null,     // data / loading / error / status tracked below
+  createBookingLoading:  false,
+  createBookingError:    null,
+  createBookingStatus:   'idle',   // 'idle' | 'loading' | 'succeeded' | 'failed'
 
-  // ── Active booking detail ─────────────────────────────────────────────────
-  activeBooking: {
-    data:   null,
-    status: REQUEST_STATUS.IDLE,
-    error:  null,
-  },
-
-  // ── Cancel booking ────────────────────────────────────────────────────────
-  cancelBooking: {
-    bookingId: null,
-    data:      null,
-    status:    REQUEST_STATUS.IDLE,
-    error:     null,
-  },
-
-  // ── Rate booking ──────────────────────────────────────────────────────────
-  rateBooking: {
-    bookingId: null,
-    status:    REQUEST_STATUS.IDLE,
-    error:     null,
-  },
-
-  // ── SOCKET ───────────────────────────────────────────────────────────────
-  socket: {
-    status:       SOCKET_STATUS.DISCONNECTED,   // connecting|connected|disconnected|error
-    error:        null,
-    joinedRooms:  [],                           // ['booking:abc', 'tp:xyz']
-  },
-
-  // ── Live location per booking (keyed by bookingId) ────────────────────────
-  // { [bookingId]: { lat, lng, heading, speed, role, updatedAt } }
-  liveLocations: {},
-
-  // ── Participant presence per booking ──────────────────────────────────────
-  // { [bookingId]: [{ role, name, timestamp }] }
-  participants: {},
-
-  // ── Booking state snapshot (from socket, after reconnect) ─────────────────
-  bookingSnapshot: {
-    bookingId:     null,
-    bookingStatus: null,
-    ride:          null,   // { status, liveLocation }
-    tracking:      null,   // { currentLocation, remainingDistance, remainingDuration, lastUpdatedAt }
-    receivedAt:    null,
-  },
+  // ── Loading / errors ──────────────────────────────────────────────────────
+  loading:               {},
+  errors:                {},
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SOCKET THUNKS
+// ── DISCOVERY THUNKS ─────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Connect socket with JWT token.
- * Attaches all event listeners and dispatches state updates.
- * @param {string} token
- */
-export const connectBookingSocket = createAsyncThunk(
-  `${SLICE_NAME}/connectBookingSocket`,
-  async (token, { dispatch, rejectWithValue }) => {
-    try {
-      const socket = getSocket(token);
+export const fetchHospitals = mkThunk(
+  'booking/fetchHospitals',
+  async ({ city, hospitalType } = {}) => {
+    const { data } = await API.get(`${BASE}/hospitals`, { params: { city, hospitalType } });
+    return data.data;
+  }
+);
 
-      // Already connected — nothing to do
-      if (socket.connected) return { already: true };
+export const fetchHospitalDoctors = mkThunk(
+  'booking/fetchHospitalDoctors',
+  async ({ hospitalId }) => {
+    const { data } = await API.get(`${BASE}/hospitals/${hospitalId}/doctors`);
+    return data.data;
+  }
+);
 
-      return new Promise((resolve, reject) => {
-        // ── Connection events ──────────────────────────────────────────────
-        socket.on('connect', () => {
-          dispatch(socketConnected());
-          resolve({ socketId: socket.id });
-        });
+export const checkHospitalAvailability = mkThunk(
+  'booking/checkHospitalAvailability',
+  async ({ hospitalId, scheduledAt }) => {
+    const { data } = await API.get(`${BASE}/hospitals/${hospitalId}/availability`, {
+      params: { scheduledAt },
+    });
+    return data.data;
+  }
+);
 
-        socket.on('connect_error', (err) => {
-          dispatch(socketError(err.message));
-          reject(err.message);
-        });
+export const checkDoctorAvailability = mkThunk(
+  'booking/checkDoctorAvailability',
+  async ({ doctorId, scheduledAt, hospitalId }) => {
+    const { data } = await API.get(`${BASE}/doctors/${doctorId}/availability`, {
+      params: { scheduledAt, hospitalId },
+    });
+    return data.data;
+  }
+);
 
-        socket.on('disconnect', (reason) => {
-          dispatch(socketDisconnected(reason));
-        });
+export const fetchLabs = mkThunk(
+  'booking/fetchLabs',
+  async ({ city, labType, homeCollection } = {}) => {
+    const { data } = await API.get(`${BASE}/labs`, {
+      params: { city, labType, homeCollection },
+    });
+    return data.data;
+  }
+);
 
-        socket.on('reconnect_attempt', () => {
-          dispatch(socketConnecting());
-        });
-
-        socket.on('reconnect', () => {
-          dispatch(socketConnected());
-        });
-
-        // ── Booking room events ────────────────────────────────────────────
-
-        /**
-         * location_update: { lat, lng, heading, speed, role, updatedAt }
-         * Need bookingId context — server sends in room, client must tag it.
-         * We store under all active booking rooms the socket is in.
-         */
-        socket.on('location_update', (payload) => {
-          // Extract bookingId from joined rooms list
-          const rooms = [...(socket.rooms || [])].filter((r) => r.startsWith('booking:'));
-          if (rooms.length === 1) {
-            const bookingId = rooms[0].replace('booking:', '');
-            dispatch(setLiveLocation({ bookingId, ...payload }));
-          }
-          // If in multiple booking rooms — payload should carry bookingId ideally.
-          // Fallback: update all active booking rooms (safe for typical 1-booking UX).
-          if (rooms.length > 1) {
-            for (const room of rooms) {
-              const bookingId = room.replace('booking:', '');
-              dispatch(setLiveLocation({ bookingId, ...payload }));
-            }
-          }
-        });
-
-        socket.on('booking_state_snapshot', (payload) => {
-          dispatch(setBookingSnapshot(payload));
-        });
-
-        socket.on('participant_joined', (payload) => {
-          dispatch(participantJoined(payload));
-        });
-
-        socket.on('participant_left', (payload) => {
-          dispatch(participantLeft(payload));
-        });
-
-        /**
-         * booking_status_update: server can emit this from router after
-         * status changes (e.g. ride started, completed).
-         * Shape: { bookingId, status }
-         */
-        socket.on('booking_status_update', ({ bookingId, status }) => {
-          dispatch(patchBookingStatus({ bookingId, status }));
-        });
-
-        socket.on('otp_resend_requested', (payload) => {
-          // Notify UI — not stored in state, use a toast or trigger component event
-          toast(`OTP resend requested by ${payload.requestedBy}`);
-        });
-
-        socket.on('error', ({ message }) => {
-          toast.error(`Socket: ${message}`);
-        });
-
-        socket.on('driver_offline', (payload) => {
-          // Admin-facing — no customer state change needed. Log only.
-          console.warn('[Socket] driver_offline', payload);
-        });
-      });
-    } catch (err) {
-      return rejectWithValue(err?.message || 'Socket connection failed');
-    }
+export const fetchLabById = mkThunk(
+  'booking/fetchLabById',
+  async ({ labId }) => {
+    const { data } = await API.get(`${BASE}/labs/${labId}`);
+    return data.data;
   }
 );
 
 /**
- * Join a booking room.
- * @param {string} bookingId
+ * fetchBookingOptions — /booking-options/:type
+ * Returns description, steps, notes, components for a booking type.
  */
-export const joinBookingRoom = createAsyncThunk(
-  `${SLICE_NAME}/joinBookingRoom`,
-  async (bookingId, { dispatch, rejectWithValue }) => {
-    try {
-      if (!_socket?.connected) throw new Error('Socket not connected');
-
-      return new Promise((resolve, reject) => {
-        _socket.emit('join_booking_room', { bookingId });
-
-        _socket.once('joined_room', (payload) => {
-          if (payload.bookingId === bookingId) {
-            dispatch(roomJoined(`booking:${bookingId}`));
-            resolve(payload);
-          }
-        });
-
-        _socket.once('error', ({ message }) => {
-          reject(message);
-        });
-
-        // Timeout guard
-        setTimeout(() => reject('Join room timeout'), 10000);
-      });
-    } catch (err) {
-      return rejectWithValue(err?.message || 'Failed to join booking room');
-    }
+export const fetchBookingOptions = mkThunk(
+  'booking/fetchBookingOptions',
+  async ({ type }) => {
+    const { data } = await API.get(`${BASE}/booking-options/${type}`);
+    return data.data;
   }
 );
 
 /**
- * Leave a booking room.
- * @param {string} bookingId
+ * fetchTransportEstimate — pre-booking straight-line estimate.
+ * Actual fare locked via Google Maps canonical route at ride creation.
  */
-export const leaveBookingRoom = createAsyncThunk(
-  `${SLICE_NAME}/leaveBookingRoom`,
-  async (bookingId, { dispatch }) => {
-    if (!_socket?.connected) return;
-    _socket.emit('leave_booking_room', { bookingId });
-    dispatch(roomLeft(`booking:${bookingId}`));
-    return bookingId;
+export const fetchTransportEstimate = mkThunk(
+  'booking/fetchTransportEstimate',
+  async ({
+    pickupLng, pickupLat, dropoffLng, dropoffLat,
+    includeReturn  = false,
+    waitingMinutes = 0,
+    bookingType    = 'patient_transport',
+  }) => {
+    const { data } = await API.get(`${BASE}/transport/estimate`, {
+      params: { pickupLng, pickupLat, dropoffLng, dropoffLat, includeReturn, waitingMinutes, bookingType },
+    });
+    return data.data;
   }
 );
 
 /**
- * Join a TP room (transport partner dashboard).
- * @param {string} tpId
+ * checkFollowUpEligibility — check if customer is eligible for follow-up.
+ * Requires doctorId. hospitalId optional.
  */
-export const joinTpRoom = createAsyncThunk(
-  `${SLICE_NAME}/joinTpRoom`,
-  async (tpId, { dispatch, rejectWithValue }) => {
-    try {
-      if (!_socket?.connected) throw new Error('Socket not connected');
-
-      return new Promise((resolve, reject) => {
-        _socket.emit('join_tp_room', { tpId });
-
-        _socket.once('joined_room', (payload) => {
-          if (payload.tpId === tpId) {
-            dispatch(roomJoined(`tp:${tpId}`));
-            resolve(payload);
-          }
-        });
-
-        _socket.once('error', ({ message }) => reject(message));
-        setTimeout(() => reject('Join TP room timeout'), 10000);
-      });
-    } catch (err) {
-      return rejectWithValue(err?.message || 'Failed to join TP room');
-    }
-  }
-);
-
-/**
- * Request a booking state snapshot (useful after reconnect).
- * @param {string} bookingId
- */
-export const requestBookingSnapshot = createAsyncThunk(
-  `${SLICE_NAME}/requestBookingSnapshot`,
-  async (bookingId, { rejectWithValue }) => {
-    try {
-      if (!_socket?.connected) throw new Error('Socket not connected');
-      _socket.emit('request_booking_state', { bookingId });
-      // Response comes via 'booking_state_snapshot' event → setBookingSnapshot reducer
-      return bookingId;
-    } catch (err) {
-      return rejectWithValue(err?.message || 'Failed to request snapshot');
-    }
-  }
-);
-
-/**
- * Disconnect socket (call on logout or app unmount).
- */
-export const disconnectBookingSocket = createAsyncThunk(
-  `${SLICE_NAME}/disconnectBookingSocket`,
-  async (_, { dispatch }) => {
-    disconnectSocket();
-    dispatch(socketDisconnected('manual'));
-    return true;
-  }
-);
-
-/**
- * Push driver location (for driver-role clients).
- * @param {{ bookingId?: string, lat: number, lng: number, heading?: number, speed?: number }} payload
- */
-export const pushDriverLocation = createAsyncThunk(
-  `${SLICE_NAME}/pushDriverLocation`,
-  async (payload, { rejectWithValue }) => {
-    try {
-      if (!_socket?.connected) throw new Error('Socket not connected');
-      _socket.emit('driver_location', payload);
-      return true;
-    } catch (err) {
-      return rejectWithValue(err?.message || 'Location push failed');
-    }
-  }
-);
-
-/**
- * Push care assistant location.
- * @param {{ bookingId?: string, lat: number, lng: number }} payload
- */
-export const pushCareLocation = createAsyncThunk(
-  `${SLICE_NAME}/pushCareLocation`,
-  async (payload, { rejectWithValue }) => {
-    try {
-      if (!_socket?.connected) throw new Error('Socket not connected');
-      _socket.emit('care_location', payload);
-      return true;
-    } catch (err) {
-      return rejectWithValue(err?.message || 'Care location push failed');
-    }
+export const checkFollowUpEligibility = mkThunk(
+  'booking/checkFollowUpEligibility',
+  async ({ doctorId, hospitalId }) => {
+    const { data } = await API.get(`${BASE}/follow-up/check`, {
+      params: { doctorId, hospitalId },
+    });
+    return data.data;
   }
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ASYNC THUNKS — DISCOVERY (unchanged from original)
+// ── BOOKING CREATION THUNKS ──────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const fetchHospitals = createAsyncThunk(
-  `${SLICE_NAME}/fetchHospitals`,
-  async (params = {}, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get('/bookings/hospitals', { params });
-      return data.data;
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('hospitals.status') }
-);
-
-export const fetchDoctorsByHospital = createAsyncThunk(
-  `${SLICE_NAME}/fetchDoctorsByHospital`,
-  async (hospitalId, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(`/bookings/hospitals/${hospitalId}/doctors`);
-      return { hospitalId, doctors: data.data };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
+/**
+ * createFullCareRide — POST /full-care-ride
+ *
+ * Creates booking + outbound ride (+ return ride if includeReturnHome).
+ * Canonical polylines locked at creation.
+ * Care assistant auto-assigned.
+ * OP record created.
+ * Returns: bookingId, bookingCode, fareBreakdown, mapRoutes, rides,
+ *          careAssistantAssigned, opNumber, razorpayOrder.
+ *
+ * @param {{
+ *   hospitalId: string,
+ *   doctorId: string,
+ *   scheduledAt: string,
+ *   consultationType?: string,
+ *   patientInfo: object,
+ *   patientLocation: { coordinates: [lng, lat], address: string, city: string, pincode?: string },
+ *   destinationLocation?: { coordinates: [lng, lat], address?: string, city?: string },
+ *   includeReturnHome?: boolean,
+ *   slotId?: string,
+ *   documents?: string[],
+ *   paymentMethod?: 'Razorpay'|'Wallet',
+ *   couponCode?: string,
+ *   coinsToRedeem?: number,
+ * }} payload
+ */
+export const createFullCareRide = mkThunk(
+  'booking/createFullCareRide',
+  async (payload) => {
+    const { data } = await API.post(`${BASE}/full-care-ride`, payload);
+    toast.success('Full care ride booked!');
+    return data.data;
   }
 );
 
-export const checkHospitalAvailability = createAsyncThunk(
-  `${SLICE_NAME}/checkHospitalAvailability`,
-  async ({ hospitalId, scheduledAt }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(`/bookings/hospitals/${hospitalId}/availability`, {
-        params: { scheduledAt },
-      });
-      return { hospitalId, ...data.data };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('hospitalAvailability.status') }
-);
-
-export const checkDoctorAvailability = createAsyncThunk(
-  `${SLICE_NAME}/checkDoctorAvailability`,
-  async ({ doctorId, scheduledAt, hospitalId }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(`/bookings/doctors/${doctorId}/availability`, {
-        params: { scheduledAt, hospitalId },
-      });
-      return { doctorId, ...data.data };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('doctorAvailability.status') }
-);
-
-export const fetchLabs = createAsyncThunk(
-  `${SLICE_NAME}/fetchLabs`,
-  async (params = {}, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get('/bookings/labs', { params });
-      return data.data;
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('labs.status') }
-);
-
-export const fetchLabDetail = createAsyncThunk(
-  `${SLICE_NAME}/fetchLabDetail`,
-  async (labId, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(`/bookings/labs/${labId}`);
-      return { labId, lab: data.data };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('labDetail.status') }
-);
-
-export const fetchBookingOptions = createAsyncThunk(
-  `${SLICE_NAME}/fetchBookingOptions`,
-  async (type, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(`/bookings/booking-options/${type}`);
-      return data.data;
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
+/**
+ * createDoctorConsultation — POST /doctor-consultation
+ *
+ * In-person doctor visit. No ride created.
+ * Returns: bookingId, bookingCode, opNumber, fareBreakdown, razorpayOrder.
+ *
+ * @param {{
+ *   hospitalId?: string,
+ *   doctorId: string,
+ *   scheduledAt: string,
+ *   consultationType?: string,
+ *   patientInfo: object,
+ *   slotId?: string,
+ *   documents?: string[],
+ *   paymentMethod?: 'Razorpay'|'Wallet',
+ *   couponCode?: string,
+ *   coinsToRedeem?: number,
+ * }} payload
+ */
+export const createDoctorConsultation = mkThunk(
+  'booking/createDoctorConsultation',
+  async (payload) => {
+    const { data } = await API.post(`${BASE}/doctor-consultation`, payload);
+    toast.success('Appointment confirmed!');
+    return data.data;
   }
 );
 
-export const estimateTransport = createAsyncThunk(
-  `${SLICE_NAME}/estimateTransport`,
-  async (params, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get('/bookings/transport/estimate', { params });
-      return data.data;
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('transportEstimate.status') }
-);
-
-export const checkFollowUp = createAsyncThunk(
-  `${SLICE_NAME}/checkFollowUp`,
-  async ({ doctorId, hospitalId }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get('/bookings/follow-up/check', {
-        params: { doctorId, hospitalId },
-      });
-      return data.data;
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('followUpCheck.status') }
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ASYNC THUNKS — BOOKING POST (unchanged)
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const createFullCareRide = createAsyncThunk(
-  `${SLICE_NAME}/createFullCareRide`,
-  async (payload, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post('/bookings/full-care-ride', payload);
-      return { bookingType: 'full_care_ride', ...data.data };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('createBooking.status') }
-);
-
-export const createDoctorConsultation = createAsyncThunk(
-  `${SLICE_NAME}/createDoctorConsultation`,
-  async (payload, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post('/bookings/doctor-consultation', payload);
-      return { bookingType: 'doctor_consultation', ...data.data };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('createBooking.status') }
-);
-
-export const createDoctorOnline = createAsyncThunk(
-  `${SLICE_NAME}/createDoctorOnline`,
-  async (payload, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post('/bookings/doctor-online', payload);
-      return { bookingType: 'doctor_online', ...data.data };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('createBooking.status') }
-);
-
-export const createPhysiotherapist = createAsyncThunk(
-  `${SLICE_NAME}/createPhysiotherapist`,
-  async (payload, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post('/bookings/physiotherapist', payload);
-      return { bookingType: 'physiotherapist', ...data.data };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('createBooking.status') }
-);
-
-export const createCareAssistant = createAsyncThunk(
-  `${SLICE_NAME}/createCareAssistant`,
-  async (payload, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post('/bookings/care-assistant', payload);
-      return { bookingType: 'care_assistant', ...data.data };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('createBooking.status') }
-);
-
-export const createDiagnosticCenter = createAsyncThunk(
-  `${SLICE_NAME}/createDiagnosticCenter`,
-  async (payload, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post('/bookings/diagnostic-center', payload);
-      return { bookingType: 'diagnostic_center', ...data.data };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('createBooking.status') }
-);
-
-export const createDiagnosticHome = createAsyncThunk(
-  `${SLICE_NAME}/createDiagnosticHome`,
-  async (payload, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post('/bookings/diagnostic-home', payload);
-      return { bookingType: 'diagnostic_home', ...data.data };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('createBooking.status') }
-);
-
-export const createPatientTransport = createAsyncThunk(
-  `${SLICE_NAME}/createPatientTransport`,
-  async (payload, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post('/bookings/patient-transport', payload);
-      return { bookingType: 'patient_transport', ...data.data };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('createBooking.status') }
-);
-
-export const createFollowUp = createAsyncThunk(
-  `${SLICE_NAME}/createFollowUp`,
-  async (payload, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post('/bookings/follow-up', payload);
-      return { bookingType: 'follow_up', ...data.data };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('createBooking.status') }
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ASYNC THUNKS — MANAGEMENT (unchanged)
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const fetchMyBookings = createAsyncThunk(
-  `${SLICE_NAME}/fetchMyBookings`,
-  async (params = {}, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get('/bookings/my-bookings', { params });
-      return {
-        bookings: data.data,
-        total:    data.total,
-        page:     data.page,
-        limit:    data.limit,
-      };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
+/**
+ * createDoctorOnline — POST /doctor-online
+ *
+ * Video consultation. No ride. Meeting link sent on confirmation.
+ * Returns: bookingId, bookingCode, fareBreakdown, razorpayOrder.
+ *
+ * @param {{
+ *   doctorId: string,
+ *   scheduledAt: string,
+ *   patientInfo: object,
+ *   documents?: string[],
+ *   paymentMethod?: 'Razorpay'|'Wallet',
+ * }} payload
+ */
+export const createDoctorOnline = mkThunk(
+  'booking/createDoctorOnline',
+  async (payload) => {
+    const { data } = await API.post(`${BASE}/doctor-online`, payload);
+    toast.success('Online consultation booked!');
+    return data.data;
   }
 );
 
-export const fetchBookingById = createAsyncThunk(
-  `${SLICE_NAME}/fetchBookingById`,
-  async (bookingId, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(`/bookings/my-bookings/${bookingId}`);
-      return data.data;
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('activeBooking.status') }
+/**
+ * createPatientTransport — POST /patient-transport
+ *
+ * Standalone transport. Canonical routes locked at creation.
+ * Optional: includeReturn (reversed route), addConsultation (adds doctor OP).
+ * Waiting charges estimated upfront; actual waiting logged in RideTracking.
+ * Returns: bookingId, bookingCode, fareBreakdown, mapRoutes, transportSummary,
+ *          rides, opNumber (if consultation), razorpayOrder.
+ *
+ * @param {{
+ *   patientInfo: object,
+ *   patientLocation: { coordinates: [lng, lat], address: string, city: string, pincode?: string },
+ *   destinationLocation: { coordinates: [lng, lat], address: string, city: string },
+ *   scheduledAt: string,
+ *   includeReturn?: boolean,
+ *   waitingMinutes?: number,
+ *   vehicleClass?: string,
+ *   addConsultation?: boolean,
+ *   hospitalId?: string,
+ *   doctorId?: string,
+ *   consultationType?: string,
+ *   slotId?: string,
+ *   paymentMethod?: 'Razorpay'|'Wallet',
+ *   couponCode?: string,
+ *   coinsToRedeem?: number,
+ * }} payload
+ */
+export const createPatientTransport = mkThunk(
+  'booking/createPatientTransport',
+  async (payload) => {
+    const { data } = await API.post(`${BASE}/patient-transport`, payload);
+    toast.success('Transport booked!');
+    return data.data;
+  }
 );
 
-export const cancelBooking = createAsyncThunk(
-  `${SLICE_NAME}/cancelBooking`,
-  async ({ bookingId, reason }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post(`/bookings/my-bookings/${bookingId}/cancel`, { reason });
-      return { bookingId, ...data.data };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('cancelBooking.status') }
+/**
+ * createPhysiotherapist — POST /physiotherapist
+ *
+ * @param {{
+ *   doctorId: string,
+ *   scheduledAt: string,
+ *   patientInfo: object,
+ *   visitType?: 'inPerson'|'homeVisit',
+ *   slotId?: string,
+ *   documents?: string[],
+ *   paymentMethod?: 'Razorpay'|'Wallet',
+ * }} payload
+ */
+export const createPhysiotherapist = mkThunk(
+  'booking/createPhysiotherapist',
+  async (payload) => {
+    const { data } = await API.post(`${BASE}/physiotherapist`, payload);
+    toast.success('Physiotherapy appointment confirmed!');
+    return data.data;
+  }
 );
 
-export const rateBooking = createAsyncThunk(
-  `${SLICE_NAME}/rateBooking`,
-  async (
-    {
-      bookingId,
+/**
+ * createFollowUp — POST /follow-up
+ *
+ * Eligibility checked by backend (same doctor + hospital, within window).
+ * followUpParentBooking set from followUpCheck.parentOp.
+ * Returns: bookingId, bookingCode, opNumber, fareBreakdown, followUpDetails, razorpayOrder.
+ *
+ * @param {{
+ *   doctorId: string,
+ *   hospitalId?: string,
+ *   scheduledAt: string,
+ *   patientInfo: object,
+ *   consultationType?: string,
+ *   slotId?: string,
+ *   paymentMethod?: 'Razorpay'|'Wallet',
+ * }} payload
+ */
+export const createFollowUp = mkThunk(
+  'booking/createFollowUp',
+  async (payload) => {
+    const { data } = await API.post(`${BASE}/follow-up`, payload);
+    toast.success('Follow-up booked!');
+    return data.data;
+  }
+);
+
+/**
+ * createDiagnosticCenter — POST /diagnostic-center
+ *
+ * Lab tests at diagnostic center (patient travels to lab). No ride created.
+ * Subscription diagnostic discount applied automatically.
+ * Returns: bookingId, bookingCode, fareBreakdown, testNames, packageNames,
+ *          diagnosticDiscount, razorpayOrder.
+ *
+ * @param {{
+ *   labId: string,
+ *   tests?: string[],
+ *   packages?: string[],
+ *   scheduledAt: string,
+ *   patientInfo: object,
+ *   reportDeliveryMode?: string,
+ *   paymentMethod?: 'Razorpay'|'Wallet',
+ * }} payload
+ */
+export const createDiagnosticCenter = mkThunk(
+  'booking/createDiagnosticCenter',
+  async (payload) => {
+    const { data } = await API.post(`${BASE}/diagnostic-center`, payload);
+    toast.success('Diagnostic appointment booked!');
+    return data.data;
+  }
+);
+
+/**
+ * createDiagnosticHome — POST /diagnostic-home
+ *
+ * Lab technician visits patient. Canonical route locked: lab → patient address.
+ * Home collection fee waived if subscription plan includes it.
+ * Returns: bookingId, bookingCode, fareBreakdown, testNames, packageNames,
+ *          homeCollectionFeeWaived, mapRoute, razorpayOrder.
+ *
+ * @param {{
+ *   labId: string,
+ *   tests?: string[],
+ *   packages?: string[],
+ *   scheduledAt: string,
+ *   patientInfo: object,
+ *   patientLocation: { coordinates: [lng, lat], address: string, city: string, pincode?: string },
+ *   reportDeliveryMode?: string,
+ *   paymentMethod?: 'Razorpay'|'Wallet',
+ * }} payload
+ */
+export const createDiagnosticHome = mkThunk(
+  'booking/createDiagnosticHome',
+  async (payload) => {
+    const { data } = await API.post(`${BASE}/diagnostic-home`, payload);
+    toast.success('Home collection booked!');
+    return data.data;
+  }
+);
+
+/**
+ * createCareAssistant — POST /care-assistant
+ *
+ * Care assistant auto-assigned (nearest available). No ride created.
+ * Returns: bookingId, bookingCode, fareBreakdown, careAssistantAssigned,
+ *          durationHours, pricingTier, razorpayOrder.
+ *
+ * @param {{
+ *   patientInfo: object,
+ *   patientLocation: { coordinates: [lng, lat], address: string, city: string },
+ *   scheduledAt: string,
+ *   durationHours?: number,
+ *   paymentMethod?: 'Razorpay'|'Wallet',
+ * }} payload
+ */
+export const createCareAssistant = mkThunk(
+  'booking/createCareAssistant',
+  async (payload) => {
+    const { data } = await API.post(`${BASE}/care-assistant`, payload);
+    toast.success('Care assistant assigned!');
+    return data.data;
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── BOOKING MANAGEMENT THUNKS ────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const fetchMyBookings = mkThunk(
+  'booking/fetchMyBookings',
+  async ({ status, bookingType, page = 1, limit = 10 } = {}) => {
+    const { data } = await API.get(`${BASE}/my-bookings`, {
+      params: { status, bookingType, page, limit },
+    });
+    return data;
+  }
+);
+
+/**
+ * fetchMyBookingById — GET /my-bookings/:bookingId
+ *
+ * Returns full booking detail + mapRoute (canonical polyline from RideTracking).
+ * mapRoute = { polyline, currentEtaMinutes, totalDistanceKm, pickupCoords, dropoffCoords }
+ */
+export const fetchMyBookingById = mkThunk(
+  'booking/fetchMyBookingById',
+  async ({ bookingId }) => {
+    const { data } = await API.get(`${BASE}/my-bookings/${bookingId}`);
+    return data.data;
+  }
+);
+
+/**
+ * cancelMyBooking — POST /my-bookings/:bookingId/cancel
+ *
+ * Only cancellable in pending/confirmed status.
+ * Returns: refundPercent, refundAmount, status.
+ */
+export const cancelMyBooking = mkThunk(
+  'booking/cancelMyBooking',
+  async ({ bookingId, reason }) => {
+    const { data } = await API.post(`${BASE}/my-bookings/${bookingId}/cancel`, { reason });
+    toast.success(`Booking cancelled. Refund: ₹${data.data?.refundAmount ?? 0}`);
+    return { bookingId, ...data.data };
+  }
+);
+
+/**
+ * rateMyBooking — POST /my-bookings/:bookingId/rate
+ *
+ * Only for completed, un-rated bookings.
+ * Supports: overallRating (required, 1-5), doctorRating, careAssistantRating,
+ *           driverRating, labRating — all with optional comment fields.
+ */
+export const rateMyBooking = mkThunk(
+  'booking/rateMyBooking',
+  async ({
+    bookingId,
+    overallRating, overallComment,
+    doctorRating,  doctorComment,
+    careAssistantRating, careAssistantComment,
+    driverRating,  driverComment,
+    labRating,     labComment,
+  }) => {
+    const { data } = await API.post(`${BASE}/my-bookings/${bookingId}/rate`, {
       overallRating, overallComment,
-      doctorRating, doctorComment,
+      doctorRating,  doctorComment,
       careAssistantRating, careAssistantComment,
-      driverRating, driverComment,
-      labRating, labComment,
-    },
-    { rejectWithValue }
-  ) => {
-    try {
-      await API.post(`/bookings/my-bookings/${bookingId}/rate`, {
-        overallRating, overallComment,
-        doctorRating, doctorComment,
-        careAssistantRating, careAssistantComment,
-        driverRating, driverComment,
-        labRating, labComment,
-      });
-      return { bookingId };
-    } catch (error) {
-      return rejectWithValue(extractErrorMessage(error));
-    }
-  },
-  { condition: shouldProceed('rateBooking.status') }
+      driverRating,  driverComment,
+      labRating,     labComment,
+    });
+    toast.success('Rating submitted!');
+    return { bookingId };
+  }
+);
+
+/**
+ * downloadOpCard — GET /my-bookings/:bookingId/op-download
+ *
+ * Customer downloads OP zip by bookingId (no need to know opNumber).
+ * Triggers browser file download.
+ */
+export const downloadOpCard = mkThunk(
+  'booking/downloadOpCard',
+  async ({ bookingId, filename = 'op-card.zip' }) => {
+    const { data } = await API.get(`${BASE}/my-bookings/${bookingId}/op-download`, {
+      responseType: 'blob',
+    });
+    downloadBlob(data, filename, 'application/zip');
+    return { bookingId };
+  }
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CREATE BOOKING THUNKS — matcher group
+// KEY HELPER — "booking/fetchHospitals/pending" → "fetchHospitals"
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ALL_CREATE_THUNKS = [
-  createFullCareRide,
-  createDoctorConsultation,
-  createDoctorOnline,
-  createPhysiotherapist,
-  createCareAssistant,
-  createDiagnosticCenter,
-  createDiagnosticHome,
-  createPatientTransport,
-  createFollowUp,
+const key = (type) => type.split('/')[1];
+
+// Booking creation thunks list — used to track createBookingLoading/Error/Status
+const CREATE_THUNKS = [
+  'createFullCareRide',
+  'createDoctorConsultation',
+  'createDoctorOnline',
+  'createPatientTransport',
+  'createPhysiotherapist',
+  'createFollowUp',
+  'createDiagnosticCenter',
+  'createDiagnosticHome',
+  'createCareAssistant',
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -787,438 +585,263 @@ const ALL_CREATE_THUNKS = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 const bookingSlice = createSlice({
-  name: SLICE_NAME,
+  name: 'booking',
   initialState,
 
   reducers: {
-    // ── Existing resets ──────────────────────────────────────────────────────
-    resetHospitals(state)            { state.hospitals            = initialState.hospitals; },
-    resetDoctorsByHospital(state)    { state.doctorsByHospital    = initialState.doctorsByHospital; },
-    resetHospitalAvailability(state) { state.hospitalAvailability = initialState.hospitalAvailability; },
-    resetDoctorAvailability(state)   { state.doctorAvailability   = initialState.doctorAvailability; },
-    resetLabs(state)                 { state.labs                 = initialState.labs; },
-    resetLabDetail(state)            { state.labDetail            = initialState.labDetail; },
-    resetBookingOptions(state)       { state.bookingOptions       = initialState.bookingOptions; },
-    resetTransportEstimate(state)    { state.transportEstimate    = initialState.transportEstimate; },
-    resetFollowUpCheck(state)        { state.followUpCheck        = initialState.followUpCheck; },
-    resetCreateBooking(state)        { state.createBooking        = initialState.createBooking; },
-    clearActiveBooking(state)        { state.activeBooking        = initialState.activeBooking; },
-    resetCancelBooking(state)        { state.cancelBooking        = initialState.cancelBooking; },
-    resetRateBooking(state)          { state.rateBooking          = initialState.rateBooking; },
+    // ── Existing ────────────────────────────────────────────────────────────
 
-    // ── Socket status (dispatched from socket event listeners) ──────────────
-    socketConnecting(state) {
-      state.socket.status = SOCKET_STATUS.CONNECTING;
-      state.socket.error  = null;
-    },
-    socketConnected(state) {
-      state.socket.status = SOCKET_STATUS.CONNECTED;
-      state.socket.error  = null;
-    },
-    socketDisconnected(state) {
-      state.socket.status      = SOCKET_STATUS.DISCONNECTED;
-      state.socket.joinedRooms = [];
-    },
-    socketError(state, { payload }) {
-      state.socket.status = SOCKET_STATUS.ERROR;
-      state.socket.error  = payload;
+    /** Clear created booking after payment screen consumed it */
+    clearCreatedBooking(state) {
+      state.createdBooking       = null;
+      state.createBookingLoading = false;
+      state.createBookingError   = null;
+      state.createBookingStatus  = 'idle';
     },
 
-    // ── Room tracking ────────────────────────────────────────────────────────
-    roomJoined(state, { payload: room }) {
-      if (!state.socket.joinedRooms.includes(room)) {
-        state.socket.joinedRooms.push(room);
-      }
-    },
-    roomLeft(state, { payload: room }) {
-      state.socket.joinedRooms = state.socket.joinedRooms.filter((r) => r !== room);
-      // Clean up location + participants for this booking
-      if (room.startsWith('booking:')) {
-        const bookingId = room.replace('booking:', '');
-        delete state.liveLocations[bookingId];
-        delete state.participants[bookingId];
-      }
+    /** Alias used by components: resetCreateBooking */
+    resetCreateBooking(state) {
+      state.createdBooking       = null;
+      state.createBookingLoading = false;
+      state.createBookingError   = null;
+      state.createBookingStatus  = 'idle';
     },
 
-    // ── Live location update (from socket event) ─────────────────────────────
-    /**
-     * @param {{ bookingId, lat, lng, heading, speed, role, updatedAt }} payload
-     */
-    setLiveLocation(state, { payload }) {
-      const { bookingId, ...rest } = payload;
-      state.liveLocations[bookingId] = rest;
+    /** Clear selected booking when navigating away from detail */
+    clearSelectedBooking(state) {
+      state.selectedBooking = null;
     },
 
-    clearLiveLocation(state, { payload: bookingId }) {
-      delete state.liveLocations[bookingId];
+    /** Clear discovery state (hospitals, labs, doctors) between searches */
+    clearDiscovery(state) {
+      state.hospitals            = [];
+      state.hospitalDoctors      = [];
+      state.hospitalAvailability = null;
+      state.doctorAvailability   = null;
+      state.labs                 = [];
+      state.selectedLab          = null;
+      state.bookingOptions       = null;
+      state.transportEstimate    = null;
+      state.followUpEligibility  = null;
     },
 
-    // ── Participant presence ─────────────────────────────────────────────────
-    /**
-     * @param {{ bookingId, role, name, timestamp }} payload
-     */
-    participantJoined(state, { payload }) {
-      const { bookingId, ...participant } = payload;
-      if (!bookingId) return;
-      if (!state.participants[bookingId]) state.participants[bookingId] = [];
-      // Upsert by role
-      const idx = state.participants[bookingId].findIndex((p) => p.role === participant.role);
-      if (idx !== -1) state.participants[bookingId][idx] = participant;
-      else state.participants[bookingId].push(participant);
-    },
-    /**
-     * @param {{ bookingId, role, name, timestamp }} payload
-     */
-    participantLeft(state, { payload }) {
-      const { bookingId, role } = payload;
-      if (!bookingId || !state.participants[bookingId]) return;
-      state.participants[bookingId] = state.participants[bookingId].filter(
-        (p) => p.role !== role
-      );
+    /** Reset cancellation state */
+    resetCancelBooking(state) {
+      state.cancelBookingResult = null;
+      delete state.loading['cancelMyBooking'];
+      delete state.errors['cancelMyBooking'];
     },
 
-    // ── Booking snapshot (from socket after reconnect) ───────────────────────
-    setBookingSnapshot(state, { payload }) {
-      state.bookingSnapshot = {
-        ...payload,
-        receivedAt: new Date().toISOString(),
-      };
-      // Also patch active booking status if IDs match
-      if (state.activeBooking.data?._id === payload.bookingId && payload.bookingStatus) {
-        state.activeBooking.data.status = payload.bookingStatus;
-      }
+    /** Reset rating state */
+    resetRateBooking(state) {
+      state.rateBookingResult = null;
+      delete state.loading['rateMyBooking'];
+      delete state.errors['rateMyBooking'];
     },
 
-    resetBookingSnapshot(state) {
-      state.bookingSnapshot = initialState.bookingSnapshot;
+    clearErrors(state) {
+      state.errors = {};
     },
 
-    // ── Optimistic status patch (from socket or local) ───────────────────────
-    patchBookingStatus(state, { payload: { bookingId, status } }) {
-      const idx = state.myBookings.data.findIndex((b) => b._id === bookingId);
-      if (idx !== -1) state.myBookings.data[idx].status = status;
-      if (state.activeBooking.data?._id === bookingId) {
-        state.activeBooking.data.status = status;
-      }
+    // ── NEW: granular reset actions required by components ──────────────────
+
+    /** Reset hospitals list + loading/error */
+    resetHospitals(state) {
+      state.hospitals = [];
+      delete state.loading['fetchHospitals'];
+      delete state.errors['fetchHospitals'];
     },
 
-    // ── Full wipe on logout ──────────────────────────────────────────────────
-    resetBookingState() {
-      disconnectSocket(); // kill socket on logout
-      return initialState;
+    /** Reset hospitalDoctors list + loading/error */
+    resetDoctorsByHospital(state) {
+      state.hospitalDoctors = [];
+      delete state.loading['fetchHospitalDoctors'];
+      delete state.errors['fetchHospitalDoctors'];
+    },
+
+    /** Reset hospitalAvailability + loading/error */
+    resetHospitalAvailability(state) {
+      state.hospitalAvailability = null;
+      delete state.loading['checkHospitalAvailability'];
+      delete state.errors['checkHospitalAvailability'];
+    },
+
+    /** Reset doctorAvailability + loading/error */
+    resetDoctorAvailability(state) {
+      state.doctorAvailability = null;
+      delete state.loading['checkDoctorAvailability'];
+      delete state.errors['checkDoctorAvailability'];
+    },
+
+    /** Reset transportEstimate + loading/error */
+    resetTransportEstimate(state) {
+      state.transportEstimate = null;
+      delete state.loading['fetchTransportEstimate'];
+      delete state.errors['fetchTransportEstimate'];
+    },
+
+    /** Reset followUpEligibility + loading/error */
+    resetFollowUpCheck(state) {
+      state.followUpEligibility = null;
+      delete state.loading['checkFollowUpEligibility'];
+      delete state.errors['checkFollowUpEligibility'];
+    },
+
+    /** Reset bookingOptions + loading/error */
+    resetBookingOptions(state) {
+      state.bookingOptions = null;
+      delete state.loading['fetchBookingOptions'];
+      delete state.errors['fetchBookingOptions'];
     },
   },
 
   extraReducers: (builder) => {
-    // ── fetchHospitals ────────────────────────────────────────────────────
-    builder
-      .addCase(fetchHospitals.pending, (state) => {
-        state.hospitals.status = REQUEST_STATUS.LOADING;
-        state.hospitals.error  = null;
-      })
-      .addCase(fetchHospitals.fulfilled, (state, { payload }) => {
-        state.hospitals.status = REQUEST_STATUS.SUCCESS;
-        state.hospitals.data   = payload;
-      })
-      .addCase(fetchHospitals.rejected, (state, { payload }) => {
-        state.hospitals.status = REQUEST_STATUS.FAILED;
-        state.hospitals.error  = payload;
-        toast.error(payload || 'Failed to load hospitals.');
-      });
+    // Generic pending / rejected handlers
+    const pending  = (state, action) => {
+      state.loading[key(action.type)] = true;
+      delete state.errors[key(action.type)];
+    };
+    const rejected = (state, action) => {
+      state.loading[key(action.type)] = false;
+      state.errors[key(action.type)]  = action.payload || 'Error';
+    };
 
-    // ── fetchDoctorsByHospital ─────────────────────────────────────────────
-    builder
-      .addCase(fetchDoctorsByHospital.pending, (state) => {
-        state.doctorsByHospital.status = REQUEST_STATUS.LOADING;
-        state.doctorsByHospital.error  = null;
-        state.doctorsByHospital.data   = [];
-      })
-      .addCase(fetchDoctorsByHospital.fulfilled, (state, { payload }) => {
-        state.doctorsByHospital.status     = REQUEST_STATUS.SUCCESS;
-        state.doctorsByHospital.hospitalId = payload.hospitalId;
-        state.doctorsByHospital.data       = payload.doctors;
-      })
-      .addCase(fetchDoctorsByHospital.rejected, (state, { payload }) => {
-        state.doctorsByHospital.status = REQUEST_STATUS.FAILED;
-        state.doctorsByHospital.error  = payload;
-        toast.error(payload || 'Failed to load doctors.');
-      });
+    // Wire helper — avoids repeating addCase 3× per thunk
+    const wire = (thunk, fulfilled) => {
+      builder
+        .addCase(thunk.pending,   pending)
+        .addCase(thunk.fulfilled, (state, action) => {
+          state.loading[key(action.type)] = false;
+          fulfilled(state, action);
+        })
+        .addCase(thunk.rejected, rejected);
+    };
 
-    // ── checkHospitalAvailability ──────────────────────────────────────────
-    builder
-      .addCase(checkHospitalAvailability.pending, (state) => {
-        state.hospitalAvailability.status = REQUEST_STATUS.LOADING;
-        state.hospitalAvailability.error  = null;
-        state.hospitalAvailability.data   = null;
-      })
-      .addCase(checkHospitalAvailability.fulfilled, (state, { payload }) => {
-        state.hospitalAvailability.status     = REQUEST_STATUS.SUCCESS;
-        state.hospitalAvailability.hospitalId = payload.hospitalId;
-        state.hospitalAvailability.data       = payload;
-      })
-      .addCase(checkHospitalAvailability.rejected, (state, { payload }) => {
-        state.hospitalAvailability.status = REQUEST_STATUS.FAILED;
-        state.hospitalAvailability.error  = payload;
-        toast.error(payload || 'Availability check failed.');
-      });
+    // ── Discovery ─────────────────────────────────────────────────────────
 
-    // ── checkDoctorAvailability ────────────────────────────────────────────
-    builder
-      .addCase(checkDoctorAvailability.pending, (state) => {
-        state.doctorAvailability.status = REQUEST_STATUS.LOADING;
-        state.doctorAvailability.error  = null;
-        state.doctorAvailability.data   = null;
-      })
-      .addCase(checkDoctorAvailability.fulfilled, (state, { payload }) => {
-        state.doctorAvailability.status   = REQUEST_STATUS.SUCCESS;
-        state.doctorAvailability.doctorId = payload.doctorId;
-        state.doctorAvailability.data     = payload;
-      })
-      .addCase(checkDoctorAvailability.rejected, (state, { payload }) => {
-        state.doctorAvailability.status = REQUEST_STATUS.FAILED;
-        state.doctorAvailability.error  = payload;
-        toast.error(payload || 'Doctor availability check failed.');
-      });
+    wire(fetchHospitals, (state, { payload }) => {
+      state.hospitals = Array.isArray(payload) ? payload : [];
+    });
 
-    // ── fetchLabs ──────────────────────────────────────────────────────────
-    builder
-      .addCase(fetchLabs.pending, (state) => {
-        state.labs.status = REQUEST_STATUS.LOADING;
-        state.labs.error  = null;
-      })
-      .addCase(fetchLabs.fulfilled, (state, { payload }) => {
-        state.labs.status = REQUEST_STATUS.SUCCESS;
-        state.labs.data   = payload;
-      })
-      .addCase(fetchLabs.rejected, (state, { payload }) => {
-        state.labs.status = REQUEST_STATUS.FAILED;
-        state.labs.error  = payload;
-        toast.error(payload || 'Failed to load labs.');
-      });
+    wire(fetchHospitalDoctors, (state, { payload }) => {
+      state.hospitalDoctors = Array.isArray(payload) ? payload : [];
+    });
 
-    // ── fetchLabDetail ─────────────────────────────────────────────────────
-    builder
-      .addCase(fetchLabDetail.pending, (state) => {
-        state.labDetail.status = REQUEST_STATUS.LOADING;
-        state.labDetail.error  = null;
-        state.labDetail.data   = null;
-      })
-      .addCase(fetchLabDetail.fulfilled, (state, { payload }) => {
-        state.labDetail.status = REQUEST_STATUS.SUCCESS;
-        state.labDetail.labId  = payload.labId;
-        state.labDetail.data   = payload.lab;
-      })
-      .addCase(fetchLabDetail.rejected, (state, { payload }) => {
-        state.labDetail.status = REQUEST_STATUS.FAILED;
-        state.labDetail.error  = payload;
-        toast.error(payload || 'Failed to load lab details.');
-      });
+    wire(checkHospitalAvailability, (state, { payload }) => {
+      state.hospitalAvailability = payload ?? null;
+    });
 
-    // ── fetchBookingOptions ────────────────────────────────────────────────
-    builder
-      .addCase(fetchBookingOptions.pending, (state) => {
-        state.bookingOptions.status = REQUEST_STATUS.LOADING;
-        state.bookingOptions.error  = null;
-        state.bookingOptions.data   = null;
-      })
-      .addCase(fetchBookingOptions.fulfilled, (state, { payload }) => {
-        state.bookingOptions.status = REQUEST_STATUS.SUCCESS;
-        state.bookingOptions.type   = payload.bookingType;
-        state.bookingOptions.data   = payload;
-      })
-      .addCase(fetchBookingOptions.rejected, (state, { payload }) => {
-        state.bookingOptions.status = REQUEST_STATUS.FAILED;
-        state.bookingOptions.error  = payload;
-        toast.error(payload || 'Failed to load booking options.');
-      });
+    wire(checkDoctorAvailability, (state, { payload }) => {
+      state.doctorAvailability = payload ?? null;
+    });
 
-    // ── estimateTransport ──────────────────────────────────────────────────
-    builder
-      .addCase(estimateTransport.pending, (state) => {
-        state.transportEstimate.status = REQUEST_STATUS.LOADING;
-        state.transportEstimate.error  = null;
-        state.transportEstimate.data   = null;
-      })
-      .addCase(estimateTransport.fulfilled, (state, { payload }) => {
-        state.transportEstimate.status = REQUEST_STATUS.SUCCESS;
-        state.transportEstimate.data   = payload;
-      })
-      .addCase(estimateTransport.rejected, (state, { payload }) => {
-        state.transportEstimate.status = REQUEST_STATUS.FAILED;
-        state.transportEstimate.error  = payload;
-        toast.error(payload || 'Failed to estimate transport fare.');
-      });
+    wire(fetchLabs, (state, { payload }) => {
+      state.labs = Array.isArray(payload) ? payload : [];
+    });
 
-    // ── checkFollowUp ──────────────────────────────────────────────────────
-    builder
-      .addCase(checkFollowUp.pending, (state) => {
-        state.followUpCheck.status = REQUEST_STATUS.LOADING;
-        state.followUpCheck.error  = null;
-        state.followUpCheck.data   = null;
-      })
-      .addCase(checkFollowUp.fulfilled, (state, { payload }) => {
-        state.followUpCheck.status = REQUEST_STATUS.SUCCESS;
-        state.followUpCheck.data   = payload;
-      })
-      .addCase(checkFollowUp.rejected, (state, { payload }) => {
-        state.followUpCheck.status = REQUEST_STATUS.FAILED;
-        state.followUpCheck.error  = payload;
-        toast.error(payload || 'Follow-up eligibility check failed.');
-      });
+    wire(fetchLabById, (state, { payload }) => {
+      state.selectedLab = payload ?? null;
+    });
 
-    // ── fetchMyBookings ────────────────────────────────────────────────────
-    builder
-      .addCase(fetchMyBookings.pending, (state) => {
-        state.myBookings.status = REQUEST_STATUS.LOADING;
-        state.myBookings.error  = null;
-      })
-      .addCase(fetchMyBookings.fulfilled, (state, { payload }) => {
-        state.myBookings.status = REQUEST_STATUS.SUCCESS;
-        state.myBookings.data   = payload.bookings;
-        state.myBookings.total  = payload.total;
-        state.myBookings.page   = payload.page;
-        state.myBookings.limit  = payload.limit;
-      })
-      .addCase(fetchMyBookings.rejected, (state, { payload }) => {
-        state.myBookings.status = REQUEST_STATUS.FAILED;
-        state.myBookings.error  = payload;
-        toast.error(payload || 'Failed to load bookings.');
-      });
+    wire(fetchBookingOptions, (state, { payload }) => {
+      state.bookingOptions = payload ?? null;
+    });
 
-    // ── fetchBookingById ───────────────────────────────────────────────────
-    builder
-      .addCase(fetchBookingById.pending, (state) => {
-        state.activeBooking.status = REQUEST_STATUS.LOADING;
-        state.activeBooking.error  = null;
-        state.activeBooking.data   = null;
-      })
-      .addCase(fetchBookingById.fulfilled, (state, { payload }) => {
-        state.activeBooking.status = REQUEST_STATUS.SUCCESS;
-        state.activeBooking.data   = payload;
-      })
-      .addCase(fetchBookingById.rejected, (state, { payload }) => {
-        state.activeBooking.status = REQUEST_STATUS.FAILED;
-        state.activeBooking.error  = payload;
-        toast.error(payload || 'Failed to load booking details.');
-      });
+    wire(fetchTransportEstimate, (state, { payload }) => {
+      state.transportEstimate = payload ?? null;
+    });
 
-    // ── cancelBooking ──────────────────────────────────────────────────────
-    builder
-      .addCase(cancelBooking.pending, (state, { meta }) => {
-        state.cancelBooking.status    = REQUEST_STATUS.LOADING;
-        state.cancelBooking.error     = null;
-        state.cancelBooking.data      = null;
-        state.cancelBooking.bookingId = meta.arg.bookingId;
-      })
-      .addCase(cancelBooking.fulfilled, (state, { payload }) => {
-        state.cancelBooking.status = REQUEST_STATUS.SUCCESS;
-        state.cancelBooking.data   = {
-          refundPercent: payload.refundPercent,
-          refundAmount:  payload.refundAmount,
-          status:        payload.status,
-        };
+    wire(checkFollowUpEligibility, (state, { payload }) => {
+      state.followUpEligibility = payload ?? null;
+    });
 
-        const idx = state.myBookings.data.findIndex((b) => b._id === payload.bookingId);
-        if (idx !== -1) state.myBookings.data[idx].status = 'cancelled';
+    // ── Booking creation ──────────────────────────────────────────────────
+    // All POST booking routes → store result in createdBooking.
+    // Also drive dedicated createBookingLoading / createBookingError / createBookingStatus.
 
-        if (state.activeBooking.data?._id === payload.bookingId) {
-          state.activeBooking.data.status = 'cancelled';
-        }
+    const wireCreate = (thunk) => {
+      builder
+        .addCase(thunk.pending, (state, action) => {
+          pending(state, action);
+          state.createBookingLoading = true;
+          state.createBookingError   = null;
+          state.createBookingStatus  = 'loading';
+        })
+        .addCase(thunk.fulfilled, (state, action) => {
+          state.loading[key(action.type)] = false;
+          state.createdBooking       = action.payload ?? null;
+          state.createBookingLoading = false;
+          state.createBookingError   = null;
+          state.createBookingStatus  = 'succeeded';
+        })
+        .addCase(thunk.rejected, (state, action) => {
+          rejected(state, action);
+          state.createBookingLoading = false;
+          state.createBookingError   = action.payload || 'Error';
+          state.createBookingStatus  = 'failed';
+        });
+    };
 
-        toast.success(
-          `Booking cancelled.${
-            payload.refundAmount > 0
-              ? ` Refund of ₹${payload.refundAmount} will be processed.`
-              : ''
-          }`
+    wireCreate(createFullCareRide);
+    wireCreate(createDoctorConsultation);
+    wireCreate(createDoctorOnline);
+    wireCreate(createPatientTransport);
+    wireCreate(createPhysiotherapist);
+    wireCreate(createFollowUp);
+    wireCreate(createDiagnosticCenter);
+    wireCreate(createDiagnosticHome);
+    wireCreate(createCareAssistant);
+
+    // ── Booking management ────────────────────────────────────────────────
+
+    wire(fetchMyBookings, (state, { payload }) => {
+      state.myBookings     = payload?.data  ?? [];
+      state.myBookingsMeta = {
+        total: payload?.total ?? 0,
+        page:  payload?.page  ?? 1,
+        limit: payload?.limit ?? 10,
+      };
+    });
+
+    wire(fetchMyBookingById, (state, { payload }) => {
+      // payload = { ...booking, mapRoute }
+      state.selectedBooking = payload ?? null;
+    });
+
+    wire(cancelMyBooking, (state, { payload }) => {
+      state.cancelBookingResult = payload ?? null;
+      if (payload?.bookingId) {
+        const idx = state.myBookings.findIndex(
+          (b) => b._id === payload.bookingId || b._id?.toString() === payload.bookingId
         );
-      })
-      .addCase(cancelBooking.rejected, (state, { payload }) => {
-        state.cancelBooking.status = REQUEST_STATUS.FAILED;
-        state.cancelBooking.error  = payload;
-        toast.error(payload || 'Failed to cancel booking.');
-      });
-
-    // ── rateBooking ────────────────────────────────────────────────────────
-    builder
-      .addCase(rateBooking.pending, (state, { meta }) => {
-        state.rateBooking.status    = REQUEST_STATUS.LOADING;
-        state.rateBooking.error     = null;
-        state.rateBooking.bookingId = meta.arg.bookingId;
-      })
-      .addCase(rateBooking.fulfilled, (state, { payload }) => {
-        state.rateBooking.status = REQUEST_STATUS.SUCCESS;
-
-        if (state.activeBooking.data?._id === payload.bookingId) {
-          state.activeBooking.data.isRated = true;
+        if (idx !== -1) {
+          state.myBookings[idx] = { ...state.myBookings[idx], status: 'cancelled' };
         }
-        const idx = state.myBookings.data.findIndex((b) => b._id === payload.bookingId);
-        if (idx !== -1) state.myBookings.data[idx].isRated = true;
+      }
+    });
 
-        toast.success('Rating submitted. Thank you!');
-      })
-      .addCase(rateBooking.rejected, (state, { payload }) => {
-        state.rateBooking.status = REQUEST_STATUS.FAILED;
-        state.rateBooking.error  = payload;
-        toast.error(payload || 'Failed to submit rating.');
-      });
-
-    // ── connectBookingSocket ───────────────────────────────────────────────
-    builder
-      .addCase(connectBookingSocket.pending, (state) => {
-        state.socket.status = SOCKET_STATUS.CONNECTING;
-        state.socket.error  = null;
-      })
-      .addCase(connectBookingSocket.fulfilled, (state) => {
-        // status already set by socketConnected() action from event listener
-        // fulfilled here just means the promise resolved (socket connected)
-        state.socket.status = SOCKET_STATUS.CONNECTED;
-      })
-      .addCase(connectBookingSocket.rejected, (state, { payload }) => {
-        state.socket.status = SOCKET_STATUS.ERROR;
-        state.socket.error  = payload;
-        toast.error(`Socket failed: ${payload}`);
-      });
-
-    // ── joinBookingRoom ────────────────────────────────────────────────────
-    builder
-      .addCase(joinBookingRoom.rejected, (state, { payload }) => {
-        toast.error(`Room join failed: ${payload}`);
-      });
-
-    // ── joinTpRoom ─────────────────────────────────────────────────────────
-    builder
-      .addCase(joinTpRoom.rejected, (state, { payload }) => {
-        toast.error(`TP room join failed: ${payload}`);
-      });
-
-    // ── All create booking thunks ──────────────────────────────────────────
-    builder
-      .addMatcher(
-        isAnyOf(...ALL_CREATE_THUNKS.map((t) => t.pending)),
-        (state) => {
-          state.createBooking.status = REQUEST_STATUS.LOADING;
-          state.createBooking.error  = null;
-          state.createBooking.data   = null;
+    wire(rateMyBooking, (state, { payload }) => {
+      state.rateBookingResult = payload ?? null;
+      if (payload?.bookingId) {
+        const idx = state.myBookings.findIndex(
+          (b) => b._id === payload.bookingId || b._id?.toString() === payload.bookingId
+        );
+        if (idx !== -1) {
+          state.myBookings[idx] = { ...state.myBookings[idx], isRated: true };
         }
-      )
-      .addMatcher(
-        isAnyOf(...ALL_CREATE_THUNKS.map((t) => t.fulfilled)),
-        (state, { payload }) => {
-          state.createBooking.status      = REQUEST_STATUS.SUCCESS;
-          state.createBooking.bookingType = payload.bookingType;
-          state.createBooking.data        = payload;
-          toast.success('Booking created successfully!');
-        }
-      )
-      .addMatcher(
-        isAnyOf(...ALL_CREATE_THUNKS.map((t) => t.rejected)),
-        (state, { payload }) => {
-          state.createBooking.status = REQUEST_STATUS.FAILED;
-          state.createBooking.error  = payload;
-          toast.error(payload || 'Failed to create booking.');
-        }
-      );
+      }
+      if (state.selectedBooking && (
+        state.selectedBooking._id === payload?.bookingId ||
+        state.selectedBooking._id?.toString() === payload?.bookingId
+      )) {
+        state.selectedBooking = { ...state.selectedBooking, isRated: true };
+      }
+    });
+
+    wire(downloadOpCard, (state, { payload }) => {
+      // No state update needed — side effect is browser download.
+      void payload;
+    });
   },
 });
 
@@ -1227,129 +850,126 @@ const bookingSlice = createSlice({
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const {
-  // Existing
+  // existing
+  clearCreatedBooking,
+  clearSelectedBooking,
+  clearDiscovery,
+  clearErrors,
+  resetCancelBooking,
+  resetRateBooking,
+  // new — required by components
+  resetCreateBooking,
   resetHospitals,
   resetDoctorsByHospital,
   resetHospitalAvailability,
   resetDoctorAvailability,
-  resetLabs,
-  resetLabDetail,
-  resetBookingOptions,
   resetTransportEstimate,
   resetFollowUpCheck,
-  resetCreateBooking,
-  clearActiveBooking,
-  resetCancelBooking,
-  resetRateBooking,
-  patchBookingStatus,
-  resetBookingState,
-  // Socket
-  socketConnecting,
-  socketConnected,
-  socketDisconnected,
-  socketError,
-  roomJoined,
-  roomLeft,
-  // Live data
-  setLiveLocation,
-  clearLiveLocation,
-  participantJoined,
-  participantLeft,
-  setBookingSnapshot,
-  resetBookingSnapshot,
+  resetBookingOptions,
 } = bookingSlice.actions;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SELECTORS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Discovery
-export const selectHospitals                = (s) => s[SLICE_NAME].hospitals.data;
-export const selectHospitalsLoading         = (s) => s[SLICE_NAME].hospitals.status === REQUEST_STATUS.LOADING;
-export const selectHospitalsError           = (s) => s[SLICE_NAME].hospitals.error;
+// ── Discovery ────────────────────────────────────────────────────────────────
 
-export const selectDoctorsByHospital        = (s) => s[SLICE_NAME].doctorsByHospital.data;
-export const selectDoctorsByHospitalId      = (s) => s[SLICE_NAME].doctorsByHospital.hospitalId;
-export const selectDoctorsByHospitalLoading = (s) => s[SLICE_NAME].doctorsByHospital.status === REQUEST_STATUS.LOADING;
-export const selectDoctorsByHospitalError   = (s) => s[SLICE_NAME].doctorsByHospital.error;
+export const selectHospitals               = (s) => s.booking.hospitals;
+export const selectHospitalsLoading        = (s) => s.booking.loading['fetchHospitals']              ?? false;
+export const selectHospitalsError          = (s) => s.booking.errors['fetchHospitals']               ?? null;
 
-export const selectHospitalAvailability     = (s) => s[SLICE_NAME].hospitalAvailability.data;
-export const selectHospitalAvailLoading     = (s) => s[SLICE_NAME].hospitalAvailability.status === REQUEST_STATUS.LOADING;
+// hospitalDoctors — also exported as selectDoctorsByHospital (component alias)
+export const selectHospitalDoctors         = (s) => s.booking.hospitalDoctors;
+export const selectDoctorsByHospital       = (s) => s.booking.hospitalDoctors;
+export const selectDoctorsByHospitalLoading = (s) => s.booking.loading['fetchHospitalDoctors']       ?? false;
+export const selectDoctorsByHospitalError  = (s) => s.booking.errors['fetchHospitalDoctors']         ?? null;
 
-export const selectDoctorAvailability       = (s) => s[SLICE_NAME].doctorAvailability.data;
-export const selectDoctorAvailLoading       = (s) => s[SLICE_NAME].doctorAvailability.status === REQUEST_STATUS.LOADING;
+export const selectHospitalAvailability    = (s) => s.booking.hospitalAvailability;
+export const selectHospitalAvailLoading    = (s) => s.booking.loading['checkHospitalAvailability']   ?? false;
+export const selectHospitalAvailError      = (s) => s.booking.errors['checkHospitalAvailability']    ?? null;
 
-export const selectLabs                     = (s) => s[SLICE_NAME].labs.data;
-export const selectLabsLoading              = (s) => s[SLICE_NAME].labs.status === REQUEST_STATUS.LOADING;
-export const selectLabsError                = (s) => s[SLICE_NAME].labs.error;
+export const selectDoctorAvailability      = (s) => s.booking.doctorAvailability;
+export const selectDoctorAvailLoading      = (s) => s.booking.loading['checkDoctorAvailability']     ?? false;
+export const selectDoctorAvailError        = (s) => s.booking.errors['checkDoctorAvailability']      ?? null;
 
-export const selectLabDetail                = (s) => s[SLICE_NAME].labDetail.data;
-export const selectLabDetailLoading         = (s) => s[SLICE_NAME].labDetail.status === REQUEST_STATUS.LOADING;
-export const selectLabDetailError           = (s) => s[SLICE_NAME].labDetail.error;
+export const selectLabs                    = (s) => s.booking.labs;
+export const selectLabsLoading             = (s) => s.booking.loading['fetchLabs']                   ?? false;
+export const selectLabsError               = (s) => s.booking.errors['fetchLabs']                    ?? null;
 
-export const selectBookingOptions           = (s) => s[SLICE_NAME].bookingOptions.data;
-export const selectBookingOptionsType       = (s) => s[SLICE_NAME].bookingOptions.type;
-export const selectBookingOptionsLoading    = (s) => s[SLICE_NAME].bookingOptions.status === REQUEST_STATUS.LOADING;
+// selectedLab — also exported as selectLabDetail (component alias)
+export const selectSelectedLab             = (s) => s.booking.selectedLab;
+export const selectLabDetail               = (s) => s.booking.selectedLab;
+export const selectLabDetailLoading        = (s) => s.booking.loading['fetchLabById']                ?? false;
+export const selectLabDetailError          = (s) => s.booking.errors['fetchLabById']                 ?? null;
 
-export const selectTransportEstimate        = (s) => s[SLICE_NAME].transportEstimate.data;
-export const selectTransportEstimLoading    = (s) => s[SLICE_NAME].transportEstimate.status === REQUEST_STATUS.LOADING;
-export const selectTransportEstimError      = (s) => s[SLICE_NAME].transportEstimate.error;
+export const selectBookingOptions          = (s) => s.booking.bookingOptions;
+export const selectBookingOptionsLoading   = (s) => s.booking.loading['fetchBookingOptions']         ?? false;
+export const selectBookingOptionsError     = (s) => s.booking.errors['fetchBookingOptions']          ?? null;
 
-export const selectFollowUpCheck            = (s) => s[SLICE_NAME].followUpCheck.data;
-export const selectFollowUpCheckLoading     = (s) => s[SLICE_NAME].followUpCheck.status === REQUEST_STATUS.LOADING;
-export const selectFollowUpCheckError       = (s) => s[SLICE_NAME].followUpCheck.error;
+export const selectTransportEstimate       = (s) => s.booking.transportEstimate;
+export const selectTransportEstimLoading   = (s) => s.booking.loading['fetchTransportEstimate']      ?? false;  // matches component import name
+export const selectTransportEstimateLoading = (s) => s.booking.loading['fetchTransportEstimate']     ?? false;  // verbose alias
+export const selectTransportEstimateError  = (s) => s.booking.errors['fetchTransportEstimate']       ?? null;
 
-// Create booking
-export const selectCreateBookingData        = (s) => s[SLICE_NAME].createBooking.data;
-export const selectCreateBookingType        = (s) => s[SLICE_NAME].createBooking.bookingType;
-export const selectCreateBookingLoading     = (s) => s[SLICE_NAME].createBooking.status === REQUEST_STATUS.LOADING;
-export const selectCreateBookingError       = (s) => s[SLICE_NAME].createBooking.error;
-export const selectCreateBookingStatus      = (s) => s[SLICE_NAME].createBooking.status;
+// followUpEligibility — also exported as selectFollowUpCheck (component alias)
+export const selectFollowUpEligibility     = (s) => s.booking.followUpEligibility;
+export const selectFollowUpCheck           = (s) => s.booking.followUpEligibility;
+export const selectFollowUpCheckLoading    = (s) => s.booking.loading['checkFollowUpEligibility']    ?? false;
+export const selectFollowUpCheckError      = (s) => s.booking.errors['checkFollowUpEligibility']     ?? null;
 
-// My bookings
-export const selectMyBookings               = (s) => s[SLICE_NAME].myBookings.data;
-export const selectMyBookingsMeta           = (s) => ({
-  total:  s[SLICE_NAME].myBookings.total,
-  page:   s[SLICE_NAME].myBookings.page,
-  limit:  s[SLICE_NAME].myBookings.limit,
-  status: s[SLICE_NAME].myBookings.status,
-  error:  s[SLICE_NAME].myBookings.error,
-});
-export const selectMyBookingsLoading        = (s) => s[SLICE_NAME].myBookings.status === REQUEST_STATUS.LOADING;
+// ── Booking creation ─────────────────────────────────────────────────────────
 
-// Active booking
-export const selectActiveBooking            = (s) => s[SLICE_NAME].activeBooking.data;
-export const selectActiveBookingLoading     = (s) => s[SLICE_NAME].activeBooking.status === REQUEST_STATUS.LOADING;
-export const selectActiveBookingError       = (s) => s[SLICE_NAME].activeBooking.error;
+export const selectCreatedBooking          = (s) => s.booking.createdBooking;
 
-// Cancel
-export const selectCancelBooking            = (s) => s[SLICE_NAME].cancelBooking;
-export const selectCancelBookingLoading     = (s) => s[SLICE_NAME].cancelBooking.status === REQUEST_STATUS.LOADING;
-export const selectCancelBookingError       = (s) => s[SLICE_NAME].cancelBooking.error;
+// Component aliases for createdBooking
+export const selectCreateBookingData       = (s) => s.booking.createdBooking;
+export const selectCreateBookingLoading    = (s) => s.booking.createBookingLoading;
+export const selectCreateBookingError      = (s) => s.booking.createBookingError;
+export const selectCreateBookingStatus     = (s) => s.booking.createBookingStatus;
 
-// Rate
-export const selectRateBooking              = (s) => s[SLICE_NAME].rateBooking;
-export const selectRateBookingLoading       = (s) => s[SLICE_NAME].rateBooking.status === REQUEST_STATUS.LOADING;
-export const selectRateBookingError         = (s) => s[SLICE_NAME].rateBooking.error;
+// Scoped sub-fields of createdBooking
+export const selectCreatedRazorpayOrder    = (s) => s.booking.createdBooking?.razorpayOrder        ?? null;
+export const selectCreatedMapRoutes        = (s) => s.booking.createdBooking?.mapRoutes             ?? null;
+export const selectCreatedFareBreakdown    = (s) => s.booking.createdBooking?.fareBreakdown         ?? null;
+export const selectCreatedCareAssistant    = (s) => s.booking.createdBooking?.careAssistantAssigned ?? null;
+export const selectCreatedOpNumber         = (s) => s.booking.createdBooking?.opNumber              ?? null;
+export const selectCreatedRides            = (s) => s.booking.createdBooking?.rides                 ?? null;
+// diagnostic-home returns single mapRoute (not mapRoutes)
+export const selectCreatedMapRoute         = (s) => s.booking.createdBooking?.mapRoute              ?? null;
 
-// Socket
-export const selectSocketStatus             = (s) => s[SLICE_NAME].socket.status;
-export const selectSocketConnected          = (s) => s[SLICE_NAME].socket.status === SOCKET_STATUS.CONNECTED;
-export const selectSocketError              = (s) => s[SLICE_NAME].socket.error;
-export const selectSocketJoinedRooms        = (s) => s[SLICE_NAME].socket.joinedRooms;
+// ── My bookings ──────────────────────────────────────────────────────────────
 
-// Live location
-export const selectLiveLocation             = (bookingId) => (s) => s[SLICE_NAME].liveLocations[bookingId] ?? null;
-export const selectAllLiveLocations         = (s) => s[SLICE_NAME].liveLocations;
+export const selectMyBookings              = (s) => s.booking.myBookings;
+export const selectMyBookingsMeta          = (s) => s.booking.myBookingsMeta;
+export const selectSelectedBooking         = (s) => s.booking.selectedBooking;
+export const selectActiveBooking           = (s) => s.booking.selectedBooking; // alias
 
-// Participants
-export const selectParticipants             = (bookingId) => (s) => s[SLICE_NAME].participants[bookingId] ?? [];
+// mapRoute from selectedBooking (canonical polyline for customer map)
+export const selectBookingMapRoute         = (s) => s.booking.selectedBooking?.mapRoute ?? null;
 
-// Snapshot
-export const selectBookingSnapshot          = (s) => s[SLICE_NAME].bookingSnapshot;
+// Cancel / rate results
+export const selectCancelBooking           = (s) => s.booking.cancelBookingResult;
+export const selectRateBooking             = (s) => s.booking.rateBookingResult;
+
+// ── Generic per-thunk loading/error ─────────────────────────────────────────
+
+export const selectLoading = (k) => (s) => s.booking.loading[k] ?? false;
+export const selectError   = (k) => (s) => s.booking.errors[k]  ?? null;
+
+// Named shortcuts
+export const selectCancelBookingLoading    = (s) => s.booking.loading['cancelMyBooking']    ?? false;
+export const selectCancelBookingError      = (s) => s.booking.errors['cancelMyBooking']     ?? null;
+export const selectRateBookingLoading      = (s) => s.booking.loading['rateMyBooking']      ?? false;
+export const selectRateBookingError        = (s) => s.booking.errors['rateMyBooking']       ?? null;
+export const selectDownloadOpCardLoading   = (s) => s.booking.loading['downloadOpCard']     ?? false;
+export const selectDownloadOpCardError     = (s) => s.booking.errors['downloadOpCard']      ?? null;
+export const selectActiveBookingLoading    = (s) => s.booking.loading['fetchMyBookingById'] ?? false;
+export const selectActiveBookingError      = (s) => s.booking.errors['fetchMyBookingById']  ?? null;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REDUCER
+// RE-EXPORTS
 // ─────────────────────────────────────────────────────────────────────────────
+
+export { BOOKING_TYPES };
 
 export default bookingSlice.reducer;

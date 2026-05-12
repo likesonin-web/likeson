@@ -1,41 +1,82 @@
 'use client';
 
 /**
- * BookingDetailsPage — Enterprise-grade, production-ready
+ * BookingDetailsPage.jsx — Likeson.in
  *
- * Key architectural decisions:
- * - Google Maps loaded ONCE via a module-level singleton promise (fixes "loaded multiple times" error)
- * - Heavy components (BookingMap, modals) are lazy-rendered with Suspense boundaries
- * - All API dispatches live in slice / thunks; zero direct API calls in UI
- * - Memoised selectors + React.memo on pure sub-components eliminate re-renders
- * - Skeleton loaders replace spinners; no CLS from layout shifts
- * - Accessible: semantic HTML, ARIA roles, keyboard-navigable modals
- * - No Zod, no helper files — everything self-contained in this single file
+ * FIXES vs previous version:
+ *  - dispatch(fetchMyBookingById(id)) → dispatch(fetchMyBookingById({ bookingId: id }))
+ *    Thunk expects { bookingId }, raw string caused bookingId=undefined → "Cast to ObjectId failed"
+ *  - Guard added: only dispatch when id is truthy (avoids undefined API call on mount)
+ *  - handleRefresh also fixed: same { bookingId: id } shape
+ *  - dispatch(cancelMyBooking(...)) already correct in slice (passes { bookingId, reason })
+ *  - dispatch(rateMyBooking(...)) already correct in slice
  */
 
 import {
-  useEffect, useState, useRef, useCallback, memo, lazy, Suspense,
+  useEffect, useState, useRef, useCallback, memo,
 } from 'react';
-import dynamic from 'next/dynamic';
 import { useDispatch, useSelector } from 'react-redux';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  ArrowLeft, Calendar, Clock, MapPin, User, Phone, Star,
-  X, AlertTriangle, CheckCircle2, Loader2, Navigation,
-  Car, Stethoscope, FlaskConical, HeartPulse, Video, Dumbbell,
-  Ambulance, RotateCcw, Home, FileText, CreditCard,
-  Activity, Package, Shield, IndianRupee,
-  MessageCircle, ThumbsUp, RefreshCw, Copy, ExternalLink, Info,
+  GoogleMap,
+  useJsApiLoader,
+  Marker,
+  DirectionsRenderer,
+  OverlayView,
+} from '@react-google-maps/api';
+import {
+  ArrowLeft,
+  Calendar,
+  Clock,
+  MapPin,
+  User,
+  Phone,
+  Star,
+  X,
+  AlertTriangle,
+  CheckCircle2,
+  Loader2,
   Navigation2,
+  Car,
+  Stethoscope,
+  FlaskConical,
+  HeartPulse,
+  Video,
+  Dumbbell,
+  Ambulance,
+  RotateCcw,
+  Home,
+  FileText,
+  CreditCard,
+  Activity,
+  Package,
+  Shield,
+  IndianRupee,
+  ThumbsUp,
+  RefreshCw,
+  Copy,
+  ExternalLink,
+  Info,
+  ChevronRight,
+  AlertCircle,
+  Lock,
+  Timer,
+  Banknote,
+  Zap,
+  Building2,
+  TestTube2,
+  Navigation,
+  CheckCheck,
+  TrendingUp,
 } from 'lucide-react';
 
 import {
-  fetchBookingById,
-  cancelBooking,
-  rateBooking,
-  clearActiveBooking,
+  fetchMyBookingById,
+  cancelMyBooking,
+  rateMyBooking,
+  clearSelectedBooking,
   resetCancelBooking,
   resetRateBooking,
   selectActiveBooking,
@@ -47,266 +88,322 @@ import {
   selectRateBookingLoading,
 } from '@/store/slices/bookingSlice';
 
+// ─── Google Maps loader config ────────────────────────────────────────────────
 
+const MAPS_LIBRARIES = ['geometry', 'places'];
 
-// ─── Google Maps Singleton ────────────────────────────────────────────────────
-// Ensures the Maps script is injected exactly once per page lifetime,
-// eliminating the "loaded multiple times" console error.
-
-const GOOGLE_MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
-
-let _mapsPromise = null;
-
-function loadGoogleMaps() {
-  if (typeof window === 'undefined') return Promise.reject(new Error('SSR'));
-  if (window.google?.maps) return Promise.resolve(window.google.maps);
-  if (_mapsPromise) return _mapsPromise;
-
-  _mapsPromise = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&libraries=geometry`;
-    script.async = true;
-    script.defer = true;
-    script.onload = () => resolve(window.google.maps);
-    script.onerror = () => {
-      _mapsPromise = null; // allow retry
-      reject(new Error('Maps failed to load'));
-    };
-    document.head.appendChild(script);
-  });
-
-  return _mapsPromise;
-}
+const MAP_STYLES_CLEAN = [
+  { elementType: 'geometry', stylers: [{ color: '#f8f9ff' }] },
+  { elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#5a6478' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#f8f9ff' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#ffffff' }] },
+  { featureType: 'road.arterial', elementType: 'geometry', stylers: [{ color: '#f0f2ff' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#e8ecff' }] },
+  { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#8892b0' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#dde8ff' }] },
+  { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit', stylers: [{ visibility: 'off' }] },
+  { featureType: 'administrative', elementType: 'geometry', stylers: [{ color: '#e0e4f0' }] },
+  { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#f4f5fc' }] },
+];
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BOOKING_TYPE_META = {
-  full_care_ride:      { label: 'Full Care Ride',      icon: Ambulance,    color: 'text-primary',   bg: 'bg-primary/10',   gradient: 'from-primary/20 to-primary/5'   },
-  doctor_consultation: { label: 'Doctor Consultation', icon: Stethoscope,  color: 'text-info',      bg: 'bg-info/10',      gradient: 'from-info/20 to-info/5'         },
-  doctor_online:       { label: 'Online Consult',      icon: Video,        color: 'text-accent',    bg: 'bg-accent/5',     gradient: 'from-accent/20 to-accent/5'     },
-  physiotherapist:     { label: 'Physiotherapy',       icon: Dumbbell,     color: 'text-success',   bg: 'bg-success/10',   gradient: 'from-success/20 to-success/5'   },
-  care_assistant:      { label: 'Care Assistant',      icon: HeartPulse,   color: 'text-secondary', bg: 'bg-secondary/20', gradient: 'from-secondary/20 to-secondary/5'},
-  diagnostic_center:   { label: 'Diagnostic Center',   icon: FlaskConical, color: 'text-warning',   bg: 'bg-warning/10',   gradient: 'from-warning/20 to-warning/5'   },
-  diagnostic_home:     { label: 'Home Diagnostics',    icon: Home,         color: 'text-warning',   bg: 'bg-warning/5',    gradient: 'from-warning/10 to-warning/5'   },
-  patient_transport:   { label: 'Patient Transport',   icon: Car,          color: 'text-accent',    bg: 'bg-accent/5',     gradient: 'from-accent/20 to-accent/5'     },
-  follow_up:           { label: 'Follow-Up',           icon: RotateCcw,    color: 'text-info',      bg: 'bg-info/10',      gradient: 'from-info/20 to-info/5'         },
+  full_care_ride:      { label: 'Full Care Ride',      icon: Ambulance,    color: 'text-primary',   bg: 'bg-primary/10',   border: 'border-primary/20' },
+  doctor_consultation: { label: 'Doctor Consultation', icon: Stethoscope,  color: 'text-info',      bg: 'bg-info/10',      border: 'border-info/20'    },
+  doctor_online:       { label: 'Online Consult',      icon: Video,        color: 'text-accent',    bg: 'bg-accent/5',     border: 'border-accent/20'  },
+  physiotherapist:     { label: 'Physiotherapy',       icon: Dumbbell,     color: 'text-success',   bg: 'bg-success/10',   border: 'border-success/20' },
+  care_assistant:      { label: 'Care Assistant',      icon: HeartPulse,   color: 'text-secondary', bg: 'bg-secondary/10', border: 'border-secondary/20'},
+  diagnostic_center:   { label: 'Diagnostic Center',   icon: FlaskConical, color: 'text-warning',   bg: 'bg-warning/10',   border: 'border-warning/20' },
+  diagnostic_home:     { label: 'Home Diagnostics',    icon: Home,         color: 'text-warning',   bg: 'bg-warning/5',    border: 'border-warning/20' },
+  patient_transport:   { label: 'Patient Transport',   icon: Car,          color: 'text-accent',    bg: 'bg-accent/5',     border: 'border-accent/20'  },
+  follow_up:           { label: 'Follow-Up Visit',     icon: RotateCcw,    color: 'text-info',      bg: 'bg-info/10',      border: 'border-info/20'    },
 };
 
 const STATUS_META = {
-  draft:          { label: 'Draft',          color: 'text-base-content/50', bg: 'bg-base-300/60',  dot: 'bg-base-content/40' },
-  pending:        { label: 'Pending',        color: 'text-warning',          bg: 'bg-warning/10',   dot: 'bg-warning'          },
-  confirmed:      { label: 'Confirmed',      color: 'text-success',          bg: 'bg-success/10',   dot: 'bg-success'          },
-  in_progress:    { label: 'In Progress',    color: 'text-info',             bg: 'bg-info/10',      dot: 'bg-info'             },
-  completed:      { label: 'Completed',      color: 'text-success',          bg: 'bg-success/10',   dot: 'bg-success'          },
-  cancelled:      { label: 'Cancelled',      color: 'text-error',            bg: 'bg-error/5',      dot: 'bg-error'            },
-  no_show:        { label: 'No Show',        color: 'text-error',            bg: 'bg-error/5',      dot: 'bg-error'            },
-  refund_pending: { label: 'Refund Pending', color: 'text-warning',          bg: 'bg-warning/10',   dot: 'bg-warning'          },
-  refunded:       { label: 'Refunded',       color: 'text-base-content/60',  bg: 'bg-base-300/60',  dot: 'bg-base-content/40'  },
+  draft:          { label: 'Draft',           dotCls: 'bg-base-content/30',    textCls: 'text-base-content/50', bgCls: 'bg-base-300/50'  },
+  pending:        { label: 'Pending',          dotCls: 'bg-warning',            textCls: 'text-warning',          bgCls: 'bg-warning/10'   },
+  confirmed:      { label: 'Confirmed',        dotCls: 'bg-success',            textCls: 'text-success',          bgCls: 'bg-success/10'   },
+  in_progress:    { label: 'In Progress',      dotCls: 'bg-info animate-pulse', textCls: 'text-info',             bgCls: 'bg-info/10'      },
+  completed:      { label: 'Completed',        dotCls: 'bg-success',            textCls: 'text-success',          bgCls: 'bg-success/10'   },
+  cancelled:      { label: 'Cancelled',        dotCls: 'bg-error',              textCls: 'text-error',            bgCls: 'bg-error/5'      },
+  no_show:        { label: 'No Show',          dotCls: 'bg-error',              textCls: 'text-error',            bgCls: 'bg-error/5'      },
+  refund_pending: { label: 'Refund Pending',   dotCls: 'bg-warning',            textCls: 'text-warning',          bgCls: 'bg-warning/10'   },
+  refunded:       { label: 'Refunded',         dotCls: 'bg-base-content/30',    textCls: 'text-base-content/50', bgCls: 'bg-base-300/50'  },
 };
 
-// ─── Pure formatters (no deps, stable references) ────────────────────────────
+const PAYMENT_STATUS_META = {
+  unpaid:             { label: 'Unpaid',              cls: 'text-error bg-error/10'     },
+  pending:            { label: 'Payment Pending',      cls: 'text-warning bg-warning/10' },
+  paid:               { label: 'Paid',                cls: 'text-success bg-success/10' },
+  partially_paid:     { label: 'Partially Paid',       cls: 'text-warning bg-warning/10' },
+  failed:             { label: 'Payment Failed',       cls: 'text-error bg-error/10'     },
+  refunded:           { label: 'Refunded',             cls: 'text-info bg-info/10'       },
+  partially_refunded: { label: 'Partially Refunded',   cls: 'text-info bg-info/10'       },
+  waived:             { label: 'Waived',               cls: 'text-success bg-success/10' },
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const fmtDate = (d) =>
-  d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }) : '—';
+  d ? new Date(d).toLocaleDateString('en-IN', {
+    day: '2-digit', month: 'long', year: 'numeric',
+  }) : '—';
 
 const fmtTime = (d) =>
-  d ? new Date(d).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—';
+  d ? new Date(d).toLocaleTimeString('en-IN', {
+    hour: '2-digit', minute: '2-digit', hour12: true,
+  }) : '—';
 
 const fmtINR = (n) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n ?? 0);
+  new Intl.NumberFormat('en-IN', {
+    style: 'currency', currency: 'INR', maximumFractionDigits: 0,
+  }).format(n ?? 0);
+
+function isWithin12Hours(scheduledAt) {
+  if (!scheduledAt) return false;
+  const diff = new Date(scheduledAt).getTime() - Date.now();
+  return diff > 0 && diff < 12 * 60 * 60 * 1000;
+}
+
+function hoursUntil(scheduledAt) {
+  if (!scheduledAt) return null;
+  const diff = new Date(scheduledAt).getTime() - Date.now();
+  if (diff <= 0) return null;
+  const hrs = Math.floor(diff / 3600000);
+  const min = Math.floor((diff % 3600000) / 60000);
+  if (hrs > 0) return `${hrs}h ${min}m`;
+  return `${min}m`;
+}
+
+// ─── Animation variants ───────────────────────────────────────────────────────
+
+const fadeUp = {
+  initial: { opacity: 0, y: 16 },
+  animate: { opacity: 1, y: 0 },
+  exit:    { opacity: 0, y: 8 },
+};
+
+const stagger = {
+  animate: { transition: { staggerChildren: 0.07 } },
+};
 
 // ─── Skeleton ─────────────────────────────────────────────────────────────────
 
-const SkeletonBlock = memo(({ className = '' }) => (
-  <div className={`animate-pulse rounded-xl bg-base-300/70 ${className}`} aria-hidden="true" />
-));
-SkeletonBlock.displayName = 'SkeletonBlock';
+function Skeleton({ className = '' }) {
+  return <div className={`skeleton ${className}`} aria-hidden="true" />;
+}
 
 function BookingDetailsSkeleton() {
   return (
-    <div className="min-h-screen" aria-label="Loading booking details" aria-busy="true">
-      {/* Header */}
-      <div className="sticky top-0 z-20 border-b border-base-300 bg-base-100 px-4 py-3">
-        <div className="flex items-center gap-3">
-          <SkeletonBlock className="w-8 h-8 rounded-full" />
-          <div className="space-y-1.5">
-            <SkeletonBlock className="w-32 h-4" />
-            <SkeletonBlock className="w-24 h-3" />
-          </div>
+    <div className="min-h-screen bg-base-100" aria-busy="true" aria-label="Loading">
+      <div className="h-16 border-b border-base-300 bg-base-100 px-4 flex items-center gap-3">
+        <Skeleton className="w-8 h-8 rounded-full" />
+        <div className="space-y-2">
+          <Skeleton className="w-36 h-4" />
+          <Skeleton className="w-20 h-3" />
         </div>
       </div>
-      {/* Hero */}
-      <SkeletonBlock className="h-24 w-full rounded-none" />
-      {/* Content */}
-      <div className="container-custom py-5 grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div className="h-32 bg-base-200" />
+      <div className="container-custom py-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-5">
-          <SkeletonBlock className="h-56 w-full" />
-          <SkeletonBlock className="h-40 w-full" />
-          <SkeletonBlock className="h-32 w-full" />
+          {[260, 200, 180, 140].map((h, i) => (
+            <Skeleton key={i} className="w-full rounded-2xl" style={{ height: h }} />
+          ))}
         </div>
         <div className="space-y-5">
-          <SkeletonBlock className="h-48 w-full" />
-          <SkeletonBlock className="h-36 w-full" />
+          <Skeleton className="w-full h-52 rounded-2xl" />
+          <Skeleton className="w-full h-40 rounded-2xl" />
         </div>
       </div>
     </div>
   );
 }
 
-// ─── BookingMap ───────────────────────────────────────────────────────────────
-// Rendered only when coordinates exist; uses the singleton loader.
+// ─── Field Info Row ───────────────────────────────────────────────────────────
 
-const MAP_STYLES = [
-  { elementType: 'geometry', stylers: [{ color: '#f5f5f5' }] },
-  { elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#616161' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#f5f5f5' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#ffffff' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#dadada' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#c9c9c9' }] },
-];
-
-const BookingMap = memo(function BookingMap({ patientLocation, destinationLocation }) {
-  const mapRef      = useRef(null);
-  const mapInstance = useRef(null);
-  const [mapError, setMapError] = useState(false);
-  const [mapReady, setMapReady] = useState(false);
-
-  const pickupCoords  = patientLocation?.coordinates;
-  const dropoffCoords = destinationLocation?.coordinates;
-
-  useEffect(() => {
-    if (!GOOGLE_MAPS_KEY || !mapRef.current || mapInstance.current) return;
-
-    let cancelled = false;
-
-    loadGoogleMaps()
-      .then((maps) => {
-        if (cancelled || !mapRef.current) return;
-
-        const center = pickupCoords
-          ? { lat: pickupCoords[1], lng: pickupCoords[0] }
-          : { lat: 16.5062, lng: 80.6480 };
-
-        const map = new maps.Map(mapRef.current, {
-          center, zoom: 12, styles: MAP_STYLES,
-          disableDefaultUI: true, zoomControl: true,
-          mapTypeControl: false, streetViewControl: false,
-        });
-        mapInstance.current = map;
-
-        const bounds = new maps.LatLngBounds();
-
-        const addMarker = (coords, fillColor, title) => {
-          const pos = { lat: coords[1], lng: coords[0] };
-          new maps.Marker({
-            position: pos, map, title,
-            icon: {
-              path: maps.SymbolPath.CIRCLE, scale: 10,
-              fillColor, fillOpacity: 1,
-              strokeColor: '#ffffff', strokeWeight: 3,
-            },
-          });
-          bounds.extend(pos);
-        };
-
-        if (pickupCoords)  addMarker(pickupCoords,  '#3b82f6', 'Pickup');
-        if (dropoffCoords) addMarker(dropoffCoords, '#22c55e', 'Destination');
-
-        if (pickupCoords && dropoffCoords) {
-          map.fitBounds(bounds, { padding: 60 });
-
-          const svc = new maps.DirectionsService();
-          const renderer = new maps.DirectionsRenderer({
-            suppressMarkers: true,
-            polylineOptions: { strokeColor: '#6366f1', strokeWeight: 4, strokeOpacity: 0.8 },
-          });
-          renderer.setMap(map);
-
-          svc.route({
-            origin:      { lat: pickupCoords[1],  lng: pickupCoords[0] },
-            destination: { lat: dropoffCoords[1], lng: dropoffCoords[0] },
-            travelMode: maps.TravelMode.DRIVING,
-          }, (result, status) => {
-            if (status === 'OK') renderer.setDirections(result);
-          });
-        }
-
-        setMapReady(true);
-      })
-      .catch(() => { if (!cancelled) setMapError(true); });
-
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // intentionally empty — coordinates don't change after mount
-
-  if (!pickupCoords && !dropoffCoords) return null;
-
+const FieldRow = memo(function FieldRow({
+  label, value, note, mono = false, highlight = false, icon: Icon, badge,
+}) {
   return (
-    <div className="card overflow-hidden" role="region" aria-label="Route map">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-base-300">
-        <div className="flex items-center gap-2">
-          <Navigation size={15} className="text-primary" aria-hidden="true" />
-          <span className="font-bold text-sm text-base-content">Route Map</span>
-        </div>
-        <div className="flex items-center gap-3 text-xs text-base-content/50" aria-hidden="true">
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-blue-500 inline-block" />Pickup
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />Destination
-          </span>
+    <div className="flex items-start justify-between gap-4 py-3 border-b border-base-300/50 last:border-0">
+      <div className="flex items-start gap-2 min-w-0 flex-1">
+        {Icon && <Icon size={13} className="text-base-content/30 mt-0.5 flex-shrink-0" />}
+        <div className="min-w-0">
+          <dt className="text-[11px] font-bold uppercase tracking-widest text-base-content/40 leading-none mb-1">
+            {label}
+          </dt>
+          {note && (
+            <p className="text-[10px] text-base-content/30 leading-tight mt-0.5">{note}</p>
+          )}
         </div>
       </div>
-
-      <div className="relative w-full h-56">
-        {mapError ? (
-          <div className="absolute inset-0 bg-base-200 flex flex-col items-center justify-center gap-2 text-base-content/40 text-sm">
-            <MapPin size={22} />
-            <span>Map unavailable</span>
-          </div>
+      <dd className={`
+        text-right text-sm shrink-0 max-w-[55%] break-words
+        ${highlight ? 'font-black text-base-content text-base' : 'font-semibold text-base-content/80'}
+        ${mono ? 'font-mono text-xs' : ''}
+      `}>
+        {badge ? (
+          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${badge}`}>
+            {value}
+          </span>
         ) : (
-          <>
-            {!mapReady && (
-              <div className="absolute inset-0 bg-base-200 flex items-center justify-center z-10" aria-live="polite">
-                <SkeletonBlock className="absolute inset-0 rounded-none" />
-              </div>
-            )}
-            <div ref={mapRef} className="w-full h-full" />
-          </>
+          value || <span className="text-base-content/25">—</span>
         )}
-      </div>
+      </dd>
     </div>
   );
 });
 
-// ─── Reusable UI Primitives ───────────────────────────────────────────────────
+// ─── Section Card ─────────────────────────────────────────────────────────────
 
-const Section = memo(function Section({ title, icon: Icon, children, className = '' }) {
+const SectionCard = memo(function SectionCard({
+  title, subtitle, icon: Icon, iconColor = 'text-primary', iconBg = 'bg-primary/10',
+  children, delay = 0, accent,
+}) {
   return (
-    <motion.section
-      initial={{ opacity: 0, y: 14 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.28 }}
-      className={`card p-5 ${className}`}
-      aria-label={title}
+    <motion.div
+      variants={fadeUp}
+      initial="initial"
+      animate="animate"
+      transition={{ duration: 0.35, delay }}
+      className="card overflow-hidden"
     >
-      <div className="flex items-center gap-2 mb-4">
-        <Icon size={15} className="text-primary" aria-hidden="true" />
-        <h3 className="font-bold text-xs text-base-content/60 uppercase tracking-widest">{title}</h3>
+      {accent && <div className={`h-0.5 w-full ${accent}`} />}
+      <div className="px-5 py-4 border-b border-base-300/60 flex items-center gap-3">
+        <div className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 ${iconBg}`}>
+          <Icon size={15} className={iconColor} />
+        </div>
+        <div>
+          <h3 className="font-black text-sm text-base-content leading-tight">{title}</h3>
+          {subtitle && <p className="text-[10px] text-base-content/40 mt-0.5">{subtitle}</p>}
+        </div>
       </div>
-      {children}
-    </motion.section>
+      <div className="px-5 py-2">{children}</div>
+    </motion.div>
   );
 });
 
-const Row = memo(function Row({ label, value, mono = false, highlight = false }) {
+// ─── Route Map ────────────────────────────────────────────────────────────────
+
+const RouteMap = memo(function RouteMap({ patientLocation, destinationLocation }) {
+  const { isLoaded } = useJsApiLoader({
+    googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY|| '',
+    libraries: MAPS_LIBRARIES,
+  });
+
+  const [directions, setDirections] = useState(null);
+  const [mapReady,   setMapReady]   = useState(false);
+  const mapRef = useRef(null);
+
+  const pickupCoords  = patientLocation?.coordinates;
+  const dropoffCoords = destinationLocation?.coordinates;
+
+  const pickupPos  = pickupCoords  ? { lat: pickupCoords[1],  lng: pickupCoords[0]  } : null;
+  const dropoffPos = dropoffCoords ? { lat: dropoffCoords[1], lng: dropoffCoords[0] } : null;
+
+  const center = pickupPos || dropoffPos || { lat: 16.5062, lng: 80.6480 };
+
+  const onMapLoad = useCallback((map) => {
+    mapRef.current = map;
+    setMapReady(true);
+    if (pickupPos && dropoffPos && window.google) {
+      const bounds = new window.google.maps.LatLngBounds();
+      bounds.extend(pickupPos);
+      bounds.extend(dropoffPos);
+      map.fitBounds(bounds, { top: 48, right: 32, bottom: 48, left: 32 });
+    }
+  }, [pickupPos, dropoffPos]);
+
+  useEffect(() => {
+    if (!isLoaded || !pickupPos || !dropoffPos) return;
+    const svc = new window.google.maps.DirectionsService();
+    svc.route({
+      origin:      pickupPos,
+      destination: dropoffPos,
+      travelMode:  window.google.maps.TravelMode.DRIVING,
+    }, (result, status) => {
+      if (status === 'OK') setDirections(result);
+    });
+  }, [isLoaded, pickupPos?.lat, dropoffPos?.lat]);
+
+  if (!pickupCoords && !dropoffCoords) return null;
+  if (!isLoaded) return <Skeleton className="w-full h-52 rounded-none" />;
+
   return (
-    <div className="flex items-start justify-between gap-3 py-2 border-b border-base-300/60 last:border-0">
-      <dt className="text-xs text-base-content/50 shrink-0">{label}</dt>
-      <dd className={`text-right text-sm break-all ${highlight ? 'font-black text-base-content' : 'font-medium text-base-content/80'} ${mono ? 'font-mono' : ''}`}>
-        {value || '—'}
-      </dd>
+    <div className="relative w-full h-52">
+      {!mapReady && <Skeleton className="absolute inset-0 rounded-none" />}
+      <GoogleMap
+        mapContainerStyle={{ width: '100%', height: '100%' }}
+        center={center}
+        zoom={13}
+        onLoad={onMapLoad}
+        options={{
+          styles: MAP_STYLES_CLEAN,
+          disableDefaultUI: true,
+          zoomControl: false,
+          gestureHandling: 'none',
+          clickableIcons: false,
+        }}
+      >
+        {directions && (
+          <DirectionsRenderer
+            directions={directions}
+            options={{
+              suppressMarkers: true,
+              polylineOptions: {
+                strokeColor:   'var(--primary, #3b82f6)',
+                strokeWeight:  4,
+                strokeOpacity: 0.85,
+              },
+            }}
+          />
+        )}
+        {pickupPos && (
+          <OverlayView
+            position={pickupPos}
+            mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+            getPixelPositionOffset={(w, h) => ({ x: -w / 2, y: -h })}
+          >
+            <div className="flex flex-col items-center">
+              <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center shadow-lg border-2 border-white">
+                <MapPin size={13} className="text-primary-content" strokeWidth={2.5} />
+              </div>
+              <div className="w-0.5 h-2 bg-primary" />
+              <div className="w-1.5 h-1.5 rounded-full bg-primary" />
+            </div>
+          </OverlayView>
+        )}
+        {dropoffPos && (
+          <OverlayView
+            position={dropoffPos}
+            mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+            getPixelPositionOffset={(w, h) => ({ x: -w / 2, y: -h })}
+          >
+            <div className="flex flex-col items-center">
+              <div className="w-7 h-7 rounded-full bg-success flex items-center justify-center shadow-lg border-2 border-white">
+                <MapPin size={13} className="text-white" strokeWidth={2.5} />
+              </div>
+              <div className="w-0.5 h-2 bg-success" />
+              <div className="w-1.5 h-1.5 rounded-full bg-success" />
+            </div>
+          </OverlayView>
+        )}
+      </GoogleMap>
+      <div className="absolute bottom-2 left-2 flex gap-2 pointer-events-none">
+        <div className="flex items-center gap-1 px-2 py-1 bg-white/90 rounded-lg shadow text-[10px] font-semibold">
+          <span className="w-2 h-2 rounded-full bg-primary inline-block" />
+          Pickup
+        </div>
+        {dropoffPos && (
+          <div className="flex items-center gap-1 px-2 py-1 bg-white/90 rounded-lg shadow text-[10px] font-semibold">
+            <span className="w-2 h-2 rounded-full bg-success inline-block" />
+            Destination
+          </div>
+        )}
+      </div>
     </div>
   );
 });
@@ -314,38 +411,49 @@ const Row = memo(function Row({ label, value, mono = false, highlight = false })
 // ─── Fare Breakdown ───────────────────────────────────────────────────────────
 
 const FareBreakdown = memo(function FareBreakdown({ fare }) {
-  if (!fare) return <p className="text-sm text-base-content/40">No fare information available.</p>;
+  if (!fare) {
+    return <p className="text-sm text-base-content/40 py-3">No fare information available.</p>;
+  }
 
   const rows = [
-    { label: 'Consultation Fee', value: fare.consultationFee,   show: !!fare.consultationFee   },
-    { label: 'Transport Fee',    value: fare.transportFee,       show: !!fare.transportFee       },
-    { label: 'Care Assistant',   value: fare.careAssistantFee,  show: !!fare.careAssistantFee  },
-    { label: 'Diagnostic Fee',   value: fare.diagnosticFee,     show: !!fare.diagnosticFee     },
-    { label: 'Home Collection',  value: fare.homeCollectionFee, show: !!fare.homeCollectionFee },
-    { label: 'Platform Fee',     value: fare.platformFee,       show: !!fare.platformFee       },
-    { label: 'Taxes',            value: fare.taxes,             show: !!fare.taxes             },
-    { label: 'Discount',         value: fare.discount,          show: !!fare.discount,         isDiscount: true },
-    { label: 'Coupon Discount',  value: fare.couponDiscount,    show: !!fare.couponDiscount,   isDiscount: true },
-    { label: 'Wallet Applied',   value: fare.walletApplied,     show: !!fare.walletApplied,    isDiscount: true },
-  ].filter((r) => r.show);
+    { label: 'Consultation Fee',  note: 'Doctor / specialist visit charge',           key: 'consultationFee',   show: !!fare.consultationFee   },
+    { label: 'Transport Fee',     note: 'Vehicle + driver cost for the trip',          key: 'transportFee',      show: !!fare.transportFee      },
+    { label: 'Care Assistant',    note: 'Personal care companion service charge',      key: 'careAssistantFee',  show: !!fare.careAssistantFee  },
+    { label: 'Diagnostic Fee',    note: 'Lab test or diagnostic procedure charges',    key: 'diagnosticFee',     show: !!fare.diagnosticFee     },
+    { label: 'Home Collection',   note: 'Technician visit to collect sample',          key: 'homeCollectionFee', show: !!fare.homeCollectionFee },
+    { label: 'Platform Fee',      note: 'Likeson service and coordination fee',        key: 'platformFee',       show: !!fare.platformFee       },
+    { label: 'Taxes & GST',       note: 'Government-applicable statutory charges',     key: 'taxes',             show: !!fare.taxes             },
+    { label: 'Discount Applied',  note: 'Promotional or subscription discount',        key: 'discount',          show: !!fare.discount,         isDeduction: true },
+    { label: 'Coupon Savings',    note: 'Promo code discount applied at checkout',     key: 'couponDiscount',    show: !!fare.couponDiscount,   isDeduction: true },
+    { label: 'Wallet Deducted',   note: 'Likeson wallet credit used for this booking', key: 'walletApplied',     show: !!fare.walletApplied,    isDeduction: true },
+  ].filter(r => r.show);
 
   return (
-    <dl>
+    <dl className="divide-y divide-base-300/50">
       {rows.map((r) => (
-        <div key={r.label} className="flex items-center justify-between py-2 border-b border-base-300/60 last:border-0">
-          <dt className="text-xs text-base-content/50">{r.label}</dt>
-          <dd className={`text-sm font-semibold ${r.isDiscount ? 'text-success' : 'text-base-content/80'}`}>
-            {r.isDiscount ? '− ' : ''}{fmtINR(Math.abs(r.value ?? 0))}
+        <div key={r.key} className="flex items-start justify-between py-2.5 gap-3">
+          <div>
+            <dt className="text-xs font-semibold text-base-content/70">{r.label}</dt>
+            <p className="text-[10px] text-base-content/30 mt-0.5">{r.note}</p>
+          </div>
+          <dd className={`text-sm font-bold shrink-0 ${r.isDeduction ? 'text-success' : 'text-base-content'}`}>
+            {r.isDeduction ? '− ' : ''}{fmtINR(Math.abs(fare[r.key] ?? 0))}
           </dd>
         </div>
       ))}
       <div className="flex items-center justify-between pt-3 mt-1">
-        <dt className="font-bold text-sm text-base-content">Total</dt>
-        <dd className="font-black text-lg text-base-content">{fmtINR(fare.totalAmount)}</dd>
+        <div>
+          <dt className="font-black text-sm text-base-content">Total Payable</dt>
+          <p className="text-[10px] text-base-content/30 mt-0.5">All charges included</p>
+        </div>
+        <dd className="font-black text-xl text-primary">{fmtINR(fare.totalAmount)}</dd>
       </div>
       {fare.refundAmount > 0 && (
-        <div className="flex items-center justify-between pt-1">
-          <dt className="text-xs text-success">Refund Amount</dt>
+        <div className="flex items-center justify-between pt-2">
+          <div>
+            <dt className="text-xs font-bold text-success">Refund Amount</dt>
+            <p className="text-[10px] text-success/60 mt-0.5">Will be credited within 5-7 working days</p>
+          </div>
           <dd className="text-sm font-bold text-success">{fmtINR(fare.refundAmount)}</dd>
         </div>
       )}
@@ -355,60 +463,79 @@ const FareBreakdown = memo(function FareBreakdown({ fare }) {
 
 // ─── Star Rating Input ────────────────────────────────────────────────────────
 
-const StarRating = memo(function StarRating({ value, onChange, label = 'Rating' }) {
+const StarInput = memo(function StarInput({ value, onChange, label }) {
   const [hovered, setHovered] = useState(0);
   return (
-    <div className="flex gap-1" role="radiogroup" aria-label={label}>
-      {[1, 2, 3, 4, 5].map((s) => (
-        <button
-          key={s}
-          type="button"
-          role="radio"
-          aria-checked={s === value}
-          aria-label={`${s} star${s > 1 ? 's' : ''}`}
-          onClick={() => onChange(s)}
-          onMouseEnter={() => setHovered(s)}
-          onMouseLeave={() => setHovered(0)}
-          className="transition-transform hover:scale-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-warning rounded"
-        >
-          <Star
-            size={22}
-            aria-hidden="true"
-            className={s <= (hovered || value) ? 'text-warning fill-current' : 'text-base-300'}
-          />
-        </button>
-      ))}
-    </div>
+    <fieldset>
+      <legend className="sr-only">{label}</legend>
+      <div className="flex gap-1.5">
+        {[1, 2, 3, 4, 5].map((s) => (
+          <motion.button
+            key={s}
+            type="button"
+            whileTap={{ scale: 0.85 }}
+            onClick={() => onChange(s)}
+            onMouseEnter={() => setHovered(s)}
+            onMouseLeave={() => setHovered(0)}
+            className="focus:outline-none"
+            aria-label={`${s} star${s > 1 ? 's' : ''}`}
+          >
+            <Star
+              size={24}
+              className={`transition-colors duration-150 ${
+                s <= (hovered || value) ? 'text-warning fill-current' : 'text-base-300'
+              }`}
+            />
+          </motion.button>
+        ))}
+      </div>
+    </fieldset>
   );
 });
+
+// ─── 12hr Cancel Warning ──────────────────────────────────────────────────────
+
+function CancelTimeWarning({ scheduledAt }) {
+  const h = hoursUntil(scheduledAt);
+  if (!h) return null;
+  return (
+    <div className="flex items-start gap-2 p-3 rounded-xl bg-error/5 border border-error/20 mt-3">
+      <Lock size={14} className="text-error flex-shrink-0 mt-0.5" />
+      <div>
+        <p className="text-xs font-bold text-error">Cancellation Locked</p>
+        <p className="text-[10px] text-error/70 mt-0.5">
+          Your appointment is in <strong>{h}</strong>. Cancellations are not allowed within 12 hours of the scheduled time.
+        </p>
+      </div>
+    </div>
+  );
+}
 
 // ─── Cancel Modal ─────────────────────────────────────────────────────────────
 
 const CancelModal = memo(function CancelModal({ booking, onClose }) {
-  const dispatch = useDispatch();
-  const { status, data, error } = useSelector(selectCancelBooking);
-  const loading  = useSelector(selectCancelBookingLoading);
+  const dispatch    = useDispatch();
+  const cancelState = useSelector(selectCancelBooking);
+  const loading     = useSelector(selectCancelBookingLoading);
   const [reason, setReason] = useState('');
   const textareaRef = useRef(null);
 
-  // Focus trap
+  const tooClose = isWithin12Hours(booking.scheduledAt);
+  const canSubmit = !tooClose && reason.trim().length >= 10 && !loading;
+
   useEffect(() => { textareaRef.current?.focus(); }, []);
 
-  const handleCancel = useCallback(() => {
-    if (!reason.trim()) return;
-    dispatch(cancelBooking({ bookingId: booking._id, reason }));
-  }, [dispatch, booking._id, reason]);
+  const handleSubmit = useCallback(() => {
+    if (!canSubmit) return;
+    dispatch(cancelMyBooking({ bookingId: booking._id, reason }));
+  }, [dispatch, booking._id, reason, canSubmit]);
 
   useEffect(() => {
-    if (status === 'success') {
-      const t = setTimeout(onClose, 2000);
+    if (cancelState?.status === 'cancelled') {
+      const t = setTimeout(onClose, 2200);
       return () => clearTimeout(t);
     }
-  }, [status, onClose]);
-
-  const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Escape') onClose();
-  }, [onClose]);
+  }, [cancelState?.status, onClose]);
 
   return (
     <motion.div
@@ -416,81 +543,95 @@ const CancelModal = memo(function CancelModal({ booking, onClose }) {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }}
+      style={{ backgroundColor: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(6px)' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-      onKeyDown={handleKeyDown}
       role="dialog"
       aria-modal="true"
-      aria-labelledby="cancel-modal-title"
+      aria-labelledby="cancel-title"
     >
       <motion.div
-        initial={{ opacity: 0, y: 40, scale: 0.97 }}
+        initial={{ opacity: 0, y: 48, scale: 0.96 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 30, scale: 0.96 }}
-        className="card w-full max-w-md p-6"
+        exit={{ opacity: 0, y: 32, scale: 0.95 }}
+        transition={{ type: 'spring', stiffness: 300, damping: 28 }}
+        className="card w-full max-w-md overflow-hidden"
       >
-        {status === 'success' ? (
-          <div className="text-center py-6" role="status" aria-live="polite">
-            <CheckCircle2 size={48} className="text-success mx-auto mb-3" aria-hidden="true" />
-            <h3 className="font-bold text-lg mb-1">Booking Cancelled</h3>
-            {data?.refundAmount > 0 && (
-              <p className="text-base-content/60 text-sm">
-                Refund of <strong>{fmtINR(data.refundAmount)}</strong> ({data.refundPercent}%) will be processed.
+        {/* SUCCESS — cancelState has { status, refundAmount, refundPercent } from slice */}
+        {cancelState?.status === 'cancelled' ? (
+          <div className="flex flex-col items-center text-center px-6 py-10">
+            <motion.div
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ type: 'spring', stiffness: 400 }}
+              className="w-16 h-16 rounded-full bg-success/10 flex items-center justify-center mb-4"
+            >
+              <CheckCircle2 size={34} className="text-success" />
+            </motion.div>
+            <h3 className="font-black text-lg text-base-content">Booking Cancelled</h3>
+            {cancelState?.refundAmount > 0 && (
+              <p className="text-sm text-base-content/60 mt-2">
+                Refund of <strong className="text-success">{fmtINR(cancelState.refundAmount)}</strong>{' '}
+                ({cancelState.refundPercent}%) will be processed within 5–7 business days.
               </p>
             )}
           </div>
         ) : (
           <>
-            <div className="flex items-center justify-between mb-5">
-              <div className="flex items-center gap-2">
-                <AlertTriangle size={18} className="text-error" aria-hidden="true" />
-                <h3 id="cancel-modal-title" className="font-bold text-base">Cancel Booking</h3>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-base-300">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-error/10 flex items-center justify-center">
+                  <AlertTriangle size={15} className="text-error" />
+                </div>
+                <div>
+                  <h3 id="cancel-title" className="font-black text-sm text-base-content">Cancel Booking</h3>
+                  <p className="text-[10px] text-base-content/40">{booking.bookingCode}</p>
+                </div>
               </div>
-              <button onClick={onClose} className="btn btn-ghost btn-xs btn-circle" aria-label="Close">
-                <X size={14} aria-hidden="true" />
+              <button onClick={onClose} className="btn btn-ghost btn-xs btn-circle">
+                <X size={14} />
               </button>
             </div>
-
-            <div className="alert alert-warning mb-5 text-sm" role="note">
-              <Info size={14} className="shrink-0" aria-hidden="true" />
-              <span>Cancellation may incur charges depending on timing. Refund eligibility will be calculated automatically.</span>
-            </div>
-
-            <div className="mb-5">
-              <label htmlFor="cancel-reason" className="label-text block mb-2">
-                Reason for cancellation <span aria-hidden="true">*</span>
-                <span className="sr-only">(required)</span>
-              </label>
-              <textarea
-                id="cancel-reason"
-                ref={textareaRef}
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="Please tell us why you're cancelling…"
-                rows={3}
-                className="input-field w-full resize-none"
-                aria-required="true"
-              />
-            </div>
-
-            {error && (
-              <div className="alert alert-error mb-4 text-sm" role="alert">
-                <AlertTriangle size={14} aria-hidden="true" />
-                <span>{error}</span>
+            <div className="px-5 py-4 space-y-4">
+              {tooClose && <CancelTimeWarning scheduledAt={booking.scheduledAt} />}
+              {!tooClose && (
+                <div className="alert alert-warning text-xs">
+                  <AlertCircle size={13} className="flex-shrink-0" />
+                  <span>Cancellation charges may apply. Refund eligibility is calculated automatically.</span>
+                </div>
+              )}
+              <div>
+                <label htmlFor="cancel-reason" className="label-text block mb-1">
+                  Reason for cancellation *
+                </label>
+                <p className="text-[10px] text-base-content/40 mb-2">
+                  Please provide at least 10 characters.
+                </p>
+                <textarea
+                  id="cancel-reason"
+                  ref={textareaRef}
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="e.g. Appointment rescheduled by the doctor…"
+                  rows={3}
+                  disabled={tooClose}
+                  className="input-field w-full resize-none disabled:opacity-40"
+                  aria-required="true"
+                />
+                <p className="text-[10px] text-base-content/30 mt-1 text-right">
+                  {reason.length} / min 10 chars
+                </p>
               </div>
-            )}
-
-            <div className="flex gap-3">
-              <button onClick={onClose} className="btn btn-ghost flex-1">Keep Booking</button>
-              <button
-                onClick={handleCancel}
-                disabled={loading || !reason.trim()}
-                className="btn btn-error flex-1 gap-2"
-                aria-disabled={loading || !reason.trim()}
-              >
-                {loading && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
-                {loading ? 'Cancelling…' : 'Cancel Booking'}
-              </button>
+              <div className="flex gap-3 pt-1">
+                <button onClick={onClose} className="btn btn-ghost flex-1">Keep Booking</button>
+                <button
+                  onClick={handleSubmit}
+                  disabled={!canSubmit}
+                  className="btn btn-error flex-1 gap-2"
+                >
+                  {loading && <Loader2 size={14} className="animate-spin" />}
+                  {loading ? 'Cancelling…' : 'Confirm Cancel'}
+                </button>
+              </div>
             </div>
           </>
         )}
@@ -501,119 +642,147 @@ const CancelModal = memo(function CancelModal({ booking, onClose }) {
 
 // ─── Rating Modal ─────────────────────────────────────────────────────────────
 
-const DOCTOR_TYPES  = new Set(['full_care_ride','doctor_consultation','doctor_online','physiotherapist','follow_up']);
-const DRIVER_TYPES  = new Set(['full_care_ride','patient_transport','diagnostic_home']);
-const CA_TYPES      = new Set(['full_care_ride','care_assistant']);
-const LAB_TYPES     = new Set(['diagnostic_center','diagnostic_home']);
+const RATING_FIELDS_BY_TYPE = {
+  full_care_ride:      ['overall', 'doctor', 'driver', 'careAssistant'],
+  doctor_consultation: ['overall', 'doctor'],
+  doctor_online:       ['overall', 'doctor'],
+  physiotherapist:     ['overall', 'doctor'],
+  care_assistant:      ['overall', 'careAssistant'],
+  diagnostic_center:   ['overall', 'lab'],
+  diagnostic_home:     ['overall', 'lab', 'driver'],
+  patient_transport:   ['overall', 'driver'],
+  follow_up:           ['overall', 'doctor'],
+};
 
-const INITIAL_RATING_FORM = {
-  overallRating: 0, overallComment: '',
-  doctorRating: 0,  doctorComment: '',
-  driverRating: 0,  driverComment: '',
-  careAssistantRating: 0, careAssistantComment: '',
-  labRating: 0, labComment: '',
+const RATING_META = {
+  overall:       { label: 'Overall Experience', note: 'How satisfied were you overall?',                    stateKey: 'overallRating',      commentKey: 'overallComment',      icon: Star       },
+  doctor:        { label: 'Doctor / Specialist', note: 'Quality of consultation and care',                  stateKey: 'doctorRating',        commentKey: 'doctorComment',        icon: Stethoscope },
+  driver:        { label: 'Driver',              note: 'Punctuality, driving and vehicle condition',        stateKey: 'driverRating',        commentKey: 'driverComment',        icon: Car        },
+  careAssistant: { label: 'Care Assistant',      note: 'Attentiveness and professionalism',                 stateKey: 'careAssistantRating', commentKey: 'careAssistantComment', icon: HeartPulse },
+  lab:           { label: 'Lab / Diagnostics',   note: 'Sample collection, report accuracy and turnaround', stateKey: 'labRating',           commentKey: 'labComment',           icon: FlaskConical},
 };
 
 const RatingModal = memo(function RatingModal({ booking, onClose }) {
-  const dispatch = useDispatch();
+  const dispatch  = useDispatch();
   const rateState = useSelector(selectRateBooking);
   const loading   = useSelector(selectRateBookingLoading);
-  const status    = rateState?.status;
 
-  const [form, setForm] = useState(INITIAL_RATING_FORM);
+  const fields = RATING_FIELDS_BY_TYPE[booking.bookingType] || ['overall'];
 
-  const set = useCallback((key, val) => setForm((p) => ({ ...p, [key]: val })), []);
+  const [form, setForm] = useState({
+    overallRating: 0,      overallComment: '',
+    doctorRating: 0,       doctorComment: '',
+    driverRating: 0,       driverComment: '',
+    careAssistantRating: 0, careAssistantComment: '',
+    labRating: 0,          labComment: '',
+  });
+
+  const set = useCallback((key, val) => setForm(p => ({ ...p, [key]: val })), []);
 
   const handleSubmit = useCallback(() => {
     if (!form.overallRating) return;
-    dispatch(rateBooking({ bookingId: booking._id, ...form }));
+    dispatch(rateMyBooking({ bookingId: booking._id, ...form }));
   }, [dispatch, booking._id, form]);
 
+  // rateMyBooking thunk returns { bookingId } on success — no status field.
+  // Use presence of rateState with bookingId matching as success signal.
+  const isSuccess = rateState?.bookingId === booking._id;
+
   useEffect(() => {
-    if (status === 'success') {
-      const t = setTimeout(onClose, 1800);
+    if (isSuccess) {
+      const t = setTimeout(onClose, 2000);
       return () => clearTimeout(t);
     }
-  }, [status, onClose]);
-
-  const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Escape') onClose();
-  }, [onClose]);
-
-  const showDoctor = DOCTOR_TYPES.has(booking.bookingType);
-  const showDriver = DRIVER_TYPES.has(booking.bookingType);
-  const showCA     = CA_TYPES.has(booking.bookingType);
-  const showLab    = LAB_TYPES.has(booking.bookingType);
-
-  const RatingField = ({ stateKey, commentKey, label }) => (
-    <div>
-      <p className="label-text block mb-2">{label}</p>
-      <StarRating label={label} value={form[stateKey]} onChange={(v) => set(stateKey, v)} />
-      <input
-        type="text"
-        placeholder="Comment (optional)"
-        value={form[commentKey]}
-        onChange={(e) => set(commentKey, e.target.value)}
-        className="input-field w-full mt-2"
-        aria-label={`${label} comment`}
-      />
-    </div>
-  );
+  }, [isSuccess, onClose]);
 
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 overflow-y-auto"
-      style={{ backgroundColor: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }}
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+      style={{ backgroundColor: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(6px)' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-      onKeyDown={handleKeyDown}
       role="dialog"
       aria-modal="true"
-      aria-labelledby="rating-modal-title"
+      aria-labelledby="rating-title"
     >
       <motion.div
-        initial={{ opacity: 0, y: 40 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 30 }}
-        className="card w-full max-w-md p-6 my-4"
+        initial={{ opacity: 0, y: 48, scale: 0.96 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 32, scale: 0.95 }}
+        transition={{ type: 'spring', stiffness: 300, damping: 28 }}
+        className="card w-full max-w-md overflow-hidden"
       >
-        {status === 'success' ? (
-          <div className="text-center py-6" role="status" aria-live="polite">
-            <ThumbsUp size={48} className="text-success mx-auto mb-3" aria-hidden="true" />
-            <h3 className="font-bold text-lg mb-1">Thank you for your feedback!</h3>
-            <p className="text-base-content/50 text-sm">Your rating helps us improve.</p>
+        {isSuccess ? (
+          <div className="flex flex-col items-center text-center px-6 py-10">
+            <motion.div
+              initial={{ scale: 0, rotate: -20 }}
+              animate={{ scale: 1, rotate: 0 }}
+              transition={{ type: 'spring', stiffness: 400 }}
+              className="w-16 h-16 rounded-full bg-warning/10 flex items-center justify-center mb-4"
+            >
+              <ThumbsUp size={30} className="text-warning" />
+            </motion.div>
+            <h3 className="font-black text-lg">Thank you!</h3>
+            <p className="text-sm text-base-content/50 mt-2">
+              Your feedback helps us deliver better care.
+            </p>
           </div>
         ) : (
           <>
-            <div className="flex items-center justify-between mb-5">
-              <div className="flex items-center gap-2">
-                <Star size={18} className="text-warning" aria-hidden="true" />
-                <h3 id="rating-modal-title" className="font-bold text-base">Rate Your Experience</h3>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-base-300">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-warning/10 flex items-center justify-center">
+                  <Star size={15} className="text-warning" />
+                </div>
+                <div>
+                  <h3 id="rating-title" className="font-black text-sm">Rate Your Experience</h3>
+                  <p className="text-[10px] text-base-content/40">Your feedback matters</p>
+                </div>
               </div>
-              <button onClick={onClose} className="btn btn-ghost btn-xs btn-circle" aria-label="Close">
-                <X size={14} aria-hidden="true" />
+              <button onClick={onClose} className="btn btn-ghost btn-xs btn-circle">
+                <X size={14} />
               </button>
             </div>
-
-            <div className="space-y-5 max-h-[60vh] overflow-y-auto pr-1">
-              <RatingField stateKey="overallRating" commentKey="overallComment" label="Overall Experience *" />
-              {showDoctor && <RatingField stateKey="doctorRating" commentKey="doctorComment" label="Doctor" />}
-              {showDriver && <RatingField stateKey="driverRating" commentKey="driverComment" label="Driver" />}
-              {showCA     && <RatingField stateKey="careAssistantRating" commentKey="careAssistantComment" label="Care Assistant" />}
-              {showLab    && <RatingField stateKey="labRating" commentKey="labComment" label="Lab / Diagnostics" />}
+            <div className="px-5 py-4 max-h-[68vh] overflow-y-auto scrollbar-thin space-y-5">
+              {fields.map((fieldKey) => {
+                const meta = RATING_META[fieldKey];
+                const FieldIcon = meta.icon;
+                return (
+                  <div key={fieldKey} className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <FieldIcon size={13} className="text-base-content/40" />
+                      <div>
+                        <p className="text-xs font-bold text-base-content">{meta.label}</p>
+                        <p className="text-[10px] text-base-content/40">{meta.note}</p>
+                      </div>
+                    </div>
+                    <StarInput
+                      label={meta.label}
+                      value={form[meta.stateKey]}
+                      onChange={(v) => set(meta.stateKey, v)}
+                    />
+                    <input
+                      type="text"
+                      placeholder="Leave a comment (optional)"
+                      value={form[meta.commentKey]}
+                      onChange={(e) => set(meta.commentKey, e.target.value)}
+                      className="input-field w-full mt-1"
+                      aria-label={`${meta.label} comment`}
+                    />
+                  </div>
+                );
+              })}
             </div>
-
-            <div className="flex gap-3 mt-5 pt-4 border-t border-base-300">
+            <div className="flex gap-3 px-5 py-4 border-t border-base-300">
               <button onClick={onClose} className="btn btn-ghost flex-1">Skip</button>
               <button
                 onClick={handleSubmit}
                 disabled={loading || !form.overallRating}
                 className="btn btn-primary flex-1 gap-2"
-                aria-disabled={loading || !form.overallRating}
               >
-                {loading && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+                {loading && <Loader2 size={14} className="animate-spin" />}
                 Submit Rating
               </button>
             </div>
@@ -624,13 +793,85 @@ const RatingModal = memo(function RatingModal({ booking, onClose }) {
   );
 });
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
+// ─── Timeline Progress ────────────────────────────────────────────────────────
+
+const STATUS_ORDER = [
+  { key: 'pending',     label: 'Booking Received', note: 'Your booking request received'       },
+  { key: 'confirmed',   label: 'Confirmed',         note: 'Healthcare team confirmed your slot' },
+  { key: 'in_progress', label: 'In Progress',       note: 'Your care session is underway'       },
+  { key: 'completed',   label: 'Completed',          note: 'Service delivered successfully'      },
+];
+
+function BookingTimeline({ status }) {
+  const activeIdx = STATUS_ORDER.findIndex(s => s.key === status);
+  if (activeIdx < 0 && status !== 'cancelled') return null;
+
+  if (status === 'cancelled') {
+    return (
+      <div className="flex items-center gap-2 px-1 py-2">
+        <div className="w-6 h-6 rounded-full bg-error/10 flex items-center justify-center flex-shrink-0">
+          <X size={12} className="text-error" />
+        </div>
+        <div>
+          <p className="text-xs font-bold text-error">Booking Cancelled</p>
+          <p className="text-[10px] text-base-content/40">This booking was cancelled</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-0">
+      {STATUS_ORDER.map((step, idx) => {
+        const isDone   = idx < activeIdx;
+        const isActive = idx === activeIdx;
+        return (
+          <div key={step.key} className="flex items-start gap-3 pb-3 last:pb-0">
+            <div className="flex flex-col items-center">
+              <motion.div
+                animate={isActive ? { scale: [1, 1.2, 1] } : {}}
+                transition={{ repeat: Infinity, duration: 2 }}
+                className={`
+                  w-6 h-6 rounded-full flex items-center justify-center border-2 flex-shrink-0 mt-0.5
+                  ${isDone   ? 'bg-success border-success' : ''}
+                  ${isActive ? 'bg-primary border-primary shadow-md shadow-primary/40' : ''}
+                  ${!isDone && !isActive ? 'bg-base-100 border-base-300' : ''}
+                `}
+              >
+                {isDone   ? <CheckCheck size={11} className="text-white" />
+                          : isActive ? <Zap size={10} className="text-primary-content" />
+                          : <span className="w-1.5 h-1.5 rounded-full bg-base-300 block" />}
+              </motion.div>
+              {idx < STATUS_ORDER.length - 1 && (
+                <div className={`w-0.5 h-5 mt-0.5 ${idx < activeIdx ? 'bg-success' : 'bg-base-300'}`} />
+              )}
+            </div>
+            <div className="pt-0.5 flex-1">
+              <p className={`text-xs font-bold leading-tight ${isActive ? 'text-primary' : isDone ? 'text-success' : 'text-base-content/30'}`}>
+                {step.label}
+              </p>
+              <p className={`text-[10px] mt-0.5 ${isActive || isDone ? 'text-base-content/40' : 'text-base-content/20'}`}>
+                {step.note}
+              </p>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function BookingDetailsPage() {
   const dispatch = useDispatch();
   const router   = useRouter();
   const params   = useParams();
-  const id       = params?.bookingId ?? params?.id;
+
+  // ── FIX: resolve id safely — Next.js App Router useParams() key
+  // matches the dynamic segment folder name exactly.
+  // Try both common names; your folder must be [bookingId] OR [id].
+  const id = params?.bookingId ?? params?.id ?? null;
 
   const booking = useSelector(selectActiveBooking);
   const loading = useSelector(selectActiveBookingLoading);
@@ -641,546 +882,723 @@ export default function BookingDetailsPage() {
   const [copied,     setCopied]     = useState(false);
 
   useEffect(() => {
-    if (id) dispatch(fetchBookingById(id));
-    return () => { dispatch(clearActiveBooking()); };
+    // ── FIX: guard — never dispatch when id is falsy (avoids "undefined" ObjectId cast error)
+    if (!id) return;
+    // ── FIX: pass { bookingId } object — thunk destructures { bookingId }, not a raw string
+    dispatch(fetchMyBookingById({ bookingId: id }));
+    return () => { dispatch(clearSelectedBooking()); };
   }, [id, dispatch]);
 
+  // ── FIX: same fix for refresh
   const handleRefresh = useCallback(() => {
-    if (id) dispatch(fetchBookingById(id));
+    if (!id) return;
+    dispatch(fetchMyBookingById({ bookingId: id }));
   }, [id, dispatch]);
 
   const handleCopy = useCallback(() => {
     if (!booking?.bookingCode) return;
     navigator.clipboard.writeText(booking.bookingCode).catch(() => {});
     setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    setTimeout(() => setCopied(false), 1600);
   }, [booking?.bookingCode]);
 
-  const handleCloseCancelModal = useCallback(() => {
+  const handleCloseCancel = useCallback(() => {
     setShowCancel(false);
     dispatch(resetCancelBooking());
   }, [dispatch]);
 
-  const handleCloseRatingModal = useCallback(() => {
+  const handleCloseRating = useCallback(() => {
     setShowRating(false);
     dispatch(resetRateBooking());
   }, [dispatch]);
 
-  // ── Loading state ──
+  // ── No id in URL ──
+  if (!id) {
+    return (
+      <main className="min-h-screen flex flex-col items-center justify-center gap-4 text-center p-6 bg-base-100">
+        <div className="w-16 h-16 rounded-2xl bg-warning/10 flex items-center justify-center mb-2">
+          <AlertTriangle size={28} className="text-warning" />
+        </div>
+        <h2 className="font-black text-xl text-base-content">Invalid URL</h2>
+        <p className="text-sm text-base-content/50 max-w-xs">
+          No booking ID found in the URL. Please go back and select a booking.
+        </p>
+        <button onClick={() => router.back()} className="btn btn-outline btn-sm gap-2">
+          <ArrowLeft size={14} /> Go Back
+        </button>
+      </main>
+    );
+  }
+
   if (loading) return <BookingDetailsSkeleton />;
 
-  // ── Error / Not found state ──
   if (error || !booking) {
     return (
-      <main className="min-h-screen flex flex-col items-center justify-center gap-4 text-center p-6">
-        <AlertTriangle size={40} className="text-error" aria-hidden="true" />
-        <h2 className="font-bold text-lg">Booking Not Found</h2>
-        <p className="text-base-content/50 text-sm max-w-xs">{error || 'This booking could not be loaded.'}</p>
-        <button onClick={() => router.back()} className="btn btn-outline btn-sm gap-2 mt-2">
-          <ArrowLeft size={14} aria-hidden="true" />
-          Go Back
-        </button>
+      <main className="min-h-screen flex flex-col items-center justify-center gap-4 text-center p-6 bg-base-100">
+        <div className="w-16 h-16 rounded-2xl bg-error/10 flex items-center justify-center mb-2">
+          <AlertTriangle size={28} className="text-error" />
+        </div>
+        <h2 className="font-black text-xl text-base-content">Booking Not Found</h2>
+        <p className="text-sm text-base-content/50 max-w-xs">
+          {error || 'This booking could not be loaded. Please check the link or try again.'}
+        </p>
+        <div className="flex gap-3 mt-2">
+          <button onClick={() => router.back()} className="btn btn-outline btn-sm gap-2">
+            <ArrowLeft size={14} /> Go Back
+          </button>
+          <button onClick={handleRefresh} className="btn btn-primary btn-sm gap-2">
+            <RefreshCw size={14} /> Retry
+          </button>
+        </div>
       </main>
     );
   }
 
   const meta  = BOOKING_TYPE_META[booking.bookingType] ?? BOOKING_TYPE_META.patient_transport;
   const sMeta = STATUS_META[booking.status]            ?? STATUS_META.pending;
+  const pMeta = PAYMENT_STATUS_META[booking.paymentStatus] ?? PAYMENT_STATUS_META.unpaid;
   const Icon  = meta.icon;
 
-  const canCancel = ['pending', 'confirmed'].includes(booking.status);
-  const canRate   = booking.status === 'completed' && !booking.isRated;
-  const hasMap    = !!(booking.patientLocation?.coordinates || booking.destinationLocation?.coordinates);
+  const canCancel    = ['pending', 'confirmed'].includes(booking.status);
+  const cancelLocked = isWithin12Hours(booking.scheduledAt);
+  const canRate      = booking.status === 'completed' && !booking.isRated;
+  const hasMap       = !!(booking.patientLocation?.coordinates || booking.destinationLocation?.coordinates);
+  const hasTransport = ['full_care_ride', 'patient_transport', 'diagnostic_home'].includes(booking.bookingType);
+  const isLive       = hasTransport && ['confirmed', 'in_progress'].includes(booking.status);
+
+  const primaryRideId = booking.primaryRide?._id ?? booking.primaryRide ?? booking.rides?.[0]?._id ?? booking.rides?.[0];
 
   return (
     <>
-      <div className="min-h-screen bg-base-100">
+      <div data-theme="customer" className="min-h-screen bg-base-100">
 
         {/* ── Sticky Header ── */}
-        <header className="sticky top-0 z-20 border-b border-base-300 bg-base-100/95 backdrop-blur-sm">
+        <header className="sticky top-0 z-20 border-b border-base-300 bg-base-100/96 backdrop-blur-md">
           <div className="container-custom py-3">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
-                <button
+                <motion.button
+                  whileTap={{ scale: 0.9 }}
                   onClick={() => router.back()}
                   className="btn btn-ghost btn-sm btn-circle shrink-0"
                   aria-label="Go back"
                 >
-                  <ArrowLeft size={16} aria-hidden="true" />
-                </button>
+                  <ArrowLeft size={16} />
+                </motion.button>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h1 className="font-black text-base text-base-content truncate">{meta.label}</h1>
-                    <span
-                      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-bold ${sMeta.color} ${sMeta.bg}`}
-                      aria-label={`Status: ${sMeta.label}`}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${sMeta.dot}`} aria-hidden="true" />
-                      {sMeta.label}
+                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-black ${sMeta.bgCls}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${sMeta.dotCls}`} />
+                      <span className={sMeta.textCls}>{sMeta.label}</span>
                     </span>
                   </div>
                   <button
                     onClick={handleCopy}
-                    className="flex items-center gap-1 text-xs text-base-content/40 hover:text-primary transition-colors mt-0.5"
+                    className="flex items-center gap-1.5 text-[11px] text-base-content/40 hover:text-primary transition-colors mt-0.5 group"
                     aria-label={`Copy booking code ${booking.bookingCode}`}
+                    title="Click to copy"
                   >
-                    <span className="font-mono">{booking.bookingCode}</span>
-                    {copied
-                      ? <CheckCircle2 size={10} className="text-success" aria-hidden="true" />
-                      : <Copy size={10} aria-hidden="true" />}
+                    <span className="font-mono group-hover:text-primary">{booking.bookingCode}</span>
+                    {copied ? <CheckCircle2 size={10} className="text-success" /> : <Copy size={10} />}
                   </button>
                 </div>
               </div>
-
               <div className="flex items-center gap-2 shrink-0">
-                <button
+                <motion.button
+                  whileTap={{ scale: 0.9 }}
                   onClick={handleRefresh}
                   className="btn btn-ghost btn-sm btn-circle"
-                  aria-label="Refresh booking"
+                  aria-label="Refresh"
                 >
-                  <RefreshCw size={14} aria-hidden="true" />
-                </button>
-                {canCancel && (
-                  <button onClick={() => setShowCancel(true)} className="btn btn-error btn-sm">
-                    Cancel
-                  </button>
+                  <RefreshCw size={14} />
+                </motion.button>
+                {isLive && primaryRideId && (
+                  <Link href={`/rides/${booking._id}/${primaryRideId}/tracking`} className="btn btn-info btn-sm gap-1.5">
+                    <Navigation2 size={13} />
+                    <span className="hidden sm:inline">Track Live</span>
+                  </Link>
                 )}
                 {canRate && (
                   <button onClick={() => setShowRating(true)} className="btn btn-primary btn-sm gap-1.5">
-                    <Star size={13} aria-hidden="true" />
-                    Rate
+                    <Star size={13} />
+                    <span className="hidden sm:inline">Rate</span>
                   </button>
                 )}
-                {['full_care_ride', 'patient_transport', 'diagnostic_home'].includes(booking.bookingType) &&
- ['confirmed', 'in_progress'].includes(booking.status) && (
-  <Link
-    href={`/my-bookings/${booking._id}/live`}
-    className="btn btn-info btn-sm gap-1.5"
-    aria-label="Track live location"
-  >
-    <Navigation2 size={13} aria-hidden="true" />
-    Track
-  </Link>
-)}
-
+                {canCancel && (
+                  <button
+                    onClick={() => setShowCancel(true)}
+                    className="btn btn-sm gap-1.5 text-error border border-error/30 bg-error/5 hover:bg-error hover:text-error-content hover:border-error"
+                  >
+                    {cancelLocked ? <Lock size={13} /> : <X size={13} />}
+                    <span className="hidden sm:inline">{cancelLocked ? 'Locked' : 'Cancel'}</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>
         </header>
 
         {/* ── Hero Band ── */}
-        <div className={`bg-gradient-to-r ${meta.gradient} border-b border-base-300`} role="banner">
-          <div className="container-custom py-5">
-            <div className="flex items-center gap-4">
-              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${meta.bg} border border-base-300 shadow-sm`} aria-hidden="true">
-                <Icon size={26} className={meta.color} />
+        <div className="border-b border-base-300 bg-gradient-to-br from-base-200 via-base-100 to-base-100">
+          <div className="container-custom py-6">
+            <div className="flex items-start gap-4">
+              <motion.div
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: 'spring', stiffness: 300 }}
+                className={`w-16 h-16 rounded-2xl flex items-center justify-center ${meta.bg} ${meta.border} border-2 shadow-sm flex-shrink-0`}
+              >
+                <Icon size={28} className={meta.color} />
+              </motion.div>
+              <div className="flex-1 min-w-0">
+                <motion.div
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.1 }}
+                >
+                  <p className="text-[11px] uppercase tracking-widest font-bold text-base-content/30 mb-1">
+                    Scheduled Appointment
+                  </p>
+                  <p className="font-black text-2xl text-base-content leading-tight">
+                    <time dateTime={booking.scheduledAt}>{fmtDate(booking.scheduledAt)}</time>
+                  </p>
+                  <p className="text-base-content/50 text-sm font-semibold mt-0.5">
+                    <time dateTime={booking.scheduledAt}>{fmtTime(booking.scheduledAt)}</time>
+                  </p>
+                </motion.div>
+                {canCancel && cancelLocked && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="flex items-center gap-1.5 mt-2"
+                  >
+                    <Timer size={12} className="text-error" />
+                    <p className="text-[11px] text-error font-semibold">
+                      Cancellation locked — less than 12 hours to appointment
+                    </p>
+                  </motion.div>
+                )}
               </div>
-              <div>
-                <p className="text-xs text-base-content/40 font-semibold uppercase tracking-wider mb-0.5">Scheduled for</p>
-                <p className="font-black text-xl text-base-content">
-                  <time dateTime={booking.scheduledAt}>{fmtDate(booking.scheduledAt)}</time>
-                </p>
-                <p className="text-base-content/60 text-sm">
-                  <time dateTime={booking.scheduledAt}>{fmtTime(booking.scheduledAt)}</time>
-                </p>
-              </div>
+              {hoursUntil(booking.scheduledAt) && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: 0.2 }}
+                  className="flex-shrink-0 text-center px-3 py-2 bg-primary/5 border border-primary/20 rounded-2xl"
+                >
+                  <p className="text-[10px] text-base-content/40 font-semibold uppercase">In</p>
+                  <p className="font-black text-primary text-lg leading-none">{hoursUntil(booking.scheduledAt)}</p>
+                </motion.div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* ── Content Grid ── */}
-        <main className="container-custom py-5">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-
-            {/* ── Left column (2/3) ── */}
+        {/* ── Main Content Grid ── */}
+        <main className="container-custom py-6">
+          <motion.div
+            variants={stagger}
+            initial="initial"
+            animate="animate"
+            className="grid grid-cols-1 lg:grid-cols-3 gap-5"
+          >
+            {/* ════ Left Column ════ */}
             <div className="lg:col-span-2 space-y-5">
 
-              {/* Map */}
               {hasMap && (
-                <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.05 }}>
-                  <BookingMap
+                <motion.div variants={fadeUp} className="card overflow-hidden">
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-base-300">
+                    <div className="flex items-center gap-2">
+                      <Navigation size={14} className="text-primary" />
+                      <span className="font-black text-sm text-base-content">Route Map</span>
+                    </div>
+                    <p className="text-[10px] text-base-content/40">Pickup → Destination</p>
+                  </div>
+                  <RouteMap
                     patientLocation={booking.patientLocation}
                     destinationLocation={booking.destinationLocation}
                   />
                 </motion.div>
               )}
 
-              {/* Patient Info */}
-              <Section title="Patient Information" icon={User}>
-                <dl className="grid grid-cols-2 gap-x-6">
-                  <Row label="Name"        value={booking.patientInfo?.name} />
-                  <Row label="Age"         value={booking.patientInfo?.age ? `${booking.patientInfo.age} yrs` : null} />
-                  <Row label="Gender"      value={booking.patientInfo?.gender} />
-                  <Row label="Blood Group" value={booking.patientInfo?.bloodGroup} />
-                  <Row label="Phone"       value={booking.patientInfo?.phone} />
-                  <Row label="Self"        value={booking.patientInfo?.isSelf ? 'Yes' : 'For another patient'} />
-                </dl>
-              </Section>
+              <SectionCard
+                title="Patient Information"
+                subtitle="Details of the person receiving care"
+                icon={User}
+                iconColor="text-primary"
+                iconBg="bg-primary/10"
+                accent="bg-gradient-to-r from-primary/60 via-primary/20 to-transparent"
+                delay={0.05}
+              >
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
+                  <FieldRow label="Full Name"     note="Legal name as on ID"                value={booking.patientInfo?.name}                                          icon={User}  highlight />
+                  <FieldRow label="Age"           note="Patient's age in years"              value={booking.patientInfo?.age ? `${booking.patientInfo.age} yrs` : null} icon={Clock} />
+                  <FieldRow label="Gender"        note="For medical records"                 value={booking.patientInfo?.gender}                                                     />
+                  <FieldRow label="Blood Group"   note="For emergency preparedness"          value={booking.patientInfo?.bloodGroup}                                                 />
+                  <FieldRow label="Contact Phone" note="For appointment-related calls"       value={booking.patientInfo?.phone}                                         icon={Phone} mono />
+                  <FieldRow label="Self / Other"  note="Booking for yourself or another?"   value={booking.patientInfo?.isSelf ? 'For myself' : 'For another patient'}              />
+                </div>
+              </SectionCard>
 
-              {/* Doctor */}
               {booking.doctor && (
-                <Section title="Doctor" icon={Stethoscope}>
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="w-10 h-10 rounded-xl bg-info/10 border border-info/30 flex items-center justify-center" aria-hidden="true">
-                      <Stethoscope size={18} className="text-info" />
+                <SectionCard
+                  title="Doctor / Specialist"
+                  subtitle="Assigned medical professional"
+                  icon={Stethoscope}
+                  iconColor="text-info"
+                  iconBg="bg-info/10"
+                  accent="bg-gradient-to-r from-info/60 via-info/20 to-transparent"
+                  delay={0.1}
+                >
+                  <div className="flex items-center gap-3 mb-3 pb-3 border-b border-base-300/50">
+                    <div className="w-10 h-10 rounded-xl bg-info/10 border border-info/20 flex items-center justify-center flex-shrink-0">
+                      {booking.doctorSnapshot?.profilePhotoUrl
+                        ? <img src={booking.doctorSnapshot.profilePhotoUrl} alt="" className="w-full h-full rounded-xl object-cover" />
+                        : <Stethoscope size={18} className="text-info" />}
                     </div>
                     <div>
-                      <p className="font-bold text-sm text-base-content">
-                        {booking.doctorSnapshot?.name ?? booking.doctor?.user?.name ?? 'Doctor'}
-                      </p>
-                      <p className="text-xs text-base-content/50">
-                        {booking.doctorSnapshot?.specialization ?? booking.doctor?.specialization}
-                      </p>
+                      <p className="font-bold text-sm text-base-content">{booking.doctorSnapshot?.name ?? 'Doctor'}</p>
+                      <p className="text-[11px] text-base-content/50">{booking.doctorSnapshot?.specialization}</p>
                     </div>
                   </div>
-                  <dl>
-                    <Row label="Consultation Type" value={booking.consultationType} />
-                    <Row label="Reg. No." value={booking.doctorSnapshot?.registrationNumber} mono />
-                  </dl>
-                </Section>
+                  <FieldRow label="Consultation Type" note="Mode of visit"          value={booking.consultationType}                  icon={Video} />
+                  <FieldRow label="Registration No."  note="Medical council number" value={booking.doctorSnapshot?.registrationNumber} mono        />
+                </SectionCard>
               )}
 
-              {/* Hospital */}
               {booking.hospital && (
-                <Section title="Hospital / Clinic" icon={MapPin}>
-                  <div className="flex items-start gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0" aria-hidden="true">
-                      <MapPin size={16} className="text-primary" />
+                <SectionCard
+                  title="Hospital / Clinic"
+                  subtitle="Facility where appointment takes place"
+                  icon={Building2}
+                  iconColor="text-primary"
+                  iconBg="bg-primary/10"
+                  delay={0.12}
+                >
+                  <div className="flex items-start gap-3 pt-1 pb-2">
+                    <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
+                      <Building2 size={16} className="text-primary" />
                     </div>
-                    <address className="not-italic">
-                      <p className="font-bold text-sm">{booking.hospital?.name}</p>
-                      <p className="text-xs text-base-content/50 mt-0.5">
+                    <address className="not-italic flex-1">
+                      <p className="font-bold text-sm text-base-content">{booking.hospital?.name}</p>
+                      <p className="text-[11px] text-base-content/50 mt-0.5">
                         {[booking.hospital?.address?.line1, booking.hospital?.address?.city].filter(Boolean).join(', ')}
                       </p>
                     </address>
                   </div>
-                </Section>
+                </SectionCard>
               )}
 
-              {/* Care Assistant */}
               {booking.careAssistant && (
-                <Section title="Care Assistant" icon={HeartPulse}>
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-secondary/20 border border-primary/20 overflow-hidden flex items-center justify-center">
-                      {booking.careAssistantSnapshot?.photoUrl ? (
-                        /* eslint-disable-next-line @next/next/no-img-element */
-                        <img
-                          src={booking.careAssistantSnapshot.photoUrl}
-                          alt={`${booking.careAssistantSnapshot?.name} photo`}
-                          className="w-full h-full object-cover"
-                          loading="lazy"
-                          width={40}
-                          height={40}
-                        />
-                      ) : (
-                        <HeartPulse size={18} className="text-secondary" aria-hidden="true" />
-                      )}
+                <SectionCard
+                  title="Care Assistant"
+                  subtitle="Your personal healthcare companion"
+                  icon={HeartPulse}
+                  iconColor="text-secondary"
+                  iconBg="bg-secondary/10"
+                  delay={0.13}
+                >
+                  <div className="flex items-center gap-3 py-2">
+                    <div className="w-11 h-11 rounded-full bg-secondary/10 border-2 border-secondary/20 overflow-hidden flex items-center justify-center flex-shrink-0">
+                      {booking.careAssistantSnapshot?.photoUrl
+                        ? <img src={booking.careAssistantSnapshot.photoUrl} alt="" className="w-full h-full object-cover" />
+                        : <HeartPulse size={18} className="text-secondary" />}
                     </div>
-                    <div>
-                      <p className="font-bold text-sm">{booking.careAssistantSnapshot?.name}</p>
-                      <p className="text-xs text-base-content/50 flex items-center gap-1">
-                        <Phone size={10} aria-hidden="true" />
-                        <span aria-label="Phone">{booking.careAssistantSnapshot?.phone ?? '—'}</span>
-                      </p>
+                    <div className="flex-1">
+                      <p className="font-bold text-sm text-base-content">{booking.careAssistantSnapshot?.name}</p>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <Phone size={10} className="text-base-content/30" />
+                        <p className="text-[11px] text-base-content/50 font-mono">{booking.careAssistantSnapshot?.phone ?? '—'}</p>
+                      </div>
                     </div>
                   </div>
-                </Section>
+                </SectionCard>
               )}
 
-              {/* Locations */}
               {(booking.patientLocation || booking.destinationLocation) && (
-                <Section title="Location Details" icon={Navigation}>
+                <SectionCard
+                  title="Location Details"
+                  subtitle="Pickup and destination addresses"
+                  icon={MapPin}
+                  iconColor="text-accent"
+                  iconBg="bg-accent/10"
+                  delay={0.14}
+                >
                   {booking.patientLocation && (
-                    <address className="not-italic mb-4 p-3 rounded-xl bg-blue-50 border border-blue-200">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="w-2 h-2 rounded-full bg-blue-500" aria-hidden="true" />
-                        <span className="text-xs font-semibold text-blue-600">Pickup</span>
+                    <div className="mb-3 p-3 rounded-xl bg-primary/5 border border-primary/15">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
+                        <span className="text-[11px] font-black text-primary uppercase tracking-wide">Pickup</span>
                       </div>
-                      <p className="text-sm text-base-content ml-4">{booking.patientLocation.address ?? '—'}</p>
-                      {booking.patientLocation.city && (
-                        <p className="text-xs text-base-content/50 ml-4">{booking.patientLocation.city}</p>
-                      )}
-                    </address>
+                      <address className="not-italic ml-3.5">
+                        <p className="text-sm font-semibold text-base-content">{booking.patientLocation.address ?? '—'}</p>
+                        {booking.patientLocation.city && <p className="text-[11px] text-base-content/50">{booking.patientLocation.city}</p>}
+                      </address>
+                    </div>
                   )}
                   {booking.destinationLocation && (
-                    <address className="not-italic p-3 rounded-xl bg-green-50 border border-green-200">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="w-2 h-2 rounded-full bg-green-500" aria-hidden="true" />
-                        <span className="text-xs font-semibold text-green-600">Destination</span>
+                    <div className="p-3 rounded-xl bg-success/5 border border-success/15">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="w-2 h-2 rounded-full bg-success flex-shrink-0" />
+                        <span className="text-[11px] font-black text-success uppercase tracking-wide">Destination</span>
                       </div>
-                      <p className="text-sm text-base-content ml-4">{booking.destinationLocation.address ?? '—'}</p>
-                      {booking.destinationLocation.city && (
-                        <p className="text-xs text-base-content/50 ml-4">{booking.destinationLocation.city}</p>
-                      )}
-                    </address>
+                      <address className="not-italic ml-3.5">
+                        <p className="text-sm font-semibold text-base-content">{booking.destinationLocation.address ?? '—'}</p>
+                        {booking.destinationLocation.city && <p className="text-[11px] text-base-content/50">{booking.destinationLocation.city}</p>}
+                      </address>
+                    </div>
                   )}
-                </Section>
+                </SectionCard>
               )}
 
-              {/* Diagnostics */}
               {booking.diagnosticDetails && (
-                <Section title="Diagnostic Details" icon={FlaskConical}>
+                <SectionCard
+                  title="Diagnostic Details"
+                  subtitle="Tests and lab packages"
+                  icon={TestTube2}
+                  iconColor="text-warning"
+                  iconBg="bg-warning/10"
+                  delay={0.15}
+                >
                   {booking.diagnosticDetails.testNames?.length > 0 && (
                     <div className="mb-3">
-                      <p className="text-xs text-base-content/40 mb-2">Tests</p>
-                      <ul className="flex flex-wrap gap-2" aria-label="Tests">
+                      <p className="text-[11px] font-bold text-base-content/40 uppercase tracking-wide mb-2">Individual Tests</p>
+                      <div className="flex flex-wrap gap-1.5">
                         {booking.diagnosticDetails.testNames.map((t) => (
-                          <li key={t}><span className="badge badge-info badge-sm">{t}</span></li>
+                          <span key={t} className="badge badge-warning badge-sm">{t}</span>
                         ))}
-                      </ul>
+                      </div>
                     </div>
                   )}
                   {booking.diagnosticDetails.packageNames?.length > 0 && (
                     <div className="mb-3">
-                      <p className="text-xs text-base-content/40 mb-2">Packages</p>
-                      <ul className="flex flex-wrap gap-2" aria-label="Packages">
+                      <p className="text-[11px] font-bold text-base-content/40 uppercase tracking-wide mb-2">Packages</p>
+                      <div className="flex flex-wrap gap-1.5">
                         {booking.diagnosticDetails.packageNames.map((p) => (
-                          <li key={p}><span className="badge badge-warning badge-sm">{p}</span></li>
+                          <span key={p} className="badge badge-accent badge-sm">{p}</span>
                         ))}
-                      </ul>
+                      </div>
                     </div>
                   )}
-                  <dl>
-                    <Row label="Report Delivery" value={booking.diagnosticDetails.reportDeliveryMode} />
-                    {booking.diagnosticDetails.sampleCollectedAt && (
-                      <Row label="Sample Collected" value={fmtDate(booking.diagnosticDetails.sampleCollectedAt)} />
-                    )}
-                  </dl>
-                </Section>
+                  <FieldRow label="Report Delivery" note="How you'll receive results" value={booking.diagnosticDetails.reportDeliveryMode} icon={FileText} />
+                </SectionCard>
               )}
 
-              {/* Online Consultation */}
               {booking.onlineConsultation?.meetingLink && (
-                <Section title="Video Consultation" icon={Video}>
-                  <div className="flex items-center gap-3 p-3 rounded-xl bg-accent/5 border border-accent/30">
-                    <Video size={20} className="text-accent" aria-hidden="true" />
+                <SectionCard
+                  title="Video Consultation"
+                  subtitle="Join your online appointment"
+                  icon={Video}
+                  iconColor="text-accent"
+                  iconBg="bg-accent/5"
+                  delay={0.16}
+                >
+                  <div className="flex items-center gap-3 p-3 rounded-xl bg-accent/5 border border-accent/20">
+                    <Video size={20} className="text-accent flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold">{booking.onlineConsultation.platform}</p>
-                      <p className="text-xs text-base-content/50 truncate">{booking.onlineConsultation.meetingLink}</p>
+                      <p className="text-sm font-bold text-base-content">{booking.onlineConsultation.platform}</p>
+                      <p className="text-[11px] text-base-content/40 truncate">{booking.onlineConsultation.meetingLink}</p>
                     </div>
-                    <a
-                      href={booking.onlineConsultation.meetingLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn btn-accent btn-sm gap-1"
-                      aria-label="Join video consultation"
-                    >
-                      <ExternalLink size={12} aria-hidden="true" />
-                      Join
+                    <a href={booking.onlineConsultation.meetingLink} target="_blank" rel="noopener noreferrer" className="btn btn-accent btn-sm gap-1 flex-shrink-0">
+                      <ExternalLink size={12} /> Join
                     </a>
                   </div>
-                </Section>
+                </SectionCard>
               )}
 
-              {/* Rides */}
               {booking.rides?.length > 0 && (
-                <Section title="Rides" icon={Car}>
-                  <ul className="space-y-3">
-                    {booking.rides.map((ride, i) => (
-                      <li key={ride._id ?? i} className="flex items-center gap-3 p-3 rounded-xl border border-base-300 bg-base-200">
-                        <Car size={16} className="text-accent shrink-0" aria-hidden="true" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold capitalize">
-                            {ride.isReturnRide ? 'Return Ride' : 'Outbound Ride'}
-                          </p>
-                          <p className="text-xs text-base-content/50">{ride.rideCode ?? `Ride ${i + 1}`}</p>
-                        </div>
-                        <span className={`badge badge-sm ${
-                          ride.status === 'completed' ? 'badge-success' :
-                          ride.status === 'cancelled' ? 'badge-error' : 'badge-warning'
-                        }`}>
-                          {ride.status?.replace(/_/g, ' ')}
-                        </span>
-                      </li>
-                    ))}
+                <SectionCard
+                  title="Associated Rides"
+                  subtitle="Transport rides linked to this booking"
+                  icon={Car}
+                  iconColor="text-accent"
+                  iconBg="bg-accent/5"
+                  delay={0.17}
+                >
+                  <ul className="space-y-2 py-1">
+                    {booking.rides.map((ride, i) => {
+                      const rId = ride._id ?? ride;
+                      return (
+                        <li key={rId ?? i}>
+                          <div className="flex items-center gap-3 p-3 rounded-xl border border-base-300 bg-base-200 hover:border-primary/30 transition-colors">
+                            <Car size={14} className="text-accent flex-shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-bold text-base-content capitalize">
+                                {ride.isReturnRide ? '↩ Return Ride' : '↗ Outbound Ride'}
+                              </p>
+                              <p className="text-[10px] text-base-content/40">{ride.rideCode ?? `Ride ${i + 1}`}</p>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <span className={`badge badge-sm ${
+                                ride.status === 'completed'   ? 'badge-success' :
+                                ride.status === 'cancelled'   ? 'badge-error'   :
+                                ride.status === 'in_progress' ? 'badge-info'    : 'badge-warning'
+                              }`}>
+                                {(ride.status ?? 'pending').replace(/_/g, ' ')}
+                              </span>
+                              {isLive && rId && (
+                                <Link href={`/rides/${booking._id}/${primaryRideId}/tracking`}className="btn btn-ghost btn-xs">
+                                  <Navigation2 size={11} />
+                                </Link>
+                              )}
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
                   </ul>
-                </Section>
+                </SectionCard>
               )}
 
-              {/* Documents */}
               {booking.documents?.length > 0 && (
-                <Section title="Documents" icon={FileText}>
-                  <ul className="space-y-2">
+                <SectionCard
+                  title="Documents"
+                  subtitle="Medical records and supporting files"
+                  icon={FileText}
+                  iconColor="text-base-content/60"
+                  iconBg="bg-base-300/60"
+                  delay={0.18}
+                >
+                  <ul className="space-y-2 py-1">
                     {booking.documents.map((doc, i) => (
                       <li key={doc._id ?? i}>
                         <a
                           href={doc.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="flex items-center gap-3 p-3 rounded-xl border border-base-300 hover:border-primary hover:bg-primary/5 transition-colors group"
-                          aria-label={`Open ${doc.docType?.replace(/_/g, ' ')} document`}
+                          className="flex items-center gap-3 p-3 rounded-xl border border-base-300 hover:border-primary/40 hover:bg-primary/5 transition-colors group"
                         >
-                          <FileText size={15} className="text-base-content/40 group-hover:text-primary" aria-hidden="true" />
+                          <FileText size={14} className="text-base-content/30 group-hover:text-primary flex-shrink-0" />
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium capitalize">{doc.docType?.replace(/_/g, ' ')}</p>
-                            <p className="text-xs text-base-content/40 truncate">{doc.originalName}</p>
+                            <p className="text-xs font-bold text-base-content capitalize">{doc.docType?.replace(/_/g, ' ')}</p>
+                            <p className="text-[10px] text-base-content/40 truncate">{doc.originalName}</p>
                           </div>
-                          <ExternalLink size={13} className="text-base-content/30 group-hover:text-primary" aria-hidden="true" />
+                          <ExternalLink size={12} className="text-base-content/20 group-hover:text-primary flex-shrink-0" />
                         </a>
                       </li>
                     ))}
                   </ul>
-                </Section>
+                </SectionCard>
               )}
 
-              {/* Cancellation */}
               {booking.cancellation && (
-                <Section title="Cancellation Details" icon={AlertTriangle}>
-                  <div className="p-4 rounded-xl bg-error/5 border border-error/30">
-                    <dl>
-                      <Row label="Cancelled By"    value={booking.cancellation.cancelledBy} />
-                      <Row label="Reason"          value={booking.cancellation.reason} />
-                      <Row label="Cancelled At"    value={fmtDate(booking.cancellation.cancelledAt)} />
-                      <Row label="Refund Eligible" value={booking.cancellation.refundEligible ? 'Yes' : 'No'} />
-                      {booking.cancellation.refundPercent > 0 && (
-                        <Row label="Refund %" value={`${booking.cancellation.refundPercent}%`} />
-                      )}
-                    </dl>
+                <SectionCard
+                  title="Cancellation Details"
+                  subtitle="How and why this booking was cancelled"
+                  icon={AlertTriangle}
+                  iconColor="text-error"
+                  iconBg="bg-error/10"
+                  delay={0.2}
+                >
+                  <div className="p-3 rounded-xl bg-error/5 border border-error/20 my-1 space-y-0">
+                    <FieldRow label="Cancelled By"     note="Role that initiated cancellation"        value={booking.cancellation.cancelledBy}                                                                                              />
+                    <FieldRow label="Reason"           note="Reason at time of cancellation"          value={booking.cancellation.reason}                                                                                                   />
+                    <FieldRow label="Cancelled At"     note="When cancellation was processed"         value={`${fmtDate(booking.cancellation.cancelledAt)} ${fmtTime(booking.cancellation.cancelledAt)}`}              icon={Clock}          />
+                    <FieldRow label="Refund Eligible"  note="Under our cancellation policy"           value={booking.cancellation.refundEligible ? 'Yes' : 'No'}
+                              badge={booking.cancellation.refundEligible ? 'text-success bg-success/10' : 'text-error bg-error/10'}                                                                                                         />
+                    {booking.cancellation.refundPercent > 0 && (
+                      <FieldRow label="Refund Percentage" note="Percentage to be refunded"            value={`${booking.cancellation.refundPercent}%`}                                                                highlight             />
+                    )}
                   </div>
-                </Section>
+                </SectionCard>
               )}
 
-              {/* Rating (submitted) */}
               {booking.isRated && booking.rating && (
-                <Section title="Your Rating" icon={Star}>
-                  <div className="flex items-center gap-3 mb-4" aria-label={`Rated ${booking.rating.overallRating} out of 5`}>
-                    <div className="flex gap-0.5" aria-hidden="true">
-                      {[1,2,3,4,5].map((s) => (
-                        <Star
-                          key={s}
-                          size={18}
-                          className={s <= booking.rating.overallRating ? 'text-warning fill-current' : 'text-base-300'}
-                        />
-                      ))}
+                <SectionCard
+                  title="Your Review"
+                  subtitle="Feedback submitted after your experience"
+                  icon={Star}
+                  iconColor="text-warning"
+                  iconBg="bg-warning/10"
+                  delay={0.22}
+                >
+                  <div className="py-1">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="flex gap-0.5">
+                        {[1, 2, 3, 4, 5].map((s) => (
+                          <Star key={s} size={20} className={s <= booking.rating.overallRating ? 'text-warning fill-current' : 'text-base-300'} />
+                        ))}
+                      </div>
+                      <span className="font-black text-base-content">{booking.rating.overallRating}/5</span>
                     </div>
-                    <span className="font-bold text-base-content">{booking.rating.overallRating}/5</span>
+                    {booking.rating.overallComment && (
+                      <blockquote className="text-sm text-base-content/70 italic border-l-2 border-warning/40 pl-3 mb-2">
+                        {booking.rating.overallComment}
+                      </blockquote>
+                    )}
+                    {booking.rating.ratedAt && (
+                      <p className="text-[10px] text-base-content/30">
+                        Submitted on <time dateTime={booking.rating.ratedAt}>{fmtDate(booking.rating.ratedAt)}</time>
+                      </p>
+                    )}
                   </div>
-                  {booking.rating.overallComment && (
-                    <blockquote className="text-sm text-base-content/70 italic border-l-2 border-base-300 pl-3">
-                      {booking.rating.overallComment}
-                    </blockquote>
-                  )}
-                  {booking.rating.ratedAt && (
-                    <p className="text-xs text-base-content/40 mt-2">
-                      Rated on <time dateTime={booking.rating.ratedAt}>{fmtDate(booking.rating.ratedAt)}</time>
-                    </p>
-                  )}
-                </Section>
+                </SectionCard>
               )}
             </div>
 
-            {/* ── Right column (1/3) ── */}
+            {/* ════ Right Column ════ */}
             <div className="space-y-5">
 
-              {/* Fare Breakdown */}
-              <Section title="Fare Breakdown" icon={IndianRupee}>
-                <FareBreakdown fare={booking.fareBreakdown} />
-                <div className="mt-4 pt-3 border-t border-base-300">
-                  <dl>
-                    <Row
-                      label="Payment Status"
-                      value={
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold ${
-                          booking.paymentStatus === 'paid'   ? 'bg-success/10 text-success' :
-                          booking.paymentStatus === 'unpaid' ? 'bg-warning/10 text-warning' :
-                          'bg-base-300/60 text-base-content/50'
-                        }`}>
-                          {booking.paymentStatus}
-                        </span>
-                      }
-                    />
-                    {booking.couponCode       && <Row label="Coupon"        value={booking.couponCode}    mono />}
-                    {booking.coinsRedeemed > 0 && <Row label="Coins Redeemed" value={booking.coinsRedeemed} />}
-                  </dl>
+              <SectionCard
+                title="Booking Progress"
+                subtitle="Current stage of your care journey"
+                icon={TrendingUp}
+                iconColor="text-primary"
+                iconBg="bg-primary/10"
+                delay={0.08}
+              >
+                <div className="py-2">
+                  <BookingTimeline status={booking.status} />
                 </div>
-              </Section>
+              </SectionCard>
 
-              {/* Booking Meta */}
-              <Section title="Booking Info" icon={Info}>
-                <dl>
-                  <Row label="Booking Code"  value={booking.bookingCode}   mono highlight />
-                  <Row label="Booking Type"  value={meta.label} />
-                  <Row label="Pricing Source" value={booking.pricingSource} />
-                  <Row label="Created"       value={fmtDate(booking.createdAt)} />
-                  {booking.completedAt && <Row label="Completed" value={fmtDate(booking.completedAt)} />}
-                  {booking.slotId      && <Row label="Slot ID"   value={booking.slotId} mono />}
-                </dl>
-              </Section>
-
-              {/* Follow-up chain */}
-              {booking.bookingType === 'follow_up' && booking.followUpParentBooking && (
-                <Section title="Follow-Up Chain" icon={RotateCcw}>
-                  <div className="p-3 rounded-xl bg-info/10 border border-info/30">
-                    <p className="text-xs text-info font-semibold mb-1">Parent Booking</p>
-                    <p className="text-sm font-mono text-base-content break-all">{booking.followUpParentBooking}</p>
+              <SectionCard
+                title="Fare Breakdown"
+                subtitle="Complete cost breakdown"
+                icon={IndianRupee}
+                iconColor="text-primary"
+                iconBg="bg-primary/10"
+                accent="bg-gradient-to-r from-primary/60 via-primary/20 to-transparent"
+                delay={0.1}
+              >
+                <div className="py-1">
+                  <FareBreakdown fare={booking.fareBreakdown} />
+                </div>
+                <div className="mt-3 pt-3 border-t border-base-300">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-[11px] font-black uppercase tracking-wide text-base-content/40">Payment Status</p>
+                      <p className="text-[10px] text-base-content/30 mt-0.5">Current payment state</p>
+                    </div>
+                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-black ${pMeta.cls}`}>
+                      {pMeta.label}
+                    </span>
                   </div>
-                </Section>
+                  {booking.couponCode && (
+                    <div className="mt-2 flex items-center gap-1.5">
+                      <CreditCard size={11} className="text-success" />
+                      <span className="text-[11px] font-mono font-bold text-success">{booking.couponCode}</span>
+                      <span className="text-[10px] text-base-content/30">coupon applied</span>
+                    </div>
+                  )}
+                  {booking.coinsRedeemed > 0 && (
+                    <div className="mt-1 flex items-center gap-1.5">
+                      <Zap size={11} className="text-warning" />
+                      <span className="text-[11px] font-bold text-warning">{booking.coinsRedeemed} coins</span>
+                      <span className="text-[10px] text-base-content/30">redeemed</span>
+                    </div>
+                  )}
+                </div>
+              </SectionCard>
+
+              <SectionCard
+                title="Booking Info"
+                subtitle="Administrative and reference details"
+                icon={Info}
+                iconColor="text-base-content/40"
+                iconBg="bg-base-200"
+                delay={0.12}
+              >
+                <div className="py-1">
+                  <FieldRow label="Booking Code"  note="Share with support"           value={booking.bookingCode}   mono highlight icon={CreditCard} />
+                  <FieldRow label="Booking Type"  note="Category of service"          value={meta.label}            icon={Icon}                      />
+                  {booking.pricingSource && (
+                    <FieldRow label="Pricing Source" note="Who set the pricing"        value={booking.pricingSource}                                  />
+                  )}
+                  <FieldRow label="Created On"    note="When booking was created"     value={`${fmtDate(booking.createdAt)}, ${fmtTime(booking.createdAt)}`} icon={Calendar} />
+                  {booking.completedAt && (
+                    <FieldRow label="Completed On" note="When service was delivered"   value={`${fmtDate(booking.completedAt)}, ${fmtTime(booking.completedAt)}`} icon={CheckCircle2} />
+                  )}
+                  {booking.slotId && (
+                    <FieldRow label="Slot ID"     note="Doctor's slot reference"       value={String(booking.slotId)} mono />
+                  )}
+                </div>
+              </SectionCard>
+
+              {booking.bookingType === 'follow_up' && booking.followUpParentBooking && (
+                <SectionCard
+                  title="Follow-Up Chain"
+                  subtitle="Original booking this is linked to"
+                  icon={RotateCcw}
+                  iconColor="text-info"
+                  iconBg="bg-info/10"
+                  delay={0.14}
+                >
+                  <div className="p-3 rounded-xl bg-info/5 border border-info/20 my-1">
+                    <p className="text-[11px] font-black text-info uppercase tracking-wide mb-1">Parent Booking ID</p>
+                    <p className="text-xs font-mono text-base-content break-all">{booking.followUpParentBooking}</p>
+                    <p className="text-[10px] text-base-content/30 mt-1.5">
+                      Discount: {booking.followUpDiscountPercent || 0}% applied.
+                    </p>
+                  </div>
+                </SectionCard>
               )}
 
-              {/* CTAs */}
-            {(canCancel || canRate || (['full_care_ride','patient_transport','diagnostic_home'].includes(booking.bookingType) && ['confirmed','in_progress'].includes(booking.status))) && (
-  <div className="space-y-3">
-    {['full_care_ride','patient_transport','diagnostic_home'].includes(booking.bookingType) &&
-     ['confirmed','in_progress'].includes(booking.status) && (
-      <Link
-        href={`/my-bookings/${booking._id}/live`}
-        className="btn btn-info w-full gap-2"
-      >
-        <Navigation2 size={15} aria-hidden="true" />
-        Track Live Location
-      </Link>
-    )}
-    {canRate && (
-      <button onClick={() => setShowRating(true)} className="btn btn-primary w-full gap-2">
-        <Star size={15} aria-hidden="true" />
-        Rate Your Experience
-      </button>
-    )}
-    {canCancel && (
-      <button
-        onClick={() => setShowCancel(true)}
-        className="btn btn-outline w-full gap-2 text-error border-error/40 hover:bg-error hover:text-error-content hover:border-error"
-      >
-        <X size={15} aria-hidden="true" />
-        Cancel Booking
-      </button>
-    )}
-  </div>
-)}
+              {/* Action Buttons */}
+              <motion.div variants={fadeUp} className="space-y-3">
+                {isLive && primaryRideId && (
+                  <Link href={`/rides/${booking._id}/${primaryRideId}/tracking`} className="btn btn-info w-full gap-2">
+                    <Navigation2 size={15} /> Track Live Location
+                  </Link>
+                )}
+                {canRate && (
+                  <button onClick={() => setShowRating(true)} className="btn btn-primary w-full gap-2">
+                    <Star size={15} /> Rate Your Experience
+                  </button>
+                )}
+                {canCancel && (
+                  <div>
+                    <button
+                      onClick={() => !cancelLocked && setShowCancel(true)}
+                      disabled={cancelLocked}
+                      title={cancelLocked ? 'Not allowed within 12 hours' : 'Cancel booking'}
+                      className={`btn w-full gap-2 ${
+                        cancelLocked
+                          ? 'opacity-50 cursor-not-allowed border-base-300 text-base-content/40 bg-base-200'
+                          : 'text-error border-error/30 bg-error/5 hover:bg-error hover:text-error-content hover:border-error'
+                      }`}
+                    >
+                      {cancelLocked ? <Lock size={14} /> : <X size={14} />}
+                      {cancelLocked ? 'Cancellation Locked' : 'Cancel Booking'}
+                    </button>
+                    {cancelLocked && (
+                      <p className="text-[10px] text-error/60 text-center mt-1.5">
+                        Not allowed within 12 hours of appointment
+                      </p>
+                    )}
+                  </div>
+                )}
+              </motion.div>
 
               {/* Quick Links */}
-              <nav className="card p-4 space-y-1" aria-label="Quick links">
-                <Link
-                  href="/my-bookings"
-                  className="flex items-center gap-2 p-2 rounded-lg hover:bg-base-200 transition-colors text-sm text-base-content/70 hover:text-base-content"
-                >
-                  <Package size={14} className="text-primary" aria-hidden="true" />
-                  All Bookings
+              <motion.nav variants={fadeUp} className="card p-4 space-y-1" aria-label="Quick links">
+                <p className="text-[10px] font-black uppercase tracking-widest text-base-content/30 px-2 mb-2">Quick Links</p>
+                <Link href="/my-bookings" className="flex items-center justify-between gap-2 px-2 py-2 rounded-lg hover:bg-base-200 transition-colors group">
+                  <div className="flex items-center gap-2">
+                    <Package size={13} className="text-primary" />
+                    <span className="text-sm text-base-content/70 group-hover:text-base-content">All Bookings</span>
+                  </div>
+                  <ChevronRight size={13} className="text-base-content/30" />
                 </Link>
-                <Link
-                  href="/bookings/new"
-                  className="flex items-center gap-2 p-2 rounded-lg hover:bg-base-200 transition-colors text-sm text-base-content/70 hover:text-base-content"
-                >
-                  <Activity size={14} className="text-primary" aria-hidden="true" />
-                  New Booking
+                <Link href="/bookings/new" className="flex items-center justify-between gap-2 px-2 py-2 rounded-lg hover:bg-base-200 transition-colors group">
+                  <div className="flex items-center gap-2">
+                    <Activity size={13} className="text-primary" />
+                    <span className="text-sm text-base-content/70 group-hover:text-base-content">New Booking</span>
+                  </div>
+                  <ChevronRight size={13} className="text-base-content/30" />
                 </Link>
-              </nav>
+              </motion.nav>
             </div>
-          </div>
+          </motion.div>
         </main>
       </div>
 
-      {/* ── Modals ── */}
       <AnimatePresence>
-        {showCancel && (
-          <CancelModal key="cancel-modal" booking={booking} onClose={handleCloseCancelModal} />
-        )}
+        {showCancel && <CancelModal key="cancel" booking={booking} onClose={handleCloseCancel} />}
       </AnimatePresence>
-
       <AnimatePresence>
-        {showRating && (
-          <RatingModal key="rating-modal" booking={booking} onClose={handleCloseRatingModal} />
-        )}
+        {showRating && <RatingModal key="rating" booking={booking} onClose={handleCloseRating} />}
       </AnimatePresence>
     </>
   );

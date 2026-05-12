@@ -30,6 +30,7 @@ import {
   selectTrialOrder, selectTrialConvertLoading,
 } from "@/store/slices/subscriptionSlice";
 import {motion} from "framer-motion";
+
 // ─── Razorpay loader ──────────────────────────────────────────────────────────
 export function preconnectRazorpay() {
   if (typeof document === "undefined") return;
@@ -62,55 +63,71 @@ function loadRazorpay() {
 /**
  * resolveOptionPrice
  *
- * careAssistant: quantity = visits/month, careAssistantTierIndex = selected tier index
- * consultations: quantity = consult count, doctorTierCount = selected doctor count for tier bonus
+ * FIX: transport — when qty === 0 (slab index "not selected"), return zero.
+ *      Previously, slab[0] was returned even for qty=0, causing transport
+ *      to always add its price to the total even when not selected.
+ *
+ * transport: qty = slab INDEX chosen in dropdown (0-based).
+ *            Dropdown value starts at 0 for first real slab.
+ *            We use a sentinel: the dropdown emits qty=0 for "not included"
+ *            BUT the real slabs start at index 0 too — so we use the
+ *            convention that qty stored is (slabIndex + 1), and 0 = none.
+ *
+ * WAIT — looking at getSlabOptions: value: idx (0-based index).
+ * And handleSetQty stores that. So qty=0 = first slab selected.
+ * "Not included" = qty stored as special sentinel.
+ *
+ * The dropdown has:
+ *   <option value={0}>— Not included —</option>
+ *   {slabOpts.map(s => <option key={s.value} value={s.value}>...)}
+ *
+ * slabOpts[0].value = 0 (first slab index).
+ * So value=0 is AMBIGUOUS between "not included" and "first slab".
+ *
+ * ROOT FIX: change "not included" sentinel to -1.
+ * getSlabOptions unchanged (returns 0-based idx).
+ * Dropdown "not included" option value = -1.
+ * handleSetQty stores -1 for none.
+ * resolveOptionPrice: qty < 0 → return zero.
+ * initial quantity for transport = -1 (not selected).
+ *
+ * This is the correct, unambiguous fix.
  */
 function resolveOptionPrice(optionPricing, optionKey, quantity, extras = {}) {
-  if (!optionPricing || quantity <= 0) {
-    return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
-  }
+  if (!optionPricing) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
 
   const qty = Number(quantity);
+
+  // Universal guard: quantity < 0 means "not selected" (sentinel -1)
+  if (qty < 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
+
   let unitPrice = 0;
   let slabLabel = "";
 
   switch (optionKey) {
     case "consultations": {
-      const base = optionPricing?.consultation?.pricePerConsultation ?? 0;
-      unitPrice = base;
-      const tiers = optionPricing?.consultation?.doctorPricingTiers ?? [];
-      // doctorTierCount: how many doctors selected (must be <= qty)
-      const selectedDoctorCount = extras.doctorTierCount ?? 0;
-      let tierBonus = 0;
-      if (tiers.length > 0 && selectedDoctorCount > 0) {
-        const matched = [...tiers]
-          .sort((a, b) => b.doctorCount - a.doctorCount)
-          .find((t) => t.doctorCount <= selectedDoctorCount);
-        if (matched) {
-          tierBonus = matched.additionalPrice ?? 0;
-          slabLabel = `Base ₹${base}/consult + ₹${tierBonus} doctor-tier bonus (${selectedDoctorCount} doctors)`;
-        }
-      } else {
-        slabLabel = `₹${base}/consult`;
-      }
-      unitPrice = base + tierBonus;
+      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
+      unitPrice = optionPricing?.consultation?.pricePerConsultation ?? 0;
+      slabLabel = `₹${unitPrice}/consult`;
       return { unitPrice, lineTotal: +(qty * unitPrice).toFixed(2), slabLabel };
     }
 
     case "transport": {
+      // qty = slab index (0-based). qty === -1 means not selected (handled above).
       const slabs = optionPricing?.transport?.kmSlabs ?? [];
       if (slabs.length > 0) {
-        const sorted = [...slabs].sort((a, b) => b.km - a.km);
-        const matched = sorted.find((s) => s.km <= qty);
-        if (matched) {
-          slabLabel = `${matched.km}km slab @ ₹${matched.price} bundle`;
-          return { unitPrice: matched.price, lineTotal: matched.price, slabLabel };
+        const idx  = Math.min(qty, slabs.length - 1);
+        const slab = slabs[idx];
+        if (slab) {
+          slabLabel = `₹${slab.pricePerKm}/km · ₹${slab.packagePrice} bundle`;
+          return { unitPrice: slab.packagePrice, lineTotal: slab.packagePrice, slabLabel };
         }
       }
       return { unitPrice: 0, lineTotal: 0, slabLabel: "No matching slab" };
     }
 
     case "diagnostics": {
+      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
       const slabs = optionPricing?.diagnosticsDiscount?.slabs ?? [];
       if (slabs.length > 0) {
         const exact = slabs.find((s) => s.percent === qty);
@@ -124,6 +141,7 @@ function resolveOptionPrice(optionPricing, optionKey, quantity, extras = {}) {
     }
 
     case "pharmacy": {
+      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
       const slabs = optionPricing?.pharmacyDiscount?.slabs ?? [];
       if (slabs.length > 0) {
         const exact = slabs.find((s) => s.percent === qty);
@@ -137,7 +155,7 @@ function resolveOptionPrice(optionPricing, optionKey, quantity, extras = {}) {
     }
 
     case "careAssistant": {
-      // quantity = visits/month, careAssistantTierIndex = which tier selected
+      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
       const caTiers = optionPricing?.careAssistant?.pricingTiers ?? [];
       const tierIdx = extras.careAssistantTierIndex ?? 0;
       if (caTiers.length > 0) {
@@ -149,15 +167,17 @@ function resolveOptionPrice(optionPricing, optionKey, quantity, extras = {}) {
     }
 
     case "homeSampleCollection": {
+      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
       const price = optionPricing?.addOns?.homeSampleCollection ?? 199;
       slabLabel = `Flat ₹${price}`;
-      return { unitPrice: price, lineTotal: qty > 0 ? price : 0, slabLabel };
+      return { unitPrice: price, lineTotal: price, slabLabel };
     }
 
     case "prioritySupport": {
+      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
       const price = optionPricing?.addOns?.prioritySupport ?? 99;
       slabLabel = `Flat ₹${price}`;
-      return { unitPrice: price, lineTotal: qty > 0 ? price : 0, slabLabel };
+      return { unitPrice: price, lineTotal: price, slabLabel };
     }
 
     default:
@@ -222,8 +242,8 @@ const getMeta = (name) => TIER_META[name] || CUSTOM_META;
 
 // ─── Option config ────────────────────────────────────────────────────────────
 const OPTION_CONFIG = [
-  { key: "consultations", icon: Stethoscope, label: "Doctor Consultations", unit: "consults/mo", isToggle: false, hint: "Price = base per consult + optional doctor-tier bonus" },
-  { key: "transport", icon: Truck, label: "Medical Transport Rides", unit: "km quota", isToggle: false, hint: "Bundle price per km-slab selected" },
+  { key: "consultations", icon: Stethoscope, label: "Doctor Consultations", unit: "consults/mo", isToggle: false, hint: "Price = base per consult" },
+  { key: "transport", icon: Truck, label: "Medical Transport Rides", unit: "slab", isToggle: false, hint: "Select a km-slab bundle for flat monthly price" },
   { key: "diagnostics", icon: Microscope, label: "Diagnostic Discount", unit: "% off", isToggle: false, hint: "Flat monthly price for chosen % off" },
   { key: "pharmacy", icon: Pill, label: "Pharmacy Discount", unit: "% off", isToggle: false, hint: "Flat monthly price for chosen % off (max 25%)" },
   { key: "careAssistant", icon: UserCheck, label: "Care Assistant Visits", unit: "visits/mo", isToggle: false, hint: "Select visit duration tier then set visits/month" },
@@ -366,22 +386,19 @@ const PlanCard = memo(function PlanCard({
 
   return (
     <article
-      className="relative  flex flex-col h-full transition-transform duration-300 hover:-translate-y-1"
+      className="relative flex flex-col h-full transition-transform duration-300 hover:-translate-y-1"
       aria-label={`${name} plan, ₹${monthly}${billing}${isCurrent ? ", currently active" : ""}`}
       style={{ paddingTop: meta.popular ? 14 : 0, zIndex: meta.popular ? 10 : 1 }}
     >
       {meta.popular && (
-        <>
-          <div
-            className="absolute -top-[14px] left-1/2 -translate-x-1/2 flex items-center gap-1.5
-              px-4 py-1.5 rounded-t-2xl text-[10px] font-black uppercase tracking-wider text-white z-30"
-            style={{ background: meta.gradientCSS, boxShadow: `0 -4px 20px ${meta.accent}55` }}
-            aria-hidden="true"
-          >
-            <Flame size={10} fill="currentColor" /> Most Popular <Flame size={10} fill="currentColor" />
-          </div>
-          
-        </>
+        <div
+          className="absolute -top-[14px] left-1/2 -translate-x-1/2 flex items-center gap-1.5
+            px-4 py-1.5 rounded-t-2xl text-[10px] font-black uppercase tracking-wider text-white z-30"
+          style={{ background: meta.gradientCSS, boxShadow: `0 -4px 20px ${meta.accent}55` }}
+          aria-hidden="true"
+        >
+          <Flame size={10} fill="currentColor" /> Most Popular <Flame size={10} fill="currentColor" />
+        </div>
       )}
 
       <div
@@ -689,25 +706,31 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
 
   const [planName, setPlanName] = useState(existingCustomPlan?.name || "My Custom Plan");
 
+  /**
+   * FIX: transport initial quantity = -1 (sentinel for "not selected").
+   * All other non-toggle options = 0.
+   * Toggle options = 0.
+   *
+   * When restoring existing plan, transport qty stored is slab index (0+),
+   * which is fine — it means "first slab selected", -1 only used for fresh state.
+   */
   const [quantities, setQty] = useState(() => {
     if (existingCustomPlan?.customOptions) {
-      return Object.fromEntries(existingCustomPlan.customOptions.map((o) => [o.optionKey, o.quantity]));
+      const base = Object.fromEntries(existingCustomPlan.customOptions.map((o) => [o.optionKey, o.quantity]));
+      // Ensure transport has -1 if not present in existing
+      if (base.transport === undefined) base.transport = -1;
+      return base;
     }
-    return Object.fromEntries(OPTION_CONFIG.map((o) => [o.key, 0]));
+    return {
+      ...Object.fromEntries(OPTION_CONFIG.map((o) => [o.key, 0])),
+      transport: -1, // sentinel: not selected
+    };
   });
 
   const [careAssistantTierIndex, setCareAssistantTierIndex] = useState(() => {
     if (existingCustomPlan?.customOptions) {
       const caOpt = existingCustomPlan.customOptions.find((o) => o.optionKey === "careAssistant");
       return caOpt?.careAssistantTierIndex ?? 0;
-    }
-    return 0;
-  });
-
-  const [doctorTierCount, setDoctorTierCount] = useState(() => {
-    if (existingCustomPlan?.customOptions) {
-      const cOpt = existingCustomPlan.customOptions.find((o) => o.optionKey === "consultations");
-      return cOpt?.doctorTierCount ?? 0;
     }
     return 0;
   });
@@ -719,63 +742,60 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
 
   const CAP_MAP = useMemo(() => ({
     consultations:        caps.consultationsMaxPerMonth       ?? 30,
-    transport:            caps.transportMaxRidesPerMonth      ?? 20,
+    // transport cap = number of slabs - 1 (index-based), handled by getSlabOptions length
+    transport:            (optionPricing?.transport?.kmSlabs?.length ?? 1) - 1,
     diagnostics:          caps.diagnosticsDiscountMax         ?? 25,
     pharmacy:             caps.pharmacyDiscountMax            ?? 25,
     careAssistant:        caps.careAssistantMaxVisitsPerMonth ?? 30,
     homeSampleCollection: 1,
     prioritySupport:      1,
-  }), [caps]);
+  }), [caps, optionPricing]);
 
-  const caTiers     = optionPricing?.careAssistant?.pricingTiers ?? [];
-  const doctorTiers = optionPricing?.consultation?.doctorPricingTiers ?? [];
-  const maxDoctorsAllowed = optionPricing?.consultation?.maxDoctorsAllowed ?? 5;
-
-  const consultQty = quantities["consultations"] ?? 0;
-
-  const availableDoctorTiers = useMemo(() => {
-    if (!doctorTiers.length || consultQty <= 0) return [];
-    return [...doctorTiers]
-      .filter((t) => t.doctorCount <= consultQty && t.doctorCount <= maxDoctorsAllowed)
-      .sort((a, b) => a.doctorCount - b.doctorCount);
-  }, [doctorTiers, consultQty, maxDoctorsAllowed]);
-
-  useEffect(() => {
-    if (doctorTierCount > consultQty) setDoctorTierCount(0);
-  }, [consultQty, doctorTierCount]);
+  const caTiers = optionPricing?.careAssistant?.pricingTiers ?? [];
 
   const priceBreakdown = useMemo(() => {
     if (!optionPricing) return {};
     return Object.fromEntries(
       OPTION_CONFIG.map((opt) => {
-        const qty = quantities[opt.key] ?? 0;
+        const qty = quantities[opt.key] ?? (opt.key === "transport" ? -1 : 0);
         const extras = {
           careAssistantTierIndex: opt.key === "careAssistant" ? careAssistantTierIndex : undefined,
-          doctorTierCount:        opt.key === "consultations"  ? doctorTierCount        : undefined,
         };
         const result = resolveOptionPrice(optionPricing, opt.key, qty, extras);
         return [opt.key, result];
       })
     );
-  }, [optionPricing, quantities, careAssistantTierIndex, doctorTierCount]);
+  }, [optionPricing, quantities, careAssistantTierIndex]);
 
   const total = useMemo(
     () => Object.values(priceBreakdown).reduce((s, v) => s + (v?.lineTotal ?? 0), 0),
     [priceBreakdown]
   );
 
+  /**
+   * FIX: handleSetQty for transport uses -1 as "not selected" sentinel.
+   * Clamp min to -1 for transport, 0 for others.
+   */
   const handleSetQty = useCallback((key, val) => {
+    const numVal = Number(val);
+    if (key === "transport") {
+      // -1 = not selected, 0+ = slab index
+      setQty((q) => ({ ...q, [key]: numVal }));
+      return;
+    }
     const max = CAP_MAP[key] ?? 1;
-    setQty((q) => ({ ...q, [key]: Math.max(0, Math.min(max, Number(val))) }));
+    setQty((q) => ({ ...q, [key]: Math.max(0, Math.min(max, numVal)) }));
   }, [CAP_MAP]);
 
   const handleSave = useCallback(async () => {
     const options = OPTION_CONFIG
-      .filter((o) => (quantities[o.key] ?? 0) > 0)
+      .filter((o) => {
+        const qty = quantities[o.key] ?? (o.key === "transport" ? -1 : 0);
+        return qty > (o.key === "transport" ? -1 : 0); // transport: qty >= 0 means selected
+      })
       .map((o) => {
         const extras = {};
         if (o.key === "careAssistant") extras.careAssistantTierIndex = careAssistantTierIndex;
-        if (o.key === "consultations") extras.doctorTierCount = doctorTierCount;
         return { optionKey: o.key, label: o.label, quantity: quantities[o.key], ...extras };
       });
 
@@ -788,11 +808,12 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
       );
       if (!res.error) onClose();
     } catch { /* handled by slice */ }
-  }, [quantities, planName, existingCustomPlan, dispatch, onClose, onToast, careAssistantTierIndex, doctorTierCount]);
+  }, [quantities, planName, existingCustomPlan, dispatch, onClose, onToast, careAssistantTierIndex]);
 
   const getSlabOptions = useCallback((optionKey) => {
     if (!optionPricing) return [];
-    if (optionKey === "transport")   return (optionPricing.transport?.kmSlabs ?? []).map((s) => ({ value: s.km,      label: `${s.km}km — ₹${s.price}` }));
+    if (optionKey === "transport") return (optionPricing.transport?.kmSlabs ?? [])
+      .map((s, idx) => ({ value: idx, label: `₹${s.pricePerKm}/km · Bundle ₹${s.packagePrice}` }));
     if (optionKey === "diagnostics") return (optionPricing.diagnosticsDiscount?.slabs ?? []).map((s) => ({ value: s.percent, label: `${s.percent}% off — ₹${s.price}/mo` }));
     if (optionKey === "pharmacy")    return (optionPricing.pharmacyDiscount?.slabs ?? []).map((s) => ({ value: s.percent, label: `${s.percent}% off — ₹${s.price}/mo` }));
     return [];
@@ -811,7 +832,6 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
         <PlanPattern patternId="waves" uid="custom-builder-pat" />
 
         <div className="relative z-10 flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-4">
-          {/* Left: badge + name + hint */}
           <div className="flex-1 min-w-0">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full
               text-[10px] font-black uppercase tracking-wider bg-white/20 text-white mb-2">
@@ -830,13 +850,9 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
             <p className="text-white/50 text-[11px] mt-1">Select services and quantities below</p>
           </div>
 
-          {/* Right: total — row on mobile too but smaller */}
           <div className="flex items-baseline gap-2 sm:block sm:text-right flex-shrink-0">
             <p className="text-[9px] text-white/45 uppercase font-bold sm:mb-0.5 hidden sm:block">Monthly Total</p>
-            <p
-              className="text-3xl sm:text-4xl font-black text-white"
-              aria-label={`₹${total} per month`}
-            >
+            <p className="text-3xl sm:text-4xl font-black text-white" aria-label={`₹${total} per month`}>
               ₹{total.toFixed(0)}
             </p>
             <p className="text-white/45 text-[11px]">/mo</p>
@@ -853,8 +869,10 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
         ) : (
           <>
             {OPTION_CONFIG.map((opt) => {
-              const qty       = quantities[opt.key] ?? 0;
-              const active    = qty > 0;
+              // FIX: transport uses -1 sentinel for "not selected"
+              const rawQty    = quantities[opt.key] ?? (opt.key === "transport" ? -1 : 0);
+              const active    = opt.key === "transport" ? rawQty >= 0 : rawQty > 0;
+              const qty       = rawQty; // pass raw to resolveOptionPrice (handles -1 guard)
               const breakdown = priceBreakdown[opt.key] ?? { unitPrice: 0, lineTotal: 0, slabLabel: "" };
               const max       = CAP_MAP[opt.key] ?? 1;
               const slabOpts  = getSlabOptions(opt.key);
@@ -872,9 +890,8 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                     <div className="absolute inset-0 rounded-2xl bg-base-200 border border-base-300 -z-10" />
                   )}
 
-                  {/* ── Row 1: icon + label + toggle (toggle stays in row 1) ── */}
+                  {/* ── Row 1: icon + label + toggle ── */}
                   <div className="flex items-start gap-2.5">
-                    {/* Icon */}
                     <div
                       className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
                       style={{ background: active ? `${CUSTOM_META.accent}20` : undefined }}
@@ -886,7 +903,6 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                       }
                     </div>
 
-                    {/* Label + hint + slab label */}
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-black text-base-content leading-tight">{opt.label}</p>
                       <p className="text-[11px] font-semibold text-base-content/40 mt-0.5 leading-snug">{opt.hint}</p>
@@ -897,7 +913,6 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                       )}
                     </div>
 
-                    {/* Toggle sits in row 1 on ALL screen sizes */}
                     {opt.isToggle && (
                       <div className="flex-shrink-0 flex flex-col items-end gap-1 ml-1">
                         <button
@@ -928,19 +943,19 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                     )}
                   </div>
 
-                  {/* ── Row 2: stepper / dropdown + price badge (non-toggle only) ── */}
+                  {/* ── Row 2: stepper / dropdown + price badge (non-toggle) ── */}
                   {!opt.isToggle && (
                     <div className="flex items-center justify-between mt-3 ml-[42px] sm:ml-[46px] gap-2">
-                      {/* Control */}
                       <div className="flex-1 min-w-0">
                         {useDropdown(opt.key) && slabOpts.length > 0 ? (
                           <select
-                            value={qty}
+                            value={opt.key === "transport" ? qty : qty}
                             onChange={(e) => handleSetQty(opt.key, Number(e.target.value))}
                             className="input-field text-sm py-2 px-3 pr-7 rounded-xl w-full"
                             aria-label={`Select ${opt.label} slab`}
                           >
-                            <option value={0}>— Not included —</option>
+                            {/* FIX: transport uses -1 sentinel for "not included" */}
+                            <option value={opt.key === "transport" ? -1 : 0}>— Not included —</option>
                             {slabOpts.map((s) => (
                               <option key={s.value} value={s.value}>{s.label}</option>
                             ))}
@@ -951,7 +966,6 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                             role="group"
                             aria-label={`${opt.label} quantity, max ${max}`}
                           >
-                            {/* Decrease */}
                             <button
                               onClick={() => handleSetQty(opt.key, qty - 1)}
                               className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center
@@ -962,7 +976,6 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                               <Minus size={13} aria-hidden="true" />
                             </button>
 
-                            {/* Count */}
                             <span
                               className="w-12 sm:w-10 text-center text-base sm:text-sm font-black bg-base-100 select-none"
                               aria-label={`${qty} ${opt.unit}`}
@@ -970,7 +983,6 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                               {qty}
                             </span>
 
-                            {/* Increase */}
                             <button
                               onClick={() => handleSetQty(opt.key, qty + 1)}
                               className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center
@@ -984,7 +996,6 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                         )}
                       </div>
 
-                      {/* Price badge */}
                       {active && (
                         <div
                           className="flex-shrink-0 text-xs font-black px-2.5 py-1 rounded-full whitespace-nowrap"
@@ -999,68 +1010,35 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
 
                   {/* ── Consultations sub-section ── */}
                   {opt.key === "consultations" && qty > 0 && optionPricing?.consultation && (
-                    <div className="mt-3 space-y-2">
-                      {doctorTiers.length > 0 && (
-                        <div
-                          className="p-3 rounded-xl"
-                          style={{ background: `${CUSTOM_META.accent}0a`, border: `1px dashed ${CUSTOM_META.accent}30` }}
-                        >
-                          <div className="flex items-center gap-1.5 mb-2">
-                            <UserPlus size={11} style={{ color: CUSTOM_META.accent }} aria-hidden="true" />
-                            <p className="text-xs font-black text-base-content/70">
-                              Doctor Tier Bonus
-                              <span className="ml-1 text-base-content/40 font-normal text-[11px]">
-                                (optional · max {maxDoctorsAllowed} doctors)
-                              </span>
-                            </p>
-                          </div>
-                          <select
-                            value={doctorTierCount}
-                            onChange={(e) => setDoctorTierCount(Number(e.target.value))}
-                            className="input-field text-sm py-2 px-3 rounded-xl w-full"
-                            aria-label="Select doctor tier for bonus pricing"
-                          >
-                            <option value={0}>— No doctor tier bonus —</option>
-                            {availableDoctorTiers.map((t) => (
-                              <option key={t.doctorCount} value={t.doctorCount}>
-                                {t.doctorCount} doctor{t.doctorCount !== 1 ? "s" : ""} — +₹{t.additionalPrice}/consult bonus
-                              </option>
-                            ))}
-                          </select>
-                          {availableDoctorTiers.length === 0 && consultQty > 0 && (
-                            <p className="text-xs text-base-content/40 mt-1">
-                              No tier bonus available for {consultQty} consult{consultQty !== 1 ? "s" : ""}
-                            </p>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Price breakdown */}
+                    <div className="mt-3">
                       <div
                         className="p-3 rounded-xl space-y-1"
                         style={{ background: `${CUSTOM_META.accent}0a`, border: `1px dashed ${CUSTOM_META.accent}30` }}
                       >
                         <p className="font-black text-xs text-base-content/70">Pricing breakdown:</p>
                         <p className="font-semibold text-xs text-base-content/55">
-                          Base: {qty} consults × ₹{optionPricing.consultation.pricePerConsultation ?? 0} each
-                          {" "}= ₹{(qty * (optionPricing.consultation.pricePerConsultation ?? 0)).toFixed(0)}
+                          {qty} consults × ₹{optionPricing.consultation.pricePerConsultation ?? 0} each
                         </p>
-                        {doctorTierCount > 0 && (() => {
-                          const matched = [...doctorTiers]
-                            .sort((a, b) => b.doctorCount - a.doctorCount)
-                            .find((t) => t.doctorCount <= doctorTierCount);
-                          return matched ? (
-                            <p className="font-semibold text-xs" style={{ color: CUSTOM_META.accent }}>
-                              + Doctor tier: {qty} × ₹{matched.additionalPrice}
-                              {" "}= ₹{(qty * matched.additionalPrice).toFixed(0)}
-                              <span className="text-base-content/40 text-[11px] ml-1">
-                                (≥{matched.doctorCount} doctors)
-                              </span>
-                            </p>
-                          ) : null;
-                        })()}
                         <p className="font-black text-sm" style={{ color: CUSTOM_META.accent }}>
                           = ₹{breakdown.lineTotal.toFixed(0)}/month total
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Transport sub-section ── */}
+                  {opt.key === "transport" && active && (
+                    <div className="mt-3">
+                      <div
+                        className="p-3 rounded-xl space-y-1"
+                        style={{ background: `${CUSTOM_META.accent}0a`, border: `1px dashed ${CUSTOM_META.accent}30` }}
+                      >
+                        <p className="font-black text-xs text-base-content/70">Bundle details:</p>
+                        <p className="font-semibold text-xs text-base-content/55">
+                          {breakdown.slabLabel}
+                        </p>
+                        <p className="font-black text-sm" style={{ color: CUSTOM_META.accent }}>
+                          = ₹{breakdown.lineTotal.toFixed(0)}/month flat
                         </p>
                       </div>
                     </div>
@@ -1069,7 +1047,6 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                   {/* ── Care Assistant sub-section ── */}
                   {opt.key === "careAssistant" && qty > 0 && caTiers.length > 0 && (
                     <div className="mt-3 space-y-2">
-                      {/* Tier selector */}
                       <div
                         className="p-3 rounded-xl"
                         style={{ background: `${CUSTOM_META.accent}0a`, border: `1px dashed ${CUSTOM_META.accent}30` }}
@@ -1092,7 +1069,6 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                         </select>
                       </div>
 
-                      {/* Pricing breakdown */}
                       <div
                         className="p-3 rounded-xl space-y-1"
                         style={{ background: `${CUSTOM_META.accent}0a`, border: `1px dashed ${CUSTOM_META.accent}30` }}
@@ -1128,7 +1104,10 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                 Cost Breakdown
               </p>
               <div className="space-y-2">
-                {OPTION_CONFIG.filter((o) => (quantities[o.key] ?? 0) > 0).map((opt) => {
+                {OPTION_CONFIG.filter((o) => {
+                  const qty = quantities[o.key] ?? (o.key === "transport" ? -1 : 0);
+                  return o.key === "transport" ? qty >= 0 : qty > 0;
+                }).map((opt) => {
                   const b = priceBreakdown[opt.key];
                   return (
                     <div key={opt.key} className="flex items-center justify-between gap-2">
@@ -1250,13 +1229,13 @@ const InlineComparisonTable = memo(function InlineComparisonTable({
       <div className="w-full flex items-center justify-between flex-wrap gap-3">
         <div className="w-full ml-auto">
           <p className="text-[10px] text-center font-black uppercase tracking-widest text-base-content/40 mb-0.5">Compare</p>
-          <h2 id="compare-heading" className="text-xl text-center  font-black text-base-content">Plan Comparison</h2>
+          <h2 id="compare-heading" className="text-xl text-center font-black text-base-content">Plan Comparison</h2>
         </div>
         <div className="flex rounded-xl overflow-hidden border border-base-300 text-xs font-black"
           role="group" aria-label="Comparison view selector">
           <button
             onClick={() => setMode("overview")}
-            className={`px-4  py-2 transition-colors ${mode === "overview"
+            className={`px-4 py-2 transition-colors ${mode === "overview"
               ? "bg-primary text-primary-content"
               : "bg-base-200 text-base-content hover:bg-base-300"}`}
             aria-pressed={mode === "overview"}>
@@ -1647,11 +1626,11 @@ export default function SubscriptionPage() {
       />
 
       <main id="main-content" className="min-h-screen bg-base-100">
-        <div className="  mx-auto   py-10 space-y-14">
+        <div className="mx-auto py-10 space-y-14">
 
           {/* Hero */}
           <section aria-labelledby="hero-heading" className="text-center space-y-4">
-             <motion.div
+            <motion.div
               animate={{ rotate: [0, 8, -8, 0] }}
               transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-full mb-1"

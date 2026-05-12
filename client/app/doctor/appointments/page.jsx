@@ -129,8 +129,8 @@ const StatPill = ({ value, label, icon: Icon, color, trend }) => (
   <motion.div
     initial={{ opacity: 0, y: 12 }}
     animate={{ opacity: 1, y: 0 }}
-    className="stat-card flex flex-col gap-1 relative overflow-hidden"
-    style={{ border: `1px solid ${color}` }}
+    className="stat-card   flex flex-col gap-1 relative overflow-hidden"
+    style={{ border: `1px solid ${color}`, background: `color-mix(in srgb,${color},transparent 82%)` }}
   >
     <div className="flex items-center justify-between">
       <span className="stat-card-label">{label}</span>
@@ -153,7 +153,7 @@ const StatusBadge = ({ status }) => {
   const Icon = cfg.icon;
   return (
     <span
-      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide"
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[8px] font-bold uppercase tracking-wide"
       style={{ background: `color-mix(in srgb,${cfg.color},transparent 85%)`, color: cfg.color, border: `1px solid color-mix(in srgb,${cfg.color},transparent 60%)` }}
     >
       <Icon size={10} /> {cfg.label}
@@ -166,7 +166,7 @@ const TabButton = ({ active, onClick, children, icon: Icon, count }) => (
     onClick={onClick}
     whileHover={{ scale: 1.02 }}
     whileTap={{ scale: 0.97 }}
-    className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all relative"
+    className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all relative"
     style={{
       background: active ? "var(--primary)" : "transparent",
       color: active ? "var(--primary-content)" : "color-mix(in oklch,var(--base-content) 60%,transparent)",
@@ -258,23 +258,23 @@ const SlotEditor = ({ day, dayEntry, onChange }) => {
               className="input-field text-xs py-1 px-2 w-16"
               title="Max patients"
             />
-           <button
+    <button
   onClick={() => updateSlot(idx, "isActive", !slot.isActive)}
-  className="relative flex items-center h-6 w-11 rounded-full transition-colors duration-200 focus:outline-none"
+  // Use Tailwind for the container to keep it clean
+  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none  focus:ring-primary`}
   style={{ 
-    background: slot.isActive ? "var(--success)" : "var(--base-300)",
-    border: "1px solid var(--base-300)" 
+    backgroundColor: slot.isActive ? "var(--success)" : "var(--base-300)" 
   }}
   title={slot.isActive ? "Active" : "Inactive"}
+  role="switch"
+  aria-checked={slot.isActive}
 >
+  <span className="sr-only">Toggle Slot</span>
   <motion.span
-    layout
+    // Use animate instead of manual marginLeft for smoother transitions
+    animate={{ x: slot.isActive ? 24 : 4 }}
     transition={{ type: "spring", stiffness: 500, damping: 30 }}
-    className="inline-block w-4 h-4 transform bg-white rounded-full shadow-lg"
-    style={{ 
-      marginLeft: slot.isActive ? "1.25rem" : "0.25rem",
-      backgroundColor: "#fff" 
-    }}
+    className="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0"
   />
 </button>
             <button onClick={() => removeSlot(idx)} className="p-1" style={{ color: "var(--error)" }}>
@@ -338,7 +338,7 @@ const OPDetailPanel = ({ opNumber, onClose }) => {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-4">
         <Spinner size={36} />
-        <span className="text-sm font-medium" style={{ color: "var(--base-content)" }}>Loading OP record…</span>
+        <span className="text-xs font-medium" style={{ color: "var(--base-content)" }}>Loading OP record…</span>
       </div>
     );
   }
@@ -361,7 +361,7 @@ const OPDetailPanel = ({ opNumber, onClose }) => {
         style={{ background: "var(--base-100)", borderBottom: "1px solid var(--base-300)" }}>
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <span className="font-black text-lg font-montserrat" style={{ color: "var(--base-content)" }}>
+            <span className=" text-xs font-montserrat" style={{ color: "var(--base-content)" }}>
               {op.opNumber}
             </span>
             <StatusBadge status={op.status} />
@@ -369,7 +369,7 @@ const OPDetailPanel = ({ opNumber, onClose }) => {
               <span className="badge badge-warning badge-sm">Follow-Up</span>
             )}
           </div>
-          <p className="text-xs" style={{ color: "color-mix(in oklch,var(--base-content) 55%,transparent)" }}>
+          <p className="text-[10px]" style={{ color: "color-mix(in oklch,var(--base-content) 55%,transparent)" }}>
             {fmt(op.scheduledAt)} · {CONSULTATION_LABELS[op.consultationType] || "Consultation"}
           </p>
         </div>
@@ -393,13 +393,13 @@ const OPDetailPanel = ({ opNumber, onClose }) => {
       {/* Patient Info */}
       <div className="card p-4">
         <div className="flex items-center gap-3 mb-3">
-          <div className="w-10 h-10 rounded-full flex items-center justify-center font-black text-sm"
+          <div className="w-10 h-10 rounded-full flex items-center justify-center font-black text-xs"
             style={{ background: "color-mix(in srgb,var(--primary),transparent 82%)", color: "var(--primary)" }}>
             {(patient.name || "?")[0].toUpperCase()}
           </div>
           <div>
-            <div className="font-bold text-sm" style={{ color: "var(--base-content)" }}>{patient.name || "—"}</div>
-            <div className="text-xs flex items-center gap-2" style={{ color: "color-mix(in oklch,var(--base-content) 55%,transparent)" }}>
+            <div className="font-bold text-xs" style={{ color: "var(--base-content)" }}>{patient.name || "—"}</div>
+            <div className="text-xs flex text-[10px] items-center gap-2" style={{ color: "color-mix(in oklch,var(--base-content) 55%,transparent)" }}>
               {patient.phone && <><Phone size={10} /> {patient.phone}</>}
               {patient.email && <><Mail size={10} /> {patient.email}</>}
             </div>
@@ -415,7 +415,7 @@ const OPDetailPanel = ({ opNumber, onClose }) => {
             <div key={label}>
               <div className="text-xs font-semibold uppercase tracking-wide mb-0.5"
                 style={{ color: "color-mix(in oklch,var(--base-content) 40%,transparent)" }}>{label}</div>
-              <div className="text-sm font-medium" style={{ color: "var(--base-content)" }}>{val}</div>
+              <div className="text-xs font-medium" style={{ color: "var(--base-content)" }}>{val}</div>
             </div>
           ))}
         </div>
@@ -423,7 +423,7 @@ const OPDetailPanel = ({ opNumber, onClose }) => {
 
       {/* Follow-up Eligibility */}
       {op.followUpExpiry && (
-        <div className="card p-3 flex items-center gap-3"
+        <div className="  p-3 flex items-center gap-3"
           style={{ borderLeft: `3px solid ${daysLeft > 0 ? "var(--success)" : "var(--error)"}` }}>
           <TimerReset size={16} style={{ color: daysLeft > 0 ? "var(--success)" : "var(--error)" }} />
           <div>
@@ -442,27 +442,27 @@ const OPDetailPanel = ({ opNumber, onClose }) => {
         <div className="card p-4 space-y-2">
           <div className="flex items-center gap-2 mb-2">
             <FileCheck size={15} style={{ color: "var(--primary)" }} />
-            <span className="font-bold text-sm" style={{ color: "var(--base-content)" }}>Clinical Notes</span>
+            <span className="font-bold text-xs" style={{ color: "var(--base-content)" }}>Clinical Notes</span>
           </div>
           {op.reasonForVisit && (
             <div>
               <div className="text-xs font-semibold uppercase tracking-wide mb-0.5"
                 style={{ color: "color-mix(in oklch,var(--base-content) 40%,transparent)" }}>Reason for Visit</div>
-              <div className="text-sm" style={{ color: "var(--base-content)" }}>{op.reasonForVisit}</div>
+              <div className="text-xs" style={{ color: "var(--base-content)" }}>{op.reasonForVisit}</div>
             </div>
           )}
           {op.diagnosisCode && (
             <div>
               <div className="text-xs font-semibold uppercase tracking-wide mb-0.5"
                 style={{ color: "color-mix(in oklch,var(--base-content) 40%,transparent)" }}>Diagnosis Code</div>
-              <div className="text-sm font-mono" style={{ color: "var(--base-content)" }}>{op.diagnosisCode}</div>
+              <div className="text-xs font-mono" style={{ color: "var(--base-content)" }}>{op.diagnosisCode}</div>
             </div>
           )}
           {op.doctorNotes && (
             <div>
               <div className="text-xs font-semibold uppercase tracking-wide mb-0.5"
                 style={{ color: "color-mix(in oklch,var(--base-content) 40%,transparent)" }}>Notes</div>
-              <div className="text-sm leading-relaxed" style={{ color: "var(--base-content)" }}>{op.doctorNotes}</div>
+              <div className="text-xs leading-relaxed" style={{ color: "var(--base-content)" }}>{op.doctorNotes}</div>
             </div>
           )}
           {op.prescriptionUrl && (
@@ -479,7 +479,7 @@ const OPDetailPanel = ({ opNumber, onClose }) => {
         <div className="card p-4">
           <div className="flex items-center gap-2 mb-3">
             <Layers size={15} style={{ color: "var(--accent)" }} />
-            <span className="font-bold text-sm" style={{ color: "var(--base-content)" }}>Follow-up Chain ({followUps.length})</span>
+            <span className="font-bold text-xs" style={{ color: "var(--base-content)" }}>Follow-up Chain ({followUps.length})</span>
           </div>
           <div className="space-y-2">
             {followUps.map((fu) => (
@@ -504,7 +504,7 @@ const OPDetailPanel = ({ opNumber, onClose }) => {
             className="flex items-center gap-2 w-full text-left"
           >
             <CheckCheck size={15} style={{ color: "var(--success)" }} />
-            <span className="font-bold text-sm flex-1" style={{ color: "var(--base-content)" }}>Mark as Completed</span>
+            <span className="font-bold text-xs flex-1" style={{ color: "var(--base-content)" }}>Mark as Completed</span>
             {showCompleteForm ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
 
@@ -529,7 +529,7 @@ const OPDetailPanel = ({ opNumber, onClose }) => {
                         value={form[key]}
                         onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
                         placeholder={placeholder}
-                        className="input-field w-full text-sm"
+                        className="input-field w-full text-xs"
                       />
                     </div>
                   ))}
@@ -540,7 +540,7 @@ const OPDetailPanel = ({ opNumber, onClose }) => {
                       onChange={(e) => setForm((f) => ({ ...f, doctorNotes: e.target.value }))}
                       rows={3}
                       placeholder="Detailed clinical observations, treatment plan..."
-                      className="input-field w-full text-sm resize-none"
+                      className="input-field w-full text-xs resize-none"
                     />
                   </div>
                   {completeAction.error && (
@@ -567,7 +567,7 @@ const OPDetailPanel = ({ opNumber, onClose }) => {
         <div className="card p-3 flex items-center gap-2"
           style={{ borderLeft: "3px solid var(--success)", background: "color-mix(in srgb,var(--success),transparent 92%)" }}>
           <CheckCircle2 size={16} style={{ color: "var(--success)" }} />
-          <span className="text-sm font-semibold" style={{ color: "var(--success)" }}>
+          <span className="text-xs font-semibold" style={{ color: "var(--success)" }}>
             Consultation completed on {fmt(op.completedAt)}
           </span>
         </div>
@@ -795,7 +795,7 @@ export default function AppointmentManagement() {
   <button
     onClick={handleToggleOnline}
     disabled={onlineSaving}
-    className="group flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-bold transition-all relative overflow-hidden"
+    className="group flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-bold transition-all relative overflow-hidden"
     style={{
       background: onlineDraft
         ? "color-mix(in srgb, var(--success), transparent 92%)"
@@ -869,7 +869,7 @@ export default function AppointmentManagement() {
         </motion.div>
 
         {/* ── Main Content ────────────────────────────────── */}
-        <div className="container-custom py-6">
+        <div className="  py-6">
           <AnimatePresence mode="wait">
 
             {/* ════════════════════════════════════════════
@@ -881,7 +881,7 @@ export default function AppointmentManagement() {
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -16 }}
-                className="grid grid-cols-1 lg:grid-cols-3 gap-6"
+                className="grid grid-cols-1 lg:grid-cols-3 gap-2"
               >
                 {/* Left: List */}
                 <div className="lg:col-span-2 space-y-4">
@@ -903,7 +903,7 @@ export default function AppointmentManagement() {
                           value={searchQ}
                           onChange={(e) => setSearchQ(e.target.value)}
                           placeholder="Search OP, patient, booking code…"
-                          className="bg-transparent outline-none text-sm flex-1 min-w-0"
+                          className="bg-transparent outline-none text-xs flex-1 min-w-0"
                           style={{ color: "var(--base-content)" }}
                         />
                         {searchQ && (
@@ -935,7 +935,7 @@ export default function AppointmentManagement() {
                               <select
                                 value={filters.status}
                                 onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value, page: 1 }))}
-                                className="input-field text-sm"
+                                className="input-field text-xs"
                               >
                                 <option value="">All Status</option>
                                 {Object.entries(OP_STATUS_CONFIG).map(([val, cfg]) => (
@@ -949,13 +949,13 @@ export default function AppointmentManagement() {
                                 type="date"
                                 value={filters.date}
                                 onChange={(e) => setFilters((f) => ({ ...f, date: e.target.value, page: 1 }))}
-                                className="input-field text-sm"
+                                className="input-field text-xs"
                               />
                             </div>
-                            <div className="flex items-end">
+                            <div className="flex items-end justify-center mb-1">
                               <button
                                 onClick={() => setFilters({ status: "", date: "", page: 1, limit: 15 })}
-                                className="btn btn-sm btn-ghost flex items-center gap-1.5"
+                                className="btn btn-sm btn-ghost h-10 flex items-center gap-1.5"
                               >
                                 <X size={12} /> Clear
                               </button>
@@ -971,7 +971,7 @@ export default function AppointmentManagement() {
                     {opsLoading && (
                       <div className="flex items-center justify-center py-12 gap-3">
                         <Spinner size={28} />
-                        <span className="text-sm" style={{ color: "var(--base-content)" }}>Loading appointments…</span>
+                        <span className="text-xs" style={{ color: "var(--base-content)" }}>Loading appointments…</span>
                       </div>
                     )}
 
@@ -983,7 +983,7 @@ export default function AppointmentManagement() {
                       >
                         <Inbox size={40} style={{ color: "color-mix(in oklch,var(--base-content) 25%,transparent)" }} />
                         <div className="font-bold" style={{ color: "var(--base-content)" }}>No appointments found</div>
-                        <div className="text-sm" style={{ color: "color-mix(in oklch,var(--base-content) 50%,transparent)" }}>
+                        <div className="text-xs" style={{ color: "color-mix(in oklch,var(--base-content) 50%,transparent)" }}>
                           {searchQ || filters.status ? "Try adjusting your filters" : "Your appointment list is empty"}
                         </div>
                       </motion.div>
@@ -1013,14 +1013,14 @@ export default function AppointmentManagement() {
                             <div className="flex items-start justify-between gap-3">
                               <div className="flex items-start gap-3 flex-1 min-w-0">
                                 <div
-                                  className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 font-black text-sm"
+                                  className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 font-black text-xs"
                                   style={{ background: "color-mix(in srgb,var(--primary),transparent 85%)", color: "var(--primary)" }}
                                 >
                                   {(patient.name || "?")?.[0]?.toUpperCase()}
                                 </div>
                                 <div className="flex-1 min-w-0">
                                   <div className="flex flex-wrap items-center gap-2 mb-0.5">
-                                    <span className="font-bold text-sm truncate" style={{ color: "var(--base-content)" }}>
+                                    <span className="font-bold text-xs truncate" style={{ color: "var(--base-content)" }}>
                                       {patient.name || "Unknown Patient"}
                                     </span>
                                     <StatusBadge status={op.status} />
@@ -1067,7 +1067,7 @@ export default function AppointmentManagement() {
                       >
                         ←
                       </button>
-                      <span className="text-sm font-semibold" style={{ color: "var(--base-content)" }}>
+                      <span className="text-xs font-semibold" style={{ color: "var(--base-content)" }}>
                         {filters.page} / {opsMeta.pages}
                       </span>
                       <button
@@ -1084,7 +1084,7 @@ export default function AppointmentManagement() {
                 {/* Right: Detail Panel */}
                 <div className="lg:col-span-1">
                   <div
-                    className="card p-4 sticky top-28"
+                    className="card  p-4 sticky top-28"
                     style={{ maxHeight: "calc(100vh - 7rem)", overflowY: "auto", minHeight: 300 }}
                   >
                     <AnimatePresence mode="wait">
@@ -1110,7 +1110,7 @@ export default function AppointmentManagement() {
                           </div>
                           <div>
                             <div className="font-bold mb-1" style={{ color: "var(--base-content)" }}>Select an OP record</div>
-                            <div className="text-sm" style={{ color: "color-mix(in oklch,var(--base-content) 50%,transparent)" }}>
+                            <div className="text-xs" style={{ color: "color-mix(in oklch,var(--base-content) 50%,transparent)" }}>
                               Click any appointment to view full details, clinical notes, and follow-up chain.
                             </div>
                           </div>
@@ -1148,7 +1148,7 @@ export default function AppointmentManagement() {
                   <div className="card p-5">
                     <div className="flex items-center gap-2 mb-4">
                       <BarChart2 size={16} style={{ color: "var(--primary)" }} />
-                      <span className="font-bold text-sm" style={{ color: "var(--base-content)" }}>Appointments by Day</span>
+                      <span className="font-bold text-xs" style={{ color: "var(--base-content)" }}>Appointments by Day</span>
                     </div>
                     <ResponsiveContainer width="100%" height={220}>
                       <BarChart data={weeklyChartData} barSize={28}>
@@ -1168,7 +1168,7 @@ export default function AppointmentManagement() {
                   <div className="card p-5">
                     <div className="flex items-center gap-2 mb-4">
                       <PieIcon size={16} style={{ color: "var(--secondary)" }} />
-                      <span className="font-bold text-sm" style={{ color: "var(--base-content)" }}>Status Distribution</span>
+                      <span className="font-bold text-xs" style={{ color: "var(--base-content)" }}>Status Distribution</span>
                     </div>
                     <div className="flex items-center gap-4">
                       <ResponsiveContainer width="60%" height={220}>
@@ -1208,7 +1208,7 @@ export default function AppointmentManagement() {
                 <div className="card p-5">
                   <div className="flex items-center gap-2 mb-4">
                     <Activity size={16} style={{ color: "var(--accent)" }} />
-                    <span className="font-bold text-sm" style={{ color: "var(--base-content)" }}>Consultation Type Breakdown</span>
+                    <span className="font-bold text-xs" style={{ color: "var(--base-content)" }}>Consultation Type Breakdown</span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     {consultationChartData.map((d, i) => {
@@ -1219,9 +1219,9 @@ export default function AppointmentManagement() {
                         <div key={d.name} className="p-4 rounded-xl" style={{ background: `color-mix(in srgb,${color},transparent 90%)` }}>
                           <div className="flex items-center gap-2 mb-2">
                             <Icon size={16} style={{ color }} />
-                            <span className="font-bold text-sm" style={{ color }}>{d.name}</span>
+                            <span className="font-bold text-xs" style={{ color }}>{d.name}</span>
                           </div>
-                          <div className="text-2xl font-black mb-1" style={{ color, fontFamily: "var(--font-family-montserrat)" }}>{d.value}</div>
+                          <div className="text-md font-black mb-1" style={{ color, fontFamily: "var(--font-family-montserrat)" }}>{d.value}</div>
                           <div className="progress-bar">
                             <motion.div
                               className="progress-bar-fill"
@@ -1244,7 +1244,7 @@ export default function AppointmentManagement() {
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-2">
                         <Shield size={16} style={{ color: "var(--info)" }} />
-                        <span className="font-bold text-sm" style={{ color: "var(--base-content)" }}>Profile Completion</span>
+                        <span className="font-bold text-xs" style={{ color: "var(--base-content)" }}>Profile Completion</span>
                       </div>
                       <span className="font-black text-lg" style={{ color: "var(--primary)", fontFamily: "var(--font-family-montserrat)" }}>
                         {profile.profileCompletionPercent ?? 0}%
@@ -1300,7 +1300,7 @@ export default function AppointmentManagement() {
                   style={{ borderLeft: "3px solid var(--info)", background: "color-mix(in srgb,var(--info),transparent 93%)" }}>
                   <Info size={16} style={{ color: "var(--info)", flexShrink: 0, marginTop: 2 }} />
                   <div>
-                    <div className="text-sm font-bold" style={{ color: "var(--info)" }}>Availability Controls Slots, Not Pricing</div>
+                    <div className="text-xs font-bold" style={{ color: "var(--info)" }}>Availability Controls Slots, Not Pricing</div>
                     <div className="text-xs mt-0.5" style={{ color: "var(--base-content)" }}>
                       {pricingSource === "hospital"
                         ? "Your fees are set by the hospital manager. You control your appointment slots independently."
@@ -1370,7 +1370,7 @@ export default function AppointmentManagement() {
     />
   </motion.div>
 </button>
-                            <span className="font-black text-sm" style={{ fontFamily: "var(--font-family-montserrat)", color: "var(--base-content)" }}>{day}</span>
+                            <span className="font-black text-xs" style={{ fontFamily: "var(--font-family-montserrat)", color: "var(--base-content)" }}>{day}</span>
                             {entry.isAvailable && entry.slots?.length > 0 && (
                               <span className="badge badge-success badge-sm">{entry.slots.filter(s => s.isActive).length} slot{entry.slots.filter(s => s.isActive).length !== 1 ? "s" : ""}</span>
                             )}
@@ -1446,7 +1446,7 @@ export default function AppointmentManagement() {
                     <User size={16} style={{ color: "var(--success)", flexShrink: 0, marginTop: 2 }} />
                   )}
                   <div>
-                    <div className="text-sm font-bold" style={{ color: pricingSource === "hospital" ? "var(--info)" : "var(--success)" }}>
+                    <div className="text-xs font-bold" style={{ color: pricingSource === "hospital" ? "var(--info)" : "var(--success)" }}>
                       {pricingSource === "hospital" ? "Hospital-Managed Pricing" : "Doctor-Controlled Pricing"}
                     </div>
                     <div className="text-xs mt-0.5" style={{ color: "var(--base-content)" }}>
@@ -1462,7 +1462,7 @@ export default function AppointmentManagement() {
                 <div className="card p-5">
                   <div className="flex items-center gap-2 mb-5">
                     <Zap size={16} style={{ color: "var(--primary)" }} />
-                    <span className="font-bold text-sm" style={{ color: "var(--base-content)" }}>Effective Consultation Fees</span>
+                    <span className="font-bold text-xs" style={{ color: "var(--base-content)" }}>Effective Consultation Fees</span>
                     <span className="badge badge-primary badge-sm ml-auto capitalize">{pricingSource || "—"}</span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -1500,7 +1500,7 @@ export default function AppointmentManagement() {
                 <div className="card p-5">
                   <div className="flex items-center gap-2 mb-4">
                     <Layers size={16} style={{ color: "var(--accent)" }} />
-                    <span className="font-bold text-sm" style={{ color: "var(--base-content)" }}>Follow-up Policy</span>
+                    <span className="font-bold text-xs" style={{ color: "var(--base-content)" }}>Follow-up Policy</span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     {[
@@ -1511,7 +1511,7 @@ export default function AppointmentManagement() {
                       <div key={label} className="p-4 rounded-xl" style={{ background: "var(--base-200)" }}>
                         <div className="text-xs font-bold uppercase tracking-wide mb-1"
                           style={{ color: "color-mix(in oklch,var(--base-content) 45%,transparent)" }}>{label}</div>
-                        <div className="text-xl font-black" style={{ color: "var(--accent)", fontFamily: "var(--font-family-montserrat)" }}>{value}</div>
+                        <div className="text-md font-black" style={{ color: "var(--accent)", fontFamily: "var(--font-family-montserrat)" }}>{value}</div>
                         {sub && <div className="text-xs font-semibold mt-0.5" style={{ color: "var(--success)" }}>{sub}</div>}
                       </div>
                     ))}
@@ -1522,7 +1522,7 @@ export default function AppointmentManagement() {
                 <div className="card p-5">
                   <div className="flex items-center gap-2 mb-4">
                     <CheckCheck size={16} style={{ color: "var(--success)" }} />
-                    <span className="font-bold text-sm" style={{ color: "var(--base-content)" }}>Consultation Types Offered</span>
+                    <span className="font-bold text-xs" style={{ color: "var(--base-content)" }}>Consultation Types Offered</span>
                   </div>
                   <div className="flex flex-wrap gap-3">
                     {[
@@ -1543,7 +1543,7 @@ export default function AppointmentManagement() {
                           }}
                         >
                           <Icon size={14} style={{ color: offered ? "var(--success)" : "color-mix(in oklch,var(--base-content) 35%,transparent)" }} />
-                          <span className="text-sm font-bold" style={{ color: offered ? "var(--success)" : "color-mix(in oklch,var(--base-content) 40%,transparent)" }}>
+                          <span className="text-xs font-bold" style={{ color: offered ? "var(--success)" : "color-mix(in oklch,var(--base-content) 40%,transparent)" }}>
                             {label}
                           </span>
                           {offered
@@ -1569,7 +1569,7 @@ export default function AppointmentManagement() {
                       <Info size={18} style={{ color: "var(--warning)" }} />
                     </div>
                     <div>
-                      <div className="font-bold text-sm" style={{ color: "var(--base-content)" }}>Platform Fee Applied</div>
+                      <div className="font-bold text-xs" style={{ color: "var(--base-content)" }}>Platform Fee Applied</div>
                       <div className="text-xs" style={{ color: "color-mix(in oklch,var(--base-content) 55%,transparent)" }}>
                         {effectivePricing.platformFee.type === "percentage"
                           ? `${effectivePricing.platformFee.value}% of each consultation`
@@ -1586,7 +1586,7 @@ export default function AppointmentManagement() {
                   <div className="card p-5">
                     <div className="flex items-center gap-2 mb-4">
                       <Building2 size={16} style={{ color: "var(--secondary)" }} />
-                      <span className="font-bold text-sm" style={{ color: "var(--base-content)" }}>Associated Hospitals</span>
+                      <span className="font-bold text-xs" style={{ color: "var(--base-content)" }}>Associated Hospitals</span>
                     </div>
                     <div className="space-y-2">
                       {myHospitals?.primaryHospital && (
@@ -1596,7 +1596,7 @@ export default function AppointmentManagement() {
                             <Building2 size={14} style={{ color: "var(--primary)" }} />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <div className="text-sm font-bold truncate" style={{ color: "var(--base-content)" }}>
+                            <div className="text-xs font-bold truncate" style={{ color: "var(--base-content)" }}>
                               {myHospitals.primaryHospital.name}
                             </div>
                             <div className="text-xs" style={{ color: "color-mix(in oklch,var(--base-content) 50%,transparent)" }}>
@@ -1613,7 +1613,7 @@ export default function AppointmentManagement() {
                             <Building2 size={14} style={{ color: "var(--secondary)" }} />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <div className="text-sm font-bold truncate" style={{ color: "var(--base-content)" }}>{h.name}</div>
+                            <div className="text-xs font-bold truncate" style={{ color: "var(--base-content)" }}>{h.name}</div>
                             <div className="text-xs" style={{ color: "color-mix(in oklch,var(--base-content) 50%,transparent)" }}>{h.address?.city}</div>
                           </div>
                           <span className="badge badge-sm" style={{ background: "var(--base-300)", color: "var(--base-content)" }}>Affiliated</span>
@@ -1626,7 +1626,7 @@ export default function AppointmentManagement() {
                             <Building2 size={14} style={{ color: "var(--accent)" }} />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <div className="text-sm font-bold truncate" style={{ color: "var(--base-content)" }}>{h.name}</div>
+                            <div className="text-xs font-bold truncate" style={{ color: "var(--base-content)" }}>{h.name}</div>
                             <div className="text-xs" style={{ color: "color-mix(in oklch,var(--base-content) 50%,transparent)" }}>
                               {h.address?.city} · {h.isVerified ? "Verified" : "Pending"}
                             </div>

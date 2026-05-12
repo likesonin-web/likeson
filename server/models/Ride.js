@@ -7,33 +7,7 @@ const generateRideCode = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RIDE MODEL — Likeson.in
-//
-// Pure transport record. One Booking may generate 1-2 Ride documents.
-// Ride is separate from Booking so:
-//   - Transport team queries rides without touching booking/medical logic
-//   - GPS write-heavy updates go to RideTracking (not here)
-//   - Fare calculations for transport are isolated
-//
-// RIDE TYPES:
-//   patient          → patient being transported (home→hospital or return)
-//   care_assistant   → care assistant vehicle to join patient
-//   diagnostic_tech  → lab technician dispatched for home sample collection
-//   pharmacy_delivery→ medicine delivery to patient
-//   blood_bank       → blood component delivery to hospital/patient
-//
-// DRIVER TYPES:
-//   Ride uses either:
-//     a) Agency driver: driver → Driver ref, via TransportPartner
-//     b) Solo driver:   driver → Driver ref (driver.soloPartner is set)
-//   Both use the same Driver model — dispatch layer handles the difference.
-//
-// VEHICLE:
-//   vehicleSnapshot is denormalized at assignment time for fast display.
-//   Source of truth remains TransportPartner.vehicles[] or SoloDriverPartner.vehicle.
-//
 // ─────────────────────────────────────────────────────────────────────────────
-
-// ── Enums ─────────────────────────────────────────────────────────────────────
 
 export const RIDE_TYPES = [
   'patient',
@@ -44,24 +18,24 @@ export const RIDE_TYPES = [
 ];
 
 export const RIDE_STATUSES = [
-  'requested',        // Booking placed, no driver assigned yet
-  'searching',        // System searching for available driver
-  'driver_assigned',  // Driver found and notified
-  'driver_accepted',  // Driver confirmed they will take the ride
-  'driver_en_route',  // Driver travelling to pickup point
-  'driver_arrived',   // Driver at pickup location
-  'otp_verified',     // Patient verified OTP — ride started
-  'in_progress',      // En route to destination
-  'at_stop',          // Paused at intermediate stop
-  'completed',        // Dropped at destination
-  'cancelled',        // Cancelled before completion
-  'no_driver_found',  // Search timed out
+  'requested',
+  'searching',
+  'driver_assigned',
+  'driver_accepted',
+  'driver_en_route',
+  'driver_arrived',
+  'otp_verified',
+  'in_progress',
+  'at_stop',
+  'completed',
+  'cancelled',
+  'no_driver_found',
 ];
 
 export const RIDE_VEHICLE_CLASSES = [
-  'two_wheeler',  // Bike / Scooter — medicine delivery, quick escort
-  'four_wheeler', // Car / SUV / Van / Tempo — patient transport
-  'ambulance',    // Future: ambulance integration
+  'two_wheeler',
+  'four_wheeler',
+  'ambulance',
 ];
 
 export const RIDE_CANCEL_ACTORS = [
@@ -71,47 +45,39 @@ export const RIDE_CANCEL_ACTORS = [
   'system',
 ];
 
+// Max declined drivers stored per ride — prevents unbounded array growth (#11)
+const MAX_DECLINED_DRIVERS = 50;
+
 // ── Sub-Schemas ───────────────────────────────────────────────────────────────
 
-/**
- * rideGeoPointSchema — GeoJSON point with address label for ride waypoints.
- */
 const rideGeoPointSchema = new Schema(
   {
     type:        { type: String, enum: ['Point'], default: 'Point' },
-    coordinates: { type: [Number], required: true }, // [lng, lat]
-    label:       { type: String, trim: true },        // "Home", "Hospital Gate 1", "Lab"
-    address:     { type: String, trim: true },        // full formatted address
+    coordinates: { type: [Number], required: true },
+    label:       { type: String, trim: true },
+    address:     { type: String, trim: true },
     city:        { type: String, trim: true },
     pincode:     { type: String, trim: true },
-    arrivedAt:   { type: Date },                      // when driver arrived at this point
-    departedAt:  { type: Date },                      // when driver left this point
+    arrivedAt:   { type: Date },
+    departedAt:  { type: Date },
   },
   { _id: false }
 );
 
-/**
- * stopSchema — intermediate stops between pickup and final dropoff.
- * Example: Home → Pharmacy (collect meds) → Hospital
- */
 const stopSchema = new Schema(
   {
-    sequence:    { type: Number, required: true },  // 1, 2, 3 ...
+    sequence:    { type: Number, required: true },
     location:    { type: rideGeoPointSchema, required: true },
     purpose:     {
       type: String,
       enum: ['pharmacy_pickup', 'hospital_gate', 'lab_collection', 'blood_bank', 'other'],
     },
-    waitMinutes: { type: Number, default: 0 },      // actual wait time recorded
+    waitMinutes: { type: Number, default: 0 },
     isCompleted: { type: Boolean, default: false },
   },
   { _id: true }
 );
 
-/**
- * vehicleSnapshotSchema — denormalized vehicle data captured at assignment.
- * Prevents broken references if vehicle record is edited after ride completes.
- */
 const vehicleSnapshotSchema = new Schema(
   {
     vehicleCode:            { type: String },
@@ -119,7 +85,7 @@ const vehicleSnapshotSchema = new Schema(
     make:                   { type: String },
     model:                  { type: String },
     color:                  { type: String },
-    vehicleType:            { type: String }, // Sedan, SUV, Bike etc.
+    vehicleType:            { type: String },
     vehicleClass:           { type: String, enum: RIDE_VEHICLE_CLASSES },
     seatingCapacity:        { type: Number },
     isWheelchairAccessible: { type: Boolean },
@@ -130,9 +96,6 @@ const vehicleSnapshotSchema = new Schema(
   { _id: false }
 );
 
-/**
- * driverSnapshotSchema — denormalized driver data at assignment time.
- */
 const driverSnapshotSchema = new Schema(
   {
     driverCode:   { type: String },
@@ -145,58 +108,41 @@ const driverSnapshotSchema = new Schema(
   { _id: false }
 );
 
-/**
- * rideFareBreakdownSchema — transport-specific fare components.
- * This is the transport slice of the parent Booking.fareBreakdown.
- */
 const rideFareBreakdownSchema = new Schema(
   {
-    baseFare:              { type: Number, default: 0, min: 0 },
-    distanceFare:          { type: Number, default: 0, min: 0 }, // perKm × distanceKm
-    waitingCharge:         { type: Number, default: 0, min: 0 }, // per-minute waiting fee
-    nightSurcharge:        { type: Number, default: 0, min: 0 },
-    wheelchairSurcharge:   { type: Number, default: 0, min: 0 },
-    stopCharges:           { type: Number, default: 0, min: 0 }, // fee for intermediate stops
-    platformFee:           { type: Number, default: 0, min: 0 }, // platform cut
-    taxes:                 { type: Number, default: 0, min: 0 },
-    discount:              { type: Number, default: 0, min: 0 },
-    totalFare:             { type: Number, default: 0, min: 0 },
-
-    // Driver payout breakdown
-    driverEarnings:        { type: Number, default: 0, min: 0 },
-    agencyEarnings:        { type: Number, default: 0, min: 0 }, // 0 if solo driver
-
-    // Pricing basis (captured at ride creation)
-    ratePerKm:             { type: Number, default: 0 },
-    minimumFare:           { type: Number, default: 0 },
-    waitingRatePerMin:     { type: Number, default: 0 },
-    currency:              { type: String, default: 'INR' },
-
-    // Platform fee structure used (snapshot from PlatformPricingConfig)
-    platformFeeType:       { type: String, enum: ['fixed', 'percentage'] },
-    platformFeeValue:      { type: Number },
+    baseFare:            { type: Number, default: 0, min: 0 },
+    distanceFare:        { type: Number, default: 0, min: 0 },
+    waitingCharge:       { type: Number, default: 0, min: 0 },
+    nightSurcharge:      { type: Number, default: 0, min: 0 },
+    wheelchairSurcharge: { type: Number, default: 0, min: 0 },
+    stopCharges:         { type: Number, default: 0, min: 0 },
+    platformFee:         { type: Number, default: 0, min: 0 },
+    taxes:               { type: Number, default: 0, min: 0 },
+    discount:            { type: Number, default: 0, min: 0 },
+    totalFare:           { type: Number, default: 0, min: 0 },
+    driverEarnings:      { type: Number, default: 0, min: 0 },
+    agencyEarnings:      { type: Number, default: 0, min: 0 },
+    ratePerKm:           { type: Number, default: 0 },
+    minimumFare:         { type: Number, default: 0 },
+    waitingRatePerMin:   { type: Number, default: 0 },
+    currency:            { type: String, default: 'INR' },
+    platformFeeType:     { type: String, enum: ['fixed', 'percentage'] },
+    platformFeeValue:    { type: Number },
   },
   { _id: false }
 );
 
-/**
- * liveLocationSchema — current driver position (updated by driver app via socket).
- * Latest position only — breadcrumb history lives in RideTracking.
- */
 const liveLocationSchema = new Schema(
   {
     type:        { type: String, enum: ['Point'], default: 'Point' },
-    coordinates: { type: [Number], default: [80.648, 16.506] }, // [lng, lat]
-    heading:     { type: Number, min: 0, max: 360 },            // degrees
+    coordinates: { type: [Number], default: [80.648, 16.506] },
+    heading:     { type: Number, min: 0, max: 360 },
     speedKmh:    { type: Number, min: 0 },
     updatedAt:   { type: Date, default: Date.now },
   },
   { _id: false }
 );
 
-/**
- * cancellationSchema — ride-level cancellation record.
- */
 const rideCancellationSchema = new Schema(
   {
     cancelledBy:       { type: String, enum: RIDE_CANCEL_ACTORS },
@@ -208,9 +154,6 @@ const rideCancellationSchema = new Schema(
   { _id: false }
 );
 
-/**
- * rideRatingSchema — customer rates driver after ride completes.
- */
 const rideRatingSchema = new Schema(
   {
     rating:    { type: Number, min: 1, max: 5 },
@@ -229,10 +172,10 @@ const rideSchema = new Schema(
     rideCode: {
       type:      String,
       unique:    true,
+      sparse:    true,   // FIX #10: sparse prevents null duplicate key collision
       uppercase: true,
       trim:      true,
       index:     true,
-      comment:   'Format: RD-XXXXXXXX — auto-generated on create',
     },
 
     rideType: {
@@ -242,37 +185,27 @@ const rideSchema = new Schema(
       index:    true,
     },
 
+    // FIX #8: vehicleClass NOT required at schema level.
+    // It is derived in pre-save from vehicleSnapshot.vehicleType when not provided.
+    // Callers SHOULD provide it at creation; pre-save fills it as fallback.
     vehicleClass: {
-      type:     String,
-      enum:     RIDE_VEHICLE_CLASSES,
-      required: true,
+      type: String,
+      enum: RIDE_VEHICLE_CLASSES,
+      // required removed — pre-save derives it if missing
     },
 
     // ── Booking Link ──────────────────────────────────────────────────────────
-    /**
-     * booking — the parent Booking that created this ride.
-     * Required. Every ride must belong to a booking.
-     */
-    booking: {
-      type:     Schema.Types.ObjectId,
-      ref:      'Booking',
-      required: true,
-      index:    true,
-    },
+   booking: {
+  type:    Schema.Types.ObjectId,
+  ref:     'Booking',
+  default: null,
+  index:   true,
+},
 
-    /**
-     * isReturnRide — true when this is the return leg of a full_care_ride.
-     * The outbound ride is Booking.primaryRide; return is Booking.returnRide.
-     */
     isReturnRide: { type: Boolean, default: false },
 
     // ── Driver & Vehicle ──────────────────────────────────────────────────────
-    /**
-     * driver → Driver model ref.
-     * Works for both agency drivers (driver.ownerAgency set) and
-     * solo driver-partners (driver.soloPartner set).
-     * null until a driver is assigned.
-     */
+    // Ride.driver → Driver._id (NOT User._id). See socket service for why this matters.
     driver: {
       type:    Schema.Types.ObjectId,
       ref:     'Driver',
@@ -280,11 +213,6 @@ const rideSchema = new Schema(
       index:   true,
     },
 
-    /**
-     * transportPartner — set when driver is an agency driver.
-     * Null for solo driver-partners.
-     * Used for fare settlement → agency.
-     */
     transportPartner: {
       type:    Schema.Types.ObjectId,
       ref:     'TransportPartner',
@@ -292,94 +220,60 @@ const rideSchema = new Schema(
       index:   true,
     },
 
-    /**
-     * soloPartner — set when driver is a self-employed driver.
-     * Null for agency drivers.
-     * Used for fare settlement → solo partner.
-     */
     soloPartner: {
       type:    Schema.Types.ObjectId,
       ref:     'SoloDriverPartner',
       default: null,
     },
 
-    /**
-     * assignedVehicleId — _id of the embedded vehicle sub-document
-     * inside TransportPartner.vehicles[]. Null for solo drivers
-     * (their vehicle lives in SoloDriverPartner.vehicle).
-     */
     assignedVehicleId: {
       type:    Schema.Types.ObjectId,
       default: null,
     },
 
-    // Denormalized snapshots — captured at assignment time
     vehicleSnapshot: { type: vehicleSnapshotSchema, default: null },
     driverSnapshot:  { type: driverSnapshotSchema,  default: null },
 
     // ── Route ─────────────────────────────────────────────────────────────────
-    /**
-     * pickup — where driver picks up the patient / item.
-     */
     pickup: {
       type:     rideGeoPointSchema,
       required: true,
     },
 
-    /**
-     * dropoff — final destination.
-     */
     dropoff: {
       type:     rideGeoPointSchema,
       required: true,
     },
 
-    /**
-     * stops — intermediate waypoints between pickup and dropoff.
-     * Ordered by sequence field. Example: Home → Pharmacy → Hospital.
-     */
     stops: {
       type:    [stopSchema],
       default: [],
     },
 
     // ── Live Position ─────────────────────────────────────────────────────────
-    /**
-     * liveLocation — driver's current position.
-     * Updated in real-time by driver app via WebSocket.
-     * History of positions → RideTracking.breadcrumbs (write-heavy, separate collection).
-     */
     liveLocation: {
       type:    liveLocationSchema,
       default: () => ({}),
     },
 
-    /**
-     * currentEtaMinutes — estimated minutes to next waypoint.
-     * Recalculated on each GPS ping and stored here for fast API reads.
-     */
     currentEtaMinutes: { type: Number, default: null },
 
     // ── Timing ────────────────────────────────────────────────────────────────
-    scheduledPickupAt:   { type: Date, required: true, index: true },
-    driverAssignedAt:    { type: Date },
-    driverAcceptedAt:    { type: Date },
-    driverArrivedAt:     { type: Date },   // arrived at pickup
-    rideStartedAt:       { type: Date },   // OTP verified
-    rideCompletedAt:     { type: Date },
-    driverEnRouteAt:     { type: Date },   // left for pickup
+    scheduledPickupAt:    { type: Date, required: true, index: true },
+    driverAssignedAt:     { type: Date },
+    driverAcceptedAt:     { type: Date },
+    driverArrivedAt:      { type: Date },
+    rideStartedAt:        { type: Date },
+    rideCompletedAt:      { type: Date },
+    driverEnRouteAt:      { type: Date },
 
     // ── Distance & Duration ───────────────────────────────────────────────────
-    estimatedDistanceKm: { type: Number, default: 0 },  // from Google Maps at booking time
-    estimatedDurationMin:{ type: Number, default: 0 },
-    actualDistanceKm:    { type: Number, default: 0 },   // from GPS tracking
-    actualDurationMin:   { type: Number, default: 0 },
+    estimatedDistanceKm:  { type: Number, default: 0 },
+    estimatedDurationMin: { type: Number, default: 0 },
+    actualDistanceKm:     { type: Number, default: 0 },
+    actualDurationMin:    { type: Number, default: 0 },
 
-    // ── OTP Verification ──────────────────────────────────────────────────────
-    /**
-     * pickupOtp — 4-digit OTP patient shares with driver to start ride.
-     * Stored hashed. Never sent in API responses.
-     */
+    // ── OTP ───────────────────────────────────────────────────────────────────
     pickupOtp: {
       type:   String,
       select: false,
@@ -401,16 +295,9 @@ const rideSchema = new Schema(
       index:   true,
     },
 
-    /**
-     * driverSearchAttempts — how many drivers were offered this ride before acceptance.
-     * Used for analytics and dispatch tuning.
-     */
     driverSearchAttempts: { type: Number, default: 0 },
 
-    /**
-     * declinedDrivers — drivers who declined this ride.
-     * Prevents re-offering same ride to same driver.
-     */
+    // FIX #11: declinedDrivers capped at MAX_DECLINED_DRIVERS in pre-save
     declinedDrivers: [{ type: Schema.Types.ObjectId, ref: 'Driver' }],
 
     cancellation: {
@@ -419,19 +306,10 @@ const rideSchema = new Schema(
     },
 
     // ── Rating ────────────────────────────────────────────────────────────────
-    rating: {
-      type:    rideRatingSchema,
-      default: null,
-    },
-
+    rating:  { type: rideRatingSchema, default: null },
     isRated: { type: Boolean, default: false },
 
     // ── RideTracking Link ─────────────────────────────────────────────────────
-    /**
-     * trackingId — ObjectId of the RideTracking document for this ride.
-     * Populated when RideTracking is created (on driver_assigned or ride start).
-     * Use this to fetch GPS breadcrumbs and milestones.
-     */
     trackingId: {
       type:    Schema.Types.ObjectId,
       ref:     'RideTracking',
@@ -472,10 +350,6 @@ rideSchema.virtual('isPendingDriver').get(function () {
   return ['requested', 'searching'].includes(this.status);
 });
 
-/**
- * driverType — whether this ride uses an agency driver or solo partner.
- * Derived from which ref is set.
- */
 rideSchema.virtual('driverType').get(function () {
   if (this.transportPartner) return 'agency';
   if (this.soloPartner)      return 'solo';
@@ -512,7 +386,7 @@ rideSchema.pre('validate', function () {
     }
   }
 
-  // Cannot have both transportPartner and soloPartner set
+  // Cannot have both transportPartner and soloPartner
   if (this.transportPartner && this.soloPartner) {
     throw new Error('Ride cannot reference both a transportPartner and a soloPartner');
   }
@@ -524,7 +398,9 @@ rideSchema.pre('save', async function () {
   // Auto-generate rideCode
   if (this.isNew && !this.rideCode) {
     let code, exists;
+    let attempts = 0;
     do {
+      if (attempts++ > 10) throw new Error('rideCode generation failed');
       code   = `RD-${generateRideCode()}`;
       exists = await mongoose.model('Ride').exists({ rideCode: code });
     } while (exists);
@@ -535,22 +411,37 @@ rideSchema.pre('save', async function () {
   const now = new Date();
   if (this.isModified('status')) {
     switch (this.status) {
-      case 'driver_assigned': this.driverAssignedAt  = this.driverAssignedAt  ?? now; break;
-      case 'driver_accepted': this.driverAcceptedAt  = this.driverAcceptedAt  ?? now; break;
-      case 'driver_en_route': this.driverEnRouteAt   = this.driverEnRouteAt   ?? now; break;
-      case 'driver_arrived':  this.driverArrivedAt   = this.driverArrivedAt   ?? now; break;
-      case 'otp_verified':    this.rideStartedAt     = this.rideStartedAt     ?? now; break;
-      case 'completed':       this.rideCompletedAt   = this.rideCompletedAt   ?? now; break;
+      case 'driver_assigned': this.driverAssignedAt = this.driverAssignedAt ?? now; break;
+      case 'driver_accepted': this.driverAcceptedAt = this.driverAcceptedAt ?? now; break;
+      case 'driver_en_route': this.driverEnRouteAt  = this.driverEnRouteAt  ?? now; break;
+      case 'driver_arrived':  this.driverArrivedAt  = this.driverArrivedAt  ?? now; break;
+      case 'otp_verified':    this.rideStartedAt    = this.rideStartedAt    ?? now; break;
+      case 'completed':       this.rideCompletedAt  = this.rideCompletedAt  ?? now; break;
     }
   }
 
   // Sync isRated
   if (this.isModified('rating') && this.rating?.rating) {
-    this.isRated = true;
-    this.rating.ratedAt = this.rating.ratedAt ?? now;
+    this.isRated          = true;
+    this.rating.ratedAt   = this.rating.ratedAt ?? now;
   }
 
-  // Capture driver snapshot when driver is first assigned
+  // FIX #8: Derive vehicleClass from vehicleSnapshot if not already set.
+  // Runs regardless of whether vehicleSnapshot was just modified —
+  // so creation without vehicleClass but with vehicleSnapshot works.
+  if (!this.vehicleClass && this.vehicleSnapshot?.vehicleType) {
+    const twoWheelerTypes = ['Bike', 'Scooter', 'Motorcycle'];
+    this.vehicleClass = twoWheelerTypes.includes(this.vehicleSnapshot.vehicleType)
+      ? 'two_wheeler'
+      : 'four_wheeler';
+  }
+
+  // Also sync vehicleClass from vehicleSnapshot.vehicleClass if present
+  if (!this.vehicleClass && this.vehicleSnapshot?.vehicleClass) {
+    this.vehicleClass = this.vehicleSnapshot.vehicleClass;
+  }
+
+  // Driver snapshot on first assignment
   if (this.isModified('driver') && this.driver && !this.driverSnapshot?.driverCode) {
     const Driver = mongoose.model('Driver');
     const drv = await Driver.findById(this.driver)
@@ -568,16 +459,14 @@ rideSchema.pre('save', async function () {
     }
   }
 
-  // Derive vehicleClass from vehicleSnapshot.vehicleType if not set
-  if (this.isModified('vehicleSnapshot') && this.vehicleSnapshot?.vehicleType && !this.vehicleClass) {
-    const twoWheelerTypes = ['Bike', 'Scooter'];
-    this.vehicleClass = twoWheelerTypes.includes(this.vehicleSnapshot.vehicleType)
-      ? 'two_wheeler'
-      : 'four_wheeler';
+  // FIX #11: Cap declinedDrivers array to prevent unbounded growth
+  if (this.isModified('declinedDrivers') && this.declinedDrivers.length > MAX_DECLINED_DRIVERS) {
+    // Keep the most recent MAX_DECLINED_DRIVERS — oldest dropped
+    this.declinedDrivers = this.declinedDrivers.slice(-MAX_DECLINED_DRIVERS);
   }
 });
 
-// ── Post-save — update driver status when ride starts/ends ───────────────────
+// ── Post-save — update Driver status when ride starts/ends ───────────────────
 
 rideSchema.post('save', async function () {
   if (!this.driver) return;
@@ -601,19 +490,18 @@ rideSchema.post('save', async function () {
 
 // ── Static Helpers ────────────────────────────────────────────────────────────
 
-/**
- * Find all active rides for a given driver.
- */
 rideSchema.statics.findActiveByDriver = function (driverId) {
   return this.find({
     driver: driverId,
-    status: { $in: ['driver_assigned', 'driver_accepted', 'driver_en_route', 'driver_arrived', 'otp_verified', 'in_progress', 'at_stop'] },
+    status: {
+      $in: [
+        'driver_assigned', 'driver_accepted', 'driver_en_route',
+        'driver_arrived', 'otp_verified', 'in_progress', 'at_stop',
+      ],
+    },
   });
 };
 
-/**
- * Find all rides for a given booking.
- */
 rideSchema.statics.findByBooking = function (bookingId) {
   return this.find({ booking: bookingId }).sort({ createdAt: 1 });
 };

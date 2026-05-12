@@ -1,4 +1,26 @@
- 
+/**
+ * bookingRouter2.js — Likeson.in
+ *
+ * Routes: Driver (agency + solo), Customer ride request,
+ *         Care assistant ride request, Admin care-ride management
+ *
+ * FIXES vs previous version:
+ *  - 'care assistant' (space) → 'care_assistant' (underscore) everywhere
+ *  - Ride.driver = Driver._id consistently (NOT User._id)
+ *    - GET /driver/assigned: queries Ride by Driver._id (driverObjectId)
+ *    - POST /:id/ride/end:   queries Ride by Driver._id
+ *    - All ride creates set driver = Driver._id
+ *  - POST /:id/ride/start REMOVED — OTP verify is socket-only (verify_otp event)
+ *    HTTP /ride/start was a duplicate path causing race conditions
+ *  - PATCH /:id/ride/arrived: OTP generated + sent to customer + admin notified
+ *    via socket emitOtpToAdmin (raw OTP visible to admin:ops for support)
+ *  - createAndLinkRide imported from shared (no duplication)
+ *  - calculateCanonicalRoute imported from shared
+ *  - GET /driver/assigned populates trackingId for canonical polyline
+ *  - POST /:id/ride/end handles return ride with canonical route locked
+ *  - PATCH /driver/location HTTP fallback: emits remainingKm to booking room
+ *  - All authorize() calls use correct role strings (snake_case)
+ */
 
 import express from 'express';
 
@@ -12,9 +34,8 @@ import TransportPartner     from '../models/TransportPartner.js';
 import CareAssistantProfile from '../models/CareAssistantProfile.js';
 import Hospital             from '../models/Hospital.js';
 import OutPatientRecord     from '../models/OutPatientRecord.js';
-import SystemLog            from '../models/SystemLog.js';
-import Wallet               from '../models/Wallet.js';
 import DoctorProfile        from '../models/DoctorProfile.js';
+import SystemLog            from '../models/SystemLog.js';
 
 import sendEmail                     from '../utils/sendEmail.js';
 import sendSms                       from '../services/Sendsms.js';
@@ -23,8 +44,7 @@ import { getBookingSocketService }   from '../services/bookingSocketService.js';
 import { transactionalTemplate, otpTemplate } from '../utils/emailTemplates.js';
 import {
   driverAssignedSms, rideStartedSms, rideCompletedSms,
-  careAssistantAssignedSms, appointmentConfirmedSms,
-  otpSms, newCareRequestToAssistantSms,
+  careAssistantAssignedSms, otpSms, newCareRequestToAssistantSms,
 } from '../utils/Smstemplates.js';
 import { generateOpHtml, buildOpZipBuffer } from '../utils/opDocumentGenerator.js';
 import { opConfirmationEmailTemplate }       from '../utils/opEmailTemplates.js';
@@ -33,59 +53,38 @@ import { protect, authorize } from '../middleware/authMiddleware.js';
 import {
   genOtp,
   hashOtp,
-  razorpay,
   haversineKm,
   createNotification,
   buildRidePayload,
-  computeRefundAmount,
-  RADIUS_METERS,
-  RIDE_STATUSES_ACTIVE,
+  createAndLinkRide,
+  calculateCanonicalRoute,
   resolveCareRideKmRate,
+  RIDE_STATUSES_ACTIVE,
   CARE_RIDE_RADIUS_M,
-  
+  syncBookingStatusFromRide,
 } from './bookingRouterShared.js';
 
-// Redis cache middleware
 import cache       from '../middleware/cache.js';
 import redisClient from '../config/redis.js';
 
 const router = express.Router();
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CACHE KEY HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
+const CACHE_TTL = { nearby: 30, ops: 45 };
 
-const CACHE_TTL = {
-  adminBookings:   30,  // seconds
-  adminStats:      60,
-  nearbyResults:   30,
-  hospitalOps:     45,
-  doctorOps:       45,
-  opRecord:        60,
-};
-
-/** Invalidate all admin booking cache keys for a specific booking */
-const invalidateBookingCache = async (bookingId) => {
+const invalidateBookingCache = async () => {
   try {
-    const keys = await redisClient.keys(`GET:/admin/bookings*`);
-    const opKeys = await redisClient.keys(`GET:/op/*`);
-    const hospitalKeys = await redisClient.keys(`GET:/hospital/*`);
-    const doctorKeys = await redisClient.keys(`GET:/doctor/ops*`);
-    const allKeys = [...keys, ...opKeys, ...hospitalKeys, ...doctorKeys];
-    if (allKeys.length) await redisClient.del(allKeys);
-  } catch (e) {
-    console.error('[Cache] invalidation error:', e.message);
-  }
+    const patterns = ['GET:/admin/bookings*', 'GET:/op/*'];
+    for (const pattern of patterns) {
+      const keys = await redisClient.keys(pattern);
+      if (keys.length) await redisClient.del(keys);
+    }
+  } catch (e) { console.error('[Cache] invalidation error:', e.message); }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HELPERS
+// INTERNAL HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Extract pickup/dropoff coords from Booking for Ride creation.
- * Uses patientLocation → destinationLocation (correct Booking schema fields).
- */
 const getBookingCoords = (booking) => ({
   pickupCoords:   booking.patientLocation?.coordinates     || [80.648, 16.506],
   pickupAddress:  booking.patientLocation?.address         || '',
@@ -95,63 +94,32 @@ const getBookingCoords = (booking) => ({
   dropoffCity:    booking.destinationLocation?.city        || '',
 });
 
- 
-/**
- * Create a Ride for a booking and link it as primaryRide.
- * Returns { ride, otp } — otp is plain text (send to customer), stored hashed.
- */
-const createAndLinkRide = async (booking, overrides = {}) => {
-  const coords = getBookingCoords(booking);
-  const otp    = genOtp();
-
-  const rideData = {
-    ...buildRidePayload({
-      bookingId:         booking._id,
-      rideType:          'patient',
-      vehicleClass:      'four_wheeler',
-      scheduledPickupAt: booking.scheduledAt,
-      ...coords,
-    }),
-    pickupOtp: hashOtp(otp),
-    ...overrides,
-  };
-
-  const ride = await Ride.create(rideData);
-
-  await Booking.findByIdAndUpdate(booking._id, {
-    $push: { rides: ride._id },
-    $set:  { primaryRide: ride._id, status: 'confirmed' },
-  });
-
-  return { ride, otp };
+const joinBookingRoom = (userId, bookingId) => {
+  try { getBookingSocketService()?.emitJoinRoom(String(userId), `booking:${bookingId}`); }
+  catch (e) { console.error('[joinBookingRoom]', e.message); }
 };
 
 /**
- * Send OP card ZIP to customer email.
- * Fires and forgets — errors are logged, never thrown.
+ * sendOpZipEmail — fire-and-forget OP card email to patient.
  */
 const sendOpZipEmail = async ({ op, booking, doctor, hospital, patient, followUps = [] }) => {
   try {
-    const html   = generateOpHtml({ op, booking, doctor, hospital, patient, followUps });
-    const zip    = await buildOpZipBuffer(html, op.opNumber);
-
-    const hospitalName = hospital?.name || null;
-    const doctorName   = doctor?.user?.name || booking?.doctorSnapshot?.name || 'Your Doctor';
-
+    const html = generateOpHtml({ op, booking, doctor, hospital, patient, followUps });
+    const zip  = await buildOpZipBuffer(html, op.opNumber);
     await sendEmail({
       email:   patient.email,
       subject: `Your OP Card — ${op.opNumber} | Likeson Healthcare`,
       html: opConfirmationEmailTemplate({
-        patientName:     patient.name,
-        doctorName,
-        hospitalName,
-        opNumber:        op.opNumber,
-        bookingCode:     booking.bookingCode,
-        scheduledAt:     op.scheduledAt || booking.scheduledAt,
+        patientName:      patient.name,
+        doctorName:       doctor?.user?.name || booking?.doctorSnapshot?.name || 'Your Doctor',
+        hospitalName:     hospital?.name || null,
+        opNumber:         op.opNumber,
+        bookingCode:      booking.bookingCode,
+        scheduledAt:      op.scheduledAt || booking.scheduledAt,
         consultationType: op.consultationType,
-        isFollowUp:      op.isFollowUp,
-        followUpExpiry:  op.followUpExpiry,
-        followUpFee:     op.followUpFee,
+        isFollowUp:       op.isFollowUp,
+        followUpExpiry:   op.followUpExpiry,
+        followUpFee:      op.followUpFee,
       }),
       attachments: [{
         content:     zip.toString('base64'),
@@ -160,159 +128,637 @@ const sendOpZipEmail = async ({ op, booking, doctor, hospital, patient, followUp
         disposition: 'attachment',
       }],
     });
-  } catch (e) {
-    console.error('[OP ZIP Email] failed:', e.message);
-  }
+  } catch (e) { console.error('[OP ZIP Email] failed:', e.message); }
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
-// DRIVER ROUTES (agency drivers)
+// DRIVER ROUTES
+//
+// CRITICAL: Ride.driver = Driver._id (NOT User._id).
+// GET /driver/assigned must query rides by Driver._id (driverObjectId).
+// All ride creations in this file set driver = Driver._id.
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
  * GET /driver/assigned
- * Agency driver sees their assigned rides.
+ * Returns active rides for the authenticated driver.
+ *
+ * FIX: Ride.driver = Driver._id. Must resolve Driver._id from User._id first,
+ * then query Ride.driver = driverDoc._id (not req.user._id).
  */
-router.get('/driver/assigned', protect, authorize('driver'), async (req, res) => {
-  try {
-    const driverDoc = await Driver.findOne({ user: req.user._id }).select('_id').lean();
-    if (!driverDoc)
-      return res.status(404).json({ success: false, message: 'Driver profile not found' });
+router.get('/driver/assigned',
+  protect,
+  authorize('driver', 'solodriverpartner'),
+  async (req, res) => {
+    try {
+      // 1. Resolve Driver doc
+      const driverDoc = await Driver.findOne({ user: req.user._id })
+        .select('_id legalName driverCode status assignedVehicleSnapshot ownerAgency soloPartner')
+        .lean();
 
-    const rides = await Ride.find({
-      driver: req.user._id,
-      status: { $in: ['driver_assigned', 'driver_accepted', 'driver_en_route', 'driver_arrived', 'otp_verified', 'in_progress', 'at_stop'] },
-    })
-     .populate({
-    path:   'booking',
-    select: 'bookingCode bookingType scheduledAt patientInfo fareBreakdown status patientLocation destinationLocation',
-  })
-      .sort({ createdAt: -1 })
-      .lean();
+      if (!driverDoc) {
+        return res.status(404).json({ success: false, message: 'Driver profile not found. Contact admin.' });
+      }
 
-    return res.json({ success: true, data: { rides } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+      // 2. Fetch active rides by Driver._id (driverDoc._id)
+      const rides = await Ride.find({
+        driver: driverDoc._id,          // ← Driver._id, NOT User._id
+        status: { $in: RIDE_STATUSES_ACTIVE },
+      })
+        .populate({
+          path:   'booking',
+          select: 'bookingCode bookingType scheduledAt patientInfo fareBreakdown status patientLocation destinationLocation consultationType notificationsSent',
+          populate: { path: 'customer', select: 'name phone avatar' },
+        })
+        .populate('trackingId', 'expectedRoutePolyline currentEtaMinutes hasActiveSos')
+        .select('rideCode rideType vehicleClass status pickup dropoff stops liveLocation scheduledPickupAt estimatedDistanceKm estimatedDurationMin driverAssignedAt driverAcceptedAt driverArrivedAt rideStartedAt fare trackingId booking transportPartner soloPartner vehicleSnapshot driverSnapshot isReturnRide')
+        .sort({ scheduledPickupAt: 1, createdAt: -1 })
+        .lean();
+
+      return res.json({
+        success: true,
+        data: {
+          driver: {
+            driverCode:              driverDoc.driverCode,
+            legalName:               driverDoc.legalName,
+            status:                  driverDoc.status,
+            assignedVehicleSnapshot: driverDoc.assignedVehicleSnapshot,
+            type: driverDoc.ownerAgency ? 'agency' : 'solo',
+          },
+          rides,
+          total: rides.length,
+        },
+      });
+    } catch (err) {
+      console.error('[GET /driver/assigned]', err.message);
+      return res.status(500).json({ success: false, message: err.message });
+    }
   }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH /:id/ride/accept
+// Driver accepts assigned ride.
+// Ride.driver already = Driver._id (set at assignment time).
+// Query uses Driver._id resolved from User._id.
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.patch('/:id/ride/accept',
+  protect,
+  authorize('driver', 'solodriverpartner'),
+  async (req, res) => {
+    try {
+      // Resolve Driver._id from User._id
+      const driverDoc = await Driver.findOne({ user: req.user._id }).select('_id assignedVehicleSnapshot phone legalName').lean();
+      if (!driverDoc) return res.status(404).json({ success: false, message: 'Driver profile not found' });
+
+      const ride = await Ride.findOne({ booking: req.params.id, driver: driverDoc._id }); // ← Driver._id
+      if (!ride) return res.status(404).json({ success: false, message: 'Ride not found' });
+      if (ride.status !== 'driver_assigned') return res.status(400).json({ success: false, message: `Ride status is ${ride.status}, expected driver_assigned` });
+
+      ride.status = 'driver_accepted';
+      await ride.save();
+
+      const booking = await Booking.findById(req.params.id);
+      if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+      booking.status    = 'confirmed';
+      booking.updatedBy = req.user._id;
+      await booking.save();
+
+      const customer   = await User.findById(booking.customer).select('email phone name').lean();
+      const driverUser = await User.findById(req.user._id).select('name phone').lean();
+
+      await createNotification({ recipient: booking.customer, title: 'Driver Accepted', body: `Driver ${driverDoc.legalName || driverUser.name} accepted your ride.`, type: 'Driver_Assigned', bookingId: booking._id });
+
+      try {
+        await sendSms({ to: customer.phone, message: driverAssignedSms({ userName: customer.name, rideId: booking.bookingCode, driverName: driverDoc.legalName || driverUser.name, vehicleNumber: driverDoc.assignedVehicleSnapshot?.registrationNumber || 'N/A', driverPhone: driverDoc.phone || driverUser.phone }) });
+      } catch (e) { console.error('[Accept] SMS:', e.message); }
+
+      // Fetch locked canonical polyline for map initialization
+      const trackingDoc = ride.trackingId
+        ? await RideTracking.findById(ride.trackingId).select('expectedRoutePolyline').lean()
+        : null;
+
+      getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', {
+        bookingId:  booking._id,
+        status:     'confirmed',
+        timestamp:  new Date(),
+        driverInfo: {
+          name:          driverDoc.legalName || driverUser.name,
+          phone:         driverDoc.phone     || driverUser.phone,
+          vehicleNumber: driverDoc.assignedVehicleSnapshot?.registrationNumber || 'N/A',
+          vehicleMake:   driverDoc.assignedVehicleSnapshot?.make,
+          vehicleModel:  driverDoc.assignedVehicleSnapshot?.model,
+          vehicleColor:  driverDoc.assignedVehicleSnapshot?.color,
+        },
+        // Canonical polyline same for all roles — locked at ride creation
+        mapRoute: {
+          polyline:         trackingDoc?.expectedRoutePolyline || null,
+          pickupCoords:     ride.pickup?.coordinates,
+          pickupAddress:    ride.pickup?.address,
+          dropoffCoords:    ride.dropoff?.coordinates,
+          dropoffAddress:   ride.dropoff?.address,
+          estimatedDistKm:  ride.estimatedDistanceKm,
+          estimatedMinutes: ride.estimatedDurationMin,
+          currentTarget:    'pickup', // initially driver heads to pickup
+        },
+      });
+
+      await invalidateBookingCache();
+      return res.json({
+        success: true, message: 'Ride accepted',
+        data: {
+          ride,
+          driverInfo: { name: driverDoc.legalName || driverUser.name, phone: driverDoc.phone || driverUser.phone, vehicleNumber: driverDoc.assignedVehicleSnapshot?.registrationNumber || 'N/A' },
+          customerInfo: { name: customer.name, phone: customer.phone },
+        },
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH /:id/ride/reject
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.patch('/:id/ride/reject',
+  protect,
+  authorize('driver', 'solodriverpartner'),
+  async (req, res) => {
+    try {
+      const { reason } = req.body;
+
+      const driverDoc = await Driver.findOne({ user: req.user._id }).select('_id').lean();
+      if (!driverDoc) return res.status(404).json({ success: false, message: 'Driver profile not found' });
+
+      const ride = await Ride.findOne({ booking: req.params.id, driver: driverDoc._id }); // ← Driver._id
+      if (!ride) return res.status(404).json({ success: false, message: 'Ride not found' });
+
+      ride.status       = 'cancelled';
+      ride.cancellation = {
+        cancelledBy:       'driver',
+        cancelledByUserId: req.user._id,
+        reason:            reason || 'Driver rejected',
+        cancelledAt:       new Date(),
+      };
+      await ride.save();
+
+      // Track declined — capped at model level ($slice 50)
+      await Ride.findByIdAndUpdate(ride._id, { $addToSet: { declinedDrivers: driverDoc._id } });
+
+      const booking = await Booking.findById(req.params.id).select('bookingCode transportPartner').lean();
+      if (booking?.transportPartner) {
+        getBookingSocketService()?.emitToRoom(`tp:${booking.transportPartner}`, 'driver_rejected', {
+          bookingId:   req.params.id,
+          bookingCode: booking.bookingCode,
+          reason:      reason || 'Driver rejected',
+        });
+      }
+      getBookingSocketService()?.emitToRoom('admin:ops', 'driver_rejected', {
+        bookingId: req.params.id, driverObjectId: driverDoc._id,
+      });
+
+      return res.json({ success: true, message: 'Ride rejected. Will be reassigned.' });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH /:id/ride/arrived
+// Driver arrived at pickup.
+//
+// FIX: OTP generated here, sent to customer via SMS/email/push.
+//      Raw OTP also sent to admin:ops via socket emitOtpToAdmin for support.
+//      OTP verify happens via socket verify_otp event (sole path).
+//      HTTP /ride/start removed — it was a duplicate OTP verify path.
+// ─────────────────────────────────────────────────────────────────────────────
+
+ 
+router.patch('/:id/ride/arrived',
+  protect,
+  authorize('driver', 'solodriverpartner'),
+  async (req, res) => {
+    try {
+      const driverDoc = await Driver.findOne({ user: req.user._id }).select('_id').lean();
+      if (!driverDoc) return res.status(404).json({ success: false, message: 'Driver profile not found' });
+
+      const ride = await Ride.findOne({ booking: req.params.id, driver: driverDoc._id });
+      if (!ride) return res.status(404).json({ success: false, message: 'Ride not found' });
+      if (!['driver_accepted', 'driver_en_route'].includes(ride.status)) {
+        return res.status(400).json({ success: false, message: `Cannot mark arrived from status: ${ride.status}` });
+      }
+
+      const otp      = genOtp(); // plain 4-digit string e.g. "4821"
+      ride.status    = 'driver_arrived';
+      ride.pickupOtp = otp;      // ← store RAW, no hash
+      await ride.save();
+
+      if (ride.trackingId) {
+        RideTracking.addMilestone(ride._id, 'driver_arrived', {
+          recordedBy: 'driver', recordedByUserId: req.user._id,
+        }).catch(e => console.error('[Arrived] milestone:', e.message));
+      }
+
+      const booking  = await Booking.findById(req.params.id);
+      const customer = await User.findById(booking.customer).select('email phone name').lean();
+
+      // SMS to customer
+      if (customer?.phone) {
+        sendSms({
+          to:      customer.phone,
+          message: otpSms({ otpCode: otp, purpose: `ride start #${booking.bookingCode}` }),
+        }).catch(e => console.error('[Arrived] OTP SMS:', e.message));
+      }
+
+      // Email to customer
+      if (customer?.email) {
+        sendEmail({
+          email:   customer.email,
+          subject: `Ride OTP — #${booking.bookingCode}`,
+          html: otpTemplate({
+            title: 'Driver arrived! Share OTP to start your ride.',
+            body:  'Your driver is waiting at your pickup location.',
+            otpCode: otp,
+          }),
+        }).catch(e => console.error('[Arrived] OTP email:', e.message));
+      }
+
+      // Push notification with OTP visible in-app
+      await createNotification({
+        recipient: booking.customer,
+        title:     'Driver Arrived',
+        body:      `Your driver arrived. Share OTP ${otp} to start your ride.`,
+        type:      'Driver_Arrived',
+        bookingId: booking._id,
+        priority:  'High',
+        otp,        // ← customer sees OTP in notification + live tracking
+      });
+
+      const ss = getBookingSocketService();
+
+      ss?.emitToRoom(`booking:${booking._id}`, 'driver_arrived', {
+        bookingId:     booking._id,
+        currentTarget: 'pickup',
+        otp,           // ← send OTP to booking room so live tracking screen shows it
+      });
+      ss?.emitToRoom(`booking:${booking._id}`, 'otp_required', { bookingId: booking._id, otp });
+
+      // Admin:ops raw OTP for support
+      ss?.emitOtpToAdmin({
+        bookingId:     booking._id,
+        bookingCode:   booking.bookingCode,
+        rideId:        ride._id,
+        otp,
+        customerName:  customer.name,
+        customerPhone: customer.phone,
+      });
+
+      console.log('[Arrived] OTP sent to customer:', otp);
+      return res.json({ success: true, message: 'Arrival marked. OTP sent to customer via SMS, email and push.' });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTE: POST /:id/ride/start REMOVED
+//
+// OTP verification is now handled EXCLUSIVELY by the socket event verify_otp.
+// That event:
+//   1. Validates OTP hash
+//   2. Sets Ride.status = 'otp_verified'
+//   3. Updates Booking.status = 'in_progress'
+//   4. Adds milestones (otp_verified, ride_started)
+//   5. Emits navigation_target_changed → dropoff to ALL roles in booking room
+//   6. Emits booking_status_change
+//
+// Having two paths (socket + HTTP) caused race conditions and duplicate
+// RideTracking docs. Single-path socket is the correct Uber-pattern.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /:id/ride/end
+// Complete ride. If return ride exists and is pending, activate it with same driver.
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.post('/:id/ride/end',
+  protect,
+  authorize('driver', 'solodriverpartner'),
+  async (req, res) => {
+    try {
+      const { dropPhotoUrl, actualDistanceKm } = req.body;
+
+      const driverDoc = await Driver.findOne({ user: req.user._id }).select('_id').lean();
+      if (!driverDoc) return res.status(404).json({ success: false, message: 'Driver profile not found' });
+
+      const ride = await Ride.findOne({ booking: req.params.id, driver: driverDoc._id }); // ← Driver._id
+      if (!ride) return res.status(404).json({ success: false, message: 'Ride not found' });
+      if (!['in_progress', 'at_stop'].includes(ride.status)) {
+        return res.status(400).json({ success: false, message: `Cannot end ride from status: ${ride.status}` });
+      }
+
+      ride.status           = 'completed';
+      ride.actualDistanceKm = actualDistanceKm || ride.estimatedDistanceKm || 0;
+      if (dropPhotoUrl) ride.internalNotes = `dropPhoto:${dropPhotoUrl}`;
+      await ride.save(); // pre-save sets rideCompletedAt
+
+      // Compute final summary (distance, speed, stops, wait times)
+      await RideTracking.computeSummary(ride._id).catch(() => {});
+      if (ride.trackingId) {
+        RideTracking.addMilestone(ride._id, 'ride_completed', {
+          recordedBy: 'driver', recordedByUserId: req.user._id,
+        }).catch(() => {});
+      }
+
+      const booking = await Booking.findById(req.params.id).populate('returnRide').lean();
+
+      // ── Return ride activation ─────────────────────────────────────────────
+      // If return ride exists and is not yet completed/cancelled,
+      // assign same driver and lock canonical route for return leg.
+      if (booking.returnRide && !['completed', 'cancelled'].includes(booking.returnRide?.status)) {
+        const returnRide = await Ride.findById(booking.returnRide._id);
+        if (returnRide && returnRide.status === 'requested') {
+          returnRide.driver = driverDoc._id; // ← Driver._id
+          returnRide.status = 'driver_assigned';
+
+          const { distanceKm: retKm, durationMin: retMin, polyline: retPolyline } =
+            await calculateCanonicalRoute(
+              returnRide.pickup?.coordinates,
+              returnRide.dropoff?.coordinates,
+            );
+
+          returnRide.estimatedDistanceKm  = retKm;
+          returnRide.estimatedDurationMin = retMin;
+          await returnRide.save();
+
+          // Lock canonical polyline for return leg
+          const retTracking = await RideTracking.create({
+            ride:                  returnRide._id,
+            booking:               booking._id,
+            driver:                driverDoc._id,
+            expectedRoutePolyline: retPolyline,
+          });
+          await Ride.findByIdAndUpdate(returnRide._id, { $set: { trackingId: retTracking._id } });
+
+          // Tell all room parties: return ride activated, switch map to return route
+          getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'return_ride_activated', {
+            bookingId:        booking._id,
+            returnRideId:     returnRide._id,
+            currentTarget:    'return_dropoff',
+            pickupCoords:     returnRide.pickup?.coordinates,
+            pickupAddress:    returnRide.pickup?.address,
+            dropoffCoords:    returnRide.dropoff?.coordinates,
+            dropoffAddress:   returnRide.dropoff?.address,
+            polyline:         retPolyline,
+            estimatedDistKm:  retKm,
+            estimatedMinutes: retMin,
+            driverInfo: {
+              name:  req.user.name,
+              phone: req.user.phone,
+            },
+          });
+
+          await Booking.findByIdAndUpdate(booking._id, {
+            $set: { primaryRide: returnRide._id, updatedBy: req.user._id },
+          });
+
+          return res.json({
+            success:  true,
+            message:  'Outbound ride completed. Return ride activated — same driver.',
+            data: {
+              completedRideId: ride._id,
+              returnRideId:    returnRide._id,
+              returnRoute:     { distKm: retKm, durationMin: retMin, polyline: retPolyline },
+            },
+          });
+        }
+      }
+
+      // ── No return ride — complete booking ─────────────────────────────────
+      const bookingDoc = await Booking.findById(req.params.id);
+      bookingDoc.status    = 'completed';
+      bookingDoc.updatedBy = req.user._id;
+      await bookingDoc.save();
+await syncBookingStatusFromRide(bookingDoc._id, 'completed', req.user._id);
+      const customer = await User.findById(bookingDoc.customer).select('email phone name').lean();
+
+    const opForLink = await OutPatientRecord.findOne({ booking: bookingDoc._id })
+  .select('opNumber').lean();
+
+await createNotification({
+  recipient: bookingDoc.customer,
+  title:     'Ride Completed',
+  body:      `Booking #${bookingDoc.bookingCode} completed. Tap to download your OP card.`,
+  type:      'Booking_Completed',
+  bookingId: bookingDoc._id,
+  // direct download URL — works regardless of whether patient knows opNumber
+  actionUrl: opForLink
+    ? `${process.env.BACKEND_URL}/api/bookings/op/${opForLink.opNumber}/download`
+    : `${process.env.FRONTEND_URL}/bookings/${bookingDoc._id}`,
+  deepLink: {
+    screen:      opForLink ? 'OpDownload' : 'BookingDetail',
+    referenceId: bookingDoc._id,
+  },
 });
 
-// ── CUSTOMER: self-request ride on booking ────────────────────────────────
+      try { await sendSms({ to: customer.phone, message: rideCompletedSms({ userName: customer.name, rideId: bookingDoc.bookingCode, totalFare: bookingDoc.fareBreakdown?.totalAmount }) }); }
+      catch (e) { console.error('[End] SMS:', e.message); }
+
+      try {
+        const pdfBuffer = await generateBookingInvoicePdf(bookingDoc);
+        await sendEmail({
+          email:   customer.email,
+          subject: `Invoice — #${bookingDoc.bookingCode}`,
+          html: transactionalTemplate({
+            header: 'BOOKING COMPLETED', title: `Booking #${bookingDoc.bookingCode} complete!`,
+            body: `Total: ₹${bookingDoc.fareBreakdown?.totalAmount}. Invoice attached.`,
+            buttonLink: `${process.env.FRONTEND_URL}/bookings/${bookingDoc._id}/rate`,
+            buttonText: 'Rate Your Experience',
+          }),
+          attachments: [{ content: pdfBuffer.toString('base64'), filename: `invoice-${bookingDoc.bookingCode}.pdf`, type: 'application/pdf', disposition: 'attachment' }],
+        });
+      } catch (e) { console.error('[End] Invoice email:', e.message); }
+
+      // Send OP card if consultation booking
+      if (['doctor_consultation', 'full_care_ride', 'follow_up', 'physiotherapist'].includes(bookingDoc.bookingType)) {
+        const op       = await OutPatientRecord.findOne({ booking: bookingDoc._id }).lean();
+        const doctor   = await DoctorProfile.findById(bookingDoc.doctor).populate('user', 'name').lean();
+        const hospital = await Hospital.findById(bookingDoc.hospital).lean();
+        const followUps = op ? await OutPatientRecord.find({ parentOp: op._id }).sort({ scheduledAt: -1 }).lean() : [];
+        if (op) await sendOpZipEmail({ op, booking: bookingDoc, doctor, hospital, patient: customer, followUps });
+      }
+
+      const ss = getBookingSocketService();
+      
+      ss?.emitToRoom(`booking:${bookingDoc._id}`, 'ride_completed', { bookingId: bookingDoc._id, completedAt: ride.rideCompletedAt });
+      ss?.emitToRoom(`booking:${bookingDoc._id}`, 'booking_status_change', { bookingId: bookingDoc._id, status: 'completed', timestamp: new Date() });
+
+      await invalidateBookingCache();
+      return res.json({ success: true, message: 'Ride completed', data: { booking: bookingDoc } });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH /driver/location — HTTP GPS fallback
+// Use when socket connection unavailable. Primary GPS path is socket driver_location.
+// FIX: also emits remainingKm + ETA estimate to booking room.
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.patch('/driver/location',
+  protect,
+  authorize('driver', 'solodriverpartner'),
+  async (req, res) => {
+    try {
+      const { lat, lng, heading, speed, bookingId } = req.body;
+      if (!lat || !lng) return res.status(400).json({ success: false, message: 'lat, lng required' });
+
+      // Update Driver geospatial location
+      await Driver.findOneAndUpdate({ user: req.user._id }, {
+        'location.coordinates': [lng, lat],
+        'location.heading':     heading || 0,
+        'location.speedKmh':    speed   || 0,
+        'location.updatedAt':   new Date(),
+      });
+
+      if (bookingId) {
+        const driverDoc = await Driver.findOne({ user: req.user._id }).select('_id').lean();
+        if (driverDoc) {
+          const ride = await Ride.findOne({
+            booking: bookingId,
+            driver:  driverDoc._id, // ← Driver._id
+            status:  { $in: RIDE_STATUSES_ACTIVE },
+          }).select('_id trackingId dropoff pickup estimatedDistanceKm status');
+
+          if (ride) {
+            ride.liveLocation = {
+              type: 'Point', coordinates: [lng, lat],
+              heading: heading || 0, speedKmh: speed || 0, updatedAt: new Date(),
+            };
+            await ride.save();
+
+            if (ride.trackingId) {
+              RideTracking.addBreadcrumb(ride._id, {
+                coordinates: [lng, lat], heading: heading || 0,
+                speedKmh: speed || 0, source: 'gps',
+              }).catch(e => console.error('[Location HTTP] breadcrumb:', e.message));
+            }
+
+            // Calculate remaining distance to current map target
+            const isAfterOtp   = ['otp_verified', 'in_progress', 'at_stop'].includes(ride.status);
+            const targetCoords = isAfterOtp ? ride.dropoff?.coordinates : ride.pickup?.coordinates;
+            let remainingKm    = null;
+            let etaMin         = null;
+
+            if (targetCoords) {
+              remainingKm = +haversineKm([lng, lat], targetCoords).toFixed(2);
+              const speedKmh = (speed && speed > 2) ? speed : 30;
+              etaMin = Math.round((remainingKm / speedKmh) * 60);
+            }
+
+            getBookingSocketService()?.emitToRoom(`booking:${bookingId}`, 'location_update', {
+              lat, lng, heading, speed,
+              role:          'driver',
+              updatedAt:     new Date(),
+              remainingKm,
+              etaMinutes:    etaMin,
+              currentTarget: isAfterOtp ? 'dropoff' : 'pickup',
+              rideStatus:    ride.status,
+            });
+          }
+        }
+      }
+
+      return res.json({ success: true });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CUSTOMER: self-request ride on existing booking
+// ═════════════════════════════════════════════════════════════════════════════
+
 router.post('/:id/request-ride',
-  protect, authorize('customer'),
+  protect,
+  authorize('customer'),
   async (req, res) => {
     try {
       const { pickupLocation, destinationLocation } = req.body;
-
       if (!pickupLocation?.coordinates?.length)
         return res.status(400).json({ success: false, message: 'pickupLocation.coordinates required' });
       if (!destinationLocation?.coordinates?.length)
         return res.status(400).json({ success: false, message: 'destinationLocation.coordinates required' });
 
-      // Must be their own booking
-      const booking = await Booking.findOne({
-        _id:      req.params.id,
-        customer: req.user._id,
-        status:   { $in: ['pending', 'confirmed'] },
-      });
-      if (!booking)
-        return res.status(404).json({ success: false, message: 'Booking not found or not yours' });
+      const booking = await Booking.findOne({ _id: req.params.id, customer: req.user._id, status: { $in: ['pending', 'confirmed'] } });
+      if (!booking) return res.status(404).json({ success: false, message: 'Booking not found or not yours' });
 
-      // Block duplicate active ride
-      const activeRide = await Ride.findOne({
-        booking: booking._id,
-        status:  { $in: RIDE_STATUSES_ACTIVE },
-      });
-      if (activeRide)
-        return res.status(400).json({ success: false, message: 'Active ride already exists for this booking' });
+      const activeRide = await Ride.findOne({ booking: booking._id, status: { $in: RIDE_STATUSES_ACTIVE } });
+      if (activeRide) return res.status(400).json({ success: false, message: 'Active ride already exists for this booking' });
 
       const [pLng, pLat] = pickupLocation.coordinates;
-
-      // Resolve rate: subscription → 21₹ default
       const { ratePerKm, source: rateSource } = await resolveCareRideKmRate(req.user._id);
 
-      // Fare
-      const distKm       = haversineKm(pickupLocation.coordinates, destinationLocation.coordinates);
-      const transportFee = +(distKm * ratePerKm).toFixed(2);
-
-      // Search 30km
-      const careRideRadiusRad = CARE_RIDE_RADIUS_M / 1000 / 6378.1;
-      const nearbyCount = await Driver.countDocuments({
-        isActive: true, isVerified: true, isBlocked: false,
-        status: 'Available',
-        location: {
-          $geoWithin: {
-            $centerSphere: [[pLng, pLat], careRideRadiusRad],
-          },
-        },
+      const { distanceKm: canonicalKm, durationMin, polyline } = await calculateCanonicalRoute(
+        pickupLocation.coordinates, destinationLocation.coordinates,
+      );
+      const transportFee    = +(canonicalKm * ratePerKm).toFixed(2);
+      const careRadiusRad   = CARE_RIDE_RADIUS_M / 1000 / 6378.1;
+      const nearbyCount     = await Driver.countDocuments({
+        isActive: true, isVerified: true, isBlocked: false, status: 'Available',
+        location: { $geoWithin: { $centerSphere: [[pLng, pLat], careRadiusRad] } },
       });
 
-      const pickupGeo = {
-        type: 'Point', coordinates: pickupLocation.coordinates,
-        label: pickupLocation.label || '', address: pickupLocation.address || '',
-        city:  pickupLocation.city  || '',
-      };
-      const dropoffGeo = {
-        type: 'Point', coordinates: destinationLocation.coordinates,
-        label: destinationLocation.label || '', address: destinationLocation.address || '',
-        city:  destinationLocation.city  || '',
-      };
+      const pickupGeo  = { type: 'Point', coordinates: pickupLocation.coordinates,  label: pickupLocation.label   || '', address: pickupLocation.address   || '', city: pickupLocation.city   || '' };
+      const dropoffGeo = { type: 'Point', coordinates: destinationLocation.coordinates, label: destinationLocation.label || '', address: destinationLocation.address || '', city: destinationLocation.city || '' };
 
       const otp  = genOtp();
       const ride = await Ride.create({
-        booking:           booking._id,
-        rideType:          'patient',
-        vehicleClass:      'four_wheeler',
-        pickup:            pickupGeo,
-        dropoff:           dropoffGeo,
-        scheduledPickupAt: booking.scheduledAt || new Date(),
-        status:            'searching',
-        pickupOtp:         hashOtp(otp),
-        createdBy:         req.user._id,
+        booking: booking._id, rideType: 'patient', vehicleClass: 'four_wheeler',
+        pickup: pickupGeo, dropoff: dropoffGeo,
+        scheduledPickupAt:    booking.scheduledAt || new Date(),
+        status:               'searching',
+        pickupOtp:            hashOtp(otp),
+        estimatedDistanceKm:  canonicalKm,
+        estimatedDurationMin: durationMin,
+        createdBy:            req.user._id,
       });
+
+      const tracking = await RideTracking.create({ ride: ride._id, booking: booking._id, expectedRoutePolyline: polyline });
+      await Ride.findByIdAndUpdate(ride._id, { $set: { trackingId: tracking._id } });
 
       await Booking.findByIdAndUpdate(booking._id, {
         $push: { rides: ride._id },
-        $set: {
-          primaryRide:         ride._id,
-          patientLocation:     pickupGeo,
-          destinationLocation: dropoffGeo,
-          'fareBreakdown.transportFee': transportFee,
-          updatedBy: req.user._id,
-        },
+        $set:  { primaryRide: ride._id, patientLocation: pickupGeo, destinationLocation: dropoffGeo, 'fareBreakdown.transportFee': transportFee, updatedBy: req.user._id },
       });
 
-      // Notify admin to assign driver
       getBookingSocketService()?.emitToAdminOps('ride_requested_by_customer', {
-        bookingId:    booking._id,
-        bookingCode:  booking.bookingCode,
-        rideId:       ride._id,
-        customerId:   req.user._id,
-        pickup:       pickupGeo,
-        destination:  dropoffGeo,
-        distKm:       +distKm.toFixed(2),
-        ratePerKm,
-        rateSource,
-        transportFee,
-        noDriverNearby: nearbyCount === 0,
-        searchRadiusKm: 30,
-        timestamp:    new Date(),
+        bookingId:       booking._id,
+        bookingCode:     booking.bookingCode,
+        rideId:          ride._id,
+        customerId:      req.user._id,
+        pickup:          pickupGeo,
+        destination:     dropoffGeo,
+        distKm:          +canonicalKm.toFixed(2),
+        ratePerKm, rateSource, transportFee,
+        noDriverNearby:  nearbyCount === 0,
+        searchRadiusKm:  30,
+        timestamp:       new Date(),
       });
 
       return res.json({
         success: true,
-        message: nearbyCount === 0
-          ? 'Ride requested. No driver nearby — admin will assign.'
-          : 'Ride requested. Admin assigning driver.',
-        data: {
-          rideId:         ride._id,
-          pickup:         pickupGeo,
-          destination:    dropoffGeo,
-          distKm:         +distKm.toFixed(2),
-          ratePerKm,
-          rateSource,
-          transportFee,
-          searchRadiusKm: 30,
-        },
+        message: nearbyCount === 0 ? 'Ride requested. No driver nearby — admin will assign.' : 'Ride requested. Admin assigning driver.',
+        data: { rideId: ride._id, pickup: pickupGeo, destination: dropoffGeo, distKm: +canonicalKm.toFixed(2), durationMin, ratePerKm, rateSource, transportFee, searchRadiusKm: 30 },
       });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
@@ -320,138 +766,85 @@ router.post('/:id/request-ride',
   }
 );
 
-// ── CARE ASSISTANT: requests ride for patient ─────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// CARE ASSISTANT: request ride for patient
+// FIX: authorize('care_assistant') — underscore
+// ═════════════════════════════════════════════════════════════════════════════
+
 router.post('/:id/care/request-ride',
-  protect, authorize('care assistant'),
+  protect,
+  authorize('care_assistant'), // FIX: was 'care assistant'
   async (req, res) => {
     try {
       const { pickupLocation, destinationLocation } = req.body;
-
       if (!pickupLocation?.coordinates?.length)
         return res.status(400).json({ success: false, message: 'pickupLocation.coordinates required' });
       if (!destinationLocation?.coordinates?.length)
         return res.status(400).json({ success: false, message: 'destinationLocation.coordinates required' });
 
-      // Must be their assigned booking
       const profile = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
-      if (!profile)
-        return res.status(404).json({ success: false, message: 'Care assistant profile not found' });
+      if (!profile) return res.status(404).json({ success: false, message: 'Care assistant profile not found' });
 
-      const booking = await Booking.findOne({
-        _id:           req.params.id,
-        careAssistant: profile._id,
-        status:        { $in: ['confirmed', 'in_progress'] },
-      });
-      if (!booking)
-        return res.status(404).json({ success: false, message: 'Booking not found or not assigned to you' });
+      const booking = await Booking.findOne({ _id: req.params.id, careAssistant: profile._id, status: { $in: ['confirmed', 'in_progress'] } });
+      if (!booking) return res.status(404).json({ success: false, message: 'Booking not found or not assigned to you' });
 
-      // Block duplicate active ride
-      const activeRide = await Ride.findOne({
-        booking: booking._id,
-        status:  { $in: RIDE_STATUSES_ACTIVE },
-      });
-      if (activeRide)
-        return res.status(400).json({ success: false, message: 'Active ride already exists' });
+      const activeRide = await Ride.findOne({ booking: booking._id, status: { $in: RIDE_STATUSES_ACTIVE } });
+      if (activeRide) return res.status(400).json({ success: false, message: 'Active ride already exists' });
 
       const [pLng, pLat] = pickupLocation.coordinates;
-
-      // Rate from customer's subscription (care assistant doesn't pay)
       const { ratePerKm, source: rateSource } = await resolveCareRideKmRate(booking.customer);
 
-      const distKm       = haversineKm(pickupLocation.coordinates, destinationLocation.coordinates);
-      const transportFee = +(distKm * ratePerKm).toFixed(2);
-
-      // 30km search
-      const careRideRadiusRad = CARE_RIDE_RADIUS_M / 1000 / 6378.1;
-      const nearbyCount = await Driver.countDocuments({
-        isActive: true, isVerified: true, isBlocked: false,
-        status: 'Available',
-        location: {
-          $geoWithin: {
-            $centerSphere: [[pLng, pLat], careRideRadiusRad],
-          },
-        },
+      const { distanceKm: canonicalKm, durationMin, polyline } = await calculateCanonicalRoute(
+        pickupLocation.coordinates, destinationLocation.coordinates,
+      );
+      const transportFee  = +(canonicalKm * ratePerKm).toFixed(2);
+      const careRadiusRad = CARE_RIDE_RADIUS_M / 1000 / 6378.1;
+      const nearbyCount   = await Driver.countDocuments({
+        isActive: true, isVerified: true, isBlocked: false, status: 'Available',
+        location: { $geoWithin: { $centerSphere: [[pLng, pLat], careRadiusRad] } },
       });
 
-      const pickupGeo = {
-        type: 'Point', coordinates: pickupLocation.coordinates,
-        label: pickupLocation.label || '', address: pickupLocation.address || '',
-        city:  pickupLocation.city  || '',
-      };
-      const dropoffGeo = {
-        type: 'Point', coordinates: destinationLocation.coordinates,
-        label: destinationLocation.label || '', address: destinationLocation.address || '',
-        city:  destinationLocation.city  || '',
-      };
+      const pickupGeo  = { type: 'Point', coordinates: pickupLocation.coordinates,  label: pickupLocation.label   || '', address: pickupLocation.address   || '', city: pickupLocation.city   || '' };
+      const dropoffGeo = { type: 'Point', coordinates: destinationLocation.coordinates, label: destinationLocation.label || '', address: destinationLocation.address || '', city: destinationLocation.city || '' };
 
       const otp  = genOtp();
       const ride = await Ride.create({
-        booking:           booking._id,
-        rideType:          'patient',
-        vehicleClass:      'four_wheeler',
-        pickup:            pickupGeo,
-        dropoff:           dropoffGeo,
-        scheduledPickupAt: booking.scheduledAt || new Date(),
-        status:            'searching',
-        pickupOtp:         hashOtp(otp),
-        createdBy:         req.user._id,
+        booking: booking._id, rideType: 'patient', vehicleClass: 'four_wheeler',
+        pickup: pickupGeo, dropoff: dropoffGeo,
+        scheduledPickupAt:    booking.scheduledAt || new Date(),
+        status:               'searching',
+        pickupOtp:            hashOtp(otp),
+        estimatedDistanceKm:  canonicalKm,
+        estimatedDurationMin: durationMin,
+        createdBy:            req.user._id,
       });
+
+      const tracking = await RideTracking.create({ ride: ride._id, booking: booking._id, expectedRoutePolyline: polyline });
+      await Ride.findByIdAndUpdate(ride._id, { $set: { trackingId: tracking._id } });
 
       await Booking.findByIdAndUpdate(booking._id, {
         $push: { rides: ride._id },
-        $set: {
-          primaryRide:         ride._id,
-          patientLocation:     pickupGeo,
-          destinationLocation: dropoffGeo,
-          'fareBreakdown.transportFee': transportFee,
-          updatedBy: req.user._id,
-        },
+        $set:  { primaryRide: ride._id, patientLocation: pickupGeo, destinationLocation: dropoffGeo, 'fareBreakdown.transportFee': transportFee, updatedBy: req.user._id },
       });
 
-      // Notify admin
       getBookingSocketService()?.emitToAdminOps('ride_requested_by_care_assistant', {
-        bookingId:        booking._id,
-        bookingCode:      booking.bookingCode,
-        rideId:           ride._id,
-        careAssistantId:  profile._id,
-        careAssistantUser: req.user._id,
-        pickup:           pickupGeo,
-        destination:      dropoffGeo,
-        distKm:           +distKm.toFixed(2),
-        ratePerKm,
-        rateSource,
-        transportFee,
-        noDriverNearby:   nearbyCount === 0,
-        searchRadiusKm:   30,
-        timestamp:        new Date(),
+        bookingId: booking._id, bookingCode: booking.bookingCode, rideId: ride._id,
+        careAssistantId: profile._id, careAssistantUser: req.user._id,
+        pickup: pickupGeo, destination: dropoffGeo,
+        distKm: +canonicalKm.toFixed(2), ratePerKm, rateSource, transportFee,
+        noDriverNearby: nearbyCount === 0, searchRadiusKm: 30, timestamp: new Date(),
       });
 
-      // Emit to booking room so customer sees request
       getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'ride_requested', {
-        bookingId:     booking._id,
-        requestedBy:   'care_assistant',
-        pickup:        pickupGeo,
-        destination:   dropoffGeo,
-        distKm:        +distKm.toFixed(2),
-        transportFee,
-        timestamp:     new Date(),
+        bookingId: booking._id, requestedBy: 'care_assistant',
+        pickup: pickupGeo, destination: dropoffGeo,
+        distKm: +canonicalKm.toFixed(2), transportFee, timestamp: new Date(),
       });
 
       return res.json({
         success: true,
-        message: nearbyCount === 0
-          ? 'Ride requested. No driver nearby — admin will assign.'
-          : 'Ride requested. Admin assigning driver.',
-        data: {
-          rideId:         ride._id,
-          pickup:         pickupGeo,
-          destination:    dropoffGeo,
-          distKm:         +distKm.toFixed(2),
-          ratePerKm,
-          rateSource,
-          transportFee,
-          searchRadiusKm: 30,
-        },
+        message: nearbyCount === 0 ? 'Ride requested. No driver nearby — admin will assign.' : 'Ride requested. Admin assigning driver.',
+        data: { rideId: ride._id, pickup: pickupGeo, destination: dropoffGeo, distKm: +canonicalKm.toFixed(2), durationMin, ratePerKm, rateSource, transportFee, searchRadiusKm: 30 },
       });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
@@ -459,170 +852,88 @@ router.post('/:id/care/request-ride',
   }
 );
 
-// ═══════════════════════════════════════════════════════
-// CARE-RIDE REQUEST ROUTES (Admin / Superadmin only)
-// Customer or care assistant requests a ride.
-// Search radius: CARE_RIDE_RADIUS_M (30 km) only.
-// If no TP/driver in 30km → still process but flag it.
-// Rate: subscription plan → config care_ride rate → 21₹/km default.
-// ═══════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
+// ADMIN: care-ride request (on behalf of customer or care assistant)
+// ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * POST /admin/care-ride/request
- * Admin creates a care-ride request: finds nearby TP/driver within 30km.
- * Body: { bookingId, pickupCoords, dropoffCoords, customerId, careAssistantId? }
- */
-/**
- * POST /admin/care-ride/request
- * Admin creates a care-ride request: finds nearby TP/driver within 30km.
- * Body: { bookingId, customerId, requesterType, careAssistantId?, pickupLocation, destinationLocation }
- */
 router.post('/admin/care-ride/request',
-  protect, authorize('admin', 'superadmin'),
+  protect,
+  authorize('admin', 'superadmin'),
   async (req, res) => {
     try {
-      const {
-        bookingId,
-        customerId,
-        requesterType,       // 'customer' | 'care_assistant'
-        careAssistantId,
-        pickupLocation,
-        destinationLocation,
-      } = req.body;
+      const { bookingId, customerId, requesterType, careAssistantId, pickupLocation, destinationLocation } = req.body;
 
-      // ── Validate requester type ──────────────────────────────────
       if (!['customer', 'care_assistant'].includes(requesterType))
         return res.status(400).json({ success: false, message: 'requesterType must be customer or care_assistant' });
-
-      // ── Validate locations ───────────────────────────────────────
       if (!pickupLocation?.coordinates?.length)
         return res.status(400).json({ success: false, message: 'pickupLocation.coordinates required' });
       if (!destinationLocation?.coordinates?.length)
         return res.status(400).json({ success: false, message: 'destinationLocation.coordinates required' });
 
       const [pLng, pLat] = pickupLocation.coordinates;
-      const [dLng, dLat] = destinationLocation.coordinates;
 
-      if (pLng === dLng && pLat === dLat)
-        return res.status(400).json({ success: false, message: 'Pickup and destination cannot be same' });
-
-      // ── Resolve booking ──────────────────────────────────────────
       let booking = bookingId ? await Booking.findById(bookingId) : null;
       let resolvedCustomerId = customerId;
 
-      // If care_assistant requested — find linked customer from booking
       if (requesterType === 'care_assistant') {
         if (!careAssistantId)
           return res.status(400).json({ success: false, message: 'careAssistantId required for care_assistant requester' });
 
-        // FIX 1: removed duplicate chained .lean() — only one .select().lean() allowed
-        const ca = await CareAssistantProfile.findById(careAssistantId)
-          .select('user fullName isActive verification')
-          .lean();
-        if (!ca)
-          return res.status(404).json({ success: false, message: 'Care assistant not found' });
-        if (!ca.isActive || !ca.verification?.isVerified)
-          return res.status(400).json({ success: false, message: 'Care assistant not active or verified' });
-
-        // Must have booking to know the customer
-        if (!booking)
-          return res.status(400).json({ success: false, message: 'bookingId required when care_assistant requests ride' });
-
+        const ca = await CareAssistantProfile.findById(careAssistantId).select('user fullName isActive verification').lean();
+        if (!ca) return res.status(404).json({ success: false, message: 'Care assistant not found' });
+        if (!ca.isActive || !ca.verification?.isVerified) return res.status(400).json({ success: false, message: 'Care assistant not active or verified' });
+        if (!booking) return res.status(400).json({ success: false, message: 'bookingId required when care_assistant requests ride' });
         resolvedCustomerId = booking.customer;
       }
 
       if (!resolvedCustomerId)
         return res.status(400).json({ success: false, message: 'customerId required' });
 
-      // ── Resolve km rate ──────────────────────────────────────────
       const { ratePerKm, source: rateSource } = await resolveCareRideKmRate(resolvedCustomerId);
 
-      // ── Compute distance + fare ──────────────────────────────────
-      const distKm       = haversineKm(pickupLocation.coordinates, destinationLocation.coordinates);
-      const transportFee = +(distKm * ratePerKm).toFixed(2);
+      const { distanceKm: canonicalKm, durationMin, polyline } = await calculateCanonicalRoute(
+        pickupLocation.coordinates, destinationLocation.coordinates,
+      );
+      const transportFee  = +(canonicalKm * ratePerKm).toFixed(2);
+      const careRadiusRad = CARE_RIDE_RADIUS_M / 1000 / 6378.1;
 
-      // ── Search within 30km from PICKUP ───────────────────────────
-      const careRideRadiusRad = CARE_RIDE_RADIUS_M / 1000 / 6378.1;
-
-      // FIX 2: was semicolon between Promise.all array items — replaced with comma.
-      //        Driver query was missing .limit().lean().
-      //        Closing ]) was missing.
       const [nearbyDrivers, nearbyTPs] = await Promise.all([
         Driver.find({
-          isActive:   true,
-          isVerified: true,
-          isBlocked:  false,
-          status:     'Available',
-          location: {
-            $geoWithin: {
-              $centerSphere: [[pLng, pLat], careRideRadiusRad],
-            },
-          },
-        })
-          .select('driverCode legalName phone location performance assignedVehicleSnapshot ownerAgency soloPartner')
-          .limit(10)
-          .lean(),                          // ← was missing
-
+          isActive: true, isVerified: true, isBlocked: false, status: 'Available',
+          location: { $geoWithin: { $centerSphere: [[pLng, pLat], careRadiusRad] } },
+        }).select('driverCode legalName phone location performance assignedVehicleSnapshot ownerAgency soloPartner').limit(10).lean(),
         TransportPartner.find({
-          partnershipStatus:   'active',
-          isAvailable:         true,
+          partnershipStatus: 'active', isAvailable: true,
           'serviceZones.city': { $regex: pickupLocation.city || '', $options: 'i' },
-        })
-          .select('businessName ownerPhone fleetInfo serviceZones')
-          .limit(10)
-          .lean(),
-      ]);                                   // ← closing ]) was missing
+        }).select('businessName ownerPhone fleetInfo serviceZones').limit(10).lean(),
+      ]);
 
       const noDriverNearby = nearbyDrivers.length === 0 && nearbyTPs.length === 0;
 
-      // ── Build geo sub-docs ───────────────────────────────────────
-      const pickupGeo = {
-        type:        'Point',
-        coordinates: pickupLocation.coordinates,
-        label:       pickupLocation.label   || '',
-        address:     pickupLocation.address || '',
-        city:        pickupLocation.city    || '',
-      };
-      const dropoffGeo = {
-        type:        'Point',
-        coordinates: destinationLocation.coordinates,
-        label:       destinationLocation.label   || '',
-        address:     destinationLocation.address || '',
-        city:        destinationLocation.city    || '',
-      };
+      const pickupGeo  = { type: 'Point', coordinates: pickupLocation.coordinates,  label: pickupLocation.label   || '', address: pickupLocation.address   || '', city: pickupLocation.city   || '' };
+      const dropoffGeo = { type: 'Point', coordinates: destinationLocation.coordinates, label: destinationLocation.label || '', address: destinationLocation.address || '', city: destinationLocation.city || '' };
 
-      // ── Create ride ──────────────────────────────────────────────
       const otp  = genOtp();
       const ride = await Ride.create({
-        booking:           booking?._id || null,
-        rideType:          'patient',
-        vehicleClass:      'four_wheeler',
-        pickup:            pickupGeo,
-        dropoff:           dropoffGeo,
-        scheduledPickupAt: booking?.scheduledAt || new Date(),
-        status:            'searching',
-        pickupOtp:         hashOtp(otp),
-        createdBy:         req.user._id,
-        // FIX 3: removed pointless `...(booking ? {} : {})` spread — did nothing
+        booking: booking?._id || null, rideType: 'patient', vehicleClass: 'four_wheeler',
+        pickup: pickupGeo, dropoff: dropoffGeo,
+        scheduledPickupAt:    booking?.scheduledAt || new Date(),
+        status:               'searching',
+        pickupOtp:            hashOtp(otp),
+        estimatedDistanceKm:  canonicalKm,
+        estimatedDurationMin: durationMin,
+        createdBy:            req.user._id,
       });
 
-      // ── Update booking if exists ─────────────────────────────────
+      const tracking = await RideTracking.create({ ride: ride._id, booking: booking?._id || null, expectedRoutePolyline: polyline });
+      await Ride.findByIdAndUpdate(ride._id, { $set: { trackingId: tracking._id } });
+
       if (booking) {
         await Booking.findByIdAndUpdate(booking._id, {
           $push: { rides: ride._id },
-          $set: {
-            primaryRide:                  ride._id,
-            patientLocation:              pickupGeo,
-            destinationLocation:          dropoffGeo,
-            status:                       'confirmed',
-            'fareBreakdown.transportFee': transportFee,
-            updatedBy:                    req.user._id,
-          },
+          $set:  { primaryRide: ride._id, patientLocation: pickupGeo, destinationLocation: dropoffGeo, status: 'confirmed', 'fareBreakdown.transportFee': transportFee, updatedBy: req.user._id },
         });
-      }
-
-      // ── Join sockets ─────────────────────────────────────────────
-      if (booking) {
+        // Join relevant parties to booking room
         if (requesterType === 'care_assistant' && careAssistantId) {
           const ca = await CareAssistantProfile.findById(careAssistantId).select('user').lean();
           if (ca) joinBookingRoom(ca.user, booking._id);
@@ -630,34 +941,13 @@ router.post('/admin/care-ride/request',
         joinBookingRoom(booking.customer, booking._id);
       }
 
-      // ── Notify admin ops ─────────────────────────────────────────
       getBookingSocketService()?.emitToAdminOps('care_ride_requested', {
-        bookingId:         booking?._id,
-        bookingCode:       booking?.bookingCode,
-        rideId:            ride._id,
-        requesterType,
-        careAssistantId:   careAssistantId || null,
-        pickup: {
-          address:     pickupLocation.address,
-          city:        pickupLocation.city,
-          label:       pickupLocation.label,
-          coordinates: pickupLocation.coordinates,
-        },
-        destination: {
-          address:     destinationLocation.address,
-          city:        destinationLocation.city,
-          label:       destinationLocation.label,
-          coordinates: destinationLocation.coordinates,
-        },
-        distKm:            +distKm.toFixed(2),
-        ratePerKm,
-        rateSource,
-        transportFee,
-        noDriverNearby,
-        nearbyDriverCount: nearbyDrivers.length,
-        nearbyTPCount:     nearbyTPs.length,
-        searchRadiusKm:    30,
-        timestamp:         new Date(),
+        bookingId: booking?._id, bookingCode: booking?.bookingCode, rideId: ride._id,
+        requesterType, careAssistantId: careAssistantId || null,
+        pickup: pickupGeo, destination: dropoffGeo,
+        distKm: +canonicalKm.toFixed(2), ratePerKm, rateSource, transportFee,
+        noDriverNearby, nearbyDriverCount: nearbyDrivers.length, nearbyTPCount: nearbyTPs.length,
+        searchRadiusKm: 30, timestamp: new Date(),
       });
 
       await invalidateBookingCache();
@@ -668,16 +958,9 @@ router.post('/admin/care-ride/request',
           ? 'Care-ride created. No driver within 30km — assign manually.'
           : `Care-ride created. ${nearbyDrivers.length} driver(s) and ${nearbyTPs.length} TP(s) found nearby.`,
         data: {
-          rideId:         ride._id,
-          requesterType,
-          pickup:         pickupGeo,
-          destination:    dropoffGeo,
-          distKm:         +distKm.toFixed(2),
-          ratePerKm,
-          rateSource,
-          transportFee,
-          noDriverNearby,
-          searchRadiusKm: 30,
+          rideId: ride._id, requesterType, pickup: pickupGeo, destination: dropoffGeo,
+          distKm: +canonicalKm.toFixed(2), durationMin, ratePerKm, rateSource, transportFee,
+          noDriverNearby, searchRadiusKm: 30,
           nearbyDrivers: nearbyDrivers.map(d => ({
             driverId:   d._id,
             name:       d.legalName,
@@ -687,12 +970,7 @@ router.post('/admin/care-ride/request',
             distanceKm: +haversineKm(pickupLocation.coordinates, d.location?.coordinates || [0, 0]).toFixed(1),
             type:       d.soloPartner ? 'solo' : 'agency',
           })),
-          nearbyTPs: nearbyTPs.map(tp => ({
-            tpId:         tp._id,
-            businessName: tp.businessName,
-            ownerPhone:   tp.ownerPhone,
-            totalDrivers: tp.fleetInfo?.totalDrivers || 0,
-          })),
+          nearbyTPs: nearbyTPs.map(tp => ({ tpId: tp._id, businessName: tp.businessName, ownerPhone: tp.ownerPhone, totalDrivers: tp.fleetInfo?.totalDrivers || 0 })),
         },
       });
     } catch (err) {
@@ -701,56 +979,44 @@ router.post('/admin/care-ride/request',
   }
 );
 
-/**
- * GET /admin/care-ride/:bookingId/nearby
- * Search drivers/TPs within 30km for a care-ride booking.
- * Different from /nearby/transport-partners (that uses 100km for dispatch).
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /admin/care-ride/:bookingId/nearby
+// Returns nearby drivers and TPs for admin to assign to a care-ride.
+// ─────────────────────────────────────────────────────────────────────────────
+
 router.get('/admin/care-ride/:bookingId/nearby',
-  protect, authorize('admin', 'superadmin'),
+  protect,
+  authorize('admin', 'superadmin'),
   cache(30, req => `GET:/admin/care-ride/${req.params.bookingId}/nearby`),
   async (req, res) => {
     try {
-      const booking = await Booking.findById(req.params.bookingId)
-        .select('patientLocation customer').lean();
-      if (!booking)
-        return res.status(404).json({ success: false, message: 'Booking not found' });
+      const booking = await Booking.findById(req.params.bookingId).select('patientLocation customer').lean();
+      if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
       const coords = booking.patientLocation?.coordinates;
-      if (!coords?.length)
-        return res.status(400).json({ success: false, message: 'No pickup coordinates' });
+      if (!coords?.length) return res.status(400).json({ success: false, message: 'No pickup coordinates' });
       const [lng, lat] = coords;
-
-      // 30km only — care-ride rule
       const careRadiusRad = CARE_RIDE_RADIUS_M / 1000 / 6378.1;
 
       const [soloDrivers, agencyDrivers, tps] = await Promise.all([
         Driver.find({
-          soloPartner: { $ne: null },
-          isActive: true, isVerified: true, isBlocked: false,
-          status: 'Available',
+          soloPartner: { $ne: null }, isActive: true, isVerified: true, isBlocked: false, status: 'Available',
           location: { $geoWithin: { $centerSphere: [[lng, lat], careRadiusRad] } },
         })
           .populate('soloPartner', 'legalName phone vehicle partnershipStatus')
-          .select('driverCode location performance assignedVehicleSnapshot')
-          .limit(15).lean(),
+          .select('driverCode location performance assignedVehicleSnapshot').limit(15).lean(),
 
         Driver.find({
-          ownerAgency: { $ne: null },
-          isActive: true, isVerified: true, isBlocked: false,
-          status: 'Available',
+          ownerAgency: { $ne: null }, isActive: true, isVerified: true, isBlocked: false, status: 'Available',
           location: { $geoWithin: { $centerSphere: [[lng, lat], careRadiusRad] } },
         })
-          .select('driverCode legalName phone location performance assignedVehicleSnapshot ownerAgency')
-          .limit(15).lean(),
+          .select('driverCode legalName phone location performance assignedVehicleSnapshot ownerAgency').limit(15).lean(),
 
         TransportPartner.find({
-          partnershipStatus: 'active',
-          isAvailable: true,
+          partnershipStatus: 'active', isAvailable: true,
           'serviceZones.city': { $regex: booking.patientLocation?.city || '', $options: 'i' },
         })
-          .select('businessName ownerPhone fleetInfo serviceZones')
-          .limit(10).lean(),
+          .select('businessName ownerPhone fleetInfo serviceZones').limit(10).lean(),
       ]);
 
       const { ratePerKm, source: rateSource } = await resolveCareRideKmRate(booking.customer);
@@ -758,34 +1024,29 @@ router.get('/admin/care-ride/:bookingId/nearby',
       return res.json({
         success: true,
         data: {
-          searchRadiusKm: 30,
-          ratePerKm,
-          rateSource,
+          searchRadiusKm: 30, ratePerKm, rateSource,
           soloDrivers: soloDrivers
             .filter(d => d.soloPartner?.partnershipStatus === 'active')
             .map(d => ({
-              driverId:    d._id,
-              name:        d.soloPartner?.legalName,
-              phone:       d.soloPartner?.phone,
-              vehicle:     d.assignedVehicleSnapshot,
-              rating:      d.performance?.rating,
-              distanceKm: +haversineKm(coords, d.location?.coordinates || [0,0]).toFixed(1),
+              driverId:   d._id,
+              name:       d.soloPartner?.legalName,
+              phone:      d.soloPartner?.phone,
+              vehicle:    d.assignedVehicleSnapshot,
+              rating:     d.performance?.rating,
+              distanceKm: +haversineKm(coords, d.location?.coordinates || [0, 0]).toFixed(1),
             })),
           agencyDrivers: agencyDrivers.map(d => ({
-            driverId:    d._id,
-            agencyId:    d.ownerAgency,
-            name:        d.legalName,
-            phone:       d.phone,
-            vehicle:     d.assignedVehicleSnapshot,
-            rating:      d.performance?.rating,
-            distanceKm: +haversineKm(coords, d.location?.coordinates || [0,0]).toFixed(1),
+            driverId:   d._id,
+            agencyId:   d.ownerAgency,
+            name:       d.legalName,
+            phone:      d.phone,
+            vehicle:    d.assignedVehicleSnapshot,
+            rating:     d.performance?.rating,
+            distanceKm: +haversineKm(coords, d.location?.coordinates || [0, 0]).toFixed(1),
           })),
           transportPartners: tps.map(tp => ({
-            tpId:          tp._id,
-            businessName:  tp.businessName,
-            ownerPhone:    tp.ownerPhone,
-            totalDrivers:  tp.fleetInfo?.totalDrivers  || 0,
-            activeDrivers: tp.fleetInfo?.activeDrivers || 0,
+            tpId: tp._id, businessName: tp.businessName, ownerPhone: tp.ownerPhone,
+            totalDrivers: tp.fleetInfo?.totalDrivers || 0, activeDrivers: tp.fleetInfo?.activeDrivers || 0,
           })),
         },
       });
@@ -794,458 +1055,5 @@ router.get('/admin/care-ride/:bookingId/nearby',
     }
   }
 );
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * PATCH /:id/ride/accept
- * Driver accepts assigned ride. Status: driver_assigned → driver_accepted.
- */
-router.patch('/:id/ride/accept', protect, authorize('driver'), async (req, res) => {
-  try {
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id });
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-    if (ride.status !== 'driver_assigned')
-      return res.status(400).json({ success: false, message: `Ride status is ${ride.status}, expected driver_assigned` });
-
-    ride.status = 'driver_accepted';
-    await ride.save();
-
-    const booking = await Booking.findById(req.params.id);
-    if (!booking)
-      return res.status(404).json({ success: false, message: 'Booking not found' });
-
-    booking.status    = 'confirmed';
-    booking.updatedBy = req.user._id;
-    await booking.save();
-
-    const customer   = await User.findById(booking.customer).select('email phone name').lean();
-const driverUser = await User.findById(req.user._id).select('name phone').lean();
-const driverDoc  = await Driver.findOne({ user: req.user._id })
-  .select('assignedVehicleSnapshot phone').lean();
-
-    await createNotification({
-      recipient: booking.customer,
-      title:     'Driver Accepted',
-      body:      `Driver ${driverUser.name} accepted your ride.`,
-      type:      'Driver_Assigned',
-      bookingId: booking._id,
-    });
-
-    try {
-      await sendSms({
-        to:      customer.phone,
-        message: driverAssignedSms({
-          userName:      customer.name,
-          rideId:        booking.bookingCode,
-          driverName:    driverUser.name,
-          vehicleNumber: driverDoc?.assignedVehicleSnapshot?.registrationNumber || 'N/A',
-          driverPhone:   driverDoc?.phone || driverUser.phone,
-        }),
-      });
-    } catch (e) { console.error('[Accept] SMS:', e.message); }
-
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', {
-      bookingId: booking._id, status: 'confirmed', timestamp: new Date(),
-    });
-
-    await invalidateBookingCache(booking._id);
-
-    return res.json({ success: true, message: 'Ride accepted', data: { ride } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * PATCH /:id/ride/reject
- * Driver rejects assigned ride. Notifies TP & admin.
- */
-router.patch('/:id/ride/reject', protect, authorize('driver'), async (req, res) => {
-  try {
-    const { reason } = req.body;
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id });
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-
-    ride.status = 'cancelled';
-    ride.cancellation = {
-      cancelledBy:       'driver',
-      cancelledByUserId: req.user._id,
-      reason:            reason || 'Driver rejected',
-      cancelledAt:       new Date(),
-    };
-    await ride.save();
-
-    // Track this driver as declined so dispatch skips them
-    await Ride.findByIdAndUpdate(ride._id, {
-      $addToSet: { declinedDrivers: req.user._id },
-    });
-
-    const booking = await Booking.findById(req.params.id)
-      .select('bookingCode transportPartner').lean();
-
-    if (booking?.transportPartner) {
-      getBookingSocketService()?.emitToRoom(`tp:${booking.transportPartner}`, 'driver_rejected', {
-        bookingId:   req.params.id,
-        bookingCode: booking.bookingCode,
-        reason:      reason || 'Driver rejected',
-      });
-    }
-    getBookingSocketService()?.emitToRoom('admin:ops', 'driver_rejected', {
-      bookingId: req.params.id, driverUserId: req.user._id,
-    });
-
-    return res.json({ success: true, message: 'Ride rejected. Will be reassigned.' });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * PATCH /:id/ride/arrived
- * Driver arrived at pickup. Generates + sends OTP to customer.
- * Status: driver_accepted|driver_en_route → driver_arrived
- */
-router.patch('/:id/ride/arrived', protect, authorize('driver'), async (req, res) => {
-  try {
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id });
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-    if (!['driver_accepted', 'driver_en_route'].includes(ride.status))
-      return res.status(400).json({ success: false, message: `Cannot mark arrived from status: ${ride.status}` });
-
-    const otp      = genOtp();
-    ride.status    = 'driver_arrived';
-    ride.pickupOtp = hashOtp(otp);
-    await ride.save();
-
-    if (ride.trackingId) {
-      await RideTracking.addMilestone(ride._id, 'driver_arrived', {
-        recordedBy: 'driver', recordedByUserId: req.user._id,
-      }).catch(e => console.error('[Arrived] milestone:', e.message));
-    }
-
-    const booking  = await Booking.findById(req.params.id);
-    const customer = await User.findById(booking.customer).select('email phone name').lean();
-
-    try {
-      await sendEmail({
-        email:   customer.email,
-        subject: `Ride OTP — #${booking.bookingCode}`,
-        html: otpTemplate({
-          title:   'Driver arrived! Share OTP to start your ride.',
-          body:    'Your driver is waiting at your pickup location.',
-          otpCode: otp,
-        }),
-      });
-    } catch (e) { console.error('[Arrived] OTP email:', e.message); }
-
-    if (customer.phone) {
-      try {
-        await sendSms({
-          to:      customer.phone,
-          message: otpSms({ otpCode: otp, purpose: `ride start #${booking.bookingCode}` }),
-        });
-      } catch (e) { console.error('[Arrived] OTP SMS:', e.message); }
-    }
-
-    await createNotification({
-      recipient: booking.customer,
-      title:     'Driver Arrived',
-      body:      'Your driver arrived. Share OTP to start.',
-      type:      'Driver_Arrived',
-      bookingId: booking._id,
-      priority:  'High',
-    });
-
-    const ss = getBookingSocketService();
-    ss?.emitToRoom(`booking:${booking._id}`, 'driver_arrived',  { bookingId: booking._id });
-    ss?.emitToRoom(`booking:${booking._id}`, 'otp_required',    { bookingId: booking._id });
-
-    return res.json({ success: true, message: 'Arrival marked, OTP sent to customer' });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-// PATCH /:id/ride/en-route
-// After OTP verified, driver taps "Start Journey"
-// Switches tracking context: pickup coords → dropoff coords
-router.patch('/:id/ride/en-route', protect, authorize('driver', 'solodriverpartner'), async (req, res) => {
-  const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id });
-  if (!ride || ride.status !== 'in_progress')
-    return res.status(400).json({ success: false, message: 'Ride must be in_progress' });
-
-  // No status change — just milestone + socket so frontend switches map target
-  await RideTracking.addMilestone(ride._id, 'ride_started', {
-    recordedBy: 'driver', recordedByUserId: req.user._id
-  }).catch(() => {});
-
-  getBookingSocketService()?.emitToRoom(`booking:${ride.booking}`, 'navigation_target_changed', {
-    bookingId: ride.booking,
-    target: 'dropoff',
-    coords: ride.dropoff?.coordinates,
-    address: ride.dropoff?.address,
-  });
-
-  return res.json({ success: true });
-});
-
-
-/**
- * POST /:id/ride/start
- * OTP verify → ride starts. Status: driver_arrived → otp_verified → in_progress
- */
-router.post('/:id/ride/start', protect, authorize('driver'), async (req, res) => {
-  try {
-    const { otp } = req.body;
-    if (!otp) return res.status(400).json({ success: false, message: 'OTP required' });
-
-    // pickupOtp is select:false — must explicitly select it
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id })
-      .select('+pickupOtp');
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-    if (ride.status !== 'driver_arrived')
-      return res.status(400).json({ success: false, message: 'Driver must be in driver_arrived status' });
-    if (hashOtp(otp) !== ride.pickupOtp)
-      return res.status(400).json({ success: false, message: 'Invalid OTP' });
-
-   
-
-    ride.status = 'in_progress';
-    await ride.save();
-
-    const booking = await Booking.findById(req.params.id);
-    booking.status    = 'in_progress';
-    booking.updatedBy = req.user._id;
-    await booking.save();
-
-    // Create RideTracking if not yet created
-   let tracking = await RideTracking.findOne({ ride: ride._id });
-if (!tracking) {
-  // Only create if createAndLinkRide didn't already create it
-  tracking = await RideTracking.create({
-    ride:    ride._id,
-    booking: booking._id,
-    driver:  req.user._id,
-    // polyline already set at ride creation — don't overwrite
-  });
-  await Ride.findByIdAndUpdate(ride._id, { $set: { trackingId: tracking._id } });
-}else{
-   await RideTracking.findByIdAndUpdate(tracking._id, { $set: { driver: req.user._id } });
-}
-
-    await RideTracking.addMilestone(ride._id, 'otp_verified', {
-      recordedBy: 'driver', recordedByUserId: req.user._id,
-    }).catch(() => {});
-    await RideTracking.addMilestone(ride._id, 'ride_started', {
-      recordedBy: 'driver', recordedByUserId: req.user._id,
-    }).catch(() => {});
-
-    const customer = await User.findById(booking.customer).select('phone name').lean();
-
-    await createNotification({
-      recipient: booking.customer,
-      title:     'Ride Started',
-      body:      `Ride #${booking.bookingCode} started. Safe journey!`,
-      type:      'Ride_Update',
-      bookingId: booking._id,
-    });
-
-    try {
-      await sendSms({
-        to:      customer.phone,
-        message: rideStartedSms({
-          userName:   customer.name,
-          rideId:     booking.bookingCode,
-          driverName: req.user.name,
-        }),
-      });
-    } catch (e) { console.error('[Start] SMS:', e.message); }
-
-    const ss = getBookingSocketService();
-    ss?.emitToRoom(`booking:${booking._id}`, 'ride_started', {
-      bookingId: booking._id, startedAt: ride.rideStartedAt,
-    });
-    ss?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', {
-      bookingId: booking._id, status: 'in_progress', timestamp: new Date(),
-    });
-
-    await invalidateBookingCache(booking._id);
-
-    return res.json({ success: true, message: 'Ride started', data: { ride } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * POST /:id/ride/end
- * Complete ride. Status: in_progress|at_stop → completed
- * Triggers OP ZIP email for doctor_consultation / full_care_ride bookings.
- */
-router.post('/:id/ride/end', protect, authorize('driver'), async (req, res) => {
-  try {
-    const { dropPhotoUrl, actualDistanceKm } = req.body;
-
-    const ride = await Ride.findOne({ booking: req.params.id, driver: req.user._id });
-    if (!ride)
-      return res.status(404).json({ success: false, message: 'Ride not found' });
-    if (!['in_progress', 'at_stop'].includes(ride.status))
-      return res.status(400).json({ success: false, message: `Cannot end ride from status: ${ride.status}` });
-
-    ride.status           = 'completed';
-    ride.actualDistanceKm = actualDistanceKm || ride.estimatedDistanceKm || 0;
-    if (dropPhotoUrl) ride.internalNotes = `dropPhoto:${dropPhotoUrl}`;
-    await ride.save();
-
-    await RideTracking.computeSummary(ride._id).catch(() => {});
-    await RideTracking.addMilestone(ride._id, 'ride_completed', {
-      recordedBy: 'driver', recordedByUserId: req.user._id,
-    }).catch(() => {});
-
-    const booking = await Booking.findById(req.params.id);
-    booking.status    = 'completed';
-    booking.updatedBy = req.user._id;
-    await booking.save();
-
-    const customer = await User.findById(booking.customer).select('email phone name').lean();
-
-    await createNotification({
-      recipient: booking.customer,
-      title:     'Ride Completed',
-      body:      `Booking #${booking.bookingCode} completed. Thank you!`,
-      type:      'Booking_Completed',
-      bookingId: booking._id,
-    });
-
-    try {
-      await sendSms({
-        to:      customer.phone,
-        message: rideCompletedSms({
-          userName:  customer.name,
-          rideId:    booking.bookingCode,
-          totalFare: booking.fareBreakdown?.totalAmount,
-        }),
-      });
-    } catch (e) { console.error('[End] SMS:', e.message); }
-
-    // Invoice email
-    try {
-      const pdfBuffer = await generateBookingInvoicePdf(booking);
-      await sendEmail({
-        email:   customer.email,
-        subject: `Invoice — #${booking.bookingCode}`,
-        html: transactionalTemplate({
-          header:     'BOOKING COMPLETED',
-          title:      `Booking #${booking.bookingCode} complete!`,
-          body:       `Total: ₹${booking.fareBreakdown?.totalAmount}. Invoice attached.`,
-          buttonLink: `${process.env.FRONTEND_URL}/bookings/${booking._id}/rate`,
-          buttonText: 'Rate Your Experience',
-        }),
-        attachments: [{
-          content:     pdfBuffer.toString('base64'),
-          filename:    `invoice-${booking.bookingCode}.pdf`,
-          type:        'application/pdf',
-          disposition: 'attachment',
-        }],
-      });
-    } catch (e) { console.error('[End] Invoice email:', e.message); }
-
-    // OP ZIP email for consultation bookings
-    if (['doctor_consultation', 'full_care_ride', 'follow_up', 'physiotherapist'].includes(booking.bookingType)) {
-      const op       = await OutPatientRecord.findOne({ booking: booking._id }).lean();
-const doctor   = await DoctorProfile.findById(booking.doctor).populate('user', 'name').lean();
-const hospital = await Hospital.findById(booking.hospital).lean();
-const followUps = await OutPatientRecord.find({ parentOp: op._id }).sort({ scheduledAt: -1 }).lean();
-
-        await sendOpZipEmail({ op, booking, doctor, hospital, patient: customer, followUps });
-      }
-     
-
-    const ss = getBookingSocketService();
-    ss?.emitToRoom(`booking:${booking._id}`, 'ride_completed', {
-      bookingId: booking._id, completedAt: ride.rideCompletedAt,
-    });
-    ss?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', {
-      bookingId: booking._id, status: 'completed', timestamp: new Date(),
-    });
-
-    await invalidateBookingCache(booking._id);
-
-    return res.json({ success: true, message: 'Ride completed', data: { booking } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * PATCH /driver/location — HTTP GPS fallback for agency drivers
- */
-router.patch('/driver/location', protect, authorize('driver'), async (req, res) => {
-  try {
-    const { lat, lng, heading, speed, bookingId } = req.body;
-    if (!lat || !lng)
-      return res.status(400).json({ success: false, message: 'lat, lng required' });
-
-    await Driver.findOneAndUpdate(
-      { user: req.user._id },
-      {
-        'location.coordinates': [lng, lat],
-        'location.heading':     heading || 0,
-        'location.speedKmh':    speed   || 0,
-        'location.updatedAt':   new Date(),
-      }
-    );
-
-    if (bookingId) {
-      const ride = await Ride.findOne({
-        booking: bookingId,
-        driver:  req.user._id,
-        status:  { $in: RIDE_STATUSES_ACTIVE },
-      });
-
-      if (ride) {
-        ride.liveLocation = {
-          type:        'Point',
-          coordinates: [lng, lat],
-          heading:     heading || 0,
-          speedKmh:    speed   || 0,
-          updatedAt:   new Date(),
-        };
-        await ride.save();
-
-        if (ride.trackingId) {
-          await RideTracking.addBreadcrumb(ride._id, {
-            coordinates: [lng, lat],
-            heading:     heading || 0,
-            speedKmh:    speed   || 0,
-            source:      'gps',
-          }).catch(e => console.error('[Location] breadcrumb:', e.message));
-        }
-
-        getBookingSocketService()?.emitToRoom(`booking:${bookingId}`, 'location_update', {
-          lat, lng, heading, speed, role: 'driver', updatedAt: new Date(),
-        });
-      }
-    }
-
-    return res.json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
 
 export default router;

@@ -1185,7 +1185,7 @@ const Header = () => {
 
       <header ref={headerRef} data-theme={headerDataTheme}
         className={cn(
-          pathname === '/search' ? 'hidden' : 'sticky top-0 z-[100] w-full backdrop-blur-md border-b border-base-300 transition-all duration-300',
+          (pathname === '/search' || pathname.startsWith('/rides/') && pathname.endsWith('/tracking') ||  pathname.startsWith('/driver/tracking')  ) ? 'hidden' : 'sticky top-0 z-[100] w-full backdrop-blur-md border-b border-base-300 transition-all duration-300',
           !isCustomer && roleBottomNavLinks && 'mb-0'
         )}
         style={{ background: 'color-mix(in srgb, var(--base-100) 88%, transparent)' }}
@@ -1427,36 +1427,31 @@ const Header = () => {
         )}
       </header>
 
-      {/* ── BOTTOM NAVIGATION — Role users, mobile ──────────────────── */}
-      {!isCustomer && user && roleBottomNavLinks && (
-        <BottomNav links={roleBottomNavLinks} palette={rolePalette} pathname={pathname} dataTheme={headerDataTheme} />
-      )}
+     {!isCustomer && user && roleBottomNavLinks && 
+  // Add the path check here to hide it on tracking pages
+  !(pathname === '/search' || 
+    (pathname.startsWith('/rides/') && pathname.endsWith('/tracking')) || 
+    pathname.startsWith('/driver/tracking')) && (
+  <BottomNav 
+    links={roleBottomNavLinks} 
+    palette={rolePalette} 
+    pathname={pathname} 
+    dataTheme={headerDataTheme} 
+  />
+)}
 
       {/* ── CUSTOMER MOBILE BOTTOM NAV ───────────────────────────────── */}
-      {isCustomer && (
-        <div className="fixed bottom-0 left-0 right-0 z-[99] flex md:hidden items-center justify-around border-t safe-bottom"
-          style={{ background: 'color-mix(in srgb, var(--base-100) 93%, transparent)', borderColor: 'var(--base-300)', backdropFilter: 'blur(12px)' }}>
-          {CUSTOMER_NAV_LINKS.map((link) => {
-            const isActive = pathname === link.href || pathname.startsWith(link.href + '/');
-            const Icon = link.icon;
-            return (
-              <Link key={link.name} href={link.href} aria-label={link.name}
-                className="flex flex-col items-center justify-center flex-1 min-h-[56px] gap-0.5 py-2 relative">
-                {isActive && (
-                  <span className="absolute top-0 left-2 right-2 h-[2.5px] rounded-b-full"
-                    style={{ background: link.barGradient }} aria-hidden="true" />
-                )}
-                <Icon size={18} strokeWidth={isActive ? 2.5 : 1.8}
-                  style={{ color: isActive ? link.accent : 'var(--base-content)', opacity: isActive ? 1 : 0.4 }} />
-                <span className="text-[8px] font-black uppercase tracking-wider leading-none"
-                  style={{ color: isActive ? link.accent : 'var(--base-content)', opacity: isActive ? 1 : 0.4 }}>
-                  {link.label}
-                </span>
-              </Link>
-            );
-          })}
-        </div>
-      )}
+      {/* ── CUSTOMER MOBILE BOTTOM NAV ───────────────────────────────── */}
+{isCustomer && !(
+  pathname === '/search' || 
+  (pathname.startsWith('/rides/') && pathname.endsWith('/tracking')) || 
+  pathname.startsWith('/driver/tracking')
+) && (
+  <div className="fixed bottom-0 left-0 right-0 z-[99] flex md:hidden items-center justify-around border-t safe-bottom"
+    style={{ background: 'color-mix(in srgb, var(--base-100) 93%, transparent)', borderColor: 'var(--base-300)', backdropFilter: 'blur(12px)' }}>
+    {/* ... rest of your map code ... */}
+  </div>
+)}
 
       {/* ── MOBILE FULLSCREEN MENU ───────────────────────────────────── */}
       <AnimatePresence>

@@ -813,7 +813,7 @@
     background-color: var(--base-200);
     border: var(--border-width) solid var(--base-300);
     color: var(--base-content);
-    @apply px-4 py-3 text-sm outline-none w-full
+    @apply px-4 py-2 text-sm outline-none w-full
            focus:ring-2 focus:border-primary
            placeholder:text-base-content/40;
     --tw-ring-color: color-mix(in srgb, var(--primary), transparent 55%);
@@ -928,7 +928,7 @@
   /* ── Stat card ───────────────────────────────────────────── */
   .stat-card {
     background-color: var(--base-200);
-    border-radius: var(--r-box);
+    border-radius: 2px ;
     border: var(--border-width) solid var(--base-300);
     @apply p-5;
     transition: background-color 0.25s, transform 0.2s, border-color 0.25s;

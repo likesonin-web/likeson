@@ -11,59 +11,50 @@ import TransportPartnerDashboard from '@/components/dashboard/Transportpartnerda
  import Marquee from "@/components/Marquee";
  import HospitalMangerDashboard from "@/components/dashboard/HospitalMangerDashboard";
 import DoctorDashboard from '@/components/dashboard/DoctorDashboard'
- 
+ import { usePathname } from 'next/navigation';
+
  
 import LabPartnerDashboard from "@/components/dashboard/LabPartnerDashboard";
 export default function LayoutConditionalWrapper({ children }) {
   const { user } = useSelector((state) => state.user);
   const [isClient, setIsClient] = useState(false);
+  const pathname = usePathname(); // ← MOVED HERE, before any returns
 
-  // UseEffect ensures we only render after the client-side hydration 
-  // This prevents Redux "undefined" errors during SSR
   useEffect(() => {
     setIsClient(true);
   }, []);
 
-  
+  const isTrackingPage = pathname?.startsWith('/rides/') && pathname?.endsWith('/tracking');
 
-  // 1. Loading State: Prevent layout jumping while Redux hydrates
   if (!isClient) {
-    return <div className="min-h-screen bg-base-100" />; 
+    return <div className="min-h-screen bg-base-100" />;
   }
 
-  // 2. Super Admin Layout
   if (user?.role === 'superadmin') {
     return <LikesonSuperAdminDashboard>{children}</LikesonSuperAdminDashboard>;
   }
-
-  // 3. Admin Layout
   if (user?.role === 'admin') {
     return <AdminDashboard>{children}</AdminDashboard>;
   }
-  // 4. Pharmacy Layout
   if (user?.role === 'pharmacy') {
     return <PharmacyDashboard>{children}</PharmacyDashboard>;
   }
-  // 5. Transport Layout 
   if (user?.role === 'transportpartner') {
     return <TransportPartnerDashboard>{children}</TransportPartnerDashboard>;
   }
- 
   if (user?.role === 'doctor') {
     return <DoctorDashboard>{children}</DoctorDashboard>;
   }
   if (user?.role === 'labpartner') {
     return <LabPartnerDashboard>{children}</LabPartnerDashboard>;
   }
-  
   if (user?.role === 'hospital') {
     return <HospitalMangerDashboard>{children}</HospitalMangerDashboard>;
   }
 
-  // 4. Standard Consumer Layout (Patient/Guest/NRI)
   return (
     <>
-       {user &&    <Marquee/>}
+      {user && !isTrackingPage && <Marquee />}
       <Header />
       <main className="min-h-screen transition-all duration-300">
         {children}
