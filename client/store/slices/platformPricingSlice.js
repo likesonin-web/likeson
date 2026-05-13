@@ -232,7 +232,7 @@ export const updatePharmacy = makeThunk(
  * payload: { note?,
  *   consultation?: { pricePerConsultation?, maxDoctorsAllowed?,
  *                    doctorPricingTiers?: [{ doctorCount, additionalPrice }] },
- *   transport?: { kmSlabs?: [{ km, price }] },
+ *   transport?: { kmSlabs?: [{ pricePerKm, packagePrice }] },
  *   diagnosticsDiscount?: { slabs?: [{ percent, price }] },
  *   pharmacyDiscount?:   { slabs?: [{ percent, price }] },
  *   careAssistant?: { pricingTiers?: [...] },

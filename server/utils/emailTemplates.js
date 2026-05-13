@@ -1665,3 +1665,76 @@ export const buildSettlementEmail = ({ userName, amount, method, storeName, sett
 
   return masterLayout(content);
 };
+
+/** Minimal blood request confirmation email */ 
+export const buildBloodRequestEmail = ({ userName, requestId, bloodGroup, component, units, bankName, processingFee }) => `
+<!DOCTYPE html><html><head><meta charset="UTF-8"/></head>
+<body style="margin:0;padding:0;background:#f4f7fa;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:40px 10px;">
+<table width="600" cellpadding="0" cellspacing="0"
+       style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 10px 25px rgba(0,0,0,.06);max-width:600px;width:100%;">
+  <tr><td style="background:linear-gradient(135deg,#7f1d1d 0%,#991b1b 100%);padding:32px 40px;text-align:center;">
+    <div style="font-size:22px;font-weight:800;color:#fff;letter-spacing:1.5px;">🩸 LIKESON BLOOD BANK</div>
+    <div style="color:#fca5a5;font-size:13px;margin-top:6px;">Blood Request Confirmation</div>
+  </td></tr>
+  <tr><td style="padding:32px 40px;">
+    <p style="font-size:15px;color:#374151;">Hi <strong>${userName}</strong>,</p>
+    <p style="color:#6b7280;font-size:13px;line-height:1.7;">
+      Your blood request has been placed successfully. The blood bank will review and respond shortly.
+    </p>
+    <table width="100%" cellpadding="0" cellspacing="0"
+           style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:16px 20px;margin:20px 0;">
+      <tr><td style="font-size:13px;color:#6b7280;padding:4px 0;">Request ID</td>
+          <td style="text-align:right;font-weight:700;color:#1a1a2e;font-family:monospace;">#${requestId}</td></tr>
+      <tr><td style="font-size:13px;color:#6b7280;padding:4px 0;">Blood Group</td>
+          <td style="text-align:right;font-weight:700;color:#991b1b;">${bloodGroup}</td></tr>
+      <tr><td style="font-size:13px;color:#6b7280;padding:4px 0;">Component</td>
+          <td style="text-align:right;font-weight:600;color:#1a1a2e;">${component}</td></tr>
+      <tr><td style="font-size:13px;color:#6b7280;padding:4px 0;">Units Requested</td>
+          <td style="text-align:right;font-weight:600;color:#1a1a2e;">${units}</td></tr>
+      <tr><td style="font-size:13px;color:#6b7280;padding:4px 0;">Blood Bank</td>
+          <td style="text-align:right;font-weight:600;color:#1a1a2e;">${bankName}</td></tr>
+      <tr><td style="font-size:13px;color:#6b7280;padding:4px 0;">Processing Fee</td>
+          <td style="text-align:right;font-weight:700;color:#15803d;">₹${processingFee}</td></tr>
+    </table>
+    <p style="color:#94a3b8;font-size:11px;text-align:center;margin-top:24px;">
+      For support: <a href="mailto:support@likeson.in" style="color:#991b1b;">support@likeson.in</a>
+    </p>
+  </td></tr>
+</table></td></tr></table>
+</body></html>`;
+
+/** Blood request issued / dispatch email */ 
+export const buildBloodIssuedEmail = ({ userName, requestId, bloodGroup, component, units, bankName, bagNumbers }) => `
+<!DOCTYPE html><html><head><meta charset="UTF-8"/></head>
+<body style="margin:0;padding:0;background:#f4f7fa;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:40px 10px;">
+<table width="600" cellpadding="0" cellspacing="0"
+       style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 10px 25px rgba(0,0,0,.06);max-width:600px;width:100%;">
+  <tr><td style="background:linear-gradient(135deg,#14532d 0%,#166534 100%);padding:32px 40px;text-align:center;">
+    <div style="font-size:22px;font-weight:800;color:#fff;letter-spacing:1.5px;">🩸 LIKESON BLOOD BANK</div>
+    <div style="color:#86efac;font-size:13px;margin-top:6px;">Blood Units Dispatched</div>
+  </td></tr>
+  <tr><td style="padding:32px 40px;">
+    <p style="font-size:15px;color:#374151;">Hi <strong>${userName}</strong>,</p>
+    <p style="color:#6b7280;font-size:13px;line-height:1.7;">
+      Great news! Your requested blood units have been issued and are on their way.
+    </p>
+    <table width="100%" cellpadding="0" cellspacing="0"
+           style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px 20px;margin:20px 0;">
+      <tr><td style="font-size:13px;color:#6b7280;padding:4px 0;">Request ID</td>
+          <td style="text-align:right;font-weight:700;color:#1a1a2e;font-family:monospace;">#${requestId}</td></tr>
+      <tr><td style="font-size:13px;color:#6b7280;padding:4px 0;">Blood Group</td>
+          <td style="text-align:right;font-weight:700;color:#166534;">${bloodGroup}</td></tr>
+      <tr><td style="font-size:13px;color:#6b7280;padding:4px 0;">Component</td>
+          <td style="text-align:right;font-weight:600;color:#1a1a2e;">${component}</td></tr>
+      <tr><td style="font-size:13px;color:#6b7280;padding:4px 0;">Units Issued</td>
+          <td style="text-align:right;font-weight:600;color:#1a1a2e;">${units}</td></tr>
+      <tr><td style="font-size:13px;color:#6b7280;padding:4px 0;">Bag Numbers</td>
+          <td style="text-align:right;font-weight:600;color:#1a1a2e;font-family:monospace;">${bagNumbers.join(', ')}</td></tr>
+      <tr><td style="font-size:13px;color:#6b7280;padding:4px 0;">Dispatched From</td>
+          <td style="text-align:right;font-weight:600;color:#1a1a2e;">${bankName}</td></tr>
+    </table>
+  </td></tr>
+</table></td></tr></table>
+</body></html>`;

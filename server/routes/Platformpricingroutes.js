@@ -612,11 +612,7 @@ router.patch(
 
     // consultation block
     body('consultation.pricePerConsultation').optional().isFloat({ min: 0 }),
-    body('consultation.maxDoctorsAllowed').optional().isInt({ min: 1 }),
-    body('consultation.doctorPricingTiers').optional().isArray(),
-    body('consultation.doctorPricingTiers.*.doctorCount').optional().isInt({ min: 1 }),
-    body('consultation.doctorPricingTiers.*.additionalPrice').optional().isFloat({ min: 0 }),
-
+     
     // transport block
     // CHANGE: removed *.km and *.price validators.
     // Now validates pricePerKm (per-km rate) and packagePrice (flat plan price).

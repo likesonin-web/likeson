@@ -12,7 +12,7 @@ import TransportPartnerDashboard from '@/components/dashboard/Transportpartnerda
  import HospitalMangerDashboard from "@/components/dashboard/HospitalMangerDashboard";
 import DoctorDashboard from '@/components/dashboard/DoctorDashboard'
  import { usePathname } from 'next/navigation';
-
+import BloodBankDashboard from "@/components/dashboard/BloodBankDashboard";
  
 import LabPartnerDashboard from "@/components/dashboard/LabPartnerDashboard";
 export default function LayoutConditionalWrapper({ children }) {
@@ -50,6 +50,9 @@ export default function LayoutConditionalWrapper({ children }) {
   }
   if (user?.role === 'hospital') {
     return <HospitalMangerDashboard>{children}</HospitalMangerDashboard>;
+  }
+  if(user?.role === 'blood_bank'){
+    return <BloodBankDashboard>{children}</BloodBankDashboard>;
   }
 
   return (

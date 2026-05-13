@@ -1087,7 +1087,8 @@ function CustomPlanOptionsSection({ isSuperadmin }) {
   const error    = useSelector(selectCustomPlanOptionsError);
   const admin    = useSelector(selectAdminConfig);
 
-  const [consultation, setConsultation] = useState({ pricePerConsultation:0, maxDoctorsAllowed:5, doctorPricingTiers:[] });
+ // NEW — schema only has pricePerConsultation
+const [consultation, setConsultation] = useState({ pricePerConsultation: 0 });
   const [transport, setTransport]       = useState({ kmSlabs:[] });
   const [diagDiscount, setDiagDiscount] = useState({ slabs:[] });
   const [pharmDiscount, setPharmDiscount] = useState({ slabs:[] });
@@ -1097,7 +1098,8 @@ function CustomPlanOptionsSection({ isSuperadmin }) {
 
   useEffect(() => {
     if (data) {
-      if (data.consultation) setConsultation({ ...data.consultation });
+      // NEW — pick only schema field
+if (data.consultation) setConsultation({ pricePerConsultation: data.consultation.pricePerConsultation ?? 0 });
       if (data.transport) setTransport({ ...data.transport });
       if (data.diagnosticsDiscount) setDiagDiscount({ ...data.diagnosticsDiscount });
       if (data.pharmacyDiscount) setPharmDiscount({ ...data.pharmacyDiscount });
@@ -1118,44 +1120,17 @@ function CustomPlanOptionsSection({ isSuperadmin }) {
 
       <div className="space-y-7">
         {/* Consultation */}
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-widest mb-4" style={{ opacity: 0.35 }}>Consultation Block</p>
-          <div className="grid grid-cols-2 gap-5 mb-4">
-            <NumericField label="Price Per Consultation" value={consultation.pricePerConsultation}
-              onChange={(v) => setConsultation((c) => ({ ...c, pricePerConsultation: v }))}
-              placeholder="e.g. 299"
-              note="Base price added to a custom plan for each consultation slot." />
-            <NumericField label="Max Doctors Allowed" value={consultation.maxDoctorsAllowed}
-              min={1} prefix=""
-              onChange={(v) => setConsultation((c) => ({ ...c, maxDoctorsAllowed: v }))}
-              placeholder="e.g. 5"
-              note="Maximum number of specialist doctors a single custom plan can include." />
-          </div>
-          <p className="text-[10px] font-semibold mb-2" style={{ opacity: 0.4 }}>Doctor count → additional price tiers</p>
-          <p className="text-[10px] font-medium mb-3" style={{ opacity: 0.4 }}>
-            As the plan includes more doctors, the additional price per extra doctor is looked up from these tiers.
-          </p>
-          {(consultation.doctorPricingTiers ?? []).map((tier, i) => (
-            <div key={i} className="flex items-center gap-2 mb-2">
-              <input type="number" placeholder="Doctor count" value={tier.doctorCount ?? ""}
-                onChange={(e) => { const t = [...(consultation.doctorPricingTiers ?? [])]; t[i] = { ...t[i], doctorCount: Number(e.target.value) }; setConsultation((c) => ({ ...c, doctorPricingTiers: t })); }}
-                className="input-field flex-1 text-sm font-bold" />
-              <input type="number" placeholder="Additional price ₹" value={tier.additionalPrice ?? ""}
-                onChange={(e) => { const t = [...(consultation.doctorPricingTiers ?? [])]; t[i] = { ...t[i], additionalPrice: Number(e.target.value) }; setConsultation((c) => ({ ...c, doctorPricingTiers: t })); }}
-                className="input-field flex-1 text-sm font-bold" />
-              <button onClick={() => setConsultation((c) => ({ ...c, doctorPricingTiers: (c.doctorPricingTiers ?? []).filter((_,idx) => idx !== i) }))}
-                className="w-8 h-8 rounded-xl flex items-center justify-center"
-                style={{ background:"rgba(239,68,68,.08)", color:"#ef4444" }}>
-                <X size={10} />
-              </button>
-            </div>
-          ))}
-          <button onClick={() => setConsultation((c) => ({ ...c, doctorPricingTiers: [...(c.doctorPricingTiers ?? []), { doctorCount:1, additionalPrice:0 }] }))}
-            className="flex items-center gap-1.5 text-xs font-black px-3 py-1.5 rounded-lg mt-1"
-            style={{ background:"color-mix(in srgb,var(--primary),transparent 88%)", color:"var(--primary)" }}>
-            <Plus size={10} /> Add Tier
-          </button>
-        </div>
+         
+{/* Consultation */}
+<div>
+  <p className="text-[10px] font-black uppercase tracking-widest mb-4" style={{ opacity: 0.35 }}>Consultation Block</p>
+  <div className="grid grid-cols-2 gap-5">
+    <NumericField label="Price Per Consultation" value={consultation.pricePerConsultation}
+      onChange={(v) => setConsultation({ pricePerConsultation: v })}
+      placeholder="e.g. 299"
+      note="Base price added to a custom plan for each consultation slot." />
+  </div>
+</div>
 
         {/*
           CHANGE: Transport kmSlabs now uses pricePerKm + packagePrice.
@@ -1540,12 +1515,14 @@ function VersionHistoryPanel({ isSuperadmin, onClose }) {
           {pagination?.pages > 1 && (
             <div className="flex justify-center gap-2 pt-2">
               <button onClick={() => setPage((p) => Math.max(1, p-1))} disabled={page===1}
-                className="px-3 py-1.5 rounded-lg text-xs font-black" style={{ background:"var(--base-200)", opacity:page===1?.4:1 }}>
+                className="px-3 py-1.5 rounded-lg text-xs font-black" 
+style={{ background:"var(--base-200)", opacity:page === 1 ? 0.4 : 1 }}>
                 ‹ Prev
               </button>
               <span className="px-3 py-1.5 text-xs font-black" style={{ opacity:.4 }}>{page}/{pagination.pages}</span>
               <button onClick={() => setPage((p) => Math.min(pagination.pages, p+1))} disabled={page===pagination.pages}
-                className="px-3 py-1.5 rounded-lg text-xs font-black" style={{ background:"var(--base-200)", opacity:page===pagination.pages?.4:1 }}>
+               
+style={{ background:"var(--base-200)", opacity:page === pagination.pages ? 0.4 : 1 }}>
                 Next ›
               </button>
             </div>

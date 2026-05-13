@@ -1745,16 +1745,25 @@ const getMyDoctorProfile = asyncHandler(async (req, res) => {
   res.json({ success: true, data: profile });
 });
 
-const getMyManagedHospitals = asyncHandler(async (req, res) => {
+export const getMyManagedHospitals = asyncHandler(async (req, res) => {
+  // 1. Populate standard fields + the virtual 'ownedHospitals'
   const profile = await DoctorProfile.findOne({ user: req.user._id })
     .select('managedHospitals primaryHospital otherHospitals')
-    .populate('managedHospitals', 'name address slug logo isVerified isActive bedCount rating')
-    .populate('primaryHospital',  'name address slug logo isVerified isActive')
-    .populate('otherHospitals',   'name address slug logo isVerified isActive');
+    .populate('managedHospitals', 'name address slug logo isVerified isActive bedCount rating managementModel')
+    .populate('primaryHospital',  'name address slug logo isVerified isActive managementModel')
+    .populate('otherHospitals',   'name address slug logo isVerified isActive managementModel')
+    .populate('ownedHospitals',   'name address slug logo isVerified isActive managementModel'); 
+    
 
   if (!profile) {
     return res.status(404).json({ success: false, message: 'Doctor profile not found' });
   }
+
+  // 2. Determine if the setup is incomplete
+  const hasPrimary = !!profile.primaryHospital;
+  const hospitalsFound = 
+    (profile.managedHospitals?.length > 0) || 
+    (profile.ownedHospitals?.length > 0);
 
   res.json({
     success: true,
@@ -1762,6 +1771,14 @@ const getMyManagedHospitals = asyncHandler(async (req, res) => {
       primaryHospital:  profile.primaryHospital,
       otherHospitals:   profile.otherHospitals,
       managedHospitals: profile.managedHospitals,
+      ownedHospitals:   profile.ownedHospitals || [], // Clinics the doctor owns
+      
+      // Meta-data to help the frontend trigger the "Contact Admin" or "Setup" warning
+      setupStatus: {
+        isPrimarySet: hasPrimary,
+        hasLinkedHospitals: hospitalsFound,
+        needsAction: !hasPrimary
+      }
     },
   });
 });

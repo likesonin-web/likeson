@@ -68,19 +68,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
       { name: "My Appointments",     href: "/doctor/appointments",          icon: <CalendarClock size={18} />    },
       { name: "Availability Slots",  href: "/doctor/availability",          icon: <Clock size={18} />            },
       { name: "Weekly Schedule",     href: "/doctor/schedule",              icon: <CalendarDays size={18} />     },
-      { name: "Consultation Types",  href: "/doctor/consultation-types",    icon: <ClipboardList size={18} />    },
-    ],
-  },
-
-  // ── 4. Consultations ─────────────────────────────────────────────────────
-  {
-    title: "Consultations",
-    icons: <HeartPulse />,
-    links: [
-      { name: "Video Consultations", href: "/doctor/consultations/video",   icon: <Video size={18} />            },
-      { name: "In-Person Queue",     href: "/doctor/consultations/inperson", icon: <Users size={18} />           },
-      { name: "Chat Consultations",  href: "/doctor/consultations/chat",    icon: <MessageSquare size={18} />    },
-      { name: "Home Visit Requests", href: "/doctor/consultations/home",    icon: <Phone size={18} />            },
+ 
     ],
   },
 
@@ -99,30 +87,8 @@ export const DOCTOR_DASHBOARD_LINKS = [
         icon: <FolderOpen size={18} />,
         // → GET /doctor/ops (paginated, filterable)
       },
-      {
-        name: "Pending / Scheduled",
-        href: "/doctor/ops?status=scheduled",
-        icon: <FilePlus2 size={18} />,
-        // → GET /doctor/ops?status=scheduled
-      },
-      {
-        name: "In Progress",
-        href: "/doctor/ops?status=in_progress",
-        icon: <Activity size={18} />,
-        // → GET /doctor/ops?status=in_progress
-      },
-      {
-        name: "Completed OPs",
-        href: "/doctor/ops?status=completed",
-        icon: <CheckCircle2 size={18} />,
-        // → GET /doctor/ops?status=completed
-      },
-      {
-        name: "Follow-Up OPs",
-        href: "/doctor/ops/follow-ups",
-        icon: <History size={18} />,
-        // → GET /doctor/ops?isFollowUp=true  (client-side filter on ops list)
-      },
+     
+     
     ],
   },
 

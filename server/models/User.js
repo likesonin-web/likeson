@@ -9,29 +9,26 @@ export const REFERRAL_INVITER_COINS = 1000;
 export const REFERRAL_INVITEE_COINS = 500;
 export const COINS_PER_RUPEE        = 100;
 
-// ── Session / token caps ──────────────────────────────────────────────────────
 const MAX_AUDIT_SESSIONS = 10;
 const MAX_DEVICE_TOKENS  = 5;
 
-// ── Roles ─────────────────────────────────────────────────────────────────────
-// FIX #21: All roles normalised to snake_case / single-word — no spaces.
-// Previous 'care assistant' and 'lab partner' had spaces → silent auth bugs.
+// FIX: Added 'blood_bank' role
 export const USER_ROLES = [
   'superadmin',
   'admin',
   'doctor',
-  'hospital',          // manager of MANAGED hospital types only (Multi/Super/Trust/Govt)
+  'hospital',
   'transportpartner',
   'driver',
   'solodriverpartner',
   'customer',
   'pharmacy',
-  'care_assistant',    // FIX: was 'care assistant'
+  'care_assistant',
   'finance',
-  'lab_partner',       // FIX: was 'lab partner'
+  'lab_partner',
+  'blood_bank',           // NEW: manages standalone/mobile blood bank
 ];
 
-// ── Role → default avatar ─────────────────────────────────────────────────────
 const roleAvatarLinks = {
   superadmin:        'https://ik.imagekit.io/zxxzgk3iq/Likeson/ChatGPT%20Image%20Feb%209,%202026,%2011_02_48%20AM.png?updatedAt=1770615250119',
   admin:             'https://ik.imagekit.io/zxxzgk3iq/Likeson/ChatGPT%20Image%20Feb%209,%202026,%2011_02_51%20AM.png?updatedAt=1770615250338',
@@ -45,9 +42,9 @@ const roleAvatarLinks = {
   finance:           'https://ik.imagekit.io/zxxzgk3iq/Likeson/ChatGPT%20Image%20Feb%209,%202026,%2011_42_24%20AM.png',
   pharmacy:          'https://ik.imagekit.io/zxxzgk3iq/Likeson/ChatGPT%20Image%20Feb%209,%202026,%2011_42_26%20AM.png',
   care_assistant:    'https://ik.imagekit.io/zxxzgk3iq/Likeson/ChatGPT%20Image%20Feb%209,%202026,%2011_42_52%20AM.png',
+  blood_bank:        'https://ik.imagekit.io/zxxzgk3iq/blood-bank.png',
 };
 
-// ── Role → profile model ──────────────────────────────────────────────────────
 const roleModelMap = {
   customer:          'CustomerProfile',
   doctor:            'DoctorProfile',
@@ -58,6 +55,7 @@ const roleModelMap = {
   transportpartner:  'TransportPartner',
   care_assistant:    'CareAssistantProfile',
   lab_partner:       'LabPartnerProfile',
+  blood_bank:        'BloodBank',       // NEW: profile = managed BloodBank doc
 };
 
 // ── Sub-schemas ────────────────────────────────────────────────────────────────
@@ -156,7 +154,6 @@ const userSchema = new Schema(
     loginCount:        { type: Number, default: 0 },
     passwordChangedAt: { type: Date },
 
-    // FIX #23: capped to MAX_AUDIT_SESSIONS / MAX_DEVICE_TOKENS in pre-save
     auditSessions: { type: [auditSessionSchema], default: [] },
     deviceTokens:  { type: [deviceTokenSchema],  default: [] },
 
@@ -193,6 +190,14 @@ userSchema.virtual('profile', {
   justOne:      true,
 });
 
+// blood_bank role → virtual resolves to BloodBank via managedBy
+userSchema.virtual('bloodBank', {
+  ref:          'BloodBank',
+  localField:   '_id',
+  foreignField: 'managedBy',
+  justOne:      true,
+});
+
 userSchema.virtual('managedHospitals', {
   ref:          'Hospital',
   localField:   '_id',
@@ -225,7 +230,7 @@ userSchema.pre('save', async function () {
     this.blockReason = undefined;
   }
 
-  // 3. FIX #22: Phone normalised — India-only (+91). Reject non-IN numbers.
+  // 3. Phone normalised — India-only (+91)
   if (this.isModified('phone') && this.phone) {
     const raw    = this.phone.trim();
     const digits = raw.replace(/\D/g, '');
@@ -244,7 +249,7 @@ userSchema.pre('save', async function () {
     }
   }
 
-  // 4. FIX #24: Referral code — collision-safe with retry (duplicate 11000 caught at save)
+  // 4. Referral code — collision-safe
   if (this.isNew && !this.referralCode) {
     let code, exists;
     let attempts = 0;
@@ -256,12 +261,12 @@ userSchema.pre('save', async function () {
     this.referralCode = code;
   }
 
-  // 5. FIX #23: Cap auditSessions — keep latest MAX_AUDIT_SESSIONS
+  // 5. Cap auditSessions
   if (this.isModified('auditSessions') && this.auditSessions.length > MAX_AUDIT_SESSIONS) {
     this.auditSessions = this.auditSessions.slice(-MAX_AUDIT_SESSIONS);
   }
 
-  // 6. FIX #23: Cap deviceTokens — keep latest MAX_DEVICE_TOKENS
+  // 6. Cap deviceTokens
   if (this.isModified('deviceTokens') && this.deviceTokens.length > MAX_DEVICE_TOKENS) {
     this.deviceTokens = this.deviceTokens.slice(-MAX_DEVICE_TOKENS);
   }
@@ -272,7 +277,6 @@ userSchema.pre('save', async function () {
 userSchema.index({ email: 1, role: 1 });
 userSchema.index({ unblockAt: 1 });
 userSchema.index({ location: '2dsphere' });
-// FIX #25: compound index for OTP lookup (email + otpExpires filter)
 userSchema.index({ email: 1, otpExpires: 1 });
 
 const User = mongoose.model('User', userSchema);

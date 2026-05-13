@@ -36,6 +36,8 @@ import bookingReducer from './slices/bookingSlice';
 import operationsReducer from './slices/operationsSlice';
 import availabilityReducer from './slices/availabilitySlice';
 import rideRequestReducer from './slices/rideRequestSlice';
+import clinicalReducer from './slices/clinicalSlice';
+import bloodbankReducer from './slices/bloodbankSlice';
 export const store = configureStore({
   reducer: {
     user: userReducer,
@@ -76,6 +78,8 @@ driver: driverReducer,
     operations: operationsReducer,
     availability:availabilityReducer,
     rideRequest:rideRequestReducer,
+    clinical: clinicalReducer,
+    bloodBank: bloodbankReducer,
   },
   devTools: process.env.NODE_ENV !== "production",
 });

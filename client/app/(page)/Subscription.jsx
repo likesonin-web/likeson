@@ -1193,6 +1193,7 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
 // ─── Inline Comparison Table ──────────────────────────────────────────────────
 const InlineComparisonTable = memo(function InlineComparisonTable({
   allFixedPlans, currentPlanName, onSubscribe, onUpgrade, hasAccess,
+  myCustomPlans = [],
 }) {
   const [mode, setMode] = useState("overview");
 
@@ -1216,13 +1217,68 @@ const InlineComparisonTable = memo(function InlineComparisonTable({
     { key: "digital",       label: "Digital Reports",        icon: Activity,     getValue: (p) => p?.features?.digitalReportAccess ? "Yes" : "—" },
   ];
 
-  const noPlan = null;
-  const columns = mode === "overview" ? [noPlan, ...allFixedPlans] : allFixedPlans;
-
-  const isHighlighted = (plan) => {
-    if (mode === "overview") return plan !== null && TIER_META[plan.fixedTier || plan.name]?.popular;
-    return (plan?.fixedTier || plan?.name) === currentPlanName;
+  // Custom plan row builder — shows each active option + total
+  const getCustomPlanValue = (plan, rowKey) => {
+    if (!plan) return "—";
+    const opts = plan.customOptions || [];
+    switch (rowKey) {
+      case "price": return `₹${plan.pricing?.monthly ?? 0}/mo`;
+      case "trial": return "—";
+      case "consultations": {
+        const o = opts.find(o => o.optionKey === "consultations");
+        return o?.quantity > 0 ? `${o.quantity}/mo` : "—";
+      }
+      case "pharmacy": {
+        const o = opts.find(o => o.optionKey === "pharmacy");
+        return o?.quantity > 0 ? `${o.quantity}% off` : "—";
+      }
+      case "diagnostics": {
+        const o = opts.find(o => o.optionKey === "diagnostics");
+        return o?.quantity > 0 ? `${o.quantity}% off` : "—";
+      }
+      case "transport": {
+        const o = opts.find(o => o.optionKey === "transport");
+        return o?.quantity >= 0 ? `Bundle ₹${o.lineTotal?.toFixed(0) ?? 0}` : "—";
+      }
+      case "careAssistant": {
+        const o = opts.find(o => o.optionKey === "careAssistant");
+        return o?.quantity > 0 ? `${o.quantity} visits` : "—";
+      }
+      case "homeSample": {
+        const o = opts.find(o => o.optionKey === "homeSampleCollection");
+        return o?.quantity > 0 ? "Included" : "—";
+      }
+      case "members": return "1";
+      case "support": return "Standard";
+      default: return "Custom";
+    }
   };
+
+  const noPlan = null;
+
+  // Build columns based on mode
+  let columns;
+  if (mode === "overview") {
+    columns = [noPlan, ...allFixedPlans, ...myCustomPlans];
+  } else {
+    // "vs My Plan" — show all fixed + custom, highlight current
+    columns = [...allFixedPlans, ...myCustomPlans];
+  }
+
+  const isCustomPlan = (plan) => plan && !plan.fixedTier && !!plan.customOptions;
+
+  // Inside InlineComparisonTable, replace isHighlighted:
+const isHighlighted = (plan) => {
+  if (!plan) return false;
+  const planIdentifier = plan.fixedTier || plan.name;
+  if (mode === "overview") {
+    return isCustomPlan(plan)
+      ? planIdentifier === currentPlanName  // highlight active custom in overview too
+      : TIER_META[planIdentifier]?.popular ?? false;
+  }
+  // "vs My Plan" mode — highlight current plan
+  return planIdentifier === currentPlanName;
+};
 
   return (
     <section aria-labelledby="compare-heading" className="space-y-4">
@@ -1255,7 +1311,7 @@ const InlineComparisonTable = memo(function InlineComparisonTable({
       </div>
 
       <div className="overflow-x-auto w-full rounded-2xl border border-base-300">
-        <table className="w-full text-xs" role="table" style={{ minWidth: "600px" }}>
+        <table className="w-full text-xs" role="table" style={{ minWidth: `${140 + columns.length * 130}px` }}>
           <thead>
             <tr>
               <th className="sticky left-0 z-10 bg-base-200 px-4 py-3 text-left
@@ -1265,20 +1321,29 @@ const InlineComparisonTable = memo(function InlineComparisonTable({
                 Feature
               </th>
               {columns.map((plan, ci) => {
-                const name = plan ? (plan.fixedTier || plan.name) : "No Plan";
-                const meta = plan ? getMeta(name) : null;
+                const isCustom    = isCustomPlan(plan);
+                const name        = plan ? (plan.fixedTier || plan.name) : "No Plan";
+                const meta        = plan && !isCustom ? getMeta(name) : isCustom ? CUSTOM_META : null;
                 const highlighted = isHighlighted(plan);
+                const monthly     = plan?.pricing?.monthly ?? 0;
                 return (
                   <th key={ci} className="px-4 py-3 text-center font-black border-b border-base-300"
                     scope="col"
                     style={{
-                      minWidth: 120,
+                      minWidth: 130,
                       background: highlighted && meta ? `${meta.accent}12` : undefined,
                       borderBottom: highlighted && meta ? `2px solid ${meta.accent}` : undefined,
                     }}>
                     {plan ? (
                       <div className="flex flex-col items-center gap-1">
-                        {highlighted && (
+                        {isCustom && (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full
+                            text-[9px] font-black text-white mb-0.5"
+                            style={{ background: CUSTOM_META.gradientCSS }}>
+                            <Layers size={8} /> Custom
+                          </span>
+                        )}
+                        {highlighted && !isCustom && (
                           <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full
                             text-[9px] font-black text-white mb-0.5"
                             style={{ background: meta?.gradientCSS }}>
@@ -1288,12 +1353,19 @@ const InlineComparisonTable = memo(function InlineComparisonTable({
                             }
                           </span>
                         )}
+                        {highlighted && isCustom && (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full
+                            text-[9px] font-black text-white mb-0.5"
+                            style={{ background: CUSTOM_META.gradientCSS }}>
+                            <BadgeCheck size={8} /> Current
+                          </span>
+                        )}
                         <span className="text-xs font-black"
                           style={{ color: highlighted && meta ? meta.accent : undefined }}>
                           {name}
                         </span>
                         <span className="text-[10px] font-bold text-base-content/50">
-                          ₹{plan.pricing?.monthly}{plan.pricing?.billingLabel || "/mo"}
+                          ₹{monthly}{plan.pricing?.billingLabel || "/mo"}
                         </span>
                       </div>
                     ) : (
@@ -1319,9 +1391,10 @@ const InlineComparisonTable = memo(function InlineComparisonTable({
                   </div>
                 </td>
                 {columns.map((plan, ci) => {
-                  const val         = row.getValue(plan);
+                  const isCustom    = isCustomPlan(plan);
+                  const val         = isCustom ? getCustomPlanValue(plan, row.key) : row.getValue(plan);
                   const highlighted = isHighlighted(plan);
-                  const meta        = plan ? getMeta(plan.fixedTier || plan.name) : null;
+                  const meta        = plan && !isCustom ? getMeta(plan.fixedTier || plan.name) : CUSTOM_META;
                   const isBetter    = plan !== null && val !== "—" && val !== "0%" && val !== "0";
                   const isNoPlan    = plan === null;
                   return (
@@ -1343,7 +1416,46 @@ const InlineComparisonTable = memo(function InlineComparisonTable({
               </tr>
             ))}
 
-            {/* Subscribe row */}
+            {/* Custom plan cost breakdown rows — only when custom plans present */}
+            {columns.some(isCustomPlan) && (
+              <tr className="bg-base-100">
+                <td className="sticky left-0 z-10 px-4 py-3 border-r border-base-300
+                  bg-base-200 font-semibold text-base-content/70" style={{ fontSize: "11px" }}>
+                  <div className="flex items-center gap-1.5">
+                    <BarChart3 size={10} className="flex-shrink-0" aria-hidden="true" />
+                    Option Breakdown
+                  </div>
+                </td>
+                {columns.map((plan, ci) => {
+                  const isCustom = isCustomPlan(plan);
+                  if (!isCustom) return <td key={ci} className="px-4 py-3 text-center text-base-content/25 text-xs">—</td>;
+                  const opts = (plan.customOptions || []).filter(o => (o.optionKey === "transport" ? o.quantity >= 0 : o.quantity > 0));
+                  const total = plan.pricing?.monthly ?? 0;
+                  return (
+                    <td key={ci} className="px-3 py-3 text-left"
+                      style={{ background: `${CUSTOM_META.accent}06` }}>
+                      <div className="space-y-1">
+                        {opts.map((o, oi) => (
+                          <div key={oi} className="flex items-center justify-between gap-2 text-[10px]">
+                            <span className="text-base-content/60 truncate">{o.label}</span>
+                            <span className="font-black flex-shrink-0" style={{ color: CUSTOM_META.accent }}>
+                              ₹{o.lineTotal?.toFixed(0) ?? 0}
+                            </span>
+                          </div>
+                        ))}
+                        <div className="flex items-center justify-between gap-2 pt-1 mt-1"
+                          style={{ borderTop: `1px solid ${CUSTOM_META.accent}30` }}>
+                          <span className="text-[10px] font-black text-base-content">Total</span>
+                          <span className="text-xs font-black" style={{ color: CUSTOM_META.accent }}>₹{total}/mo</span>
+                        </div>
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            )}
+
+            {/* Subscribe / action row */}
             <tr className="bg-base-200">
               <td className="sticky left-0 z-10 px-4 py-3 bg-base-300 border-r border-base-300
                 text-[11px] font-black text-base-content/60">
@@ -1357,8 +1469,9 @@ const InlineComparisonTable = memo(function InlineComparisonTable({
                     </td>
                   );
                 }
+                const isCustom  = isCustomPlan(plan);
                 const name      = plan.fixedTier || plan.name;
-                const meta      = getMeta(name);
+                const meta      = isCustom ? CUSTOM_META : getMeta(name);
                 const isCurrent = name === currentPlanName;
                 return (
                   <td key={ci} className="px-3 py-3 text-center">
@@ -1368,7 +1481,7 @@ const InlineComparisonTable = memo(function InlineComparisonTable({
                         style={{ background: `${meta.accent}15`, color: meta.accent }}>
                         <BadgeCheck size={10} aria-hidden="true" /> Active
                       </span>
-                    ) : hasAccess ? (
+                    ) : hasAccess && !isCustom ? (
                       <button onClick={() => onUpgrade(plan)}
                         className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl
                           text-[10px] font-black text-white transition-all hover:brightness-110"
@@ -1800,14 +1913,22 @@ export default function SubscriptionPage() {
 
           {/* Comparison table */}
           {fixedPlans.length > 0 && (
-            <InlineComparisonTable
-              allFixedPlans={fixedPlans}
-              currentPlanName={currentPlanName}
-              onSubscribe={handleSubscribe}
-              onUpgrade={handleUpgrade}
-              hasAccess={hasAccess}
-            />
-          )}
+  <InlineComparisonTable
+    allFixedPlans={fixedPlans}
+    currentPlanName={currentPlanName}
+    onSubscribe={handleSubscribe}
+    onUpgrade={handleUpgrade}
+    hasAccess={hasAccess}
+    myCustomPlans={(() => {
+      // Ensure active custom plan always appears even if myCustomPlans not loaded
+      if (mySub?.plan?.planType === "custom") {
+        const alreadyIn = myCustomPlans.some(p => p._id === mySub.plan._id || p.id === mySub.plan.id);
+        return alreadyIn ? myCustomPlans : [...myCustomPlans, mySub.plan];
+      }
+      return myCustomPlans;
+    })()}
+  />
+)}
 
           {/* Custom plan section */}
           <section aria-labelledby="custom-heading" className="space-y-5">

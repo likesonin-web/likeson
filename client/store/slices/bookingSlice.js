@@ -561,6 +561,17 @@ export const downloadOpCard = mkThunk(
   }
 );
 
+
+export const verifyRazorpayPayment = mkThunk(
+  'booking/verifyRazorpayPayment',
+  async ({ bookingId, razorpay_order_id, razorpay_payment_id, razorpay_signature }) => {
+    const { data } = await API.post(`${BASE}/verify-payment`, {
+      bookingId, razorpay_order_id, razorpay_payment_id, razorpay_signature,
+    });
+    toast.success('Payment verified!');
+    return { bookingId, ...data.data };
+  }
+);
 // ─────────────────────────────────────────────────────────────────────────────
 // KEY HELPER — "booking/fetchHospitals/pending" → "fetchHospitals"
 // ─────────────────────────────────────────────────────────────────────────────
@@ -842,8 +853,33 @@ const bookingSlice = createSlice({
       // No state update needed — side effect is browser download.
       void payload;
     });
+
+    wire(verifyRazorpayPayment, (state, { payload }) => {
+  state.verifyPaymentResult = payload ?? null;
+  // update paymentStatus in list + selectedBooking
+  if (payload?.bookingId) {
+    const idx = state.myBookings.findIndex(
+      (b) => b._id === payload.bookingId || b._id?.toString() === payload.bookingId
+    );
+    if (idx !== -1) {
+      state.myBookings[idx] = { ...state.myBookings[idx], paymentStatus: 'paid' };
+    }
+  }
+  if (state.selectedBooking && (
+    state.selectedBooking._id === payload?.bookingId ||
+    state.selectedBooking._id?.toString() === payload?.bookingId
+  )) {
+    state.selectedBooking = { ...state.selectedBooking, paymentStatus: 'paid' };
+  }
+  if (state.createdBooking) {
+    state.createdBooking = { ...state.createdBooking, paymentStatus: 'paid' };
+  }
+}); 
   },
+  
 });
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ACTIONS
@@ -966,6 +1002,10 @@ export const selectDownloadOpCardError     = (s) => s.booking.errors['downloadOp
 export const selectActiveBookingLoading    = (s) => s.booking.loading['fetchMyBookingById'] ?? false;
 export const selectActiveBookingError      = (s) => s.booking.errors['fetchMyBookingById']  ?? null;
 
+
+export const selectVerifyPaymentResult  = (s) => s.booking.verifyPaymentResult;
+export const selectVerifyPaymentLoading = (s) => s.booking.loading['verifyRazorpayPayment'] ?? false;
+export const selectVerifyPaymentError   = (s) => s.booking.errors['verifyRazorpayPayment']  ?? null;
 // ─────────────────────────────────────────────────────────────────────────────
 // RE-EXPORTS
 // ─────────────────────────────────────────────────────────────────────────────

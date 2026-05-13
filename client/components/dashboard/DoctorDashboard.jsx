@@ -193,21 +193,30 @@ const SidebarSection = memo(function SidebarSection({
         )}
       </button>
 
-      <AnimatePresence>
-        {isOpen && isSidebarOpen && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: "easeInOut" }}
-            className="overflow-hidden ml-5 mt-0.5 pl-3 border-l border-success/20"
-          >
-            {section.links.map((link, idx) => (
-              <NavItem key={idx} link={link} isActive={pathname === link.href} />
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
+  {/* --- Within SidebarSection component --- */}
+<AnimatePresence>
+  {isOpen && isSidebarOpen && (
+    <motion.div
+      initial={{ height: 0, opacity: 0 }}
+      animate={{ height: "auto", opacity: 1 }}
+      exit={{ height: 0, opacity: 0 }}
+      transition={{ duration: 0.25, ease: "circOut" }}
+      // Use onAnimationComplete to remove overflow-hidden so shadows/borders aren't clipped
+      onAnimationComplete={() => {
+        const el = document.getElementById(`section-${section.title}`);
+        if (el) el.style.overflow = "visible";
+      }}
+      id={`section-${section.title}`}
+      className="overflow-hidden ml-4 mt-1 pl-2 border-l border-success/15"
+    >
+      <div className="flex flex-col gap-0.5 py-1"> {/* Wrapper to ensure consistent spacing */}
+        {section.links.map((link, idx) => (
+          <NavItem key={idx} link={link} isActive={pathname === link.href} />
+        ))}
+      </div>
+    </motion.div>
+  )}
+</AnimatePresence>
     </div>
   );
 });
@@ -308,118 +317,124 @@ const DoctorDashboard = ({ children }) => {
       </AnimatePresence>
 
       {/* ── Sidebar ─────────────────────────────────────────────────────── */}
-      <aside
-        className={cn(
-          "fixed left-0 top-0 z-50 h-screen bg-base-200 border-r border-base-300 transition-all duration-500 ease-in-out flex flex-col",
-          isSidebarOpen
-            ? "w-64 translate-x-0"
-            : "w-0 -translate-x-full lg:w-20 lg:translate-x-0"
-        )}
-      >
-        {/* Logo + collapse */}
-        <div className="p-5 flex items-center justify-between h-20 border-b border-base-300 shrink-0">
-          <AnimatePresence mode="wait">
-            {isSidebarOpen && (
-              <motion.div
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -10 }}
-                transition={{ duration: 0.2 }}
-                className="flex items-center gap-2.5"
-              >
-                <div className="w-8 h-8 rounded-xl bg-success/15 border border-success/30 flex items-center justify-center">
-                  <Stethoscope size={16} className="text-success" />
-                </div>
-                <div>
-                  <Link
-                    href="/doctor/dashboard"
-                    className="font-black text-sm tracking-tight hover:text-success transition-colors block leading-none"
-                  >
-                    LIKESON
-                    <span className="text-success">.in</span>
-                  </Link>
-                  <span className="text-[9px] font-bold text-success/60 uppercase tracking-widest">
-                    Doctor Portal
-                  </span>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-          <button
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="p-2 rounded-lg bg-base-300/50 hover:text-success hover:bg-success/5 transition-all shrink-0"
-            aria-label="Toggle Sidebar"
-          >
-            {isSidebarOpen ? <PanelLeftClose size={17} /> : <Menu size={17} />}
-          </button>
-        </div>
-
-        {/* Doctor mini profile card */}
-        <AnimatePresence>
-          {isSidebarOpen && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              exit={{ opacity: 0, height: 0 }}
-              className="mx-3 mt-4 p-3.5 rounded-2xl bg-success/5 border border-success/15 shrink-0"
-            >
-              <div className="flex items-center gap-3">
-                <div className="relative shrink-0">
-                  <img
-                    src={doctorAvatar}
-                    alt="Doctor"
-                    className="w-10 h-10 rounded-xl object-cover bg-base-300 border-2 border-success/30"
-                  />
-                  <span
-                    className={cn(
-                      "absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-base-200",
-                      isOnline ? "bg-success" : "bg-base-300"
-                    )}
-                  />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[11px] font-black truncate text-base-content">
-                    Dr. {user?.name || "Doctor"}
-                  </p>
-                  <p className="text-[9px] font-bold text-success/70 uppercase tracking-widest truncate">
-                    {user?.specialization || "Specialist"}
-                  </p>
-                </div>
-              </div>
-              <div className="mt-2.5 flex items-center gap-1.5">
-                <OnlineBadge isOnline={isOnline} />
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Nav links */}
-        <nav className="flex-1 overflow-y-auto p-3 space-y-0.5 custom-scrollbar mt-3">
-          {DOCTOR_DASHBOARD_LINKS.map((section, idx) => (
-            <SidebarSection
-              key={idx}
-              section={section}
-              isOpen={openMenus[section.title]}
-              isSidebarOpen={isSidebarOpen}
-              onToggle={toggleMenu}
-              pathname={pathname}
-            />
-          ))}
-        </nav>
-
-        {/* Sidebar footer */}
-        {isSidebarOpen && (
-          <div className="p-3 border-t border-base-300 shrink-0">
-            <button
-              onClick={handleLogout}
-              className="w-full flex items-center gap-3 px-3 py-2.5 text-[10px] font-black text-error/70 hover:text-error hover:bg-error/5 rounded-xl uppercase tracking-widest transition-all"
-            >
-              <LogOut size={15} />
-              Sign Out
-            </button>
+     <aside
+  className={cn(
+    "fixed left-0 top-0 z-50 h-[100dvh] bg-base-200 border-r border-base-300 transition-all duration-500 ease-in-out flex flex-col",
+    isSidebarOpen
+      ? "w-64 translate-x-0"
+      : "w-0 -translate-x-full lg:w-20 lg:translate-x-0"
+  )}
+>
+  {/* 1. Sidebar Header: Logo + Collapse Button */}
+  <div className="p-5 flex items-center justify-between h-20 border-b border-base-300 shrink-0">
+    <AnimatePresence mode="wait">
+      {isSidebarOpen && (
+        <motion.div
+          initial={{ opacity: 0, x: -10 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -10 }}
+          transition={{ duration: 0.2 }}
+          className="flex items-center gap-2.5"
+        >
+          <div className="w-8 h-8 rounded-xl bg-success/15 border border-success/30 flex items-center justify-center">
+            <Stethoscope size={16} className="text-success" />
           </div>
-        )}
-      </aside>
+          <div>
+            <Link
+              href="/doctor/dashboard"
+              className="font-black text-sm tracking-tight hover:text-success transition-colors block leading-none"
+            >
+              LIKESON
+              <span className="text-success">.in</span>
+            </Link>
+            <span className="text-[9px] font-bold text-success/60 uppercase tracking-widest">
+              Doctor Portal
+            </span>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+    <button
+      onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+      className="p-2 rounded-lg bg-base-300/50 hover:text-success hover:bg-success/5 transition-all shrink-0"
+      aria-label="Toggle Sidebar"
+    >
+      {isSidebarOpen ? <PanelLeftClose size={17} /> : <Menu size={17} />}
+    </button>
+  </div>
+
+  {/* 2. Scrollable Content Wrapper */}
+  <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+    
+    {/* Doctor Mini Profile Card */}
+    <AnimatePresence>
+      {isSidebarOpen && (
+        <motion.div
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: "auto" }}
+          exit={{ opacity: 0, height: 0 }}
+          className="mx-3 mt-4 shrink-0"
+        >
+          <div className="p-3.5 rounded-2xl bg-success/5 border border-success/15">
+            <div className="flex items-center gap-3">
+              <div className="relative shrink-0">
+                <img
+                  src={doctorAvatar}
+                  alt="Doctor"
+                  className="w-10 h-10 rounded-xl object-cover bg-base-300 border-2 border-success/30"
+                />
+                <span
+                  className={cn(
+                    "absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-base-200",
+                    isOnline ? "bg-success" : "bg-base-300"
+                  )}
+                />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-black truncate text-base-content">
+                  Dr. {user?.name || "Doctor"}
+                </p>
+                <p className="text-[9px] font-bold text-success/70 uppercase tracking-widest truncate">
+                  {user?.specialization || "Specialist"}
+                </p>
+              </div>
+            </div>
+            <div className="mt-2.5">
+              <OnlineBadge isOnline={isOnline} />
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+
+    {/* Navigation Links - Scrollable area */}
+    <nav className="flex-1 overflow-y-auto p-3 space-y-1 custom-scrollbar mt-2">
+      {DOCTOR_DASHBOARD_LINKS.map((section, idx) => (
+        <SidebarSection
+          key={idx}
+          section={section}
+          isOpen={openMenus[section.title]}
+          isSidebarOpen={isSidebarOpen}
+          onToggle={toggleMenu}
+          pathname={pathname}
+        />
+      ))}
+    </nav>
+  </div>
+
+  {/* 3. Sidebar Footer: Sign Out Button */}
+  {isSidebarOpen && (
+    <div className="p-3 border-t border-base-300 bg-base-200 shrink-0 pb-[env(safe-area-inset-bottom)]">
+      <button
+        onClick={handleLogout}
+        className="w-full flex items-center gap-3 px-3 py-2.5 text-[10px] font-black text-error/70 hover:text-error hover:bg-error/5 rounded-xl uppercase tracking-widest transition-all"
+      >
+        <LogOut size={15} />
+        Sign Out
+      </button>
+    </div>
+  )}
+</aside>
 
       {/* ── Main viewport ───────────────────────────────────────────────── */}
       <main
@@ -436,7 +451,7 @@ const DoctorDashboard = ({ children }) => {
             {!isSidebarOpen && (
               <button
                 onClick={() => setIsSidebarOpen(true)}
-                className="p-2 hover:bg-base-200 rounded-lg transition-colors"
+                className="p-2 hover:bg-base-200 hidden rounded-lg transition-colors"
                 aria-label="Open Sidebar"
               >
                 <Menu size={20} />
@@ -598,7 +613,7 @@ const DoctorDashboard = ({ children }) => {
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3 }}
-            className="rounded-[2.5rem] border border-base-300 bg-base-200/40 min-h-[75vh] p-4 shadow-inner relative overflow-hidden backdrop-blur-sm"
+            className="md:rounded-[1.5rem] rounded-sm border border-base-300 bg-base-200/40 min-h-[75vh] md:p-4 shadow-inner relative overflow-hidden backdrop-blur-sm"
           >
             {/* Decorative medical-teal glow */}
             <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-success/4 blur-[130px] rounded-full pointer-events-none" />

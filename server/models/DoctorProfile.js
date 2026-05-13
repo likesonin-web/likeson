@@ -251,7 +251,7 @@ const doctorProfileSchema = new Schema(
      */
     primaryHospital: { type: Schema.Types.ObjectId, ref: 'Hospital', default: null },
     otherHospitals:  [{ type: Schema.Types.ObjectId, ref: 'Hospital' }],
-
+    managedHospitals: [{ type: Schema.Types.ObjectId, ref: 'Hospital' }],
     // ── Consultation Types Offered ────────────────────────────────────────────
     /**
      * For hospital-manager doctors: this mirrors Hospital.consultationPricing.consultationTypes
@@ -583,6 +583,9 @@ doctorProfileSchema.statics.resolveEffectivePricing = async function (doctorProf
     note:        'Fees set by doctor. platformFee: null means global config applies.',
   };
 };
+doctorProfileSchema.virtual('isProfileComplete').get(function () {
+  return !!this.primaryHospital && this.isVerified;
+});
 
 // ── Indexes ───────────────────────────────────────────────────────────────────
 

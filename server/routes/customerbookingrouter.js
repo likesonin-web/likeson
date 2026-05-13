@@ -1565,6 +1565,40 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
   }
 });
 
+
+// POST /verify-payment  — call after Razorpay frontend success callback
+router.post('/verify-payment', protect, async (req, res) => {
+  try {
+    const { bookingId, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+
+    const isValid = verifyRazorpaySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+    if (!isValid)
+      return res.status(400).json({ success: false, message: 'Invalid payment signature' });
+
+    const booking = await Booking.findOne({ _id: bookingId, customer: req.user._id });
+    if (!booking)
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+
+    booking.paymentStatus = 'paid';
+    booking.payments.push({
+      gateway:       'Razorpay',
+      transactionId: razorpay_payment_id,
+      orderId:       razorpay_order_id,
+      paymentMode:   'Other',
+      amount:        booking.fareBreakdown.totalAmount,
+      status:        'success',
+      paidAt:        new Date(),
+    });
+    booking.fareBreakdown.amountPaid = booking.fareBreakdown.totalAmount;
+    booking.updatedBy = req.user._id;
+    await booking.save();
+
+    res.json({ success: true, message: 'Payment verified', data: { bookingId, paymentStatus: 'paid' } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ═════════════════════════════════════════════════════════════════════════════
 // BOOKING MANAGEMENT
 // ═════════════════════════════════════════════════════════════════════════════

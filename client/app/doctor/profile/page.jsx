@@ -42,11 +42,11 @@ const resolveSection = (param) => {
 
 // ─── Style tokens ─────────────────────────────────────────────────────────────
 const inputCls =
-  "w-full bg-base-200 border border-base-300 rounded-xl px-4 py-3 text-base-content text-sm " +
+  "w-full bg-base-200 border border-base-300 rounded-xl px-4 py-3 text-base-content text-xs " +
   "focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary transition-all " +
   "placeholder:text-base-content/30 font-poppins";
 const labelCls =
-  "block text-xs font-semibold uppercase tracking-widest text-base-content/50 mb-1.5 font-montserrat";
+  "block text-[10px] font-semibold uppercase tracking-widest text-base-content/50 mb-1.5 font-montserrat";
 
 // ─── Badge helpers ────────────────────────────────────────────────────────────
 const kycBadge = (status) => {
@@ -94,7 +94,7 @@ function SectionHeader({ title, subtitle, icon: Icon, onEdit, isEditing, onCance
         </div>
         <div>
           <h2 className="text-base font-bold text-base-content font-montserrat">{title}</h2>
-          {subtitle && <p className="text-xs text-base-content/50 mt-0.5 font-poppins">{subtitle}</p>}
+          {subtitle && <p className="text-[10px] text-base-content/50 mt-0.5 font-poppins">{subtitle}</p>}
         </div>
       </div>
       {onEdit && (
@@ -103,14 +103,14 @@ function SectionHeader({ title, subtitle, icon: Icon, onEdit, isEditing, onCance
             <>
               <button
                 onClick={onCancel}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-base-content/60 hover:bg-base-200 transition-all"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-semibold text-base-content/60 hover:bg-base-200 transition-all"
               >
                 <X size={13} /> Cancel
               </button>
               <button
                 onClick={onSave}
                 disabled={saving}
-                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold bg-primary text-primary-content hover:brightness-110 transition-all disabled:opacity-50"
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[10px] font-semibold bg-primary text-primary-content hover:brightness-110 transition-all disabled:opacity-50"
               >
                 {saving ? <span className="spinner w-3 h-3" /> : <Save size={13} />} Save
               </button>
@@ -118,7 +118,7 @@ function SectionHeader({ title, subtitle, icon: Icon, onEdit, isEditing, onCance
           ) : (
             <button
               onClick={onEdit}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-primary hover:bg-primary/10 transition-all border border-primary/20"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-semibold text-primary hover:bg-primary/10 transition-all border border-primary/20"
             >
               <Edit3 size={13} /> Edit
             </button>
@@ -134,8 +134,8 @@ function InfoRow({ label, value, icon: Icon }) {
     <div className="flex items-start gap-3">
       {Icon && <Icon size={15} className="text-primary mt-0.5 flex-shrink-0" />}
       <div>
-        <p className="text-xs text-base-content/40 font-poppins">{label}</p>
-        <p className="text-sm font-semibold text-base-content font-poppins">{value || "—"}</p>
+        <p className="text-[10px] text-base-content/40 font-poppins">{label}</p>
+        <p className="text-xs font-semibold text-base-content font-poppins">{value || "—"}</p>
       </div>
     </div>
   );
@@ -187,12 +187,12 @@ function OverviewSection({ profile }) {
               <h1 className="text-xl font-black text-base-content font-montserrat">Dr. {user?.name || "—"}</h1>
               {profile?.isVerified && <BadgeCheck size={18} className="text-primary" />}
             </div>
-            <p className="text-sm text-primary font-semibold mb-2 font-poppins">{profile?.specialization || "—"}</p>
+            <p className="text-xs text-primary font-semibold mb-2 font-poppins">{profile?.specialization || "—"}</p>
             <div className="flex flex-wrap gap-1.5 mb-3">
-              <span className={`text-xs px-2.5 py-0.5 rounded-full border font-semibold ${kyc.color}`}>{kyc.label}</span>
-              <span className={`text-xs px-2.5 py-0.5 rounded-full border font-semibold ${partner.color}`}>{partner.label}</span>
+              <span className={`text-[10px] px-2.5 py-0.5 rounded-full border font-semibold ${kyc.color}`}>{kyc.label}</span>
+              <span className={`text-[10px] px-2.5 py-0.5 rounded-full border font-semibold ${partner.color}`}>{partner.label}</span>
             </div>
-            <div className="flex flex-wrap gap-4 text-xs text-base-content/50">
+            <div className="flex flex-wrap gap-4 text-[10px] text-base-content/50">
               {user?.email && <span className="flex items-center gap-1"><Mail size={12} />{user.email}</span>}
               {user?.phone && <span className="flex items-center gap-1"><Phone size={12} />{user.phone}</span>}
             </div>
@@ -207,10 +207,10 @@ function OverviewSection({ profile }) {
                 </RadialBarChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex items-center justify-center">
-                <span className="text-sm font-black text-base-content font-montserrat">{profile?.profileCompletionPercent ?? 0}%</span>
+                <span className="text-xs font-black text-base-content font-montserrat">{profile?.profileCompletionPercent ?? 0}%</span>
               </div>
             </div>
-            <p className="text-xs text-base-content/40 font-poppins">Profile</p>
+            <p className="text-[10px] text-base-content/40 font-poppins">Profile</p>
           </div>
         </div>
       </SectionCard>
@@ -220,8 +220,8 @@ function OverviewSection({ profile }) {
         {stats.map(({ label, value, icon: Icon }) => (
           <SectionCard key={label} className="p-4 text-center hover:-translate-y-0.5 transition-transform cursor-default">
             <Icon size={18} className="text-primary mx-auto mb-1.5" />
-            <p className="text-xl font-black text-base-content font-montserrat">{value}</p>
-            <p className="text-xs text-base-content/40 font-poppins mt-0.5">{label}</p>
+            <p className="text-md font-black text-base-content font-montserrat">{value}</p>
+            <p className="text-[10px] text-base-content/40 font-poppins mt-0.5">{label}</p>
           </SectionCard>
         ))}
       </div>
@@ -232,10 +232,10 @@ function OverviewSection({ profile }) {
           <div className="flex items-center gap-3">
             <Building2 size={18} className="text-primary" />
             <div>
-              <p className="text-xs text-base-content/40 font-poppins">Primary Hospital</p>
-              <p className="text-sm font-semibold text-base-content font-montserrat">{profile.primaryHospital?.name || "—"}</p>
+              <p className="text-[10px] text-base-content/40 font-poppins">Primary Hospital</p>
+              <p className="text-xs font-semibold text-base-content font-montserrat">{profile.primaryHospital?.name || "—"}</p>
               {profile.primaryHospital?.address?.city && (
-                <p className="text-xs text-base-content/40">{profile.primaryHospital.address.city}, {profile.primaryHospital.address.state}</p>
+                <p className="text-[10px] text-base-content/40">{profile.primaryHospital.address.city}, {profile.primaryHospital.address.state}</p>
               )}
             </div>
           </div>
@@ -262,7 +262,7 @@ function OverviewSection({ profile }) {
               {done
                 ? <CheckCircle2 size={15} className="text-success flex-shrink-0" />
                 : <Clock size={15} className="text-base-content/30 flex-shrink-0" />}
-              <span className={`text-sm font-poppins ${done ? "text-base-content/70 line-through" : "text-base-content"}`}>{label}</span>
+              <span className={`text-xs font-poppins ${done ? "text-base-content/70 line-through" : "text-base-content"}`}>{label}</span>
             </div>
           ))}
         </div>
@@ -354,7 +354,7 @@ function ProfessionalSection({ profile, dispatch }) {
             <label className={labelCls}>Achievements</label>
             <div className="flex flex-wrap gap-2 mb-2">
               {form.achievements.map((a, i) => (
-                <span key={i} className="flex items-center gap-1.5 text-xs bg-primary/10 text-primary px-3 py-1 rounded-full border border-primary/20">
+                <span key={i} className="flex items-center gap-1.5 text-[10px] bg-primary/10 text-primary px-3 py-1 rounded-full border border-primary/20">
                   {a}
                   <button onClick={() => setForm((f) => ({ ...f, achievements: f.achievements.filter((_, j) => j !== i) }))}><X size={11} /></button>
                 </span>
@@ -362,7 +362,7 @@ function ProfessionalSection({ profile, dispatch }) {
             </div>
             <div className="flex gap-2">
               <input className={inputCls} value={newAch} onChange={(e) => setNewAch(e.target.value)} placeholder="Add achievement…" onKeyDown={(e) => e.key === "Enter" && addAch()} />
-              <button onClick={addAch} className="px-3 py-2 rounded-xl bg-primary text-primary-content text-sm font-bold hover:brightness-110 transition-all"><Plus size={16} /></button>
+              <button onClick={addAch} className="px-3 py-2 rounded-xl bg-primary text-primary-content text-xs font-bold hover:brightness-110 transition-all"><Plus size={16} /></button>
             </div>
           </div>
         </div>
@@ -377,7 +377,7 @@ function ProfessionalSection({ profile, dispatch }) {
               <p className={labelCls}>Achievements</p>
               <div className="flex flex-wrap gap-2 mt-1">
                 {profile.achievements.map((a, i) => (
-                  <span key={i} className="text-xs bg-primary/10 text-primary px-3 py-1 rounded-full border border-primary/20">{a}</span>
+                  <span key={i} className="text-[10px] bg-primary/10 text-primary px-3 py-1 rounded-full border border-primary/20">{a}</span>
                 ))}
               </div>
             </div>
@@ -448,14 +448,14 @@ function QualificationsSection({ profile, dispatch }) {
               </div>
             </div>
           ))}
-          <button onClick={add} className="flex items-center gap-2 text-sm text-primary font-semibold hover:underline font-poppins">
+          <button onClick={add} className="flex items-center gap-2 text-xs text-primary font-semibold hover:underline font-poppins">
             <Plus size={15} /> Add Qualification
           </button>
         </div>
       ) : (
         <div className="space-y-3">
           {(profile?.qualifications?.length ?? 0) === 0 ? (
-            <p className="text-sm text-base-content/40 italic font-poppins">No qualifications added yet.</p>
+            <p className="text-xs text-base-content/40 italic font-poppins">No qualifications added yet.</p>
           ) : (
             profile.qualifications.map((q, i) => (
               <div key={i} className="flex items-start gap-4 p-4 bg-base-200/60 rounded-xl border border-base-300">
@@ -463,9 +463,9 @@ function QualificationsSection({ profile, dispatch }) {
                   <Award size={14} className="text-primary" />
                 </div>
                 <div>
-                  <p className="text-sm font-bold text-base-content font-montserrat">{q.degree || "—"}</p>
-                  <p className="text-xs text-base-content/60 font-poppins">{q.college || "—"}</p>
-                  {q.year && <p className="text-xs text-primary mt-0.5">{q.year}</p>}
+                  <p className="text-xs font-bold text-base-content font-montserrat">{q.degree || "—"}</p>
+                  <p className="text-[10px] text-base-content/60 font-poppins">{q.college || "—"}</p>
+                  {q.year && <p className="text-[10px] text-primary mt-0.5">{q.year}</p>}
                 </div>
               </div>
             ))
@@ -531,7 +531,7 @@ function BioSection({ profile, dispatch }) {
               placeholder="Write a short bio about your practice, expertise, and approach to patient care…"
               maxLength={1000}
             />
-            <p className="text-xs text-base-content/30 mt-1 text-right">{form.biography.length}/1000</p>
+            <p className="text-[10px] text-base-content/30 mt-1 text-right">{form.biography.length}/1000</p>
           </div>
           <div>
             <label className={labelCls}>Languages Spoken</label>
@@ -540,7 +540,7 @@ function BioSection({ profile, dispatch }) {
                 <button
                   key={lang}
                   onClick={() => toggleLang(lang)}
-                  className={`text-xs px-3 py-1.5 rounded-full border font-semibold transition-all ${
+                  className={`text-[10px] px-3 py-1.5 rounded-full border font-semibold transition-all ${
                     form.languagesSpoken.includes(lang)
                       ? "bg-primary text-primary-content border-primary"
                       : "bg-base-200 text-base-content/60 border-base-300 hover:border-primary hover:text-primary"
@@ -557,18 +557,18 @@ function BioSection({ profile, dispatch }) {
           <div>
             <p className={labelCls}><Mic size={11} className="inline mr-1" />Biography</p>
             {profile?.biography
-              ? <p className="text-sm text-base-content/80 leading-relaxed font-poppins">{profile.biography}</p>
-              : <p className="text-sm text-base-content/30 italic">No biography added yet.</p>}
+              ? <p className="text-xs text-base-content/80 leading-relaxed font-poppins">{profile.biography}</p>
+              : <p className="text-xs text-base-content/30 italic">No biography added yet.</p>}
           </div>
           <div>
             <p className={labelCls}><Globe size={11} className="inline mr-1" />Languages</p>
             {(profile?.languagesSpoken?.length ?? 0) > 0 ? (
               <div className="flex flex-wrap gap-2 mt-1">
                 {profile.languagesSpoken.map((l) => (
-                  <span key={l} className="text-xs bg-primary/10 text-primary px-3 py-1 rounded-full border border-primary/20">{l}</span>
+                  <span key={l} className="text-[10px] bg-primary/10 text-primary px-3 py-1 rounded-full border border-primary/20">{l}</span>
                 ))}
               </div>
-            ) : <p className="text-sm text-base-content/30 italic">No languages added.</p>}
+            ) : <p className="text-xs text-base-content/30 italic">No languages added.</p>}
           </div>
         </div>
       )}
@@ -624,7 +624,7 @@ function FeesSection({ profile, dispatch }) {
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <Icon size={14} className="text-primary" />
-                  <span className="text-sm font-semibold text-base-content font-poppins">{label}</span>
+                  <span className="text-xs font-semibold text-base-content font-poppins">{label}</span>
                 </div>
                 {type && (
                   <label className="flex items-center gap-2 cursor-pointer">
@@ -634,12 +634,12 @@ function FeesSection({ profile, dispatch }) {
                       checked={form.consultationTypes?.[type] || false}
                       onChange={(e) => setForm((f) => ({ ...f, consultationTypes: { ...f.consultationTypes, [type]: e.target.checked } }))}
                     />
-                    <span className="text-xs text-base-content/50">Enabled</span>
+                    <span className="text-[10px] text-base-content/50">Enabled</span>
                   </label>
                 )}
               </div>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-base-content/40 font-bold">₹</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-base-content/40 font-bold">₹</span>
                 <input
                   type="number"
                   min={0}
@@ -662,14 +662,14 @@ function FeesSection({ profile, dispatch }) {
                 <div className="flex items-center gap-3">
                   <Icon size={15} className={enabled ? "text-primary" : "text-base-content/30"} />
                   <div>
-                    <p className="text-sm font-semibold text-base-content font-poppins">{label}</p>
-                    {type && <p className="text-xs text-base-content/40">{enabled ? "Enabled" : "Disabled"}</p>}
+                    <p className="text-xs font-semibold text-base-content font-poppins">{label}</p>
+                    {type && <p className="text-[10px] text-base-content/40">{enabled ? "Enabled" : "Disabled"}</p>}
                   </div>
                 </div>
                 <p className="text-base font-black text-base-content font-montserrat">
                   {fee
                     ? `₹${fee.toLocaleString("en-IN")}`
-                    : <span className="text-base-content/30 text-sm font-poppins">Not set</span>}
+                    : <span className="text-base-content/30 text-xs font-poppins">Not set</span>}
                 </p>
               </div>
             );
@@ -678,9 +678,9 @@ function FeesSection({ profile, dispatch }) {
             <div className="mt-2 p-3 bg-warning/10 border border-warning/20 rounded-xl">
               <div className="flex items-center gap-2 mb-1">
                 <AlertCircle size={13} className="text-warning" />
-                <p className="text-xs font-semibold text-warning font-montserrat">Custom Platform Fee Applied</p>
+                <p className="text-[10px] font-semibold text-warning font-montserrat">Custom Platform Fee Applied</p>
               </div>
-              <p className="text-xs text-base-content/60 font-poppins">
+              <p className="text-[10px] text-base-content/60 font-poppins">
                 {profile.platformFee.type === "fixed"
                   ? `₹${profile.platformFee.value} flat per transaction`
                   : `${profile.platformFee.value}% of transaction value`}
@@ -729,25 +729,25 @@ function PhotoSection({ profile, dispatch }) {
             ) : (
               <div className="w-full h-full bg-primary/5 flex flex-col items-center justify-center gap-2">
                 <Camera size={32} className="text-primary/30" />
-                <p className="text-xs text-base-content/30">No photo</p>
+                <p className="text-[10px] text-base-content/30">No photo</p>
               </div>
             )}
           </div>
           {preview && (
             <div className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-warning text-warning-content flex items-center justify-center">
-              <span className="text-xs font-black">!</span>
+              <span className="text-[10px] font-black">!</span>
             </div>
           )}
         </div>
         <div className="flex-1 space-y-3">
           <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
-          <p className="text-sm text-base-content/60 font-poppins leading-relaxed">
+          <p className="text-xs text-base-content/60 font-poppins leading-relaxed">
             Upload a clear, professional headshot. Accepted formats: JPG, PNG, WEBP. Max 5MB.
           </p>
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => fileRef.current?.click()}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary/10 text-primary border border-primary/20 text-sm font-semibold hover:bg-primary/20 transition-all"
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary/10 text-primary border border-primary/20 text-xs font-semibold hover:bg-primary/20 transition-all"
             >
               <ImageIcon size={15} /> Choose Photo
             </button>
@@ -756,22 +756,22 @@ function PhotoSection({ profile, dispatch }) {
                 <button
                   onClick={handleUpload}
                   disabled={uploading}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-content text-sm font-semibold hover:brightness-110 transition-all disabled:opacity-50"
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-content text-xs font-semibold hover:brightness-110 transition-all disabled:opacity-50"
                 >
                   {uploading ? <span className="spinner w-4 h-4" /> : <Upload size={15} />}
                   {uploading ? "Uploading…" : "Upload"}
                 </button>
                 <button
                   onClick={cancel}
-                  className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm text-base-content/50 hover:bg-base-200 transition-all"
+                  className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs text-base-content/50 hover:bg-base-200 transition-all"
                 >
                   <RotateCcw size={13} /> Reset
                 </button>
               </>
             )}
           </div>
-          {file && <p className="text-xs text-primary font-poppins">Selected: {file.name}</p>}
-          <p className="text-xs text-base-content/30 font-poppins">Your photo will also update your platform account avatar.</p>
+          {file && <p className="text-[10px] text-primary font-poppins">Selected: {file.name}</p>}
+          <p className="text-[10px] text-base-content/30 font-poppins">Your photo will also update your platform account avatar.</p>
         </div>
       </div>
     </SectionCard>
@@ -788,7 +788,7 @@ function SidebarNav({ activeId }) {
           <Link
             key={id}
             href={href}
-            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all group ${
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-semibold transition-all group ${
               isActive
                 ? "bg-primary text-primary-content shadow-md shadow-primary/20"
                 : "text-base-content/60 hover:bg-base-200 hover:text-base-content"
@@ -809,14 +809,14 @@ function SidebarNav({ activeId }) {
 
 function MobileTabs({ activeId }) {
   return (
-    <div className="flex overflow-x-auto gap-2 pb-1 scrollbar-hide">
+    <div className="flex overflow-x-auto gap-2   scrollbar-hide">
       {SECTIONS.map(({ id, label, icon: Icon, href }) => {
         const isActive = activeId === id;
         return (
           <Link
             key={id}
             href={href}
-            className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
+            className={`flex-shrink-0 flex items-center mb-4 gap-1.5 px-3 py-2 rounded-lg text-[10px] font-semibold transition-all ${
               isActive ? "bg-primary text-primary-content" : "bg-base-200 text-base-content/60"
             }`}
           >
@@ -856,7 +856,7 @@ export default function MyProfile() {
       <div className="min-h-screen bg-base-200 flex items-center justify-center">
         <div className="text-center space-y-4">
           <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin mx-auto" />
-          <p className="text-sm text-base-content/50 font-poppins">Loading your profile…</p>
+          <p className="text-xs text-base-content/50 font-poppins">Loading your profile…</p>
         </div>
       </div>
     );
@@ -868,8 +868,8 @@ export default function MyProfile() {
         <div className="text-center space-y-3 max-w-sm">
           <AlertCircle size={36} className="text-error mx-auto" />
           <p className="text-base font-semibold text-base-content font-montserrat">Failed to load profile</p>
-          <p className="text-sm text-base-content/50 font-poppins">{error}</p>
-          <button onClick={() => dispatch(fetchMyDoctorProfile())} className="btn-primary-cta text-xs px-5 py-2.5">Retry</button>
+          <p className="text-xs text-base-content/50 font-poppins">{error}</p>
+          <button onClick={() => dispatch(fetchMyDoctorProfile())} className="btn-primary-cta text-[10px] px-5 py-2.5">Retry</button>
         </div>
       </div>
     );
@@ -888,50 +888,50 @@ export default function MyProfile() {
             </div>
             <h1 className="text-lg font-black text-base-content font-montserrat">My Profile</h1>
           </div>
-          <p className="text-xs text-base-content/40 font-poppins ml-11">
+          <p className="text-[10px] text-base-content/40 font-poppins ml-11">
             Manage your professional identity on Likeson Healthcare
           </p>
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+      <div className="w-full mx-auto md:px-4 px-2   py-6">
         {/* Mobile tab bar — uses Next.js <Link>, highlights by activeId */}
         <div className="lg:hidden mb-4">
           <MobileTabs activeId={activeId} />
         </div>
 
-        <div className="flex gap-6 items-start">
+        <div className="flex gap-2 md:gap-4 items-start">
           {/* Desktop sidebar — uses Next.js <Link> for real navigation */}
           <aside className="hidden lg:block w-56 flex-shrink-0 sticky top-6">
             <div className="bg-base-100 border border-base-300 rounded-2xl p-3 shadow-sm">
               <div className="px-2 py-2 mb-2">
-                <p className="text-xs font-bold text-base-content/30 uppercase tracking-widest font-montserrat">Sections</p>
+                <p className="text-[10px] font-bold text-base-content/30 uppercase tracking-widest font-montserrat">Sections</p>
               </div>
               <SidebarNav activeId={activeId} />
             </div>
 
             {/* Quick info panel */}
             <div className="mt-4 bg-base-100 border border-base-300 rounded-2xl p-4 shadow-sm space-y-3">
-              <p className="text-xs font-bold text-base-content/30 uppercase tracking-widest font-montserrat mb-2">Quick Info</p>
+              <p className="text-[10px] font-bold text-base-content/30 uppercase tracking-widest font-montserrat mb-2">Quick Info</p>
               <div className="flex items-center gap-2">
                 <div className={`w-2 h-2 rounded-full ${profile?.isOnline ? "bg-success" : "bg-base-300"}`} />
-                <span className="text-xs font-poppins text-base-content/60">{profile?.isOnline ? "Online" : "Offline"}</span>
+                <span className="text-[10px] font-poppins text-base-content/60">{profile?.isOnline ? "Online" : "Offline"}</span>
               </div>
               <div className="flex items-center gap-2">
                 <Star size={12} className="text-warning" />
-                <span className="text-xs font-poppins text-base-content/60">
+                <span className="text-[10px] font-poppins text-base-content/60">
                   {profile?.rating?.averageRating?.toFixed(1) ?? "0.0"} ({profile?.rating?.totalRatings ?? 0} ratings)
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <Shield size={12} className="text-primary" />
-                <span className={`text-xs font-poppins ${profile?.isVerified ? "text-success" : "text-base-content/40"}`}>
+                <span className={`text-[10px] font-poppins ${profile?.isVerified ? "text-success" : "text-base-content/40"}`}>
                   {profile?.isVerified ? "Verified" : "Unverified"}
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <BookOpen size={12} className="text-primary" />
-                <span className="text-xs font-poppins text-base-content/60">
+                <span className="text-[10px] font-poppins text-base-content/60">
                   Step {profile?.onboarding?.step ?? 1} of onboarding
                 </span>
               </div>
@@ -939,7 +939,7 @@ export default function MyProfile() {
           </aside>
 
           {/* Main content — AnimatePresence re-animates whenever the URL section changes */}
-          <main className="flex-1 min-w-0">
+          <main className="flex-1   min-w-0">
             <AnimatePresence mode="wait">
               <motion.div key={activeId}>
                 {activeId === "overview"       && <OverviewSection       {...sectionProps} />}

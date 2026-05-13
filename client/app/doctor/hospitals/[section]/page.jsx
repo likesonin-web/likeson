@@ -77,7 +77,7 @@ function SectionHeader({ title, subtitle, icon: Icon }) {
       )}
       <div>
         <h2 className="text-lg font-bold text-base-content font-montserrat">{title}</h2>
-        {subtitle && <p className="text-sm text-base-content/55 mt-0.5">{subtitle}</p>}
+        {subtitle && <p className="text-xs text-base-content/55 mt-0.5">{subtitle}</p>}
       </div>
     </div>
   );
@@ -97,11 +97,11 @@ function StatChip({ label, value, icon: Icon, color = "primary", trend }) {
         <Icon size={18} />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-xs text-base-content/50 font-semibold uppercase tracking-wide">{label}</p>
-        <p className="font-extrabold text-xl text-base-content font-montserrat mt-0.5">{value}</p>
+        <p className="text-[10px] text-base-content/50 font-semibold uppercase tracking-wide">{label}</p>
+        <p className="font-extrabold md:text-xl text-[14px] text-base-content font-montserrat mt-0.5">{value}</p>
       </div>
       {trend !== undefined && (
-        <div className={`flex items-center gap-0.5 text-xs font-bold ${trend >= 0 ? "text-success" : "text-error"}`}>
+        <div className={`flex items-center gap-0.5 mt-3 text-[10px] font-bold ${trend >= 0 ? "text-success" : "text-error"}`}>
           <TrendingUp size={12} className={trend < 0 ? "rotate-180" : ""} />
           {Math.abs(trend)}%
         </div>
@@ -120,13 +120,13 @@ function HospitalBadge({ type }) {
     "Nursing Home":      "badge-primary",
     "Trust":             "badge-info",
   };
-  return <span className={`badge ${map[type] || "badge-primary"} text-xs`}>{type}</span>;
+  return <span className={`badge ${map[type] || "badge-primary"} text-[10px]`}>{type}</span>;
 }
 
 function VerifiedBadge({ isVerified }) {
   return isVerified
-    ? <span className="badge badge-success text-xs flex items-center gap-1"><CheckCircle2 size={10} />Verified</span>
-    : <span className="badge badge-warning text-xs flex items-center gap-1"><Clock size={10} />Pending</span>;
+    ? <span className="badge badge-success text-[10px] flex items-center gap-1"><CheckCircle2 size={10} />Verified</span>
+    : <span className="badge badge-warning text-[10px] flex items-center gap-1"><Clock size={10} />Pending</span>;
 }
 
 function HospitalCard({ hospital, role = "affiliated", index = 0 }) {
@@ -179,20 +179,20 @@ function HospitalCard({ hospital, role = "affiliated", index = 0 }) {
                   {hospital.name}
                 </h3>
                 {hospital.slug && (
-                  <p className="text-xs text-base-content/40 font-mono mt-0.5">/{hospital.slug}</p>
+                  <p className="text-[10px] text-base-content/40 font-mono mt-0.5">/{hospital.slug}</p>
                 )}
               </div>
               <div className="flex items-center gap-2 flex-wrap">
                 <VerifiedBadge isVerified={hospital.isVerified} />
-                {role === "primary" && <span className="badge badge-primary text-xs">Primary</span>}
-                {role === "managed" && <span className="badge badge-warning text-xs flex items-center gap-1"><Star size={9} />Managed</span>}
+                {role === "primary" && <span className="badge badge-primary text-[10px]">Primary</span>}
+                {role === "managed" && <span className="badge badge-warning text-[10px] flex items-center gap-1"><Star size={9} />Managed</span>}
               </div>
             </div>
 
             <div className="flex items-center flex-wrap gap-2 mt-2">
               <HospitalBadge type={hospital.hospitalType} />
               {hospital.accreditations?.slice(0, 2).map((a) => (
-                <span key={a} className="badge badge-info text-xs">{a}</span>
+                <span key={a} className="badge badge-info text-[10px]">{a}</span>
               ))}
             </div>
           </div>
@@ -202,29 +202,29 @@ function HospitalCard({ hospital, role = "affiliated", index = 0 }) {
         {addrStr && (
           <div className="flex items-start gap-2 mt-3">
             <MapPin size={13} className="text-base-content/40 shrink-0 mt-0.5" />
-            <p className="text-xs text-base-content/55 leading-relaxed">{addrStr}</p>
+            <p className="text-[10px] text-base-content/55 leading-relaxed">{addrStr}</p>
           </div>
         )}
 
         {/* Stat pills */}
         <div className="flex gap-2 mt-3 flex-wrap">
           {hospital.bedCount?.total > 0 && (
-            <span className="flex items-center gap-1 text-xs bg-base-200 px-2 py-1 rounded-lg font-medium text-base-content/70">
+            <span className="flex items-center gap-1 text-[10px] bg-base-200 px-2 py-1 rounded-lg font-medium text-base-content/70">
               <Bed size={11} /> {hospital.bedCount.total} beds
             </span>
           )}
           {hospital.rating?.averageRating > 0 && (
-            <span className="flex items-center gap-1 text-xs bg-base-200 px-2 py-1 rounded-lg font-medium text-base-content/70">
+            <span className="flex items-center gap-1 text-[10px] bg-base-200 px-2 py-1 rounded-lg font-medium text-base-content/70">
               <Star size={11} className="text-warning fill-warning" /> {hospital.rating.averageRating.toFixed(1)}
             </span>
           )}
           {hospital.linkedDoctors?.length > 0 && (
-            <span className="flex items-center gap-1 text-xs bg-base-200 px-2 py-1 rounded-lg font-medium text-base-content/70">
+            <span className="flex items-center gap-1 text-[10px] bg-base-200 px-2 py-1 rounded-lg font-medium text-base-content/70">
               <Stethoscope size={11} /> {hospital.linkedDoctors.length} doctors
             </span>
           )}
           {hospital.is24x7 && (
-            <span className="flex items-center gap-1 text-xs bg-success/10 px-2 py-1 rounded-lg font-medium text-success">
+            <span className="flex items-center gap-1 text-[10px] bg-success/10 px-2 py-1 rounded-lg font-medium text-success">
               <Wifi size={11} /> 24×7
             </span>
           )}
@@ -246,19 +246,19 @@ function HospitalCard({ hospital, role = "affiliated", index = 0 }) {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {hospital.contact.phone && (
                       <a href={`tel:${hospital.contact.phone}`}
-                        className="flex items-center gap-2 text-xs text-base-content/70 hover:text-primary transition-colors">
+                        className="flex items-center gap-2 text-[10px] text-base-content/70 hover:text-primary transition-colors">
                         <Phone size={12} /> {hospital.contact.phone}
                       </a>
                     )}
                     {hospital.contact.email && (
                       <a href={`mailto:${hospital.contact.email}`}
-                        className="flex items-center gap-2 text-xs text-base-content/70 hover:text-primary transition-colors">
+                        className="flex items-center gap-2 text-[10px] text-base-content/70 hover:text-primary transition-colors">
                         <Mail size={12} /> {hospital.contact.email}
                       </a>
                     )}
                     {hospital.contact.website && (
                       <a href={hospital.contact.website} target="_blank" rel="noreferrer"
-                        className="flex items-center gap-2 text-xs text-primary hover:underline">
+                        className="flex items-center gap-2 text-[10px] text-primary hover:underline">
                         <Globe size={12} /> Website <ExternalLink size={10} />
                       </a>
                     )}
@@ -268,11 +268,11 @@ function HospitalCard({ hospital, role = "affiliated", index = 0 }) {
                 {/* Facilities */}
                 {facilities.length > 0 && (
                   <div>
-                    <p className="text-xs font-semibold text-base-content/50 uppercase tracking-wide mb-2">Facilities</p>
+                    <p className="text-[10px] font-semibold text-base-content/50 uppercase tracking-wide mb-2">Facilities</p>
                     <div className="flex flex-wrap gap-2">
                       {facilities.map(({ icon: Icon, label }) => (
                         <span key={label}
-                          className="flex items-center gap-1 text-xs bg-success/10 text-success px-2.5 py-1 rounded-lg font-semibold">
+                          className="flex items-center gap-1 text-[10px] bg-success/10 text-success px-2.5 py-1 rounded-lg font-semibold">
                           <Icon size={11} /> {label}
                         </span>
                       ))}
@@ -283,10 +283,10 @@ function HospitalCard({ hospital, role = "affiliated", index = 0 }) {
                 {/* Accepted schemes */}
                 {hospital.acceptedSchemes?.length > 0 && (
                   <div>
-                    <p className="text-xs font-semibold text-base-content/50 uppercase tracking-wide mb-2">Accepted Schemes</p>
+                    <p className="text-[10px] font-semibold text-base-content/50 uppercase tracking-wide mb-2">Accepted Schemes</p>
                     <div className="flex flex-wrap gap-1.5">
                       {hospital.acceptedSchemes.map((s) => (
-                        <span key={s} className="text-xs bg-info/10 text-info px-2 py-0.5 rounded-md font-medium">{s}</span>
+                        <span key={s} className="text-[10px] bg-info/10 text-info px-2 py-0.5 rounded-md font-medium">{s}</span>
                       ))}
                     </div>
                   </div>
@@ -295,13 +295,13 @@ function HospitalCard({ hospital, role = "affiliated", index = 0 }) {
                 {/* Specialties */}
                 {hospital.specialties?.length > 0 && (
                   <div>
-                    <p className="text-xs font-semibold text-base-content/50 uppercase tracking-wide mb-2">Specialties</p>
+                    <p className="text-[10px] font-semibold text-base-content/50 uppercase tracking-wide mb-2">Specialties</p>
                     <div className="flex flex-wrap gap-1.5">
                       {hospital.specialties.slice(0, 8).map((s) => (
-                        <span key={s} className="text-xs bg-base-200 text-base-content/60 px-2 py-0.5 rounded-md font-medium">{s}</span>
+                        <span key={s} className="text-[10px] bg-base-200 text-base-content/60 px-2 py-0.5 rounded-md font-medium">{s}</span>
                       ))}
                       {hospital.specialties.length > 8 && (
-                        <span className="text-xs text-base-content/40">+{hospital.specialties.length - 8} more</span>
+                        <span className="text-[10px] text-base-content/40">+{hospital.specialties.length - 8} more</span>
                       )}
                     </div>
                   </div>
@@ -315,14 +315,14 @@ function HospitalCard({ hospital, role = "affiliated", index = 0 }) {
         <div className="flex items-center justify-between mt-4 pt-3 border-t border-base-300/60">
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"
+            className="text-[10px] font-semibold text-primary hover:underline flex items-center gap-1"
           >
             {expanded ? "Show less" : "View details"}
             <ChevronRight size={12} className={`transition-transform ${expanded ? "rotate-90" : ""}`} />
           </button>
           {hospital.googleMapsUrl && (
             <a href={hospital.googleMapsUrl} target="_blank" rel="noreferrer"
-              className="flex items-center gap-1 text-xs text-base-content/50 hover:text-primary transition-colors">
+              className="flex items-center gap-1 text-[10px] text-base-content/50 hover:text-primary transition-colors">
               <Navigation size={12} /> Directions
             </a>
           )}
@@ -344,10 +344,10 @@ function EmptyState({ icon: Icon, title, description, action, onAction }) {
       </div>
       <div>
         <p className="font-bold text-base-content text-base">{title}</p>
-        <p className="text-sm text-base-content/50 mt-1 max-w-xs mx-auto">{description}</p>
+        <p className="text-xs text-base-content/50 mt-1 max-w-xs mx-auto">{description}</p>
       </div>
       {action && (
-        <button onClick={onAction} className="btn-primary-cta text-xs px-5 py-2.5 mt-2">
+        <button onClick={onAction} className="btn-primary-cta text-[10px] px-5 py-2.5 mt-2">
           {action}
         </button>
       )}
@@ -361,7 +361,7 @@ function EmptyState({ icon: Icon, title, description, action, onAction }) {
 function ChartTooltip({ active, payload, label, prefix = "", suffix = "" }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="card p-3 text-xs shadow-xl border border-base-300 min-w-[120px]">
+    <div className="card p-3 text-[10px] shadow-xl border border-base-300 min-w-[120px]">
       <p className="font-bold text-base-content mb-2">{label}</p>
       {payload.map((entry, i) => (
         <div key={i} className="flex items-center justify-between gap-4">
@@ -405,9 +405,9 @@ function AnalyticsPanel({ profile, hospitalCount }) {
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <BarChart2 size={16} className="text-primary" />
-            <h4 className="font-bold text-base-content text-sm">Monthly Consultations & Referrals</h4>
+            <h4 className="font-bold text-base-content text-xs">Monthly Consultations & Referrals</h4>
           </div>
-          <span className="badge badge-primary text-xs">Last 7 months</span>
+          <span className="badge badge-primary text-[10px]">Last 7 months</span>
         </div>
         <ResponsiveContainer width="100%" height={200}>
           <AreaChart data={mockMonthly} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
@@ -437,7 +437,7 @@ function AnalyticsPanel({ profile, hospitalCount }) {
         <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.32 }} className="card p-5">
           <div className="flex items-center gap-2 mb-4">
             <TrendingUp size={16} className="text-success" />
-            <h4 className="font-bold text-base-content text-sm">Monthly Earnings (₹)</h4>
+            <h4 className="font-bold text-base-content text-xs">Monthly Earnings (₹)</h4>
           </div>
           <ResponsiveContainer width="100%" height={170}>
             <BarChart data={mockMonthly} margin={{ top: 0, right: 5, left: -20, bottom: 0 }}>
@@ -458,7 +458,7 @@ function AnalyticsPanel({ profile, hospitalCount }) {
         <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.38 }} className="card p-5">
           <div className="flex items-center gap-2 mb-4">
             <Layers size={16} className="text-accent" />
-            <h4 className="font-bold text-base-content text-sm">Consultation Type Split</h4>
+            <h4 className="font-bold text-base-content text-xs">Consultation Type Split</h4>
           </div>
           <div className="flex items-center gap-4">
             <ResponsiveContainer width={130} height={130}>
@@ -475,8 +475,8 @@ function AnalyticsPanel({ profile, hospitalCount }) {
               {mockTypeBreakdown.map((d, i) => (
                 <div key={d.name} className="flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: COLORS[i] }} />
-                  <span className="text-xs text-base-content/70 font-medium">{d.name}</span>
-                  <span className="text-xs font-bold text-base-content ml-auto">{d.value}%</span>
+                  <span className="text-[10px] text-base-content/70 font-medium">{d.name}</span>
+                  <span className="text-[10px] font-bold text-base-content ml-auto">{d.value}%</span>
                 </div>
               ))}
             </div>
@@ -488,7 +488,7 @@ function AnalyticsPanel({ profile, hospitalCount }) {
       <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.44 }} className="card p-5">
         <div className="flex items-center gap-2 mb-4">
           <Star size={16} className="text-warning" />
-          <h4 className="font-bold text-base-content text-sm">Hospital Ratings</h4>
+          <h4 className="font-bold text-base-content text-xs">Hospital Ratings</h4>
         </div>
         <div className="flex flex-col sm:flex-row items-center gap-6">
           <ResponsiveContainer width={180} height={180}>
@@ -504,7 +504,7 @@ function AnalyticsPanel({ profile, hospitalCount }) {
           <div className="flex-1 space-y-3 w-full">
             {mockHospitalRating.map((h, i) => (
               <div key={h.name}>
-                <div className="flex justify-between text-xs font-semibold mb-1">
+                <div className="flex justify-between text-[10px] font-semibold mb-1">
                   <span className="text-base-content/70">{h.name}</span>
                   <span style={{ color: h.fill }}>{h.rating}/5</span>
                 </div>
@@ -568,7 +568,7 @@ function AllHospitals({ managed, profile }) {
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             <Layers size={14} className="text-base-content/40" />
-            <h3 className="text-sm font-bold text-base-content/60 uppercase tracking-wide">All Linked Hospitals</h3>
+            <h3 className="text-xs font-bold text-base-content/60 uppercase tracking-wide">All Linked Hospitals</h3>
           </div>
           {primary && <HospitalCard hospital={primary} role="primary" index={0} />}
           {others.map((h, i)   => <HospitalCard key={h._id} hospital={h} role="affiliated" index={i + 1} />)}
@@ -611,13 +611,13 @@ function PrimaryHospital({ managed, profile }) {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap mb-1">
-                    <h3 className="font-extrabold text-xl text-base-content font-montserrat">{hospital.name}</h3>
-                    <span className="badge badge-primary text-xs">Primary</span>
+                    <h3 className="font-extrabold md:text-xl text-[12px] text-base-content font-montserrat">{hospital.name}</h3>
+                    <span className="badge badge-primary text-[10px]">Primary</span>
                     <VerifiedBadge isVerified={hospital.isVerified} />
                   </div>
                   <HospitalBadge type={hospital.hospitalType} />
                   {hospital.description && (
-                    <p className="text-sm text-base-content/60 mt-2 leading-relaxed line-clamp-2">{hospital.description}</p>
+                    <p className="text-xs text-base-content/60 mt-2 leading-relaxed line-clamp-2">{hospital.description}</p>
                   )}
                 </div>
               </div>
@@ -635,10 +635,10 @@ function PrimaryHospital({ managed, profile }) {
                   <div key={label} className="flex items-center gap-3 p-3 rounded-xl bg-base-200/50">
                     <Icon size={14} className="text-primary shrink-0" />
                     <div className="min-w-0">
-                      <p className="text-xs font-semibold text-base-content/45 uppercase tracking-wide">{label}</p>
+                      <p className="text-[10px] font-semibold text-base-content/45 uppercase tracking-wide">{label}</p>
                       {link
-                        ? <a href={value} target="_blank" rel="noreferrer" className="text-sm font-medium text-primary hover:underline flex items-center gap-1 truncate">{value} <ExternalLink size={10} /></a>
-                        : <p className="text-sm font-semibold text-base-content truncate">{value}</p>
+                        ? <a href={value} target="_blank" rel="noreferrer" className="text-xs font-medium text-primary hover:underline flex items-center gap-1 truncate">{value} <ExternalLink size={10} /></a>
+                        : <p className="text-xs font-semibold text-base-content truncate">{value}</p>
                       }
                     </div>
                   </div>
@@ -648,12 +648,12 @@ function PrimaryHospital({ managed, profile }) {
               {/* Accreditations */}
               {hospital.accreditations?.length > 0 && (
                 <div className="mt-4">
-                  <p className="text-xs font-semibold text-base-content/50 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                  <p className="text-[10px] font-semibold text-base-content/50 uppercase tracking-wide mb-2 flex items-center gap-1.5">
                     <Award size={11} /> Accreditations
                   </p>
                   <div className="flex gap-2 flex-wrap">
                     {hospital.accreditations.map((a) => (
-                      <span key={a} className="badge badge-info text-xs flex items-center gap-1">
+                      <span key={a} className="badge badge-info text-[10px] flex items-center gap-1">
                         <Shield size={9} /> {a}
                       </span>
                     ))}
@@ -697,7 +697,7 @@ function OtherAffiliations({ managed, profile }) {
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
             className="flex items-center gap-3 p-4 rounded-xl bg-info/5 border border-info/20">
             <Info size={16} className="text-info shrink-0" />
-            <p className="text-sm text-base-content/70">
+            <p className="text-xs text-base-content/70">
               You consult at <strong className="text-info">{others.length}</strong> affiliated hospitals in addition to your primary practice.
               Patients can book you from any of these locations.
             </p>
@@ -715,7 +715,7 @@ function OtherAffiliations({ managed, profile }) {
             <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="card p-5">
               <div className="flex items-center gap-2 mb-4">
                 <Building2 size={16} className="text-primary" />
-                <h4 className="font-bold text-base-content text-sm">Affiliated Hospital Types</h4>
+                <h4 className="font-bold text-base-content text-xs">Affiliated Hospital Types</h4>
               </div>
               <ResponsiveContainer width="100%" height={180}>
                 <BarChart
@@ -787,7 +787,7 @@ function ManagedHospitals({ managed, profile }) {
             <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="card p-5">
               <div className="flex items-center gap-2 mb-4">
                 <BarChart2 size={16} className="text-primary" />
-                <h4 className="font-bold text-base-content text-sm">Hospitals — Beds & Doctors</h4>
+                <h4 className="font-bold text-base-content text-xs">Hospitals — Beds & Doctors</h4>
               </div>
               <ResponsiveContainer width="100%" height={190}>
                 <BarChart
@@ -815,12 +815,12 @@ function ManagedHospitals({ managed, profile }) {
             <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="card p-5">
               <div className="flex items-center gap-2 mb-4">
                 <Star size={16} className="text-warning" />
-                <h4 className="font-bold text-base-content text-sm">Hospital Ratings</h4>
+                <h4 className="font-bold text-base-content text-xs">Hospital Ratings</h4>
               </div>
               <div className="space-y-3">
                 {hospitals.map((h, i) => (
                   <div key={h._id || i}>
-                    <div className="flex justify-between text-xs font-semibold mb-1">
+                    <div className="flex justify-between text-[10px] font-semibold mb-1">
                       <span className="text-base-content/70 truncate max-w-[180px]">{h.name}</span>
                       <span className="text-warning">{(h.rating?.averageRating || 0).toFixed(1)}/5</span>
                     </div>
@@ -887,17 +887,17 @@ export default function MyHospitals() {
     <div className="min-h-screen bg-base-100">
       {/* ── Page header ─────────────────────────────────────────── */}
       <div className="border-b border-base-300 bg-base-100 sticky top-0 z-30">
-        <div className="container-custom py-4">
+        <div className="  py-4">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="p-2 rounded-xl bg-primary/10">
                 <Building2 size={20} className="text-primary" />
               </div>
               <div>
-                <h1 className="text-xl font-extrabold font-montserrat text-base-content tracking-tight">
+                <h1 className="md:text-xl text-[12px] font-extrabold font-montserrat text-base-content tracking-tight">
                   My Hospitals
                 </h1>
-                <p className="text-xs text-base-content/50">
+                <p className="text-[10px] text-base-content/50">
                   {totalCount} hospital{totalCount !== 1 ? "s" : ""} linked to your account
                 </p>
               </div>
@@ -905,7 +905,7 @@ export default function MyHospitals() {
             <button
               onClick={() => { dispatch(fetchMyManagedHospitals()); dispatch(fetchMyDoctorProfile()); }}
               disabled={loading.fetchMyManagedHospitals}
-              className="flex items-center gap-1.5 text-xs font-semibold text-base-content/60 hover:text-primary transition-colors disabled:opacity-40"
+              className="flex items-center gap-1.5 text-[10px] font-semibold text-base-content/60 hover:text-primary transition-colors disabled:opacity-40"
             >
               <RefreshCcw size={13} className={loading.fetchMyManagedHospitals ? "animate-spin" : ""} />
               Refresh
@@ -914,8 +914,8 @@ export default function MyHospitals() {
         </div>
       </div>
 
-      <div className="container-custom py-6">
-        <div className="flex gap-6">
+      <div className=" px-2 md:px-4 py-6">
+        <div className="flex flex-wrap gap-6">
           {/* ── Sidebar ───────────────────────────────────────────── */}
           <aside className="hidden md:flex flex-col gap-1 w-56 shrink-0">
             {links.map(({ name, section: sec, icon: Icon }) => {
@@ -930,7 +930,7 @@ export default function MyHospitals() {
                 <button
                   key={sec}
                   onClick={() => router.push(`/doctor/hospitals${sec ? `/${sec}` : ""}`)}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 text-left ${
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 text-left ${
                     isActive
                       ? "bg-primary text-primary-content shadow-md shadow-primary/20"
                       : "text-base-content/70 hover:bg-base-200 hover:text-base-content"
@@ -939,7 +939,7 @@ export default function MyHospitals() {
                   <Icon size={16} className="shrink-0" />
                   <span className="flex-1 truncate">{name}</span>
                   {count > 0 && (
-                    <span className={`text-xs font-bold px-1.5 py-0.5 rounded-md ${
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
                       isActive ? "bg-white/20 text-white" : "bg-base-300 text-base-content/60"
                     }`}>
                       {count}
@@ -953,15 +953,15 @@ export default function MyHospitals() {
             {/* Sidebar stats mini */}
             <div className="mt-4 space-y-2">
               <div className="p-3 rounded-xl bg-base-200/50 border border-base-300">
-                <p className="text-xs font-semibold text-base-content/50 mb-2 uppercase tracking-wide">Quick Stats</p>
+                <p className="text-[10px] font-semibold text-base-content/50 mb-2 uppercase tracking-wide">Quick Stats</p>
                 {[
                   { label: "Rating",   value: `${(profile?.rating?.averageRating || 0).toFixed(1)} ★`, color: "text-warning" },
                   { label: "Reviews",  value: profile?.rating?.totalReviews || 0,    color: "text-base-content" },
                   { label: "KYC",      value: profile?.kycStatus || "N/A",           color: profile?.kycStatus === "verified" ? "text-success" : "text-warning" },
                 ].map(({ label, value, color }) => (
                   <div key={label} className="flex justify-between items-center py-1">
-                    <span className="text-xs text-base-content/50">{label}</span>
-                    <span className={`text-xs font-bold ${color}`}>{value}</span>
+                    <span className="text-[10px] text-base-content/50">{label}</span>
+                    <span className={`text-[10px] font-bold ${color}`}>{value}</span>
                   </div>
                 ))}
               </div>
@@ -977,7 +977,7 @@ export default function MyHospitals() {
                   <button
                     key={sec}
                     onClick={() => router.push(`/doctor/hospitals${sec ? `/${sec}` : ""}`)}
-                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all shrink-0 ${
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[10px] font-semibold whitespace-nowrap transition-all shrink-0 ${
                       isActive ? "bg-primary text-primary-content" : "bg-base-200 text-base-content/70"
                     }`}
                   >
@@ -995,7 +995,7 @@ export default function MyHospitals() {
               <div className="flex items-center justify-center py-24">
                 <div className="flex flex-col items-center gap-3">
                   <div className="spinner w-8 h-8" />
-                  <p className="text-sm text-base-content/50">Loading hospitals…</p>
+                  <p className="text-xs text-base-content/50">Loading hospitals…</p>
                 </div>
               </div>
             ) : (

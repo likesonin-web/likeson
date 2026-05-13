@@ -388,9 +388,37 @@ platformPricingConfigSchema.pre('save', function () {
 // ─────────────────────────────────────────────────────────────────────────────
 // STATIC METHODS
 // ─────────────────────────────────────────────────────────────────────────────
+// NEW — provide required platformFee defaults so create() doesn't fail validation
 platformPricingConfigSchema.statics.getGlobal = async function () {
   let config = await this.findOne({ configName: 'global', isActive: true });
-  if (!config) config = await this.create({ configName: 'global' });
+  if (!config) {
+    const defaultFee = { type: 'percentage', value: 10 };
+    config = await this.create({
+      configName: 'global',
+      transport: {
+        platformFee: defaultFee,
+      },
+      careAssistant: {
+        platformFee: defaultFee,
+      },
+      doctor: {
+        platformFee: defaultFee,
+      },
+      hospital: {
+        platformFee: defaultFee,
+      },
+      diagnostics: {
+        platformFee: defaultFee,
+        homeSamplePlatformFee: defaultFee,
+      },
+      pharmacy: {
+        platformFee: defaultFee,
+      },
+      customPlanOptions: {
+        consultation: { pricePerConsultation: 0 },
+      },
+    });
+  }
   return config;
 };
 

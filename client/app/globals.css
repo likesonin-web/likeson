@@ -948,6 +948,7 @@
     color: color-mix(in oklch, var(--base-content) 55%, transparent);
     margin-top: 0.25rem;
   }
+  
 
   /* ── Spinner / Loading ───────────────────────────────────── */
   .spinner,
@@ -1257,3 +1258,5 @@
   .glass-card { border: 1px solid #e5e7eb; background: white; }
   .no-print   { display: none !important; }
 }
+
+ 

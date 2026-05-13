@@ -36,7 +36,8 @@ import {
   selectLabDetail, selectLabDetailLoading, selectBookingOptions, selectBookingOptionsLoading,
   selectTransportEstimate, selectTransportEstimLoading, selectFollowUpCheck,
   selectFollowUpCheckLoading, selectCreateBookingData, selectCreateBookingLoading,
-  selectCreateBookingError, selectCreateBookingStatus,
+  selectCreateBookingError, selectCreateBookingStatus,verifyRazorpayPayment,
+selectVerifyPaymentLoading,
 } from '@/store/slices/bookingSlice';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1932,10 +1933,17 @@ export default function BookingSystem() {
             name:    form.patientName || '',
             contact: form.patientPhone || '',
           },
-          onSuccess: (paymentResponse) => {
-            setPaymentState('done');
-            setSuccess(true);
-          },
+           
+          onSuccess: async (paymentResponse) => {
+  setPaymentState('done');
+  await dispatch(verifyRazorpayPayment({
+    bookingId:            actionResult.payload?.bookingId,
+    razorpay_order_id:    paymentResponse.razorpay_order_id,
+    razorpay_payment_id:  paymentResponse.razorpay_payment_id,
+    razorpay_signature:   paymentResponse.razorpay_signature,
+  }));
+  setSuccess(true);
+},
           onFailure: (msg) => {
             setPaymentState('failed');
             setPaymentError(msg || 'Payment failed or cancelled. Booking saved — complete payment from My Bookings.');

@@ -195,6 +195,12 @@ import booking1Routes from './routes/bookingrouterpaert1.js';
 app.use('/api/bookings', booking1Routes);
 import rideRequestRouter from './routes/rideRequestRouter.js';
 app.use('/api/ride-requests', rideRequestRouter);
+
+import prescriptionCareRouter from './routes/prescriptionCareRouter.js';
+app.use('/api/clinical',prescriptionCareRouter)
+
+import bloodBankRouter from './routes/bloodbankRouter.js';
+app.use('/api/blood-banks', bloodBankRouter);
 /* ---------------- Logs ---------------- */
 
 app.use(morgan(NODE_ENV === "development" ? "dev" : "combined"));

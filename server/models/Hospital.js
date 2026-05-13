@@ -150,6 +150,48 @@ const hospitalSchema = new Schema(
       index:    true,
     },
 
+   // ── Blood Bank References ─────────────────────────────────────────────────
+ 
+  /**
+   * bloodBanks — blood banks associated with this hospital.
+   *
+   * Two categories of entries:
+   *   1. hospital_embedded banks (BloodBank.bankType === 'hospital_embedded',
+   *      BloodBank.hospital === this._id) — physically inside this hospital.
+   *   2. standalone banks in supply agreement
+   *      (BloodBank.linkedHospitals contains this._id).
+   *
+   * This array is the hospital-side mirror. Keep in sync when:
+   *   - A BloodBank is created with bankType 'hospital_embedded' + this hospital
+   *   - A supply agreement is added/removed (linkedHospitals update)
+   *
+   * Usage:
+   *   await Hospital.findById(id).populate('bloodBanks', 'name bankCode status contact location')
+   */
+  bloodBanks: [
+    {
+      type: Schema.Types.ObjectId,
+      ref:  'BloodBank',
+    },
+  ],
+ 
+  /**
+   * primaryBloodBank — the main/embedded blood bank of this hospital.
+   * Null if hospital has no dedicated blood bank.
+   * Usually the first hospital_embedded BloodBank created for this hospital.
+   */
+  primaryBloodBank: {
+    type:    Schema.Types.ObjectId,
+    ref:     'BloodBank',
+    default: null,
+  },
+ 
+  /**
+   * acceptsBloodRequests — hospital can place BloodRequests on platform.
+   * Default true. Set false if hospital has own sufficient supply chain.
+   */
+  acceptsBloodRequests: { type: Boolean, default: true },
+
     description: { type: String, maxlength: 1000 },
     logo:        { type: String },
     images: {
@@ -417,6 +459,7 @@ hospitalSchema.index(
 hospitalSchema.index({ linkedDoctors: 1 });
 hospitalSchema.index({ isVerified: 1, isActive: 1 });
 hospitalSchema.index({ location: '2dsphere' });          // line near bottom
-
+hospitalSchema.index({ bloodBanks: 1 });
+hospitalSchema.index({ primaryBloodBank: 1 });
 const Hospital = mongoose.model('Hospital', hospitalSchema);
 export default Hospital;

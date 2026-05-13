@@ -6,43 +6,47 @@ const { Schema } = mongoose;
 //
 // Represents a blood bank facility. Three types:
 //
-//  standalone       → Independent blood bank (Red Cross, private facility)
-//                     managedBy → User{ role: 'blood_bank' }
+//  standalone        → Independent blood bank
+//                      managedBy → User{ role: 'blood_bank' }
 //
-//  hospital_embedded→ Blood bank inside a hospital
-//                     hospital → Hospital ref (required)
-//                     managedBy → same User as hospital manager OR separate
+//  hospital_embedded → Blood bank inside a hospital
+//                      hospital → Hospital ref (required)
+//                      managedBy → User{ role: 'blood_bank' } OR hospital manager
 //
-//  mobile_unit      → Mobile blood collection van / camp unit
-//                     parentBank → BloodBank ref (the base facility)
+//  mobile_unit       → Mobile blood collection van
+//                      parentBank → BloodBank ref (required)
+//
+// RELATIONSHIPS:
+//   Hospital.bloodBanks → array of BloodBank refs (hospital side)
+//   BloodBank.hospital  → Hospital ref (embedded type only)
+//   Customer accesses blood bank via BloodBank model directly (search/find nearby)
 //
 // INVENTORY:
-//   BloodInventory documents are stored separately (one per bloodGroup+component combo).
+//   BloodInventory docs stored separately (one per bloodGroup+component).
 //   BloodBank.inventory virtual populates them.
 //
 // COMPLIANCE (India):
-//   Blood banks must be licensed under Drugs & Cosmetics Act, 1940.
-//   NACO (National AIDS Control Organisation) registration required.
-//   State Drug Controller license mandatory.
+//   Licensed under Drugs & Cosmetics Act, 1940.
+//   NACO registration required. State Drug Controller license mandatory.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const BANK_TYPES = ['standalone', 'hospital_embedded', 'mobile_unit'];
 
 export const BLOOD_BANK_STATUSES = [
-  'pending',       // Applied, awaiting admin review
-  'under_review',  // Admin reviewing documents
-  'active',        // Operational
-  'suspended',     // Temporarily suspended (compliance issue)
-  'revoked',       // License revoked
-  'deactivated',   // Voluntarily deactivated
+  'pending',
+  'under_review',
+  'active',
+  'suspended',
+  'revoked',
+  'deactivated',
 ];
 
 export const ACCREDITATION_BODIES = ['NABH', 'NABL', 'NACO', 'State_Drug_Controller', 'ISO', 'Other'];
 
 export const BLOOD_COMPONENTS = [
   'Whole Blood',
-  'PRBC',           // Packed Red Blood Cells
-  'FFP',            // Fresh Frozen Plasma
+  'PRBC',
+  'FFP',
   'Platelets',
   'Cryoprecipitate',
   'Plasma',
@@ -59,8 +63,8 @@ export const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 const operatingHoursSchema = new Schema(
   {
     day:       { type: String, enum: ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'] },
-    openTime:  { type: String },   // "08:00"
-    closeTime: { type: String },   // "20:00"
+    openTime:  { type: String },
+    closeTime: { type: String },
     is24Hours: { type: Boolean, default: false },
     isClosed:  { type: Boolean, default: false },
   },
@@ -72,10 +76,10 @@ const licenseSchema = new Schema(
     licenseType: {
       type: String,
       enum: [
-        'Drugs_Cosmetics_Act',   // Central license under D&C Act 1940
-        'State_Drug_Controller', // State-level blood bank license
-        'NACO_Registration',     // National AIDS Control Organisation
-        'FSSAI',                 // Food Safety (rare, for plasma fractionation)
+        'Drugs_Cosmetics_Act',
+        'State_Drug_Controller',
+        'NACO_Registration',
+        'FSSAI',
         'Other',
       ],
       required: true,
@@ -106,11 +110,11 @@ const accreditationSchema = new Schema(
 
 const contactPersonSchema = new Schema(
   {
-    name:        { type: String, trim: true, required: true },
-    designation: { type: String, trim: true },   // "Medical Officer", "Lab Director"
-    phone:       { type: String, trim: true },
-    email:       { type: String, lowercase: true, trim: true },
-    isPrimary:   { type: Boolean, default: false },
+    name:            { type: String, trim: true, required: true },
+    designation:     { type: String, trim: true },
+    phone:           { type: String, trim: true },
+    email:           { type: String, lowercase: true, trim: true },
+    isPrimary:       { type: Boolean, default: false },
     isAvailable24x7: { type: Boolean, default: false },
   },
   { _id: true }
@@ -145,24 +149,20 @@ const bankDetailsSchema = new Schema(
       type: String, uppercase: true, trim: true,
       match: [/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Invalid IFSC'],
     },
-    bankName:       { type: String, trim: true },
-    upiId:          { type: String, trim: true },
-    isVerified:     { type: Boolean, default: false },
-    verifiedAt:     { type: Date },
+    bankName:   { type: String, trim: true },
+    upiId:      { type: String, trim: true },
+    isVerified: { type: Boolean, default: false },
+    verifiedAt: { type: Date },
   },
   { _id: false }
 );
 
-/**
- * stockAlertSchema — low-stock alert thresholds per blood group + component.
- * When availableUnits falls below threshold, system triggers notifications.
- */
 const stockAlertSchema = new Schema(
   {
-    bloodGroup:      { type: String, enum: BLOOD_GROUPS, required: true },
-    component:       { type: String, enum: BLOOD_COMPONENTS, required: true },
-    minThreshold:    { type: Number, required: true, min: 0 },  // alert when below this
-    criticalThreshold: { type: Number, required: true, min: 0 }, // critical alert level
+    bloodGroup:        { type: String, enum: BLOOD_GROUPS, required: true },
+    component:         { type: String, enum: BLOOD_COMPONENTS, required: true },
+    minThreshold:      { type: Number, required: true, min: 0 },
+    criticalThreshold: { type: Number, required: true, min: 0 },
   },
   { _id: false }
 );
@@ -185,7 +185,6 @@ const bloodBankSchema = new Schema(
       uppercase: true,
       trim:      true,
       index:     true,
-      comment:   'Format: BB-XXXXXXXX — auto-generated',
     },
     slug: {
       type:      String,
@@ -202,10 +201,12 @@ const bloodBankSchema = new Schema(
       index:    true,
     },
 
-    // ── Ownership / Management ────────────────────────────────────────────────
+    // ── Ownership ─────────────────────────────────────────────────────────────
     /**
-     * managedBy → User with role 'blood_bank' (standalone/mobile)
-     * OR hospital manager User (hospital_embedded)
+     * managedBy → User{ role: 'blood_bank' } for standalone/mobile_unit.
+     *             OR User{ role: 'hospital' } for hospital_embedded.
+     * NOTE: Only users with role 'blood_bank' can manage standalone/mobile banks.
+     *       hospital_embedded banks are managed by the parent hospital's manager.
      */
     managedBy: {
       type:     Schema.Types.ObjectId,
@@ -215,8 +216,8 @@ const bloodBankSchema = new Schema(
     },
 
     /**
-     * hospital — required when bankType === 'hospital_embedded'.
-     * Links to the parent Hospital document.
+     * hospital → required when bankType === 'hospital_embedded'.
+     * The parent Hospital document. Hospital.bloodBanks array mirrors this.
      */
     hospital: {
       type:    Schema.Types.ObjectId,
@@ -226,8 +227,8 @@ const bloodBankSchema = new Schema(
     },
 
     /**
-     * parentBank — required when bankType === 'mobile_unit'.
-     * The base blood bank that operates this mobile unit.
+     * parentBank → required when bankType === 'mobile_unit'.
+     * The base blood bank operating this mobile unit.
      */
     parentBank: {
       type:    Schema.Types.ObjectId,
@@ -238,11 +239,7 @@ const bloodBankSchema = new Schema(
     description: { type: String, maxlength: 1000 },
     logoUrl:     { type: String },
 
-    // ── Services Offered ──────────────────────────────────────────────────────
-    /**
-     * componentsHandled — which blood components this bank can store/supply.
-     * Not all banks handle all components (e.g. platelets need special storage).
-     */
+    // ── Services ──────────────────────────────────────────────────────────────
     componentsHandled: {
       type:    [{ type: String, enum: BLOOD_COMPONENTS }],
       default: ['Whole Blood', 'PRBC'],
@@ -253,15 +250,14 @@ const bloodBankSchema = new Schema(
       default: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
     },
 
-    // Services flags
-    acceptsDonations:       { type: Boolean, default: true },
-    offersDelivery:         { type: Boolean, default: false },   // will deliver to hospitals
-    offersCrossMatch:       { type: Boolean, default: true },
-    offersComponentSeparation: { type: Boolean, default: false }, // can fractionate whole blood
-    offersEmergencySupply:  { type: Boolean, default: true },
-    isEmergency24x7:        { type: Boolean, default: false },
-    hasApheresisFacility:   { type: Boolean, default: false },   // single-donor platelet collection
-    hasMobileUnit:          { type: Boolean, default: false },
+    acceptsDonations:          { type: Boolean, default: true },
+    offersDelivery:            { type: Boolean, default: false },
+    offersCrossMatch:          { type: Boolean, default: true },
+    offersComponentSeparation: { type: Boolean, default: false },
+    offersEmergencySupply:     { type: Boolean, default: true },
+    isEmergency24x7:           { type: Boolean, default: false },
+    hasApheresisFacility:      { type: Boolean, default: false },
+    hasMobileUnit:             { type: Boolean, default: false },
 
     // ── Contact ───────────────────────────────────────────────────────────────
     contact: {
@@ -283,9 +279,9 @@ const bloodBankSchema = new Schema(
       city:     { type: String, default: 'Vijayawada', trim: true },
       state:    { type: String, default: 'Andhra Pradesh', trim: true },
       pincode: {
-        type:  String,
+        type:     String,
         required: true,
-        match: [/^[1-9][0-9]{5}$/, 'Invalid PIN code'],
+        match:    [/^[1-9][0-9]{5}$/, 'Invalid PIN code'],
       },
     },
 
@@ -299,45 +295,34 @@ const bloodBankSchema = new Schema(
     // ── Operating Hours ───────────────────────────────────────────────────────
     operatingHours: { type: [operatingHoursSchema], default: [] },
 
-    // ── Service Radius ────────────────────────────────────────────────────────
-    /**
-     * deliveryRadiusKm — how far this bank will deliver blood components.
-     * 0 = no delivery (collection only).
-     */
-    deliveryRadiusKm:  { type: Number, default: 0, min: 0 },
-    deliveryFeePerKm:  { type: Number, default: 0, min: 0 },
-    freeDeliveryKm:    { type: Number, default: 0, min: 0 },  // free within this radius
+    // ── Delivery ──────────────────────────────────────────────────────────────
+    deliveryRadiusKm: { type: Number, default: 0, min: 0 },
+    deliveryFeePerKm: { type: Number, default: 0, min: 0 },
+    freeDeliveryKm:   { type: Number, default: 0, min: 0 },
 
     // ── Linked Hospitals ──────────────────────────────────────────────────────
     /**
-     * linkedHospitals — hospitals this bank has supply agreements with.
-     * These hospitals get priority allocation during shortage.
+     * linkedHospitals — hospitals with supply agreements with this bank.
+     * Priority allocation during shortage events.
+     * MIRROR: Hospital.bloodBanks also references this bank.
      */
     linkedHospitals: [{ type: Schema.Types.ObjectId, ref: 'Hospital' }],
 
-    // ── Licenses & Accreditations ─────────────────────────────────────────────
+    // ── Compliance ────────────────────────────────────────────────────────────
     licenses:       { type: [licenseSchema],       default: [] },
     accreditations: { type: [accreditationSchema], default: [] },
 
     // ── Stock Alert Thresholds ────────────────────────────────────────────────
-    /**
-     * stockAlerts — per blood-group+component thresholds.
-     * System triggers donor notifications + admin alerts when stock falls below.
-     */
     stockAlerts: { type: [stockAlertSchema], default: [] },
 
     // ── Pricing ───────────────────────────────────────────────────────────────
-    /**
-     * pricing — per-component processing fees charged.
-     * Blood itself cannot be sold (illegal in India).
-     * Only processing/storage fees are charged.
-     */
+    // Blood itself cannot be sold (illegal in India). Only processing fees.
     pricing: [
       {
-        component:      { type: String, enum: BLOOD_COMPONENTS },
-        processingFee:  { type: Number, default: 0, min: 0 },  // ₹ per unit
-        crossMatchFee:  { type: Number, default: 0, min: 0 },
-        storageFee:     { type: Number, default: 0, min: 0 },
+        component:     { type: String, enum: BLOOD_COMPONENTS },
+        processingFee: { type: Number, default: 0, min: 0 },
+        crossMatchFee: { type: Number, default: 0, min: 0 },
+        storageFee:    { type: Number, default: 0, min: 0 },
       },
     ],
 
@@ -353,34 +338,34 @@ const bloodBankSchema = new Schema(
 
     // ── Stats ─────────────────────────────────────────────────────────────────
     stats: {
-      totalUnitsCollected:  { type: Number, default: 0 },
-      totalUnitsIssued:     { type: Number, default: 0 },
-      totalDonors:          { type: Number, default: 0 },
-      totalDonations:       { type: Number, default: 0 },
-      totalRequestsFulfilled: { type: Number, default: 0 },
-      totalRequestsPartial:   { type: Number, default: 0 },
-      totalRequestsFailed:    { type: Number, default: 0 },
-      totalEarnings:          { type: Number, default: 0 },
-      lastDonationAt:         { type: Date },
-      lastIssuanceAt:         { type: Date },
+      totalUnitsCollected:     { type: Number, default: 0 },
+      totalUnitsIssued:        { type: Number, default: 0 },
+      totalDonors:             { type: Number, default: 0 },
+      totalDonations:          { type: Number, default: 0 },
+      totalRequestsFulfilled:  { type: Number, default: 0 },
+      totalRequestsPartial:    { type: Number, default: 0 },
+      totalRequestsFailed:     { type: Number, default: 0 },
+      totalEarnings:           { type: Number, default: 0 },
+      lastDonationAt:          { type: Date },
+      lastIssuanceAt:          { type: Date },
     },
 
     // ── Rating ────────────────────────────────────────────────────────────────
     rating: { type: ratingSummarySchema, default: () => ({}) },
 
-    // ── Status & Verification ─────────────────────────────────────────────────
+    // ── Status ────────────────────────────────────────────────────────────────
     status: {
       type:    String,
       enum:    BLOOD_BANK_STATUSES,
       default: 'pending',
       index:   true,
     },
-    statusLog:   { type: [statusLogSchema], default: [] },
-    isVerified:  { type: Boolean, default: false, index: true },
-    isActive:    { type: Boolean, default: false, index: true },
-    isFeatured:  { type: Boolean, default: false },
-    verifiedAt:  { type: Date },
-    verifiedBy:  { type: Schema.Types.ObjectId, ref: 'User' },
+    statusLog:        { type: [statusLogSchema], default: [] },
+    isVerified:       { type: Boolean, default: false, index: true },
+    isActive:         { type: Boolean, default: false, index: true },
+    isFeatured:       { type: Boolean, default: false },
+    verifiedAt:       { type: Date },
+    verifiedBy:       { type: Schema.Types.ObjectId, ref: 'User' },
     rejectionReason:  { type: String },
     suspensionReason: { type: String },
 
@@ -420,7 +405,6 @@ bloodBankSchema.virtual('isMobileUnit').get(function () {
 
 /**
  * inventory virtual — all BloodInventory docs for this bank.
- * Usage: await BloodBank.findById(id).populate('inventory')
  */
 bloodBankSchema.virtual('inventory', {
   ref:          'BloodInventory',
@@ -429,15 +413,6 @@ bloodBankSchema.virtual('inventory', {
   justOne:      false,
 });
 
-/**
- * donors virtual — all BloodDonor docs who donated to this bank.
- */
-bloodBankSchema.virtual('donors', {
-  ref:          'BloodDonor',
-  localField:   '_id',
-  foreignField: 'donations.bloodBank',
-  justOne:      false,
-});
 
 // ── Pre-validate ──────────────────────────────────────────────────────────────
 
@@ -466,12 +441,12 @@ bloodBankSchema.pre('save', async function () {
   }
 
   // Auto-generate slug
-  if ((this.isNew || this.isModified('name')) && !this.slug) {
-    this.slug = this.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '');
-  }
+  if (this.isNew || this.isModified('name')) {
+  this.slug = this.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
 
   // Mask bank account number
   if (this.isModified('bankDetails.accountNumber') && this.bankDetails?.accountNumber) {
@@ -488,10 +463,10 @@ bloodBankSchema.pre('save', async function () {
   }
   this._previousStatus = this.status;
 
-  // Sync isActive from status
+  // Sync isActive + isVerified from status
   if (this.isModified('status')) {
-    this.isActive    = this.status === 'active';
-    this.isVerified  = ['active', 'suspended'].includes(this.status);
+    this.isActive   = this.status === 'active';
+    this.isVerified = ['active', 'suspended'].includes(this.status);
     if (this.status === 'active' && !this.verifiedAt) this.verifiedAt = new Date();
   }
 });
