@@ -28,7 +28,8 @@ import {
   SquareDashedTopSolid,
   PanelsTopLeft,
   Car,
-  AlertTriangle
+  AlertTriangle,
+  Droplets
 } from "lucide-react";
 import { FcInvite } from "react-icons/fc";
 
@@ -125,6 +126,7 @@ export const SUPER_ADMIN_DASHBOARD_LINKS = [
       { name: "Doctors",       href: "/super-admin/doctors",      icon: <UserCog size={15} />       },
       { name: "Appointments",  href: "/super-admin/appointments", icon: <CalendarClock size={15} /> },
       { name: "Specialties",   href: "/super-admin/specialties",  icon: <Stethoscope size={15} />   },
+      {name:"Blood Bank", href: "/super-admin/blood-bank",  icon: <Droplets size={15} />   },
     ],
   },
 

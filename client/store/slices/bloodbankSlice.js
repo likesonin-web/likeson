@@ -1,10 +1,11 @@
+// /app/store/slices/bloodbankSlice.js
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import API   from '../api';
 import toast from 'react-hot-toast';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
-const pending  = (state)        => { state.loading = true; state.error = null; };
+const pending  = (state)         => { state.loading = true; state.error = null; };
 const rejected = (state, action) => {
   state.loading = false;
   state.error   = action.payload;
@@ -109,12 +110,42 @@ export const postReview = createAsyncThunk(
   }
 );
 
-/** POST /blood-banks/:id/request — create Razorpay order */
+/**
+ * FIX 6: POST /blood-banks/prescription/upload
+ * Upload prescription file BEFORE placing blood request.
+ * Returns { prescriptionUrl } — pass it into createBloodRequest.
+ * formData must have field name "prescription".
+ */
+export const uploadPrescription = createAsyncThunk(
+  'bloodBank/uploadPrescription',
+  async (formData, { rejectWithValue }) => {
+    try {
+      const { data } = await API.post('/blood-banks/prescription/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      toast.success('Prescription uploaded!');
+      return data.data; // { prescriptionUrl }
+    } catch (err) { return rejectWithValue(rj(err)); }
+  }
+);
+
+/**
+ * POST /blood-banks/:id/request — create Razorpay order.
+ * requestData can include prescriptionUrl (pre-uploaded)
+ * or a FormData with "prescription" file attached (inline upload).
+ * FIX 6: clears paymentResult on new request start.
+ */
 export const createBloodRequest = createAsyncThunk(
   'bloodBank/createRequest',
   async ({ id, requestData }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post(`/blood-banks/${id}/request`, requestData);
+      // If requestData is FormData (has prescription file inline), use multipart
+      const isFormData = requestData instanceof FormData;
+      const { data } = await API.post(
+        `/blood-banks/${id}/request`,
+        requestData,
+        isFormData ? { headers: { 'Content-Type': 'multipart/form-data' } } : {}
+      );
       return data.data;
     } catch (err) { return rejectWithValue(rj(err)); }
   }
@@ -249,13 +280,29 @@ export const updatePricing = createAsyncThunk(
   }
 );
 
-/** GET /blood-banks/me/inventory */
+/** GET /blood-banks/me/inventory — summary list (no units array) */
 export const fetchMyInventory = createAsyncThunk(
   'bloodBank/fetchMyInventory',
   async (_, { rejectWithValue }) => {
     try {
       const { data } = await API.get('/blood-banks/me/inventory');
       return data.data;
+    } catch (err) { return rejectWithValue(rj(err)); }
+  }
+);
+
+/**
+ * FIX 7: GET /blood-banks/me/inventory/:invId
+ * Fetches full inventory slot WITH units array.
+ * Was missing — units were never loadable from frontend.
+ * Returns full inventory doc; merges into myInventory by _id.
+ */
+export const fetchInventorySlot = createAsyncThunk(
+  'bloodBank/fetchInventorySlot',
+  async (invId, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`/blood-banks/me/inventory/${invId}`);
+      return data.data; // full slot with units[]
     } catch (err) { return rejectWithValue(rj(err)); }
   }
 );
@@ -272,19 +319,27 @@ export const createInventorySlot = createAsyncThunk(
   }
 );
 
-/** POST /blood-banks/me/inventory/:invId/units */
+/**
+ * FIX 1: POST /blood-banks/me/inventory/:invId/units
+ * Was: fulfilled handler did nothing → unit added to DB but state never updated.
+ * Fix: return { invId, unit, hint } → fulfilled merges unit into slot.units[].
+ */
 export const addBloodUnit = createAsyncThunk(
   'bloodBank/addBloodUnit',
   async ({ invId, unitData }, { rejectWithValue }) => {
     try {
       const { data } = await API.post(`/blood-banks/me/inventory/${invId}/units`, unitData);
-      toast.success('Blood unit added!');
-      return { invId, unit: data.data };
+      toast.success('Blood unit added! Update test results to release it.');
+      return { invId, unit: data.data, hint: data.hint };
     } catch (err) { return rejectWithValue(rj(err)); }
   }
 );
 
-/** PUT /blood-banks/me/inventory/:invId/units/:unitId */
+/**
+ * FIX 2: PUT /blood-banks/me/inventory/:invId/units/:unitId
+ * Was: fulfilled handler did nothing → unit updated in DB but state stale.
+ * Fix: return { invId, unitId, unit } → fulfilled finds and replaces unit in slot.units[].
+ */
 export const updateBloodUnit = createAsyncThunk(
   'bloodBank/updateBloodUnit',
   async ({ invId, unitId, updateData }, { rejectWithValue }) => {
@@ -294,7 +349,7 @@ export const updateBloodUnit = createAsyncThunk(
         updateData
       );
       toast.success('Unit updated!');
-      return { invId, unit: data.data };
+      return { invId, unitId, unit: data.data };
     } catch (err) { return rejectWithValue(rj(err)); }
   }
 );
@@ -311,18 +366,25 @@ export const runExpiryCheck = createAsyncThunk(
   }
 );
 
-/** GET /blood-banks/me/requests */
+/**
+ * FIX 3: GET /blood-banks/me/requests — supports pagination params
+ * Pass { status, page, limit } optionally.
+ */
 export const fetchMyRequests = createAsyncThunk(
   'bloodBank/fetchMyRequests',
-  async (_, { rejectWithValue }) => {
+  async (params = {}, { rejectWithValue }) => {
     try {
-      const { data } = await API.get('/blood-banks/me/requests');
-      return data.data;
+      const { data } = await API.get('/blood-banks/me/requests', { params });
+      return data; // { data, total, page, pages }
     } catch (err) { return rejectWithValue(rj(err)); }
   }
 );
 
-/** PUT /blood-banks/me/requests/:reqId/respond */
+/**
+ * FIX 4: PUT /blood-banks/me/requests/:reqId/respond
+ * Was: fulfilled did nothing → request status stale in UI.
+ * Fix: fulfilled updates the matched request's status in myRequests[].
+ */
 export const respondToRequest = createAsyncThunk(
   'bloodBank/respondToRequest',
   async ({ reqId, action, reason }, { rejectWithValue }) => {
@@ -332,12 +394,17 @@ export const respondToRequest = createAsyncThunk(
         { action, reason }
       );
       toast.success(data.message);
-      return { reqId, action };
+      // Return new status from server response
+      return { reqId, status: data.data?.status, action };
     } catch (err) { return rejectWithValue(rj(err)); }
   }
 );
 
-/** PUT /blood-banks/me/requests/:reqId/issue */
+/**
+ * FIX 5: PUT /blood-banks/me/requests/:reqId/issue
+ * Was: fulfilled did nothing → request status stale in UI.
+ * Fix: fulfilled updates matched request to status 'dispatched'.
+ */
 export const issueBloodUnits = createAsyncThunk(
   'bloodBank/issueUnits',
   async ({ reqId, issueData }, { rejectWithValue }) => {
@@ -347,7 +414,7 @@ export const issueBloodUnits = createAsyncThunk(
         issueData
       );
       toast.success(data.message);
-      return data.data;
+      return { reqId, ...data.data }; // { reqId, bagNumbers, totalIssued }
     } catch (err) { return rejectWithValue(rj(err)); }
   }
 );
@@ -493,7 +560,7 @@ export const adminVerifyLicense = createAsyncThunk(
     try {
       const { data } = await API.put(`/blood-banks/admin/${id}/licenses/${licId}/verify`);
       toast.success('License verified!');
-      return { id, license: data.data };
+      return { id, licId, license: data.data };
     } catch (err) { return rejectWithValue(rj(err)); }
   }
 );
@@ -530,13 +597,17 @@ const initialState = {
   reviews:          [],
 
   // Customer
+  prescriptionUrl:  null,   // FIX 6: uploaded prescription url stored here
   razorpayOrder:    null,
   paymentResult:    null,
 
   // Manager — own profile
   myBank:           null,
-  myInventory:      [],
+  myInventory:      [],     // summary slots (no units[])
   myRequests:       [],
+  myRequestsTotal:  0,      // FIX 3: pagination tracking
+  myRequestsPage:   1,
+  myRequestsPages:  1,
   myStats:          null,
   statusLog:        [],
 
@@ -554,13 +625,32 @@ const initialState = {
   error:    null,
 };
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Find inventory slot in myInventory by _id.
+ * Returns the slot reference (Immer-safe mutation OK inside reducers).
+ */
+const findSlot = (state, invId) =>
+  state.myInventory.find(s => s._id === invId || s._id?.toString() === invId);
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 const bloodBankSlice = createSlice({
   name: 'bloodBank',
   initialState,
   reducers: {
     clearError:        (state) => { state.error = null; },
     clearSelectedBank: (state) => { state.selectedBank = null; },
-    clearRazorpayOrder:(state) => { state.razorpayOrder = null; state.paymentResult = null; },
+    clearRazorpayOrder:(state) => {
+      state.razorpayOrder  = null;
+      state.paymentResult  = null;
+      state.prescriptionUrl = null;  // FIX 6: also clear prescription on reset
+    },
+    // FIX 6: allow manually setting prescriptionUrl (e.g. after upload step)
+    setPrescriptionUrl: (state, { payload }) => {
+      state.prescriptionUrl = payload;
+    },
   },
   extraReducers: (builder) => {
 
@@ -627,7 +717,7 @@ const bloodBankSlice = createSlice({
       .addCase(fetchReviews.rejected,  rejected)
       .addCase(fetchReviews.fulfilled, (state, { payload }) => {
         state.loading = false;
-        state.reviews = payload;
+        state.reviews = payload ?? [];
       });
 
     // ── postReview ───────────────────────────────────────────────────────────
@@ -636,9 +726,23 @@ const bloodBankSlice = createSlice({
       .addCase(postReview.rejected,  rejected)
       .addCase(postReview.fulfilled, (state) => { state.loading = false; });
 
-    // ── createBloodRequest ───────────────────────────────────────────────────
+    // ── uploadPrescription (FIX 6) ───────────────────────────────────────────
     builder
-      .addCase(createBloodRequest.pending,   pending)
+      .addCase(uploadPrescription.pending,   pending)
+      .addCase(uploadPrescription.rejected,  rejected)
+      .addCase(uploadPrescription.fulfilled, (state, { payload }) => {
+        state.loading         = false;
+        state.prescriptionUrl = payload.prescriptionUrl;  // store for use in createBloodRequest
+      });
+
+    // ── createBloodRequest ───────────────────────────────────────────────────
+    // FIX 6: clear paymentResult on new request (don't show old success)
+    builder
+      .addCase(createBloodRequest.pending, (state) => {
+        state.loading       = true;
+        state.error         = null;
+        state.paymentResult = null;  // FIX 6: clear stale payment result
+      })
       .addCase(createBloodRequest.rejected,  rejected)
       .addCase(createBloodRequest.fulfilled, (state, { payload }) => {
         state.loading       = false;
@@ -650,9 +754,10 @@ const bloodBankSlice = createSlice({
       .addCase(verifyPayment.pending,   pending)
       .addCase(verifyPayment.rejected,  rejected)
       .addCase(verifyPayment.fulfilled, (state, { payload }) => {
-        state.loading       = false;
-        state.paymentResult = payload;
-        state.razorpayOrder = null;
+        state.loading         = false;
+        state.paymentResult   = payload;
+        state.razorpayOrder   = null;
+        state.prescriptionUrl = null;   // FIX 6: clear after successful request
       });
 
     // ── createBloodBank ──────────────────────────────────────────────────────
@@ -741,8 +846,26 @@ const bloodBankSlice = createSlice({
       .addCase(fetchMyInventory.pending,   pending)
       .addCase(fetchMyInventory.rejected,  rejected)
       .addCase(fetchMyInventory.fulfilled, (state, { payload }) => {
-        state.loading      = false;
-        state.myInventory  = payload;
+        state.loading     = false;
+        state.myInventory = payload;
+      });
+
+    // ── fetchInventorySlot (FIX 7) ───────────────────────────────────────────
+    // Merges full slot (with units[]) into myInventory by _id.
+    // If slot not in list yet, pushes it.
+    builder
+      .addCase(fetchInventorySlot.pending,   pending)
+      .addCase(fetchInventorySlot.rejected,  rejected)
+      .addCase(fetchInventorySlot.fulfilled, (state, { payload }) => {
+        state.loading = false;
+        const idx = state.myInventory.findIndex(
+          s => s._id === payload._id || s._id?.toString() === payload._id?.toString()
+        );
+        if (idx !== -1) {
+          state.myInventory[idx] = payload;  // replace with full doc (includes units[])
+        } else {
+          state.myInventory.push(payload);   // not in list yet, add it
+        }
       });
 
     // ── createInventorySlot ──────────────────────────────────────────────────
@@ -754,48 +877,114 @@ const bloodBankSlice = createSlice({
         state.myInventory.push(payload);
       });
 
-    // ── addBloodUnit ─────────────────────────────────────────────────────────
+    // ── addBloodUnit (FIX 1) ─────────────────────────────────────────────────
+    // Was: fulfilled did nothing — unit added to DB but UI never reflected it.
+    // Fix: push new unit into the matched slot's units[] array.
     builder
       .addCase(addBloodUnit.pending,   pending)
       .addCase(addBloodUnit.rejected,  rejected)
-      .addCase(addBloodUnit.fulfilled, (state) => { state.loading = false; });
+      .addCase(addBloodUnit.fulfilled, (state, { payload }) => {
+        state.loading = false;
+        const slot = findSlot(state, payload.invId);
+        if (slot) {
+          if (!slot.units) slot.units = [];     // guard: summary slots may have no units[]
+          slot.units.push(payload.unit);
+          slot.totalUnits = (slot.totalUnits ?? 0) + 1;
+          // Note: availableUnits NOT incremented here — only after isReleaseApproved=true
+        }
+      });
 
-    // ── updateBloodUnit ──────────────────────────────────────────────────────
+    // ── updateBloodUnit (FIX 2) ──────────────────────────────────────────────
+    // Was: fulfilled did nothing — unit updated in DB but state stale.
+    // Fix: find unit in slot.units[] by _id and replace in-place.
     builder
       .addCase(updateBloodUnit.pending,   pending)
       .addCase(updateBloodUnit.rejected,  rejected)
-      .addCase(updateBloodUnit.fulfilled, (state) => { state.loading = false; });
+      .addCase(updateBloodUnit.fulfilled, (state, { payload }) => {
+        state.loading = false;
+        const slot = findSlot(state, payload.invId);
+        if (slot?.units) {
+          const unitIdx = slot.units.findIndex(
+            u => u._id === payload.unitId || u._id?.toString() === payload.unitId
+          );
+          if (unitIdx !== -1) {
+            slot.units[unitIdx] = payload.unit;
+          }
+          // Sync availableUnits counter on the slot summary:
+          // Count units that are available + approved (source of truth is server,
+          // but keep local count consistent for UI badges)
+          slot.availableUnits = slot.units.filter(
+            u => u.status === 'available' && u.isReleaseApproved
+          ).length;
+          slot.reservedUnits = slot.units.filter(u => u.status === 'reserved').length;
+        }
+      });
 
-    // ── runExpiryCheck ───────────────────────────────────────────────────────
+    // ── runExpiryCheck (FIX 8) ───────────────────────────────────────────────
+    // Fix: safe selective merge — only overwrite expiry-related fields, not whole slot.
+    // Old Object.assign could corrupt units[] if result shape mismatched.
     builder
       .addCase(runExpiryCheck.pending,   pending)
       .addCase(runExpiryCheck.rejected,  rejected)
       .addCase(runExpiryCheck.fulfilled, (state, { payload }) => {
         state.loading = false;
-        const slot = state.myInventory.find(i => i._id === payload.invId);
-        if (slot) Object.assign(slot, payload.result);
+        const slot = findSlot(state, payload.invId);
+        if (slot) {
+          // FIX 8: Selectively merge only fields returned by expiry-check endpoint
+          const r = payload.result;
+          if (r.expiringIn3Days !== undefined) slot.expiringIn3Days = r.expiringIn3Days;
+          if (r.expiringIn7Days !== undefined) slot.expiringIn7Days = r.expiringIn7Days;
+          if (r.expiredUnits    !== undefined) slot.expiredUnits    = r.expiredUnits;
+          if (r.nextExpiryAt    !== undefined) slot.nextExpiryAt    = r.nextExpiryAt;
+          if (r.availableUnits  !== undefined) slot.availableUnits  = r.availableUnits;
+        }
       });
 
-    // ── fetchMyRequests ──────────────────────────────────────────────────────
+    // ── fetchMyRequests (FIX 3) ──────────────────────────────────────────────
+    // Was: no pagination params, no total/page in state.
+    // Fix: store total, page, pages for UI pagination.
     builder
       .addCase(fetchMyRequests.pending,   pending)
       .addCase(fetchMyRequests.rejected,  rejected)
       .addCase(fetchMyRequests.fulfilled, (state, { payload }) => {
-        state.loading     = false;
-        state.myRequests  = payload || [];
+        state.loading          = false;
+        state.myRequests       = payload.data  ?? payload ?? [];
+        state.myRequestsTotal  = payload.total ?? state.myRequests.length;
+        state.myRequestsPage   = payload.page  ?? 1;
+        state.myRequestsPages  = payload.pages ?? 1;
       });
 
-    // ── respondToRequest ─────────────────────────────────────────────────────
+    // ── respondToRequest (FIX 4) ─────────────────────────────────────────────
+    // Was: fulfilled did nothing → request status stale in UI.
+    // Fix: find request in myRequests[] and update its status.
     builder
       .addCase(respondToRequest.pending,   pending)
       .addCase(respondToRequest.rejected,  rejected)
-      .addCase(respondToRequest.fulfilled, (state) => { state.loading = false; });
+      .addCase(respondToRequest.fulfilled, (state, { payload }) => {
+        state.loading = false;
+        const req = state.myRequests.find(
+          r => r._id === payload.reqId || r._id?.toString() === payload.reqId
+        );
+        if (req) {
+          // Map action → expected status
+          req.status = payload.status
+            ?? (payload.action === 'accept' ? 'cross_matching' : 'rejected');
+        }
+      });
 
-    // ── issueBloodUnits ──────────────────────────────────────────────────────
+    // ── issueBloodUnits (FIX 5) ──────────────────────────────────────────────
+    // Was: fulfilled did nothing → request stuck at old status in UI.
+    // Fix: update matched request status to 'dispatched'.
     builder
       .addCase(issueBloodUnits.pending,   pending)
       .addCase(issueBloodUnits.rejected,  rejected)
-      .addCase(issueBloodUnits.fulfilled, (state) => { state.loading = false; });
+      .addCase(issueBloodUnits.fulfilled, (state, { payload }) => {
+        state.loading = false;
+        const req = state.myRequests.find(
+          r => r._id === payload.reqId || r._id?.toString() === payload.reqId
+        );
+        if (req) req.status = 'dispatched';
+      });
 
     // ── fetchMyStats ─────────────────────────────────────────────────────────
     builder
@@ -811,8 +1000,8 @@ const bloodBankSlice = createSlice({
       .addCase(fetchStatusLog.pending,   pending)
       .addCase(fetchStatusLog.rejected,  rejected)
       .addCase(fetchStatusLog.fulfilled, (state, { payload }) => {
-        state.loading    = false;
-        state.statusLog  = payload;
+        state.loading   = false;
+        state.statusLog = payload ?? [];
       });
 
     // ── fetchLinkedBanks ─────────────────────────────────────────────────────
@@ -821,7 +1010,7 @@ const bloodBankSlice = createSlice({
       .addCase(fetchLinkedBanks.rejected,  rejected)
       .addCase(fetchLinkedBanks.fulfilled, (state, { payload }) => {
         state.loading     = false;
-        state.linkedBanks = payload;
+        state.linkedBanks = payload ?? [];
       });
 
     // ── linkBloodBank ────────────────────────────────────────────────────────
@@ -836,7 +1025,9 @@ const bloodBankSlice = createSlice({
       .addCase(unlinkBloodBank.rejected,  rejected)
       .addCase(unlinkBloodBank.fulfilled, (state, { payload: id }) => {
         state.loading     = false;
-        state.linkedBanks = state.linkedBanks.filter(b => b._id !== id);
+        state.linkedBanks = state.linkedBanks.filter(
+          b => b._id !== id && b._id?.toString() !== id
+        );
       });
 
     // ── adminFetchAllBanks ───────────────────────────────────────────────────
@@ -873,9 +1064,9 @@ const bloodBankSlice = createSlice({
       .addCase(adminUpdateStatus.rejected,  rejected)
       .addCase(adminUpdateStatus.fulfilled, (state, { payload }) => {
         state.loading = false;
-        const bank = state.adminBanks.find(b => b._id === payload.id);
+        const bank = state.adminBanks.find(b => b._id === payload.id || b._id?.toString() === payload.id);
         if (bank) bank.status = payload.status;
-        if (state.adminSelectedBank?._id === payload.id)
+        if (state.adminSelectedBank?._id === payload.id || state.adminSelectedBank?._id?.toString() === payload.id)
           state.adminSelectedBank.status = payload.status;
       });
 
@@ -885,9 +1076,9 @@ const bloodBankSlice = createSlice({
       .addCase(adminVerifyBank.rejected,  rejected)
       .addCase(adminVerifyBank.fulfilled, (state, { payload }) => {
         state.loading = false;
-        const bank = state.adminBanks.find(b => b._id === payload.id);
+        const bank = state.adminBanks.find(b => b._id === payload.id || b._id?.toString() === payload.id);
         if (bank) { bank.isVerified = true; bank.status = 'active'; }
-        if (state.adminSelectedBank?._id === payload.id)
+        if (state.adminSelectedBank?._id === payload.id || state.adminSelectedBank?._id?.toString() === payload.id)
           Object.assign(state.adminSelectedBank, payload.data);
       });
 
@@ -897,17 +1088,29 @@ const bloodBankSlice = createSlice({
       .addCase(adminToggleFeatured.rejected,  rejected)
       .addCase(adminToggleFeatured.fulfilled, (state, { payload }) => {
         state.loading = false;
-        const bank = state.adminBanks.find(b => b._id === payload.id);
+        const bank = state.adminBanks.find(b => b._id === payload.id || b._id?.toString() === payload.id);
         if (bank) bank.isFeatured = payload.isFeatured;
-        if (state.adminSelectedBank?._id === payload.id)
+        if (state.adminSelectedBank?._id === payload.id || state.adminSelectedBank?._id?.toString() === payload.id)
           state.adminSelectedBank.isFeatured = payload.isFeatured;
       });
 
-    // ── adminVerifyLicense ───────────────────────────────────────────────────
+    // ── adminVerifyLicense (FIX 9) ───────────────────────────────────────────
+    // Was: fulfilled did nothing → license isVerified stale in admin UI.
+    // Fix: find license by _id in adminSelectedBank.licenses[] and update it.
     builder
       .addCase(adminVerifyLicense.pending,   pending)
       .addCase(adminVerifyLicense.rejected,  rejected)
-      .addCase(adminVerifyLicense.fulfilled, (state) => { state.loading = false; });
+      .addCase(adminVerifyLicense.fulfilled, (state, { payload }) => {
+        state.loading = false;
+        if (state.adminSelectedBank?.licenses) {
+          const licIdx = state.adminSelectedBank.licenses.findIndex(
+            l => l._id === payload.licId || l._id?.toString() === payload.licId
+          );
+          if (licIdx !== -1) {
+            state.adminSelectedBank.licenses[licIdx] = payload.license;
+          }
+        }
+      });
 
     // ── adminDeleteBank ──────────────────────────────────────────────────────
     builder
@@ -915,11 +1118,20 @@ const bloodBankSlice = createSlice({
       .addCase(adminDeleteBank.rejected,  rejected)
       .addCase(adminDeleteBank.fulfilled, (state, { payload: id }) => {
         state.loading    = false;
-        state.adminBanks = state.adminBanks.filter(b => b._id !== id);
-        if (state.adminSelectedBank?._id === id) state.adminSelectedBank = null;
+        state.adminBanks = state.adminBanks.filter(
+          b => b._id !== id && b._id?.toString() !== id
+        );
+        if (state.adminSelectedBank?._id === id || state.adminSelectedBank?._id?.toString() === id)
+          state.adminSelectedBank = null;
       });
   },
 });
 
-export const { clearError, clearSelectedBank, clearRazorpayOrder } = bloodBankSlice.actions;
+export const {
+  clearError,
+  clearSelectedBank,
+  clearRazorpayOrder,
+  setPrescriptionUrl,     // FIX 6: new action
+} = bloodBankSlice.actions;
+
 export default bloodBankSlice.reducer;

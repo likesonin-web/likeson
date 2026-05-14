@@ -2,58 +2,26 @@ import mongoose from 'mongoose';
 const { Schema } = mongoose;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BLOOD BANK MODEL — Likeson.in
+// BLOOD BANK MODEL — Likeson.in  (fixed)
 //
-// Represents a blood bank facility. Three types:
-//
-//  standalone        → Independent blood bank
-//                      managedBy → User{ role: 'blood_bank' }
-//
-//  hospital_embedded → Blood bank inside a hospital
-//                      hospital → Hospital ref (required)
-//                      managedBy → User{ role: 'blood_bank' } OR hospital manager
-//
-//  mobile_unit       → Mobile blood collection van
-//                      parentBank → BloodBank ref (required)
-//
-// RELATIONSHIPS:
-//   Hospital.bloodBanks → array of BloodBank refs (hospital side)
-//   BloodBank.hospital  → Hospital ref (embedded type only)
-//   Customer accesses blood bank via BloodBank model directly (search/find nearby)
-//
-// INVENTORY:
-//   BloodInventory docs stored separately (one per bloodGroup+component).
-//   BloodBank.inventory virtual populates them.
-//
-// COMPLIANCE (India):
-//   Licensed under Drugs & Cosmetics Act, 1940.
-//   NACO registration required. State Drug Controller license mandatory.
+// FIX 1: Slug collision handled — appends bankCode suffix on conflict
+// FIX 2: _previousStatus persisted correctly via local var pattern
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const BANK_TYPES = ['standalone', 'hospital_embedded', 'mobile_unit'];
 
 export const BLOOD_BANK_STATUSES = [
-  'pending',
-  'under_review',
-  'active',
-  'suspended',
-  'revoked',
-  'deactivated',
+  'pending', 'under_review', 'active', 'suspended', 'revoked', 'deactivated',
 ];
 
-export const ACCREDITATION_BODIES = ['NABH', 'NABL', 'NACO', 'State_Drug_Controller', 'ISO', 'Other'];
+export const ACCREDITATION_BODIES = [
+  'NABH', 'NABL', 'NACO', 'State_Drug_Controller', 'ISO', 'Other',
+];
 
 export const BLOOD_COMPONENTS = [
-  'Whole Blood',
-  'PRBC',
-  'FFP',
-  'Platelets',
-  'Cryoprecipitate',
-  'Plasma',
-  'Single Donor Platelets',
-  'Leukoreduced PRBC',
-  'Irradiated PRBC',
-  'Washed PRBC',
+  'Whole Blood', 'PRBC', 'FFP', 'Platelets', 'Cryoprecipitate',
+  'Plasma', 'Single Donor Platelets', 'Leukoreduced PRBC',
+  'Irradiated PRBC', 'Washed PRBC',
 ];
 
 export const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
@@ -75,23 +43,17 @@ const licenseSchema = new Schema(
   {
     licenseType: {
       type: String,
-      enum: [
-        'Drugs_Cosmetics_Act',
-        'State_Drug_Controller',
-        'NACO_Registration',
-        'FSSAI',
-        'Other',
-      ],
+      enum: ['Drugs_Cosmetics_Act', 'State_Drug_Controller', 'NACO_Registration', 'FSSAI', 'Other'],
       required: true,
     },
-    licenseNumber:  { type: String, trim: true, required: true },
-    issuedBy:       { type: String, trim: true },
-    issuedOn:       { type: Date },
-    validUntil:     { type: Date },
-    documentUrl:    { type: String },
-    isVerified:     { type: Boolean, default: false },
-    verifiedBy:     { type: Schema.Types.ObjectId, ref: 'User' },
-    verifiedAt:     { type: Date },
+    licenseNumber: { type: String, trim: true, required: true },
+    issuedBy:      { type: String, trim: true },
+    issuedOn:      { type: Date },
+    validUntil:    { type: Date },
+    documentUrl:   { type: String },
+    isVerified:    { type: Boolean, default: false },
+    verifiedBy:    { type: Schema.Types.ObjectId, ref: 'User' },
+    verifiedAt:    { type: Date },
   },
   { _id: true }
 );
@@ -171,80 +133,25 @@ const stockAlertSchema = new Schema(
 
 const bloodBankSchema = new Schema(
   {
-    // ── Identity ──────────────────────────────────────────────────────────────
-    name: {
-      type:     String,
-      required: true,
-      trim:     true,
-      index:    true,
-    },
+    name: { type: String, required: true, trim: true, index: true },
     bankCode: {
-      type:      String,
-      unique:    true,
-      sparse:    true,
-      uppercase: true,
-      trim:      true,
-      index:     true,
+      type: String, unique: true, sparse: true, uppercase: true, trim: true, index: true,
     },
-    slug: {
-      type:      String,
-      unique:    true,
-      lowercase: true,
-      trim:      true,
-      index:     true,
-    },
+    slug: { type: String, unique: true, lowercase: true, trim: true, index: true },
 
-    bankType: {
-      type:     String,
-      required: true,
-      enum:     BANK_TYPES,
-      index:    true,
-    },
+    bankType: { type: String, required: true, enum: BANK_TYPES, index: true },
 
-    // ── Ownership ─────────────────────────────────────────────────────────────
-    /**
-     * managedBy → User{ role: 'blood_bank' } for standalone/mobile_unit.
-     *             OR User{ role: 'hospital' } for hospital_embedded.
-     * NOTE: Only users with role 'blood_bank' can manage standalone/mobile banks.
-     *       hospital_embedded banks are managed by the parent hospital's manager.
-     */
-    managedBy: {
-      type:     Schema.Types.ObjectId,
-      ref:      'User',
-      required: true,
-      index:    true,
-    },
-
-    /**
-     * hospital → required when bankType === 'hospital_embedded'.
-     * The parent Hospital document. Hospital.bloodBanks array mirrors this.
-     */
-    hospital: {
-      type:    Schema.Types.ObjectId,
-      ref:     'Hospital',
-      default: null,
-      index:   true,
-    },
-
-    /**
-     * parentBank → required when bankType === 'mobile_unit'.
-     * The base blood bank operating this mobile unit.
-     */
-    parentBank: {
-      type:    Schema.Types.ObjectId,
-      ref:     'BloodBank',
-      default: null,
-    },
+    managedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    hospital:  { type: Schema.Types.ObjectId, ref: 'Hospital', default: null, index: true },
+    parentBank:{ type: Schema.Types.ObjectId, ref: 'BloodBank', default: null },
 
     description: { type: String, maxlength: 1000 },
     logoUrl:     { type: String },
 
-    // ── Services ──────────────────────────────────────────────────────────────
     componentsHandled: {
       type:    [{ type: String, enum: BLOOD_COMPONENTS }],
       default: ['Whole Blood', 'PRBC'],
     },
-
     bloodGroupsAvailable: {
       type:    [{ type: String, enum: BLOOD_GROUPS }],
       default: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
@@ -259,7 +166,6 @@ const bloodBankSchema = new Schema(
     hasApheresisFacility:      { type: Boolean, default: false },
     hasMobileUnit:             { type: Boolean, default: false },
 
-    // ── Contact ───────────────────────────────────────────────────────────────
     contact: {
       phone:          { type: String, required: true },
       emergencyPhone: { type: String },
@@ -268,10 +174,8 @@ const bloodBankSchema = new Schema(
       whatsapp:       { type: String },
       website:        { type: String },
     },
-
     contactPersons: { type: [contactPersonSchema], default: [] },
 
-    // ── Address & Location ────────────────────────────────────────────────────
     address: {
       line1:    { type: String, required: true, trim: true },
       line2:    { type: String, trim: true },
@@ -279,44 +183,27 @@ const bloodBankSchema = new Schema(
       city:     { type: String, default: 'Vijayawada', trim: true },
       state:    { type: String, default: 'Andhra Pradesh', trim: true },
       pincode: {
-        type:     String,
-        required: true,
-        match:    [/^[1-9][0-9]{5}$/, 'Invalid PIN code'],
+        type: String, required: true, match: [/^[1-9][0-9]{5}$/, 'Invalid PIN code'],
       },
     },
-
     location: {
       type:        { type: String, enum: ['Point'], default: 'Point' },
       coordinates: { type: [Number], default: [80.648, 16.506] },
     },
-
     googleMapsUrl: { type: String },
 
-    // ── Operating Hours ───────────────────────────────────────────────────────
     operatingHours: { type: [operatingHoursSchema], default: [] },
 
-    // ── Delivery ──────────────────────────────────────────────────────────────
     deliveryRadiusKm: { type: Number, default: 0, min: 0 },
     deliveryFeePerKm: { type: Number, default: 0, min: 0 },
     freeDeliveryKm:   { type: Number, default: 0, min: 0 },
 
-    // ── Linked Hospitals ──────────────────────────────────────────────────────
-    /**
-     * linkedHospitals — hospitals with supply agreements with this bank.
-     * Priority allocation during shortage events.
-     * MIRROR: Hospital.bloodBanks also references this bank.
-     */
     linkedHospitals: [{ type: Schema.Types.ObjectId, ref: 'Hospital' }],
 
-    // ── Compliance ────────────────────────────────────────────────────────────
     licenses:       { type: [licenseSchema],       default: [] },
     accreditations: { type: [accreditationSchema], default: [] },
+    stockAlerts:    { type: [stockAlertSchema],    default: [] },
 
-    // ── Stock Alert Thresholds ────────────────────────────────────────────────
-    stockAlerts: { type: [stockAlertSchema], default: [] },
-
-    // ── Pricing ───────────────────────────────────────────────────────────────
-    // Blood itself cannot be sold (illegal in India). Only processing fees.
     pricing: [
       {
         component:     { type: String, enum: BLOOD_COMPONENTS },
@@ -328,38 +215,27 @@ const bloodBankSchema = new Schema(
 
     platformFeePercent: { type: Number, default: 0, min: 0, max: 100 },
 
-    // ── Settlement ────────────────────────────────────────────────────────────
     settlementCycle: {
-      type:    String,
-      enum:    ['weekly', 'biweekly', 'monthly'],
-      default: 'monthly',
+      type: String, enum: ['weekly', 'biweekly', 'monthly'], default: 'monthly',
     },
     bankDetails: { type: bankDetailsSchema, default: () => ({}) },
 
-    // ── Stats ─────────────────────────────────────────────────────────────────
     stats: {
-      totalUnitsCollected:     { type: Number, default: 0 },
-      totalUnitsIssued:        { type: Number, default: 0 },
-      totalDonors:             { type: Number, default: 0 },
-      totalDonations:          { type: Number, default: 0 },
-      totalRequestsFulfilled:  { type: Number, default: 0 },
-      totalRequestsPartial:    { type: Number, default: 0 },
-      totalRequestsFailed:     { type: Number, default: 0 },
-      totalEarnings:           { type: Number, default: 0 },
-      lastDonationAt:          { type: Date },
-      lastIssuanceAt:          { type: Date },
+      totalUnitsCollected:    { type: Number, default: 0 },
+      totalUnitsIssued:       { type: Number, default: 0 },
+      totalDonors:            { type: Number, default: 0 },
+      totalDonations:         { type: Number, default: 0 },
+      totalRequestsFulfilled: { type: Number, default: 0 },
+      totalRequestsPartial:   { type: Number, default: 0 },
+      totalRequestsFailed:    { type: Number, default: 0 },
+      totalEarnings:          { type: Number, default: 0 },
+      lastDonationAt:         { type: Date },
+      lastIssuanceAt:         { type: Date },
     },
 
-    // ── Rating ────────────────────────────────────────────────────────────────
     rating: { type: ratingSummarySchema, default: () => ({}) },
 
-    // ── Status ────────────────────────────────────────────────────────────────
-    status: {
-      type:    String,
-      enum:    BLOOD_BANK_STATUSES,
-      default: 'pending',
-      index:   true,
-    },
+    status: { type: String, enum: BLOOD_BANK_STATUSES, default: 'pending', index: true },
     statusLog:        { type: [statusLogSchema], default: [] },
     isVerified:       { type: Boolean, default: false, index: true },
     isActive:         { type: Boolean, default: false, index: true },
@@ -369,14 +245,12 @@ const bloodBankSchema = new Schema(
     rejectionReason:  { type: String },
     suspensionReason: { type: String },
 
-    // ── Onboarding ────────────────────────────────────────────────────────────
     onboarding: {
       step:        { type: Number,  default: 1 },
       isComplete:  { type: Boolean, default: false },
       completedAt: { type: Date },
     },
 
-    // ── Internal ──────────────────────────────────────────────────────────────
     internalNotes: { type: String, select: false },
     tags:          [{ type: String, trim: true, lowercase: true }],
     createdBy:     { type: Schema.Types.ObjectId, ref: 'User' },
@@ -403,16 +277,9 @@ bloodBankSchema.virtual('isMobileUnit').get(function () {
   return this.bankType === 'mobile_unit';
 });
 
-/**
- * inventory virtual — all BloodInventory docs for this bank.
- */
 bloodBankSchema.virtual('inventory', {
-  ref:          'BloodInventory',
-  localField:   '_id',
-  foreignField: 'bloodBank',
-  justOne:      false,
+  ref: 'BloodInventory', localField: '_id', foreignField: 'bloodBank', justOne: false,
 });
-
 
 // ── Pre-validate ──────────────────────────────────────────────────────────────
 
@@ -440,27 +307,46 @@ bloodBankSchema.pre('save', async function () {
     this.bankCode = code;
   }
 
-  // Auto-generate slug
+  // FIX: Slug generation with uniqueness suffix to prevent collision
   if (this.isNew || this.isModified('name')) {
-  this.slug = this.name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-}
+    const baseSlug = this.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
 
-  // Mask bank account number
-  if (this.isModified('bankDetails.accountNumber') && this.bankDetails?.accountNumber) {
-    this.bankDetails.accountLast4 = this.bankDetails.accountNumber.slice(-4);
+    let slug = baseSlug;
+    let exists = await mongoose.model('BloodBank').exists({
+      slug,
+      _id: { $ne: this._id },  // exclude self on update
+    });
+
+    if (exists) {
+      // Append last 6 chars of bankCode to guarantee uniqueness
+      const suffix = (this.bankCode || '').slice(-6).toLowerCase();
+      slug = `${baseSlug}-${suffix}`;
+      // Final fallback: append timestamp
+      const stillExists = await mongoose.model('BloodBank').exists({
+        slug, _id: { $ne: this._id },
+      });
+      if (stillExists) {
+        slug = `${baseSlug}-${Date.now()}`;
+      }
+    }
+    this.slug = slug;
   }
+
+  // FIX: Use local variable for _previousStatus before overwrite
+  const prevStatus = this._previousStatus;
 
   // Append status log
   if (this.isModified('status') && !this.isNew) {
     this.statusLog.push({
-      fromStatus: this._previousStatus || null,
+      fromStatus: prevStatus || null,
       toStatus:   this.status,
       changedBy:  this.updatedBy || null,
     });
   }
+  // Store current for next save
   this._previousStatus = this.status;
 
   // Sync isActive + isVerified from status

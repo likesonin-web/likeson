@@ -199,7 +199,7 @@ const ROLE_PALETTES = {
     shadowColor: 'color-mix(in srgb, var(--primary) 30%, transparent)', label: 'Pharmacy',
     icon: Pill, dataTheme: 'pharmacy',
   },
-  'care assistant': {
+  'care_assistant': {
     accent: 'var(--primary)', bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
     barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
     pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)', pillText: 'var(--primary)',
@@ -1185,7 +1185,7 @@ const Header = () => {
 
       <header ref={headerRef} data-theme={headerDataTheme}
         className={cn(
-          (pathname === '/search' || pathname.startsWith('/rides/') && pathname.endsWith('/tracking') ||  pathname.startsWith('/driver/tracking')  ) ? 'hidden' : 'sticky top-0 z-[100] w-full backdrop-blur-md border-b border-base-300 transition-all duration-300',
+          (pathname === '/search' || pathname.startsWith('/rides/') && pathname.endsWith('/tracking') ||  pathname.startsWith('/driver/tracking')  ) ? 'hidden' : 'sticky top-0 z-[100]  w-full backdrop-blur-md border-b border-base-300 transition-all duration-300',
           !isCustomer && roleBottomNavLinks && 'mb-0'
         )}
         style={{ background: 'color-mix(in srgb, var(--base-100) 88%, transparent)' }}

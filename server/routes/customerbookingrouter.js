@@ -74,11 +74,11 @@ import {
   haversineKm,
   createNotification,
   CUSTOMER_BOOKING_TYPES,
-
+verifyRazorpaySignature,
   // Canonical route — locked at ride creation
   calculateCanonicalRoute,
 } from './bookingRouterShared.js';
-
+import PlatformPricingConfig from '../models/PlatformPricingConfig.js';
 const router = express.Router();
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1808,5 +1808,34 @@ router.get('/my-bookings/:bookingId/op-download',
     }
   }
 );
+
+
+router.get('/platform-pricing', async (req, res) => {
+  try {
+    // 1. Fetch the global config
+    // We use .select to only pull the specific field from MongoDB for better performance
+    const config = await PlatformPricingConfig.findOne({ 
+      configName: 'global', 
+      isActive: true 
+    }).select('careAssistant.pricingTiers');
+
+    // 2. Handle case where config might not exist yet
+    if (!config) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Platform pricing configuration not found." 
+      });
+    }
+
+    // 3. Return only the array of pricing tiers
+    res.json({ 
+      success: true, 
+      data: config.careAssistant.pricingTiers 
+    });
+    
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 export default router;

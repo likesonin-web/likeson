@@ -2,46 +2,19 @@ import mongoose from 'mongoose';
 const { Schema } = mongoose;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BLOOD INVENTORY MODEL — Likeson.in
-//
-// Real-time blood stock per blood bank.
-// ONE document per (bloodBank + bloodGroup + component) combination.
-//
-// WHY SEPARATE FROM BloodBank:
-//   Stock changes many times per day. Fast geospatial query needs index on
-//   bloodGroup + component + location (denormalized from parent bank).
-//   Atomic $inc updates — no need to load entire BloodBank doc.
-//
-// UNITS ARRAY:
-//   Each element = one physical blood bag. Capped at 500 per document.
-//
-// CONCURRENCY:
-//   reservedUnits updated atomically via $inc.
-//   availableUnits = totalUnits - reservedUnits - issuedUnits - expiredUnits
-//   Always read availableUnits from DB — never recompute in application layer.
+// BLOOD INVENTORY MODEL — Likeson.in  (fixed)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const UNIT_STATUSES = [
-  'available',
-  'reserved',
-  'cross_matching',
-  'cross_matched',
-  'dispatched',
-  'issued',
-  'transfused',
-  'expired',
-  'discarded',
-  'quarantined',
-  'recalled',
+  'available', 'reserved', 'cross_matching', 'cross_matched',
+  'dispatched', 'issued', 'transfused', 'expired', 'discarded',
+  'quarantined', 'recalled',
 ];
 
 export const STORAGE_LOCATIONS = [
   'Refrigerator_1', 'Refrigerator_2', 'Refrigerator_3',
   'Freezer_1', 'Freezer_2',
-  'Platelet_Agitator',
-  'Room_Temperature',
-  'Transport_Box',
-  'Mobile_Unit',
+  'Platelet_Agitator', 'Room_Temperature', 'Transport_Box', 'Mobile_Unit',
 ];
 
 export const COMPONENT_STORAGE_TEMP = {
@@ -72,44 +45,24 @@ export const COMPONENT_SHELF_LIFE_DAYS = {
 
 // ── Sub-Schemas ───────────────────────────────────────────────────────────────
 
-/**
- * bloodUnitSchema — individual blood bag / unit.
- * donorCode stored as plain string — no BloodDonor model dependency.
- * Walk-in / unregistered donors tracked via donorCode string only.
- */
 const bloodUnitSchema = new Schema(
   {
-    // ── Traceability ──────────────────────────────────────────────────────────
-    bagNumber: {
-      type:      String,
-      required:  true,
-      trim:      true,
-      uppercase: true,
-    },
+    bagNumber:    { type: String, required: true, trim: true, uppercase: true },
+    donorCode:    { type: String, trim: true, uppercase: true, default: null },
+    donorName:    { type: String, trim: true },
 
-    /**
-     * donorCode — reference code of the donor (if known).
-     * Stored as string — no hard FK to any donor model.
-     * Walk-in donors: set to 'WALK-IN' or a generated code.
-     */
-    donorCode:  { type: String, trim: true, uppercase: true, default: null },
-    donorName:  { type: String, trim: true },   // optional display name
+    collectedAt:      { type: Date, required: true },
+    collectedByStaff: { type: String, trim: true },
+    volumeMl:         { type: Number, required: true, min: 50, max: 500 },
+    donorHemoglobin:  { type: Number, min: 0 },
 
-    // ── Collection Details ────────────────────────────────────────────────────
-    collectedAt:       { type: Date, required: true },
-    collectedByStaff:  { type: String, trim: true },
-    volumeMl:          { type: Number, required: true, min: 50, max: 500 },
-    donorHemoglobin:   { type: Number, min: 0 },
-
-    // ── Processing ────────────────────────────────────────────────────────────
-    processedAt:   { type: Date },
-    processedBy:   { type: String, trim: true },
+    processedAt:      { type: Date },
+    processedBy:      { type: String, trim: true },
     separationMethod: {
       type: String,
       enum: ['Whole_Blood_Filtration', 'Apheresis', 'Centrifugation', 'Not_Applicable'],
     },
 
-    // ── Testing (mandatory NACO/ELISA screening) ──────────────────────────────
     testResults: {
       hiv:      { type: String, enum: ['Non-Reactive', 'Reactive', 'Pending', 'Not_Done'], default: 'Pending' },
       hbsAg:    { type: String, enum: ['Non-Reactive', 'Reactive', 'Pending', 'Not_Done'], default: 'Pending' },
@@ -121,10 +74,9 @@ const bloodUnitSchema = new Schema(
       allClear: { type: Boolean, default: false },
     },
 
-    isTestingComplete:  { type: Boolean, default: false },
-    isReleaseApproved:  { type: Boolean, default: false },
+    isTestingComplete: { type: Boolean, default: false },
+    isReleaseApproved: { type: Boolean, default: false },
 
-    // ── Cross-Match ───────────────────────────────────────────────────────────
     crossMatch: {
       requestId:    { type: Schema.Types.ObjectId, ref: 'BloodRequest', default: null },
       sampleSentAt: { type: Date },
@@ -133,19 +85,13 @@ const bloodUnitSchema = new Schema(
       performedBy:  { type: String },
     },
 
-    // ── Storage ───────────────────────────────────────────────────────────────
     storageLocation:     { type: String, enum: STORAGE_LOCATIONS },
     storageSlot:         { type: String, trim: true },
     storageTemperatureC: { type: Number },
 
-    // ── Expiry ────────────────────────────────────────────────────────────────
-    expiresAt: {
-      type:     Date,
-      required: true,
-      index:    true,
-    },
+    // FIX: expiresAt index on sub-doc handled at parent level
+    expiresAt: { type: Date, required: true },
 
-    // ── Issuance ──────────────────────────────────────────────────────────────
     reservedFor: { type: Schema.Types.ObjectId, ref: 'BloodRequest', default: null },
     reservedAt:  { type: Date },
     issuedTo: {
@@ -159,15 +105,8 @@ const bloodUnitSchema = new Schema(
     transfusedAt: { type: Date },
     transfusedBy: { type: String },
 
-    // ── Status ────────────────────────────────────────────────────────────────
-    status: {
-      type:    String,
-      enum:    UNIT_STATUSES,
-      default: 'available',
-      index:   true,
-    },
+    status: { type: String, enum: UNIT_STATUSES, default: 'available' },
 
-    // ── Recall ────────────────────────────────────────────────────────────────
     isRecalled:   { type: Boolean, default: false },
     recallReason: { type: String },
     recalledAt:   { type: Date },
@@ -182,74 +121,55 @@ const bloodUnitSchema = new Schema(
 const bloodInventorySchema = new Schema(
   {
     bloodBank: {
-      type:     Schema.Types.ObjectId,
-      ref:      'BloodBank',
-      required: true,
-      index:    true,
+      type: Schema.Types.ObjectId, ref: 'BloodBank', required: true, index: true,
     },
-
     bloodGroup: {
-      type:     String,
-      required: true,
-      enum:     ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
-      index:    true,
+      type: String, required: true,
+      enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
+      index: true,
     },
-
     component: {
-      type:     String,
-      required: true,
-      enum:     [
+      type: String, required: true,
+      enum: [
         'Whole Blood', 'PRBC', 'FFP', 'Platelets', 'Cryoprecipitate',
         'Plasma', 'Single Donor Platelets', 'Leukoreduced PRBC',
         'Irradiated PRBC', 'Washed PRBC',
       ],
-      index:    true,
+      index: true,
     },
 
-    // ── Location Denormalization ──────────────────────────────────────────────
-    /**
-     * Copied from BloodBank.location on create/update.
-     * Enables fast geospatial query: "Find AB+ PRBC within 15km"
-     * without $lookup on BloodBank.
-     */
     location: {
       type:        { type: String, enum: ['Point'], default: 'Point' },
       coordinates: { type: [Number], default: [80.648, 16.506] },
     },
-
     cityName: { type: String, trim: true },
 
-    // ── Stock Counters (atomic $inc only) ─────────────────────────────────────
-    totalUnits:      { type: Number, default: 0, min: 0 },
-    availableUnits:  { type: Number, default: 0, min: 0 },
-    reservedUnits:   { type: Number, default: 0, min: 0 },
-    issuedUnits:     { type: Number, default: 0, min: 0 },
-    expiredUnits:    { type: Number, default: 0, min: 0 },
-    discardedUnits:  { type: Number, default: 0, min: 0 },
-    quarantinedUnits:{ type: Number, default: 0, min: 0 },
+    // Counters — atomic $inc only. DO NOT recompute in app layer.
+    totalUnits:       { type: Number, default: 0, min: 0 },
+    availableUnits:   { type: Number, default: 0, min: 0 },
+    reservedUnits:    { type: Number, default: 0, min: 0 },
+    issuedUnits:      { type: Number, default: 0, min: 0 },
+    expiredUnits:     { type: Number, default: 0, min: 0 },
+    discardedUnits:   { type: Number, default: 0, min: 0 },
+    quarantinedUnits: { type: Number, default: 0, min: 0 },
 
-    // ── Units Array (max 500) ─────────────────────────────────────────────────
     units: {
       type:     [bloodUnitSchema],
       default:  [],
       validate: [v => v.length <= 500, 'Max 500 units per inventory document'],
     },
 
-    // ── Expiry Tracking ───────────────────────────────────────────────────────
     nextExpiryAt:    { type: Date, default: null, index: true },
     expiringIn3Days: { type: Number, default: 0, min: 0 },
     expiringIn7Days: { type: Number, default: 0, min: 0 },
 
-    // ── Pricing ───────────────────────────────────────────────────────────────
     processingFeePerUnit: { type: Number, default: 0, min: 0 },
     crossMatchFeePerUnit: { type: Number, default: 0, min: 0 },
 
-    // ── Stock Alert State ─────────────────────────────────────────────────────
     isLowStock:      { type: Boolean, default: false, index: true },
     isCriticalStock: { type: Boolean, default: false, index: true },
     lastAlertSentAt: { type: Date },
 
-    // ── Audit ─────────────────────────────────────────────────────────────────
     lastUpdatedAt:  { type: Date, default: Date.now },
     lastDonationAt: { type: Date },
     lastIssuanceAt: { type: Date },
@@ -264,14 +184,13 @@ const bloodInventorySchema = new Schema(
   }
 );
 
-// ── Unique: one doc per bank+bloodGroup+component ─────────────────────────────
+// ── Unique index ──────────────────────────────────────────────────────────────
 bloodInventorySchema.index(
   { bloodBank: 1, bloodGroup: 1, component: 1 },
   { unique: true }
 );
 
 // ── Virtuals ──────────────────────────────────────────────────────────────────
-
 bloodInventorySchema.virtual('hasStock').get(function () {
   return this.availableUnits > 0;
 });
@@ -285,19 +204,10 @@ bloodInventorySchema.virtual('shelfLifeDays').get(function () {
   return COMPONENT_SHELF_LIFE_DAYS[this.component] ?? null;
 });
 
-// ── Static Methods ────────────────────────────────────────────────────────────
+// ── Statics ───────────────────────────────────────────────────────────────────
 
-/**
- * findAvailableNearby — geospatial search for available stock.
- * Used by customer-facing blood request flow.
- */
 bloodInventorySchema.statics.findAvailableNearby = function ({
-  bloodGroup,
-  component,
-  unitsNeeded = 1,
-  lng,
-  lat,
-  maxDistanceMeters = 20000,
+  bloodGroup, component, unitsNeeded = 1, lng, lat, maxDistanceMeters = 20000,
 }) {
   return this.find({
     bloodGroup,
@@ -315,36 +225,30 @@ bloodInventorySchema.statics.findAvailableNearby = function ({
     .limit(10);
 };
 
-/**
- * reserveUnits — atomically reserve N units for a BloodRequest.
- * Returns updated doc or null if insufficient stock.
- */
 bloodInventorySchema.statics.reserveUnits = async function (inventoryId, requestId, unitsToReserve) {
   const updated = await this.findOneAndUpdate(
+    { _id: inventoryId, availableUnits: { $gte: unitsToReserve } },
     {
-      _id:            inventoryId,
-      availableUnits: { $gte: unitsToReserve },
-    },
-    {
-      $inc: {
-        availableUnits: -unitsToReserve,
-        reservedUnits:   unitsToReserve,
-      },
+      $inc: { availableUnits: -unitsToReserve, reservedUnits: unitsToReserve },
       $set: { lastUpdatedAt: new Date() },
     },
     { new: true }
   );
-
   if (!updated) return null;
 
-  // Mark specific units reserved (FIFO — oldest collected first)
+  const now = new Date();
   let reserved = 0;
   for (const unit of updated.units) {
     if (reserved >= unitsToReserve) break;
-    if (unit.status === 'available' && unit.isReleaseApproved) {
+    // FIX: also check unit not expired before reserving
+    if (
+      unit.status === 'available' &&
+      unit.isReleaseApproved &&
+      unit.expiresAt > now
+    ) {
       unit.status      = 'reserved';
       unit.reservedFor = requestId;
-      unit.reservedAt  = new Date();
+      unit.reservedAt  = now;
       reserved++;
     }
   }
@@ -352,10 +256,6 @@ bloodInventorySchema.statics.reserveUnits = async function (inventoryId, request
   return updated.save();
 };
 
-/**
- * releaseReservation — release reserved units back to available.
- * Called when BloodRequest is cancelled.
- */
 bloodInventorySchema.statics.releaseReservation = async function (inventoryId, requestId) {
   const inv = await this.findById(inventoryId);
   if (!inv) return null;
@@ -379,9 +279,6 @@ bloodInventorySchema.statics.releaseReservation = async function (inventoryId, r
   return inv;
 };
 
-/**
- * addUnit — add newly collected blood bag to inventory.
- */
 bloodInventorySchema.statics.addUnit = async function (inventoryId, unitData) {
   const inv = await this.findById(inventoryId);
   if (!inv) throw new Error('BloodInventory not found');
@@ -389,6 +286,10 @@ bloodInventorySchema.statics.addUnit = async function (inventoryId, unitData) {
 
   inv.units.push(unitData);
   inv.totalUnits++;
+  // FIX: only increment availableUnits when unit is released/approved
+  if (unitData.isReleaseApproved && unitData.status === 'available') {
+    inv.availableUnits++;
+  }
   inv.lastDonationAt = new Date();
   inv.lastUpdatedAt  = new Date();
 
@@ -396,8 +297,8 @@ bloodInventorySchema.statics.addUnit = async function (inventoryId, unitData) {
 };
 
 /**
- * runExpiryCheck — mark expired units, update counters.
- * Called by scheduled job (daily at 00:00).
+ * runExpiryCheck — called by daily cron at 00:00.
+ * FIX: expiringIn3Days/7Days now correctly exclude already-expired units.
  */
 bloodInventorySchema.statics.runExpiryCheck = async function (inventoryId) {
   const inv = await this.findById(inventoryId);
@@ -421,17 +322,23 @@ bloodInventorySchema.statics.runExpiryCheck = async function (inventoryId) {
     .sort((a, b) => a - b);
   inv.nextExpiryAt = activeDates[0] ?? null;
 
+  // FIX: filter out already-expired — use u.expiresAt > now as lower bound
   const threeDays = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
   const sevenDays = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-  inv.expiringIn3Days = inv.units.filter(u => u.status === 'available' && u.expiresAt <= threeDays).length;
-  inv.expiringIn7Days = inv.units.filter(u => u.status === 'available' && u.expiresAt <= sevenDays).length;
-  inv.lastUpdatedAt   = now;
+  inv.expiringIn3Days = inv.units.filter(
+    u => u.status === 'available' && u.expiresAt > now && u.expiresAt <= threeDays
+  ).length;
+  inv.expiringIn7Days = inv.units.filter(
+    u => u.status === 'available' && u.expiresAt > now && u.expiresAt <= sevenDays
+  ).length;
+  inv.lastUpdatedAt = now;
 
   return inv.save();
 };
 
 // ── Pre-save ──────────────────────────────────────────────────────────────────
-
+// NOTE: pre-save only fires on .save() — NOT on $inc/$set atomic updates.
+// Counter integrity maintained via statics above.
 bloodInventorySchema.pre('save', function () {
   if (this.isModified('units')) {
     const now    = new Date();
@@ -439,14 +346,12 @@ bloodInventorySchema.pre('save', function () {
       .filter(u => u.status === 'available' && u.expiresAt > now)
       .map(u => u.expiresAt)
       .sort((a, b) => a - b);
-    this.nextExpiryAt = active[0] ?? null;
-
+    this.nextExpiryAt     = active[0] ?? null;
     this.quarantinedUnits = this.units.filter(u => u.status === 'quarantined').length;
   }
 });
 
 // ── Indexes ───────────────────────────────────────────────────────────────────
-
 bloodInventorySchema.index({ location: '2dsphere' });
 bloodInventorySchema.index({ bloodGroup: 1, component: 1, availableUnits: 1 });
 bloodInventorySchema.index({ bloodGroup: 1, component: 1, location: '2dsphere' });

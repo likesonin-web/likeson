@@ -1,16 +1,6 @@
 'use client';
 
-/**
- * RideLiveTracking.jsx — Likeson.in
- * PRODUCTION v2 — Google Maps Advanced Markers + 3D SVG vehicles
- *
- * ENV:
- *   NEXT_PUBLIC_GOOGLE_MAPS_KEY       = AIzaSy...
- *   NEXT_PUBLIC_MAP_ID                = 53b37ff1ce3093072bb1c62b
- *   NEXT_PUBLIC_SOCKET_URL            = http://localhost:5050
- *
- * Stack: Next.js · Redux · @react-google-maps/api · Framer Motion · Lucide · Tailwind
- */
+ 
 
 import React, {
   useCallback,

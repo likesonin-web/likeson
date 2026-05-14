@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   RadialBarChart, RadialBar, ResponsiveContainer, Tooltip,
@@ -10,17 +11,19 @@ import {
 import {
   Droplets, Plus, Search, RefreshCw, ChevronRight,
   TrendingUp, TrendingDown, AlertTriangle, CheckCircle2,
-  Layers, FlaskConical, X, ArrowUpRight, Package,
-  Thermometer, Clock, MapPin, Activity, Archive,
-  ShieldAlert, BellOff, CalendarCheck, Banknote,
-  TestTube, Tag, User, Trash2, Lock,
+  X, ArrowUpRight, Package,
+  MapPin, Activity, Archive,
+  ShieldAlert, Clock, Banknote,
+  TestTube, Tag, User, Trash2, Lock, ArrowLeft,
 } from 'lucide-react';
 import {
   fetchMyInventory,
+  fetchInventorySlot,
   createInventorySlot,
+  runExpiryCheck,
 } from '@/store/slices/bloodbankSlice';
 
-/* ─────────────────────────── CONSTANTS ─────────────────────────── */
+/* ─── CONSTANTS ─── */
 
 const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 
@@ -30,19 +33,6 @@ const COMPONENTS = [
   'Irradiated PRBC', 'Washed PRBC',
 ];
 
-const STORAGE_LOCATIONS = [
-  'Refrigerator_1', 'Refrigerator_2', 'Refrigerator_3',
-  'Freezer_1', 'Freezer_2', 'Platelet_Agitator',
-  'Room_Temperature', 'Transport_Box', 'Mobile_Unit',
-];
-
-const UNIT_STATUSES = [
-  'available', 'reserved', 'cross_matching', 'cross_matched',
-  'dispatched', 'issued', 'transfused', 'expired',
-  'discarded', 'quarantined', 'recalled',
-];
-
-/** Shelf life in days per component (mirrors model constant) */
 const COMPONENT_SHELF_LIFE_DAYS = {
   'Whole Blood': 35, 'PRBC': 42, 'FFP': 365,
   'Platelets': 5, 'Cryoprecipitate': 365, 'Plasma': 365,
@@ -50,18 +40,12 @@ const COMPONENT_SHELF_LIFE_DAYS = {
   'Irradiated PRBC': 28, 'Washed PRBC': 24,
 };
 
-/** Storage temp ranges per component */
 const COMPONENT_STORAGE_TEMP = {
-  'Whole Blood':            '2–6 °C',
-  'PRBC':                   '2–6 °C',
-  'FFP':                    '-25 to -18 °C',
-  'Platelets':              '20–24 °C',
-  'Cryoprecipitate':        '-25 to -18 °C',
-  'Plasma':                 '-25 to -18 °C',
-  'Single Donor Platelets': '20–24 °C',
-  'Leukoreduced PRBC':      '2–6 °C',
-  'Irradiated PRBC':        '2–6 °C',
-  'Washed PRBC':            '2–6 °C',
+  'Whole Blood': '2–6 °C', 'PRBC': '2–6 °C',
+  'FFP': '-25 to -18 °C', 'Platelets': '20–24 °C',
+  'Cryoprecipitate': '-25 to -18 °C', 'Plasma': '-25 to -18 °C',
+  'Single Donor Platelets': '20–24 °C', 'Leukoreduced PRBC': '2–6 °C',
+  'Irradiated PRBC': '2–6 °C', 'Washed PRBC': '2–6 °C',
 };
 
 const GROUP_COLORS = {
@@ -76,7 +60,7 @@ const COMP_SHORT = {
   'Irradiated PRBC': 'IR-PRBC', 'Washed PRBC': 'WA-PRBC',
 };
 
-/* ─────────────────────────── ANIMATION VARIANTS ─────────────────── */
+/* ─── ANIMATION ─── */
 
 const container = { hidden: {}, show: { transition: { staggerChildren: 0.055 } } };
 const item = {
@@ -84,7 +68,7 @@ const item = {
   show: { opacity: 1, y: 0, transition: { duration: 0.35, ease: [.4, 0, .2, 1] } },
 };
 
-/* ─────────────────────────── HELPERS ────────────────────────────── */
+/* ─── HELPERS ─── */
 
 function fmt(date) {
   if (!date) return '—';
@@ -96,17 +80,11 @@ function fmtTime(date) {
   return new Date(date).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-/* ────────────── NOTE LABEL ────────────────────────────────────────
-   Small grey helper text shown below each field value.
-   Mirrors the schema comments so staff understand data meaning.
-──────────────────────────────────────────────────────────────────── */
 function NoteLabel({ text }) {
-  return (
-    <p className="text-[9px] text-base-content/40 leading-tight mt-0.5">{text}</p>
-  );
+  return <p className="text-[9px] text-base-content/40 leading-tight mt-0.5">{text}</p>;
 }
 
-/* ─────────────────────────── STAT PILL ──────────────────────────── */
+/* ─── STAT PILL ─── */
 
 function StatPill({ label, value, icon: Icon, color, sub, note }) {
   return (
@@ -117,7 +95,7 @@ function StatPill({ label, value, icon: Icon, color, sub, note }) {
       <div className="flex items-start justify-between">
         <div className="w-9 h-9 rounded-xl flex items-center justify-center"
           style={{ background: `${color}18` }}>
-          <Icon className="w-4.5 h-4.5" style={{ color }} />
+          <Icon className="w-4 h-4" style={{ color }} />
         </div>
         {sub !== undefined && (
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${sub >= 0 ? 'bg-success/10 text-success' : 'bg-error/10 text-error'}`}>
@@ -133,7 +111,7 @@ function StatPill({ label, value, icon: Icon, color, sub, note }) {
   );
 }
 
-/* ─────────────────────────── INVENTORY CARD ─────────────────────── */
+/* ─── INVENTORY CARD ─── */
 
 function InventoryCard({ inv, onClick }) {
   const pct = inv.totalUnits > 0 ? Math.round((inv.availableUnits / Math.max(inv.totalUnits, 1)) * 100) : 0;
@@ -145,32 +123,25 @@ function InventoryCard({ inv, onClick }) {
     <motion.div variants={item} whileHover={{ y: -3, scale: 1.01 }} whileTap={{ scale: .98 }}
       onClick={() => onClick(inv)}
       className="glass-card p-4 cursor-pointer group relative overflow-hidden">
-
-      {/* blood group accent bar — color from GROUP_COLORS map */}
       <div className="absolute top-0 left-0 w-1 h-full rounded-l-xl" style={{ background: color }} />
 
-      {/* Header: blood group badge + component name + stock status */}
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2.5">
-          {/* bloodGroup field — 8 ABO+Rh types */}
           <div className="w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm text-white shadow-md"
             style={{ background: color }}>
             {inv.bloodGroup}
           </div>
           <div>
-            {/* component field — 10 blood product types */}
             <p className="text-xs font-bold text-base-content/50 uppercase tracking-wide">
               {COMP_SHORT[inv.component] ?? inv.component}
             </p>
             <p className="text-sm font-semibold text-base-content leading-tight">{inv.component}</p>
-            <NoteLabel text="1 doc per bloodGroup+component combo" />
+            <NoteLabel text="1 doc per bloodGroup+component" />
           </div>
         </div>
-        {/* isLowStock / isCriticalStock flags — set by scheduled job */}
         <span className={`badge badge-${statusColor} badge-sm`}>{statusLabel}</span>
       </div>
 
-      {/* availableUnits / totalUnits ratio */}
       <div className="mb-3">
         <div className="flex justify-between text-[10px] text-base-content/50 mb-1">
           <span>Available / Total</span><span>{pct}%</span>
@@ -181,26 +152,22 @@ function InventoryCard({ inv, onClick }) {
             transition={{ duration: .8, ease: 'easeOut', delay: .2 }}
             style={{ background: color }} />
         </div>
-        <NoteLabel text="availableUnits = total − reserved − issued − expired" />
       </div>
 
-      {/* Counter grid — 4 key stock counters */}
       <div className="grid grid-cols-4 gap-1 text-center mb-2">
         {[
-          { label: 'Avail', val: inv.availableUnits, c: 'text-success', note: 'availableUnits' },
-          { label: 'Rsrvd', val: inv.reservedUnits, c: 'text-warning', note: 'reservedUnits' },
-          { label: 'Issued', val: inv.issuedUnits, c: 'text-info', note: 'issuedUnits' },
-          { label: 'Exprd', val: inv.expiredUnits, c: 'text-error', note: 'expiredUnits' },
-        ].map(({ label, val, c, note }) => (
+          { label: 'Avail', val: inv.availableUnits, c: 'text-success' },
+          { label: 'Rsrvd', val: inv.reservedUnits, c: 'text-warning' },
+          { label: 'Issued', val: inv.issuedUnits, c: 'text-info' },
+          { label: 'Exprd', val: inv.expiredUnits, c: 'text-error' },
+        ].map(({ label, val, c }) => (
           <div key={label} className="bg-base-200/60 rounded-lg py-1.5 px-1">
             <p className={`text-base font-black ${c}`}>{val ?? 0}</p>
             <p className="text-[9px] text-base-content/40 uppercase tracking-wide">{label}</p>
-            <NoteLabel text={note} />
           </div>
         ))}
       </div>
 
-      {/* cityName + nextExpiryAt quick info */}
       <div className="flex items-center justify-between mt-1">
         {inv.cityName && (
           <div className="flex items-center gap-1 text-[10px] text-base-content/40">
@@ -223,7 +190,7 @@ function InventoryCard({ inv, onClick }) {
   );
 }
 
-/* ─────────────────────────── CREATE SLOT MODAL ─────────────────── */
+/* ─── CREATE SLOT MODAL ─── */
 
 function CreateSlotModal({ open, onClose }) {
   const dispatch = useDispatch();
@@ -259,10 +226,8 @@ function CreateSlotModal({ open, onClose }) {
             <div className="flex items-center justify-between mb-5">
               <div>
                 <h3 className="font-montserrat font-black text-xl text-base-content">New Inventory Slot</h3>
-                <p className="text-sm text-base-content/50 mt-0.5">
-                  One slot per bloodGroup + component combination
-                </p>
-                <NoteLabel text="Unique constraint: bloodBank + bloodGroup + component" />
+                <p className="text-sm text-base-content/50 mt-0.5">One slot per bloodGroup + component</p>
+                <NoteLabel text="Unique: bloodBank + bloodGroup + component" />
               </div>
               <button onClick={onClose} className="p-2 rounded-xl hover:bg-base-300/60 transition-colors">
                 <X className="w-4 h-4 text-base-content/60" />
@@ -270,52 +235,35 @@ function CreateSlotModal({ open, onClose }) {
             </div>
 
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-
-              {/* bloodGroup */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="label mb-1">
-                    <span className="label-text">Blood Group</span>
-                  </label>
-                  <select value={form.bloodGroup} onChange={e => set('bloodGroup', e.target.value)}
-                    className="input-field">
+                  <label className="label mb-1"><span className="label-text">Blood Group</span></label>
+                  <select value={form.bloodGroup} onChange={e => set('bloodGroup', e.target.value)} className="input-field">
                     {BLOOD_GROUPS.map(g => <option key={g}>{g}</option>)}
                   </select>
-                  <NoteLabel text="ABO + Rh type. Enum: A+/A-/B+/B-/AB+/AB-/O+/O-" />
+                  <NoteLabel text="ABO + Rh enum" />
                 </div>
-
-                {/* component */}
                 <div>
-                  <label className="label mb-1">
-                    <span className="label-text">Component</span>
-                  </label>
-                  <select value={form.component} onChange={e => set('component', e.target.value)}
-                    className="input-field">
+                  <label className="label mb-1"><span className="label-text">Component</span></label>
+                  <select value={form.component} onChange={e => set('component', e.target.value)} className="input-field">
                     {COMPONENTS.map(c => <option key={c}>{c}</option>)}
                   </select>
-                  <NoteLabel text={`Shelf life: ${COMPONENT_SHELF_LIFE_DAYS[form.component] ?? '—'} days. Temp: ${COMPONENT_STORAGE_TEMP[form.component] ?? '—'}`} />
+                  <NoteLabel text={`Shelf: ${COMPONENT_SHELF_LIFE_DAYS[form.component]}d · ${COMPONENT_STORAGE_TEMP[form.component]}`} />
                 </div>
               </div>
 
-              {/* processingFeePerUnit + crossMatchFeePerUnit */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="label mb-1">
-                    <span className="label-text">Processing Fee (₹)</span>
-                  </label>
+                  <label className="label mb-1"><span className="label-text">Processing Fee (₹)</span></label>
                   <input type="number" min="0" value={form.processingFeePerUnit}
-                    onChange={e => set('processingFeePerUnit', +e.target.value)}
-                    className="input-field" />
-                  <NoteLabel text="processingFeePerUnit — synced from BloodBank.pricing on update" />
+                    onChange={e => set('processingFeePerUnit', +e.target.value)} className="input-field" />
+                  <NoteLabel text="processingFeePerUnit" />
                 </div>
                 <div>
-                  <label className="label mb-1">
-                    <span className="label-text">CrossMatch Fee (₹)</span>
-                  </label>
+                  <label className="label mb-1"><span className="label-text">CrossMatch Fee (₹)</span></label>
                   <input type="number" min="0" value={form.crossMatchFeePerUnit}
-                    onChange={e => set('crossMatchFeePerUnit', +e.target.value)}
-                    className="input-field" />
-                  <NoteLabel text="crossMatchFeePerUnit — added to Razorpay order total" />
+                    onChange={e => set('crossMatchFeePerUnit', +e.target.value)} className="input-field" />
+                  <NoteLabel text="crossMatchFeePerUnit" />
                 </div>
               </div>
 
@@ -333,9 +281,7 @@ function CreateSlotModal({ open, onClose }) {
   );
 }
 
-/* ─────────────────────────── UNIT ROW (inside drawer) ─────────────
-   Displays all bloodUnitSchema fields with note labels.
-──────────────────────────────────────────────────────────────────── */
+/* ─── UNIT ROW (drawer) ─── */
 
 function UnitRow({ unit }) {
   const statusColor = {
@@ -345,199 +291,65 @@ function UnitRow({ unit }) {
     quarantined: 'warning', recalled: 'error',
   }[unit.status] ?? 'neutral';
 
-  const allTests = ['hiv', 'hbsAg', 'hcv', 'syphilis', 'malaria'];
-  const testClear = unit.testResults?.allClear;
-
   return (
     <div className="border border-base-300/60 rounded-xl p-3 mb-2 text-xs bg-base-200/40">
-      {/* Row 1: identity + status */}
       <div className="flex items-center justify-between mb-2">
         <div>
-          <p className="font-black text-sm text-base-content">{unit.bagNumber}</p>
-          <NoteLabel text="bagNumber — unique physical bag label (uppercase)" />
+          <p className="font-mono text-sm font-black text-base-content">{unit.bagNumber}</p>
+          <NoteLabel text="bagNumber — unique physical bag label" />
         </div>
         <span className={`badge badge-${statusColor} badge-xs`}>{unit.status}</span>
       </div>
-
-      <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-
-        {/* donorCode */}
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
         <div>
-          <p className="text-base-content/60 font-semibold">Donor Code</p>
-          <p className="font-bold text-base-content">{unit.donorCode ?? '—'}</p>
-          <NoteLabel text="donorCode — string ref, no FK. WALK-IN for unregistered" />
-        </div>
-
-        {/* donorName */}
-        <div>
-          <p className="text-base-content/60 font-semibold">Donor Name</p>
-          <p className="font-bold text-base-content">{unit.donorName ?? '—'}</p>
-          <NoteLabel text="donorName — optional display only" />
-        </div>
-
-        {/* collectedAt */}
-        <div>
-          <p className="text-base-content/60 font-semibold">Collected At</p>
-          <p className="font-bold text-base-content">{fmt(unit.collectedAt)}</p>
-          <NoteLabel text="collectedAt — required. Blood draw timestamp" />
-        </div>
-
-        {/* volumeMl */}
-        <div>
-          <p className="text-base-content/60 font-semibold">Volume</p>
-          <p className="font-bold text-base-content">{unit.volumeMl ? `${unit.volumeMl} mL` : '—'}</p>
-          <NoteLabel text="volumeMl — 50–500 mL range allowed" />
-        </div>
-
-        {/* collectedByStaff */}
-        <div>
-          <p className="text-base-content/60 font-semibold">Collected By</p>
-          <p className="font-bold text-base-content">{unit.collectedByStaff ?? '—'}</p>
-          <NoteLabel text="collectedByStaff — staff name string" />
-        </div>
-
-        {/* donorHemoglobin */}
-        <div>
-          <p className="text-base-content/60 font-semibold">Hemoglobin</p>
-          <p className="font-bold text-base-content">{unit.donorHemoglobin != null ? `${unit.donorHemoglobin} g/dL` : '—'}</p>
-          <NoteLabel text="donorHemoglobin — donor Hb at time of donation" />
-        </div>
-
-        {/* processedAt + processedBy */}
-        <div>
-          <p className="text-base-content/60 font-semibold">Processed At</p>
-          <p className="font-bold text-base-content">{fmt(unit.processedAt)}</p>
-          <NoteLabel text="processedAt — component separation timestamp" />
+          <p className="text-base-content/50 font-semibold">Donor Code</p>
+          <p className="font-bold">{unit.donorCode ?? '—'}</p>
+          <NoteLabel text="string ref, no FK" />
         </div>
         <div>
-          <p className="text-base-content/60 font-semibold">Processed By</p>
-          <p className="font-bold text-base-content">{unit.processedBy ?? '—'}</p>
-          <NoteLabel text="processedBy — lab tech name" />
+          <p className="text-base-content/50 font-semibold">Volume</p>
+          <p className="font-bold">{unit.volumeMl ? `${unit.volumeMl} mL` : '—'}</p>
         </div>
-
-        {/* separationMethod */}
-        <div className="col-span-2">
-          <p className="text-base-content/60 font-semibold">Separation Method</p>
-          <p className="font-bold text-base-content">{unit.separationMethod ?? '—'}</p>
-          <NoteLabel text="separationMethod — Whole_Blood_Filtration / Apheresis / Centrifugation / Not_Applicable" />
-        </div>
-
-        {/* expiresAt */}
         <div>
-          <p className="text-base-content/60 font-semibold">Expires At</p>
-          <p className={`font-bold ${unit.expiresAt && new Date(unit.expiresAt) < new Date() ? 'text-error' : 'text-base-content'}`}>
+          <p className="text-base-content/50 font-semibold">Collected</p>
+          <p className="font-bold">{fmt(unit.collectedAt)}</p>
+        </div>
+        <div>
+          <p className="text-base-content/50 font-semibold">Expires</p>
+          <p className={`font-bold ${unit.expiresAt && new Date(unit.expiresAt) < new Date() ? 'text-error' : ''}`}>
             {fmt(unit.expiresAt)}
           </p>
-          <NoteLabel text="expiresAt — required, indexed. Auto-expired by runExpiryCheck()" />
+          <NoteLabel text="expiresAt — indexed" />
         </div>
-
-        {/* storageLocation */}
         <div>
-          <p className="text-base-content/60 font-semibold">Storage Location</p>
-          <p className="font-bold text-base-content">{unit.storageLocation ?? '—'}</p>
-          <NoteLabel text="storageLocation — enum: Refrigerator_1…Mobile_Unit" />
-        </div>
-
-        {/* storageSlot */}
-        <div>
-          <p className="text-base-content/60 font-semibold">Storage Slot</p>
-          <p className="font-bold text-base-content">{unit.storageSlot ?? '—'}</p>
-          <NoteLabel text="storageSlot — physical rack/slot identifier" />
-        </div>
-
-        {/* storageTemperatureC */}
-        <div>
-          <p className="text-base-content/60 font-semibold">Storage Temp</p>
-          <p className="font-bold text-base-content">
-            {unit.storageTemperatureC != null ? `${unit.storageTemperatureC} °C` : '—'}
-          </p>
-          <NoteLabel text="storageTemperatureC — actual recorded temp" />
-        </div>
-
-        {/* isTestingComplete + isReleaseApproved */}
-        <div>
-          <p className="text-base-content/60 font-semibold">Testing Done</p>
+          <p className="text-base-content/50 font-semibold">Testing</p>
           <p className={`font-bold ${unit.isTestingComplete ? 'text-success' : 'text-warning'}`}>
-            {unit.isTestingComplete ? 'Yes' : 'Pending'}
+            {unit.isTestingComplete ? 'Done' : 'Pending'}
           </p>
-          <NoteLabel text="isTestingComplete — all NACO/ELISA screens done" />
         </div>
         <div>
-          <p className="text-base-content/60 font-semibold">Released</p>
+          <p className="text-base-content/50 font-semibold">Released</p>
           <p className={`font-bold ${unit.isReleaseApproved ? 'text-success' : 'text-error'}`}>
             {unit.isReleaseApproved ? 'Approved' : 'Held'}
           </p>
-          <NoteLabel text="isReleaseApproved — bank manager approval before issue" />
+          <NoteLabel text="isReleaseApproved" />
         </div>
-
-        {/* testResults */}
         <div className="col-span-2">
-          <p className="text-base-content/60 font-semibold mb-1">
-            Test Results
-            {testClear != null && (
-              <span className={`ml-2 badge badge-xs ${testClear ? 'badge-success' : 'badge-error'}`}>
-                {testClear ? 'All Clear' : 'Reactive'}
-              </span>
-            )}
-          </p>
-          <div className="flex flex-wrap gap-1.5">
+          <p className="text-base-content/50 font-semibold mb-1">Tests</p>
+          <div className="flex flex-wrap gap-1">
             {['hiv', 'hbsAg', 'hcv', 'syphilis', 'malaria'].map(k => {
               const val = unit.testResults?.[k] ?? 'Pending';
               const c = val === 'Non-Reactive' ? 'badge-success' : val === 'Reactive' ? 'badge-error' : 'badge-warning';
-              return (
-                <span key={k} className={`badge badge-xs ${c}`}>
-                  {k.toUpperCase()}: {val}
-                </span>
-              );
+              return <span key={k} className={`badge badge-xs ${c}`}>{k.toUpperCase()}: {val}</span>;
             })}
           </div>
-          <NoteLabel text="testResults — HIV/HBsAg/HCV/Syphilis/Malaria: Non-Reactive|Reactive|Pending|Not_Done" />
         </div>
-
-        {/* crossMatch */}
-        {unit.crossMatch?.result && (
-          <div className="col-span-2">
-            <p className="text-base-content/60 font-semibold">Cross-Match</p>
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className={`badge badge-xs ${unit.crossMatch.result === 'Compatible' ? 'badge-success' : 'badge-error'}`}>
-                {unit.crossMatch.result}
-              </span>
-              {unit.crossMatch.resultAt && (
-                <span className="text-base-content/40">{fmt(unit.crossMatch.resultAt)}</span>
-              )}
-            </div>
-            <NoteLabel text="crossMatch — Compatible|Incompatible|Pending. Links to BloodRequest" />
-          </div>
-        )}
-
-        {/* issuedTo */}
-        {unit.issuedTo?.issuedAt && (
-          <div className="col-span-2 bg-info/5 rounded-lg p-2 border border-info/20">
-            <p className="text-base-content/60 font-semibold">Issued</p>
-            <p className="font-bold text-base-content">{fmt(unit.issuedTo.issuedAt)} by {unit.issuedTo.issuedBy ?? '—'}</p>
-            <NoteLabel text="issuedTo — request/hospital/issuedAt/issuedBy/receiptUrl" />
-          </div>
-        )}
-
-        {/* transfusedAt */}
-        {unit.transfusedAt && (
-          <div>
-            <p className="text-base-content/60 font-semibold">Transfused</p>
-            <p className="font-bold text-success">{fmt(unit.transfusedAt)}</p>
-            <NoteLabel text="transfusedAt — patient administration timestamp" />
-          </div>
-        )}
-
-        {/* isRecalled */}
         {unit.isRecalled && (
           <div className="col-span-2 bg-error/5 rounded-lg p-2 border border-error/20">
             <div className="flex items-center gap-1.5 text-error font-bold">
-              <ShieldAlert className="w-3 h-3" />
-              RECALLED
+              <ShieldAlert className="w-3 h-3" /> RECALLED
             </div>
             <p className="text-base-content/60 mt-0.5">{unit.recallReason ?? '—'}</p>
-            {unit.recalledAt && <p className="text-base-content/40 text-[9px]">{fmt(unit.recalledAt)}</p>}
-            <NoteLabel text="isRecalled + recallReason + recalledAt — post-issue safety recall" />
           </div>
         )}
       </div>
@@ -545,10 +357,13 @@ function UnitRow({ unit }) {
   );
 }
 
-/* ─────────────────────────── INVENTORY DETAIL DRAWER ─────────────── */
+/* ─── INVENTORY DETAIL DRAWER ─── */
 
-function InventoryDetailDrawer({ inv, onClose }) {
-  const [tab, setTab] = useState('overview'); // 'overview' | 'units' | 'audit'
+function InventoryDetailDrawer({ inv, onClose, onRunExpiry, loadingSlot }) {
+  const router = useRouter();
+  const [tab, setTab] = useState('overview');
+
+  useEffect(() => { setTab('overview'); }, [inv?._id]);
 
   if (!inv) return null;
   const color = GROUP_COLORS[inv.bloodGroup] ?? 'var(--primary)';
@@ -561,6 +376,9 @@ function InventoryDetailDrawer({ inv, onClose }) {
     { name: 'Discarded', value: inv.discardedUnits ?? 0, fill: 'var(--neutral)' },
     { name: 'Quarantined', value: inv.quarantinedUnits ?? 0, fill: 'oklch(72% 0.17 72)' },
   ].filter(d => d.value > 0);
+
+  // units[] available only after fetchInventorySlot called
+  const units = inv.units ?? [];
 
   return (
     <AnimatePresence>
@@ -584,23 +402,19 @@ function InventoryDetailDrawer({ inv, onClose }) {
                   <div>
                     <h3 className="font-montserrat font-black text-lg text-base-content">{inv.bloodGroup}</h3>
                     <p className="text-xs text-base-content/50">{inv.component}</p>
-                    <NoteLabel text={`Shelf life: ${COMPONENT_SHELF_LIFE_DAYS[inv.component] ?? '—'} days · ${COMPONENT_STORAGE_TEMP[inv.component] ?? '—'}`} />
+                    <NoteLabel text={`Shelf: ${COMPONENT_SHELF_LIFE_DAYS[inv.component] ?? '—'}d · ${COMPONENT_STORAGE_TEMP[inv.component] ?? '—'}`} />
                   </div>
                 </div>
                 <button onClick={onClose} className="p-2 rounded-xl hover:bg-base-300/60">
                   <X className="w-4 h-4 text-base-content/60" />
                 </button>
               </div>
-
-              {/* Tabs */}
               <div className="flex gap-1 mb-0">
                 {['overview', 'units', 'audit'].map(t => (
-                  <button key={t}
-                    onClick={() => setTab(t)}
+                  <button key={t} onClick={() => setTab(t)}
                     className={`px-3 py-1.5 text-xs font-bold rounded-t-lg capitalize transition-colors ${tab === t
-                        ? 'bg-base-200 text-base-content border-t border-x border-base-300/60'
-                        : 'text-base-content/40 hover:text-base-content'
-                      }`}>
+                      ? 'bg-base-200 text-base-content border-t border-x border-base-300/60'
+                      : 'text-base-content/40 hover:text-base-content'}`}>
                     {t}
                   </button>
                 ))}
@@ -609,23 +423,20 @@ function InventoryDetailDrawer({ inv, onClose }) {
 
             <div className="p-5 flex flex-col gap-4 flex-1">
 
-              {/* ── OVERVIEW TAB ── */}
+              {/* ── OVERVIEW ── */}
               {tab === 'overview' && (
                 <>
-                  {/* Stock counters — all 7 counter fields */}
                   <div>
-                    <p className="text-xs font-bold uppercase tracking-widest text-base-content/40 mb-2">
-                      Stock Counters
-                    </p>
+                    <p className="text-xs font-bold uppercase tracking-widest text-base-content/40 mb-2">Stock Counters</p>
                     <div className="grid grid-cols-2 gap-2">
                       {[
-                        { l: 'Total Units', v: inv.totalUnits ?? 0, note: 'totalUnits — all bags ever added', c: 'text-base-content' },
-                        { l: 'Available', v: inv.availableUnits ?? 0, note: 'availableUnits — released, not reserved', c: 'text-success' },
-                        { l: 'Reserved', v: inv.reservedUnits ?? 0, note: 'reservedUnits — atomically $inc by reserveUnits()', c: 'text-warning' },
-                        { l: 'Issued', v: inv.issuedUnits ?? 0, note: 'issuedUnits — dispatched to patient', c: 'text-info' },
-                        { l: 'Expired', v: inv.expiredUnits ?? 0, note: 'expiredUnits — marked by runExpiryCheck()', c: 'text-error' },
-                        { l: 'Discarded', v: inv.discardedUnits ?? 0, note: 'discardedUnits — contaminated or damaged', c: 'text-error' },
-                        { l: 'Quarantined', v: inv.quarantinedUnits ?? 0, note: 'quarantinedUnits — held for investigation', c: 'text-warning' },
+                        { l: 'Total Units', v: inv.totalUnits ?? 0, note: 'totalUnits', c: 'text-base-content' },
+                        { l: 'Available', v: inv.availableUnits ?? 0, note: 'availableUnits', c: 'text-success' },
+                        { l: 'Reserved', v: inv.reservedUnits ?? 0, note: 'reservedUnits (atomic $inc)', c: 'text-warning' },
+                        { l: 'Issued', v: inv.issuedUnits ?? 0, note: 'issuedUnits', c: 'text-info' },
+                        { l: 'Expired', v: inv.expiredUnits ?? 0, note: 'expiredUnits', c: 'text-error' },
+                        { l: 'Discarded', v: inv.discardedUnits ?? 0, note: 'discardedUnits', c: 'text-error' },
+                        { l: 'Quarantined', v: inv.quarantinedUnits ?? 0, note: 'quarantinedUnits', c: 'text-warning' },
                       ].map(({ l, v, note, c }) => (
                         <div key={l} className="bg-base-200/60 rounded-xl p-2.5">
                           <p className="text-[10px] text-base-content/40 uppercase tracking-wide">{l}</p>
@@ -636,7 +447,6 @@ function InventoryDetailDrawer({ inv, onClose }) {
                     </div>
                   </div>
 
-                  {/* Chart — unit distribution */}
                   {chartData.length > 0 && (
                     <div>
                       <p className="text-xs font-bold uppercase tracking-widest text-base-content/40 mb-2">Unit Distribution</p>
@@ -656,7 +466,7 @@ function InventoryDetailDrawer({ inv, onClose }) {
                     </div>
                   )}
 
-                  {/* Expiry section */}
+                  {/* Expiry */}
                   <div>
                     <p className="text-xs font-bold uppercase tracking-widest text-base-content/40 mb-2">Expiry Tracking</p>
                     <div className="grid grid-cols-2 gap-2">
@@ -665,17 +475,17 @@ function InventoryDetailDrawer({ inv, onClose }) {
                         <p className={`text-sm font-bold mt-0.5 ${inv.nextExpiryAt ? 'text-warning' : 'text-base-content'}`}>
                           {fmt(inv.nextExpiryAt)}
                         </p>
-                        <NoteLabel text="nextExpiryAt — earliest expiry among available units (indexed)" />
+                        <NoteLabel text="nextExpiryAt — indexed" />
                       </div>
                       <div className="bg-base-200/60 rounded-xl p-2.5">
                         <p className="text-[10px] text-base-content/40 uppercase">Expiring 3d / 7d</p>
                         <p className={`text-sm font-bold mt-0.5 ${inv.expiringIn3Days > 0 ? 'text-error' : 'text-base-content'}`}>
-                          {inv.expiringIn3Days ?? 0} / {inv.expiringIn7Days ?? 0} units
+                          {inv.expiringIn3Days ?? 0} / {inv.expiringIn7Days ?? 0}
                         </p>
-                        <NoteLabel text="expiringIn3Days / expiringIn7Days — recomputed on expiry check" />
+                        <NoteLabel text="recomputed on expiry check" />
                       </div>
                     </div>
-                    {(inv.expiringIn3Days > 0 || inv.expiringIn7Days > 0) && (
+                    {(inv.expiringIn3Days > 0) && (
                       <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-warning/10 border border-warning/30 mt-2">
                         <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0" />
                         <p className="text-xs font-semibold text-warning">
@@ -691,13 +501,13 @@ function InventoryDetailDrawer({ inv, onClose }) {
                     <div className="grid grid-cols-2 gap-2">
                       <div className="bg-base-200/60 rounded-xl p-2.5">
                         <p className="text-[10px] text-base-content/40 uppercase">Processing Fee</p>
-                        <p className="text-sm font-bold mt-0.5 text-base-content">₹ {inv.processingFeePerUnit ?? 0}</p>
-                        <NoteLabel text="processingFeePerUnit — per bag, synced from BloodBank.pricing" />
+                        <p className="text-sm font-bold mt-0.5">₹ {inv.processingFeePerUnit ?? 0}</p>
+                        <NoteLabel text="processingFeePerUnit" />
                       </div>
                       <div className="bg-base-200/60 rounded-xl p-2.5">
                         <p className="text-[10px] text-base-content/40 uppercase">CrossMatch Fee</p>
-                        <p className="text-sm font-bold mt-0.5 text-base-content">₹ {inv.crossMatchFeePerUnit ?? 0}</p>
-                        <NoteLabel text="crossMatchFeePerUnit — added to Razorpay order" />
+                        <p className="text-sm font-bold mt-0.5">₹ {inv.crossMatchFeePerUnit ?? 0}</p>
+                        <NoteLabel text="crossMatchFeePerUnit" />
                       </div>
                     </div>
                   </div>
@@ -709,12 +519,12 @@ function InventoryDetailDrawer({ inv, onClose }) {
                       <div className={`rounded-xl p-2.5 border ${inv.isCriticalStock ? 'bg-error/10 border-error/30' : 'bg-base-200/60 border-base-300/40'}`}>
                         <div className="flex items-center gap-1.5">
                           <ShieldAlert className={`w-3.5 h-3.5 ${inv.isCriticalStock ? 'text-error' : 'text-base-content/30'}`} />
-                          <p className="text-[10px] text-base-content/40 uppercase">Critical Stock</p>
+                          <p className="text-[10px] text-base-content/40 uppercase">Critical</p>
                         </div>
                         <p className={`text-sm font-bold mt-0.5 ${inv.isCriticalStock ? 'text-error' : 'text-base-content/40'}`}>
-                          {inv.isCriticalStock ? 'YES — Act now' : 'No'}
+                          {inv.isCriticalStock ? 'YES' : 'No'}
                         </p>
-                        <NoteLabel text="isCriticalStock — below criticalThreshold in stockAlerts config" />
+                        <NoteLabel text="isCriticalStock" />
                       </div>
                       <div className={`rounded-xl p-2.5 border ${inv.isLowStock ? 'bg-warning/10 border-warning/30' : 'bg-base-200/60 border-base-300/40'}`}>
                         <div className="flex items-center gap-1.5">
@@ -722,18 +532,11 @@ function InventoryDetailDrawer({ inv, onClose }) {
                           <p className="text-[10px] text-base-content/40 uppercase">Low Stock</p>
                         </div>
                         <p className={`text-sm font-bold mt-0.5 ${inv.isLowStock ? 'text-warning' : 'text-base-content/40'}`}>
-                          {inv.isLowStock ? 'YES — Reorder' : 'No'}
+                          {inv.isLowStock ? 'YES' : 'No'}
                         </p>
-                        <NoteLabel text="isLowStock — below minThreshold in stockAlerts config" />
+                        <NoteLabel text="isLowStock" />
                       </div>
                     </div>
-                    {inv.lastAlertSentAt && (
-                      <div className="mt-2 bg-base-200/60 rounded-xl p-2.5">
-                        <p className="text-[10px] text-base-content/40 uppercase">Last Alert Sent</p>
-                        <p className="text-sm font-bold mt-0.5 text-base-content">{fmtTime(inv.lastAlertSentAt)}</p>
-                        <NoteLabel text="lastAlertSentAt — prevents duplicate alert spam" />
-                      </div>
-                    )}
                   </div>
 
                   {/* Location */}
@@ -742,28 +545,29 @@ function InventoryDetailDrawer({ inv, onClose }) {
                     <div className="bg-base-200/60 rounded-xl p-2.5 flex items-start gap-2">
                       <MapPin className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
                       <div>
-                        <p className="text-sm font-bold text-base-content">
-                          {inv.cityName ?? '—'}
-                        </p>
+                        <p className="text-sm font-bold text-base-content">{inv.cityName ?? '—'}</p>
                         {inv.location?.coordinates && (
                           <p className="text-xs text-base-content/40">
                             [{inv.location.coordinates[1]?.toFixed(4)}, {inv.location.coordinates[0]?.toFixed(4)}]
                           </p>
                         )}
-                        <NoteLabel text="location — 2dsphere GeoJSON Point, denormalized from BloodBank for fast $near queries" />
-                        <NoteLabel text="cityName — string copy from BloodBank.address.city" />
+                        <NoteLabel text="2dsphere GeoJSON Point — denormalized from BloodBank" />
                       </div>
                     </div>
                   </div>
 
                   {/* Action buttons */}
                   <div className="flex gap-2 mt-auto pt-2">
-                    <a href={`/blood-bank/units?invId=${inv._id}`} className="btn btn-outline flex-1 text-sm">
-                      View Units
-                    </a>
-                    <a href={`/blood-bank/expiry?invId=${inv._id}`} className="btn btn-primary flex-1 text-sm">
-                      Run Expiry Check
-                    </a>
+                    <button
+                      onClick={() => onRunExpiry(inv._id)}
+                      className="btn btn-outline flex-1 text-sm gap-1.5">
+                      <RefreshCw className="w-3.5 h-3.5" /> Expiry Check
+                    </button>
+                    <button
+                      onClick={() => router.push(`/blood-bank/units?invId=${inv._id}`)}
+                      className="btn btn-primary flex-1 text-sm gap-1.5">
+                      <Package className="w-3.5 h-3.5" /> Manage Units
+                    </button>
                   </div>
                 </>
               )}
@@ -773,18 +577,24 @@ function InventoryDetailDrawer({ inv, onClose }) {
                 <div>
                   <div className="flex items-center justify-between mb-3">
                     <p className="text-xs font-bold uppercase tracking-widest text-base-content/40">
-                      Blood Units ({(inv.units ?? []).length} / 500 max)
+                      Blood Units ({units.length} / 500 max)
                     </p>
-                    <NoteLabel text="units[] — capped at 500 per inventory doc" />
+                    {loadingSlot && (
+                      <span className="loading loading-sm loading-spinner" style={{ color: 'var(--primary)' }} />
+                    )}
                   </div>
-                  {(inv.units ?? []).length === 0 ? (
+                  {loadingSlot ? (
+                    <div className="flex flex-col gap-2">
+                      {Array(3).fill(0).map((_, i) => <div key={i} className="skeleton h-24 rounded-xl" />)}
+                    </div>
+                  ) : units.length === 0 ? (
                     <div className="text-center py-10 text-base-content/30">
                       <TestTube className="w-8 h-8 mx-auto mb-2 opacity-30" />
                       <p className="text-sm">No units added yet</p>
-                      <NoteLabel text="Add bags via POST /me/inventory/:invId/units" />
+                      <NoteLabel text="Add via POST /me/inventory/:invId/units" />
                     </div>
                   ) : (
-                    (inv.units ?? []).map((u, i) => <UnitRow key={u._id ?? i} unit={u} />)
+                    units.map((u, i) => <UnitRow key={u._id ?? i} unit={u} />)
                   )}
                 </div>
               )}
@@ -793,15 +603,14 @@ function InventoryDetailDrawer({ inv, onClose }) {
               {tab === 'audit' && (
                 <div className="flex flex-col gap-3">
                   <p className="text-xs font-bold uppercase tracking-widest text-base-content/40">Audit Fields</p>
-
                   {[
-                    { l: 'Last Updated', v: fmtTime(inv.lastUpdatedAt), note: 'lastUpdatedAt — set on any counter change or unit mutation' },
-                    { l: 'Last Donation', v: fmtTime(inv.lastDonationAt), note: 'lastDonationAt — set when addUnit() is called' },
-                    { l: 'Last Issuance', v: fmtTime(inv.lastIssuanceAt), note: 'lastIssuanceAt — set when units are marked issued' },
-                    { l: 'Created By', v: inv.createdBy ?? '—', note: 'createdBy — User ObjectId ref' },
-                    { l: 'Updated By', v: inv.updatedBy ?? '—', note: 'updatedBy — User ObjectId ref, last modifier' },
-                    { l: 'Document ID', v: inv._id, note: '_id — MongoDB ObjectId for this inventory slot' },
-                    { l: 'BloodBank Ref', v: inv.bloodBank, note: 'bloodBank — ObjectId ref to BloodBank parent doc' },
+                    { l: 'Last Updated', v: fmtTime(inv.lastUpdatedAt), note: 'lastUpdatedAt' },
+                    { l: 'Last Donation', v: fmtTime(inv.lastDonationAt), note: 'lastDonationAt — set by addUnit()' },
+                    { l: 'Last Issuance', v: fmtTime(inv.lastIssuanceAt), note: 'lastIssuanceAt' },
+                    { l: 'Created By', v: inv.createdBy ?? '—', note: 'createdBy — User ObjectId' },
+                    { l: 'Updated By', v: inv.updatedBy ?? '—', note: 'updatedBy — User ObjectId' },
+                    { l: 'Document ID', v: inv._id, note: '_id — MongoDB ObjectId' },
+                    { l: 'BloodBank Ref', v: inv.bloodBank, note: 'bloodBank — ObjectId ref' },
                   ].map(({ l, v, note }) => (
                     <div key={l} className="bg-base-200/60 rounded-xl p-3">
                       <p className="text-[10px] text-base-content/40 uppercase tracking-wide">{l}</p>
@@ -809,18 +618,16 @@ function InventoryDetailDrawer({ inv, onClose }) {
                       <NoteLabel text={note} />
                     </div>
                   ))}
-
-                  {/* Timestamps from mongoose */}
                   <div className="grid grid-cols-2 gap-2">
                     <div className="bg-base-200/60 rounded-xl p-2.5">
                       <p className="text-[10px] text-base-content/40 uppercase">Created</p>
                       <p className="text-sm font-bold mt-0.5">{fmtTime(inv.createdAt)}</p>
-                      <NoteLabel text="createdAt — mongoose timestamps auto-field" />
+                      <NoteLabel text="createdAt — mongoose auto" />
                     </div>
                     <div className="bg-base-200/60 rounded-xl p-2.5">
                       <p className="text-[10px] text-base-content/40 uppercase">Updated</p>
                       <p className="text-sm font-bold mt-0.5">{fmtTime(inv.updatedAt)}</p>
-                      <NoteLabel text="updatedAt — mongoose timestamps auto-field" />
+                      <NoteLabel text="updatedAt — mongoose auto" />
                     </div>
                   </div>
                 </div>
@@ -833,20 +640,51 @@ function InventoryDetailDrawer({ inv, onClose }) {
   );
 }
 
-/* ─────────────────────────── PAGE ──────────────────────────────── */
+/* ─── PAGE ─── */
 
 export default function InventoryPage() {
   const dispatch = useDispatch();
+  const router = useRouter();
   const { myInventory, loading } = useSelector(s => s.bloodBank);
 
   const [search, setSearch] = useState('');
   const [filterGroup, setFilterGroup] = useState('');
   const [filterComp, setFilterComp] = useState('');
-  const [filterAlert, setFilterAlert] = useState(''); // 'critical' | 'low' | ''
+  const [filterAlert, setFilterAlert] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [selected, setSelected] = useState(null);
+  const [loadingSlot, setLoadingSlot] = useState(false);
 
   useEffect(() => { dispatch(fetchMyInventory()); }, [dispatch]);
+
+  // On card click: load full slot (with units[]) then open drawer
+  const handleCardClick = async (inv) => {
+    setSelected(inv); // show drawer immediately with summary data
+    setLoadingSlot(true);
+    try {
+      const result = await dispatch(fetchInventorySlot(inv._id));
+      // After fetchInventorySlot, myInventory is updated in Redux.
+      // We need to get the full slot from updated state.
+      // Use the returned payload directly.
+      if (result?.payload) {
+        setSelected(result.payload);
+      }
+    } finally {
+      setLoadingSlot(false);
+    }
+  };
+
+  // Run expiry check for a slot
+  const handleRunExpiry = async (invId) => {
+    const result = await dispatch(runExpiryCheck(invId));
+    // Refresh the selected slot after expiry check
+    if (selected?._id === invId) {
+      setLoadingSlot(true);
+      const refreshed = await dispatch(fetchInventorySlot(invId));
+      if (refreshed?.payload) setSelected(refreshed.payload);
+      setLoadingSlot(false);
+    }
+  };
 
   const filtered = (myInventory ?? []).filter(inv => {
     const q = search.toLowerCase();
@@ -858,7 +696,6 @@ export default function InventoryPage() {
     );
   });
 
-  /* Summary stats derived from filtered inventory */
   const totalUnits      = filtered.reduce((a, i) => a + (i.totalUnits ?? 0), 0);
   const totalAvailable  = filtered.reduce((a, i) => a + (i.availableUnits ?? 0), 0);
   const totalReserved   = filtered.reduce((a, i) => a + (i.reservedUnits ?? 0), 0);
@@ -869,9 +706,7 @@ export default function InventoryPage() {
   const criticalCount   = filtered.filter(i => i.isCriticalStock).length;
   const lowCount        = filtered.filter(i => i.isLowStock && !i.isCriticalStock).length;
   const expiring3d      = filtered.reduce((a, i) => a + (i.expiringIn3Days ?? 0), 0);
-  const expiring7d      = filtered.reduce((a, i) => a + (i.expiringIn7Days ?? 0), 0);
 
-  /* Radial chart data — availableUnits per blood group */
   const radialData = BLOOD_GROUPS.map(g => ({
     name: g,
     value: filtered.filter(i => i.bloodGroup === g).reduce((a, i) => a + (i.availableUnits ?? 0), 0),
@@ -884,16 +719,22 @@ export default function InventoryPage() {
     <>
       <div className="flex flex-col gap-6">
 
-        {/* ── Page header ── */}
+        {/* ── Header ── */}
         <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }}
           className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
           <div>
+            {/* Go Back button */}
+            <button
+              onClick={() => router.back()}
+              className="btn btn-ghost btn-sm gap-1.5 mb-2 -ml-1 text-base-content/60 hover:text-base-content">
+              <ArrowLeft className="w-4 h-4" />
+              Go Back
+            </button>
             <h1 className="font-montserrat font-black text-2xl md:text-3xl text-base-content">
               Blood Inventory
             </h1>
             <p className="text-sm text-base-content/50 mt-0.5">
-              {filtered.length} slot{filtered.length !== 1 ? 's' : ''} ·&nbsp;
-              {totalAvailable} available · {totalUnits} total
+              {filtered.length} slot{filtered.length !== 1 ? 's' : ''} · {totalAvailable} available · {totalUnits} total
             </p>
             <NoteLabel text="One BloodInventory doc per (bloodBank + bloodGroup + component). Max 500 units per doc." />
           </div>
@@ -911,43 +752,39 @@ export default function InventoryPage() {
           </div>
         </motion.div>
 
-        {/* ── Stat pills — all 7 counter fields + alerts ── */}
+        {/* ── Stat pills ── */}
         <motion.div variants={container} initial="hidden" animate="show"
           className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
-          <StatPill label="Total"       value={totalUnits}      icon={Package}        color="var(--base-content)" note="totalUnits sum" />
-          <StatPill label="Available"   value={totalAvailable}  icon={Droplets}       color="var(--success)"      note="availableUnits" />
-          <StatPill label="Reserved"    value={totalReserved}   icon={Lock}           color="var(--warning)"      note="reservedUnits (atomic $inc)" />
-          <StatPill label="Issued"      value={totalIssued}     icon={ArrowUpRight}   color="var(--info)"         note="issuedUnits" />
-          <StatPill label="Expired"     value={totalExpired}    icon={Clock}          color="var(--error)"        note="expiredUnits" />
-          <StatPill label="Discarded"   value={totalDiscarded}  icon={Trash2}         color="var(--error)"        note="discardedUnits" />
-          <StatPill label="Quarantined" value={totalQuarant}    icon={ShieldAlert}    color="var(--warning)"      note="quarantinedUnits" />
-          <StatPill label="Critical"    value={criticalCount}   icon={AlertTriangle}  color="var(--error)"        note="isCriticalStock slots" />
+          <StatPill label="Total"       value={totalUnits}     icon={Package}        color="var(--base-content)" note="totalUnits" />
+          <StatPill label="Available"   value={totalAvailable} icon={Droplets}       color="var(--success)"      note="availableUnits" />
+          <StatPill label="Reserved"    value={totalReserved}  icon={Lock}           color="var(--warning)"      note="reservedUnits" />
+          <StatPill label="Issued"      value={totalIssued}    icon={ArrowUpRight}   color="var(--info)"         note="issuedUnits" />
+          <StatPill label="Expired"     value={totalExpired}   icon={Clock}          color="var(--error)"        note="expiredUnits" />
+          <StatPill label="Discarded"   value={totalDiscarded} icon={Trash2}         color="var(--error)"        note="discardedUnits" />
+          <StatPill label="Quarantined" value={totalQuarant}   icon={ShieldAlert}    color="var(--warning)"      note="quarantinedUnits" />
+          <StatPill label="Critical"    value={criticalCount}  icon={AlertTriangle}  color="var(--error)"        note="isCriticalStock slots" />
         </motion.div>
 
-        {/* ── Expiry alert banner ── */}
+        {/* ── Expiry alert ── */}
         {expiring3d > 0 && (
           <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
             className="flex items-center gap-3 px-4 py-3 rounded-xl bg-error/10 border border-error/30">
             <AlertTriangle className="w-5 h-5 text-error flex-shrink-0" />
             <div>
               <p className="text-sm font-bold text-error">
-                {expiring3d} bag{expiring3d !== 1 ? 's' : ''} expiring within 3 days — {expiring7d} within 7 days
+                {expiring3d} bag{expiring3d !== 1 ? 's' : ''} expiring within 3 days
               </p>
-              <NoteLabel text="expiringIn3Days / expiringIn7Days — recomputed by runExpiryCheck() daily job" />
+              <NoteLabel text="expiringIn3Days — recomputed by runExpiryCheck() daily job" />
             </div>
           </motion.div>
         )}
 
-        {/* ── Chart + Filters row ── */}
+        {/* ── Chart + Filters ── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-          {/* Radial chart — availableUnits by bloodGroup */}
           <motion.div initial={{ opacity: 0, scale: .97 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: .1 }}
             className="card p-5 lg:col-span-1">
-            <p className="text-xs font-bold uppercase tracking-widest text-base-content/40 mb-1">
-              Available by Blood Group
-            </p>
-            <NoteLabel text="availableUnits grouped by bloodGroup across all components" />
+            <p className="text-xs font-bold uppercase tracking-widest text-base-content/40 mb-1">Available by Blood Group</p>
+            <NoteLabel text="availableUnits grouped by bloodGroup" />
             <div className="h-44 mt-2">
               <ResponsiveContainer width="100%" height="100%">
                 <RadialBarChart cx="50%" cy="50%" innerRadius="30%" outerRadius="90%"
@@ -968,12 +805,10 @@ export default function InventoryPage() {
             </div>
           </motion.div>
 
-          {/* Filters */}
           <motion.div initial={{ opacity: 0, scale: .97 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: .15 }}
             className="card p-5 lg:col-span-2 flex flex-col gap-3">
             <p className="text-xs font-bold uppercase tracking-widest text-base-content/40">Filters</p>
 
-            {/* search — bloodGroup, component, cityName */}
             <div>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-base-content/40" />
@@ -981,31 +816,24 @@ export default function InventoryPage() {
                   className="input-field pl-9" value={search}
                   onChange={e => setSearch(e.target.value)} />
               </div>
-              <NoteLabel text="Searches: bloodGroup, component, cityName fields" />
+              <NoteLabel text="Searches: bloodGroup, component, cityName" />
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {/* bloodGroup filter */}
               <div>
                 <label className="label mb-1"><span className="label-text">Blood Group</span></label>
                 <select className="input-field" value={filterGroup} onChange={e => setFilterGroup(e.target.value)}>
                   <option value="">All Groups</option>
                   {BLOOD_GROUPS.map(g => <option key={g}>{g}</option>)}
                 </select>
-                <NoteLabel text="bloodGroup enum filter" />
               </div>
-
-              {/* component filter */}
               <div>
                 <label className="label mb-1"><span className="label-text">Component</span></label>
                 <select className="input-field" value={filterComp} onChange={e => setFilterComp(e.target.value)}>
                   <option value="">All Components</option>
                   {COMPONENTS.map(c => <option key={c}>{c}</option>)}
                 </select>
-                <NoteLabel text="component enum filter" />
               </div>
-
-              {/* alert state filter — isLowStock / isCriticalStock */}
               <div>
                 <label className="label mb-1"><span className="label-text">Alert State</span></label>
                 <select className="input-field" value={filterAlert} onChange={e => setFilterAlert(e.target.value)}>
@@ -1013,7 +841,7 @@ export default function InventoryPage() {
                   <option value="critical">Critical Only</option>
                   <option value="low">Low Stock</option>
                 </select>
-                <NoteLabel text="isCriticalStock / isLowStock boolean flags" />
+                <NoteLabel text="isCriticalStock / isLowStock" />
               </div>
             </div>
 
@@ -1026,32 +854,28 @@ export default function InventoryPage() {
           </motion.div>
         </div>
 
-        {/* ── Summary row: low stock + expiry quick stats ── */}
+        {/* ── Alert summary ── */}
         {(lowCount > 0 || criticalCount > 0) && (
           <div className="flex flex-wrap gap-2">
             {criticalCount > 0 && (
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-error/10 border border-error/20 text-xs">
                 <ShieldAlert className="w-3.5 h-3.5 text-error" />
                 <span className="font-bold text-error">{criticalCount} critical slot{criticalCount !== 1 ? 's' : ''}</span>
-                <NoteLabel text="isCriticalStock" />
               </div>
             )}
             {lowCount > 0 && (
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-warning/10 border border-warning/20 text-xs">
                 <AlertTriangle className="w-3.5 h-3.5 text-warning" />
                 <span className="font-bold text-warning">{lowCount} low stock slot{lowCount !== 1 ? 's' : ''}</span>
-                <NoteLabel text="isLowStock" />
               </div>
             )}
           </div>
         )}
 
-        {/* ── Inventory grid ── */}
+        {/* ── Grid ── */}
         {loading && !myInventory?.length ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {Array(8).fill(0).map((_, i) => (
-              <div key={i} className="skeleton h-52 rounded-2xl" />
-            ))}
+            {Array(8).fill(0).map((_, i) => <div key={i} className="skeleton h-52 rounded-2xl" />)}
           </div>
         ) : filtered.length === 0 ? (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
@@ -1061,7 +885,7 @@ export default function InventoryPage() {
             </div>
             <p className="font-semibold text-base-content/50">No inventory slots found</p>
             <p className="text-sm text-base-content/30 mt-1">
-              {hasFilters ? 'Try adjusting your filters' : 'Create your first slot to get started'}
+              {hasFilters ? 'Try adjusting filters' : 'Create your first slot'}
             </p>
             {!hasFilters && (
               <button onClick={() => setShowCreate(true)} className="btn btn-primary btn-sm mt-4 gap-1.5">
@@ -1073,14 +897,19 @@ export default function InventoryPage() {
           <motion.div variants={container} initial="hidden" animate="show"
             className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filtered.map(inv => (
-              <InventoryCard key={inv._id} inv={inv} onClick={setSelected} />
+              <InventoryCard key={inv._id} inv={inv} onClick={handleCardClick} />
             ))}
           </motion.div>
         )}
       </div>
 
       <CreateSlotModal open={showCreate} onClose={() => setShowCreate(false)} />
-      <InventoryDetailDrawer inv={selected} onClose={() => setSelected(null)} />
+      <InventoryDetailDrawer
+        inv={selected}
+        onClose={() => setSelected(null)}
+        onRunExpiry={handleRunExpiry}
+        loadingSlot={loadingSlot}
+      />
     </>
   );
 }

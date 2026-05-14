@@ -1,57 +1,18 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * BLOOD BANK ROUTER — Likeson.in
+ * BLOOD BANK ROUTER — Likeson.in  (FIXED)
  *
- * Routes:
- *   PUBLIC
- *   GET    /blood-banks                            list active banks
- *   GET    /blood-banks/nearby                     geospatial search
- *   GET    /blood-banks/slug/:slug                 by slug
- *   GET    /blood-banks/:id                        single bank
- *   GET    /blood-banks/:id/inventory              stock summary
- *   GET    /blood-banks/:id/inventory/search       filter by bloodGroup+component
- *
- *   CUSTOMER (protect + authorize('customer'))
- *   POST   /blood-banks/:id/request                place blood request (Razorpay order)
- *   POST   /blood-banks/request/verify-payment     verify Razorpay payment
- *   GET    /blood-banks/:id/reviews                get reviews
- *   POST   /blood-banks/:id/reviews                post review
- *
- *   BLOOD_BANK MANAGER (protect + authorize('blood_bank'))
- *   POST   /blood-banks                            create bank
- *   GET    /blood-banks/me                         own profile
- *   PUT    /blood-banks/me                         update profile
- *   PUT    /blood-banks/me/logo                    upload logo (ImageKit)
- *   PUT    /blood-banks/me/licenses                add/update license doc (ImageKit upload)
- *   PUT    /blood-banks/me/accreditations          add/update accreditation doc
- *   PUT    /blood-banks/me/bank-details            settlement bank account
- *   PUT    /blood-banks/me/stock-alerts            set threshold configs
- *   PUT    /blood-banks/me/pricing                 update processing fees
- *   GET    /blood-banks/me/inventory               full inventory
- *   POST   /blood-banks/me/inventory               create inventory slot
- *   POST   /blood-banks/me/inventory/:invId/units  add blood unit (bag)
- *   PUT    /blood-banks/me/inventory/:invId/units/:unitId  update unit
- *   POST   /blood-banks/me/inventory/:invId/expiry-check   run expiry sweep
- *   GET    /blood-banks/me/requests                incoming blood requests
- *   PUT    /blood-banks/me/requests/:reqId/respond accept/reject
- *   PUT    /blood-banks/me/requests/:reqId/issue   mark units issued → send email
- *   GET    /blood-banks/me/stats                   stats + earnings
- *   GET    /blood-banks/me/status-log              status history
- *
- *   HOSPITAL (protect + authorize('hospital'))
- *   GET    /blood-banks/linked                     banks linked to my hospital
- *   POST   /blood-banks/:id/link                   request supply agreement
- *   DELETE /blood-banks/:id/link                   remove supply agreement
- *
- *   ADMIN (protect + authorize('admin','superadmin'))
- *   GET    /admin/blood-banks                      all banks any status
- *   GET    /admin/blood-banks/:id                  full doc incl internalNotes
- *   PUT    /admin/blood-banks/:id/status           change status
- *   PUT    /admin/blood-banks/:id/verify           mark verified
- *   PUT    /admin/blood-banks/:id/featured         toggle featured
- *   PUT    /admin/blood-banks/:id/licenses/:licId/verify  verify license
- *   DELETE /admin/blood-banks/:id                  hard delete
- *   GET    /admin/blood-banks/:id/stats            admin stats
+ * FIXES APPLIED:
+ *   FIX 1: Route order — /request/verify-payment BEFORE /:id to avoid param collision
+ *   FIX 2: BloodRequest model imported and used properly for DB persistence
+ *   FIX 3: Prescription upload multer added to POST /:id/request
+ *   FIX 4: addUnit now sets isReleaseApproved=false, status='available' correctly
+ *          Unit counter only bumps when isReleaseApproved=true
+ *   FIX 5: GET /me/inventory/:invId added (with units array)
+ *   FIX 6: Unit update counter logic corrected for isReleaseApproved transition
+ *   FIX 7: searchAndAllocate called from BloodRequest static after payment verify
+ *   FIX 8: Prescription ImageKit upload endpoint added for customers
+ *   FIX 9: booking field removed entirely
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
@@ -62,10 +23,11 @@ import Razorpay       from 'razorpay';
 import ImageKit       from 'imagekit';
 
 import dotenv         from 'dotenv';
-import sendEmail       from '../utils/sendEmail.js';
+import sendEmail      from '../utils/sendEmail.js';
 import { buildBloodRequestEmail, buildBloodIssuedEmail } from '../utils/emailTemplates.js';
 import BloodBank      from '../models/BloodBank.js';
 import BloodInventory from '../models/BloodInventory.js';
+import BloodRequest   from '../models/BloodRequest.js';
 import Hospital       from '../models/Hospital.js';
 import User           from '../models/User.js';
 import Notification   from '../models/Notification.js';
@@ -75,8 +37,6 @@ import { protect, authorize } from '../middleware/authMiddleware.js';
 
 dotenv.config();
 
- 
-
 // ── Razorpay ──────────────────────────────────────────────────────────────────
 const razorpay = new Razorpay({
   key_id:     process.env.RAZORPAY_KEY_ID     || 'rzp_test_SV43jVcrs5wKAM',
@@ -85,20 +45,32 @@ const razorpay = new Razorpay({
 
 // ── ImageKit ──────────────────────────────────────────────────────────────────
 const imagekit = new ImageKit({
-  publicKey:   process.env.IMAGEKIT_PUBLIC_KEY  || 'public_rIdrz0GPllpCv0Q3HzChmkN+sLg=',
-  privateKey:  process.env.IMAGEKIT_PRIVATE_KEY || 'private_VZy2yDP9AuEzZRr8BYHhSFWJA/c=',
+  publicKey:   process.env.IMAGEKIT_PUBLIC_KEY   || 'public_rIdrz0GPllpCv0Q3HzChmkN+sLg=',
+  privateKey:  process.env.IMAGEKIT_PRIVATE_KEY  || 'private_VZy2yDP9AuEzZRr8BYHhSFWJA/c=',
   urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT || 'https://ik.imagekit.io/zxxzgk3iq',
 });
 
 // ── Multer (memory) ───────────────────────────────────────────────────────────
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits:  { fileSize: 10 * 1024 * 1024 },
+});
+
+const prescriptionUpload = multer({
+  storage: multer.memoryStorage(),
+  limits:  { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Only JPEG, PNG, WebP, PDF allowed for prescription'));
+  },
+});
 
 // ── Router ────────────────────────────────────────────────────────────────────
 const router = express.Router();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Upload buffer to ImageKit, return URL */
 const uploadToImageKit = (buffer, fileName, folder) =>
   new Promise((resolve, reject) => {
     imagekit.upload(
@@ -107,9 +79,8 @@ const uploadToImageKit = (buffer, fileName, folder) =>
     );
   });
 
-/** Verify Razorpay signature */
 const verifyRazorpaySignature = (orderId, paymentId, signature) => {
-  const body    = `${orderId}|${paymentId}`;
+  const body     = `${orderId}|${paymentId}`;
   const expected = crypto
     .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || 'sRxoYVIpHbyLsKXGor6dkHxt')
     .update(body)
@@ -118,14 +89,12 @@ const verifyRazorpaySignature = (orderId, paymentId, signature) => {
 };
 
 
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── PUBLIC ROUTES ─────────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
  * GET /blood-banks
- * List active blood banks. Filters: city, bankType, bloodGroup, component, emergency, featured, page, limit
  */
 router.get('/', async (req, res) => {
   try {
@@ -137,29 +106,23 @@ router.get('/', async (req, res) => {
     } = req.query;
 
     const filter = { isActive: true, status: 'active' };
-    if (city)       filter['address.city']      = new RegExp(city, 'i');
-    if (bankType)   filter.bankType              = bankType;
-    if (bloodGroup) filter.bloodGroupsAvailable  = bloodGroup;
-    if (component)  filter.componentsHandled      = component;
+    if (city)       filter['address.city']     = new RegExp(city, 'i');
+    if (bankType)   filter.bankType             = bankType;
+    if (bloodGroup) filter.bloodGroupsAvailable = bloodGroup;
+    if (component)  filter.componentsHandled    = component;
     if (emergency === 'true') filter.isEmergency24x7 = true;
     if (featured  === 'true') filter.isFeatured       = true;
 
     const skip  = (parseInt(page) - 1) * parseInt(limit);
     const total = await BloodBank.countDocuments(filter);
     const banks = await BloodBank.find(filter)
-      .select('-statusLog -internalNotes -bankDetails -licenses -accreditations')
+      .select('-statusLog -internalNotes -licenses -accreditations')
       .sort({ isFeatured: -1, 'rating.averageRating': -1 })
       .skip(skip)
       .limit(parseInt(limit))
       .lean();
 
-    res.json({
-      success: true,
-      total,
-      page:    parseInt(page),
-      pages:   Math.ceil(total / parseInt(limit)),
-      data:    banks,
-    });
+    res.json({ success: true, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)), data: banks });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -167,37 +130,27 @@ router.get('/', async (req, res) => {
 
 /**
  * GET /blood-banks/nearby
- * Geospatial search.
- * Query: lng, lat, radius (km), bloodGroup, component, unitsNeeded
  */
 router.get('/nearby', async (req, res) => {
   try {
-    const {
-      lng, lat,
-      radius     = 20,
-      bloodGroup,
-      component,
-      unitsNeeded = 1,
-    } = req.query;
+    const { lng, lat, radius = 20, bloodGroup, component, unitsNeeded = 1 } = req.query;
 
     if (!lng || !lat) {
       return res.status(400).json({ success: false, message: 'lng and lat required' });
     }
 
     if (bloodGroup && component) {
-      // Use BloodInventory geospatial static
       const results = await BloodInventory.findAvailableNearby({
         bloodGroup,
         component,
-        unitsNeeded: parseInt(unitsNeeded),
-        lng:         parseFloat(lng),
-        lat:         parseFloat(lat),
+        unitsNeeded:       parseInt(unitsNeeded),
+        lng:               parseFloat(lng),
+        lat:               parseFloat(lat),
         maxDistanceMeters: parseFloat(radius) * 1000,
       });
       return res.json({ success: true, data: results });
     }
 
-    // Just find banks nearby
     const banks = await BloodBank.find({
       isActive: true,
       status:   'active',
@@ -233,9 +186,13 @@ router.get('/slug/:slug', async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// IMPORTANT: All /me/*, /linked, /admin/*, /request/* routes MUST come BEFORE
+// /:id to prevent Express from matching those path segments as the :id param.
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * GET /blood-banks/linked  (HOSPITAL — placed before /:id to avoid param collision)
- * Returns blood banks linked to the logged-in hospital manager's hospital.
+ * GET /blood-banks/linked  (HOSPITAL)
  */
 router.get('/linked', protect, authorize('hospital'), async (req, res) => {
   try {
@@ -243,10 +200,7 @@ router.get('/linked', protect, authorize('hospital'), async (req, res) => {
     if (!hospital) return res.status(404).json({ success: false, message: 'Hospital not found' });
 
     const banks = await BloodBank.find({
-      $or: [
-        { hospital:       hospital._id },
-        { linkedHospitals: hospital._id },
-      ],
+      $or: [{ hospital: hospital._id }, { linkedHospitals: hospital._id }],
     })
       .select('name bankCode bankType status isActive contact address location rating componentsHandled bloodGroupsAvailable')
       .lean();
@@ -274,6 +228,7 @@ router.get('/me', protect, authorize('blood_bank'), async (req, res) => {
 
 /**
  * GET /blood-banks/me/inventory  (BLOOD_BANK MANAGER)
+ * Summary only — no units array
  */
 router.get('/me/inventory', protect, authorize('blood_bank'), async (req, res) => {
   try {
@@ -281,7 +236,7 @@ router.get('/me/inventory', protect, authorize('blood_bank'), async (req, res) =
     if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found' });
 
     const inventory = await BloodInventory.find({ bloodBank: bank._id })
-      .select('-units')  // exclude heavy units array by default
+      .select('-units')
       .lean();
 
     res.json({ success: true, data: inventory });
@@ -291,15 +246,49 @@ router.get('/me/inventory', protect, authorize('blood_bank'), async (req, res) =
 });
 
 /**
+ * GET /blood-banks/me/inventory/:invId  (BLOOD_BANK MANAGER)
+ * Full inventory doc WITH units array.
+ */
+router.get('/me/inventory/:invId', protect, authorize('blood_bank'), async (req, res) => {
+  try {
+    const bank = await BloodBank.findOne({ managedBy: req.user._id }).lean();
+    if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found' });
+
+    const inv = await BloodInventory.findOne({ _id: req.params.invId, bloodBank: bank._id });
+    if (!inv) return res.status(404).json({ success: false, message: 'Inventory slot not found' });
+
+    res.json({ success: true, data: inv });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/**
  * GET /blood-banks/me/requests  (BLOOD_BANK MANAGER)
- * Placeholder — BloodRequest model to be implemented separately.
- * Returns 501 with guidance.
  */
 router.get('/me/requests', protect, authorize('blood_bank'), async (req, res) => {
-  res.status(501).json({
-    success: false,
-    message: 'BloodRequest model not yet implemented. Create BloodRequest model with fields: bloodBank, customer, bloodGroup, component, unitsRequested, status, payment, etc.',
-  });
+  try {
+    const bank = await BloodBank.findOne({ managedBy: req.user._id }).lean();
+    if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found' });
+
+    const { status, page = 1, limit = 20 } = req.query;
+    const filter = { 'allocations.bloodBank': bank._id };
+    if (status) filter.status = status;
+
+    const skip  = (parseInt(page) - 1) * parseInt(limit);
+    const total = await BloodRequest.countDocuments(filter);
+    const requests = await BloodRequest.find(filter)
+      .populate('requestedBy', 'name email phone')
+      .populate('hospital', 'name address')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    res.json({ success: true, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)), data: requests });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 /**
@@ -312,7 +301,6 @@ router.get('/me/stats', protect, authorize('blood_bank'), async (req, res) => {
       .lean();
     if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found' });
 
-    // Inventory summary
     const invSummary = await BloodInventory.aggregate([
       { $match: { bloodBank: bank._id } },
       { $group: {
@@ -321,18 +309,14 @@ router.get('/me/stats', protect, authorize('blood_bank'), async (req, res) => {
         totalReserved:  { $sum: '$reservedUnits' },
         totalIssued:    { $sum: '$issuedUnits' },
         totalExpired:   { $sum: '$expiredUnits' },
-        lowStockCount:  { $sum: { $cond: ['$isLowStock', 1, 0] } },
+        lowStockCount:  { $sum: { $cond: ['$isLowStock',      1, 0] } },
         criticalCount:  { $sum: { $cond: ['$isCriticalStock', 1, 0] } },
       }},
     ]);
 
     res.json({
       success: true,
-      data: {
-        bank:      { name: bank.name, bankCode: bank.bankCode, rating: bank.rating },
-        stats:     bank.stats,
-        inventory: invSummary[0] || {},
-      },
+      data: { bank: { name: bank.name, bankCode: bank.bankCode, rating: bank.rating }, stats: bank.stats, inventory: invSummary[0] || {} },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -354,11 +338,8 @@ router.get('/me/status-log', protect, authorize('blood_bank'), async (req, res) 
   }
 });
 
-// ── ADMIN routes (before /:id) ─────────────────────────────────────────────
+// ── ADMIN routes ──────────────────────────────────────────────────────────────
 
-/**
- * GET /blood-banks/admin/all  (ADMIN)
- */
 router.get('/admin/all', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { status, bankType, page = 1, limit = 30, search } = req.query;
@@ -386,9 +367,6 @@ router.get('/admin/all', protect, authorize('admin', 'superadmin'), async (req, 
   }
 });
 
-/**
- * GET /blood-banks/admin/:id  (ADMIN)
- */
 router.get('/admin/:id', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const bank = await BloodBank.findById(req.params.id)
@@ -403,9 +381,6 @@ router.get('/admin/:id', protect, authorize('admin', 'superadmin'), async (req, 
   }
 });
 
-/**
- * GET /blood-banks/admin/:id/stats  (ADMIN)
- */
 router.get('/admin/:id/stats', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const bank = await BloodBank.findById(req.params.id).select('stats rating name bankCode').lean();
@@ -429,16 +404,12 @@ router.get('/admin/:id/stats', protect, authorize('admin', 'superadmin'), async 
   }
 });
 
-/**
- * PUT /blood-banks/admin/:id/status  (ADMIN)
- * Body: { status, reason }
- */
 router.put('/admin/:id/status', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { status, reason } = req.body;
     const valid = ['pending', 'under_review', 'active', 'suspended', 'revoked', 'deactivated'];
     if (!valid.includes(status)) {
-      return res.status(400).json({ success: false, message: `Invalid status. Must be one of: ${valid.join(', ')}` });
+      return res.status(400).json({ success: false, message: `Invalid status. Must be: ${valid.join(', ')}` });
     }
 
     const bank = await BloodBank.findById(req.params.id);
@@ -451,13 +422,12 @@ router.put('/admin/:id/status', protect, authorize('admin', 'superadmin'), async
     if (status === 'revoked')   bank.rejectionReason  = reason || 'License revoked';
     await bank.save();
 
-    // Notify bank manager
     const manager = await User.findById(bank.managedBy).select('email name');
     if (manager?.email) {
       await sendEmail({
         email:   manager.email,
         subject: `Blood Bank Status Update — ${bank.name}`,
-        html: `<p>Hi ${manager.name},</p><p>Your blood bank <strong>${bank.name}</strong> status has been changed from <strong>${prevStatus}</strong> to <strong>${status}</strong>. ${reason ? `Reason: ${reason}` : ''}</p>`,
+        html:    `<p>Hi ${manager.name},</p><p>Your blood bank <strong>${bank.name}</strong> status changed from <strong>${prevStatus}</strong> to <strong>${status}</strong>. ${reason ? `Reason: ${reason}` : ''}</p>`,
       }).catch(console.error);
     }
 
@@ -475,19 +445,16 @@ router.put('/admin/:id/status', protect, authorize('admin', 'superadmin'), async
   }
 });
 
-/**
- * PUT /blood-banks/admin/:id/verify  (ADMIN)
- */
 router.put('/admin/:id/verify', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const bank = await BloodBank.findById(req.params.id);
     if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found' });
 
-    bank.isVerified  = true;
-    bank.verifiedAt  = new Date();
-    bank.verifiedBy  = req.user._id;
-    bank.status      = 'active';
-    bank.updatedBy   = req.user._id;
+    bank.isVerified = true;
+    bank.verifiedAt = new Date();
+    bank.verifiedBy = req.user._id;
+    bank.status     = 'active';
+    bank.updatedBy  = req.user._id;
     await bank.save();
 
     res.json({ success: true, message: 'Blood bank verified and activated', data: { isVerified: true, status: bank.status } });
@@ -496,9 +463,6 @@ router.put('/admin/:id/verify', protect, authorize('admin', 'superadmin'), async
   }
 });
 
-/**
- * PUT /blood-banks/admin/:id/featured  (ADMIN)
- */
 router.put('/admin/:id/featured', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const bank = await BloodBank.findById(req.params.id);
@@ -512,9 +476,6 @@ router.put('/admin/:id/featured', protect, authorize('admin', 'superadmin'), asy
   }
 });
 
-/**
- * PUT /blood-banks/admin/:id/licenses/:licId/verify  (ADMIN)
- */
 router.put('/admin/:id/licenses/:licId/verify', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const bank = await BloodBank.findById(req.params.id);
@@ -523,10 +484,10 @@ router.put('/admin/:id/licenses/:licId/verify', protect, authorize('admin', 'sup
     const lic = bank.licenses.id(req.params.licId);
     if (!lic) return res.status(404).json({ success: false, message: 'License not found' });
 
-    lic.isVerified  = true;
-    lic.verifiedBy  = req.user._id;
-    lic.verifiedAt  = new Date();
-    bank.updatedBy  = req.user._id;
+    lic.isVerified = true;
+    lic.verifiedBy = req.user._id;
+    lic.verifiedAt = new Date();
+    bank.updatedBy = req.user._id;
     await bank.save();
 
     res.json({ success: true, message: 'License verified', data: lic });
@@ -535,15 +496,11 @@ router.put('/admin/:id/licenses/:licId/verify', protect, authorize('admin', 'sup
   }
 });
 
-/**
- * DELETE /blood-banks/admin/:id  (ADMIN — hard delete)
- */
 router.delete('/admin/:id', protect, authorize('superadmin'), async (req, res) => {
   try {
     const bank = await BloodBank.findByIdAndDelete(req.params.id);
     if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found' });
 
-    // Also delete all inventory docs for this bank
     await BloodInventory.deleteMany({ bloodBank: req.params.id });
 
     await SystemLog.createLog({
@@ -559,8 +516,212 @@ router.delete('/admin/:id', protect, authorize('superadmin'), async (req, res) =
   }
 });
 
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// ── PARAM ROUTES (/:id) ───────────────────────────────────────────────────────
+// FIX 1: /request/* routes BEFORE /:id param routes
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /blood-banks/prescription/upload  (CUSTOMER)
+ */
+router.post(
+  '/prescription/upload',
+  protect,
+  authorize('customer'),
+  prescriptionUpload.single('prescription'),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: 'No file uploaded. Field name must be "prescription".' });
+      }
+
+      const url = await uploadToImageKit(
+        req.file.buffer,
+        `rx_${req.user._id}_${Date.now()}`,
+        'blood-requests/prescriptions'
+      );
+
+      res.json({
+        success: true,
+        message: 'Prescription uploaded. Use prescriptionUrl in your blood request.',
+        data:    { prescriptionUrl: url },
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * POST /blood-banks/request/verify-payment  (CUSTOMER)
+ * FIX 9: booking field removed from BloodRequest.create()
+ *
+ * Body: {
+ *   razorpayOrderId, razorpayPaymentId, razorpaySignature,
+ *   bloodBankId, bloodGroup, component, unitsNeeded,
+ *   patientName, patientAge, patientGender,
+ *   hospitalId, urgency, clinicalIndication, notes,
+ *   prescriptionUrl,
+ * }
+ */
+router.post('/request/verify-payment', protect, authorize('customer'), async (req, res) => {
+  try {
+    const {
+      razorpayOrderId, razorpayPaymentId, razorpaySignature,
+      bloodBankId, bloodGroup, component, unitsNeeded = 1,
+      patientName, patientAge, patientGender,
+      hospitalId, urgency = 'routine', clinicalIndication, notes,
+      prescriptionUrl,
+    } = req.body;
+
+    const valid = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+    if (!valid) {
+      return res.status(400).json({ success: false, message: 'Payment verification failed. Invalid signature.' });
+    }
+
+    const bank = await BloodBank.findById(bloodBankId);
+    if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found' });
+
+    const resolvedHospitalId = hospitalId || bank.hospital || null;
+
+    const isEmergencyRequest = ['emergency', 'mass_casualty'].includes(urgency);
+    if (!isEmergencyRequest && !prescriptionUrl) {
+      return res.status(400).json({
+        success:  false,
+        message:  'prescriptionUrl required for non-emergency blood requests. Upload via POST /blood-banks/prescription/upload first.',
+      });
+    }
+
+    const inv = await BloodInventory.findOne({
+      bloodBank:      bloodBankId,
+      bloodGroup,
+      component,
+      availableUnits: { $gte: parseInt(unitsNeeded) },
+    });
+    if (!inv) {
+      return res.status(400).json({
+        success: false,
+        message: 'Stock no longer available. Payment will be refunded.',
+      });
+    }
+
+    // FIX 9: No booking field
+    const bloodRequest = await BloodRequest.create({
+      requestType: 'patient_direct',
+      requestedBy: req.user._id,
+      hospital:    resolvedHospitalId,
+      patient: {
+        name:   patientName || req.user.name,
+        age:    patientAge,
+        gender: patientGender,
+        bloodGroup,
+      },
+      bloodGroup,
+      component,
+      unitsRequired:    parseInt(unitsNeeded),
+      urgency,
+      clinicalIndication,
+      clinicalNotes:    notes,
+      crossMatchRequired: true,
+      prescriptionUrl:  prescriptionUrl || null,
+      prescriptionWaived: isEmergencyRequest,
+      prescriptionWaivedReason: isEmergencyRequest ? `Auto-waived: urgency=${urgency}` : null,
+      status:        'searching',
+      paymentStatus: 'paid',
+      fareBreakdown: {
+        processingFees: 0,
+        crossMatchFees: 0,
+        deliveryFees:   0,
+        platformFee:    0,
+        taxes:          0,
+        discount:       0,
+        totalAmount:    0,
+        currency:       'INR',
+      },
+      createdBy: req.user._id,
+    });
+
+    let allocationResult = null;
+    try {
+      allocationResult = await BloodRequest.searchAndAllocate(bloodRequest._id);
+    } catch (allocErr) {
+      console.error('searchAndAllocate failed after payment:', allocErr.message);
+    }
+
+    const manager = await User.findById(bank.managedBy).select('_id email name');
+    if (manager) {
+      await Notification.create({
+        recipient: manager._id,
+        title:     `New Blood Request — ${bloodGroup} ${component}`,
+        body:      `${unitsNeeded} unit(s) of ${bloodGroup} ${component} requested. Ref: ${bloodRequest.requestCode}`,
+        type:      'Order_Placed',
+        priority:  'High',
+        deepLink:  { screen: 'BloodRequests', referenceId: bank._id },
+      });
+
+      if (manager.email) {
+        await sendEmail({
+          email:   manager.email,
+          subject: `New Blood Request — ${bloodGroup} ${component} | ${bloodRequest.requestCode}`,
+          html:    buildBloodRequestEmail({
+            userName:      manager.name,
+            requestId:     bloodRequest.requestCode,
+            bloodGroup,
+            component,
+            units:         unitsNeeded,
+            bankName:      bank.name,
+            processingFee: 'Processing fee collected via platform',
+          }),
+        }).catch(console.error);
+      }
+    }
+
+    await sendEmail({
+      email:   req.user.email,
+      subject: `Blood Request Confirmed — ${bloodGroup} ${component} | ${bloodRequest.requestCode}`,
+      html:    buildBloodRequestEmail({
+        userName:      req.user.name,
+        requestId:     bloodRequest.requestCode,
+        bloodGroup,
+        component,
+        units:         unitsNeeded,
+        bankName:      bank.name,
+        processingFee: 'Already paid',
+      }),
+    }).catch(console.error);
+
+    await SystemLog.createLog({
+      level: 'success', category: 'payment',
+      message: `Blood request payment verified: ${bloodRequest.requestCode}`,
+      actor:   { userId: req.user._id, name: req.user.name, role: req.user.role },
+      relatedEntity: { model: 'BloodBank', entityId: bank._id, label: bank.name },
+      metadata: { requestCode: bloodRequest.requestCode, bloodGroup, component, unitsNeeded, razorpayOrderId, razorpayPaymentId },
+    });
+
+    res.json({
+      success: true,
+      message: 'Payment verified. Blood request created. Bank notified.',
+      data: {
+        requestCode:    bloodRequest.requestCode,
+        requestId:      bloodRequest._id,
+        bloodGroup,
+        component,
+        unitsNeeded:    parseInt(unitsNeeded),
+        bankName:       bank.name,
+        status:         bloodRequest.status,
+        allocation:     allocationResult,
+        prescriptionRequired: !isEmergencyRequest,
+        prescriptionUrl:      prescriptionUrl || null,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ── /:id PARAM ROUTES — must come AFTER all /me, /admin, /request routes ──────
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
@@ -569,7 +730,7 @@ router.delete('/admin/:id', protect, authorize('superadmin'), async (req, res) =
 router.get('/:id', async (req, res) => {
   try {
     const bank = await BloodBank.findOne({ _id: req.params.id, isActive: true })
-      .select('-internalNotes -bankDetails -statusLog')
+      .select('-internalNotes -statusLog')
       .lean();
     if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found' });
     res.json({ success: true, data: bank });
@@ -579,8 +740,7 @@ router.get('/:id', async (req, res) => {
 });
 
 /**
- * GET /blood-banks/:id/inventory
- * Public stock summary (no units array)
+ * GET /blood-banks/:id/inventory  (public summary)
  */
 router.get('/:id/inventory', async (req, res) => {
   try {
@@ -595,7 +755,6 @@ router.get('/:id/inventory', async (req, res) => {
 
 /**
  * GET /blood-banks/:id/inventory/search
- * Query: bloodGroup, component, unitsNeeded
  */
 router.get('/:id/inventory/search', async (req, res) => {
   try {
@@ -603,11 +762,9 @@ router.get('/:id/inventory/search', async (req, res) => {
     const filter = { bloodBank: req.params.id };
     if (bloodGroup) filter.bloodGroup = bloodGroup;
     if (component)  filter.component  = component;
-    if (unitsNeeded > 0) filter.availableUnits = { $gte: parseInt(unitsNeeded) };
+    if (parseInt(unitsNeeded) > 0) filter.availableUnits = { $gte: parseInt(unitsNeeded) };
 
-    const results = await BloodInventory.find(filter)
-      .select('-units')
-      .lean();
+    const results = await BloodInventory.find(filter).select('-units').lean();
     res.json({ success: true, data: results });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -616,7 +773,6 @@ router.get('/:id/inventory/search', async (req, res) => {
 
 /**
  * GET /blood-banks/:id/reviews
- * TODO: implement Review model. Returns 501 for now.
  */
 router.get('/:id/reviews', async (_req, res) => {
   res.status(501).json({ success: false, message: 'Review model not yet implemented.' });
@@ -631,194 +787,152 @@ router.post('/:id/reviews', protect, authorize('customer'), async (_req, res) =>
 
 /**
  * POST /blood-banks/:id/request  (CUSTOMER)
- * Creates Razorpay order for blood processing fee.
- * Body: { bloodGroup, component, unitsNeeded, patientName, hospitalId?, urgency, notes }
+ * Multipart field: prescription (optional — or supply prescriptionUrl in body)
  */
-router.post('/:id/request', protect, authorize('customer'), async (req, res) => {
-  try {
-    const { bloodGroup, component, unitsNeeded = 1, patientName, hospitalId, urgency = 'routine', notes } = req.body;
+router.post(
+  '/:id/request',
+  protect,
+  authorize('customer'),
+  prescriptionUpload.single('prescription'),
+  async (req, res) => {
+    try {
+      const {
+        bloodGroup, component, unitsNeeded = 1,
+        patientName, patientAge, patientGender,
+        hospitalId, urgency = 'routine', clinicalIndication, notes,
+      } = req.body;
 
-    if (!bloodGroup || !component) {
-      return res.status(400).json({ success: false, message: 'bloodGroup and component required' });
-    }
+      let { prescriptionUrl } = req.body;
 
-    const bank = await BloodBank.findOne({ _id: req.params.id, isActive: true, status: 'active' });
-    if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found or inactive' });
+      if (!bloodGroup || !component) {
+        return res.status(400).json({ success: false, message: 'bloodGroup and component required' });
+      }
 
-    // Check inventory
-    const inv = await BloodInventory.findOne({
-      bloodBank:      bank._id,
-      bloodGroup,
-      component,
-      availableUnits: { $gte: parseInt(unitsNeeded) },
-    });
-    if (!inv) {
-      return res.status(400).json({
-        success: false,
-        message: `Insufficient stock. Requested ${unitsNeeded} unit(s) of ${bloodGroup} ${component} — not available at this bank.`,
+      if (req.file && !prescriptionUrl) {
+        prescriptionUrl = await uploadToImageKit(
+          req.file.buffer,
+          `rx_${req.user._id}_${Date.now()}`,
+          'blood-requests/prescriptions'
+        );
+      }
+
+      const isEmergencyRequest = ['emergency', 'mass_casualty'].includes(urgency);
+      if (!isEmergencyRequest && !prescriptionUrl) {
+        return res.status(400).json({
+          success:  false,
+          message:  'prescriptionUrl required. Either upload file as multipart field "prescription" or use POST /blood-banks/prescription/upload first.',
+        });
+      }
+
+      const bank = await BloodBank.findOne({ _id: req.params.id, isActive: true, status: 'active' });
+      if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found or inactive' });
+
+      const inv = await BloodInventory.findOne({
+        bloodBank:      bank._id,
+        bloodGroup,
+        component,
+        availableUnits: { $gte: parseInt(unitsNeeded) },
       });
-    }
+      if (!inv) {
+        return res.status(400).json({
+          success: false,
+          message: `Insufficient stock. Requested ${unitsNeeded} unit(s) of ${bloodGroup} ${component} — not available.`,
+        });
+      }
 
-    // Calculate processing fee
-    const pricingEntry  = bank.pricing?.find(p => p.component === component);
-    const feePerUnit    = pricingEntry?.processingFee || inv.processingFeePerUnit || 0;
-    const crossMatchFee = pricingEntry?.crossMatchFee || inv.crossMatchFeePerUnit || 0;
-    const totalFee      = (feePerUnit + crossMatchFee) * parseInt(unitsNeeded);
+      const pricingEntry  = bank.pricing?.find(p => p.component === component);
+      const feePerUnit    = pricingEntry?.processingFee || inv.processingFeePerUnit || 0;
+      const crossMatchFee = pricingEntry?.crossMatchFee || inv.crossMatchFeePerUnit || 0;
+      const totalFee      = (feePerUnit + crossMatchFee) * parseInt(unitsNeeded);
 
-    // Create Razorpay order (amount in paise)
-    const rzpOrder = await razorpay.orders.create({
-      amount:   Math.round(totalFee * 100),
-      currency: 'INR',
-      receipt:  `bb_req_${Date.now()}`,
-      notes: {
-        bloodBankId: bank._id.toString(),
-        bloodGroup,
-        component,
-        unitsNeeded: unitsNeeded.toString(),
-        customerId:  req.user._id.toString(),
-        patientName: patientName || req.user.name,
-      },
-    });
-
-    res.json({
-      success: true,
-      message: 'Razorpay order created. Complete payment to confirm blood request.',
-      data: {
-        razorpayOrderId: rzpOrder.id,
-        amount:          totalFee,
-        currency:        'INR',
-        bankName:        bank.name,
-        bloodGroup,
-        component,
-        unitsNeeded:     parseInt(unitsNeeded),
-        feeBreakdown: {
-          processingFee: feePerUnit * parseInt(unitsNeeded),
-          crossMatchFee: crossMatchFee * parseInt(unitsNeeded),
-          total:         totalFee,
+      const rzpOrder = await razorpay.orders.create({
+        amount:   Math.max(100, Math.round(totalFee * 100)),
+        currency: 'INR',
+        receipt:  `bb_req_${Date.now()}`,
+        notes: {
+          bloodBankId:     bank._id.toString(),
+          bloodGroup,
+          component,
+          unitsNeeded:     unitsNeeded.toString(),
+          customerId:      req.user._id.toString(),
+          patientName:     patientName || req.user.name,
+          prescriptionUrl: prescriptionUrl || '',
+          urgency,
         },
-        razorpayKeyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_SV43jVcrs5wKAM',
-      },
-    });
+      });
+
+      res.json({
+        success: true,
+        message: 'Razorpay order created. Complete payment to confirm blood request.',
+        data: {
+          razorpayOrderId:  rzpOrder.id,
+          amount:           totalFee,
+          currency:         'INR',
+          bankName:         bank.name,
+          bloodGroup,
+          component,
+          unitsNeeded:      parseInt(unitsNeeded),
+          urgency,
+          prescriptionUrl:  prescriptionUrl || null,
+          prescriptionRequired: !isEmergencyRequest,
+          feeBreakdown: {
+            processingFee: feePerUnit * parseInt(unitsNeeded),
+            crossMatchFee: crossMatchFee * parseInt(unitsNeeded),
+            total:         totalFee,
+          },
+          razorpayKeyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_SV43jVcrs5wKAM',
+        },
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * POST /blood-banks/:id/link  (HOSPITAL)
+ */
+router.post('/:id/link', protect, authorize('hospital'), async (req, res) => {
+  try {
+    const hospital = await Hospital.findOne({ managedBy: req.user._id });
+    if (!hospital) return res.status(404).json({ success: false, message: 'Hospital not found' });
+
+    const bank = await BloodBank.findOne({ _id: req.params.id, isActive: true });
+    if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found' });
+
+    await BloodBank.findByIdAndUpdate(bank._id, { $addToSet: { linkedHospitals: hospital._id } });
+    await Hospital.findByIdAndUpdate(hospital._id, { $addToSet: { bloodBanks: bank._id } });
+
+    res.json({ success: true, message: `Supply agreement established with ${bank.name}` });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 /**
- * POST /blood-banks/request/verify-payment  (CUSTOMER)
- * Called after Razorpay payment success.
- * Body: { razorpayOrderId, razorpayPaymentId, razorpaySignature, bloodBankId, bloodGroup, component, unitsNeeded, patientName, hospitalId, notes }
+ * DELETE /blood-banks/:id/link  (HOSPITAL)
  */
-router.post('/request/verify-payment', protect, authorize('customer'), async (req, res) => {
+router.delete('/:id/link', protect, authorize('hospital'), async (req, res) => {
   try {
-    const {
-      razorpayOrderId, razorpayPaymentId, razorpaySignature,
-      bloodBankId, bloodGroup, component, unitsNeeded = 1,
-      patientName, hospitalId, notes,
-    } = req.body;
+    const hospital = await Hospital.findOne({ managedBy: req.user._id });
+    if (!hospital) return res.status(404).json({ success: false, message: 'Hospital not found' });
 
-    // Verify signature
-    const valid = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
-    if (!valid) {
-      return res.status(400).json({ success: false, message: 'Payment verification failed. Invalid signature.' });
-    }
+    await BloodBank.findByIdAndUpdate(req.params.id, { $pull: { linkedHospitals: hospital._id } });
+    await Hospital.findByIdAndUpdate(hospital._id,   { $pull: { bloodBanks: req.params.id } });
 
-    const bank = await BloodBank.findById(bloodBankId);
-    if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found' });
-
-    // Reserve units atomically
-    const inv = await BloodInventory.findOne({
-      bloodBank: bloodBankId,
-      bloodGroup,
-      component,
-      availableUnits: { $gte: parseInt(unitsNeeded) },
-    });
-
-    if (!inv) {
-      return res.status(400).json({
-        success: false,
-        message: 'Stock no longer available. Payment will be refunded.',
-      });
-    }
-
-    // Generate a request reference (BloodRequest model to be implemented)
-    const requestRef = `BR-${Date.now()}-${Math.random().toString(36).slice(-4).toUpperCase()}`;
-
-    const reserved = await BloodInventory.reserveUnits(inv._id, requestRef, parseInt(unitsNeeded));
-    if (!reserved) {
-      return res.status(400).json({ success: false, message: 'Reservation failed. Stock may have been taken.' });
-    }
-
-    // In-app notification to blood_bank manager
-    const manager = await User.findById(bank.managedBy).select('_id email name');
-    await Notification.create({
-      recipient: manager._id,
-      title:     `New Blood Request — ${bloodGroup} ${component}`,
-      body:      `${unitsNeeded} unit(s) of ${bloodGroup} ${component} requested. Ref: ${requestRef}`,
-      type:      'Order_Placed',
-      priority:  'High',
-      deepLink:  { screen: 'BloodRequests', referenceId: bank._id },
-    });
-
-    // Email to customer
-    const customer = req.user;
-    await sendEmail({
-      email:   customer.email,
-      subject: `Blood Request Confirmed — ${bloodGroup} ${component}`,
-      html:    buildBloodRequestEmail({
-        userName:      customer.name,
-        requestId:     requestRef,
-        bloodGroup,
-        component,
-        units:         unitsNeeded,
-        bankName:      bank.name,
-        processingFee: 'Already paid',
-      }),
-    }).catch(console.error);
-
-    // Email to manager
-    if (manager?.email) {
-      await sendEmail({
-        email:   manager.email,
-        subject: `New Blood Request Received — ${bloodGroup} ${component}`,
-        html:    buildBloodRequestEmail({
-          userName:      manager.name,
-          requestId:     requestRef,
-          bloodGroup,
-          component,
-          units:         unitsNeeded,
-          bankName:      bank.name,
-          processingFee: 'Processing fee collected',
-        }),
-      }).catch(console.error);
-    }
-
-    await SystemLog.createLog({
-      level: 'success', category: 'payment',
-      message: `Blood request payment verified: ${requestRef}`,
-      actor:   { userId: customer._id, name: customer.name, role: customer.role },
-      relatedEntity: { model: 'BloodBank', entityId: bank._id, label: bank.name },
-      metadata: { requestRef, bloodGroup, component, unitsNeeded, razorpayOrderId, razorpayPaymentId },
-    });
-
-    res.json({
-      success: true,
-      message: 'Payment verified. Blood units reserved. Blood bank notified.',
-      data:    { requestRef, bloodGroup, component, unitsNeeded: parseInt(unitsNeeded), bankName: bank.name },
-    });
+    res.json({ success: true, message: 'Supply agreement removed' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// ── BLOOD_BANK MANAGER ROUTES ─────────────────────────────────────────────────
+// ── BLOOD_BANK MANAGER WRITE ROUTES ───────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
  * POST /blood-banks  (BLOOD_BANK MANAGER)
- * Create blood bank profile.
- * Body: { name, bankType, contact, address, description, componentsHandled, bloodGroupsAvailable, ...}
  */
 router.post('/', protect, authorize('blood_bank'), async (req, res) => {
   try {
@@ -843,7 +957,6 @@ router.post('/', protect, authorize('blood_bank'), async (req, res) => {
       status:    'pending',
     });
 
-    // If hospital_embedded, add to hospital.bloodBanks
     if (bankType === 'hospital_embedded' && hospitalId) {
       await Hospital.findByIdAndUpdate(hospitalId, {
         $addToSet: { bloodBanks: bank._id },
@@ -866,8 +979,6 @@ router.post('/', protect, authorize('blood_bank'), async (req, res) => {
 
 /**
  * PUT /blood-banks/me  (BLOOD_BANK MANAGER)
- * Update profile fields (contact, hours, services, address, description, etc.)
- * NOT: logo, licenses, accreditations, bankDetails, stockAlerts, pricing (separate endpoints)
  */
 router.put('/me', protect, authorize('blood_bank'), async (req, res) => {
   try {
@@ -899,7 +1010,6 @@ router.put('/me', protect, authorize('blood_bank'), async (req, res) => {
 
 /**
  * PUT /blood-banks/me/logo  (BLOOD_BANK MANAGER)
- * Multipart: field name = logo
  */
 router.put('/me/logo', protect, authorize('blood_bank'), upload.single('logo'), async (req, res) => {
   try {
@@ -908,12 +1018,7 @@ router.put('/me/logo', protect, authorize('blood_bank'), upload.single('logo'), 
     const bank = await BloodBank.findOne({ managedBy: req.user._id });
     if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found' });
 
-    const url = await uploadToImageKit(
-      req.file.buffer,
-      `logo_${bank.bankCode}_${Date.now()}`,
-      'blood-banks/logos'
-    );
-
+    const url = await uploadToImageKit(req.file.buffer, `logo_${bank.bankCode}_${Date.now()}`, 'blood-banks/logos');
     bank.logoUrl   = url;
     bank.updatedBy = req.user._id;
     await bank.save();
@@ -926,9 +1031,6 @@ router.put('/me/logo', protect, authorize('blood_bank'), upload.single('logo'), 
 
 /**
  * PUT /blood-banks/me/licenses  (BLOOD_BANK MANAGER)
- * Multipart: field name = document
- * Body fields: licenseType, licenseNumber, issuedBy, issuedOn, validUntil
- * If licenseId in body → update existing, else → push new
  */
 router.put('/me/licenses', protect, authorize('blood_bank'), upload.single('document'), async (req, res) => {
   try {
@@ -939,11 +1041,7 @@ router.put('/me/licenses', protect, authorize('blood_bank'), upload.single('docu
 
     let documentUrl;
     if (req.file) {
-      documentUrl = await uploadToImageKit(
-        req.file.buffer,
-        `lic_${bank.bankCode}_${Date.now()}`,
-        'blood-banks/licenses'
-      );
+      documentUrl = await uploadToImageKit(req.file.buffer, `lic_${bank.bankCode}_${Date.now()}`, 'blood-banks/licenses');
     }
 
     if (licenseId) {
@@ -955,7 +1053,7 @@ router.put('/me/licenses', protect, authorize('blood_bank'), upload.single('docu
       if (issuedOn)      lic.issuedOn       = new Date(issuedOn);
       if (validUntil)    lic.validUntil     = new Date(validUntil);
       if (documentUrl)   lic.documentUrl    = documentUrl;
-      lic.isVerified = false; // reset on update
+      lic.isVerified = false;
     } else {
       if (!licenseType || !licenseNumber) {
         return res.status(400).json({ success: false, message: 'licenseType and licenseNumber required' });
@@ -965,7 +1063,6 @@ router.put('/me/licenses', protect, authorize('blood_bank'), upload.single('docu
 
     bank.updatedBy = req.user._id;
     await bank.save();
-
     res.json({ success: true, message: licenseId ? 'License updated' : 'License added', data: bank.licenses });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -974,8 +1071,6 @@ router.put('/me/licenses', protect, authorize('blood_bank'), upload.single('docu
 
 /**
  * PUT /blood-banks/me/accreditations  (BLOOD_BANK MANAGER)
- * Multipart: field name = document
- * Body: accreditationId (optional), body, certificateNo, issuedOn, validUntil
  */
 router.put('/me/accreditations', protect, authorize('blood_bank'), upload.single('document'), async (req, res) => {
   try {
@@ -986,11 +1081,7 @@ router.put('/me/accreditations', protect, authorize('blood_bank'), upload.single
 
     let documentUrl;
     if (req.file) {
-      documentUrl = await uploadToImageKit(
-        req.file.buffer,
-        `acc_${bank.bankCode}_${Date.now()}`,
-        'blood-banks/accreditations'
-      );
+      documentUrl = await uploadToImageKit(req.file.buffer, `acc_${bank.bankCode}_${Date.now()}`, 'blood-banks/accreditations');
     }
 
     if (accreditationId) {
@@ -1009,7 +1100,6 @@ router.put('/me/accreditations', protect, authorize('blood_bank'), upload.single
 
     bank.updatedBy = req.user._id;
     await bank.save();
-
     res.json({ success: true, message: accreditationId ? 'Accreditation updated' : 'Accreditation added', data: bank.accreditations });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -1018,26 +1108,39 @@ router.put('/me/accreditations', protect, authorize('blood_bank'), upload.single
 
 /**
  * PUT /blood-banks/me/bank-details  (BLOOD_BANK MANAGER)
- * Body: { accountHolderName, accountNumber, ifscCode, bankName, upiId }
  */
 router.put('/me/bank-details', protect, authorize('blood_bank'), async (req, res) => {
   try {
     const bank = await BloodBank.findOne({ managedBy: req.user._id });
     if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found' });
 
-    const allowed = ['accountHolderName', 'accountNumber', 'ifscCode', 'bankName', 'upiId'];
-    allowed.forEach(f => {
-      if (req.body[f] !== undefined) bank.bankDetails[f] = req.body[f];
-    });
+    const { accountHolderName, accountNumber, ifscCode, bankName, upiId } = req.body;
 
-    bank.bankDetails.isVerified = false; // reset on update — admin must re-verify
-    bank.updatedBy = req.user._id;
-    await bank.save();
+    const setFields = { 'bankDetails.isVerified': false, updatedBy: req.user._id };
+    if (accountHolderName !== undefined) setFields['bankDetails.accountHolderName'] = accountHolderName;
+    if (ifscCode          !== undefined) setFields['bankDetails.ifscCode']          = ifscCode;
+    if (bankName          !== undefined) setFields['bankDetails.bankName']           = bankName;
+    if (upiId             !== undefined) setFields['bankDetails.upiId']              = upiId;
+
+    if (accountNumber !== undefined) {
+      setFields['bankDetails.accountNumber'] = accountNumber;
+      setFields['bankDetails.accountLast4']  = accountNumber.slice(-4);
+    }
+
+    const updated = await BloodBank.findOneAndUpdate(
+      { managedBy: req.user._id },
+      { $set: setFields },
+      { new: true, select: 'bankDetails.accountLast4 bankDetails.bankName bankDetails.upiId bankDetails.isVerified' }
+    );
 
     res.json({
       success: true,
       message: 'Bank details updated. Admin verification required.',
-      data:    { accountLast4: bank.bankDetails.accountLast4, bankName: bank.bankDetails.bankName, upiId: bank.bankDetails.upiId },
+      data: {
+        accountLast4: updated.bankDetails.accountLast4,
+        bankName:     updated.bankDetails.bankName,
+        upiId:        updated.bankDetails.upiId,
+      },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -1046,7 +1149,6 @@ router.put('/me/bank-details', protect, authorize('blood_bank'), async (req, res
 
 /**
  * PUT /blood-banks/me/stock-alerts  (BLOOD_BANK MANAGER)
- * Body: { stockAlerts: [{ bloodGroup, component, minThreshold, criticalThreshold }] }
  */
 router.put('/me/stock-alerts', protect, authorize('blood_bank'), async (req, res) => {
   try {
@@ -1060,7 +1162,6 @@ router.put('/me/stock-alerts', protect, authorize('blood_bank'), async (req, res
     bank.stockAlerts = req.body.stockAlerts;
     bank.updatedBy   = req.user._id;
     await bank.save();
-
     res.json({ success: true, message: 'Stock alert thresholds updated', data: bank.stockAlerts });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -1069,7 +1170,6 @@ router.put('/me/stock-alerts', protect, authorize('blood_bank'), async (req, res
 
 /**
  * PUT /blood-banks/me/pricing  (BLOOD_BANK MANAGER)
- * Body: { pricing: [{ component, processingFee, crossMatchFee, storageFee }] }
  */
 router.put('/me/pricing', protect, authorize('blood_bank'), async (req, res) => {
   try {
@@ -1084,16 +1184,10 @@ router.put('/me/pricing', protect, authorize('blood_bank'), async (req, res) => 
     bank.updatedBy = req.user._id;
     await bank.save();
 
-    // Sync processingFeePerUnit in BloodInventory docs for each component
     for (const entry of req.body.pricing) {
       await BloodInventory.updateMany(
         { bloodBank: bank._id, component: entry.component },
-        {
-          $set: {
-            processingFeePerUnit: entry.processingFee  || 0,
-            crossMatchFeePerUnit: entry.crossMatchFee  || 0,
-          },
-        }
+        { $set: { processingFeePerUnit: entry.processingFee || 0, crossMatchFeePerUnit: entry.crossMatchFee || 0 } }
       );
     }
 
@@ -1105,8 +1199,6 @@ router.put('/me/pricing', protect, authorize('blood_bank'), async (req, res) => 
 
 /**
  * POST /blood-banks/me/inventory  (BLOOD_BANK MANAGER)
- * Create a new inventory slot (one per bloodGroup+component combination).
- * Body: { bloodGroup, component, processingFeePerUnit, crossMatchFeePerUnit }
  */
 router.post('/me/inventory', protect, authorize('blood_bank'), async (req, res) => {
   try {
@@ -1142,9 +1234,6 @@ router.post('/me/inventory', protect, authorize('blood_bank'), async (req, res) 
 
 /**
  * POST /blood-banks/me/inventory/:invId/units  (BLOOD_BANK MANAGER)
- * Add a new blood unit (bag) to an inventory slot.
- * Multipart optional (no file here — just JSON body).
- * Body: { bagNumber, collectedAt, volumeMl, donorCode, donorName, collectedByStaff, expiresAt, storageLocation, storageSlot }
  */
 router.post('/me/inventory/:invId/units', protect, authorize('blood_bank'), async (req, res) => {
   try {
@@ -1164,25 +1253,61 @@ router.post('/me/inventory/:invId/units', protect, authorize('blood_bank'), asyn
       return res.status(400).json({ success: false, message: 'bagNumber, collectedAt, volumeMl required' });
     }
 
+    const bagExists = inv.units.some(u => u.bagNumber === bagNumber.toUpperCase());
+    if (bagExists) {
+      return res.status(400).json({ success: false, message: `Bag number ${bagNumber} already exists` });
+    }
+
+    let finalExpiry = expiresAt;
+    if (!finalExpiry) {
+      const shelfLifeConfig = await BloodInventory.findOne().select('COMPONENT_SHELF_LIFE_DAYS').lean();
+      const days = shelfLifeConfig?.COMPONENT_SHELF_LIFE_DAYS?.[inv.component] ?? 35;
+      const d = new Date(collectedAt);
+      d.setDate(d.getDate() + days);
+      finalExpiry = d;
+    }
+
     const updatedInv = await BloodInventory.addUnit(inv._id, {
-      bagNumber, collectedAt, volumeMl,
+      bagNumber: bagNumber.toUpperCase(),
+      collectedAt,
+      volumeMl: parseFloat(volumeMl),
       donorCode: donorCode || 'WALK-IN',
       donorName,
       collectedByStaff,
-      expiresAt,
+      expiresAt: finalExpiry,
       storageLocation,
       storageSlot,
       status: 'available',
-      // Testing defaults to Pending — unit not released until allClear = true
+      isReleaseApproved: false,
+      isTestingComplete: false,
+      testResults: {
+        hiv: 'Pending', hbsAg: 'Pending', hcv: 'Pending',
+        syphilis: 'Pending', malaria: 'Pending', allClear: false,
+      },
     });
 
-    // Update bank stats
-    await BloodBank.findByIdAndUpdate(bank._id, { $inc: { 'stats.totalUnitsCollected': 1, 'stats.totalDonations': 1 }, $set: { 'stats.lastDonationAt': new Date() } });
+    await BloodBank.findByIdAndUpdate(bank._id, {
+      $inc: { 'stats.totalUnitsCollected': 1, 'stats.totalDonations': 1 },
+      $set: { 'stats.lastDonationAt': new Date() },
+    });
+
+    const addedUnit = updatedInv.units[updatedInv.units.length - 1];
 
     res.status(201).json({
       success: true,
-      message: 'Blood unit added. Testing pending before release.',
-      data:    updatedInv.units[updatedInv.units.length - 1],
+      message: 'Blood unit added. Testing results pending.',
+      data: addedUnit,
+      hint: {
+        nextStep: `PUT /blood-banks/me/inventory/${inv._id}/units/${addedUnit._id}`,
+        payload: {
+          testResults: {
+            hiv: 'Non-Reactive', hbsAg: 'Non-Reactive',
+            hcv: 'Non-Reactive', syphilis: 'Non-Reactive', malaria: 'Non-Reactive'
+          },
+          isTestingComplete: true,
+          isReleaseApproved: true
+        },
+      },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -1191,8 +1316,6 @@ router.post('/me/inventory/:invId/units', protect, authorize('blood_bank'), asyn
 
 /**
  * PUT /blood-banks/me/inventory/:invId/units/:unitId  (BLOOD_BANK MANAGER)
- * Update unit fields: test results, storage, status, cross-match result, release approval.
- * Body: any subset of bloodUnitSchema fields.
  */
 router.put('/me/inventory/:invId/units/:unitId', protect, authorize('blood_bank'), async (req, res) => {
   try {
@@ -1205,9 +1328,9 @@ router.put('/me/inventory/:invId/units/:unitId', protect, authorize('blood_bank'
     const unit = inv.units.id(req.params.unitId);
     if (!unit) return res.status(404).json({ success: false, message: 'Unit not found' });
 
-    const prevStatus = unit.status;
+    const prevStatus            = unit.status;
+    const prevIsReleaseApproved = unit.isReleaseApproved;
 
-    // Allowed fields to update
     const allowed = [
       'testResults', 'isTestingComplete', 'isReleaseApproved',
       'storageLocation', 'storageSlot', 'storageTemperatureC',
@@ -1220,32 +1343,38 @@ router.put('/me/inventory/:invId/units/:unitId', protect, authorize('blood_bank'
       if (req.body[f] !== undefined) unit[f] = req.body[f];
     });
 
-    // Auto-set allClear if all tests Non-Reactive
     if (req.body.testResults) {
       const t = unit.testResults;
-      unit.testResults.allClear = ['hiv','hbsAg','hcv','syphilis','malaria'].every(
+      unit.testResults.allClear = ['hiv', 'hbsAg', 'hcv', 'syphilis', 'malaria'].every(
         k => t[k] === 'Non-Reactive'
       );
+      if (unit.testResults.allClear) unit.isTestingComplete = true;
     }
 
-    // Counter adjustments based on status change
-    if (req.body.status && req.body.status !== prevStatus) {
-      if (prevStatus === 'available' && req.body.status === 'quarantined') {
-        inv.availableUnits  = Math.max(0, inv.availableUnits - 1);
+    const newStatus            = unit.status;
+    const newIsReleaseApproved = unit.isReleaseApproved;
+
+    if (!prevIsReleaseApproved && newIsReleaseApproved && newStatus === 'available') {
+      inv.availableUnits++;
+    }
+
+    if (newStatus !== prevStatus) {
+      if (prevStatus === 'available' && newStatus === 'quarantined') {
+        if (prevIsReleaseApproved) inv.availableUnits = Math.max(0, inv.availableUnits - 1);
         inv.quarantinedUnits++;
       }
-      if (prevStatus === 'quarantined' && req.body.status === 'available') {
+      if (prevStatus === 'quarantined' && newStatus === 'available' && newIsReleaseApproved) {
         inv.availableUnits++;
         inv.quarantinedUnits = Math.max(0, inv.quarantinedUnits - 1);
       }
-      if (req.body.status === 'discarded') {
-        if (prevStatus === 'available')   inv.availableUnits   = Math.max(0, inv.availableUnits - 1);
-        if (prevStatus === 'quarantined') inv.quarantinedUnits = Math.max(0, inv.quarantinedUnits - 1);
+      if (newStatus === 'discarded') {
+        if (prevStatus === 'available' && prevIsReleaseApproved) {
+          inv.availableUnits = Math.max(0, inv.availableUnits - 1);
+        }
+        if (prevStatus === 'quarantined') {
+          inv.quarantinedUnits = Math.max(0, inv.quarantinedUnits - 1);
+        }
         inv.discardedUnits++;
-      }
-      // If unit is approved and available, bump availableUnits (was not counted before release)
-      if (req.body.status === 'available' && req.body.isReleaseApproved === true && prevStatus !== 'available') {
-        inv.availableUnits++;
       }
     }
 
@@ -1260,7 +1389,6 @@ router.put('/me/inventory/:invId/units/:unitId', protect, authorize('blood_bank'
 
 /**
  * POST /blood-banks/me/inventory/:invId/expiry-check  (BLOOD_BANK MANAGER)
- * Trigger expiry sweep for a specific inventory slot.
  */
 router.post('/me/inventory/:invId/expiry-check', protect, authorize('blood_bank'), async (req, res) => {
   try {
@@ -1290,10 +1418,6 @@ router.post('/me/inventory/:invId/expiry-check', protect, authorize('blood_bank'
 
 /**
  * PUT /blood-banks/me/requests/:reqId/respond  (BLOOD_BANK MANAGER)
- * Accept or reject a blood request.
- * Body: { action: 'accept' | 'reject', reason }
- * NOTE: This is a stub — a full BloodRequest model is needed.
- * The stub updates reservation status in BloodInventory if reject.
  */
 router.put('/me/requests/:reqId/respond', protect, authorize('blood_bank'), async (req, res) => {
   try {
@@ -1302,21 +1426,50 @@ router.put('/me/requests/:reqId/respond', protect, authorize('blood_bank'), asyn
       return res.status(400).json({ success: false, message: "action must be 'accept' or 'reject'" });
     }
 
-    // If rejecting, release reservation
-    if (action === 'reject') {
-      // Find inventory docs with units reserved for this requestId
-      const invDocs = await BloodInventory.find({ 'units.reservedFor': req.params.reqId });
+    const bloodRequest = await BloodRequest.findById(req.params.reqId);
+    if (!bloodRequest) return res.status(404).json({ success: false, message: 'Blood request not found' });
+
+    if (action === 'accept') {
+      bloodRequest.status    = 'cross_matching';
+      bloodRequest.updatedBy = req.user._id;
+      await bloodRequest.save();
+
+      await Notification.create({
+        recipient: bloodRequest.requestedBy,
+        title:     'Blood Request Accepted',
+        body:      `Your request ${bloodRequest.requestCode} has been accepted. Cross-matching in progress.`,
+        type:      'Order_Placed',
+        priority:  'High',
+      }).catch(console.error);
+
+    } else {
+      const invDocs = await BloodInventory.find({ 'units.reservedFor': bloodRequest._id });
       for (const inv of invDocs) {
-        await BloodInventory.releaseReservation(inv._id, req.params.reqId);
+        await BloodInventory.releaseReservation(inv._id, bloodRequest._id);
       }
+
+      bloodRequest.status          = 'rejected';
+      bloodRequest.rejectionReason = reason || 'Blood bank declined the request';
+      bloodRequest.rejectedBy      = req.user._id;
+      bloodRequest.rejectedAt      = new Date();
+      bloodRequest.updatedBy       = req.user._id;
+      await bloodRequest.save();
+
+      await Notification.create({
+        recipient: bloodRequest.requestedBy,
+        title:     'Blood Request Rejected',
+        body:      `Request ${bloodRequest.requestCode} was rejected. Reason: ${reason || 'No reason provided'}`,
+        type:      'Order_Placed',
+        priority:  'High',
+      }).catch(console.error);
     }
 
     res.json({
       success: true,
       message: action === 'accept'
-        ? 'Request accepted. Prepare units for issuance.'
+        ? 'Request accepted. Prepare units for cross-matching.'
         : `Request rejected. Units released. Reason: ${reason || 'No reason provided'}`,
-      data: { requestRef: req.params.reqId, action },
+      data: { requestCode: bloodRequest.requestCode, status: bloodRequest.status },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -1325,60 +1478,71 @@ router.put('/me/requests/:reqId/respond', protect, authorize('blood_bank'), asyn
 
 /**
  * PUT /blood-banks/me/requests/:reqId/issue  (BLOOD_BANK MANAGER)
- * Mark blood units as issued.
- * Body: { bagNumbers: string[], issuedBy, receiptUrl?, hospitalId?, customerEmail?, customerName? }
- * Sends issuance confirmation email to customer.
  */
 router.put('/me/requests/:reqId/issue', protect, authorize('blood_bank'), async (req, res) => {
   try {
     const bank = await BloodBank.findOne({ managedBy: req.user._id });
     if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found' });
 
-    const { bagNumbers = [], issuedBy, receiptUrl, hospitalId, customerEmail, customerName, bloodGroup, component } = req.body;
+    const {
+      bagNumbers = [], issuedBy, receiptUrl, hospitalId,
+      customerEmail, customerName, bloodGroup, component,
+    } = req.body;
 
     if (!bagNumbers.length) {
       return res.status(400).json({ success: false, message: 'bagNumbers array required' });
     }
 
-    // Find inventory docs containing these bag numbers and update them
+    const upperBags = bagNumbers.map(b => b.toUpperCase());
     let totalIssued = 0;
+
     const invDocs = await BloodInventory.find({
-      bloodBank: bank._id,
-      'units.bagNumber': { $in: bagNumbers.map(b => b.toUpperCase()) },
+      bloodBank:         bank._id,
+      'units.bagNumber': { $in: upperBags },
     });
 
     for (const inv of invDocs) {
       let changed = false;
       for (const unit of inv.units) {
-        if (bagNumbers.map(b => b.toUpperCase()).includes(unit.bagNumber)) {
-          unit.status    = 'issued';
-          unit.issuedTo  = {
+        if (upperBags.includes(unit.bagNumber) && ['reserved', 'cross_matched'].includes(unit.status)) {
+          unit.status   = 'issued';
+          unit.issuedTo = {
             request:    req.params.reqId,
             hospital:   hospitalId || null,
             issuedAt:   new Date(),
             issuedBy:   issuedBy || req.user.name,
             receiptUrl: receiptUrl || null,
           };
+          inv.issuedUnits++;
+          inv.reservedUnits  = Math.max(0, inv.reservedUnits - 1);
+          inv.availableUnits = Math.max(0, inv.availableUnits);
           totalIssued++;
           changed = true;
         }
       }
       if (changed) {
-        inv.issuedUnits    += totalIssued;
-        inv.reservedUnits   = Math.max(0, inv.reservedUnits - totalIssued);
-        inv.lastIssuanceAt  = new Date();
-        inv.lastUpdatedAt   = new Date();
+        inv.lastIssuanceAt = new Date();
+        inv.lastUpdatedAt  = new Date();
         await inv.save();
       }
     }
 
-    // Update bank stats
+    if (totalIssued === 0) {
+      return res.status(400).json({ success: false, message: 'No matching reserved units found for those bag numbers' });
+    }
+
+    const bloodRequest = await BloodRequest.findById(req.params.reqId);
+    if (bloodRequest) {
+      bloodRequest.status    = 'dispatched';
+      bloodRequest.updatedBy = req.user._id;
+      await bloodRequest.save();
+    }
+
     await BloodBank.findByIdAndUpdate(bank._id, {
       $inc: { 'stats.totalUnitsIssued': totalIssued, 'stats.totalRequestsFulfilled': 1 },
       $set: { 'stats.lastIssuanceAt': new Date() },
     });
 
-    // Send email to customer if provided
     if (customerEmail) {
       await sendEmail({
         email:   customerEmail,
@@ -1390,67 +1554,24 @@ router.put('/me/requests/:reqId/issue', protect, authorize('blood_bank'), async 
           component:  component  || 'N/A',
           units:      totalIssued,
           bankName:   bank.name,
-          bagNumbers,
+          bagNumbers: upperBags,
         }),
       }).catch(console.error);
     }
 
     await SystemLog.createLog({
       level: 'success', category: 'system',
-      message: `Blood units issued: ${bagNumbers.join(', ')} for request ${req.params.reqId}`,
+      message: `Blood units issued: ${upperBags.join(', ')} for request ${req.params.reqId}`,
       actor:   { userId: req.user._id, name: req.user.name, role: req.user.role },
       relatedEntity: { model: 'BloodBank', entityId: bank._id, label: bank.name },
-      metadata: { requestRef: req.params.reqId, bagNumbers, totalIssued },
+      metadata: { requestRef: req.params.reqId, bagNumbers: upperBags, totalIssued },
     });
 
     res.json({
       success: true,
       message: `${totalIssued} unit(s) issued successfully`,
-      data:    { requestRef: req.params.reqId, bagNumbers, totalIssued },
+      data:    { requestRef: req.params.reqId, bagNumbers: upperBags, totalIssued },
     });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ── HOSPITAL ROUTES ───────────────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * POST /blood-banks/:id/link  (HOSPITAL)
- * Add supply agreement between hospital and blood bank.
- */
-router.post('/:id/link', protect, authorize('hospital'), async (req, res) => {
-  try {
-    const hospital = await Hospital.findOne({ managedBy: req.user._id });
-    if (!hospital) return res.status(404).json({ success: false, message: 'Hospital not found' });
-
-    const bank = await BloodBank.findOne({ _id: req.params.id, isActive: true });
-    if (!bank) return res.status(404).json({ success: false, message: 'Blood bank not found' });
-
-    // Add hospital to bank's linkedHospitals and vice versa
-    await BloodBank.findByIdAndUpdate(bank._id, { $addToSet: { linkedHospitals: hospital._id } });
-    await Hospital.findByIdAndUpdate(hospital._id, { $addToSet: { bloodBanks: bank._id } });
-
-    res.json({ success: true, message: `Supply agreement established with ${bank.name}` });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-/**
- * DELETE /blood-banks/:id/link  (HOSPITAL)
- */
-router.delete('/:id/link', protect, authorize('hospital'), async (req, res) => {
-  try {
-    const hospital = await Hospital.findOne({ managedBy: req.user._id });
-    if (!hospital) return res.status(404).json({ success: false, message: 'Hospital not found' });
-
-    await BloodBank.findByIdAndUpdate(req.params.id, { $pull: { linkedHospitals: hospital._id } });
-    await Hospital.findByIdAndUpdate(hospital._id,   { $pull: { bloodBanks: req.params.id } });
-
-    res.json({ success: true, message: 'Supply agreement removed' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

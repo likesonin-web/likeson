@@ -49,7 +49,7 @@ const ROLE_META = {
   customer:         { label: 'Customer',       color: 'info',    icon: '👤' },
   hospital:         { label: 'Hospital',       color: 'primary', icon: '🏥' },
   solodriverpartner: { label: 'Solo Driver',    color: 'primary', icon: '🚘' },
-  'care assistant': { label: 'Care Assistant', color: 'success', icon: '🩺' },
+  'care_assistant': { label: 'Care Assistant', color: 'success', icon: '🩺' },
   doctor:           { label: 'Doctor',         color: 'primary', icon: '⚕️' },
   driver:           { label: 'Driver',         color: 'error', icon: '🚗' },
   pharmacy:         { label: 'Pharmacy',       color: 'accent',  icon: '💊' },

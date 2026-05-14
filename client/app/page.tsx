@@ -87,7 +87,7 @@ const Home: React.FC = () => {
       )}
 
       {/* ── CARE ASSISTANT ────────────────────────────────────────────────── */}
-      {user?.role === "care assistant" && (
+      {user?.role === "care_assistant" && (
         <>
           <Container className="w-full flex flex-col gap-12 py-6">
             <CareAssistant />

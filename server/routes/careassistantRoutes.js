@@ -51,9 +51,9 @@ const upload = multer({
 // ─────────────────────────────────────────────────────────────────────────────
 // MIDDLEWARE SHORTCUTS
 // ─────────────────────────────────────────────────────────────────────────────
-const isCareAssistant = [protect, authorize('care assistant')];
+const isCareAssistant = [protect, authorize('care_assistant')];
 const isAdmin         = [protect, authorize('admin', 'superadmin')];
-const isAny           = [protect, authorize('care assistant', 'admin', 'superadmin')];
+const isAny           = [protect, authorize('care_assistant', 'admin', 'superadmin')];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -101,7 +101,7 @@ const computeCompletion = (p) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // POST /api/care-assistant/admin/create
-// Admin / SuperAdmin creates a new care assistant: User account + CareAssistantProfile in one shot.
+// Admin / SuperAdmin creates a new care_assistant: User account + CareAssistantProfile in one shot.
 // A welcome email with auto-generated credentials is dispatched automatically.
 // Required body: fullName, email
 // Optional body: phone, alternatePhone, dateOfBirth, gender, address, bio,
@@ -162,7 +162,7 @@ router.post('/admin/create', isAdmin, async (req, res) => {
         email:           email.toLowerCase().trim(),
         password:        hashedPassword,
         phone:           phone || undefined,
-        role:            'care assistant',
+        role:            'care_assistant',
         isEmailVerified: false,
         isPhoneVerified: false,
         createdBy:       req.user._id,
@@ -208,7 +208,7 @@ router.post('/admin/create', isAdmin, async (req, res) => {
         html:    transactionalTemplate({
           header:     'Account Created',
           title:      `Welcome aboard, ${fullName}!`,
-          body:       `Your care assistant account on <strong>Likeson.in</strong> has been created by our admin team.<br><br>
+          body:       `Your care_assistant account on <strong>Likeson.in</strong> has been created by our admin team.<br><br>
                        <strong>Login Email:</strong> ${newUser.email}<br>
                        <strong>Temporary Password:</strong> <code style="background:#f1f5f9;padding:2px 8px;border-radius:4px;font-family:monospace;font-size:15px;">${tempPassword}</code><br><br>
                        Please log in and <strong>change your password immediately</strong> from your account security settings.<br><br>
@@ -226,7 +226,7 @@ router.post('/admin/create', isAdmin, async (req, res) => {
     await SystemLog.createLog({
       level:    'success',
       category: 'user',
-      message:  `Admin created care assistant account: ${fullName} (${newUser.email})`,
+      message:  `Admin created care_assistant account: ${fullName} (${newUser.email})`,
       actor:    buildActor(req),
       relatedEntity: { model: 'CareAssistantProfile', entityId: profile._id, label: fullName },
       request:  { method: 'POST', path: req.originalUrl, statusCode: 201 },
@@ -264,7 +264,7 @@ router.post('/admin/create', isAdmin, async (req, res) => {
 
 /**
  * GET /api/care-assistant/profile
- * @desc    Get the authenticated care assistant's own profile
+ * @desc    Get the authenticated care_assistant's own profile
  * @access  Care Assistant
  */
 router.get('/profile', isCareAssistant, async (req, res) => {
@@ -1380,7 +1380,7 @@ router.post('/security/request-account-deletion', isCareAssistant, async (req, r
       subject: 'Confirm Account Deletion — Likeson Healthcare',
       html:    otpTemplate({
         title:   'Account Deletion Request',
-        body:    'We received a request to permanently delete your Likeson care assistant account. If this was you, use the code below to confirm. This action cannot be undone.',
+        body:    'We received a request to permanently delete your Likeson care_assistant account. If this was you, use the code below to confirm. This action cannot be undone.',
         otpCode: otp,
       }),
     });
@@ -1477,7 +1477,7 @@ router.get('/performance', isCareAssistant, async (req, res) => {
 
 /**
  * GET /api/care-assistant/admin/all
- * @desc    List all care assistants with filters & pagination
+ * @desc    List all care_assistants with filters & pagination
  * @access  Admin / SuperAdmin
  * @query   page, limit, status, workType, city, kycStatus, isActive, isBlocked, search
  */
@@ -1542,7 +1542,7 @@ router.get('/admin/all', isAdmin, async (req, res) => {
 
 /**
  * GET /api/care-assistant/admin/:id
- * @desc    Get a single care assistant's full profile (admin view — includes sensitive flags)
+ * @desc    Get a single care_assistant's full profile (admin view — includes sensitive flags)
  * @access  Admin / SuperAdmin
  */
 router.get('/admin/:id', isAdmin, async (req, res) => {
@@ -1603,7 +1603,7 @@ router.patch('/admin/:id/kyc', isAdmin, async (req, res) => {
       { new: true }
     ).select('kyc.verificationStatus kyc.aadhaarVerified kyc.panVerified isActive verification.isVerified fullName');
 
-    // Notify care assistant by email
+    // Notify care_assistant by email
     try {
       const caUser = await User.findById(profile.user).select('email name');
       if (caUser) {
@@ -1688,7 +1688,7 @@ router.patch('/admin/:id/police-verification', isAdmin, async (req, res) => {
 
 /**
  * PATCH /api/care-assistant/admin/:id/block
- * @desc    Block a care assistant
+ * @desc    Block a care_assistant
  *          Body: { blockReason: string, unblockAt?: Date }
  * @access  Admin / SuperAdmin
  */
@@ -1721,7 +1721,7 @@ router.patch('/admin/:id/block', isAdmin, async (req, res) => {
           html:    transactionalTemplate({
             header:     'Account Suspended',
             title:      'Your account has been suspended',
-            body:       `Your care assistant account has been suspended.<br><br><strong>Reason:</strong> ${blockReason}${unblockAt ? `<br><strong>Auto-unblock:</strong> ${new Date(unblockAt).toLocaleString('en-IN')}` : ''}<br><br>Please contact support at <a href="mailto:support@likeson.in">support@likeson.in</a> if you believe this is a mistake.`,
+            body:       `Your care_assistant account has been suspended.<br><br><strong>Reason:</strong> ${blockReason}${unblockAt ? `<br><strong>Auto-unblock:</strong> ${new Date(unblockAt).toLocaleString('en-IN')}` : ''}<br><br>Please contact support at <a href="mailto:support@likeson.in">support@likeson.in</a> if you believe this is a mistake.`,
             buttonText: 'Contact Support',
             buttonLink: 'mailto:support@likeson.in',
           }),
@@ -1748,7 +1748,7 @@ router.patch('/admin/:id/block', isAdmin, async (req, res) => {
 
 /**
  * PATCH /api/care-assistant/admin/:id/unblock
- * @desc    Unblock a care assistant
+ * @desc    Unblock a care_assistant
  * @access  Admin / SuperAdmin
  */
 router.patch('/admin/:id/unblock', isAdmin, async (req, res) => {
@@ -1891,7 +1891,7 @@ router.patch('/admin/:id/bank/verify', isAdmin, async (req, res) => {
 
 /**
  * GET /api/care-assistant/admin/stats/overview
- * @desc    Platform-wide care assistant statistics
+ * @desc    Platform-wide care_assistant statistics
  * @access  Admin / SuperAdmin
  */
 router.get('/admin/stats/overview', isAdmin, async (req, res) => {
@@ -1944,7 +1944,7 @@ router.get('/admin/stats/overview', isAdmin, async (req, res) => {
 
 /**
  * GET /api/care-assistant/admin/nearby
- * @desc    Find care assistants near a coordinate (for dispatch)
+ * @desc    Find care_assistants near a coordinate (for dispatch)
  *          Query: lng, lat, radiusKm (default 10), status (default Available)
  * @access  Admin / SuperAdmin
  */

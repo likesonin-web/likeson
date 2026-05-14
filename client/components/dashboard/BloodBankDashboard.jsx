@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -31,6 +31,7 @@ import {
   Building2,
 } from 'lucide-react';
 import { fetchMyBank, fetchMyStats } from '@/store/slices/bloodbankSlice'; // adjust path
+import { logout } from "@/store/slices/userSlice";
 
 /* ─────────────────────────────────────────────────
    NAV STRUCTURE
@@ -195,7 +196,7 @@ function NavGroup({ group, items, collapsed, pathname, onNav }) {
 /* ─────────────────────────────────────────────────
    SIDEBAR CONTENT (shared desktop + mobile)
 ───────────────────────────────────────────────── */
-function SidebarContent({ collapsed, pathname, onNav, onToggle, isMobile }) {
+function SidebarContent({ collapsed, pathname, onNav, onToggle, isMobile, onLogout }) {
   const { myBank, myStats } = useSelector(s => s.bloodBank);
 
   return (
@@ -314,6 +315,7 @@ function SidebarContent({ collapsed, pathname, onNav, onToggle, isMobile }) {
                 initial={{ opacity: 0, width: 0 }}
                 animate={{ opacity: 1, width: 'auto' }}
                 exit={{ opacity: 0, width: 0 }}
+               onClick={onLogout}
                 className="text-sm font-semibold whitespace-nowrap overflow-hidden"
               >
                 Sign Out
@@ -394,7 +396,8 @@ function TopBar({ onMenuOpen, collapsed, currentLabel }) {
 export default function BloodBankDashboard({ children }) {
   const dispatch = useDispatch();
   const pathname = usePathname();
-
+ 
+  const router    = useRouter();
   const [sidebarOpen,      setSidebarOpen]      = useState(false);   // mobile drawer
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);   // desktop collapse
   const overlayRef = useRef(null);
@@ -416,6 +419,11 @@ export default function BloodBankDashboard({ children }) {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [sidebarOpen]);
+
+    const handleLogout = useCallback(() => {
+      dispatch(logout());
+      router.push("/");
+    }, [dispatch, router]);
 
   /* lock body scroll when mobile sidebar open */
   useEffect(() => {
@@ -473,6 +481,7 @@ export default function BloodBankDashboard({ children }) {
                 pathname={pathname}
                 onNav={() => setSidebarOpen(false)}
                 isMobile={true}
+                onLogout={handleLogout}
               />
             </motion.aside>
           </>

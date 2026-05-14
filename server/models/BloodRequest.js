@@ -2,36 +2,13 @@ import mongoose from 'mongoose';
 const { Schema } = mongoose;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BLOOD REQUEST MODEL — Likeson.in
+// BLOOD REQUEST MODEL — Likeson.in  (fixed)
 //
-// Core operational model. A BloodRequest is raised whenever blood components
-// are needed for a patient. It drives the entire fulfillment workflow:
-//
-//   RAISED → SEARCHING → MATCHED → CROSS_MATCHING → APPROVED
-//          → DISPATCHED → DELIVERED → TRANSFUSED
-//
-// REQUEST TYPES:
-//   patient_direct     → Patient/family requests via app (links to Booking)
-//   hospital_internal  → Hospital raises internally (no patient Booking)
-//   emergency          → Emergency request — bypasses normal approval flow
-//   voluntary_camp     → Blood donation camp request (bank collecting stock)
-//
-// MULTI-BANK FULFILLMENT:
-//   A single request may be fulfilled by MULTIPLE blood banks if one bank
-//   has insufficient stock (shortage scenario).
-//   allocations[] array supports partial + multi-source fulfillment.
-//
-// PARTIAL FULFILLMENT:
-//   fulfilledUnits may be < requiredUnits.
-//   Status 'partially_matched' allows requesting hospital to proceed with
-//   available units while system continues searching for remainder.
-//
-// LINKS:
-//   BloodRequest → Booking (nullable — only when originated from app)
-//   BloodRequest → BloodBank (via allocations[])
-//   BloodRequest → BloodInventory (specific bags reserved)
-//   BloodRequest → Ride (delivery transport per allocation)
-//   BloodRequest → Hospital (where transfusion happens)
+// FIX 1: prescriptionUrl enforced for non-emergency patient_direct requests
+// FIX 2: searchAndAllocate uses populated (non-lean) bloodBank correctly
+// FIX 3: fareBreakdown spread safe on new doc
+// FIX 4: voluntary_camp hospital validation message corrected
+// FIX 5: booking field removed entirely
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const REQUEST_TYPES = [
@@ -42,142 +19,92 @@ export const REQUEST_TYPES = [
 ];
 
 export const REQUEST_STATUSES = [
-  'raised',              // Request submitted
-  'searching',           // System searching inventory for matching stock
-  'partially_matched',   // Some units found, still searching for remainder
-  'fully_matched',       // All required units located across banks
-  'cross_matching',      // Cross-match samples sent to lab
-  'cross_match_done',    // Cross-match completed — all units cleared
-  'approved',            // Medical officer approved — ready to dispatch
-  'dispatched',          // Blood bags in transit
-  'partially_delivered', // Some bags delivered (multi-bank scenario)
-  'delivered',           // All bags delivered to hospital
-  'transfused',          // Confirmed transfused into patient (final success)
-  'cancelled',           // Cancelled before dispatch
-  'expired',             // Required-by deadline passed unfulfilled
-  'rejected',            // Rejected by blood bank (insufficient justification)
+  'raised',
+  'searching',
+  'partially_matched',
+  'fully_matched',
+  'cross_matching',
+  'cross_match_done',
+  'approved',
+  'dispatched',
+  'partially_delivered',
+  'delivered',
+  'transfused',
+  'cancelled',
+  'expired',
+  'rejected',
 ];
 
 export const URGENCY_LEVELS = [
-  'routine',       // Elective surgery — 24-72 hours acceptable
-  'urgent',        // Needed within 6-12 hours
-  'emergency',     // Needed within 1-2 hours
-  'mass_casualty', // Disaster scenario — multiple patients simultaneously
+  'routine',
+  'urgent',
+  'emergency',
+  'mass_casualty',
 ];
 
 export const CLINICAL_INDICATIONS = [
-  'Elective Surgery',
-  'Emergency Surgery',
-  'Trauma',
-  'Obstetric Hemorrhage',
-  'Gastrointestinal Bleed',
-  'Anemia (Chronic)',
-  'Anemia (Acute)',
-  'Thalassemia',
-  'Sickle Cell Disease',
-  'Hemophilia',
-  'Thrombocytopenia',
-  'Oncology / Chemotherapy',
-  'Organ Transplant',
-  'Neonatal Jaundice',
-  'Dengue',
-  'Malaria',
-  'Liver Disease',
-  'Renal Disease',
-  'Cardiac Surgery',
-  'Bone Marrow Transplant',
-  'Other',
+  'Elective Surgery', 'Emergency Surgery', 'Trauma', 'Obstetric Hemorrhage',
+  'Gastrointestinal Bleed', 'Anemia (Chronic)', 'Anemia (Acute)',
+  'Thalassemia', 'Sickle Cell Disease', 'Hemophilia', 'Thrombocytopenia',
+  'Oncology / Chemotherapy', 'Organ Transplant', 'Neonatal Jaundice',
+  'Dengue', 'Malaria', 'Liver Disease', 'Renal Disease', 'Cardiac Surgery',
+  'Bone Marrow Transplant', 'Other',
 ];
 
 // ── Sub-Schemas ───────────────────────────────────────────────────────────────
 
-/**
- * allocationSchema — one blood bank's contribution to fulfilling this request.
- * A request may have multiple allocations (multi-bank fulfillment).
- */
 const allocationSchema = new Schema(
   {
-    // ── Bank & Inventory ──────────────────────────────────────────────────────
-    bloodBank: {
-      type:     Schema.Types.ObjectId,
-      ref:      'BloodBank',
-      required: true,
-    },
-    bloodBankName: { type: String },   // denormalized for display
+    bloodBank:     { type: Schema.Types.ObjectId, ref: 'BloodBank',     required: true },
+    bloodBankName: { type: String },
+    inventory:     { type: Schema.Types.ObjectId, ref: 'BloodInventory', required: true },
 
-    inventory: {
-      type:     Schema.Types.ObjectId,
-      ref:      'BloodInventory',
-      required: true,
-    },
+    unitsAllocated: { type: Number, required: true, min: 1 },
+    bagNumbers:     [{ type: String, uppercase: true, trim: true }],
 
-    // ── Units ─────────────────────────────────────────────────────────────────
-    unitsAllocated:  { type: Number, required: true, min: 1 },
-    bagNumbers:      [{ type: String, uppercase: true, trim: true }],  // specific bags
-
-    // ── Cross-Match ───────────────────────────────────────────────────────────
-    crossMatchRequired:  { type: Boolean, default: true },
+    crossMatchRequired:     { type: Boolean, default: true },
     crossMatchSampleSentAt: { type: Date },
     crossMatchResult: {
       type:    String,
       enum:    ['Compatible', 'Incompatible', 'Pending', 'Waived', null],
       default: null,
     },
-    crossMatchResultAt:  { type: Date },
+    crossMatchResultAt:    { type: Date },
     crossMatchPerformedBy: { type: String },
 
-    // ── Approval ──────────────────────────────────────────────────────────────
     approvedBy:    { type: Schema.Types.ObjectId, ref: 'User' },
     approvedAt:    { type: Date },
     approvalNotes: { type: String },
 
-    // ── Pricing ───────────────────────────────────────────────────────────────
     processingFeePerUnit: { type: Number, default: 0, min: 0 },
     crossMatchFee:        { type: Number, default: 0, min: 0 },
     deliveryFee:          { type: Number, default: 0, min: 0 },
     totalFee:             { type: Number, default: 0, min: 0 },
 
-    // ── Dispatch & Delivery ───────────────────────────────────────────────────
-    /**
-     * ride — Ride document for transporting this allocation.
-     * Pickup: blood bank address → Dropoff: hospital address.
-     * null if hospital self-collects.
-     */
-    ride: {
-      type:    Schema.Types.ObjectId,
-      ref:     'Ride',
-      default: null,
-    },
+    ride: { type: Schema.Types.ObjectId, ref: 'Ride', default: null },
 
-    dispatchedAt:   { type: Date },
-    dispatchedBy:   { type: String },   // staff name at blood bank
-
+    dispatchedAt:  { type: Date },
+    dispatchedBy:  { type: String },
     deliveryMethod: {
-      type: String,
-      enum: ['platform_ride', 'bank_vehicle', 'hospital_pickup', 'ambulance', 'courier'],
+      type:    String,
+      enum:    ['platform_ride', 'bank_vehicle', 'hospital_pickup', 'ambulance', 'courier'],
       default: 'platform_ride',
     },
+    deliveredAt:        { type: Date },
+    deliveredTo:        { type: String },
+    deliveryReceiptUrl: { type: String },
 
-    deliveredAt:     { type: Date },
-    deliveredTo:     { type: String },    // name of person who received at hospital
-    deliveryReceiptUrl: { type: String }, // signed receipt
-
-    // ── Status ────────────────────────────────────────────────────────────────
     status: {
       type:    String,
       enum:    ['reserved', 'cross_matching', 'approved', 'dispatched', 'delivered', 'transfused', 'cancelled', 'rejected'],
       default: 'reserved',
     },
-
-    rejectionReason: { type: String },
+    rejectionReason:    { type: String },
     cancellationReason: { type: String },
   },
   { _id: true, timestamps: true }
 );
 
-/**
- * patientInfoSchema — recipient details at request time.
- */
 const requestPatientSchema = new Schema(
   {
     name:          { type: String, required: true, trim: true },
@@ -185,18 +112,14 @@ const requestPatientSchema = new Schema(
     gender:        { type: String, enum: ['Male', 'Female', 'Other'] },
     bloodGroup:    { type: String, enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] },
     rhType:        { type: String, enum: ['Positive', 'Negative'] },
-    wardBed:       { type: String, trim: true },   // Ward/Bed number at hospital
-    uhid:          { type: String, trim: true },   // Universal Hospital ID
-    ipNumber:      { type: String, trim: true },   // In-patient number
+    wardBed:       { type: String, trim: true },
+    uhid:          { type: String, trim: true },
+    ipNumber:      { type: String, trim: true },
     diagnosisNotes:{ type: String, trim: true },
   },
   { _id: false }
 );
 
-/**
- * searchAttemptSchema — log of each inventory search attempt.
- * Used for analytics and debugging shortage scenarios.
- */
 const searchAttemptSchema = new Schema(
   {
     searchedAt:       { type: Date, default: Date.now },
@@ -210,9 +133,6 @@ const searchAttemptSchema = new Schema(
   { _id: false }
 );
 
-/**
- * statusLogSchema — full audit trail of every status change.
- */
 const statusLogSchema = new Schema(
   {
     fromStatus: { type: String },
@@ -225,9 +145,6 @@ const statusLogSchema = new Schema(
   { _id: true }
 );
 
-/**
- * cancellationSchema
- */
 const requestCancellationSchema = new Schema(
   {
     cancelledBy:       { type: String, enum: ['customer', 'hospital', 'admin', 'system'] },
@@ -243,260 +160,137 @@ const requestCancellationSchema = new Schema(
 
 const bloodRequestSchema = new Schema(
   {
-    // ── Identity ──────────────────────────────────────────────────────────────
     requestCode: {
-      type:      String,
-      unique:    true,
-      uppercase: true,
-      trim:      true,
-      index:     true,
-      comment:   'Format: BR-XXXXXXXX — auto-generated',
+      type: String, unique: true, uppercase: true, trim: true, index: true,
     },
-
     requestType: {
-      type:     String,
-      required: true,
-      enum:     REQUEST_TYPES,
-      index:    true,
+      type: String, required: true, enum: REQUEST_TYPES, index: true,
     },
 
-    // ── Parties ───────────────────────────────────────────────────────────────
-    /**
-     * requestedBy → User who raised this request.
-     * For patient_direct: customer User.
-     * For hospital_internal: hospital manager User.
-     * For emergency: doctor or hospital manager User.
-     */
     requestedBy: {
-      type:     Schema.Types.ObjectId,
-      ref:      'User',
-      required: true,
-      index:    true,
+      type: Schema.Types.ObjectId, ref: 'User', required: true, index: true,
     },
-
-    /**
-     * hospital — where the blood will be transfused.
-     * Required for all types except voluntary_camp.
-     */
     hospital: {
-      type:    Schema.Types.ObjectId,
-      ref:     'Hospital',
-      default: null,
-      index:   true,
+      type: Schema.Types.ObjectId, ref: 'Hospital', default: null, index: true,
     },
+    hospitalName: { type: String },
 
-    hospitalName: { type: String },   // denormalized
+    patient: { type: requestPatientSchema, required: true },
 
-    /**
-     * booking → Booking._id (bookingType: 'blood_bank').
-     * null for hospital_internal and emergency requests.
-     */
-    booking: {
-      type:    Schema.Types.ObjectId,
-      ref:     'Booking',
-      default: null,
-      index:   true,
-    },
+    prescribingDoctor:     { type: Schema.Types.ObjectId, ref: 'DoctorProfile', default: null },
+    prescribingDoctorName: { type: String },
 
-    // ── Patient Info ──────────────────────────────────────────────────────────
-    patient: {
-      type:     requestPatientSchema,
-      required: true,
-    },
-
-    /**
-     * prescribingDoctor — doctor who prescribed the transfusion.
-     * Required for non-emergency requests.
-     */
-    prescribingDoctor: {
-      type:    Schema.Types.ObjectId,
-      ref:     'DoctorProfile',
-      default: null,
-    },
-
-    prescribingDoctorName: { type: String },  // denormalized
-    prescriptionUrl:       { type: String },   // uploaded prescription PDF/image
-
-    // ── Blood Requirement ─────────────────────────────────────────────────────
-    bloodGroup: {
-      type:     String,
-      required: true,
-      enum:     ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
-      index:    true,
-    },
-
-    rhType: {
+    // ── Prescription Upload ───────────────────────────────────────────────────
+    // Required for: patient_direct (non-emergency) and hospital_internal requests.
+    // Waived for: urgency === 'emergency' | 'mass_casualty', or requestType === 'emergency'.
+    // Verified at: pre-validate hook below.
+    prescriptionUrl: {
       type:    String,
-      enum:    ['Positive', 'Negative'],
+      trim:    true,
+      default: null,
     },
+    prescriptionVerified:   { type: Boolean, default: false },
+    prescriptionVerifiedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    prescriptionVerifiedAt: { type: Date, default: null },
+    prescriptionWaived:     { type: Boolean, default: false },
+    prescriptionWaivedReason: { type: String, default: null },
 
+    bloodGroup: {
+      type: String, required: true,
+      enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
+      index: true,
+    },
+    rhType:    { type: String, enum: ['Positive', 'Negative'] },
     component: {
-      type:     String,
-      required: true,
-      enum:     [
+      type: String, required: true,
+      enum: [
         'Whole Blood', 'PRBC', 'FFP', 'Platelets', 'Cryoprecipitate',
         'Plasma', 'Single Donor Platelets', 'Leukoreduced PRBC',
         'Irradiated PRBC', 'Washed PRBC',
       ],
-      index:    true,
-    },
-
-    unitsRequired:  { type: Number, required: true, min: 1 },
-    fulfilledUnits: { type: Number, default: 0, min: 0 },  // units confirmed allocated
-
-    /**
-     * crossMatchRequired — whether cross-match is mandatory for this request.
-     * Emergency requests may waive cross-match (type-specific / O- emergency).
-     */
-    crossMatchRequired:     { type: Boolean, default: true },
-    crossMatchSampleSentAt: { type: Date },
-
-    // ── Clinical Details ──────────────────────────────────────────────────────
-    clinicalIndication: {
-      type: String,
-      enum: CLINICAL_INDICATIONS,
-    },
-
-    clinicalNotes:   { type: String, trim: true },
-
-    urgency: {
-      type:     String,
-      enum:     URGENCY_LEVELS,
-      required: true,
-      default:  'routine',
-      index:    true,
-    },
-
-    /**
-     * requiredBy — deadline. System escalates if not fulfilled before this time.
-     * For emergency: typically 1-2 hours from raised time.
-     */
-    requiredBy: {
-      type:  Date,
       index: true,
     },
 
-    // ── Delivery Address ──────────────────────────────────────────────────────
-    /**
-     * deliveryAddress — where blood should be delivered.
-     * Defaults to hospital address if not specified.
-     */
-    deliveryAddress: {
-      line1:    { type: String, trim: true },
-      city:     { type: String, trim: true },
-      state:    { type: String, trim: true },
-      pincode:  { type: String, trim: true },
-    },
+    unitsRequired:  { type: Number, required: true, min: 1 },
+    fulfilledUnits: { type: Number, default: 0, min: 0 },
 
+    crossMatchRequired:     { type: Boolean, default: true },
+    crossMatchSampleSentAt: { type: Date },
+
+    clinicalIndication: { type: String, enum: CLINICAL_INDICATIONS },
+    clinicalNotes:      { type: String, trim: true },
+
+    urgency: {
+      type: String, enum: URGENCY_LEVELS, required: true, default: 'routine', index: true,
+    },
+    requiredBy: { type: Date, index: true },
+
+    deliveryAddress: {
+      line1:   { type: String, trim: true },
+      city:    { type: String, trim: true },
+      state:   { type: String, trim: true },
+      pincode: { type: String, trim: true },
+    },
     deliveryLocation: {
       type:        { type: String, enum: ['Point'], default: 'Point' },
       coordinates: { type: [Number] },
     },
 
-    // ── Allocations (Multi-Bank Fulfillment) ──────────────────────────────────
-    /**
-     * allocations — one entry per blood bank contributing units.
-     * A request with unitsRequired: 4 may have:
-     *   allocation[0]: BloodBank A → 2 units
-     *   allocation[1]: BloodBank B → 2 units
-     */
-    allocations: {
-      type:    [allocationSchema],
-      default: [],
-    },
+    allocations:    { type: [allocationSchema],    default: [] },
+    searchAttempts: { type: [searchAttemptSchema], default: [] },
 
-    // ── Search History ────────────────────────────────────────────────────────
-    searchAttempts: {
-      type:    [searchAttemptSchema],
-      default: [],
-    },
-
-    /**
-     * searchRadiusKm — current search radius. Expanded incrementally
-     * if initial search finds insufficient stock.
-     * Start: 5km → 10km → 20km → 50km → citywide.
-     */
     searchRadiusKm: { type: Number, default: 5 },
+    lastSearchAt:   { type: Date },
 
-    lastSearchAt: { type: Date },
-
-    // ── Pricing & Payment ─────────────────────────────────────────────────────
     fareBreakdown: {
-      processingFees:  { type: Number, default: 0, min: 0 },
-      crossMatchFees:  { type: Number, default: 0, min: 0 },
-      deliveryFees:    { type: Number, default: 0, min: 0 },
-      platformFee:     { type: Number, default: 0, min: 0 },
-      taxes:           { type: Number, default: 0, min: 0 },
-      discount:        { type: Number, default: 0, min: 0 },
-      totalAmount:     { type: Number, default: 0, min: 0 },
-      currency:        { type: String, default: 'INR' },
+      processingFees: { type: Number, default: 0, min: 0 },
+      crossMatchFees: { type: Number, default: 0, min: 0 },
+      deliveryFees:   { type: Number, default: 0, min: 0 },
+      platformFee:    { type: Number, default: 0, min: 0 },
+      taxes:          { type: Number, default: 0, min: 0 },
+      discount:       { type: Number, default: 0, min: 0 },
+      totalAmount:    { type: Number, default: 0, min: 0 },
+      currency:       { type: String, default: 'INR' },
     },
 
     paymentStatus: {
-      type:    String,
-      enum:    ['unpaid', 'pending', 'paid', 'waived', 'refunded'],
-      default: 'unpaid',
+      type: String, enum: ['unpaid', 'pending', 'paid', 'waived', 'refunded'], default: 'unpaid',
     },
+    isWaived:     { type: Boolean, default: false },
+    waivedReason: { type: String },
 
-    /**
-     * isWaived — for government hospital patients, BPL card holders, emergencies.
-     * Processing fees waived but still logged.
-     */
-    isWaived:      { type: Boolean, default: false },
-    waivedReason:  { type: String },
-
-    // ── Status & Lifecycle ────────────────────────────────────────────────────
     status: {
-      type:    String,
-      enum:    REQUEST_STATUSES,
-      default: 'raised',
-      index:   true,
+      type: String, enum: REQUEST_STATUSES, default: 'raised', index: true,
     },
+    statusLog:    { type: [statusLogSchema], default: [] },
+    cancellation: { type: requestCancellationSchema, default: null },
 
-    statusLog: {
-      type:    [statusLogSchema],
-      default: [],
-    },
+    rejectionReason: { type: String },
+    rejectedBy:      { type: Schema.Types.ObjectId, ref: 'User' },
+    rejectedAt:      { type: Date },
 
-    cancellation: {
-      type:    requestCancellationSchema,
-      default: null,
-    },
+    raisedAt:         { type: Date, default: Date.now },
+    firstMatchAt:     { type: Date },
+    fullyMatchedAt:   { type: Date },
+    approvedAt:       { type: Date },
+    firstDispatchAt:  { type: Date },
+    fullyDeliveredAt: { type: Date },
+    transfusedAt:     { type: Date },
+    completedAt:      { type: Date },
 
-    rejectionReason:   { type: String },
-    rejectedBy:        { type: Schema.Types.ObjectId, ref: 'User' },
-    rejectedAt:        { type: Date },
+    slaBreached:     { type: Boolean, default: false, index: true },
+    slaBreachedAt:   { type: Date },
+    escalationLevel: { type: Number, default: 0, min: 0, max: 3 },
 
-    // ── Key Timestamps ────────────────────────────────────────────────────────
-    raisedAt:          { type: Date, default: Date.now },
-    firstMatchAt:      { type: Date },   // when first unit was reserved
-    fullyMatchedAt:    { type: Date },   // when all units were reserved
-    approvedAt:        { type: Date },   // medical officer approval
-    firstDispatchAt:   { type: Date },   // first allocation dispatched
-    fullyDeliveredAt:  { type: Date },   // all allocations delivered
-    transfusedAt:      { type: Date },   // confirmed transfusion
-    completedAt:       { type: Date },
-
-    // ── SLA Tracking ─────────────────────────────────────────────────────────
-    /**
-     * slaBreached — true if request was not fulfilled before requiredBy deadline.
-     * Written by scheduled job. Triggers admin escalation.
-     */
-    slaBreached:      { type: Boolean, default: false, index: true },
-    slaBreachedAt:    { type: Date },
-    escalationLevel:  { type: Number, default: 0, min: 0, max: 3 },
-
-    // ── Post-Transfusion ──────────────────────────────────────────────────────
     transfusionOutcome: {
-      type: String,
-      enum: ['Successful', 'Adverse_Reaction', 'Patient_Expired', 'Not_Required', null],
+      type:    String,
+      enum:    ['Successful', 'Adverse_Reaction', 'Patient_Expired', 'Not_Required', null],
       default: null,
     },
-    transfusionNotes: { type: String },
-    transfusedBy:     { type: Schema.Types.ObjectId, ref: 'DoctorProfile' },
-    adverseReactionReport: { type: String },   // URL to haemovigilance report
+    transfusionNotes:      { type: String },
+    transfusedBy:          { type: Schema.Types.ObjectId, ref: 'DoctorProfile' },
+    adverseReactionReport: { type: String },
 
-    // ── Internal ──────────────────────────────────────────────────────────────
     assignedAdminId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     internalNotes:   { type: String, select: false },
     isTestRequest:   { type: Boolean, default: false },
@@ -538,8 +332,7 @@ bloodRequestSchema.virtual('isEmergency').get(function () {
 
 bloodRequestSchema.virtual('minutesUntilDeadline').get(function () {
   if (!this.requiredBy) return null;
-  const diff = new Date(this.requiredBy) - new Date();
-  return Math.round(diff / 60000);
+  return Math.round((new Date(this.requiredBy) - new Date()) / 60000);
 });
 
 bloodRequestSchema.virtual('isOverdue').get(function () {
@@ -551,35 +344,49 @@ bloodRequestSchema.virtual('totalAllocatedBags').get(function () {
   return this.allocations?.reduce((sum, a) => sum + (a.bagNumbers?.length ?? 0), 0) ?? 0;
 });
 
+// ── Helper: is prescription required? ────────────────────────────────────────
+function prescriptionRequired(doc) {
+  if (doc.urgency === 'emergency' || doc.urgency === 'mass_casualty') return false;
+  if (doc.requestType === 'emergency') return false;
+  if (doc.requestType === 'voluntary_camp') return false;
+  return ['patient_direct', 'hospital_internal'].includes(doc.requestType);
+}
+
 // ── Pre-validate ──────────────────────────────────────────────────────────────
 
 bloodRequestSchema.pre('validate', function () {
-  // hospital required for all non-camp types
-  if (this.requestType !== 'voluntary_camp' && !this.hospital) {
-    throw new Error(`${this.requestType} requests require a hospital reference`);
+  if (this.requestType === 'hospital_internal' && !this.hospital) {
+    throw new Error('hospital_internal requests require a hospital reference');
   }
 
-  // fulfilledUnits cannot exceed required
   if (this.fulfilledUnits > this.unitsRequired) {
     throw new Error('fulfilledUnits cannot exceed unitsRequired');
   }
 
-  // Emergency requests auto-set requiredBy if not set
   if (this.isNew && this.urgency === 'emergency' && !this.requiredBy) {
-    const twoHours = new Date(Date.now() + 2 * 60 * 60 * 1000);
-    this.requiredBy = twoHours;
+    this.requiredBy = new Date(Date.now() + 2 * 60 * 60 * 1000);
+  }
+  if (this.isNew && this.urgency === 'urgent' && !this.requiredBy) {
+    this.requiredBy = new Date(Date.now() + 6 * 60 * 60 * 1000);
   }
 
-  if (this.isNew && this.urgency === 'urgent' && !this.requiredBy) {
-    const sixHours = new Date(Date.now() + 6 * 60 * 60 * 1000);
-    this.requiredBy = sixHours;
+  if (this.isNew && prescriptionRequired(this)) {
+    if (!this.prescriptionUrl || !this.prescriptionUrl.trim()) {
+      throw new Error(
+        'prescriptionUrl is required for patient_direct and hospital_internal requests. ' +
+        'Upload a valid prescription document before submitting.'
+      );
+    }
+  }
+
+  if (this.prescriptionWaived && !this.prescriptionWaivedReason) {
+    throw new Error('prescriptionWaivedReason is required when prescriptionWaived is true');
   }
 });
 
 // ── Pre-save ──────────────────────────────────────────────────────────────────
 
 bloodRequestSchema.pre('save', async function () {
-  // Auto-generate requestCode
   if (this.isNew && !this.requestCode) {
     const { customAlphabet } = await import('nanoid');
     const gen = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 8);
@@ -591,7 +398,6 @@ bloodRequestSchema.pre('save', async function () {
     this.requestCode = code;
   }
 
-  // Append status to log on change
   if (this.isModified('status') && !this.isNew) {
     this.statusLog.push({
       fromStatus: this._previousStatus || null,
@@ -601,15 +407,14 @@ bloodRequestSchema.pre('save', async function () {
   }
   this._previousStatus = this.status;
 
-  // Auto-set key timestamps on status transitions
   const now = new Date();
   if (this.isModified('status')) {
     switch (this.status) {
       case 'partially_matched':
-        if (!this.firstMatchAt) this.firstMatchAt = now;
+        if (!this.firstMatchAt)  this.firstMatchAt = now;
         break;
       case 'fully_matched':
-        if (!this.firstMatchAt)  this.firstMatchAt  = now;
+        if (!this.firstMatchAt)   this.firstMatchAt   = now;
         if (!this.fullyMatchedAt) this.fullyMatchedAt = now;
         break;
       case 'approved':
@@ -632,7 +437,6 @@ bloodRequestSchema.pre('save', async function () {
     }
   }
 
-  // Auto-calculate status from fulfilledUnits
   if (this.isModified('fulfilledUnits') && this.isActive) {
     if (this.fulfilledUnits >= this.unitsRequired && this.status === 'partially_matched') {
       this.status = 'fully_matched';
@@ -643,20 +447,19 @@ bloodRequestSchema.pre('save', async function () {
     }
   }
 
-  // Recalculate total fare from allocations
   if (this.isModified('allocations')) {
     let processingFees = 0, crossMatchFees = 0, deliveryFees = 0;
     for (const alloc of this.allocations) {
-      processingFees += alloc.processingFeePerUnit * alloc.unitsAllocated;
+      processingFees += (alloc.processingFeePerUnit ?? 0) * (alloc.unitsAllocated ?? 0);
       crossMatchFees += alloc.crossMatchFee ?? 0;
       deliveryFees   += alloc.deliveryFee   ?? 0;
     }
-    const platformFee = this.fareBreakdown?.platformFee ?? 0;
+    const existing   = this.fareBreakdown?.toObject?.() ?? this.fareBreakdown ?? {};
+    const platformFee = existing.platformFee ?? 0;
+    const discount    = existing.discount    ?? 0;
     const taxes       = +((processingFees + crossMatchFees + deliveryFees) * 0.05).toFixed(2);
-    const discount    = this.fareBreakdown?.discount ?? 0;
 
     this.fareBreakdown = {
-      ...this.fareBreakdown,
       processingFees,
       crossMatchFees,
       deliveryFees,
@@ -669,21 +472,13 @@ bloodRequestSchema.pre('save', async function () {
   }
 });
 
-// ── Static Methods ────────────────────────────────────────────────────────────
+// ── Statics ───────────────────────────────────────────────────────────────────
 
-/**
- * searchAndAllocate — core fulfillment logic.
- * Finds nearest banks with matching stock, reserves units atomically.
- *
- * Usage:
- *   const result = await BloodRequest.searchAndAllocate(requestId);
- *   // Returns { fulfilledUnits, stillNeeded, allocations }
- */
 bloodRequestSchema.statics.searchAndAllocate = async function (requestId) {
   const BloodInventory = mongoose.model('BloodInventory');
+
   const request = await this.findById(requestId)
-    .populate('hospital', 'location address')
-    .lean();
+    .populate('hospital', 'location address');
 
   if (!request) throw new Error('BloodRequest not found');
   if (!['raised', 'searching', 'partially_matched'].includes(request.status)) {
@@ -697,13 +492,12 @@ bloodRequestSchema.statics.searchAndAllocate = async function (requestId) {
     ?? request.deliveryLocation?.coordinates
     ?? [80.648, 16.506];
 
-  // Find nearest banks with available stock
   const candidates = await BloodInventory.findAvailableNearby({
-    bloodGroup:          request.bloodGroup,
-    component:           request.component,
-    unitsNeeded:         1,  // find any with at least 1 unit
+    bloodGroup:        request.bloodGroup,
+    component:         request.component,
+    unitsNeeded:       1,
     lng, lat,
-    maxDistanceMeters:   request.searchRadiusKm * 1000,
+    maxDistanceMeters: request.searchRadiusKm * 1000,
   });
 
   let totalAllocated = 0;
@@ -716,32 +510,33 @@ bloodRequestSchema.statics.searchAndAllocate = async function (requestId) {
     const reserved = await BloodInventory.reserveUnits(inv._id, requestId, unitsToReserve);
     if (!reserved) continue;
 
-    // Collect actual bag numbers that were reserved
+    const bankRef  = inv.bloodBank?._id ?? inv.bloodBank;
+    const bankName = inv.bloodBank?.name ?? '';
+
     const bagNums = reserved.units
       .filter(u => u.status === 'reserved' && String(u.reservedFor) === String(requestId))
       .map(u => u.bagNumber);
 
     newAllocations.push({
-      bloodBank:    inv.bloodBank._id,
-      bloodBankName: inv.bloodBank.name,
-      inventory:    inv._id,
-      unitsAllocated: unitsToReserve,
-      bagNumbers:   bagNums,
-      processingFeePerUnit: inv.processingFeePerUnit,
-      crossMatchRequired: request.crossMatchRequired,
-      status: 'reserved',
+      bloodBank:            bankRef,
+      bloodBankName:        bankName,
+      inventory:            inv._id,
+      unitsAllocated:       unitsToReserve,
+      bagNumbers:           bagNums,
+      processingFeePerUnit: inv.processingFeePerUnit ?? 0,
+      crossMatchRequired:   request.crossMatchRequired,
+      status:               'reserved',
     });
 
     totalAllocated += unitsToReserve;
   }
 
-  // Update request
   const updated = await this.findByIdAndUpdate(
     requestId,
     {
-      $push:  { allocations: { $each: newAllocations } },
-      $inc:   { fulfilledUnits: totalAllocated },
-      $set:   { lastSearchAt: new Date() },
+      $push: { allocations: { $each: newAllocations } },
+      $inc:  { fulfilledUnits: totalAllocated },
+      $set:  { lastSearchAt: new Date() },
     },
     { new: true }
   );
@@ -759,7 +554,6 @@ bloodRequestSchema.index({ bloodGroup: 1, component: 1, status: 1 });
 bloodRequestSchema.index({ hospital: 1, status: 1 });
 bloodRequestSchema.index({ hospital: 1, createdAt: -1 });
 bloodRequestSchema.index({ requestedBy: 1, status: 1 });
-bloodRequestSchema.index({ booking: 1 }, { sparse: true });
 bloodRequestSchema.index({ urgency: 1, status: 1 });
 bloodRequestSchema.index({ requiredBy: 1, status: 1 });
 bloodRequestSchema.index({ slaBreached: 1 });
@@ -768,6 +562,7 @@ bloodRequestSchema.index({ 'allocations.bloodBank': 1 });
 bloodRequestSchema.index({ 'allocations.ride': 1 }, { sparse: true });
 bloodRequestSchema.index({ raisedAt: -1 });
 bloodRequestSchema.index({ deliveryLocation: '2dsphere' }, { sparse: true });
+bloodRequestSchema.index({ prescriptionVerified: 1 }, { sparse: true });
 
 const BloodRequest = mongoose.model('BloodRequest', bloodRequestSchema);
 export default BloodRequest;

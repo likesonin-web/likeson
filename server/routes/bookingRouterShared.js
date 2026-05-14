@@ -59,7 +59,7 @@ export const razorpay = new Razorpay({
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const DEFAULT_KM_RATE = 12; // ₹12/km fallback
+export const DEFAULT_KM_RATE = 21; // ₹21/km fallback
 
 export const RIDE_STATUSES_ACTIVE = [
   'driver_assigned', 'driver_accepted', 'driver_en_route',
