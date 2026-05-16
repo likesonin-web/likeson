@@ -57,12 +57,12 @@ function MiniStat({ label, value, icon: Icon, color, sub }) {
         <Icon size={18} style={{ color }} />
       </div>
       <div className="min-w-0">
-        <p className="text-xs font-semibold truncate"
+        <p className="text-[10px] font-semibold truncate"
           style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>{label}</p>
         <p className="text-lg font-black font-montserrat leading-tight" style={{ color: 'var(--base-content)' }}>
           {value}
         </p>
-        {sub && <p className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>{sub}</p>}
+        {sub && <p className="text-[10px]" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>{sub}</p>}
       </div>
     </div>
   );
@@ -77,12 +77,12 @@ function VerificationRow({ label, ok, action }) {
         {ok
           ? <CheckCircle2 size={16} style={{ color: 'var(--success)' }} />
           : <AlertCircle  size={16} style={{ color: 'var(--warning)' }} />}
-        <span className="text-sm font-medium" style={{ color: 'var(--base-content)' }}>{label}</span>
+        <span className="text-xs font-medium" style={{ color: 'var(--base-content)' }}>{label}</span>
       </div>
       {ok ? (
         <span className="badge badge-success text-[10px]">Verified</span>
       ) : (
-        <button onClick={action} className="text-xs font-bold flex items-center gap-1"
+        <button onClick={action} className="text-[10px] font-bold flex items-center gap-1"
           style={{ color: 'var(--primary)' }}>
           Verify <ChevronRight size={11} />
         </button>
@@ -123,7 +123,7 @@ function OverviewTab({ user, settings, wallet, referral, loaders, onNavigate }) 
               </h3>
               {user?.isEmailVerified && <BadgeCheck size={16} style={{ color: 'var(--success)' }} />}
             </div>
-            <p className="text-sm truncate" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
+            <p className="text-xs truncate" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
               {user?.email}
             </p>
             <div className="flex items-center gap-2 mt-2 flex-wrap">
@@ -169,7 +169,7 @@ function OverviewTab({ user, settings, wallet, referral, loaders, onNavigate }) 
             action={() => onNavigate('security')} />
           <div className="mt-4 pt-3 border-t" style={{ borderColor: 'var(--base-300)' }}>
             <button onClick={() => onNavigate('security')}
-              className="text-xs font-bold flex items-center gap-1"
+              className="text-[10px] font-bold flex items-center gap-1"
               style={{ color: 'var(--primary)' }}>
               Manage Security <ChevronRight size={11} />
             </button>
@@ -183,14 +183,14 @@ function OverviewTab({ user, settings, wallet, referral, loaders, onNavigate }) 
               Recent Transactions
             </h4>
             <button onClick={() => onNavigate('wallet')}
-              className="text-xs font-bold flex items-center gap-1" style={{ color: 'var(--primary)' }}>
+              className="text-[10px] font-bold flex items-center gap-1" style={{ color: 'var(--primary)' }}>
               View all <ChevronRight size={11} />
             </button>
           </div>
           {recentTxns.length === 0 ? (
             <div className="text-center py-6">
               <Wallet size={28} className="mx-auto opacity-20 mb-2" style={{ color: 'var(--base-content)' }} />
-              <p className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
+              <p className="text-[10px]" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
                 No transactions yet
               </p>
             </div>
@@ -199,14 +199,14 @@ function OverviewTab({ user, settings, wallet, referral, loaders, onNavigate }) 
               {recentTxns.map((t, i) => (
                 <div key={t.transactionId ?? i} className="flex items-center justify-between py-1.5">
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-semibold truncate" style={{ color: 'var(--base-content)' }}>
+                    <p className="text-[10px] font-semibold truncate" style={{ color: 'var(--base-content)' }}>
                       {t.description ?? t.purpose?.replace(/_/g, ' ')}
                     </p>
                     <p className="text-[10px]" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
                       {t.timestamp ? new Date(t.timestamp).toLocaleDateString('en-IN') : '—'}
                     </p>
                   </div>
-                  <span className={`text-sm font-black ${t.type === 'Credit' ? '' : ''}`}
+                  <span className={`text-xs font-black ${t.type === 'Credit' ? '' : ''}`}
                     style={{ color: t.type === 'Credit' ? 'var(--success)' : 'var(--error)' }}>
                     {t.type === 'Credit' ? '+' : '−'}₹{t.amount?.toFixed(2)}
                   </span>
@@ -239,7 +239,7 @@ function OverviewTab({ user, settings, wallet, referral, loaders, onNavigate }) 
                 style={{ background: `color-mix(in srgb, ${color}, transparent 82%)` }}>
                 <Icon size={15} style={{ color }} />
               </div>
-              <span className="text-sm font-semibold" style={{ color: 'var(--base-content)' }}>{label}</span>
+              <span className="text-xs font-semibold" style={{ color: 'var(--base-content)' }}>{label}</span>
             </button>
           ))}
         </div>
@@ -279,11 +279,11 @@ function WalletTab({ user, wallet, loaders, onRedeemNav }) {
             <div className="glass-card p-5">
               <div className="flex items-center gap-2 mb-2">
                 <s.icon size={15} style={{ color: s.color }} />
-                <p className="text-xs font-semibold"
+                <p className="text-[10px] font-semibold"
                   style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>{s.label}</p>
               </div>
               <p className="text-3xl font-black font-montserrat" style={{ color: s.color }}>{s.value}</p>
-              {s.sub && <p className="text-xs mt-1" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>{s.sub}</p>}
+              {s.sub && <p className="text-[10px] mt-1" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>{s.sub}</p>}
             </div>
           </motion.div>
         ))}
@@ -296,11 +296,11 @@ function WalletTab({ user, wallet, loaders, onRedeemNav }) {
           style={{ background: 'var(--bg-gradient-primary)' }}>
           <div>
             <p className="font-black text-white text-lg font-montserrat">Redeem your coins!</p>
-            <p className="text-white/80 text-sm">
+            <p className="text-white/80 text-xs">
               {user.coins.toLocaleString()} coins = ₹{(user.coins / 100).toFixed(2)} wallet credit
             </p>
           </div>
-          <button className="btn-secondary bg-white border-white px-5 py-2.5 text-sm"
+          <button className="btn-secondary bg-white border-white px-5 py-2.5 text-xs"
             style={{ color: 'var(--primary)', borderColor: 'white', background: 'white' }}>
             Redeem Now
           </button>
@@ -310,7 +310,7 @@ function WalletTab({ user, wallet, loaders, onRedeemNav }) {
       {/* Credit history chart */}
       {chartData.length > 0 && (
         <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={4} className="glass-card p-5">
-          <p className="font-black text-sm font-montserrat mb-4" style={{ color: 'var(--base-content)' }}>
+          <p className="font-black text-xs font-montserrat mb-4" style={{ color: 'var(--base-content)' }}>
             Credit History
           </p>
           <ResponsiveContainer width="100%" height={160}>
@@ -339,7 +339,7 @@ function WalletTab({ user, wallet, loaders, onRedeemNav }) {
         {txns.length === 0 ? (
           <div className="text-center py-10">
             <Wallet size={36} className="mx-auto opacity-20 mb-3" style={{ color: 'var(--base-content)' }} />
-            <p className="text-sm" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
+            <p className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
               No transactions yet
             </p>
           </div>
@@ -356,14 +356,14 @@ function WalletTab({ user, wallet, loaders, onRedeemNav }) {
                     transform: t.type === 'Debit' ? 'scaleY(-1)' : 'none' }} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-semibold truncate" style={{ color: 'var(--base-content)' }}>
+                  <p className="text-[10px] font-semibold truncate" style={{ color: 'var(--base-content)' }}>
                     {t.description ?? t.purpose?.replace(/_/g, ' ')}
                   </p>
                   <p className="text-[10px]" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
                     {t.timestamp ? new Date(t.timestamp).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
                   </p>
                 </div>
-                <span className="text-sm font-black flex-shrink-0"
+                <span className="text-xs font-black flex-shrink-0"
                   style={{ color: t.type === 'Credit' ? 'var(--success)' : 'var(--error)' }}>
                   {t.type === 'Credit' ? '+' : '−'}₹{t.amount?.toFixed(2)}
                 </span>
@@ -396,7 +396,7 @@ function ReferralTab({ user, referral }) {
       {/* Code card */}
       <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={1}
         className="glass-card p-6 space-y-4">
-        <p className="text-sm font-semibold" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
+        <p className="text-xs font-semibold" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
           Your unique referral code
         </p>
         <div className="flex items-center gap-3">
@@ -405,12 +405,12 @@ function ReferralTab({ user, referral }) {
             {referral?.referralCode ?? '—'}
           </div>
           <button onClick={copy}
-            className={`btn-primary-cta px-5 py-4 text-sm flex items-center gap-2 ${copied ? 'opacity-80' : ''}`}>
+            className={`btn-primary-cta px-5 py-4 text-xs flex items-center gap-2 ${copied ? 'opacity-80' : ''}`}>
             {copied ? <CheckCircle2 size={16} /> : <Gift size={16} />}
             {copied ? 'Copied!' : 'Copy'}
           </button>
         </div>
-        <p className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
+        <p className="text-[10px]" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
           Share this code. You earn <strong>1000 coins (₹10)</strong> for each person who signs up with it.
           They get <strong>500 coins (₹5)</strong> free.
         </p>
@@ -427,7 +427,7 @@ function ReferralTab({ user, referral }) {
           <motion.div key={label} variants={fadeUp} initial="hidden" animate="visible" custom={i + 2}
             className="glass-card p-4 text-center">
             <p className="text-2xl font-black font-montserrat" style={{ color }}>{value}</p>
-            <p className="text-xs font-semibold mt-1"
+            <p className="text-[10px] font-semibold mt-1"
               style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>{label}</p>
           </motion.div>
         ))}
@@ -441,7 +441,7 @@ function ReferralTab({ user, referral }) {
         {(referral?.referralHistory ?? []).length === 0 ? (
           <div className="text-center py-8">
             <Gift size={32} className="mx-auto opacity-20 mb-2" style={{ color: 'var(--base-content)' }} />
-            <p className="text-sm" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
+            <p className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
               No referrals yet. Share your code to start earning!
             </p>
           </div>
@@ -451,14 +451,14 @@ function ReferralTab({ user, referral }) {
               <div key={h._id ?? i} className="flex items-center justify-between p-3 rounded-xl"
                 style={{ background: 'var(--base-200)' }}>
                 <div>
-                  <p className="text-sm font-semibold" style={{ color: 'var(--base-content)' }}>
+                  <p className="text-xs font-semibold" style={{ color: 'var(--base-content)' }}>
                     {h.referredUser?.name ?? 'New User'}
                   </p>
-                  <p className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
+                  <p className="text-[10px]" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
                     {h.createdAt ? new Date(h.createdAt).toLocaleDateString('en-IN') : '—'}
                   </p>
                 </div>
-                <span className="text-sm font-black" style={{ color: 'var(--success)' }}>
+                <span className="text-xs font-black" style={{ color: 'var(--success)' }}>
                   +{h.coinsAwarded} coins
                 </span>
               </div>
@@ -515,15 +515,15 @@ function LegalTab({ settings, loaders, dispatch, user }) {
                 <FileText size={16} style={{ color: accepted ? 'var(--success)' : 'var(--warning)' }} />
               </div>
               <div>
-                <p className="text-sm font-semibold" style={{ color: 'var(--base-content)' }}>{label}</p>
-                <p className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
+                <p className="text-xs font-semibold" style={{ color: 'var(--base-content)' }}>{label}</p>
+                <p className="text-[10px]" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
                   {accepted ? `Accepted ${fmt(accepted)}` : 'Not yet accepted'}
                 </p>
               </div>
             </div>
             {!accepted ? (
               <button onClick={() => handleAccept(acceptType)} disabled={accepting === acceptType}
-                className="btn-primary-cta px-4 py-2 text-xs flex items-center gap-1.5">
+                className="btn-primary-cta px-4 py-2 text-[10px] flex items-center gap-1.5">
                 {accepting === acceptType ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
                 Accept
               </button>
@@ -542,12 +542,12 @@ function LegalTab({ settings, loaders, dispatch, user }) {
           <Power size={16} style={{ color: 'var(--error)' }} />
           <h4 className="font-black text-base font-montserrat" style={{ color: 'var(--error)' }}>Deactivate Account</h4>
         </div>
-        <p className="text-sm" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 30%)' }}>
+        <p className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 30%)' }}>
           Temporarily deactivate your account. Your data is preserved and you can reactivate by contacting support.
         </p>
         {!showDeactivate ? (
           <button onClick={() => setShowDeactivate(true)}
-            className="btn-secondary border-error text-error px-4 py-2 text-xs flex items-center gap-2"
+            className="btn-secondary border-error text-error px-4 py-2 text-[10px] flex items-center gap-2"
             style={{ borderColor: 'var(--error)', color: 'var(--error)' }}>
             <Power size={13} /> Deactivate Account
           </button>
@@ -557,9 +557,9 @@ function LegalTab({ settings, loaders, dispatch, user }) {
               placeholder="Confirm your password" className="input-field w-full" />
             <div className="flex gap-3">
               <button onClick={() => { setShowDeactivate(false); setDeactivatePw(''); }}
-                className="btn-secondary flex-1 py-2 text-xs">Cancel</button>
+                className="btn-secondary flex-1 py-2 text-[10px]">Cancel</button>
               <button onClick={handleDeactivate} disabled={!deactivatePw || loaders.deactivate}
-                className="flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-2 disabled:opacity-40"
+                className="flex-1 py-2 text-[10px] font-bold rounded-lg flex items-center justify-center gap-2 disabled:opacity-40"
                 style={{ background: 'var(--error)', color: 'var(--error-content)' }}>
                 {loaders.deactivate ? <Loader2 size={13} className="animate-spin" /> : <Power size={13} />}
                 Confirm Deactivate
@@ -668,7 +668,7 @@ export default function SettingsManagement() {
               <h1 className="font-montserrat font-black text-3xl md:text-4xl" style={{ color: 'var(--base-content)' }}>
                 Settings
               </h1>
-              <p className="text-sm mt-1" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
+              <p className="text-xs mt-1" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
                 Manage your account, security, and preferences
               </p>
             </div>
@@ -695,14 +695,14 @@ export default function SettingsManagement() {
                 style={{ border: '2px solid var(--primary)' }}>
                 {user?.avatar
                   ? <img src={user.avatar} alt="" className="w-full h-full object-cover" />
-                  : <div className="w-full h-full flex items-center justify-center font-black text-sm"
+                  : <div className="w-full h-full flex items-center justify-center font-black text-xs"
                       style={{ background: 'var(--bg-gradient-primary)', color: 'var(--primary-content)' }}>
                       {user?.name?.[0]?.toUpperCase()}
                     </div>}
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-bold truncate" style={{ color: 'var(--base-content)' }}>{user?.name}</p>
-                <p className="text-xs capitalize" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
+                <p className="text-xs font-bold truncate" style={{ color: 'var(--base-content)' }}>{user?.name}</p>
+                <p className="text-[10px] capitalize" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
                   {user?.role}
                 </p>
               </div>
@@ -712,7 +712,7 @@ export default function SettingsManagement() {
               const active = tab.id === activeTab;
               return (
                 <button key={tab.id} onClick={() => navigate(tab.id)}
-                  className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold w-full text-left transition-all duration-200"
+                  className="flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-semibold w-full text-left transition-all duration-200"
                   style={{
                     background: active ? 'color-mix(in srgb, var(--primary), transparent 88%)' : 'transparent',
                     color:      active ? 'var(--primary)' : 'color-mix(in srgb, var(--base-content), transparent 30%)',
@@ -728,7 +728,7 @@ export default function SettingsManagement() {
             <div className="mt-4 pt-4 border-t" style={{ borderColor: 'var(--base-300)' }}>
               <button
                 onClick={() => { dispatch(logout()); router.push('/'); }}
-                className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold w-full transition-all duration-200 text-left"
+                className="flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-semibold w-full transition-all duration-200 text-left"
                 style={{ color: 'var(--error)' }}
                 onMouseEnter={e => e.currentTarget.style.background = 'color-mix(in srgb, var(--error), transparent 90%)'}
                 onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
@@ -765,14 +765,14 @@ export default function SettingsManagement() {
                       style={{ border: '2px solid var(--primary)' }}>
                       {user?.avatar
                         ? <img src={user.avatar} alt="" className="w-full h-full object-cover" />
-                        : <div className="w-full h-full flex items-center justify-center font-black text-xs"
+                        : <div className="w-full h-full flex items-center justify-center font-black text-[10px]"
                             style={{ background: 'var(--bg-gradient-primary)', color: 'var(--primary-content)' }}>
                             {user?.name?.[0]?.toUpperCase()}
                           </div>}
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-bold truncate" style={{ color: 'var(--base-content)' }}>{user?.name}</p>
-                      <p className="text-xs capitalize" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
+                      <p className="text-xs font-bold truncate" style={{ color: 'var(--base-content)' }}>{user?.name}</p>
+                      <p className="text-[10px] capitalize" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
                         {user?.role}
                       </p>
                     </div>
@@ -782,7 +782,7 @@ export default function SettingsManagement() {
                     const active = tab.id === activeTab;
                     return (
                       <button key={tab.id} onClick={() => navigate(tab.id)}
-                        className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold w-full text-left transition-all"
+                        className="flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-semibold w-full text-left transition-all"
                         style={{
                           background: active ? 'color-mix(in srgb, var(--primary), transparent 88%)' : 'transparent',
                           color:      active ? 'var(--primary)' : 'color-mix(in srgb, var(--base-content), transparent 30%)',
@@ -796,7 +796,7 @@ export default function SettingsManagement() {
                   <div className="mt-auto pt-4 border-t" style={{ borderColor: 'var(--base-300)' }}>
                     <button
                       onClick={() => { dispatch(logout()); router.push('/'); }}
-                      className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold w-full text-left"
+                      className="flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-semibold w-full text-left"
                       style={{ color: 'var(--error)' }}>
                       <LogOut size={15} /> Sign Out
                     </button>
@@ -811,7 +811,7 @@ export default function SettingsManagement() {
 
             {/* Breadcrumb */}
             <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={1.5}
-              className="flex items-center gap-2 mb-5 text-xs font-semibold"
+              className="flex items-center gap-2 mb-5 text-[10px] font-semibold"
               style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
               <Settings size={12} />
               <span>Settings</span>

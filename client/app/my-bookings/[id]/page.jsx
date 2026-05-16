@@ -3,13 +3,18 @@
 /**
  * BookingDetailsPage.jsx — Likeson.in
  *
- * FIXES vs previous version:
- *  - dispatch(fetchMyBookingById(id)) → dispatch(fetchMyBookingById({ bookingId: id }))
- *    Thunk expects { bookingId }, raw string caused bookingId=undefined → "Cast to ObjectId failed"
- *  - Guard added: only dispatch when id is truthy (avoids undefined API call on mount)
- *  - handleRefresh also fixed: same { bookingId: id } shape
- *  - dispatch(cancelMyBooking(...)) already correct in slice (passes { bookingId, reason })
- *  - dispatch(rateMyBooking(...)) already correct in slice
+ * FIXES:
+ *  1. useJsApiLoader moved to page level — can only be called once per app with
+ *     the same options. RouteMap now receives `isLoaded` as a prop.
+ *  2. MAPS_LIBRARIES defined as a module-level constant (outside any component)
+ *     so the array reference never changes between renders, preventing the
+ *     "Loader must not be called again with different options" crash.
+ *  3. RouteMap useEffect dependencies stabilised — uses primitive lat/lng
+ *     values instead of object references that recreate each render.
+ *  4. onMapLoad useCallback deps use primitive coords, not object refs.
+ *  5. dispatch(fetchMyBookingById({ bookingId: id })) — thunk expects object.
+ *  6. Guard: only dispatch when id is truthy.
+ *  7. handleRefresh uses same { bookingId: id } shape.
  */
 
 import {
@@ -88,9 +93,14 @@ import {
   selectRateBookingLoading,
 } from '@/store/slices/bookingSlice';
 
-// ─── Google Maps loader config ────────────────────────────────────────────────
-
+// ─── Google Maps library list ─────────────────────────────────────────────────
+// CRITICAL: must be a stable module-level constant — never defined inside a
+// component or hook body. If the array reference changes between renders the
+// @react-google-maps/api loader throws:
+//   "Loader must not be called again with different options"
 const MAPS_LIBRARIES = ['geometry', 'places'];
+
+// ─── Map Styles ───────────────────────────────────────────────────────────────
 
 const MAP_STYLES_CLEAN = [
   { elementType: 'geometry', stylers: [{ color: '#f8f9ff' }] },
@@ -192,8 +202,8 @@ const stagger = {
 
 // ─── Skeleton ─────────────────────────────────────────────────────────────────
 
-function Skeleton({ className = '' }) {
-  return <div className={`skeleton ${className}`} aria-hidden="true" />;
+function Skeleton({ className = '', style }) {
+  return <div className={`skeleton ${className}`} style={style} aria-hidden="true" />;
 }
 
 function BookingDetailsSkeleton() {
@@ -287,13 +297,11 @@ const SectionCard = memo(function SectionCard({
 });
 
 // ─── Route Map ────────────────────────────────────────────────────────────────
+// FIX: `isLoaded` is now received as a prop from the page-level useJsApiLoader
+// call. This component no longer calls useJsApiLoader itself, eliminating the
+// "Loader must not be called again with different options" error.
 
-const RouteMap = memo(function RouteMap({ patientLocation, destinationLocation }) {
-  const { isLoaded } = useJsApiLoader({
-    googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY|| '',
-    libraries: MAPS_LIBRARIES,
-  });
-
+const RouteMap = memo(function RouteMap({ patientLocation, destinationLocation, isLoaded }) {
   const [directions, setDirections] = useState(null);
   const [mapReady,   setMapReady]   = useState(false);
   const mapRef = useRef(null);
@@ -301,33 +309,43 @@ const RouteMap = memo(function RouteMap({ patientLocation, destinationLocation }
   const pickupCoords  = patientLocation?.coordinates;
   const dropoffCoords = destinationLocation?.coordinates;
 
-  const pickupPos  = pickupCoords  ? { lat: pickupCoords[1],  lng: pickupCoords[0]  } : null;
-  const dropoffPos = dropoffCoords ? { lat: dropoffCoords[1], lng: dropoffCoords[0] } : null;
+  // Derive stable primitive values for use in dependency arrays.
+  // Object refs (pickupPos, dropoffPos) recreate on every render, so using
+  // them directly in useEffect/useCallback deps causes infinite loops.
+  const pickupLat  = pickupCoords?.[1]  ?? null;
+  const pickupLng  = pickupCoords?.[0]  ?? null;
+  const dropoffLat = dropoffCoords?.[1] ?? null;
+  const dropoffLng = dropoffCoords?.[0] ?? null;
+
+  const pickupPos  = pickupLat  != null ? { lat: pickupLat,  lng: pickupLng  } : null;
+  const dropoffPos = dropoffLat != null ? { lat: dropoffLat, lng: dropoffLng } : null;
 
   const center = pickupPos || dropoffPos || { lat: 16.5062, lng: 80.6480 };
 
+  // FIX: useCallback deps use primitive lat/lng values, not object refs.
   const onMapLoad = useCallback((map) => {
     mapRef.current = map;
     setMapReady(true);
-    if (pickupPos && dropoffPos && window.google) {
+    if (pickupLat != null && dropoffLat != null && window.google) {
       const bounds = new window.google.maps.LatLngBounds();
-      bounds.extend(pickupPos);
-      bounds.extend(dropoffPos);
+      bounds.extend({ lat: pickupLat,  lng: pickupLng  });
+      bounds.extend({ lat: dropoffLat, lng: dropoffLng });
       map.fitBounds(bounds, { top: 48, right: 32, bottom: 48, left: 32 });
     }
-  }, [pickupPos, dropoffPos]);
+  }, [pickupLat, pickupLng, dropoffLat, dropoffLng]);
 
+  // FIX: useEffect deps use primitive values — no spurious re-runs.
   useEffect(() => {
-    if (!isLoaded || !pickupPos || !dropoffPos) return;
+    if (!isLoaded || pickupLat == null || dropoffLat == null) return;
     const svc = new window.google.maps.DirectionsService();
     svc.route({
-      origin:      pickupPos,
-      destination: dropoffPos,
+      origin:      { lat: pickupLat,  lng: pickupLng  },
+      destination: { lat: dropoffLat, lng: dropoffLng },
       travelMode:  window.google.maps.TravelMode.DRIVING,
     }, (result, status) => {
       if (status === 'OK') setDirections(result);
     });
-  }, [isLoaded, pickupPos?.lat, dropoffPos?.lat]);
+  }, [isLoaded, pickupLat, pickupLng, dropoffLat, dropoffLng]);
 
   if (!pickupCoords && !dropoffCoords) return null;
   if (!isLoaded) return <Skeleton className="w-full h-52 rounded-none" />;
@@ -556,7 +574,6 @@ const CancelModal = memo(function CancelModal({ booking, onClose }) {
         transition={{ type: 'spring', stiffness: 300, damping: 28 }}
         className="card w-full max-w-md overflow-hidden"
       >
-        {/* SUCCESS — cancelState has { status, refundAmount, refundPercent } from slice */}
         {cancelState?.status === 'cancelled' ? (
           <div className="flex flex-col items-center text-center px-6 py-10">
             <motion.div
@@ -655,10 +672,10 @@ const RATING_FIELDS_BY_TYPE = {
 };
 
 const RATING_META = {
-  overall:       { label: 'Overall Experience', note: 'How satisfied were you overall?',                    stateKey: 'overallRating',      commentKey: 'overallComment',      icon: Star       },
+  overall:       { label: 'Overall Experience', note: 'How satisfied were you overall?',                    stateKey: 'overallRating',       commentKey: 'overallComment',      icon: Star        },
   doctor:        { label: 'Doctor / Specialist', note: 'Quality of consultation and care',                  stateKey: 'doctorRating',        commentKey: 'doctorComment',        icon: Stethoscope },
-  driver:        { label: 'Driver',              note: 'Punctuality, driving and vehicle condition',        stateKey: 'driverRating',        commentKey: 'driverComment',        icon: Car        },
-  careAssistant: { label: 'Care Assistant',      note: 'Attentiveness and professionalism',                 stateKey: 'careAssistantRating', commentKey: 'careAssistantComment', icon: HeartPulse },
+  driver:        { label: 'Driver',              note: 'Punctuality, driving and vehicle condition',        stateKey: 'driverRating',        commentKey: 'driverComment',        icon: Car         },
+  careAssistant: { label: 'Care Assistant',      note: 'Attentiveness and professionalism',                 stateKey: 'careAssistantRating', commentKey: 'careAssistantComment', icon: HeartPulse  },
   lab:           { label: 'Lab / Diagnostics',   note: 'Sample collection, report accuracy and turnaround', stateKey: 'labRating',           commentKey: 'labComment',           icon: FlaskConical},
 };
 
@@ -670,11 +687,11 @@ const RatingModal = memo(function RatingModal({ booking, onClose }) {
   const fields = RATING_FIELDS_BY_TYPE[booking.bookingType] || ['overall'];
 
   const [form, setForm] = useState({
-    overallRating: 0,      overallComment: '',
-    doctorRating: 0,       doctorComment: '',
-    driverRating: 0,       driverComment: '',
+    overallRating: 0,       overallComment: '',
+    doctorRating: 0,        doctorComment: '',
+    driverRating: 0,        driverComment: '',
     careAssistantRating: 0, careAssistantComment: '',
-    labRating: 0,          labComment: '',
+    labRating: 0,           labComment: '',
   });
 
   const set = useCallback((key, val) => setForm(p => ({ ...p, [key]: val })), []);
@@ -684,8 +701,6 @@ const RatingModal = memo(function RatingModal({ booking, onClose }) {
     dispatch(rateMyBooking({ bookingId: booking._id, ...form }));
   }, [dispatch, booking._id, form]);
 
-  // rateMyBooking thunk returns { bookingId } on success — no status field.
-  // Use presence of rateState with bookingId matching as success signal.
   const isSuccess = rateState?.bookingId === booking._id;
 
   useEffect(() => {
@@ -868,9 +883,7 @@ export default function BookingDetailsPage() {
   const router   = useRouter();
   const params   = useParams();
 
-  // ── FIX: resolve id safely — Next.js App Router useParams() key
-  // matches the dynamic segment folder name exactly.
-  // Try both common names; your folder must be [bookingId] OR [id].
+  // FIX: resolve id safely — matches the dynamic segment folder name exactly.
   const id = params?.bookingId ?? params?.id ?? null;
 
   const booking = useSelector(selectActiveBooking);
@@ -881,15 +894,23 @@ export default function BookingDetailsPage() {
   const [showRating, setShowRating] = useState(false);
   const [copied,     setCopied]     = useState(false);
 
+  // ── FIX: useJsApiLoader lives here at page level — called exactly once,
+  // always with the same MAPS_LIBRARIES reference. isLoaded is passed down
+  // as a prop to RouteMap so it never calls the loader itself.
+  const { isLoaded: mapsLoaded } = useJsApiLoader({
+    googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || '',
+    libraries: MAPS_LIBRARIES,   // stable module-level constant — never changes
+  });
+
+  // FIX: guard — never dispatch when id is falsy
   useEffect(() => {
-    // ── FIX: guard — never dispatch when id is falsy (avoids "undefined" ObjectId cast error)
     if (!id) return;
-    // ── FIX: pass { bookingId } object — thunk destructures { bookingId }, not a raw string
+    // FIX: pass { bookingId } object — thunk destructures { bookingId }
     dispatch(fetchMyBookingById({ bookingId: id }));
     return () => { dispatch(clearSelectedBooking()); };
   }, [id, dispatch]);
 
-  // ── FIX: same fix for refresh
+  // FIX: same { bookingId } shape for refresh
   const handleRefresh = useCallback(() => {
     if (!id) return;
     dispatch(fetchMyBookingById({ bookingId: id }));
@@ -1106,6 +1127,7 @@ export default function BookingDetailsPage() {
             {/* ════ Left Column ════ */}
             <div className="lg:col-span-2 space-y-5">
 
+              {/* FIX: isLoaded passed as prop — RouteMap no longer calls useJsApiLoader */}
               {hasMap && (
                 <motion.div variants={fadeUp} className="card overflow-hidden">
                   <div className="flex items-center justify-between px-5 py-3 border-b border-base-300">
@@ -1118,6 +1140,7 @@ export default function BookingDetailsPage() {
                   <RouteMap
                     patientLocation={booking.patientLocation}
                     destinationLocation={booking.destinationLocation}
+                    isLoaded={mapsLoaded}
                   />
                 </motion.div>
               )}
@@ -1338,7 +1361,7 @@ export default function BookingDetailsPage() {
                                 {(ride.status ?? 'pending').replace(/_/g, ' ')}
                               </span>
                               {isLive && rId && (
-                                <Link href={`/rides/${booking._id}/${primaryRideId}/tracking`}className="btn btn-ghost btn-xs">
+                                <Link href={`/rides/${booking._id}/${primaryRideId}/tracking`} className="btn btn-ghost btn-xs">
                                   <Navigation2 size={11} />
                                 </Link>
                               )}
@@ -1392,13 +1415,13 @@ export default function BookingDetailsPage() {
                   delay={0.2}
                 >
                   <div className="p-3 rounded-xl bg-error/5 border border-error/20 my-1 space-y-0">
-                    <FieldRow label="Cancelled By"     note="Role that initiated cancellation"        value={booking.cancellation.cancelledBy}                                                                                              />
-                    <FieldRow label="Reason"           note="Reason at time of cancellation"          value={booking.cancellation.reason}                                                                                                   />
-                    <FieldRow label="Cancelled At"     note="When cancellation was processed"         value={`${fmtDate(booking.cancellation.cancelledAt)} ${fmtTime(booking.cancellation.cancelledAt)}`}              icon={Clock}          />
-                    <FieldRow label="Refund Eligible"  note="Under our cancellation policy"           value={booking.cancellation.refundEligible ? 'Yes' : 'No'}
+                    <FieldRow label="Cancelled By"      note="Role that initiated cancellation"    value={booking.cancellation.cancelledBy}                                                                                              />
+                    <FieldRow label="Reason"            note="Reason at time of cancellation"      value={booking.cancellation.reason}                                                                                                   />
+                    <FieldRow label="Cancelled At"      note="When cancellation was processed"     value={`${fmtDate(booking.cancellation.cancelledAt)} ${fmtTime(booking.cancellation.cancelledAt)}`}              icon={Clock}          />
+                    <FieldRow label="Refund Eligible"   note="Under our cancellation policy"       value={booking.cancellation.refundEligible ? 'Yes' : 'No'}
                               badge={booking.cancellation.refundEligible ? 'text-success bg-success/10' : 'text-error bg-error/10'}                                                                                                         />
                     {booking.cancellation.refundPercent > 0 && (
-                      <FieldRow label="Refund Percentage" note="Percentage to be refunded"            value={`${booking.cancellation.refundPercent}%`}                                                                highlight             />
+                      <FieldRow label="Refund Percentage" note="Percentage to be refunded"         value={`${booking.cancellation.refundPercent}%`}                                                                highlight             />
                     )}
                   </div>
                 </SectionCard>
@@ -1508,7 +1531,7 @@ export default function BookingDetailsPage() {
                   )}
                   <FieldRow label="Created On"    note="When booking was created"     value={`${fmtDate(booking.createdAt)}, ${fmtTime(booking.createdAt)}`} icon={Calendar} />
                   {booking.completedAt && (
-                    <FieldRow label="Completed On" note="When service was delivered"   value={`${fmtDate(booking.completedAt)}, ${fmtTime(booking.completedAt)}`} icon={CheckCircle2} />
+                    <FieldRow label="Completed On" note="When service was delivered"  value={`${fmtDate(booking.completedAt)}, ${fmtTime(booking.completedAt)}`} icon={CheckCircle2} />
                   )}
                   {booking.slotId && (
                     <FieldRow label="Slot ID"     note="Doctor's slot reference"       value={String(booking.slotId)} mono />

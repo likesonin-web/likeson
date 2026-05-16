@@ -557,28 +557,49 @@ router.get('/hospital/:hospitalId/ops',
   }
 );
 
+// ── bookingRouter1.js — Update your route middleware logic ──
 router.get('/hospital/:hospitalId/valid-ops',
   protect, authorize('hospital', 'doctor', 'admin', 'superadmin'),
   cache(CACHE_TTL.ops, req => `GET:/hospital/${req.params.hospitalId}/valid-ops:${req.originalUrl}`),
   async (req, res) => {
     try {
       const { hospitalId } = req.params;
+      
+      // Explicit Guard Check: Stop string variations of undefined/null from crashing queries
+      if (!hospitalId || hospitalId === 'undefined' || hospitalId === 'null') {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'A valid 24-character hexadecimal Hospital ID path parameter is required.' 
+        });
+      }
+
       const { doctorId, patientId, page = 1, limit = 20 } = req.query;
-      const filter = { hospital: hospitalId, isFollowUp: false, followUpExpiry: { $gt: new Date() }, status: { $in: ['scheduled', 'completed'] } };
+      const filter = { 
+        hospital: hospitalId, 
+        isFollowUp: false, 
+        followUpExpiry: { $gt: new Date() }, 
+        status: { $in: ['scheduled', 'completed'] } 
+      };
+      
       if (doctorId)  filter.doctor  = doctorId;
       if (patientId) filter.patient = patientId;
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
       const [ops, total] = await Promise.all([
         OutPatientRecord.find(filter)
-          .populate('doctor',  'user specialization').populate('patient', 'name phone')
+          .populate('doctor',  'user specialization')
+          .populate('patient', 'name phone')
           .populate('booking', 'bookingCode bookingType fareBreakdown paymentStatus')
           .sort({ scheduledAt: -1 }).skip(skip).limit(parseInt(limit)).lean(),
         OutPatientRecord.countDocuments(filter),
       ]);
 
       const now      = new Date();
-      const enriched = ops.map(op => ({ ...op, daysRemaining: Math.ceil((new Date(op.followUpExpiry) - now) / (1000 * 60 * 60 * 24)) }));
+      const enriched = ops.map(op => ({ 
+        ...op, 
+        daysRemaining: Math.ceil((new Date(op.followUpExpiry) - now) / (1000 * 60 * 60 * 24)) 
+      }));
+      
       return res.json({ success: true, data: { ops: enriched, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) } });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });

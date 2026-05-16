@@ -38,6 +38,7 @@ import availabilityReducer from './slices/availabilitySlice';
 import rideRequestReducer from './slices/rideRequestSlice';
 import clinicalReducer from './slices/clinicalSlice';
 import bloodbankReducer from './slices/bloodbankSlice';
+import adminAnalysticsReducer from './slices/adminAnalyticsSlice';
 export const store = configureStore({
   reducer: {
     user: userReducer,
@@ -80,6 +81,7 @@ driver: driverReducer,
     rideRequest:rideRequestReducer,
     clinical: clinicalReducer,
     bloodBank: bloodbankReducer,
+    adminAnalytics:adminAnalysticsReducer,
   },
   devTools: process.env.NODE_ENV !== "production",
 });

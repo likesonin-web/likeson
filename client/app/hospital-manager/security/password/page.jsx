@@ -626,7 +626,7 @@ export default function SettingsSecurityPage() {
     >
       {/* Page header */}
       <div className="border-b border-[color:var(--base-300)] bg-[color:var(--base-100)]">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
+        <div className=" w-full mx-auto px-4 ">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-[color:var(--primary)] text-[color:var(--primary-content)] flex items-center justify-center">
               <Shield size={18} />
@@ -643,7 +643,7 @@ export default function SettingsSecurityPage() {
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+      <div className="w-full mx-auto px-4 p-4">
         <div className="flex flex-col lg:flex-row gap-6">
 
           {/* ── Sidebar Nav ────────────────────────────────────────── */}

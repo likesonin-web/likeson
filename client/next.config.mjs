@@ -4,14 +4,16 @@ const nextConfig = {
     remotePatterns: [
       {
         protocol: 'https',
-        hostname: '**', // The double asterisk acts as a wildcard for all HTTPS domains
+        hostname: '**', // Wildcard for all HTTPS domains
       },
       {
         protocol: 'http',
-        hostname: '**', // Optional: Include this if you also have insecure HTTP image sources
+        hostname: '**', // Wildcard for all HTTP domains
       },
     ],
   },
+  // Optional but highly recommended if preload warnings persist with webkit browsers:
+  // optimizeFonts: true, 
 };
 
 export default nextConfig;

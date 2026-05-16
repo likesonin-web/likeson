@@ -1,54 +1,48 @@
-import redisClient from "../config/redis.js";
+import redisClient from '../config/redis.js';
 
-/**
- * cache(ttlSeconds, keyFn?)
- *
- * Express middleware factory that caches JSON responses in Redis.
- *
- * @param {number}   ttlSeconds  – How long to keep the cached value (default 60 s).
- * @param {Function} keyFn       – Optional fn(req) → string to build a custom cache key.
- *                                 Defaults to `<METHOD>:<originalUrl>`.
- *
- * Usage:
- *   router.get("/hospitals",        cache(120), getAllHospitals);
- *   router.get("/hospitals/:id",    cache(60, req => `hospital:${req.params.id}`), getOne);
- *   router.get("/me",               cache(30, req => `user:${req.user._id}:profile`), getProfile);
- */
+const CACHE_VERSION = 'v1'; // bump on deploy to bust all cache
+
+const NON_CACHEABLE_PATTERNS = [
+  '/tracking', '/otp', '/payment', '/notification',
+  '/driver/location', '/live', '/verify', '/auth',
+];
+
+const MAX_PAYLOAD_BYTES = 512 * 1024; // 512 KB max — skip large payloads
+
 const cache = (ttlSeconds = 60, keyFn = null) => {
   return async (req, res, next) => {
-    // Skip caching for non-GET requests
-    if (req.method !== "GET") return next();
+    if (req.method !== 'GET') return next();
 
-    // Build cache key
-    const cacheKey = keyFn ? keyFn(req) : `${req.method}:${req.originalUrl}`;
+    // skip non-cacheable routes
+    const url = req.originalUrl;
+    if (NON_CACHEABLE_PATTERNS.some(p => url.includes(p))) return next();
+
+    const rawKey = keyFn ? keyFn(req) : `${req.method}:${url}`;
+    const cacheKey = `${CACHE_VERSION}:${rawKey}`;
 
     try {
       const cached = await redisClient.get(cacheKey);
-
       if (cached) {
-        const parsed = JSON.parse(cached);
-        res.setHeader("X-Cache", "HIT");
-        return res.status(200).json(parsed);
+        res.setHeader('X-Cache', 'HIT');
+        return res.status(200).json(JSON.parse(cached));
       }
     } catch (err) {
-      // Redis failure must never break the actual request
-      console.error("Cache READ error:", err.message);
+      console.error('[Cache READ]', err.message);
     }
 
-    // Intercept res.json so we can cache the outgoing payload
     const originalJson = res.json.bind(res);
-
     res.json = async (body) => {
-      // Only cache successful responses
       if (res.statusCode >= 200 && res.statusCode < 300) {
         try {
-          await redisClient.setEx(cacheKey, ttlSeconds, JSON.stringify(body));
+          const serialized = JSON.stringify(body);
+          if (Buffer.byteLength(serialized) <= MAX_PAYLOAD_BYTES) {
+            await redisClient.setEx(cacheKey, ttlSeconds, serialized);
+          }
         } catch (err) {
-          console.error("Cache WRITE error:", err.message);
+          console.error('[Cache WRITE]', err.message);
         }
       }
-
-      res.setHeader("X-Cache", "MISS");
+      res.setHeader('X-Cache', 'MISS');
       return originalJson(body);
     };
 

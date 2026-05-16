@@ -376,17 +376,15 @@ router.patch('/:id/ride/arrived',
       }
 
       // Email to customer
-      if (customer?.email) {
-        sendEmail({
-          email:   customer.email,
-          subject: `Ride OTP — #${booking.bookingCode}`,
-          html: otpTemplate({
-            title: 'Driver arrived! Share OTP to start your ride.',
-            body:  'Your driver is waiting at your pickup location.',
-            otpCode: otp,
-          }),
-        }).catch(e => console.error('[Arrived] OTP email:', e.message));
-      }
+     if (custUser?.email) {
+  const { sendOtpEmail } = await import('../services/emailQueueService.js');
+  sendOtpEmail(custUser.email, {
+    rideId:  String(ride._id),
+    otpCode,
+    title:   'Your driver has arrived!',
+    body:    'Share this OTP with your driver to start the ride.',
+  }).catch(e => console.error('[arrived] queue OTP email:', e.message));
+}
 
       // Push notification with OTP visible in-app
       await createNotification({

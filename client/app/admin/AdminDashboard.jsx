@@ -17,12 +17,7 @@ import {
   ADMIN_SEARCH_QUICK_AND_PAGE_LINKS,
   ADMIN_PROFILE_LINKS,
 } from "../../constants/admin";
-// ↑ FIX 1: Import now pulls ADMIN_PROFILE_LINKS from the data file (was a
-//           local PROFILE_LINKS constant that used old prop names: icon/href
-//           correctly, but referenced wrong hrefs like /admin/profile-settings/…
-//           and used <Zap> for Security which is semantically wrong).
-//   FIX 2: Import path corrected from "../../constants/admin" → adminLinks
-//           to match the actual output filename.
+ 
 
 import { useRouter, usePathname } from "next/navigation";
 import { logout } from "@/store/slices/userSlice";
@@ -52,7 +47,7 @@ const NavItem = memo(({ link, isActive }) => (
   <Link
     href={link.href}
     className={cn(
-      "flex items-center gap-3 px-6 py-3 text-[10px] font-bold uppercase tracking-wider transition-all",
+      "flex items-center gap-3 px-4 py-3 text-[10px] font-bold uppercase tracking-wider transition-all",
       isActive
         ? "text-warning translate-x-2 bg-warning/5"
         : "text-base-content/40 hover:text-warning hover:translate-x-1"
@@ -140,7 +135,7 @@ const SidebarSection = memo(({ section, isOpen, isSidebarOpen, onToggle, pathnam
       <button
         onClick={() => onToggle(section.title)}
         className={cn(
-          "w-full flex items-center justify-between p-3.5 rounded-md transition-all group",
+          "w-full flex items-center justify-between p-3 rounded-md transition-all group",
           isOpen || isParentActive
             ? "bg-warning/90 text-warning-content shadow-lg shadow-warning/20"
             : "text-base-content/50 hover:bg-base-300 hover:text-base-content"
@@ -173,7 +168,7 @@ const SidebarSection = memo(({ section, isOpen, isSidebarOpen, onToggle, pathnam
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden ml-6 mt-2 border-l border-warning/20 space-y-1"
+            className="overflow-hidden ml-3 mt-2  l border-warning/20 space-y-1"
           >
             {section.links.map((link, lIdx) => (
               <NavItem
@@ -297,7 +292,7 @@ const AdminDashboard = ({ children }) => {
   if (!mounted) return null;
 
   return (
-    <div className="min-h-screen bg-base-100 text-base-content font-poppins selection:bg-warning/30">
+    <div date-theme={"admin"} className="min-h-screen bg-base-100 text-base-content font-poppins selection:bg-warning/30">
 
       {/* ── Mobile Backdrop ──────────────────────────────────────────────── */}
       <AnimatePresence>
@@ -313,7 +308,7 @@ const AdminDashboard = ({ children }) => {
       {/* ── Sidebar ──────────────────────────────────────────────────────── */}
       <aside className={cn(
         "fixed left-0 top-0 z-50 h-screen bg-base-200 border-r border-base-300 transition-all duration-500 ease-in-out",
-        isSidebarOpen ? "w-72 translate-x-0" : "w-0 -translate-x-full lg:w-24 lg:translate-x-0"
+        isSidebarOpen ? "w-72 translate-x-0" : "w-0 -translate-x-full lg:w-4 lg:translate-x-0"
       )}>
         <div className="flex flex-col h-full overflow-hidden">
 
@@ -340,7 +335,7 @@ const AdminDashboard = ({ children }) => {
           </div>
 
           {/* Nav sections — FIX 7: flat array, no .sidebar key */}
-          <nav className="flex-1 overflow-y-auto px-4 py-6 space-y-2 custom-scrollbar">
+          <nav className="flex-1 overflow-y-auto px-4 py-6 space-y-2 w-full max-w-[300px] custom-scrollbar">
             {ADMIN_DASHBOARD_LINKS.map((section, idx) => (
               <SidebarSection
                 key={idx}
@@ -385,7 +380,7 @@ const AdminDashboard = ({ children }) => {
                     {item.icon} {item.name}
                   </button>
                   {item.links && (
-                    <div className="absolute left-0 top-full pt-4 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 translate-y-2 group-hover:translate-y-0">
+                    <div className="absolute left-0 top-full opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 translate-y-2 group-hover:translate-y-0">
                       <div className="w-64 bg-base-200 border border-base-300 p-2 rounded-md shadow-2xl">
                         {item.links.map((sub, si) => (
                           <Link
@@ -465,7 +460,7 @@ const AdminDashboard = ({ children }) => {
         </header>
 
         {/* ── Page Body ────────────────────────────────────────────────── */}
-        <section className="flex-1 w-full max-w-[1700px] mx-auto p-6 space-y-6">
+        <section className="flex-1 w-full max-w-[1700px] mx-auto p-2 space-y-6">
 
           {/* Quick-access shortcut cards
               FIX 15: Was reading shortcut.link / shortcut.icons / shortcut.title
@@ -476,7 +471,7 @@ const AdminDashboard = ({ children }) => {
               <Link
                 key={idx}
                 href={shortcut.href}
-                className="flex flex-col items-center justify-center p-4 bg-base-200 border border-base-300 rounded-md hover:border-warning/50 hover:bg-warning/5 transition-all group relative overflow-hidden"
+                className="flex flex-col items-center justify-center p-2 bg-base-200 border border-base-300 rounded-md hover:border-warning/50 hover:bg-warning/5 transition-all group relative overflow-hidden"
               >
                 <div className="absolute top-2 right-3 text-[8px] font-bold text-warning/40 uppercase tracking-tighter">
                   {shortcut.shortcut}
@@ -512,14 +507,14 @@ const AdminDashboard = ({ children }) => {
             animate={{ opacity: 1, y: 0 }}
             className="rounded-[1.5rem] border border-base-300 bg-base-200/40 min-h-[65vh] p-2 shadow-inner relative overflow-hidden"
           >
-            <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-warning/5 blur-[150px] rounded-full -z-10 animate-pulse pointer-events-none" />
+            <div className="absolute top-0 right-0 w-[600px] h-[1000px] bg-warning/5 blur-[150px] rounded-full -z-10 animate-pulse pointer-events-none" />
             {children}
           </motion.div>
         </section>
 
         {/* ── Footer ───────────────────────────────────────────────────── */}
         <footer className="p-6">
-          <div className="flex flex-col lg:flex-row items-center justify-between gap-6 p-6 border border-base-300 rounded-[1rem] bg-base-200/50 backdrop-blur-md">
+          <div className="flex flex-col lg:flex-row items-center justify-between gap-6 p-3 border border-base-300 rounded-[1rem] bg-base-200/50 backdrop-blur-md">
             <div className="flex items-center gap-4">
               <div className="p-3 bg-base-100 rounded-md border border-base-300">
                 <LayoutGrid size={20} className="text-warning" />
@@ -529,7 +524,7 @@ const AdminDashboard = ({ children }) => {
                   Operational Terminal
                 </span>
                 <span className="text-[9px] text-base-content/30 font-bold uppercase tracking-widest">
-                  © 2026 Admin Infrastructure v4.2.0
+                  © 2026 Admin Infrastructure 
                 </span>
               </div>
             </div>

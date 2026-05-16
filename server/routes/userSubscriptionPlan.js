@@ -1,16 +1,20 @@
 /**
  * subscriptionRouter.js — Likeson.in
  *
- * Corrections vs previous version:
+ * FIXES IN THIS VERSION:
+ *  BUG #1 FIXED: resolveCustomOptionUnitPrice transport case — dead b.km replaced with slab index lookup
+ *  BUG #2 FIXED: snapshotLimits now reads customOptions for custom plans (consultations, careAssistant, transport)
+ *  BUG #3 FIXED: incrementSubscriptionUsage moved to post-payment via subscriptionUsagePending on Booking
+ *                (this router exposes POST /flush-pending-usage called by verify-payment route)
+ *
+ * Other corrections retained from previous version:
  *  1. customPlanOptions unit-price resolution fixed to match actual
  *     PlatformPricingConfig.customPlanOptions schema fields
- *     (consultation.pricePerConsultation, transport.kmSlabs, etc.)
  *  2. SystemLog imported and wired to every mutating/sensitive route
  *  3. UserSubscription.create now snapshots planName, planType,
  *     fixedTier, and limits from the plan at purchase time
- *  4. Admin controls pricing — customer READ-ONLY access to pricing
- *     enforced; customers cannot set unitPrices themselves
- *  5. Minor: /upgrade also snapshots limits on plan change
+ *  4. Admin controls pricing — customer READ-ONLY access to pricing enforced
+ *  5. /upgrade also snapshots limits on plan change
  */
 
 import express                         from 'express';
@@ -30,6 +34,7 @@ import PromotionCoupon       from '../models/PromotionCoupon.js';
 import Notification          from '../models/Notification.js';
 import Wallet                from '../models/Wallet.js';
 import SystemLog             from '../models/SystemLog.js';
+import Booking               from '../models/Booking.js';
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 import { protect, authorize } from '../middleware/authMiddleware.js';
@@ -82,10 +87,10 @@ const buildActor = (req) => ({
 
 const detectPlatform = (req) => {
     const ua = (req.headers['user-agent'] || '').toLowerCase();
-    if (ua.includes('android'))                 return 'android';
+    if (ua.includes('android'))                       return 'android';
     if (ua.includes('iphone') || ua.includes('ipad')) return 'ios';
-    if (ua.includes('electron'))                return 'desktop';
-    if (req.headers['x-platform'])              return req.headers['x-platform'];
+    if (ua.includes('electron'))                      return 'desktop';
+    if (req.headers['x-platform'])                    return req.headers['x-platform'];
     return 'web';
 };
 
@@ -102,39 +107,42 @@ const log = (payload) => SystemLog.createLog(payload).catch(() => null);
 /**
  * resolveCustomOptionUnitPrice
  *
- * Drop-in replacement for the same function in subscriptionRouter.js.
- * Now accepts `extras` param:
- *   extras.careAssistantTierIndex — index into customPlanOptions.careAssistant.pricingTiers
- *   extras.doctorTierCount        — selected doctor count for tier bonus (separate from qty)
+ * BUG #1 FIX: transport case previously used b.km / s.km which do not exist
+ * in the schema (schema only has pricePerKm + packagePrice).
+ * Fixed: use slab index directly. qty for transport = slabIndex (0-based).
+ * lineTotal = slab.packagePrice (flat bundle price for that slab).
  *
- * qty for consultations = number of consults (NOT doctor count).
- * qty for careAssistant = number of visits/month.
+ * extras.careAssistantTierIndex — index into customPlanOptions.careAssistant.pricingTiers
+ * extras.slabIndex              — index into transport.kmSlabs (for transport option)
  */
 const resolveCustomOptionUnitPrice = (optionPrices, optionKey, quantity, extras = {}) => {
     let unitPrice = 0;
 
     switch (optionKey) {
         case 'consultations': {
-  unitPrice = optionPrices?.consultation?.pricePerConsultation ?? 0;
-  break;
-}
+            unitPrice = optionPrices?.consultation?.pricePerConsultation ?? 0;
+            break;
+        }
 
         case 'transport': {
-            // kmSlabs: [{km, price}] — price is flat per slab bundle, not per-km
+            // BUG #1 FIX: use slabIndex not s.km / b.km (those fields don't exist)
             const slabs = optionPrices?.transport?.kmSlabs ?? [];
-            if (slabs.length) {
-                const matched = [...slabs]
-                    .sort((a, b) => b.km - a.km)
-                    .find((s) => s.km <= quantity);
-                // unitPrice = slab price; lineTotal = qty(1) × unitPrice = slab price
-                unitPrice = matched?.price ?? 0;
+            if (slabs.length > 0) {
+                // qty/slabIndex is the 0-based index the customer selected
+                const idx  = Math.max(0, Math.min(Math.floor(Number(extras.slabIndex ?? quantity ?? 0)), slabs.length - 1));
+                const slab = slabs[idx];
+                if (slab) {
+                    // unitPrice = packagePrice (flat monthly bundle price for this slab)
+                    // lineTotal = packagePrice (not qty × unitPrice — flat bundle)
+                    unitPrice = slab.packagePrice ?? 0;
+                }
             }
             break;
         }
 
         case 'diagnostics': {
             const slabs = optionPrices?.diagnosticsDiscount?.slabs ?? [];
-            if (slabs.length) {
+            if (slabs.length > 0) {
                 const exact = slabs.find((s) => s.percent === quantity);
                 if (exact) {
                     unitPrice = exact.price;
@@ -150,7 +158,7 @@ const resolveCustomOptionUnitPrice = (optionPrices, optionKey, quantity, extras 
 
         case 'pharmacy': {
             const slabs = optionPrices?.pharmacyDiscount?.slabs ?? [];
-            if (slabs.length) {
+            if (slabs.length > 0) {
                 const exact = slabs.find((s) => s.percent === quantity);
                 if (exact) {
                     unitPrice = exact.price;
@@ -167,7 +175,7 @@ const resolveCustomOptionUnitPrice = (optionPrices, optionKey, quantity, extras 
         case 'careAssistant': {
             // Use the tier index the customer selected, not always tiers[0]
             const caTiers = optionPrices?.careAssistant?.pricingTiers ?? [];
-            if (caTiers.length) {
+            if (caTiers.length > 0) {
                 const tierIdx = Number(extras.careAssistantTierIndex ?? 0);
                 const tier    = caTiers[tierIdx] ?? caTiers[0];
                 unitPrice     = tier?.chargeToUser ?? 0;
@@ -195,21 +203,82 @@ const resolveCustomOptionUnitPrice = (optionPrices, optionKey, quantity, extras 
 
 
 /**
- * snapshotLimits — pull the plan's benefit limits into a flat object
- * for storage on UserSubscription.limits at purchase time.
+ * snapshotLimits
+ *
+ * BUG #2 FIX: previously always read fixed plan fields, returning 0
+ * for custom plan consultation/careAssistant quotas even when customer
+ * paid for them via customOptions. Now reads customOptions for custom plans.
+ *
+ * Pull the plan's benefit limits into a flat object for storage on
+ * UserSubscription.limits at purchase time.
  */
-const snapshotLimits = (plan) => ({
-    consultationsPerMonth:       plan.consultations?.freePerMonth        ?? 0,
-    transportRidesPerMonth:      plan.transport?.ridesPerMonth           ?? null,
-    careAssistantVisitsPerMonth: plan.careAssistant?.visitsPerMonth      ?? null,
-    labTestsPerMonth:            0,
-    pharmacyDiscountPercent:     plan.pharmacy?.isFlat
-                                     ? plan.pharmacy.discountMax
-                                     : plan.pharmacy?.discountMax ?? 0,
-    diagnosticsDiscountPercent:  plan.diagnostics?.discountPercent       ?? 0,
-    transportRatePerKm:          plan.transport?.ratePerKm               ?? null,
-    homeSampleCollection:        plan.diagnostics?.homeSampleCollection   ?? false,
-});
+const snapshotLimits = (plan) => {
+    // Start with fixed plan defaults
+    let consultationsPerMonth       = plan.consultations?.freePerMonth        ?? 0;
+    let careAssistantVisitsPerMonth = plan.careAssistant?.visitsPerMonth      ?? null;
+    let transportRatePerKm          = plan.transport?.ratePerKm               ?? null;
+    let transportRidesPerMonth      = plan.transport?.ridesPerMonth           ?? null;
+    let pharmacyDiscountPercent     = plan.pharmacy?.discountMin ?? plan.pharmacy?.discountMax ?? 0;
+    let diagnosticsDiscountPercent  = plan.diagnostics?.discountPercent       ?? 0;
+    let homeSampleCollection        = plan.diagnostics?.homeSampleCollection  ?? false;
+
+    // BUG #2 FIX: for custom plans, override with values from customOptions
+    // because fixed plan fields are null/0 for custom plans — the real values
+    // live in customOptions[].quantity
+    if (plan.planType === 'custom' && Array.isArray(plan.customOptions)) {
+        const consultOpt = plan.customOptions.find(o => o.optionKey === 'consultations');
+        if (consultOpt?.quantity > 0) {
+            consultationsPerMonth = consultOpt.quantity;
+        }
+
+        const caOpt = plan.customOptions.find(o => o.optionKey === 'careAssistant');
+        if (caOpt?.quantity > 0) {
+            careAssistantVisitsPerMonth = caOpt.quantity;
+        }
+
+        // Transport: unitPrice stored on option = pricePerKm for this slab
+        // We snapshot it as transportRatePerKm so resolveKmRate can read it
+        const tOpt = plan.customOptions.find(o => o.optionKey === 'transport');
+        if (tOpt?.unitPrice > 0) {
+            // For transport option, unitPrice = packagePrice (flat bundle),
+            // but sub.limits.transportRatePerKm is used by resolveKmRate.
+            // We store the pricePerKm from the slab — need to resolve from plan
+            // At snapshot time we don't have full slab data, so use unitPrice as rate.
+            // resolveKmRate in shared will read sub.limits.transportRatePerKm.
+            // NOTE: unitPrice for transport = packagePrice not pricePerKm.
+            // The actual pricePerKm must be pulled from the slab at booking time.
+            // We flag transportRatePerKm = -1 to signal "custom transport option active"
+            // and resolveKmRate will look up the actual rate from the plan's customOptions.
+            transportRatePerKm = -1; // sentinel: custom transport active, look up from plan
+        }
+
+        const diagOpt = plan.customOptions.find(o => o.optionKey === 'diagnostics');
+        if (diagOpt?.quantity > 0) {
+            diagnosticsDiscountPercent = diagOpt.quantity; // quantity = discount %
+        }
+
+        const pharmOpt = plan.customOptions.find(o => o.optionKey === 'pharmacy');
+        if (pharmOpt?.quantity > 0) {
+            pharmacyDiscountPercent = pharmOpt.quantity;
+        }
+
+        const homeOpt = plan.customOptions.find(o => o.optionKey === 'homeSampleCollection');
+        if (homeOpt?.quantity > 0) {
+            homeSampleCollection = true;
+        }
+    }
+
+    return {
+        consultationsPerMonth,
+        transportRidesPerMonth,
+        careAssistantVisitsPerMonth,
+        labTestsPerMonth:            0,
+        pharmacyDiscountPercent,
+        diagnosticsDiscountPercent,
+        transportRatePerKm,
+        homeSampleCollection,
+    };
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  SECTION 1 — PLAN CATALOGUE  (read-only, customer-facing)
@@ -219,7 +288,7 @@ router.get(
     '/plans',
     asyncHandler(async (req, res) => {
         const plans = await SubscriptionPlan.find({
-            isActive: true,
+            isActive:              true,
             visibleToCustomerOnly: false,
         })
             .sort({ displayOrder: 1 })
@@ -279,11 +348,10 @@ router.get(
     asyncHandler(async (req, res) => {
         const config = await PlatformPricingConfig.getGlobal();
 
-        // Return admin-defined option pricing and caps for UI rendering
         res.status(200).json({
             success: true,
             data: {
-                optionPricing: config.customPlanOptions, // full schema — UI uses what it needs
+                optionPricing: config.customPlanOptions,
                 caps:          config.caps,
             },
         });
@@ -294,7 +362,7 @@ router.get(
  * POST /api/v1/subscriptions/custom-plan
  * Customer builds a custom plan.
  * Unit prices resolved server-side from PlatformPricingConfig.
- * Supports careAssistantTierIndex + doctorTierCount extras.
+ * Supports careAssistantTierIndex + slabIndex extras.
  */
 router.post(
     '/custom-plan',
@@ -302,6 +370,10 @@ router.post(
     authorize('customer'),
     [
         body('name').trim().notEmpty().withMessage('Plan name is required'),
+        body('options.*.slabIndex')
+            .optional()
+            .isInt({ min: 0 })
+            .withMessage('slabIndex must be a non-negative integer'),
         body('options')
             .isArray({ min: 1 })
             .withMessage('At least one option must be selected'),
@@ -318,18 +390,16 @@ router.post(
             .optional()
             .isInt({ min: 0 })
             .withMessage('careAssistantTierIndex must be a non-negative integer'),
-         
     ],
     validate,
     asyncHandler(async (req, res) => {
         const { name, options } = req.body;
 
         const config       = await PlatformPricingConfig.getGlobal();
-        const optionPrices = config.customPlanOptions;   // admin-controlled prices
+        const optionPrices = config.customPlanOptions;
         const caps         = config.caps;
 
-         
-        const caTiers           = optionPrices?.careAssistant?.pricingTiers ?? [];
+        const caTiers = optionPrices?.careAssistant?.pricingTiers ?? [];
 
         const builtOptions = [];
 
@@ -366,21 +436,36 @@ router.post(
                 careAssistantTierIndex = requestedIdx;
             }
 
-             
+            // BUG #1 FIX: transport uses slabIndex not qty as km distance band
+            let slabIndex = 0;
+            if (optionKey === 'transport') {
+                const totalSlabs       = (optionPrices?.transport?.kmSlabs ?? []).length;
+                const requestedSlabIdx = Number(opt.slabIndex ?? 0);
+                if (totalSlabs === 0)
+                    return res.status(400).json({ success: false, message: 'Transport slabs not configured. Contact admin.' });
+                if (requestedSlabIdx < 0 || requestedSlabIdx >= totalSlabs)
+                    return res.status(400).json({ success: false, message: `slabIndex must be between 0 and ${totalSlabs - 1}.` });
+                slabIndex = requestedSlabIdx;
+                qty       = slabIndex; // qty for transport = slab index (used as index in resolveCustomOptionUnitPrice)
+            }
 
-            // ── Server-side unit price resolution ─────────────────────────────
-            const extras    = { careAssistantTierIndex };
+            const extras    = { careAssistantTierIndex, slabIndex };
             const unitPrice = resolveCustomOptionUnitPrice(optionPrices, optionKey, qty, extras);
-            const lineTotal = +(qty * unitPrice).toFixed(2);
 
-           builtOptions.push({
-  optionKey,
-  label:    label || optionKey,
-  quantity: qty,
-  unitPrice,
-  lineTotal,
-  ...(optionKey === 'careAssistant' && { careAssistantTierIndex }),
-});
+            // BUG #1 FIX: transport lineTotal = packagePrice (flat), not qty × unitPrice
+            const lineTotal = optionKey === 'transport'
+                ? unitPrice   // unitPrice = packagePrice = flat bundle price
+                : +(qty * unitPrice).toFixed(2);
+
+            builtOptions.push({
+                optionKey,
+                label:    label || optionKey,
+                quantity: qty,
+                unitPrice,
+                lineTotal,
+                ...(optionKey === 'careAssistant' && { careAssistantTierIndex }),
+                ...(optionKey === 'transport'     && { slabIndex }),
+            });
         }
 
         const totalMonthly = +builtOptions.reduce((s, o) => s + o.lineTotal, 0).toFixed(2);
@@ -427,7 +512,6 @@ router.post(
 /**
  * PUT /api/v1/subscriptions/custom-plan/:planId
  * Update an existing custom plan (owning customer only).
- * Supports careAssistantTierIndex + doctorTierCount extras.
  */
 router.put(
     '/custom-plan/:planId',
@@ -451,10 +535,10 @@ router.put(
             .optional()
             .isInt({ min: 0 })
             .withMessage('careAssistantTierIndex must be a non-negative integer'),
-        body('options.*.doctorTierCount')
+        body('options.*.slabIndex')
             .optional()
             .isInt({ min: 0 })
-            .withMessage('doctorTierCount must be a non-negative integer'),
+            .withMessage('slabIndex must be a non-negative integer'),
     ],
     validate,
     asyncHandler(async (req, res) => {
@@ -481,8 +565,7 @@ router.put(
         const optionPrices = config.customPlanOptions;
         const caps         = config.caps;
 
-         
-        const caTiers           = optionPrices?.careAssistant?.pricingTiers ?? [];
+        const caTiers = optionPrices?.careAssistant?.pricingTiers ?? [];
 
         const builtOptions = [];
 
@@ -507,7 +590,6 @@ router.put(
                 qty = qty > 0 ? 1 : 0;
 
             // ── Resolve extras ────────────────────────────────────────────────
-
             let careAssistantTierIndex = 0;
             if (optionKey === 'careAssistant') {
                 const requestedIdx = Number(opt.careAssistantTierIndex ?? 0);
@@ -518,28 +600,42 @@ router.put(
                 careAssistantTierIndex = requestedIdx;
             }
 
-             
+            // BUG #1 FIX: transport slabIndex
+            let slabIndex = 0;
+            if (optionKey === 'transport') {
+                const totalSlabs       = (optionPrices?.transport?.kmSlabs ?? []).length;
+                const requestedSlabIdx = Number(opt.slabIndex ?? 0);
+                if (totalSlabs === 0)
+                    return res.status(400).json({ success: false, message: 'Transport slabs not configured. Contact admin.' });
+                if (requestedSlabIdx < 0 || requestedSlabIdx >= totalSlabs)
+                    return res.status(400).json({ success: false, message: `slabIndex must be between 0 and ${totalSlabs - 1}.` });
+                slabIndex = requestedSlabIdx;
+                qty       = slabIndex;
+            }
 
-            // ── Server-side unit price resolution ─────────────────────────────
-            const extras    = { careAssistantTierIndex };
+            const extras    = { careAssistantTierIndex, slabIndex };
             const unitPrice = resolveCustomOptionUnitPrice(optionPrices, optionKey, qty, extras);
-            const lineTotal = +(qty * unitPrice).toFixed(2);
+
+            // BUG #1 FIX: transport lineTotal = packagePrice (flat)
+            const lineTotal = optionKey === 'transport'
+                ? unitPrice
+                : +(qty * unitPrice).toFixed(2);
 
             builtOptions.push({
-  optionKey,
-  label:    label || optionKey,
-  quantity: qty,
-  unitPrice,
-  lineTotal,
-  ...(optionKey === 'careAssistant' && { careAssistantTierIndex }),
-});
-
+                optionKey,
+                label:    label || optionKey,
+                quantity: qty,
+                unitPrice,
+                lineTotal,
+                ...(optionKey === 'careAssistant' && { careAssistantTierIndex }),
+                ...(optionKey === 'transport'     && { slabIndex }),
+            });
         }
 
         if (name) plan.name = name;
         plan.customOptions = builtOptions;
         plan.updatedBy     = req.user._id;
-        await plan.save();   // pre-save recomputes pricing.monthly from lineTotal sum
+        await plan.save(); // pre-save recomputes pricing.monthly from lineTotal sum
 
         await log({
             level:    'info',
@@ -769,7 +865,7 @@ router.post(
         if (!planId || amount === undefined) {
             try {
                 const rzpOrder = await razorpay.orders.fetch(razorpay_order_id);
-                if (!planId)             planId = rzpOrder.notes?.planId;
+                if (!planId)              planId = rzpOrder.notes?.planId;
                 if (amount === undefined) amount = rzpOrder.amount / 100;
             } catch {
                 return res.status(400).json({ success: false, message: 'Could not resolve plan details from Razorpay order. Please supply planId and amount.' });
@@ -829,6 +925,96 @@ router.post(
         });
 
         res.status(201).json({ success: true, data: sub });
+    })
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SECTION 3B — BUG #3 FIX: POST-PAYMENT USAGE FLUSH
+//
+//  Called by bookingRouterCustomer.js /verify-payment route after Razorpay
+//  signature is verified. Executes subscriptionUsagePending increments that
+//  were deferred at booking creation time to prevent premature decrement.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/v1/subscriptions/flush-pending-usage
+ *
+ * Body: { bookingId }
+ *
+ * Finds all pending subscription usage increments stored on the booking
+ * (Booking.subscriptionUsagePending), executes them, then clears the pending list.
+ *
+ * This route is called internally by /bookings/verify-payment after signature
+ * verification succeeds. It can also be called by admin to manually flush
+ * for bookings where payment was confirmed externally (Cash/Wallet).
+ */
+router.post(
+    '/flush-pending-usage',
+    protect,
+    asyncHandler(async (req, res) => {
+        const { bookingId } = req.body;
+
+        if (!bookingId)
+            return res.status(400).json({ success: false, message: 'bookingId required.' });
+
+        const booking = await Booking.findById(bookingId).select('subscriptionUsagePending customer').lean();
+        if (!booking)
+            return res.status(404).json({ success: false, message: 'Booking not found.' });
+
+        // Only the booking's customer or admin can flush
+        const isAdmin = ['admin', 'superadmin'].includes(req.user?.role);
+        if (!isAdmin && String(booking.customer) !== String(req.user._id))
+            return res.status(403).json({ success: false, message: 'Not authorised.' });
+
+        const pending = booking.subscriptionUsagePending || [];
+
+        if (pending.length === 0) {
+            return res.status(200).json({ success: true, message: 'No pending usage to flush.', flushed: 0 });
+        }
+
+        let flushed = 0;
+        const now = new Date();
+
+        for (const { subId, field } of pending) {
+            if (!subId || !field) continue;
+
+            // Try to increment in existing usageHistory entry for this month
+            const updated = await UserSubscription.findOneAndUpdate(
+                { _id: subId, 'usageHistory.month': now.getMonth() + 1, 'usageHistory.year': now.getFullYear() },
+                { $inc: { [`usageHistory.$.${field}`]: 1 } }
+            );
+
+            if (!updated) {
+                // No entry for this month yet — create one
+                await UserSubscription.findByIdAndUpdate(subId, {
+                    $push: {
+                        usageHistory: {
+                            month:  now.getMonth() + 1,
+                            year:   now.getFullYear(),
+                            [field]: 1,
+                        },
+                    },
+                });
+            }
+
+            flushed++;
+        }
+
+        // Clear pending list on booking
+        await Booking.findByIdAndUpdate(bookingId, {
+            $set: { subscriptionUsagePending: [] },
+        });
+
+        await log({
+            level:    'info',
+            category: 'system',
+            message:  `Flushed ${flushed} pending subscription usage increments for booking ${bookingId}`,
+            actor:    buildActor(req),
+            request:  { method: 'POST', path: req.originalUrl, statusCode: 200 },
+            metadata: { bookingId, flushed, pending },
+        });
+
+        return res.status(200).json({ success: true, flushed, pending });
     })
 );
 
@@ -919,7 +1105,7 @@ router.put(
         sub.planType  = newPlan.planType;
         sub.fixedTier = newPlan.fixedTier ?? null;
         sub.status    = 'Active';
-        sub.limits    = snapshotLimits(newPlan);
+        sub.limits    = snapshotLimits(newPlan); // BUG #2 FIX: uses updated snapshotLimits
 
         const newExpiry = new Date();
         newExpiry.setDate(newExpiry.getDate() + 30);
@@ -1087,7 +1273,7 @@ router.post(
             expiryDate: trialExpiry,
             autoRenew:  false,
             trialUsed:  true,
-            limits:     snapshotLimits(plan),
+            limits:     snapshotLimits(plan), // BUG #2 FIX: reads customOptions for custom plans
             ...(razorpay_payment_method_id && { savedPaymentMethodId: razorpay_payment_method_id }),
             paymentHistory: [],
         });
@@ -1655,9 +1841,9 @@ router.get(
         const limit  = Math.min(parseInt(req.query.limit) || 20, 100);
         const filter = {};
 
-        if (req.query.status)   filter.status = req.query.status;
-        if (req.query.userId)   filter.user   = req.query.userId;
-        if (req.query.planType) filter.planType = req.query.planType;
+        if (req.query.status)   filter.status    = req.query.status;
+        if (req.query.userId)   filter.user      = req.query.userId;
+        if (req.query.planType) filter.planType  = req.query.planType;
 
         const [total, subs] = await Promise.all([
             UserSubscription.countDocuments(filter),
@@ -1710,7 +1896,7 @@ router.post(
         body('name').trim().notEmpty().withMessage('name is required'),
         body('slug').trim().notEmpty().withMessage('slug is required'),
         body('fixedTier')
-            .isIn(['Basic Care', 'Premium Care', 'Family Care', 'Pregnant Women Care', "NRI's Care"])
+            .isIn(['Basic Care', 'Standard Care', 'Premium Care', 'Family Care', 'Pregnant Women Care', "NRI's Care"])
             .withMessage('Invalid fixedTier'),
         body('pricing.monthly').isNumeric().withMessage('pricing.monthly is required'),
     ],
@@ -1733,7 +1919,7 @@ router.post(
             category: 'system',
             message:  `Fixed plan created by admin: ${plan.name}`,
             actor:    buildActor(req),
-            relatedEntity: { model: 'UserSubscription', entityId: plan._id, label: plan.name },
+            relatedEntity: { model: 'SubscriptionPlan', entityId: plan._id, label: plan.name },
             request:  { method: 'POST', path: req.originalUrl, statusCode: 201 },
             metadata: { fixedTier: plan.fixedTier, monthly: plan.pricing.monthly },
         });
@@ -1770,7 +1956,7 @@ router.put(
             category: 'system',
             message:  `Plan updated by admin: ${plan.name}`,
             actor:    buildActor(req),
-            relatedEntity: { model: 'UserSubscription', entityId: plan._id, label: plan.name },
+            relatedEntity: { model: 'SubscriptionPlan', entityId: plan._id, label: plan.name },
             request:  { method: 'PUT', path: req.originalUrl, statusCode: 200 },
             metadata: req.body,
         });
@@ -1804,7 +1990,7 @@ router.delete(
             category: 'system',
             message:  `Plan deactivated by superadmin: ${plan.name}`,
             actor:    buildActor(req),
-            relatedEntity: { model: 'UserSubscription', entityId: plan._id, label: plan.name },
+            relatedEntity: { model: 'SubscriptionPlan', entityId: plan._id, label: plan.name },
             request:  { method: 'DELETE', path: req.originalUrl, statusCode: 200 },
         });
 
@@ -1856,7 +2042,6 @@ router.put(
 router.use((err, req, res, _next) => {
     console.error('[SubscriptionRouter Error]', err);
 
-    // Fire-and-forget error log — do not await
     SystemLog.createLog({
         level:    'error',
         category: 'api',

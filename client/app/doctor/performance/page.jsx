@@ -5,11 +5,11 @@ import { useDispatch, useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
-  ResponsiveContainer, Tooltip
+  ResponsiveContainer, Tooltip,
 } from 'recharts';
 import {
   Star, TrendingUp, Award, CheckCircle, Clock,
-  Zap, Target, Activity, ShieldCheck, UserCheck, BarChart3
+  Zap, Target, Activity, ShieldCheck, UserCheck, BarChart3,
 } from 'lucide-react';
 import {
   fetchMyDoctorProfile,
@@ -19,38 +19,49 @@ import {
   selectHospitalLoading,
 } from '@/store/slices/hospitalSlice';
 
+/* ─── animation ─── */
 const fadeUp = {
-  hidden: { opacity: 0, y: 20 },
-  show: (i = 0) => ({ opacity: 1, y: 0, transition: { delay: i * 0.07, duration: 0.45, ease: 'easeOut' } }),
+  hidden: { opacity: 0, y: 16 },
+  show: (i = 0) => ({
+    opacity: 1, y: 0,
+    transition: { delay: i * 0.07, duration: 0.4, ease: 'easeOut' },
+  }),
 };
 
-const ProgressBar = ({ label, value, max, color, icon: Icon, delay }) => {
+/* ─── skeleton ─── */
+const Skeleton = ({ className = '' }) => (
+  <div className={`skeleton ${className}`} />
+);
+
+/* ─── progress bar ─── */
+const ProgressBar = ({ label, value, max, icon: Icon, delay }) => {
   const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
   return (
-    <motion.div variants={fadeUp} custom={delay} initial="hidden" animate="show" className="space-y-2">
+    <motion.div variants={fadeUp} custom={delay} initial="hidden" animate="show" className="space-y-1.5">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Icon className={`w-3.5 h-3.5 ${color}`} />
-          <span className="text-xs font-semibold text-slate-400">{label}</span>
+          <Icon className="w-3.5 h-3.5 text-primary" />
+          <span className="text-xs font-semibold text-base-content/60">{label}</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs font-bold text-white font-mono">{value.toLocaleString('en-IN')}</span>
-          <span className="text-xs text-slate-600">/ {max.toLocaleString('en-IN')}</span>
+          <span className="text-xs font-bold text-base-content font-mono">{value.toLocaleString('en-IN')}</span>
+          <span className="text-xs text-base-content/30">/ {max.toLocaleString('en-IN')}</span>
         </div>
       </div>
-      <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+      <div className="progress-bar">
         <motion.div
-          initial={{ width: 0 }} animate={{ width: `${pct}%` }}
-          transition={{ duration: 0.9, delay: delay * 0.08 + 0.3, ease: 'easeOut' }}
-          className="h-full rounded-full"
-          style={{ background: `var(--tw-gradient-stops, ${color})` }}
+          initial={{ width: 0 }}
+          animate={{ width: `${pct}%` }}
+          transition={{ duration: 0.9, delay: delay * 0.07 + 0.3, ease: 'easeOut' }}
+          className="progress-bar-fill"
         />
       </div>
     </motion.div>
   );
 };
 
-const ScoreRing = ({ value, label, color, delay, size = 100 }) => {
+/* ─── score ring ─── */
+const ScoreRing = ({ value, label, colorClass, delay, size = 100 }) => {
   const r = (size - 14) / 2;
   const circ = 2 * Math.PI * r;
   const offset = circ - (value / 100) * circ;
@@ -59,43 +70,51 @@ const ScoreRing = ({ value, label, color, delay, size = 100 }) => {
       className="flex flex-col items-center gap-2">
       <div className="relative" style={{ width: size, height: size }}>
         <svg width={size} height={size} className="-rotate-90">
-          <circle cx={size/2} cy={size/2} r={r} stroke="rgba(255,255,255,0.06)" strokeWidth={7} fill="none" />
+          <circle
+            cx={size / 2} cy={size / 2} r={r}
+            className="stroke-base-300" strokeWidth={7} fill="none"
+          />
           <motion.circle
-            cx={size/2} cy={size/2} r={r}
-            stroke={color} strokeWidth={7} fill="none"
+            cx={size / 2} cy={size / 2} r={r}
+            className={colorClass}
+            strokeWidth={7} fill="none"
             strokeLinecap="round"
             strokeDasharray={circ}
             initial={{ strokeDashoffset: circ }}
             animate={{ strokeDashoffset: offset }}
-            transition={{ duration: 1.2, delay: delay * 0.08, ease: 'easeOut' }}
+            transition={{ duration: 1.2, delay: delay * 0.07, ease: 'easeOut' }}
           />
         </svg>
         <div className="absolute inset-0 flex items-center justify-center">
-          <span className="text-lg font-black text-white font-mono">{value}%</span>
+          <span className="text-lg font-black text-base-content font-mono">{value}%</span>
         </div>
       </div>
-      <p className="text-[11px] text-slate-500 text-center leading-tight">{label}</p>
+      <p className="text-[11px] text-base-content/50 text-center leading-tight">{label}</p>
     </motion.div>
   );
 };
 
-const BadgeCard = ({ icon: Icon, title, desc, color, achieved, delay }) => (
+/* ─── badge card ─── */
+const BadgeCard = ({ icon: Icon, title, desc, achieved, delay }) => (
   <motion.div
     variants={fadeUp} custom={delay} initial="hidden" animate="show"
-    className={`p-4 rounded-xl border transition-all
-      ${achieved
-        ? 'border-white/10 bg-slate-900/60'
-        : 'border-white/[0.04] bg-slate-900/30 opacity-50'}`}
+    className={`p-4 rounded-xl border transition-all ${
+      achieved
+        ? 'border-primary/20 bg-base-200'
+        : 'border-base-300/60 bg-base-200 opacity-40'
+    }`}
   >
     <div className="flex items-start gap-3">
-      <div className={`p-2 rounded-lg ${achieved ? `bg-gradient-to-br ${color}` : 'bg-slate-800'} shadow`}>
-        <Icon className="w-4 h-4 text-white" />
+      <div className={`p-2 rounded-lg ${achieved ? 'bg-primary/10' : 'bg-base-300'}`}>
+        <Icon className={`w-4 h-4 ${achieved ? 'text-primary' : 'text-base-content/30'}`} />
       </div>
       <div>
-        <p className={`text-sm font-bold ${achieved ? 'text-white' : 'text-slate-600'}`}>{title}</p>
-        <p className="text-xs text-slate-500 mt-0.5">{desc}</p>
+        <p className={`text-sm font-bold ${achieved ? 'text-base-content' : 'text-base-content/30'}`}>
+          {title}
+        </p>
+        <p className="text-xs text-base-content/50 mt-0.5">{desc}</p>
         {achieved && (
-          <span className="inline-flex items-center gap-1 mt-1.5 text-[10px] font-bold text-emerald-400">
+          <span className="inline-flex items-center gap-1 mt-1.5 text-[10px] font-bold text-success">
             <CheckCircle className="w-3 h-3" /> Achieved
           </span>
         )}
@@ -104,16 +123,35 @@ const BadgeCard = ({ icon: Icon, title, desc, color, achieved, delay }) => (
   </motion.div>
 );
 
-const CustomTooltip = ({ active, payload }) => {
+/* ─── section card ─── */
+const SectionCard = ({ children, delay, className = '' }) => (
+  <motion.div
+    variants={fadeUp} custom={delay} initial="hidden" animate="show"
+    className={`p-6 rounded-2xl border border-base-300/60 bg-base-200 ${className}`}
+  >
+    {children}
+  </motion.div>
+);
+
+const SectionTitle = ({ children, icon: Icon }) => (
+  <h2 className="text-xs font-bold text-base-content/50 uppercase tracking-widest mb-5 flex items-center gap-2">
+    {Icon && <Icon className="w-3.5 h-3.5 text-primary" />}
+    {children}
+  </h2>
+);
+
+/* ─── custom radar tooltip ─── */
+const RadarTooltip = ({ active, payload }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div className="bg-slate-900 border border-white/10 rounded-xl px-3 py-2 shadow-2xl">
-      <p className="text-xs font-bold text-white">{payload[0]?.payload?.subject}</p>
-      <p className="text-xs text-blue-400">{payload[0]?.value} pts</p>
+    <div className="bg-base-200 border border-primary/20 rounded-xl px-3 py-2 shadow-2xl">
+      <p className="text-xs font-bold text-base-content">{payload[0]?.payload?.subject}</p>
+      <p className="text-xs text-primary">{payload[0]?.value} pts</p>
     </div>
   );
 };
 
+/* ─── main page ─── */
 export default function Performance() {
   const dispatch = useDispatch();
   const profile  = useSelector(selectMyDoctorProfile);
@@ -128,13 +166,12 @@ export default function Performance() {
     if (profile?._id) dispatch(fetchDoctorStats(profile._id));
   }, [dispatch, profile?._id]);
 
-  const s = stats?.stats || {};
-  const rating = stats?.rating || {};
-  const isLoading = loading.fetchMyDoctorProfile || loading.fetchDoctorStats;
+  const s          = stats?.stats || {};
+  const rating     = stats?.rating || {};
+  const isLoading  = loading.fetchMyDoctorProfile || loading.fetchDoctorStats;
   const completion = profile?.profileCompletionPercent ?? 0;
 
-  // Compute a simple overall performance score
-  const ratingScore = Math.round((rating.averageRating || 0) / 5 * 100);
+  const ratingScore  = Math.round(((rating.averageRating || 0) / 5) * 100);
   const consultScore = Math.min(100, Math.round(((s.totalConsultations || 0) / 50) * 100));
   const settleScore  = s.totalEarnings > 0
     ? Math.round(((s.totalSettled || 0) / s.totalEarnings) * 100)
@@ -142,119 +179,133 @@ export default function Performance() {
   const overallScore = Math.round((ratingScore + consultScore + completion + settleScore) / 4);
 
   const radarData = [
-    { subject: 'Rating',      A: ratingScore,  fullMark: 100 },
-    { subject: 'Consults',    A: consultScore,  fullMark: 100 },
-    { subject: 'Profile',     A: completion,    fullMark: 100 },
-    { subject: 'Settlement',  A: settleScore,   fullMark: 100 },
-    { subject: 'Referrals',   A: Math.min(100, ((s.totalReferrals || 0) / 20) * 100), fullMark: 100 },
+    { subject: 'Rating',     A: ratingScore,  fullMark: 100 },
+    { subject: 'Consults',   A: consultScore, fullMark: 100 },
+    { subject: 'Profile',    A: completion,   fullMark: 100 },
+    { subject: 'Settlement', A: settleScore,  fullMark: 100 },
+    { subject: 'Referrals',  A: Math.min(100, ((s.totalReferrals || 0) / 20) * 100), fullMark: 100 },
   ];
 
   const badges = [
-    { icon: Star,       title: 'Top Rated',      desc: 'Rating ≥ 4.5',               color: 'from-amber-600 to-amber-500',    achieved: (rating.averageRating || 0) >= 4.5 },
-    { icon: Zap,        title: 'Active Partner',  desc: 'Partnership Active & KYC OK', color: 'from-blue-600 to-blue-500',     achieved: profile?.partnershipStatus === 'Active' && profile?.kycStatus === 'verified' },
-    { icon: Target,     title: 'High Volume',     desc: '50+ consultations',           color: 'from-violet-600 to-violet-500', achieved: (s.totalConsultations || 0) >= 50 },
-    { icon: UserCheck,  title: 'KYC Verified',    desc: 'Identity confirmed',          color: 'from-teal-600 to-teal-500',     achieved: profile?.kycStatus === 'verified' },
-    { icon: ShieldCheck,'title': 'Bank Verified', desc: 'Payout enabled',             color: 'from-emerald-600 to-emerald-500', achieved: profile?.bankDetails?.isBankVerified },
-    { icon: Award,      title: 'Profile Pro',     desc: '80%+ profile completion',     color: 'from-rose-600 to-rose-500',     achieved: completion >= 80 },
+    { icon: Star,       title: 'Top Rated',     desc: 'Rating ≥ 4.5',                achieved: (rating.averageRating || 0) >= 4.5 },
+    { icon: Zap,        title: 'Active Partner', desc: 'Partnership Active & KYC OK', achieved: profile?.partnershipStatus === 'Active' && profile?.kycStatus === 'verified' },
+    { icon: Target,     title: 'High Volume',    desc: '50+ consultations',           achieved: (s.totalConsultations || 0) >= 50 },
+    { icon: UserCheck,  title: 'KYC Verified',   desc: 'Identity confirmed',          achieved: profile?.kycStatus === 'verified' },
+    { icon: ShieldCheck,title: 'Bank Verified',  desc: 'Payout enabled',             achieved: profile?.bankDetails?.isBankVerified },
+    { icon: Award,      title: 'Profile Pro',    desc: '80%+ profile completion',     achieved: completion >= 80 },
   ];
 
   return (
-    <div className="min-h-screen bg-[#080c14] text-white font-[family-name:var(--font-family-poppins)]">
-      <div className="fixed inset-0 pointer-events-none">
-        <div className="absolute top-0 right-1/4 w-80 h-80 bg-amber-600/5 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/3 left-1/3 w-72 h-72 bg-violet-600/5 rounded-full blur-3xl" />
-      </div>
+    <div className="min-h-screen bg-base-100 text-base-content font-[family-name:var(--font-family-poppins)]">
 
       <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 py-8">
 
-        {/* Header */}
+        {/* ── Header ── */}
         <motion.div variants={fadeUp} custom={0} initial="hidden" animate="show" className="mb-8">
           <div className="flex items-center gap-3 mb-1">
-            <div className="p-2.5 rounded-xl bg-gradient-to-br from-amber-500 to-rose-500 shadow-lg shadow-amber-500/20">
-              <BarChart3 className="w-5 h-5 text-white" />
+            <div className="p-2.5 rounded-xl bg-primary">
+              <BarChart3 className="w-5 h-5 text-primary-content" />
             </div>
-            <h1 className="text-2xl font-black tracking-tight">Performance</h1>
+            <h1 className="text-2xl font-black tracking-tight text-base-content">Performance</h1>
           </div>
-          <p className="text-slate-500 text-sm ml-12">Track your quality metrics and achievements</p>
+          <p className="text-sm text-base-content/50 ml-[3.25rem]">
+            Track your quality metrics and achievements
+          </p>
         </motion.div>
 
-        {/* Overall + Radar */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        {/* ── Score overview + Radar ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
 
           {/* Score rings */}
-          <motion.div variants={fadeUp} custom={1} initial="hidden" animate="show"
-            className="p-6 rounded-2xl border border-white/[0.06] bg-slate-900/50">
-            <h2 className="text-sm font-bold text-slate-300 uppercase tracking-widest mb-6">Score Overview</h2>
+          <SectionCard delay={1}>
+            <SectionTitle>Score Overview</SectionTitle>
             {isLoading ? (
-              <div className="h-40 bg-slate-800 rounded-xl animate-pulse" />
+              <Skeleton className="h-40 w-full" />
             ) : (
               <>
                 <div className="flex items-center justify-center mb-6">
-                  <ScoreRing value={overallScore} label="Overall Score" color="#3b82f6" delay={2} size={120} />
+                  <ScoreRing
+                    value={overallScore}
+                    label="Overall Score"
+                    colorClass="stroke-primary"
+                    delay={2}
+                    size={120}
+                  />
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  <ScoreRing value={ratingScore}  label="Rating"     color="#f59e0b" delay={3} />
-                  <ScoreRing value={consultScore} label="Volume"     color="#8b5cf6" delay={4} />
-                  <ScoreRing value={completion}   label="Profile"    color="#14b8a6" delay={5} />
-                  <ScoreRing value={settleScore}  label="Settlement" color="#10b981" delay={6} />
+                  <ScoreRing value={ratingScore}  label="Rating"     colorClass="stroke-warning"   delay={3} />
+                  <ScoreRing value={consultScore} label="Volume"     colorClass="stroke-secondary"  delay={4} />
+                  <ScoreRing value={completion}   label="Profile"    colorClass="stroke-info"       delay={5} />
+                  <ScoreRing value={settleScore}  label="Settlement" colorClass="stroke-success"    delay={6} />
                 </div>
               </>
             )}
-          </motion.div>
+          </SectionCard>
 
-          {/* Radar */}
-          <motion.div variants={fadeUp} custom={7} initial="hidden" animate="show"
-            className="p-6 rounded-2xl border border-white/[0.06] bg-slate-900/50">
-            <h2 className="text-sm font-bold text-slate-300 uppercase tracking-widest mb-4">Performance Radar</h2>
+          {/* Radar chart */}
+          <SectionCard delay={7}>
+            <SectionTitle>Performance Radar</SectionTitle>
             {isLoading ? (
-              <div className="h-60 bg-slate-800 rounded-xl animate-pulse" />
+              <Skeleton className="h-60 w-full" />
             ) : (
               <ResponsiveContainer width="100%" height={240}>
                 <RadarChart data={radarData}>
-                  <PolarGrid stroke="rgba(255,255,255,0.06)" />
-                  <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 11 }} />
-                  <PolarRadiusAxis angle={90} domain={[0, 100]} tick={{ fill: '#475569', fontSize: 9 }} />
-                  <Radar
-                    name="Score" dataKey="A"
-                    stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.15} strokeWidth={2}
-                    dot={{ fill: '#3b82f6', r: 3 }}
+                  <PolarGrid className="stroke-base-300" />
+                  <PolarAngleAxis
+                    dataKey="subject"
+                    tick={{ fontSize: 11, fill: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}
                   />
-                  <Tooltip content={<CustomTooltip />} />
+                  <PolarRadiusAxis
+                    angle={90}
+                    domain={[0, 100]}
+                    tick={{ fontSize: 9, fill: 'color-mix(in oklch, var(--base-content) 30%, transparent)' }}
+                  />
+                  <Radar
+                    name="Score"
+                    dataKey="A"
+                    stroke="var(--primary)"
+                    fill="var(--primary)"
+                    fillOpacity={0.12}
+                    strokeWidth={2}
+                    dot={{ fill: 'var(--primary)', r: 3 }}
+                  />
+                  <Tooltip content={<RadarTooltip />} />
                 </RadarChart>
               </ResponsiveContainer>
             )}
-          </motion.div>
+          </SectionCard>
         </div>
 
-        {/* Progress bars */}
-        <motion.div variants={fadeUp} custom={8} initial="hidden" animate="show"
-          className="p-6 rounded-2xl border border-white/[0.06] bg-slate-900/50 mb-8">
-          <h2 className="text-sm font-bold text-slate-300 uppercase tracking-widest mb-5">Progress Metrics</h2>
+        {/* ── Progress metrics ── */}
+        <SectionCard delay={8} className="mb-5">
+          <SectionTitle icon={Activity}>Progress Metrics</SectionTitle>
           {isLoading ? (
             <div className="space-y-4">
-              {Array(5).fill(0).map((_, i) => <div key={i} className="h-8 bg-slate-800 rounded animate-pulse" />)}
+              {Array(6).fill(0).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-5">
-              <ProgressBar label="Profile Completion"   value={completion}                     max={100}  color="text-blue-400"   icon={UserCheck}  delay={9} />
-              <ProgressBar label="Consultations"        value={s.totalConsultations || 0}      max={Math.max(50, s.totalConsultations || 0)} color="text-violet-400" icon={Activity} delay={10} />
-              <ProgressBar label="Referrals"            value={s.totalReferrals || 0}          max={Math.max(20, s.totalReferrals || 0)}      color="text-amber-400"  icon={TrendingUp} delay={11} />
-              <ProgressBar label="Home Visits"          value={s.totalHomeVisits || 0}         max={Math.max(20, s.totalHomeVisits || 0)}     color="text-teal-400"   icon={Clock}     delay={12} />
-              <ProgressBar label="Total Ratings"        value={rating.totalRatings || 0}       max={Math.max(50, rating.totalRatings || 0)}   color="text-amber-400"  icon={Star}      delay={13} />
-              <ProgressBar label="Monthly Referrals"    value={s.monthlyReferrals || 0}        max={Math.max(10, s.monthlyReferrals || 0)}    color="text-rose-400"   icon={Target}    delay={14} />
+              <ProgressBar label="Profile Completion" value={completion}                     max={100}                                           icon={UserCheck}   delay={9}  />
+              <ProgressBar label="Consultations"      value={s.totalConsultations || 0}      max={Math.max(50, s.totalConsultations || 0)}        icon={Activity}    delay={10} />
+              <ProgressBar label="Referrals"          value={s.totalReferrals || 0}          max={Math.max(20, s.totalReferrals || 0)}            icon={TrendingUp}  delay={11} />
+              <ProgressBar label="Home Visits"        value={s.totalHomeVisits || 0}         max={Math.max(20, s.totalHomeVisits || 0)}           icon={Clock}       delay={12} />
+              <ProgressBar label="Total Ratings"      value={rating.totalRatings || 0}       max={Math.max(50, rating.totalRatings || 0)}         icon={Star}        delay={13} />
+              <ProgressBar label="Monthly Referrals"  value={s.monthlyReferrals || 0}        max={Math.max(10, s.monthlyReferrals || 0)}          icon={Target}      delay={14} />
             </div>
           )}
-        </motion.div>
+        </SectionCard>
 
-        {/* Badges */}
+        {/* ── Achievements ── */}
         <div>
-          <motion.h2 variants={fadeUp} custom={15} initial="hidden" animate="show"
-            className="text-sm font-bold text-slate-300 uppercase tracking-widest mb-4 flex items-center gap-2">
-            <Award className="w-3.5 h-3.5 text-amber-400" /> Achievements
+          <motion.h2
+            variants={fadeUp} custom={15} initial="hidden" animate="show"
+            className="text-xs font-bold text-base-content/50 uppercase tracking-widest mb-4 flex items-center gap-2"
+          >
+            <Award className="w-3.5 h-3.5 text-warning" /> Achievements
           </motion.h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {isLoading
-              ? Array(6).fill(0).map((_, i) => <div key={i} className="h-20 rounded-xl bg-slate-900 animate-pulse" />)
+              ? Array(6).fill(0).map((_, i) => <Skeleton key={i} className="h-20 w-full rounded-xl" />)
               : badges.map((b, i) => <BadgeCard key={b.title} {...b} delay={16 + i} />)
             }
           </div>

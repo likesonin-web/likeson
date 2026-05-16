@@ -188,8 +188,15 @@ const notificationSchema = new Schema(
   }
 );
 
-// ── Indexes ───────────────────────────────────────────────────────────────────
+notificationSchema.add({
+  dedupeKey: { type: String, default: null, index: true },
+});
 
+// ── Indexes ───────────────────────────────────────────────────────────────────
+notificationSchema.index(
+  { recipient: 1, dedupeKey: 1 },
+  { unique: true, sparse: true }
+);
 notificationSchema.index({ recipient: 1, isRead: 1, createdAt: -1 });
 notificationSchema.index({ scheduledAt: 1, 'channels.status': 1 });
 notificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });

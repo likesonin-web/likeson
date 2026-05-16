@@ -7,6 +7,15 @@ const generateBookingCode = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BOOKING MODEL — Likeson.in
+//
+// FIXES IN THIS VERSION:
+//  BUG #3 + #5 FIX: Added subscriptionUsagePending array field.
+//    Booking routes push {subId, field} objects here instead of immediately
+//    calling incrementSubscriptionUsage(). Actual increment happens after
+//    payment is verified in /verify-payment route or
+//    POST /subscriptions/flush-pending-usage.
+//    On cancellation, this array is cleared so no quota is ever consumed
+//    for bookings where payment was not completed.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const BOOKING_TYPES = [
@@ -202,6 +211,33 @@ const ratingSchema = new Schema(
   { _id: false }
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// BUG #3 + #5 FIX: Sub-schema for deferred subscription usage increments.
+//
+// When a booking is created and a subscription benefit is applied (free
+// consultation or free care assistant visit), instead of immediately
+// incrementing the usage counter, the booking route pushes an entry here.
+//
+// The actual increment happens ONLY after:
+//   A) Razorpay payment is verified in POST /verify-payment
+//   B) Wallet payment succeeds in the booking creation route
+//   C) Booking total is ₹0 (fully covered) — flushed immediately
+//
+// On cancellation: this array is cleared — no quota consumed.
+// On booking failure: array is never flushed — no quota consumed.
+//
+// Fields:
+//   subId  — UserSubscription._id to increment
+//   field  — usageHistory field name (e.g. 'consultationsUsed', 'careAssistantVisitsUsed')
+// ─────────────────────────────────────────────────────────────────────────────
+const subscriptionUsagePendingSchema = new Schema(
+  {
+    subId:  { type: String, required: true }, // stored as string to avoid populate overhead
+    field:  { type: String, required: true }, // e.g. 'consultationsUsed', 'careAssistantVisitsUsed'
+  },
+  { _id: false }
+);
+
 // ── Main Schema ───────────────────────────────────────────────────────────────
 
 const bookingSchema = new Schema(
@@ -376,7 +412,7 @@ const bookingSchema = new Schema(
 
     pricingSource: {
       type: String,
-      enum: ['hospital', 'doctor', 'platform'],
+      enum: ['hospital', 'doctor', 'platform', 'subscription'],
     },
 
     paymentStatus: {
@@ -440,6 +476,27 @@ const bookingSchema = new Schema(
       completionSummary:   { type: Boolean, default: false },
     },
 
+    // ── BUG #3 + #5 FIX: Deferred subscription usage increments ──────────────
+    //
+    // Populated by booking creation routes when a subscription benefit is applied.
+    // Each entry = one pending usage increment that must be executed after payment.
+    //
+    // Lifecycle:
+    //   1. Booking created → routes push {subId, field} here via queueSubscriptionUsage()
+    //   2. Payment verified → /verify-payment flushes all entries here
+    //      OR Wallet payment → flushed immediately in booking route
+    //      OR ₹0 total → flushed immediately in booking route
+    //   3. Booking cancelled → array cleared, no increment ever happens
+    //   4. Payment fails → array stays but verify-payment never called, no increment
+    //
+    // This field is intentionally excluded from API responses (select: false not
+    // used because routes need to read it, but it is excluded in .select() queries).
+    // ─────────────────────────────────────────────────────────────────────────
+    subscriptionUsagePending: {
+      type:    [subscriptionUsagePendingSchema],
+      default: [],
+    },
+
     // ── Admin / Internal ──────────────────────────────────────────────────────
     assignedAdminId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     internalNotes:   { type: String, trim: true, select: false },
@@ -488,11 +545,13 @@ bookingSchema.virtual('amountDue').get(function () {
   return Math.max(0, total - paid);
 });
 
+// Virtual: has unresolved pending subscription usage
+// Useful for admin dashboards to flag bookings awaiting payment
+bookingSchema.virtual('hasSubscriptionUsagePending').get(function () {
+  return Array.isArray(this.subscriptionUsagePending) && this.subscriptionUsagePending.length > 0;
+});
+
 // ── Pre-validate ──────────────────────────────────────────────────────────────
-// FIX #4: Added missing validations for doctor_consultation, physiotherapist,
-//          care_assistant booking types.
-// FIX #5: follow_up now also requires doctor.
-// FIX #6: returnRide without primaryRide guard added.
 
 bookingSchema.pre('validate', function () {
   const t = this.bookingType;
@@ -504,7 +563,7 @@ bookingSchema.pre('validate', function () {
     if (!this.patientLocation) throw new Error('full_care_ride requires patientLocation');
   }
 
-  // FIX #4: doctor_consultation requires doctor
+  // doctor_consultation requires doctor
   if (t === 'doctor_consultation' && !this.doctor) {
     throw new Error('doctor_consultation requires doctor');
   }
@@ -514,17 +573,17 @@ bookingSchema.pre('validate', function () {
     throw new Error('doctor_online requires doctor');
   }
 
-  // FIX #4: physiotherapist requires doctor (the physio is a doctor profile)
+  // physiotherapist requires doctor (the physio is a doctor profile)
   if (t === 'physiotherapist' && !this.doctor) {
     throw new Error('physiotherapist requires doctor (physiotherapist profile)');
   }
 
-  // FIX #4: care_assistant booking requires careAssistant
+  // care_assistant booking requires careAssistant
   if (t === 'care_assistant' && !this.careAssistant) {
     throw new Error('care_assistant booking requires careAssistant');
   }
 
-  // FIX #5: follow_up requires both parentBooking and doctor
+  // follow_up requires both parentBooking and doctor
   if (t === 'follow_up') {
     if (!this.followUpParentBooking) throw new Error('follow_up requires followUpParentBooking');
     if (!this.doctor)                throw new Error('follow_up requires doctor');
@@ -541,7 +600,7 @@ bookingSchema.pre('validate', function () {
     if (!this.destinationLocation) throw new Error('patient_transport requires destinationLocation (dropoff)');
   }
 
-  // FIX #6: returnRide cannot exist without primaryRide
+  // returnRide cannot exist without primaryRide
   if (this.returnRide && !this.primaryRide) {
     throw new Error('returnRide requires primaryRide to be set first');
   }
@@ -562,11 +621,10 @@ bookingSchema.pre('save', async function () {
     this.bookingCode = code;
   }
 
-  // FIX #3: statusLog fromStatus — read from last log entry, not in-memory _previousStatus.
-  // _previousStatus is lost when doc is loaded fresh. Reading from statusLog is reliable.
+  // statusLog fromStatus — read from last log entry
   if (this.isModified('status') && !this.isNew) {
-    const lastLog   = this.statusLog?.[this.statusLog.length - 1];
-    const fromStatus = lastLog?.toStatus ?? null; // last recorded toStatus = current fromStatus
+    const lastLog    = this.statusLog?.[this.statusLog.length - 1];
+    const fromStatus = lastLog?.toStatus ?? null;
     this.statusLog.push({
       fromStatus,
       toStatus:  this.status,
@@ -584,6 +642,14 @@ bookingSchema.pre('save', async function () {
   // Auto-set completedAt
   if (this.isModified('status') && this.status === 'completed' && !this.completedAt) {
     this.completedAt = new Date();
+  }
+
+  // BUG #3 + #5 FIX: On cancellation, clear pending subscription usage
+  // so quota is never consumed for cancelled bookings.
+  if (this.isModified('status') && this.status === 'cancelled') {
+    if (this.subscriptionUsagePending?.length > 0) {
+      this.subscriptionUsagePending = [];
+    }
   }
 
   // Doctor snapshot on first assignment
@@ -635,6 +701,8 @@ bookingSchema.index({ rides: 1 });
 bookingSchema.index({ 'diagnosticDetails.labPartner': 1 });
 bookingSchema.index({ createdAt: -1 });
 bookingSchema.index({ bookingType: 1, status: 1, scheduledAt: 1 });
+// Index for admin dashboard: find bookings with pending subscription usage
+bookingSchema.index({ 'subscriptionUsagePending.0': 1, paymentStatus: 1 });
 
 const Booking = mongoose.model('Booking', bookingSchema);
 export default Booking;

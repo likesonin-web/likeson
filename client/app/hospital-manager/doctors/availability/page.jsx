@@ -51,7 +51,7 @@ const DoctorSelector = ({ doctors, selected, onSelect, loadingList }) => {
 
   return (
     <div className="card p-4 flex flex-col gap-3">
-      <p className="text-xs font-bold text-[var(--base-content)] uppercase tracking-wider flex items-center gap-2">
+      <p className="text-[10px] font-bold text-[var(--base-content)] uppercase tracking-wider flex items-center gap-2">
         <Users size={13} /> Select Doctor
       </p>
       <div className="relative">
@@ -61,7 +61,7 @@ const DoctorSelector = ({ doctors, selected, onSelect, loadingList }) => {
           placeholder="Search doctors…"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          className="input-field w-full pl-9 text-xs py-2"
+          className="input-field w-full pl-9 text-[10px] py-2"
         />
       </div>
       <p className="text-[10px] text-[var(--base-content)]/35">
@@ -75,7 +75,7 @@ const DoctorSelector = ({ doctors, selected, onSelect, loadingList }) => {
       ) : filtered.length === 0 ? (
         <div className="flex flex-col items-center py-8 gap-2">
           <User size={20} className="text-[var(--base-content)]/20" />
-          <p className="text-xs text-[var(--base-content)]/40">No doctors found</p>
+          <p className="text-[10px] text-[var(--base-content)]/40">No doctors found</p>
         </div>
       ) : (
         <div className="space-y-1.5 max-h-64 overflow-y-auto">
@@ -93,13 +93,13 @@ const DoctorSelector = ({ doctors, selected, onSelect, loadingList }) => {
                     : "border-[var(--base-300)] hover:border-[var(--primary)] bg-[var(--base-200)]"
                 }`}
               >
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 ${
                   isSelected ? "bg-white/20 text-white" : "bg-[var(--primary)] text-[var(--primary-content)]"
                 }`}>
                   {doc.user?.name?.split(" ").map(n => n[0]).join("").slice(0,2) ?? "?"}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className={`text-xs font-bold truncate ${isSelected ? "text-white" : "text-[var(--base-content)]"}`}>
+                  <p className={`text-[10px] font-bold truncate ${isSelected ? "text-white" : "text-[var(--base-content)]"}`}>
                     {doc.user?.name ?? "—"}
                   </p>
                   <p className={`text-[10px] truncate ${isSelected ? "text-white/70" : "text-[var(--base-content)]/50"}`}>
@@ -131,24 +131,24 @@ const SlotBadge = ({ slot, onClick }) => {
       whileHover={{ scale: 1.02 }}
       whileTap={{ scale: 0.98 }}
       onClick={() => onClick(slot)}
-      className="w-full text-left p-2.5 rounded-[var(--r-field)] border border-transparent hover:border-[var(--primary)]/30 transition-all group"
+      className="w-full text-left p-1 rounded-md border border-transparent hover:border-[var(--primary)]/30 transition-all group"
       style={{ background: `color-mix(in srgb, ${color.bg} 12%, var(--base-200))` }}
     >
       <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-1.5">
           <Clock size={11} style={{ color: color.bg }} />
-          <span className="text-[11px] font-bold text-[var(--base-content)]">{fmtTime(slot.startTime)}</span>
-          <span className="text-[10px] text-[var(--base-content)]/40">→</span>
-          <span className="text-[11px] font-bold text-[var(--base-content)]">{fmtTime(slot.endTime)}</span>
+          <span className="text-[8px] font-bold text-[var(--base-content)]">{fmtTime(slot.startTime)}</span>
+          <span className="text-[8px] text-[var(--base-content)]/40">→</span>
+          <span className="text-[8px] font-bold text-[var(--base-content)]">{fmtTime(slot.endTime)}</span>
         </div>
-        <Eye size={11} className="text-[var(--base-content)]/30 group-hover:text-[var(--primary)] transition-colors" />
+         
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold" style={{ background: color.bg, color: color.text }}>
+        <span className="text-[8px] px-1.5 py-0.5 rounded-full font-semibold" style={{ background: color.bg, color: color.text }}>
           {color.label}
         </span>
-        <span className="text-[10px] text-[var(--base-content)]/50">{slotDuration(slot.startTime, slot.endTime)}</span>
-        <span className="text-[10px] text-[var(--base-content)]/50">· {slot.maxPatients} pts</span>
+        <span className="text-[8px] text-[var(--base-content)]/50">{slotDuration(slot.startTime, slot.endTime)}</span>
+        <span className="text-[8px] text-[var(--base-content)]/50">· {slot.maxPatients} pts</span>
       </div>
     </motion.button>
   );
@@ -184,7 +184,7 @@ const SlotDetailModal = ({ slot, day, onClose }) => {
         >
           <div className="flex items-center gap-2">
             <Clock size={16} style={{ color: color.bg }} />
-            <p className="font-bold text-sm text-[var(--base-content)]">Slot Details</p>
+            <p className="font-bold text-xs text-[var(--base-content)]">Slot Details</p>
           </div>
           <button onClick={onClose} className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-[var(--base-300)] transition-colors">
             <X size={14} />
@@ -194,8 +194,8 @@ const SlotDetailModal = ({ slot, day, onClose }) => {
           {rows.map(r => (
             <div key={r.label} className="flex flex-col">
               <div className="flex items-center justify-between">
-                <span className="text-xs text-[var(--base-content)]/50 font-medium">{r.label}</span>
-                <span className="text-xs font-bold text-[var(--base-content)]">{r.value}</span>
+                <span className="text-[10px] text-[var(--base-content)]/50 font-medium">{r.label}</span>
+                <span className="text-[10px] font-bold text-[var(--base-content)]">{r.value}</span>
               </div>
               <p className="text-[10px] text-[var(--base-content)]/30 mt-0.5">{r.note}</p>
               <div className="h-px bg-[var(--base-300)] mt-2" />
@@ -203,9 +203,9 @@ const SlotDetailModal = ({ slot, day, onClose }) => {
           ))}
         </div>
         <div className="px-5 pb-4">
-          <div className="alert alert-info text-xs flex items-start gap-2">
-            <Info size={13} className="flex-shrink-0 mt-0.5" style={{ color: "var(--info)" }} />
-            <p className="text-[var(--base-content)]/70">
+          <div className="alert alert-info text-[10px] flex items-start gap-2">
+            <Info size={16} className="flex-shrink-0 mt-0.5" style={{ color: "var(--info)" }} />
+            <p className="text-[var(--base-content)]/70 text-[10px]  ">
               Hospital managers can view availability but cannot edit it. Doctors manage their own slots.
             </p>
           </div>
@@ -237,7 +237,7 @@ const WeeklyGrid = ({ availability, onSlotClick }) => {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.04 }}
-            className={`rounded-[var(--r-box)] border overflow-hidden transition-colors ${
+            className={`rounded-md border overflow-hidden transition-colors ${
               isOff
                 ? "border-[var(--base-300)] opacity-60"
                 : "border-[var(--base-300)] hover:border-[var(--primary)]/40"
@@ -246,8 +246,8 @@ const WeeklyGrid = ({ availability, onSlotClick }) => {
             {/* Day header */}
             <div className={`px-2 py-2.5 border-b border-[var(--base-300)] flex items-center justify-between ${isOff ? "bg-[var(--base-300)]/40" : "bg-[var(--base-200)]"}`}>
               <div>
-                <p className="text-[10px] font-black uppercase tracking-wider text-[var(--base-content)]/60">{DAY_SHORT[i]}</p>
-                <p className="text-xs font-bold text-[var(--base-content)] leading-none">{day.slice(3)}</p>
+                <p className="text-[10px]  uppercase tracking-wider text-[var(--base-content)]/60">{DAY_SHORT[i]}{day.slice(3)}</p>
+                 
               </div>
               {isOff
                 ? <XCircle size={13} className="text-[var(--error)]/60" />
@@ -297,8 +297,8 @@ const ListView = ({ availability, onSlotClick }) => {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
         <CalendarDays size={36} className="text-[var(--base-content)]/20 mb-3" />
-        <p className="font-bold text-[var(--base-content)] text-sm">No availability set</p>
-        <p className="text-xs text-[var(--base-content)]/50 mt-1 max-w-xs">
+        <p className="font-bold text-[var(--base-content)] text-xs">No availability set</p>
+        <p className="text-[10px] text-[var(--base-content)]/50 mt-1 max-w-xs">
           This doctor hasn't published any weekly slots yet
         </p>
       </div>
@@ -316,7 +316,7 @@ const ListView = ({ availability, onSlotClick }) => {
                 <span className="text-[10px] font-black text-[var(--primary-content)]">{day.day.slice(0,3).toUpperCase()}</span>
               </div>
               <div>
-                <p className="font-bold text-sm text-[var(--base-content)]">{day.day}</p>
+                <p className="font-bold text-xs text-[var(--base-content)]">{day.day}</p>
                 <p className="text-[10px] text-[var(--base-content)]/50">
                   {activeSlots.length} active slot{activeSlots.length !== 1 ? "s" : ""}
                 </p>
@@ -393,7 +393,7 @@ export default function Availability() {
   }, [availability]);
 
   return (
-    <div className="min-h-screen bg-[var(--base-100)] p-4 md:p-6 lg:p-8" data-theme="hospital">
+    <div className="min-h-screen bg-[var(--base-100)] p-4  " data-theme="hospital">
 
       {/* Slot detail modal */}
       <AnimatePresence>
@@ -417,7 +417,7 @@ export default function Availability() {
         <h1 className="text-2xl md:text-3xl font-black text-[var(--base-content)] font-montserrat tracking-tight">
           Doctor Availability
         </h1>
-        <p className="text-sm text-[var(--base-content)]/50 mt-1">
+        <p className="text-xs text-[var(--base-content)]/50 mt-1">
           View weekly slot schedules for all linked doctors — read-only for hospital managers
         </p>
       </div>
@@ -426,11 +426,11 @@ export default function Availability() {
       {errorList && (
         <div className="alert alert-error flex items-center gap-2 mb-4">
           <AlertCircle size={14} />
-          <p className="text-xs font-semibold">{errorList}</p>
+          <p className="text-[10px] font-semibold">{errorList}</p>
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-2">
 
         {/* Left: doctor selector */}
         <div className="lg:col-span-1">
@@ -455,7 +455,7 @@ export default function Availability() {
                 <CalendarDays size={28} className="text-[var(--base-content)]/30" />
               </div>
               <p className="font-bold text-[var(--base-content)]">Select a doctor</p>
-              <p className="text-sm text-[var(--base-content)]/50 max-w-xs">
+              <p className="text-xs text-[var(--base-content)]/50 max-w-xs">
                 Choose a linked doctor from the left panel to view their weekly availability and slot details
               </p>
             </motion.div>
@@ -465,7 +465,7 @@ export default function Availability() {
           {loadingAvail && selected && (
             <div className="card p-12 flex flex-col items-center justify-center gap-3">
               <Loader2 size={28} className="animate-spin text-[var(--primary)]" />
-              <p className="text-sm text-[var(--base-content)]/50">Loading availability…</p>
+              <p className="text-xs text-[var(--base-content)]/50">Loading availability…</p>
             </div>
           )}
 
@@ -473,11 +473,11 @@ export default function Availability() {
           {errorAvail && selected && !loadingAvail && (
             <div className="card p-8 flex flex-col items-center gap-3 text-center">
               <AlertCircle size={24} className="text-[var(--error)]" />
-              <p className="text-sm font-semibold text-[var(--base-content)]">Failed to load availability</p>
-              <p className="text-xs text-[var(--base-content)]/50">{errorAvail}</p>
+              <p className="text-xs font-semibold text-[var(--base-content)]">Failed to load availability</p>
+              <p className="text-[10px] text-[var(--base-content)]/50">{errorAvail}</p>
               <button
                 onClick={() => dispatch(fetchDoctorAvailability(selected._id))}
-                className="btn-secondary text-xs px-4 py-2"
+                className="btn-secondary text-[10px] px-4 py-2"
               >
                 Retry
               </button>
@@ -504,7 +504,7 @@ export default function Availability() {
                     </div>
                     <div>
                       <p className="font-bold text-[var(--base-content)]">{selected.user?.name}</p>
-                      <p className="text-xs text-[var(--primary)] font-semibold">{selected.specialization}</p>
+                      <p className="text-[10px] text-[var(--primary)] font-semibold">{selected.specialization}</p>
                       <div className="flex items-center gap-1.5 mt-0.5">
                         {selected.isOnline
                           ? <Wifi size={11} className="text-[var(--success)]" />
@@ -532,7 +532,7 @@ export default function Availability() {
                       <button
                         key={key}
                         onClick={() => setView(key)}
-                        className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-[var(--r-field)] border font-semibold transition-colors ${
+                        className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-[var(--r-field)] border font-semibold transition-colors ${
                           view === key
                             ? "bg-[var(--primary)] text-[var(--primary-content)] border-[var(--primary)]"
                             : "border-[var(--base-300)] text-[var(--base-content)] hover:border-[var(--primary)]"
@@ -555,7 +555,7 @@ export default function Availability() {
                     ].map(({ label, value, color, note }) => (
                       <div key={label} className="card p-4 flex flex-col gap-2">
                         <p className="text-2xl font-black font-montserrat" style={{ color }}>{value}</p>
-                        <p className="text-xs font-semibold text-[var(--base-content)]">{label}</p>
+                        <p className="text-[10px] font-semibold text-[var(--base-content)]">{label}</p>
                         <p className="text-[10px] text-[var(--base-content)]/35 leading-snug">{note}</p>
                       </div>
                     ))}
@@ -566,7 +566,7 @@ export default function Availability() {
                 <div className="alert alert-info flex items-start gap-2.5">
                   <Info size={14} className="flex-shrink-0 mt-0.5" style={{ color: "var(--info)" }} />
                   <div>
-                    <p className="text-xs font-bold text-[var(--base-content)]">Read-only view</p>
+                    <p className="text-[10px] font-bold text-[var(--base-content)]">Read-only view</p>
                     <p className="text-[11px] text-[var(--base-content)]/60 mt-0.5">
                       Hospital managers can view but not modify doctor schedules. Weekly slots are managed exclusively by the doctor. Hospital controls pricing; doctors control availability.
                     </p>
@@ -588,12 +588,12 @@ export default function Availability() {
 
                 {/* Legend */}
                 <div className="card p-4">
-                  <p className="text-xs font-bold text-[var(--base-content)] mb-3">Consultation Type Legend</p>
+                  <p className="text-[10px] font-bold text-[var(--base-content)] mb-3">Consultation Type Legend</p>
                   <div className="flex flex-wrap gap-3">
                     {Object.entries(TYPE_COLORS).map(([key, val]) => (
                       <div key={key} className="flex items-center gap-2">
                         <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: val.bg }} />
-                        <span className="text-xs text-[var(--base-content)]/70 font-medium">{val.label}</span>
+                        <span className="text-[10px] text-[var(--base-content)]/70 font-medium">{val.label}</span>
                       </div>
                     ))}
                   </div>

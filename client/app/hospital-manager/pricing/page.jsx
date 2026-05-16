@@ -85,13 +85,13 @@ function KpiCard({ icon: Icon, label, value, sub, color = 'primary', index = 0 }
         >
           <Icon size={18} style={{ color: `var(--${color})` }} />
         </span>
-        <span className="text-xs font-semibold uppercase tracking-wider text-base-content/50">{label}</span>
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">{label}</span>
       </div>
 
-      <p className="font-montserrat text-2xl font-extrabold text-base-content leading-none">
+      <p className="font-montserrat text-2xl font-black  text-base-content leading-none">
         {value}
       </p>
-      {sub && <p className="mt-1 text-xs text-base-content/55">{sub}</p>}
+      {sub && <p className="mt-1 text-[10px] text-base-content/55">{sub}</p>}
     </motion.div>
   );
 }
@@ -106,7 +106,7 @@ function SectionTitle({ icon: Icon, title, desc }) {
       </span>
       <div>
         <h3 className="font-montserrat text-base font-bold text-base-content">{title}</h3>
-        {desc && <p className="text-xs text-base-content/55 mt-0.5">{desc}</p>}
+        {desc && <p className="text-[10px] text-base-content/55 mt-0.5">{desc}</p>}
       </div>
     </div>
   );
@@ -116,7 +116,7 @@ function SectionTitle({ icon: Icon, title, desc }) {
 function RupeeInput({ label, value, onChange, min = 0, max = 99999, disabled = false, helper }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-xs font-semibold text-base-content/70 uppercase tracking-wide">{label}</label>
+      <label className="text-[10px] font-semibold text-base-content/70 uppercase tracking-wide">{label}</label>
       <div className={`flex items-center rounded-[var(--r-field)] border overflow-hidden
                        transition-colors duration-200 ${disabled
                          ? 'bg-base-300/50 border-base-300 opacity-60 cursor-not-allowed'
@@ -131,7 +131,7 @@ function RupeeInput({ label, value, onChange, min = 0, max = 99999, disabled = f
           value={value}
           disabled={disabled}
           onChange={(e) => onChange(clamp(e.target.value, min, max))}
-          className="flex-1 h-10 bg-transparent px-3 text-sm font-semibold text-base-content
+          className="flex-1 h-10 bg-transparent px-3 text-xs font-semibold text-base-content
                      outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none
                      [&::-webkit-outer-spin-button]:appearance-none disabled:pointer-events-none"
         />
@@ -157,7 +157,7 @@ function Toggle({ label, checked, onChange, disabled = false }) {
           className="absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm"
         />
       </div>
-      <span className="text-sm font-medium text-base-content">{label}</span>
+      <span className="text-xs font-medium text-base-content">{label}</span>
     </label>
   );
 }
@@ -166,7 +166,7 @@ function Toggle({ label, checked, onChange, disabled = false }) {
 function PricingTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-[var(--r-box)] border border-base-300 bg-base-100 p-3 shadow-lg text-xs">
+    <div className="rounded-[var(--r-box)] border border-base-300 bg-base-100 p-3 shadow-lg text-[10px]">
       <p className="font-semibold text-base-content mb-2">{label}</p>
       {payload.map((p) => (
         <div key={p.dataKey} className="flex items-center justify-between gap-6 mb-1">
@@ -341,7 +341,7 @@ export default function Pricing() {
         >
           <Loader2 size={32} className="text-primary" />
         </motion.div>
-        <p className="text-sm text-base-content/55 font-medium">Loading pricing configuration…</p>
+        <p className="text-xs text-base-content/55 font-medium">Loading pricing configuration…</p>
       </div>
     );
   }
@@ -350,8 +350,8 @@ export default function Pricing() {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-4">
         <AlertTriangle size={32} className="text-error" />
-        <p className="text-sm text-error font-medium">{error}</p>
-        <button onClick={() => dispatch(fetchPricing())} className="btn-secondary text-xs px-4 py-2">
+        <p className="text-xs text-error font-medium">{error}</p>
+        <button onClick={() => dispatch(fetchPricing())} className="btn-secondary text-[10px] px-4 py-2">
           Retry
         </button>
       </div>
@@ -362,7 +362,7 @@ export default function Pricing() {
 
   return (
     <motion.div
-      className="min-h-screen pb-20"
+      className="min-h-screen p-3 pb-20"
       initial="hidden"
       animate="visible"
       variants={stagger}
@@ -377,14 +377,14 @@ export default function Pricing() {
                 <ShieldCheck size={10} />
                 Hospital Pricing
               </span>
-              <span className="text-xs text-base-content/40">
+              <span className="text-[10px] text-base-content/40">
                 Platform fee is managed by Superadmin
               </span>
             </div>
-            <h1 className="font-montserrat text-2xl md:text-3xl font-extrabold text-base-content tracking-tight">
+            <h1 className="font-montserrat text-2xl font-black md:text-3xl  text-base-content tracking-tight">
               Consultation Pricing
             </h1>
-            <p className="mt-1 text-sm text-base-content/55">
+            <p className="mt-1 text-xs text-base-content/55">
               Set fees charged to patients and honorariums paid to linked doctors.
             </p>
           </div>
@@ -400,7 +400,7 @@ export default function Pricing() {
               >
                 <button
                   onClick={handleReset}
-                  className="btn-secondary text-xs px-4 py-2.5 flex items-center gap-1.5"
+                  className="btn-secondary text-[10px] px-4 py-2.5 flex items-center gap-1.5"
                 >
                   <RefreshCw size={13} />
                   Reset
@@ -408,7 +408,7 @@ export default function Pricing() {
                 <button
                   onClick={handleSave}
                   disabled={saving}
-                  className="btn-primary-cta text-xs px-5 py-2.5 flex items-center gap-1.5"
+                  className="btn-primary-cta text-[10px] px-5 py-2.5 flex items-center gap-1.5"
                 >
                   {saving
                     ? <Loader2 size={13} className="animate-spin" />
@@ -430,7 +430,7 @@ export default function Pricing() {
                            border border-success/30 px-4 py-2.5"
               >
                 <CheckCircle2 size={14} className="text-success" />
-                <span className="text-xs font-semibold text-success">Pricing saved successfully</span>
+                <span className="text-[10px] font-semibold text-success">Pricing saved successfully</span>
               </motion.div>
             )}
           </AnimatePresence>
@@ -441,8 +441,8 @@ export default function Pricing() {
       <motion.div variants={fadeUp} className="alert alert-info mb-6 rounded-[var(--r-box)]">
         <Lock size={16} className="text-info shrink-0 mt-0.5" />
         <div>
-          <p className="text-sm font-semibold">Platform fee is superadmin-controlled</p>
-          <p className="text-xs text-base-content/60 mt-0.5">
+          <p className="text-xs font-semibold">Platform fee is superadmin-controlled</p>
+          <p className="text-[10px] text-base-content/60 mt-0.5">
             You can configure patient fees and doctor honorariums below. The platform fee (applied on top)
             is set by Superadmin and is not visible here.
           </p>
@@ -544,12 +544,12 @@ export default function Pricing() {
                   helper="Must not exceed patient fee"
                 />
                 {validationErrs.inPersonHonorarium && (
-                  <p className="text-xs text-error mt-1">{validationErrs.inPersonHonorarium}</p>
+                  <p className="text-[10px] text-error mt-1">{validationErrs.inPersonHonorarium}</p>
                 )}
               </div>
             </div>
             {form.consultationTypes.inPerson && (
-              <div className="mt-3 flex items-center gap-1.5 text-xs text-base-content/50">
+              <div className="mt-3 flex items-center gap-1.5 text-[10px] text-base-content/50">
                 <TrendingUp size={12} className="text-success" />
                 Hospital margin: {fmt(Math.max(0, form.inPersonFee - form.inPersonHonorarium))}
                 &nbsp;({form.inPersonFee > 0
@@ -582,12 +582,12 @@ export default function Pricing() {
                   helper="Must not exceed patient fee"
                 />
                 {validationErrs.videoHonorarium && (
-                  <p className="text-xs text-error mt-1">{validationErrs.videoHonorarium}</p>
+                  <p className="text-[10px] text-error mt-1">{validationErrs.videoHonorarium}</p>
                 )}
               </div>
             </div>
             {form.consultationTypes.video && (
-              <div className="mt-3 flex items-center gap-1.5 text-xs text-base-content/50">
+              <div className="mt-3 flex items-center gap-1.5 text-[10px] text-base-content/50">
                 <TrendingUp size={12} className="text-success" />
                 Hospital margin: {fmt(Math.max(0, form.videoFee - form.videoHonorarium))}
                 &nbsp;({form.videoFee > 0
@@ -620,12 +620,12 @@ export default function Pricing() {
                   helper="Must not exceed patient fee"
                 />
                 {validationErrs.homeVisitHonorarium && (
-                  <p className="text-xs text-error mt-1">{validationErrs.homeVisitHonorarium}</p>
+                  <p className="text-[10px] text-error mt-1">{validationErrs.homeVisitHonorarium}</p>
                 )}
               </div>
             </div>
             {form.consultationTypes.homeVisit && (
-              <div className="mt-3 flex items-center gap-1.5 text-xs text-base-content/50">
+              <div className="mt-3 flex items-center gap-1.5 text-[10px] text-base-content/50">
                 <TrendingUp size={12} className="text-success" />
                 Hospital margin: {fmt(Math.max(0, form.homeVisitFee - form.homeVisitHonorarium))}
                 &nbsp;({form.homeVisitFee > 0
@@ -656,7 +656,7 @@ export default function Pricing() {
                 helper="Set 0 for free follow-ups"
               />
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-base-content/70 uppercase tracking-wide">
+                <label className="text-[10px] font-semibold text-base-content/70 uppercase tracking-wide">
                   Discount (%)
                 </label>
                 <div className="flex items-center rounded-[var(--r-field)] border border-base-300
@@ -671,18 +671,18 @@ export default function Pricing() {
                     max={100}
                     value={form.followUpDiscountPercent}
                     onChange={(e) => set('followUpDiscountPercent', clamp(e.target.value, 0, 100))}
-                    className="flex-1 h-10 bg-transparent px-3 text-sm font-semibold text-base-content
+                    className="flex-1 h-10 bg-transparent px-3 text-xs font-semibold text-base-content
                                outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
                   />
                 </div>
                 {validationErrs.followUpDiscountPercent && (
-                  <p className="text-xs text-error">{validationErrs.followUpDiscountPercent}</p>
+                  <p className="text-[10px] text-error">{validationErrs.followUpDiscountPercent}</p>
                 )}
               </div>
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-base-content/70 uppercase tracking-wide">
+              <label className="text-[10px] font-semibold text-base-content/70 uppercase tracking-wide">
                 Valid For (days after first visit)
               </label>
               <div className="flex items-center rounded-[var(--r-field)] border border-base-300
@@ -697,24 +697,24 @@ export default function Pricing() {
                   max={90}
                   value={form.followUpValidDays}
                   onChange={(e) => set('followUpValidDays', clamp(e.target.value, 1, 90))}
-                  className="flex-1 h-10 bg-transparent px-3 text-sm font-semibold text-base-content
+                  className="flex-1 h-10 bg-transparent px-3 text-xs font-semibold text-base-content
                              outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
                 />
-                <span className="pr-3 text-xs text-base-content/50 font-medium">days</span>
+                <span className="pr-3 text-[10px] text-base-content/50 font-medium">days</span>
               </div>
               {validationErrs.followUpValidDays && (
-                <p className="text-xs text-error">{validationErrs.followUpValidDays}</p>
+                <p className="text-[10px] text-error">{validationErrs.followUpValidDays}</p>
               )}
               <p className="text-[11px] text-base-content/45">Range: 1 – 90 days</p>
             </div>
 
             {/* follow-up summary pill */}
             <div className="mt-4 rounded-[var(--r-field)] bg-success/8 border border-success/20 p-3">
-              <p className="text-xs font-semibold text-success flex items-center gap-1.5">
+              <p className="text-[10px] font-semibold text-success flex items-center gap-1.5">
                 <CheckCircle2 size={12} />
                 Follow-Up Summary
               </p>
-              <p className="text-xs text-base-content/60 mt-1">
+              <p className="text-[10px] text-base-content/60 mt-1">
                 Patients returning within{' '}
                 <strong className="text-base-content">{form.followUpValidDays} days</strong> will be charged{' '}
                 {form.followUpFee === 0
@@ -741,7 +741,7 @@ export default function Pricing() {
               />
               <button
                 onClick={() => setShowChart((s) => !s)}
-                className="flex items-center gap-1 text-xs text-base-content/50 hover:text-primary transition-colors"
+                className="flex items-center gap-1 text-[10px] text-base-content/50 hover:text-primary transition-colors"
               >
                 {showChart ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               </button>
@@ -821,7 +821,7 @@ export default function Pricing() {
                         <p className="text-[10px] text-base-content/50 font-semibold uppercase tracking-wide mb-1">
                           {d.name}
                         </p>
-                        <p className="text-xs font-bold text-success">
+                        <p className="text-[10px] font-bold text-success">
                           {fmt(d.Margin)}
                         </p>
                         <p className="text-[10px] text-base-content/40">margin</p>
@@ -837,7 +837,7 @@ export default function Pricing() {
           {pricing?.lastUpdatedByRole && (
             <motion.div variants={popIn} className="card p-5">
               <SectionTitle icon={Info} title="Last Updated" />
-              <div className="flex flex-wrap gap-3 text-xs text-base-content/60">
+              <div className="flex flex-wrap gap-3 text-[10px] text-base-content/60">
                 <span className="flex items-center gap-1.5">
                   <span className="status-dot status-dot-info" />
                   Updated by: <strong className="text-base-content ml-1 capitalize">
@@ -865,17 +865,17 @@ export default function Pricing() {
                        px-5 py-3"
           >
             <AlertTriangle size={14} className="text-warning shrink-0" />
-            <span className="text-xs font-semibold text-base-content/70">Unsaved changes</span>
+            <span className="text-[10px] font-semibold text-base-content/70">Unsaved changes</span>
             <button
               onClick={handleReset}
-              className="text-xs font-bold text-base-content/50 hover:text-base-content transition-colors"
+              className="text-[10px] font-bold text-base-content/50 hover:text-base-content transition-colors"
             >
               Reset
             </button>
             <button
               onClick={handleSave}
               disabled={saving}
-              className="btn-primary-cta text-xs px-4 py-2 flex items-center gap-1.5 rounded-full"
+              className="btn-primary-cta text-[10px] px-4 py-2 flex items-center gap-1.5 rounded-full"
             >
               {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
               {saving ? 'Saving…' : 'Save'}

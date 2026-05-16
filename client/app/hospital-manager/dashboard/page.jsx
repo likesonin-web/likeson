@@ -281,7 +281,7 @@ export default function Overview() {
   }
 
   return (
-    <div className="min-h-screen bg-[color:var(--color-base-200)] p-5 lg:p-7" style={POPPINS}>
+    <div className="min-h-screen bg-[color:var(--color-base-200)]  p-3" style={POPPINS}>
 
       {/* ── Header ───────────────────────────────────────────────────────── */}
       <motion.div variants={fadeUp} initial="hidden" animate="visible" className="mb-6">

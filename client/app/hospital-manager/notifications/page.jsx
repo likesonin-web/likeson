@@ -291,7 +291,7 @@ export default function Notifications() {
   };
 
   return (
-    <div className="min-h-screen bg-[color:var(--color-base-200)] p-6 lg:p-8">
+    <div className="min-h-screen bg-[color:var(--color-base-200)] p-3">
 
       {/* ── Header ── */}
       <motion.div variants={fadeUp} custom={0} initial="hidden" animate="visible" className="mb-6">

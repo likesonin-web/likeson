@@ -1,93 +1,88 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  LayoutDashboard,
-  Droplets,
-  FlaskConical,
-  ClipboardList,
-  ChartBar,
-  Settings,
-  FileText,
-  Bell,
-  LogOut,
-  Menu,
-  X,
-  ChevronLeft,
-  ChevronRight,
-  AlertTriangle,
-  PackageSearch,
-  BadgeCheck,
-  Banknote,
-  ShieldCheck,
-  History,
-  Users,
-  Truck,
-  ChevronDown,
-  Building2,
+  LayoutDashboard, Droplets, FlaskConical, ClipboardList,
+  ChartBar, Settings, Bell, LogOut, Menu, X,
+  ChevronLeft, ChevronRight, AlertTriangle, PackageSearch,
+  Banknote, Building2, Sun, Moon, User, ChevronDown,
 } from 'lucide-react';
-import { fetchMyBank, fetchMyStats } from '@/store/slices/bloodbankSlice'; // adjust path
+import { fetchMyBank, fetchMyStats } from '@/store/slices/bloodbankSlice';
 import { logout } from "@/store/slices/userSlice";
+import { useTheme } from 'next-themes';
+import { cn } from '@/lib/utils';
 
-/* ─────────────────────────────────────────────────
-   NAV STRUCTURE
-───────────────────────────────────────────────── */
 const NAV = [
   {
     group: 'Overview',
     items: [
-      { label: 'Dashboard',    icon: LayoutDashboard, href: '/blood-bank/dashboard' },
-      { label: 'Stats',        icon: ChartBar,        href: '/blood-bank/stats'     },
+      { label: 'Dashboard', icon: LayoutDashboard, href: '/blood-bank/dashboard' },
+      { label: 'Stats',     icon: ChartBar,        href: '/blood-bank/stats'     },
     ],
   },
   {
     group: 'Blood Management',
     items: [
-      { label: 'Inventory',    icon: Droplets,        href: '/blood-bank/inventory'  },
-      { label: 'Blood Units',  icon: FlaskConical,    href: '/blood-bank/units'      },
-      { label: 'Expiry Check', icon: PackageSearch,   href: '/blood-bank/expiry'     },
+      { label: 'Inventory',    icon: Droplets,      href: '/blood-bank/inventory' },
+      { label: 'Blood Units',  icon: FlaskConical,  href: '/blood-bank/units'     },
+      { label: 'Expiry Check', icon: PackageSearch, href: '/blood-bank/expiry'    },
     ],
   },
   {
     group: 'Requests',
     items: [
-      { label: 'Requests',     icon: ClipboardList,   href: '/blood-bank/requests'   },
+      { label: 'Requests', icon: ClipboardList, href: '/blood-bank/requests' },
     ],
   },
   {
     group: 'Configuration',
     items: [
-      { label: 'Pricing',      icon: Banknote,        href: '/blood-bank/pricing'    },
-      { label: 'Stock Alerts', icon: AlertTriangle,   href: '/blood-bank/stock-alerts' },
-      { label: 'Linked Hospitals', icon: Building2,   href: '/blood-bank/hospitals'  },
+      { label: 'Pricing',          icon: Banknote,       href: '/blood-bank/pricing'       },
+      { label: 'Stock Alerts',     icon: AlertTriangle,  href: '/blood-bank/stock-alerts'  },
+      { label: 'Linked Hospitals', icon: Building2,      href: '/blood-bank/hospitals'     },
     ],
   },
   {
     group: 'Profile & Docs',
     items: [
-      { label: 'Profile',      icon: Settings,        href: '/blood-bank/profile'    }
+      { label: 'Profile', icon: Settings, href: '/blood-bank/profile' },
     ],
   },
 ];
 
-/* ─────────────────────────────────────────────────
-   CONSTANTS
-───────────────────────────────────────────────── */
 const SIDEBAR_W_OPEN   = 256;
 const SIDEBAR_W_CLOSED = 68;
 
-/* ─────────────────────────────────────────────────
-   LOGO MARK
-───────────────────────────────────────────────── */
+const ThemeToggle = memo(function ThemeToggle({ compact = false }) {
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return <div className={cn('rounded-xl border border-base-300 skeleton', compact ? 'w-8 h-8' : 'w-10 h-10')} aria-hidden="true" />;
+  const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
+  const Icon = theme === 'dark' ? Moon : Sun;
+  const label = `Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`;
+  return (
+    <button onClick={toggleTheme} aria-label={label} title={label}
+      className={cn(
+        'rounded-xl border border-base-300 text-base-content/50 hover:bg-primary/5 hover:text-primary transition-all duration-200 flex items-center justify-center',
+        compact ? 'w-8 h-8' : 'p-2.5'
+      )}>
+      <Icon size={compact ? 15 : 18} />
+    </button>
+  );
+});
+
+/* ── LOGO ── */
 function LogoMark({ collapsed }) {
   return (
     <div className="flex items-center gap-2.5 overflow-hidden">
       <div className="relative flex-shrink-0 w-9 h-9 rounded-xl bg-primary flex items-center justify-center shadow-primary">
         <Droplets className="w-5 h-5 text-primary-content" strokeWidth={2.5} />
+        {/* FIX: pulse dot — was using error color, kept */}
         <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-error border-2 border-base-100 animate-pulse" />
       </div>
       <AnimatePresence>
@@ -112,13 +107,12 @@ function LogoMark({ collapsed }) {
   );
 }
 
-/* ─────────────────────────────────────────────────
-   NAV ITEM
-───────────────────────────────────────────────── */
+/* ── NAV ITEM ── */
 function NavItem({ item, collapsed, active, onClick }) {
   const Icon = item.icon;
   return (
     <Link href={item.href} onClick={onClick}>
+      {/* FIX: added `relative` so tooltip (absolute left-full) positions correctly */}
       <motion.div
         whileHover={{ x: collapsed ? 0 : 3 }}
         whileTap={{ scale: 0.97 }}
@@ -132,7 +126,7 @@ function NavItem({ item, collapsed, active, onClick }) {
           ${collapsed ? 'justify-center' : ''}
         `}
       >
-        <Icon className={`flex-shrink-0 ${active ? 'w-[18px] h-[18px]' : 'w-[18px] h-[18px]'}`} strokeWidth={active ? 2.5 : 2} />
+        <Icon className="flex-shrink-0 w-[18px] h-[18px]" strokeWidth={active ? 2.5 : 2} />
         <AnimatePresence>
           {!collapsed && (
             <motion.span
@@ -146,8 +140,7 @@ function NavItem({ item, collapsed, active, onClick }) {
             </motion.span>
           )}
         </AnimatePresence>
-
-        {/* tooltip on collapsed */}
+        {/* Tooltip — only shown when collapsed */}
         {collapsed && (
           <div className="absolute left-full ml-3 px-2.5 py-1.5 bg-neutral text-neutral-content text-xs font-semibold rounded-lg
             opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-150 whitespace-nowrap z-50 shadow-depth">
@@ -159,9 +152,7 @@ function NavItem({ item, collapsed, active, onClick }) {
   );
 }
 
-/* ─────────────────────────────────────────────────
-   NAV GROUP
-───────────────────────────────────────────────── */
+/* ── NAV GROUP ── */
 function NavGroup({ group, items, collapsed, pathname, onNav }) {
   return (
     <div className="mb-1">
@@ -193,15 +184,14 @@ function NavGroup({ group, items, collapsed, pathname, onNav }) {
   );
 }
 
-/* ─────────────────────────────────────────────────
-   SIDEBAR CONTENT (shared desktop + mobile)
-───────────────────────────────────────────────── */
+/* ── SIDEBAR CONTENT ── */
+// FIX: added `onNav` prop (used by mobile to close drawer on link click)
+// FIX: added `onLogout` prop so both desktop and mobile sidebars can trigger logout
 function SidebarContent({ collapsed, pathname, onNav, onToggle, isMobile, onLogout }) {
   const { myBank, myStats } = useSelector(s => s.bloodBank);
 
   return (
     <div className="flex flex-col h-full">
-
       {/* Header */}
       <div className={`flex items-center py-5 px-3 ${collapsed && !isMobile ? 'justify-center' : 'justify-between'}`}>
         <LogoMark collapsed={collapsed && !isMobile} />
@@ -211,10 +201,7 @@ function SidebarContent({ collapsed, pathname, onNav, onToggle, isMobile, onLogo
             onClick={onToggle}
             className="flex-shrink-0 w-7 h-7 rounded-lg bg-base-300/60 hover:bg-primary/15 flex items-center justify-center text-base-content/60 hover:text-primary transition-colors"
           >
-            {collapsed
-              ? <ChevronRight className="w-3.5 h-3.5" />
-              : <ChevronLeft  className="w-3.5 h-3.5" />
-            }
+            {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
           </motion.button>
         )}
         {isMobile && (
@@ -265,17 +252,20 @@ function SidebarContent({ collapsed, pathname, onNav, onToggle, isMobile, onLogo
             items={items}
             collapsed={collapsed && !isMobile}
             pathname={pathname}
+            // FIX: pass onNav so mobile closes on nav click; desktop gets undefined (no-op)
             onNav={isMobile ? onNav : undefined}
           />
         ))}
       </nav>
 
       {/* Footer */}
-      <div className={`px-2 pb-4 pt-2 border-t border-base-300/60 flex flex-col gap-1`}>
-        <Link href="/blood-bank/notifications">
+      <div className="px-2 pb-4 pt-2 border-t border-base-300/60 flex flex-col gap-1">
+        {/* Notifications link */}
+        <Link href="/blood-bank/notifications" onClick={isMobile ? onNav : undefined}>
+          {/* FIX: added `relative` for tooltip positioning */}
           <motion.div
             whileHover={{ x: collapsed && !isMobile ? 0 : 3 }}
-            className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer
+            className={`relative flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer
               text-base-content/60 hover:bg-primary/10 hover:text-primary transition-colors group
               ${collapsed && !isMobile ? 'justify-center' : ''}`}
           >
@@ -301,10 +291,12 @@ function SidebarContent({ collapsed, pathname, onNav, onToggle, isMobile, onLogo
           </motion.div>
         </Link>
 
+        {/* Logout button */}
+        {/* FIX: added `relative` for tooltip; `onLogout` comes from parent, not local dispatch */}
         <motion.button
           whileTap={{ scale: 0.96 }}
-          onClick={() => { /* dispatch logout */ }}
-          className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer w-full
+          onClick={onLogout}
+          className={`relative flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer w-full
             text-error/70 hover:bg-error/10 hover:text-error transition-colors group
             ${collapsed && !isMobile ? 'justify-center' : ''}`}
         >
@@ -315,7 +307,6 @@ function SidebarContent({ collapsed, pathname, onNav, onToggle, isMobile, onLogo
                 initial={{ opacity: 0, width: 0 }}
                 animate={{ opacity: 1, width: 'auto' }}
                 exit={{ opacity: 0, width: 0 }}
-               onClick={onLogout}
                 className="text-sm font-semibold whitespace-nowrap overflow-hidden"
               >
                 Sign Out
@@ -334,11 +325,25 @@ function SidebarContent({ collapsed, pathname, onNav, onToggle, isMobile, onLogo
   );
 }
 
-/* ─────────────────────────────────────────────────
-   TOP BAR (mobile + desktop)
-───────────────────────────────────────────────── */
-function TopBar({ onMenuOpen, collapsed, currentLabel }) {
+/* ── TOP BAR ── */
+function TopBar({ onMenuOpen, currentLabel, theme, onThemeToggle }) {
   const { myBank } = useSelector(s => s.bloodBank);
+  const { user }   = useSelector(s => s.user);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileRef = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (profileRef.current && !profileRef.current.contains(e.target))
+        setProfileOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const initials = user?.name
+    ? user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+    : 'BB';
 
   return (
     <header className="h-14 bg-base-100/80 backdrop-blur-strong border-b border-base-300/60 flex items-center px-4 gap-3 sticky top-0 z-30">
@@ -368,50 +373,104 @@ function TopBar({ onMenuOpen, collapsed, currentLabel }) {
               ? 'bg-warning/10 text-warning border-warning/30'
               : 'bg-error/10 text-error border-error/30'
             }`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${myBank.status === 'active' ? 'bg-success' : myBank.status === 'pending' ? 'bg-warning' : 'bg-error'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full ${
+              myBank.status === 'active' ? 'bg-success' :
+              myBank.status === 'pending' ? 'bg-warning' : 'bg-error'
+            }`} />
             {myBank.status?.replace('_', ' ').toUpperCase()}
           </div>
         )}
 
+       <ThemeToggle/>
+
         {/* Notification icon */}
+        {/* FIX: w-4.5 h-4.5 → w-[18px] h-[18px] */}
         <Link href="/blood-bank/notifications">
           <button className="relative p-2 rounded-xl hover:bg-base-300/60 text-base-content/70 transition-colors">
-            <Bell className="w-4.5 h-4.5" />
+            <Bell className="w-[18px] h-[18px]" />
             <span className="absolute top-1 right-1 w-2 h-2 bg-error rounded-full border border-base-100" />
           </button>
         </Link>
 
-        {/* Avatar */}
-        <div className="w-8 h-8 rounded-xl bg-primary/15 flex items-center justify-center">
-          <Droplets className="w-4 h-4 text-primary" />
+        {/* Profile avatar + dropdown */}
+        <div className="relative" ref={profileRef}>
+          <button
+            onClick={() => setProfileOpen(v => !v)}
+            className="flex items-center gap-1.5 p-1 rounded-xl hover:bg-base-300/60 transition-colors"
+          >
+            <div className="w-8 h-8 rounded-xl bg-primary/20 flex items-center justify-center border border-primary/30">
+              {user?.avatar ? (
+                <img src={user.avatar} alt="avatar" className="w-8 h-8 rounded-xl object-cover" />
+              ) : (
+                <span className="text-xs font-black text-primary">{initials}</span>
+              )}
+            </div>
+            <ChevronDown className={`w-3 h-3 text-base-content/40 transition-transform ${profileOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          <AnimatePresence>
+            {profileOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: 6, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 6, scale: 0.95 }}
+                transition={{ duration: 0.15 }}
+                className="absolute right-0 top-full mt-2 w-56 bg-base-100 border border-base-300/60 rounded-2xl shadow-xl overflow-hidden z-50"
+              >
+                <div className="px-4 py-3 border-b border-base-300/60 bg-base-200/50">
+                  <p className="text-sm font-bold text-base-content truncate">{user?.name ?? 'Blood Bank'}</p>
+                  <p className="text-xs text-base-content/50 truncate">{user?.email ?? ''}</p>
+                </div>
+                <div className="p-1.5">
+                  <Link href="/blood-bank/profile" onClick={() => setProfileOpen(false)}>
+                    <div className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-base-content/70 hover:bg-primary/10 hover:text-primary transition-colors cursor-pointer">
+                      <User className="w-4 h-4" />
+                      View Profile
+                    </div>
+                  </Link>
+                  <Link href="/blood-bank/profile?tab=settings" onClick={() => setProfileOpen(false)}>
+                    <div className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-base-content/70 hover:bg-primary/10 hover:text-primary transition-colors cursor-pointer">
+                      <Settings className="w-4 h-4" />
+                      Settings
+                    </div>
+                  </Link>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
     </header>
   );
 }
 
-/* ─────────────────────────────────────────────────
-   MAIN LAYOUT
-───────────────────────────────────────────────── */
+/* ── MAIN LAYOUT ── */
 export default function BloodBankDashboard({ children }) {
   const dispatch = useDispatch();
   const pathname = usePathname();
- 
-  const router    = useRouter();
-  const [sidebarOpen,      setSidebarOpen]      = useState(false);   // mobile drawer
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);   // desktop collapse
+  const router   = useRouter();
+
+  const [sidebarOpen,      setSidebarOpen]      = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // FIX: SSR guard — localStorage only on client
+  const [theme, setTheme] = useState('blood_bank');
+  useEffect(() => {
+    const saved = localStorage.getItem('bb_theme');
+    if (saved) setTheme(saved);
+  }, []);
+
   const overlayRef = useRef(null);
 
-  /* fetch on mount */
   useEffect(() => {
     dispatch(fetchMyBank());
     dispatch(fetchMyStats());
   }, [dispatch]);
 
-  /* close mobile sidebar on route change */
+  // Close mobile drawer on route change
   useEffect(() => { setSidebarOpen(false); }, [pathname]);
 
-  /* close on outside click */
+  // Close on overlay click
   useEffect(() => {
     const handler = (e) => {
       if (sidebarOpen && overlayRef.current === e.target) setSidebarOpen(false);
@@ -420,25 +479,32 @@ export default function BloodBankDashboard({ children }) {
     return () => document.removeEventListener('mousedown', handler);
   }, [sidebarOpen]);
 
-    const handleLogout = useCallback(() => {
-      dispatch(logout());
-      router.push("/");
-    }, [dispatch, router]);
-
-  /* lock body scroll when mobile sidebar open */
+  // Lock body scroll when mobile drawer open
   useEffect(() => {
     document.body.style.overflow = sidebarOpen ? 'hidden' : '';
     return () => { document.body.style.overflow = ''; };
   }, [sidebarOpen]);
 
-  /* current route label */
+  const handleLogout = useCallback(() => {
+    dispatch(logout());
+    router.push("/");
+  }, [dispatch, router]);
+
+  const handleThemeToggle = useCallback(() => {
+    setTheme(prev => {
+      const next = prev === 'blood_bank' ? 'dark' : 'blood_bank';
+      localStorage.setItem('bb_theme', next);
+      return next;
+    });
+  }, []);
+
   const currentLabel = NAV.flatMap(g => g.items)
     .find(i => pathname === i.href || pathname?.startsWith(i.href + '/'))?.label ?? 'Dashboard';
 
   return (
-    <div data-theme="blood_bank" className="flex h-screen bg-base-200 overflow-hidden font-sans">
+    <div data-theme={theme} className="flex h-screen bg-base-200 overflow-hidden font-sans">
 
-      {/* ── DESKTOP SIDEBAR ───────────────────────────────── */}
+      {/* DESKTOP SIDEBAR */}
       <motion.aside
         animate={{ width: sidebarCollapsed ? SIDEBAR_W_CLOSED : SIDEBAR_W_OPEN }}
         transition={{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
@@ -450,24 +516,23 @@ export default function BloodBankDashboard({ children }) {
           pathname={pathname}
           onToggle={() => setSidebarCollapsed(v => !v)}
           isMobile={false}
+          onLogout={handleLogout}
         />
       </motion.aside>
 
-      {/* ── MOBILE DRAWER OVERLAY ────────────────────────── */}
+      {/* MOBILE DRAWER */}
       <AnimatePresence>
         {sidebarOpen && (
           <>
-            {/* backdrop */}
+            {/* FIX: overlay uses onClick not ref so it reliably closes */}
             <motion.div
-              ref={overlayRef}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
+              onClick={() => setSidebarOpen(false)}
               className="lg:hidden fixed inset-0 bg-neutral/50 backdrop-blur-sm z-40"
             />
-
-            {/* drawer */}
             <motion.aside
               initial={{ x: -SIDEBAR_W_OPEN }}
               animate={{ x: 0 }}
@@ -488,15 +553,14 @@ export default function BloodBankDashboard({ children }) {
         )}
       </AnimatePresence>
 
-      {/* ── MAIN AREA ────────────────────────────────────── */}
+      {/* MAIN AREA */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <TopBar
           onMenuOpen={() => setSidebarOpen(true)}
-          collapsed={sidebarCollapsed}
           currentLabel={currentLabel}
+          theme={theme}
+          onThemeToggle={handleThemeToggle}
         />
-
-        {/* Page content */}
         <main className="flex-1 overflow-y-auto overflow-x-hidden">
           <motion.div
             key={pathname}

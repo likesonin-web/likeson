@@ -284,13 +284,19 @@ const rideRequestSlice = createSlice({
     // Call these from SocketProvider listeners (useBookingRoom / useSocket).
 
     // location_update → SOCKET_EVENTS.LOCATION_UPDATE
-    socketLocationUpdate(state, action) {
-      // payload: { lat, lng, heading, speedKmh, updatedAt, … }
-      state.liveData = state.liveData
-        ? { ...state.liveData, liveLocation: action.payload }
-        : null;
-      state.socketLive.liveLocation = action.payload;
-    },
+socketLocationUpdate(state, action) {
+  const p = action.payload;
+  state.socketLive.liveLocation = {
+    lat:       p.lat,
+    lng:       p.lng,
+    heading:   p.heading   ?? 0,
+    speedKmh:  p.speedKmh  ?? p.speed ?? 0,
+    updatedAt: p.updatedAt ?? Date.now(),
+  };
+  if (state.liveData) {
+    state.liveData.liveLocation = state.socketLive.liveLocation;
+  }
+},
 
     // eta_update → SOCKET_EVENTS.ETA_UPDATE
     socketEtaUpdate(state, action) {

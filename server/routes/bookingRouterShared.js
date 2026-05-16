@@ -1,10 +1,23 @@
 /**
  * bookingRouterShared.js — Likeson.in
  *
- * Single source of truth for all shared helpers, constants, and utilities
- * used across bookingRouter1.js, bookingRouter2.js, and bookingSocketService.js
+ * FIXES IN THIS VERSION:
+ *  BUG #1 FIXED: resolveKmRate reads custom plan transport slab pricePerKm correctly
+ *                (no longer uses dead .km field)
+ *  BUG #2 FIXED: checkSubscriptionConsultation reads snapshotted limits correctly
+ *                (snapshotLimits in subscriptionRouter now sets consultationsPerMonth
+ *                 from customOptions for custom plans — so sub.limits.consultationsPerMonth
+ *                 is now correct at read time here)
+ *  BUG #3 FIXED: incrementSubscriptionUsage now DEFERRED — booking routes call
+ *                queueSubscriptionUsage() which pushes to Booking.subscriptionUsagePending.
+ *                Actual increment happens in /verify-payment → /subscriptions/flush-pending-usage.
+ *                decrementSubscriptionUsage kept for rollback scenarios.
+ *  BUG #4 FIXED: checkConsultationModeAllowed() — new helper used by booking routes
+ *                to block unsupported consultation modes per subscription plan.
+ *  BUG #5 FIXED: Care assistant quota no longer decrements before payment verified.
+ *                All usage increments deferred via subscriptionUsagePending.
  *
- * FIXES vs previous version:
+ * Other fixes retained from previous version:
  *  - calculateCanonicalRoute moved to top (ES module parse-order fix)
  *  - resolveCareRideKmRate no longer double-calls resolveKmRate
  *  - All exports at top-level (no dynamic import cycles for hot paths)
@@ -38,9 +51,9 @@ export { default as PlatformPricingConfig } from '../models/PlatformPricingConfi
 
 // ── Util / Service Exports ────────────────────────────────────────────────────
 export { default as sendEmail }             from '../utils/sendEmail.js';
-export { default as sendSms }              from '../services/Sendsms.js';
+export { default as sendSms }               from '../services/Sendsms.js';
 export { generateBookingInvoicePdf }        from '../utils/bookingInvoiceGenerator.js';
-export { getBookingSocketService }         from '../services/bookingSocketService.js';
+export { getBookingSocketService }          from '../services/bookingSocketService.js';
 export { transactionalTemplate, otpTemplate } from '../utils/emailTemplates.js';
 export {
   rideBookedSms, driverAssignedSms, rideStartedSms, rideCompletedSms,
@@ -109,20 +122,19 @@ export const haversineKm = ([lng1, lat1], [lng2, lat2]) => {
 };
 
 /** In-app + push notification — fire-and-forget */
-// In createNotification — add actionUrl + deepLink to Notification.create():
 export const createNotification = async ({
   recipient, title, body, type, bookingId,
   priority = 'Medium', otp = undefined,
-  actionUrl = undefined,          // ADD
-  deepLink  = undefined,          // ADD
+  actionUrl = undefined,
+  deepLink  = undefined,
 }) => {
   const { default: Notification } = await import('../models/Notification.js');
   try {
     await Notification.create({
       recipient, title, body, type, priority,
       ...(otp       ? { otp }       : {}),
-      ...(actionUrl ? { actionUrl } : {}),   // ADD
-      ...(deepLink  ? { deepLink }  : {}),   // ADD
+      ...(actionUrl ? { actionUrl } : {}),
+      ...(deepLink  ? { deepLink }  : {}),
       relatedEntityType: 'Booking',
       relatedEntityId:   bookingId,
       channels: [{ channel: 'InApp' }, { channel: 'Push' }],
@@ -133,7 +145,6 @@ export const createNotification = async ({
 /**
  * syncBookingStatusFromRide
  * Single source of truth: ride status → booking status.
- * Call after ANY Ride.status mutation (HTTP or socket).
  */
 export const syncBookingStatusFromRide = async (bookingId, rideStatus, updatedBy) => {
   const { default: BookingModel } = await import('../models/Booking.js');
@@ -147,7 +158,6 @@ export const syncBookingStatusFromRide = async (bookingId, rideStatus, updatedBy
     in_progress:     'in_progress',
     at_stop:         'in_progress',
     completed:       'completed',
-    // cancelled: intentionally omitted — single ride cancel ≠ booking cancel
   };
 
   const newStatus = MAP[rideStatus];
@@ -159,6 +169,7 @@ export const syncBookingStatusFromRide = async (bookingId, rideStatus, updatedBy
     { new: true }
   ).select('_id status bookingCode').lean();
 };
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CANONICAL ROUTE CALCULATOR
 // Must be defined before any function that calls it (ES module parse order).
@@ -173,12 +184,6 @@ const GMAPS_KEY = process.env.GOOGLE_MAPS_KEY;
  *   RideTracking.expectedRoutePolyline  (locked, never recalculated)
  *   Ride.estimatedDistanceKm            (locked)
  *   Ride.estimatedDurationMin           (locked)
- *
- * ALL roles read from DB — no party recalculates — everyone sees same map route.
- *
- * @param {number[]} pickupCoords  [lng, lat]
- * @param {number[]} dropoffCoords [lng, lat]
- * @returns {Promise<{ distanceKm: number, durationMin: number, polyline: string|null }>}
  */
 export const calculateCanonicalRoute = async (pickupCoords, dropoffCoords) => {
   const safePickup  = pickupCoords  || [80.648, 16.506];
@@ -207,7 +212,7 @@ export const calculateCanonicalRoute = async (pickupCoords, dropoffCoords) => {
     return {
       distanceKm:  +(leg.distance.value / 1000).toFixed(2),
       durationMin: Math.round(leg.duration.value / 60),
-      polyline:    route.overview_polyline.points, // encoded polyline — locked forever
+      polyline:    route.overview_polyline.points,
     };
   } catch (err) {
     console.error('[calculateCanonicalRoute] GMaps fail → haversine fallback:', err.message);
@@ -241,15 +246,12 @@ export const buildRidePayload = ({
   pickup:  { type: 'Point', coordinates: pickupCoords,  address: pickupAddress,  city: pickupCity  },
   dropoff: { type: 'Point', coordinates: dropoffCoords, address: dropoffAddress, city: dropoffCity },
   scheduledPickupAt,
-  status:    'requested',   // callers override (e.g. 'driver_assigned', 'searching')
+  status:    'requested',
   createdBy,
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// createAndLinkRide — SHARED helper (single definition, used by both routers)
-//
-// Creates Ride + RideTracking with LOCKED canonical route in one atomic sequence.
-// Returns { ride, otp, distanceKm, durationMin, polyline }
+// createAndLinkRide — SHARED helper
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const createAndLinkRide = async (booking, overrides = {}) => {
@@ -283,14 +285,14 @@ export const createAndLinkRide = async (booking, overrides = {}) => {
     }),
     estimatedDistanceKm:  distanceKm,
     estimatedDurationMin: durationMin,
-   pickupOtp: hashOtp(otp),
+    pickupOtp: hashOtp(otp),
     ...overrides,
   });
 
   const tracking = await RideTracking.create({
     ride:                  ride._id,
     booking:               booking._id,
-    expectedRoutePolyline: polyline,    // LOCKED — never overwritten after this
+    expectedRoutePolyline: polyline,
   });
 
   await Ride.findByIdAndUpdate(ride._id, { $set: { trackingId: tracking._id } });
@@ -486,6 +488,18 @@ export const checkHospitalOrDoctorAvailability = async ({ hospitalId, doctorId, 
 // TRANSPORT / FARE HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * resolveKmRate
+ *
+ * BUG #1 FIX: custom plan transport rate.
+ * Previously used sub.limits.transportRatePerKm which was never set correctly
+ * for custom plans (snapshotLimits was broken). Now:
+ *  1. Check sub.limits.transportRatePerKm — if > 0, use it (fixed plans set this directly)
+ *  2. If sentinel -1 (custom plan transport active), fetch plan.customOptions transport slab
+ *     and read pricePerKm from the selected slab
+ *  3. Check plan.transport.ratePerKm (fixed plan field)
+ *  4. Fall to config default
+ */
 export const resolveKmRate = async (userId) => {
   const { default: UserSubscription }      = await import('../models/UserSubscription.js');
   const { default: SubscriptionPlan }      = await import('../models/SubscriptionPlan.js');
@@ -502,12 +516,41 @@ export const resolveKmRate = async (userId) => {
 
   if (!sub) return { ratePerKm: configRate, source: 'default' };
 
+  // Check sub.limits.transportRatePerKm
+  // -1 = sentinel meaning "custom plan transport active, read from customOptions"
   const planRate = sub.limits?.transportRatePerKm;
-  if (planRate != null && planRate > 0) return { ratePerKm: planRate, source: 'subscription' };
+
+  if (planRate != null && planRate > 0) {
+    // Fixed plan rate — use directly
+    return { ratePerKm: planRate, source: 'subscription' };
+  }
 
   if (sub.plan) {
-    const plan = await SubscriptionPlan.findById(sub.plan).select('transport').lean();
-    if (plan?.transport?.ratePerKm > 0) return { ratePerKm: plan.transport.ratePerKm, source: 'subscription' };
+    const plan = await SubscriptionPlan.findById(sub.plan)
+      .select('planType transport customOptions')
+      .lean();
+
+    // BUG #1 FIX: custom plan — read pricePerKm from selected transport slab
+    if (plan?.planType === 'custom' && Array.isArray(plan.customOptions)) {
+      const transportOpt = plan.customOptions.find(o => o.optionKey === 'transport');
+      if (transportOpt && transportOpt.quantity >= 0) {
+        // transportOpt.quantity = slabIndex selected by customer
+        const config2 = await PlatformPricingConfig.getGlobal();
+        const slabs   = config2?.customPlanOptions?.transport?.kmSlabs ?? [];
+        const slabIdx = Math.max(0, Math.min(Math.floor(transportOpt.quantity), slabs.length - 1));
+        const slab    = slabs[slabIdx];
+        if (slab?.pricePerKm > 0) {
+          return { ratePerKm: slab.pricePerKm, source: 'subscription' };
+        }
+      }
+      // Custom plan with no transport option selected → fall to config rate
+      return { ratePerKm: configRate, source: 'default' };
+    }
+
+    // Fixed plan — rate lives in plan.transport.ratePerKm
+    if (plan?.transport?.ratePerKm > 0) {
+      return { ratePerKm: plan.transport.ratePerKm, source: 'subscription' };
+    }
   }
 
   return { ratePerKm: configRate, source: 'default' };
@@ -515,17 +558,14 @@ export const resolveKmRate = async (userId) => {
 
 /**
  * resolveCareRideKmRate
- * FIX: was calling resolveKmRate then ignoring result, fetching config again.
- * Now: check subscription first, fallback to config care rate.
+ * Check subscription first, fallback to config care rate.
  */
 export const resolveCareRideKmRate = async (userId) => {
   const { default: PlatformPricingConfig } = await import('../models/PlatformPricingConfig.js');
 
-  // Check subscription rate first
   const { ratePerKm, source } = await resolveKmRate(userId);
   if (source === 'subscription') return { ratePerKm, source };
 
-  // Fall back to config care-ride rate
   const config   = await PlatformPricingConfig.getGlobal();
   const careRate = config?.transport?.careRideRatePerKm ?? 21;
   return { ratePerKm: careRate, source: 'care_ride_config' };
@@ -650,26 +690,194 @@ export const checkFollowUpEligibility = async ({ customerId, doctorId, hospitalI
 // SUBSCRIPTION HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * checkSubscriptionConsultation
+ *
+ * BUG #2 FIX: sub.limits.consultationsPerMonth now correctly set for custom
+ * plans (via fixed snapshotLimits in subscriptionRouter). So the priority
+ * order here works reliably:
+ *   1. sub.limits.consultationsPerMonth  (snapshotted — now correct for custom plans too)
+ *   2. plan.customOptions[optionKey='consultations'].quantity  (custom plan fallback)
+ *   3. plan.consultations.freePerMonth                         (fixed plan fallback)
+ */
 export const checkSubscriptionConsultation = async (userId) => {
   const { default: UserSubscription } = await import('../models/UserSubscription.js');
+  const { default: SubscriptionPlan } = await import('../models/SubscriptionPlan.js');
+
   const sub = await UserSubscription.findOne({
     user: userId, status: { $in: ['Active', 'Trial'] }, expiryDate: { $gt: new Date() },
   }).lean();
 
   if (!sub) return { allowed: false, sub: null, remaining: 0, isFree: false, reason: 'No active subscription' };
 
-  const limit = sub.limits?.consultationsPerMonth ?? 0;
-  if (limit === 0) return { allowed: false, sub, remaining: 0, isFree: false, reason: 'No consultation quota' };
+  // Resolve consult limit — check sub.limits first, then plan
+  let limit = sub.limits?.consultationsPerMonth ?? null;
 
-  const now = new Date();
+  if ((limit == null || limit === 0) && sub.plan) {
+    const plan = await SubscriptionPlan.findById(sub.plan)
+      .select('planType customOptions consultations').lean();
+
+    if (plan?.planType === 'custom' && Array.isArray(plan.customOptions)) {
+      const consultOpt = plan.customOptions.find(o => o.optionKey === 'consultations');
+      if (consultOpt?.quantity > 0) limit = consultOpt.quantity;
+    } else if (plan?.consultations?.freePerMonth != null) {
+      // fixed plan fallback
+      limit = plan.consultations.freePerMonth;
+    }
+  }
+
+  if (!limit || limit === 0)
+    return { allowed: false, sub, remaining: 0, isFree: false, reason: 'No consultation quota in plan' };
+
+  const now   = new Date();
   const usage = sub.usageHistory?.find(u => u.month === now.getMonth() + 1 && u.year === now.getFullYear());
   const used  = usage?.consultationsUsed ?? 0;
 
-  if (limit === -1) return { allowed: true, sub, remaining: Infinity, isFree: true, reason: 'Unlimited' };
-  if (used >= limit) return { allowed: false, sub, remaining: 0, isFree: false, reason: `Monthly quota exhausted (${used}/${limit})` };
-  return { allowed: true, sub, remaining: limit - used, isFree: true, reason: `${limit - used} remaining` };
+  if (limit === -1) return { allowed: true, sub, remaining: Infinity, isFree: true, reason: 'Unlimited consultations' };
+  if (used >= limit) return { allowed: false, sub, remaining: 0, isFree: false, reason: `Monthly quota exhausted (${used}/${limit} used)` };
+  return { allowed: true, sub, remaining: limit - used, isFree: true, reason: `${limit - used} of ${limit} consultations remaining this month` };
 };
 
+/**
+ * checkSubscriptionCareAssistant
+ *
+ * BUG #2 FIX: sub.limits.careAssistantVisitsPerMonth now correctly set for
+ * custom plans (via fixed snapshotLimits in subscriptionRouter).
+ *
+ * Returns:
+ *   allowed:   true  → visit is covered by plan (fee = 0 for this booking)
+ *   isFree:    true  → careAssistantFee should be ₹0
+ *   remaining: visits left this month
+ *   reason:    explanation string
+ *
+ * NOTE: Transport is NEVER free — always charges at plan's km rate.
+ * NOTE: Diagnostics discount is a % discount, not a free quota.
+ * NOTE: Pharmacy discount is a % discount, not a free quota.
+ */
+export const checkSubscriptionCareAssistant = async (userId) => {
+  const { default: UserSubscription } = await import('../models/UserSubscription.js');
+  const { default: SubscriptionPlan } = await import('../models/SubscriptionPlan.js');
+
+  const sub = await UserSubscription.findOne({
+    user: userId, status: { $in: ['Active', 'Trial'] }, expiryDate: { $gt: new Date() },
+  }).lean();
+
+  if (!sub) return { allowed: false, sub: null, remaining: 0, isFree: false, reason: 'No active subscription' };
+
+  // Resolve care assistant visit limit
+  let limit = sub.limits?.careAssistantVisitsPerMonth ?? null;
+
+  if ((limit == null || limit === 0) && sub.plan) {
+    const plan = await SubscriptionPlan.findById(sub.plan)
+      .select('planType customOptions careAssistant').lean();
+
+    if (plan?.planType === 'custom' && Array.isArray(plan.customOptions)) {
+      const caOpt = plan.customOptions.find(o => o.optionKey === 'careAssistant');
+      if (caOpt?.quantity > 0) limit = caOpt.quantity;
+    } else if (plan?.careAssistant?.visitsPerMonth != null) {
+      // fixed plan with explicit visits/month
+      limit = plan.careAssistant.visitsPerMonth;
+    } else if (plan?.careAssistant?.included === true) {
+      // fixed plan where care assistant is "included" but no explicit count → treat as 1/month
+      limit = 1;
+    }
+  }
+
+  if (!limit || limit === 0)
+    return { allowed: false, sub, remaining: 0, isFree: false, reason: 'No care assistant quota in plan' };
+
+  const now   = new Date();
+  const usage = sub.usageHistory?.find(u => u.month === now.getMonth() + 1 && u.year === now.getFullYear());
+  const used  = usage?.careAssistantVisitsUsed ?? 0;
+
+  if (limit === -1) return { allowed: true, sub, remaining: Infinity, isFree: true, reason: 'Unlimited care assistant visits' };
+  if (used >= limit) return { allowed: false, sub, remaining: 0, isFree: false, reason: `Care assistant quota exhausted (${used}/${limit} used this month)` };
+  return { allowed: true, sub, remaining: limit - used, isFree: true, reason: `${limit - used} of ${limit} care assistant visits remaining this month` };
+};
+
+/**
+ * BUG #4 FIX: checkConsultationModeAllowed
+ *
+ * New helper. Called by booking routes after subscription check.
+ * Returns { allowed: bool, reason: string }.
+ *
+ * Rules:
+ *  - No subscription → all modes allowed (pay-per-use, no restriction)
+ *  - Fixed plan → check plan.consultations.modes.{inPerson|video|home}
+ *  - Custom plan → no mode restriction (customer paid per consult, no mode filter)
+ *  - follow_up + physiotherapist → skip mode check (not standard consult)
+ *
+ * consultationType values: 'inPerson' | 'video' | 'homeVisit'
+ */
+export const checkConsultationModeAllowed = async (userId, consultationType) => {
+  // No mode restriction for non-consult types
+  if (!consultationType) return { allowed: true };
+
+  const { default: UserSubscription } = await import('../models/UserSubscription.js');
+  const { default: SubscriptionPlan } = await import('../models/SubscriptionPlan.js');
+
+  const sub = await UserSubscription.findOne({
+    user:       userId,
+    status:     { $in: ['Active', 'Trial'] },
+    expiryDate: { $gt: new Date() },
+  }).lean();
+
+  // No sub → no restriction
+  if (!sub) return { allowed: true, reason: 'No subscription — all modes available' };
+
+  if (!sub.plan) return { allowed: true };
+
+  const plan = await SubscriptionPlan.findById(sub.plan)
+    .select('planType consultations').lean();
+
+  if (!plan) return { allowed: true };
+
+  // Custom plans → no mode restriction
+  if (plan.planType === 'custom') return { allowed: true };
+
+  // Fixed plan — check allowed modes
+  const modes = plan.consultations?.modes || {};
+
+  // Map consultationType to modes field key
+  const modeMap = {
+    inPerson:  'inPerson',
+    video:     'video',
+    homeVisit: 'home',
+  };
+
+  const modeKey = modeMap[consultationType];
+  if (!modeKey) return { allowed: true }; // unknown type — don't block
+
+  // If modes field not set at all → default allow all
+  if (Object.keys(modes).length === 0) return { allowed: true };
+
+  const isAllowed = modes[modeKey] !== false; // undefined = allowed, false = blocked
+
+  if (!isAllowed) {
+    const readableMode = consultationType === 'homeVisit'
+      ? 'home visits'
+      : consultationType === 'video'
+      ? 'video consultations'
+      : 'in-person consultations';
+    return {
+      allowed: false,
+      reason: `Your subscription (${sub.planName || 'current plan'}) does not support ${readableMode}. Please upgrade your plan or choose a different consultation type.`,
+    };
+  }
+
+  return { allowed: true };
+};
+
+/**
+ * incrementSubscriptionUsage
+ *
+ * BUG #3 + BUG #5 FIX: This function is now ONLY called from the
+ * /subscriptions/flush-pending-usage route (after payment verified).
+ * Booking routes must NOT call this directly — use queueSubscriptionUsage()
+ * instead to push to Booking.subscriptionUsagePending.
+ *
+ * Kept here for backward compatibility with any admin/cron callers.
+ */
 export const incrementSubscriptionUsage = async (subId, field) => {
   const { default: UserSubscription } = await import('../models/UserSubscription.js');
   const now = new Date();
@@ -681,6 +889,46 @@ export const incrementSubscriptionUsage = async (subId, field) => {
     await UserSubscription.findByIdAndUpdate(subId, {
       $push: { usageHistory: { month: now.getMonth() + 1, year: now.getFullYear(), [field]: 1 } },
     });
+  }
+};
+
+/**
+ * queueSubscriptionUsage
+ *
+ * BUG #3 + BUG #5 FIX: New function. Called by booking routes INSTEAD of
+ * incrementSubscriptionUsage. Pushes a pending usage record onto the booking
+ * document. Actual increment happens after payment verified via
+ * POST /subscriptions/flush-pending-usage.
+ *
+ * Parameters:
+ *   bookingId — Mongoose ObjectId or string
+ *   subId     — UserSubscription._id
+ *   field     — usageHistory field name (e.g. 'consultationsUsed')
+ *
+ * Usage in booking routes:
+ *   if (isCoveredBySubscription && subCheck.sub) {
+ *     await queueSubscriptionUsage(booking._id, subCheck.sub._id, 'consultationsUsed');
+ *   }
+ */
+export const queueSubscriptionUsage = async (bookingId, subId, field) => {
+  const { default: BookingModel } = await import('../models/Booking.js');
+
+  if (!bookingId || !subId || !field) {
+    console.error('[queueSubscriptionUsage] missing required params', { bookingId, subId, field });
+    return;
+  }
+
+  try {
+    await BookingModel.findByIdAndUpdate(bookingId, {
+      $push: {
+        subscriptionUsagePending: {
+          subId:  subId.toString(),
+          field,
+        },
+      },
+    });
+  } catch (e) {
+    console.error('[queueSubscriptionUsage] failed to queue usage:', e.message);
   }
 };
 
@@ -733,6 +981,16 @@ export const getLabWithTests = async (labId) => {
 // CONSULTATION FEE RESOLVER
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * resolveConsultationFee
+ *
+ * Priority:
+ *   1. Follow-up → return followUpFee (may be 0 = free, independent of sub quota)
+ *   2. Covered by subscription (quota remaining) → return 0
+ *   3. Hospital-managed pricing → hospital fee
+ *   4. Doctor pricing → doctor fee
+ *   5. Platform default → ₹600
+ */
 export const resolveConsultationFee = async ({
   isFollowUp, followUpFee, isCoveredBySubscription,
   doctorId, hospitalId, consultationType,
@@ -761,6 +1019,58 @@ export const resolveConsultationFee = async ({
   }
 
   return { fee: 600, source: 'default' };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CARE ASSISTANT FEE RESOLVER
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * resolveCareAssistantFee
+ *
+ * Priority:
+ *   1. Covered by subscription quota (remaining visits > 0) → fee = 0
+ *   2. Platform pricing tier (duration-based) → chargeToUser
+ *
+ * Returns:
+ *   fee:                     number  — ₹ to charge customer
+ *   source:                  string  — 'subscription' | 'platform'
+ *   isCoveredBySubscription: boolean
+ *   tier:                    object | null — matched pricing tier (for display)
+ *
+ * BUG #5 FIX: This function only returns fee = 0 if quota allows. Actual
+ * usage increment is deferred to post-payment via queueSubscriptionUsage().
+ * Callers should NOT call incrementSubscriptionUsage directly.
+ */
+export const resolveCareAssistantFee = async ({ userId, durationHours, config }) => {
+  const { default: PlatformPricingConfig } = await import('../models/PlatformPricingConfig.js');
+  const resolvedConfig = config || await PlatformPricingConfig.getGlobal();
+
+  const parsedDuration = parseInt(durationHours, 10) || 4;
+  const tier = PlatformPricingConfig.resolveCareAssistantTier?.(resolvedConfig, parsedDuration) ?? null;
+
+  const subCheck = await checkSubscriptionCareAssistant(userId);
+
+  if (subCheck.allowed && subCheck.isFree) {
+    return {
+      fee:                     0,
+      source:                  'subscription',
+      isCoveredBySubscription: true,
+      sub:                     subCheck.sub,
+      subQuotaInfo:            subCheck,
+      tier,
+    };
+  }
+
+  // Quota exhausted or no plan → charge platform tier price
+  return {
+    fee:                     tier?.chargeToUser ?? 0,
+    source:                  'platform',
+    isCoveredBySubscription: false,
+    sub:                     subCheck.sub,
+    subQuotaInfo:            subCheck,
+    tier,
+  };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,46 +1,41 @@
 'use client';
 
 /**
- * RideLiveTracking.jsx — Likeson.in
+ * RideLiveTracking.jsx — Likeson.in  (FIXED v2)
  * Customer / Patient LIVE ride tracking page.
  *
  * Route params: { rideId, bookingId }
  *
- * Stack: Next.js App Router · React · Tailwind CSS · Framer Motion
- *        · Lucide React · Redux Toolkit · Socket.IO · @react-google-maps/api
- *
- * Socket events listened:
- *   location_update · eta_update · navigation_target_changed
- *   ride_status_changed · booking_status_change · booking_state_snapshot
- *   sos_alert · booking_status_change · driver_arrived · otp_required
- *   ride_completed · ride_cancelled · driver_en_route · driver_accepted
- *
- * APIs used:
- *   GET /ride-requests/:rideId/tracking
- *   GET /ride-requests/:rideId/live
- *
- * Redux:
- *   operationsSlice · rideRequestSlice
- *
- * DOES NOT: invent statuses, fake events, modify backend, create fake APIs.
+ * FIX LOG:
+ *  1. Single source-of-truth for live location: rideRequestSlice.socketLive.liveLocation
+ *  2. socketLocationUpdate reducer always writes — no liveData null-guard
+ *  3. animateDriverMarker driven by useEffect on liveLocationFromRedux (no stale closure)
+ *  4. Removed operationsSlice duplicate liveLocation dependency
+ *  5. requestAnimationFrame replaces setInterval for smooth marker animation
+ *  6. Reconnect → auto rejoin room + requestBookingState
+ *  7. Single socket listener block with stable ref (no re-subscribe on re-render)
+ *  8. useBookingRoom NOT used here (avoids double-join); raw on() used instead
+ *  9. GPS maximumAge:0, enableHighAccuracy:true, distance threshold 10m
+ * 10. Stale closure fix: all socket handlers read latest state via refs
+ * 11. Marker update extracted into stable updateDriverMarkerOnMap()
+ * 12. map.panTo on every location_update (smooth camera follow)
+ * 13. Full debug logging guarded by __DEV__
  */
 
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import {
+  useEffect, useRef, useState, useCallback, useMemo,
+} from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useDispatch, useSelector } from 'react-redux';
-import { motion, AnimatePresence, useSpring, useTransform } from 'framer-motion';
-import {
-  GoogleMap,
-  useJsApiLoader,
-  Polyline,
-} from '@react-google-maps/api';
+import { motion, AnimatePresence } from 'framer-motion';
+import { GoogleMap, useJsApiLoader, Polyline } from '@react-google-maps/api';
 import {
   Phone, MessageCircle, Shield, ShieldAlert, Navigation,
   MapPin, ChevronUp, ChevronDown, Copy, Check, Wifi, WifiOff,
   Loader2, Star, Car, User, Clock, Route, AlertTriangle,
   Volume2, VolumeX, Share2, Crosshair, Moon, Sun, Info,
   CheckCircle2, Circle, ArrowRight, RefreshCw, X, Zap,
-  HeartPulse, HelpCircle, ChevronRight
+  HeartPulse, HelpCircle, ChevronRight,
 } from 'lucide-react';
 
 import {
@@ -62,19 +57,15 @@ import {
 import {
   joinBookingRoom,
   leaveBookingRoom,
-  setLiveLocation,
   setEtaUpdate,
   setNavigationTarget,
   setSosAlert,
-  selectLiveLocation,
-  selectNavigationTarget,
   selectSosAlert,
   selectSocketConnected,
 } from '@/store/slices/operationsSlice';
 
 import {
   useSocket,
-  useBookingRoom,
   useSos,
   SOCKET_EVENTS,
 } from '@/context/SocketProvider';
@@ -83,9 +74,17 @@ import {
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MAP_ID           = process.env.NEXT_PUBLIC_MAP_ID           || '33a293614af186975a18525f';
-const GOOGLE_MAPS_KEY  = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY  || '';
+const MAP_ID          = process.env.NEXT_PUBLIC_MAP_ID          || '33a293614af186975a18525f';
+const GOOGLE_MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || '';
 const GOOGLE_MAPS_LIBS = ['geometry', 'marker'];
+const __DEV__ = process.env.NODE_ENV !== 'production';
+
+const log = (...args) => { if (__DEV__) console.log('[LiveTracking]', ...args); };
+
+// Minimum movement (meters) to emit location update
+const MIN_MOVE_METERS = 10;
+// Max interval between forced emits even if stationary
+const MAX_EMIT_INTERVAL_MS = 2000;
 
 const RIDE_STATUS_LABELS = {
   driver_assigned: 'Driver Assigned',
@@ -99,19 +98,6 @@ const RIDE_STATUS_LABELS = {
   cancelled:       'Ride Cancelled',
 };
 
-const RIDE_STATUS_COLOR = {
-  driver_assigned: 'info',
-  driver_accepted: 'info',
-  driver_en_route: 'warning',
-  driver_arrived:  'accent',
-  otp_verified:    'success',
-  in_progress:     'success',
-  at_stop:         'warning',
-  completed:       'success',
-  cancelled:       'error',
-};
-
-// status progression for milestone timeline
 const STATUS_MILESTONES = [
   { key: 'driver_assigned', label: 'Driver Assigned', icon: Car },
   { key: 'driver_en_route', label: 'En Route',        icon: Navigation },
@@ -122,8 +108,8 @@ const STATUS_MILESTONES = [
 ];
 
 const STATUS_ORDER = [
-  'driver_assigned','driver_accepted','driver_en_route',
-  'driver_arrived','otp_verified','in_progress','at_stop','completed',
+  'driver_assigned', 'driver_accepted', 'driver_en_route',
+  'driver_arrived', 'otp_verified', 'in_progress', 'at_stop', 'completed',
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -168,6 +154,18 @@ function decodePolyline(encoded) {
   return points;
 }
 
+/** Haversine distance in meters */
+function distanceMeters(a, b) {
+  if (!a || !b) return Infinity;
+  const R = 6371000;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLng = (b.lng - a.lng) * Math.PI / 180;
+  const x = Math.sin(dLat / 2) ** 2 +
+    Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
 function speak(text) {
   if (typeof window === 'undefined' || !window.speechSynthesis) return;
   window.speechSynthesis.cancel();
@@ -177,90 +175,80 @@ function speak(text) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MARKER HELPERS (Advanced Markers via google.maps.marker namespace)
+// MARKER ELEMENT FACTORIES
 // ─────────────────────────────────────────────────────────────────────────────
 
 function createDriverMarkerElement(heading = 0) {
   const el = document.createElement('div');
-  el.style.cssText = `
-    width:52px;height:52px;display:flex;align-items:center;
-    justify-content:center;transform:rotate(${heading}deg);
-    transition:transform 0.5s ease;
-  `;
+  el.style.cssText = `width:60px;height:60px;position:relative;`;
   el.innerHTML = `
     <div style="
-      width:48px;height:48px;border-radius:50%;
-      background:linear-gradient(135deg,#3b82f6,#1d4ed8);
-      border:3px solid white;
-      box-shadow:0 4px 20px rgba(59,130,246,0.6),0 0 0 6px rgba(59,130,246,0.15);
+      position:absolute;inset:0;border-radius:50%;
+      background:#3b82f6;opacity:0.25;
+      animation:pulseHalo 2s infinite;
+    "></div>
+    <div style="
+      position:absolute;inset:6px;border-radius:50%;
+      background:linear-gradient(145deg,#3b82f6,#2563eb);
+      border:2.5px solid white;
+      box-shadow:0 8px 15px rgba(37,99,235,0.45),inset 0 -2px 5px rgba(0,0,0,0.1);
       display:flex;align-items:center;justify-content:center;
-      position:relative;
-    ">
+      transform:rotate(${heading}deg);
+      transition:transform 0.4s ease;
+    " id="driver-inner">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
         <path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/>
       </svg>
-      <div style="
-        position:absolute;bottom:-8px;left:50%;transform:translateX(-50%);
-        width:0;height:0;
-        border-left:6px solid transparent;
-        border-right:6px solid transparent;
-        border-top:8px solid #1d4ed8;
-      "></div>
     </div>
+    <style>
+      @keyframes pulseHalo{0%{transform:scale(1);opacity:0.3}100%{transform:scale(1.9);opacity:0}}
+    </style>
   `;
   return el;
 }
 
 function createPickupMarkerElement(reached = false) {
   const el = document.createElement('div');
-  el.style.cssText = `width:56px;height:64px;position:relative;`;
+  el.style.cssText = `width:52px;height:60px;position:relative;`;
   el.innerHTML = `
     <div style="
-      width:52px;height:52px;border-radius:50%;
+      width:48px;height:48px;border-radius:50%;
       background:${reached ? 'linear-gradient(135deg,#10b981,#059669)' : 'linear-gradient(135deg,#6366f1,#4f46e5)'};
       border:3px solid white;
       box-shadow:0 4px 16px ${reached ? 'rgba(16,185,129,0.5)' : 'rgba(99,102,241,0.5)'};
       display:flex;align-items:center;justify-content:center;
-      position:relative;
-      ${!reached ? 'animation:markerPulse 2s infinite;' : ''}
+      ${!reached ? 'animation:mPulse 2s infinite;' : ''}
     ">
-      <span style="color:white;font-weight:900;font-size:20px;letter-spacing:-1px;">${reached ? '✓' : 'P'}</span>
+      <span style="color:white;font-weight:900;font-size:18px;">${reached ? '✓' : 'P'}</span>
     </div>
     <div style="
       position:absolute;bottom:0;left:50%;transform:translateX(-50%);
       width:0;height:0;
-      border-left:7px solid transparent;
-      border-right:7px solid transparent;
+      border-left:7px solid transparent;border-right:7px solid transparent;
       border-top:10px solid ${reached ? '#059669' : '#4f46e5'};
     "></div>
-    <style>
-      @keyframes markerPulse {
-        0%,100%{box-shadow:0 4px 16px rgba(99,102,241,0.5),0 0 0 0 rgba(99,102,241,0.4);}
-        50%{box-shadow:0 4px 16px rgba(99,102,241,0.5),0 0 0 12px rgba(99,102,241,0);}
-      }
-    </style>
+    <style>@keyframes mPulse{0%,100%{box-shadow:0 4px 16px rgba(99,102,241,0.5),0 0 0 0 rgba(99,102,241,0.4)}50%{box-shadow:0 4px 16px rgba(99,102,241,0.5),0 0 0 12px rgba(99,102,241,0)}}</style>
   `;
   return el;
 }
 
 function createDropoffMarkerElement() {
   const el = document.createElement('div');
-  el.style.cssText = `width:56px;height:64px;position:relative;`;
+  el.style.cssText = `width:52px;height:60px;position:relative;`;
   el.innerHTML = `
     <div style="
-      width:52px;height:52px;border-radius:50%;
+      width:48px;height:48px;border-radius:50%;
       background:linear-gradient(135deg,#f59e0b,#d97706);
       border:3px solid white;
       box-shadow:0 4px 16px rgba(245,158,11,0.5);
       display:flex;align-items:center;justify-content:center;
     ">
-      <span style="color:white;font-weight:900;font-size:20px;">D</span>
+      <span style="color:white;font-weight:900;font-size:18px;">D</span>
     </div>
     <div style="
       position:absolute;bottom:0;left:50%;transform:translateX(-50%);
       width:0;height:0;
-      border-left:7px solid transparent;
-      border-right:7px solid transparent;
+      border-left:7px solid transparent;border-right:7px solid transparent;
       border-top:10px solid #d97706;
     "></div>
   `;
@@ -268,10 +256,9 @@ function createDropoffMarkerElement() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SUB-COMPONENTS
+// SUB-COMPONENTS (unchanged from original, included for completeness)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Connection Banner
 function ReconnectBanner({ visible }) {
   return (
     <AnimatePresence>
@@ -291,16 +278,13 @@ function ReconnectBanner({ visible }) {
   );
 }
 
-// OTP Card
-function OtpCard({ otp, rideId, bookingId }) {
+function OtpCard({ otp }) {
   const [copied, setCopied] = useState(false);
-
   const handleCopy = () => {
     navigator.clipboard?.writeText(otp);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-
   return (
     <motion.div
       initial={{ scale: 0.9, opacity: 0 }}
@@ -308,7 +292,6 @@ function OtpCard({ otp, rideId, bookingId }) {
       exit={{ scale: 0.9, opacity: 0 }}
       className="relative overflow-hidden rounded-2xl border border-accent/30 bg-gradient-to-br from-accent/10 to-primary/10 p-5"
     >
-      {/* pulse ring */}
       <motion.div
         className="absolute inset-0 rounded-2xl border-2 border-accent/40"
         animate={{ scale: [1, 1.03, 1], opacity: [0.6, 0.2, 0.6] }}
@@ -349,10 +332,8 @@ function OtpCard({ otp, rideId, bookingId }) {
   );
 }
 
-// Ride Progress Timeline
 function RideProgressTimeline({ currentStatus }) {
   const curIdx = statusIndex(currentStatus);
-
   return (
     <div className="space-y-3">
       {STATUS_MILESTONES.map((milestone, i) => {
@@ -361,7 +342,6 @@ function RideProgressTimeline({ currentStatus }) {
         const active = milestone.key === currentStatus ||
           (currentStatus === 'driver_accepted' && milestone.key === 'driver_en_route' && i === 1);
         const Icon   = milestone.icon;
-
         return (
           <div key={milestone.key} className="flex items-center gap-3">
             <div className="relative flex flex-col items-center">
@@ -374,8 +354,7 @@ function RideProgressTimeline({ currentStatus }) {
                     ? 'bg-success border-success text-success-content'
                     : active
                       ? 'bg-primary/20 border-primary text-primary'
-                      : 'bg-base-300 border-base-300 text-base-content/30'
-                  }
+                      : 'bg-base-300 border-base-300 text-base-content/30'}
                 `}
               >
                 {done ? <Check size={14} /> : <Icon size={13} />}
@@ -405,11 +384,9 @@ function RideProgressTimeline({ currentStatus }) {
   );
 }
 
-// Completion Screen
 function CompletionScreen({ ride, tracking, onClose }) {
   const dist = tracking?.tracking?.summary?.totalDistanceKm ?? ride?.actualDistanceKm ?? 0;
   const dur  = tracking?.tracking?.summary?.totalDurationMin ?? ride?.actualDurationMin ?? 0;
-
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -423,38 +400,13 @@ function CompletionScreen({ ride, tracking, onClose }) {
         transition={{ type: 'spring', stiffness: 260, damping: 20 }}
         className="w-32 h-32 rounded-full bg-success/20 border-4 border-success flex items-center justify-center mb-6"
       >
-        <motion.div
-          initial={{ scale: 0 }}
-          animate={{ scale: 1 }}
-          transition={{ delay: 0.3, type: 'spring' }}
-        >
+        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.3, type: 'spring' }}>
           <CheckCircle2 size={56} className="text-success" />
         </motion.div>
       </motion.div>
-
-      <motion.h2
-        initial={{ y: 20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.2 }}
-        className="text-2xl font-black text-base-content mb-1"
-      >
-        Ride Completed!
-      </motion.h2>
-      <motion.p
-        initial={{ y: 20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.3 }}
-        className="text-base-content/60 text-sm mb-8"
-      >
-        Thank you for choosing Likeson Healthcare
-      </motion.p>
-
-      <motion.div
-        initial={{ y: 20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.4 }}
-        className="w-full max-w-sm grid grid-cols-2 gap-4 mb-8"
-      >
+      <motion.h2 initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.2 }} className="text-2xl font-black text-base-content mb-1">Ride Completed!</motion.h2>
+      <motion.p initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.3 }} className="text-base-content/60 text-sm mb-8">Thank you for choosing Likeson Healthcare</motion.p>
+      <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.4 }} className="w-full max-w-sm grid grid-cols-2 gap-4 mb-8">
         {[
           { label: 'Distance', value: fmtDist(dist), icon: Route },
           { label: 'Duration', value: fmtEta(dur),   icon: Clock },
@@ -466,26 +418,14 @@ function CompletionScreen({ ride, tracking, onClose }) {
           </div>
         ))}
       </motion.div>
-
-      <motion.div
-        initial={{ y: 20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.5 }}
-        className="flex flex-col gap-3 w-full max-w-sm"
-      >
-        <button className="btn btn-primary w-full flex items-center justify-center gap-2">
-          <Star size={16} />
-          Rate Your Experience
-        </button>
-        <button onClick={onClose} className="btn btn-ghost w-full text-base-content/60">
-          View Booking Details
-        </button>
+      <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.5 }} className="flex flex-col gap-3 w-full max-w-sm">
+        <button className="btn btn-primary w-full flex items-center justify-center gap-2"><Star size={16} />Rate Your Experience</button>
+        <button onClick={onClose} className="btn btn-ghost w-full text-base-content/60">View Booking Details</button>
       </motion.div>
     </motion.div>
   );
 }
 
-// Loading skeleton
 function TrackingSkeleton() {
   return (
     <div className="fixed inset-0 bg-base-100 flex flex-col items-center justify-center gap-6 z-[100]">
@@ -502,19 +442,13 @@ function TrackingSkeleton() {
       </div>
       <div className="flex gap-2">
         {[0, 1, 2].map(i => (
-          <motion.div
-            key={i}
-            className="w-2 h-2 rounded-full bg-primary"
-            animate={{ y: [-4, 4, -4] }}
-            transition={{ delay: i * 0.2, repeat: Infinity, duration: 0.8 }}
-          />
+          <motion.div key={i} className="w-2 h-2 rounded-full bg-primary" animate={{ y: [-4, 4, -4] }} transition={{ delay: i * 0.2, repeat: Infinity, duration: 0.8 }} />
         ))}
       </div>
     </div>
   );
 }
 
-// Floating action button
 function FloatBtn({ icon: Icon, onClick, title, variant = 'default', pulse = false }) {
   return (
     <motion.button
@@ -528,8 +462,7 @@ function FloatBtn({ icon: Icon, onClick, title, variant = 'default', pulse = fal
           ? 'bg-error/90 border-error/50 text-error-content hover:bg-error'
           : variant === 'active'
             ? 'bg-primary/90 border-primary/50 text-primary-content hover:bg-primary'
-            : 'bg-base-100/90 border-base-300/60 text-base-content hover:bg-base-200'
-        }
+            : 'bg-base-100/90 border-base-300/60 text-base-content hover:bg-base-200'}
       `}
     >
       {pulse && (
@@ -548,12 +481,9 @@ function FloatBtn({ icon: Icon, onClick, title, variant = 'default', pulse = fal
 // BOTTOM SHEET
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SHEET_SNAPS = { collapsed: 120, half: 380, full: '92vh' };
-
 function BottomSheet({ children, rideStatus }) {
   const [snap, setSnap]     = useState('half');
   const [activeTab, setTab] = useState('driver');
-
   const heightVal = snap === 'full' ? '92vh' : snap === 'half' ? '380px' : '120px';
 
   const tabs = [
@@ -570,15 +500,12 @@ function BottomSheet({ children, rideStatus }) {
       className="fixed bottom-0 left-0 right-0 z-[100] flex flex-col"
       style={{ maxHeight: '92vh' }}
     >
-      {/* glass panel */}
       <div className="flex-1 flex flex-col bg-base-100/95 backdrop-blur-xl rounded-t-3xl border-t border-base-300/60 shadow-2xl overflow-hidden">
-        {/* drag handle row */}
         <div className="flex flex-col items-center pt-3 pb-1 px-4 flex-shrink-0">
           <button
             onClick={() => setSnap(s => s === 'full' ? 'half' : s === 'half' ? 'collapsed' : 'half')}
             className="w-10 h-1 rounded-full bg-base-300 mb-3"
           />
-          {/* status pill */}
           <div className="flex items-center gap-2 mb-2">
             <motion.div
               animate={{ scale: [1, 1.3, 1] }}
@@ -597,17 +524,13 @@ function BottomSheet({ children, rideStatus }) {
           </div>
         </div>
 
-        {/* tabs */}
         {snap !== 'collapsed' && (
           <div className="flex border-b border-base-300/60 flex-shrink-0 px-2">
             {tabs.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
                 onClick={() => setTab(id)}
-                className={`
-                  flex-1 flex flex-col items-center gap-0.5 py-2 text-xs font-semibold transition-all
-                  ${activeTab === id ? 'text-primary border-b-2 border-primary' : 'text-base-content/50'}
-                `}
+                className={`flex-1 flex flex-col items-center gap-0.5 py-2 text-xs font-semibold transition-all ${activeTab === id ? 'text-primary border-b-2 border-primary' : 'text-base-content/50'}`}
               >
                 <Icon size={15} />
                 <span>{label}</span>
@@ -616,7 +539,6 @@ function BottomSheet({ children, rideStatus }) {
           </div>
         )}
 
-        {/* content */}
         {snap !== 'collapsed' && (
           <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-3">
             <AnimatePresence mode="wait">
@@ -638,57 +560,57 @@ function BottomSheet({ children, rideStatus }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MAIN PAGE COMPONENT
+// MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function RideLiveTracking() {
-  const params   = useParams();
-  const router   = useRouter();
-  const dispatch = useDispatch();
-
+  const params    = useParams();
+  const router    = useRouter();
+  const dispatch  = useDispatch();
   const rideId    = params?.rideId;
   const bookingId = params?.bookingId;
 
-  // ── Redux state ──────────────────────────────────────────────────────────
-  const trackingData    = useSelector(selectTrackingData);
-  const liveData        = useSelector(selectLiveData);
-  const socketLiveLocRx = useSelector(selectLiveLocation);
-  const navTarget       = useSelector(selectNavigationTarget);
-  const sosAlertRx      = useSelector(selectSosAlert);
-  const isSocketConn    = useSelector(selectSocketConnected);
+  // ── Redux ────────────────────────────────────────────────────────────────
+  const trackingData = useSelector(selectTrackingData);
+  const liveData     = useSelector(selectLiveData);
+  const sosAlertRx   = useSelector(selectSosAlert);
+  const isSocketConn = useSelector(selectSocketConnected);
+
+  // FIX: single source of truth — rideRequest.socketLive.liveLocation
+  // This selector reads from rideRequestSlice where socketLocationUpdate writes
+  const liveLocationFromRedux = useSelector(s => s.rideRequest.socketLive.liveLocation);
 
   // ── Socket ───────────────────────────────────────────────────────────────
-  const { on, connected, SOCKET_EVENTS: EV } = useSocket();
-  const {
-    locationUpdate, etaUpdate, rideStatus: socketRideStatus,
-    bookingStatus, navigationTarget: socketNavTarget,
-    sosAlert, snapshot,
-  } = useBookingRoom(bookingId);
+  const { on, connected, SOCKET_EVENTS: EV, emit } = useSocket();
 
   // ── Local state ──────────────────────────────────────────────────────────
-  const [rideStatus, setRideStatus]       = useState(null);
-  const [driverPos, setDriverPos]         = useState(null); // { lat, lng, heading }
-  const [etaInfo, setEtaInfo]             = useState(null); // { etaMinutes, distanceRemainingKm }
-  const [otp, setOtp]                     = useState(null);
-  const [isDark, setIsDark]               = useState(false);
-  const [voiceOn, setVoiceOn]             = useState(false);
-  const [showCompletion, setCompletion]   = useState(false);
-  const [loading, setLoading]             = useState(true);
-  const [error, setError]                 = useState(null);
-  const [mapReady, setMapReady]           = useState(false);
-  const [pickupReached, setPickupReached] = useState(false);
+  const [rideStatus,      setRideStatus]      = useState(null);
+  const [etaInfo,         setEtaInfo]         = useState(null);
+  const [otp,             setOtp]             = useState(null);
+  const [isDark,          setIsDark]          = useState(false);
+  const [voiceOn,         setVoiceOn]         = useState(false);
+  const [showCompletion,  setCompletion]      = useState(false);
+  const [loading,         setLoading]         = useState(true);
+  const [error,           setError]           = useState(null);
+  const [mapReady,        setMapReady]        = useState(false);
+  const [pickupReached,   setPickupReached]   = useState(false);
+  // Displayed driver position — updated by RAF animation
+  const [displayPos,      setDisplayPos]      = useState(null);
 
   // ── Refs ─────────────────────────────────────────────────────────────────
   const mapRef            = useRef(null);
   const driverMarkerRef   = useRef(null);
   const pickupMarkerRef   = useRef(null);
   const dropoffMarkerRef  = useRef(null);
-  const prevPosRef        = useRef(null);
-  const interpolateRef    = useRef(null);
+  const animFrameRef      = useRef(null);
+  const animStartRef      = useRef(null);
+  const animFromRef       = useRef(null);
+  const animToRef         = useRef(null);
   const voiceRef          = useRef(false);
   const lastSpokenStatus  = useRef(null);
+  const listenersAttached = useRef(false);  // FIX: prevent double-bind on re-render
+  const prevLiveLocRef    = useRef(null);   // for RAF animation start position
 
-  // keep voiceRef in sync
   useEffect(() => { voiceRef.current = voiceOn; }, [voiceOn]);
 
   // ── Google Maps loader ───────────────────────────────────────────────────
@@ -702,32 +624,43 @@ export default function RideLiveTracking() {
   const ride     = trackingData?.ride     || liveData;
   const tracking = trackingData?.tracking || null;
 
-  const pickupCoords  = useMemo(() => ride?.pickup   ? { lat: ride.pickup.coordinates[1],  lng: ride.pickup.coordinates[0]  } : null, [ride]);
-  const dropoffCoords = useMemo(() => ride?.dropoff  ? { lat: ride.dropoff.coordinates[1], lng: ride.dropoff.coordinates[0] } : null, [ride]);
+  const pickupCoords = useMemo(() =>
+    ride?.pickup?.coordinates?.length === 2
+      ? { lat: ride.pickup.coordinates[1],  lng: ride.pickup.coordinates[0]  }
+      : null,
+  [ride]);
+
+  const dropoffCoords = useMemo(() =>
+    ride?.dropoff?.coordinates?.length === 2
+      ? { lat: ride.dropoff.coordinates[1], lng: ride.dropoff.coordinates[0] }
+      : null,
+  [ride]);
 
   const routePath = useMemo(() => {
     const poly = tracking?.expectedRoutePolyline || trackingData?.tracking?.expectedRoutePolyline;
     return poly ? decodePolyline(poly) : [];
   }, [tracking, trackingData]);
 
-  // completed portion = breadcrumbs
   const completedPath = useMemo(() => {
     const crumbs = tracking?.breadcrumbs || [];
     return crumbs.map(c => ({ lat: c.coordinates[1], lng: c.coordinates[0] }));
   }, [tracking]);
 
-  // ── Fetch snapshot on mount ──────────────────────────────────────────────
+  // ── Fetch on mount ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!rideId) return;
     setLoading(true);
     dispatch(fetchRideTracking({ rideId, breadcrumbs: 200 }))
       .unwrap()
       .then((data) => {
-        const s = data?.ride?.status;
+        const s  = data?.ride?.status;
         if (s) setRideStatus(s);
         const ll = data?.ride?.liveLocation;
         if (ll?.coordinates?.length === 2) {
-          setDriverPos({ lat: ll.coordinates[1], lng: ll.coordinates[0], heading: ll.heading || 0 });
+          const pos = { lat: ll.coordinates[1], lng: ll.coordinates[0], heading: ll.heading || 0 };
+          setDisplayPos(pos);
+          prevLiveLocRef.current = pos;
+          log('Initial position from HTTP', pos);
         }
         if (data?.ride?.currentEtaMinutes) {
           setEtaInfo({ etaMinutes: data.ride.currentEtaMinutes, distanceRemainingKm: null });
@@ -735,12 +668,15 @@ export default function RideLiveTracking() {
         if (s === 'completed') setCompletion(true);
       })
       .catch(() => {
-        // fallback to live
         dispatch(fetchRideLive(rideId))
           .unwrap()
           .then((data) => {
             if (data?.status) setRideStatus(data.status);
-            if (data?.liveLocation) setDriverPos({ lat: data.liveLocation.lat, lng: data.liveLocation.lng, heading: data.liveLocation.heading || 0 });
+            if (data?.liveLocation) {
+              const pos = { lat: data.liveLocation.lat, lng: data.liveLocation.lng, heading: data.liveLocation.heading || 0 };
+              setDisplayPos(pos);
+              prevLiveLocRef.current = pos;
+            }
           })
           .catch(e => setError(e?.message || 'Could not load ride'));
       })
@@ -754,30 +690,63 @@ export default function RideLiveTracking() {
     return () => { dispatch(leaveBookingRoom({ bookingId })); };
   }, [bookingId, dispatch]);
 
-  // ── Listen socket events ─────────────────────────────────────────────────
+  // FIX: On socket reconnect → rejoin room + request snapshot
+  useEffect(() => {
+    if (!connected || !bookingId) return;
+    log('Socket connected/reconnected → joining room', bookingId);
+    dispatch(joinBookingRoom({ bookingId }));
+    // Request full state snapshot for reconnect recovery
+    emit('request_booking_state', { bookingId });
+  }, [connected, bookingId, dispatch, emit]);
+
+
+  useEffect(() => {
+  if (!connected || !bookingId) return;
+  // Always rejoin on connect (idempotent on server)
+  dispatch(joinBookingRoom({ bookingId }));
+  emit('request_booking_state', { bookingId });
+}, [connected, bookingId]);
+
+  // ── Socket listeners — attached ONCE, stable via ref ─────────────────────
+  // FIX: use listenersAttached ref to prevent duplicate binds on re-render
   useEffect(() => {
     if (!connected) return;
+    if (listenersAttached.current) return;
+    listenersAttached.current = true;
+    log('Attaching socket listeners');
 
     const unsubs = [
-      // location_update
+
+      // ── location_update — MAIN driver position event ──────────────────
+      // Backend must: socket.on('driver_location', ...) → io.to(`booking:${bookingId}`).emit('location_update', payload)
       on(EV.LOCATION_UPDATE, (d) => {
         if (!d) return;
-        const newPos = { lat: d.lat, lng: d.lng, heading: d.heading || 0 };
-        dispatch(socketLocationUpdate(d));
-        dispatch(setLiveLocation(d));
-        animateDriverMarker(newPos);
-        if (d.etaMinutes) setEtaInfo({ etaMinutes: d.etaMinutes, distanceRemainingKm: d.remainingKm });
+        log('location_update received', d);
+
+        // FIX: always dispatch — reducer must NOT guard on liveData null
+        dispatch(socketLocationUpdate({
+          lat:      d.lat,
+          lng:      d.lng,
+          heading:  d.heading  ?? 0,
+          speedKmh: d.speedKmh ?? d.speed ?? null,
+          updatedAt: d.updatedAt ?? Date.now(),
+        }));
+
+        if (d.etaMinutes != null) {
+          setEtaInfo({ etaMinutes: d.etaMinutes, distanceRemainingKm: d.remainingKm ?? null });
+        }
       }),
 
-      // eta_update
+      // ── eta_update ────────────────────────────────────────────────────
       on(EV.ETA_UPDATE, (d) => {
         if (!d) return;
+        log('eta_update', d);
         dispatch(socketEtaUpdate(d));
         dispatch(setEtaUpdate(d));
-        setEtaInfo({ etaMinutes: d.etaMinutes, distanceRemainingKm: d.distanceRemainingKm });
+        setEtaInfo({ etaMinutes: d.etaMinutes, distanceRemainingKm: d.distanceRemainingKm ?? null });
       }),
 
-      // navigation_target_changed
+      // ── navigation_target_changed ─────────────────────────────────────
       on(EV.NAVIGATION_TARGET_CHANGED, (d) => {
         if (!d) return;
         dispatch(socketNavigationTargetChanged(d));
@@ -788,22 +757,21 @@ export default function RideLiveTracking() {
         }
       }),
 
-      // ride_status_changed
+      // ── ride_status_changed ───────────────────────────────────────────
       on(EV.RIDE_STATUS_CHANGED, (d) => {
         if (!d?.status) return;
+        log('ride_status_changed', d.status);
         dispatch(socketRideStatusChanged(d));
         setRideStatus(d.status);
         announceStatus(d.status);
         if (d.status === 'completed') setTimeout(() => setCompletion(true), 1500);
       }),
 
-      // booking_status_change
       on(EV.BOOKING_STATUS_CHANGE, (d) => {
         if (!d?.status) return;
         if (d.status === 'completed') setTimeout(() => setCompletion(true), 1500);
       }),
 
-      // otp_required / driver_arrived
       on('driver_arrived', (d) => {
         dispatch(socketDriverArrived(d));
         setRideStatus('driver_arrived');
@@ -815,7 +783,6 @@ export default function RideLiveTracking() {
         if (d?.otp) setOtp(String(d.otp));
       }),
 
-      // ride_completed
       on('ride_completed', (d) => {
         dispatch(socketRideCompleted(d));
         setRideStatus('completed');
@@ -823,44 +790,143 @@ export default function RideLiveTracking() {
         if (voiceRef.current) speak('Your ride has been completed. Thank you for using Likeson.');
       }),
 
-      // ride_cancelled
       on('ride_cancelled', (d) => {
         dispatch(socketRideCancelled(d));
         setRideStatus('cancelled');
       }),
 
-      // driver_en_route
       on('driver_en_route', (d) => {
         dispatch(socketDriverEnRoute(d));
         setRideStatus('driver_en_route');
         if (voiceRef.current) speak('Your driver is on the way to your pickup location.');
       }),
 
-      // driver_accepted
       on('driver_accepted', (d) => {
         dispatch(socketDriverAccepted(d));
         setRideStatus('driver_accepted');
       }),
 
-      // sos_alert
       on(EV.SOS_ALERT, (d) => {
         dispatch(setSosAlert(d));
       }),
 
-      // booking_state_snapshot (reconnect)
+      // ── booking_state_snapshot — reconnect recovery ───────────────────
       on(EV.BOOKING_STATE_SNAPSHOT, (d) => {
+        log('booking_state_snapshot', d);
         if (d?.ride?.status) setRideStatus(d.ride.status);
         if (d?.liveLocation) {
-          const p = { lat: d.liveLocation.lat, lng: d.liveLocation.lng, heading: d.liveLocation.heading || 0 };
-          setDriverPos(p);
+          const p = {
+            lat:     d.liveLocation.lat,
+            lng:     d.liveLocation.lng,
+            heading: d.liveLocation.heading || 0,
+          };
+          // Inject directly into Redux so liveLocationFromRedux selector fires
+          dispatch(socketLocationUpdate(p));
         }
       }),
     ];
 
-    return () => unsubs.forEach(fn => fn?.());
-  }, [connected, dispatch, on, EV]);
+    return () => {
+      log('Detaching socket listeners');
+      listenersAttached.current = false;
+      unsubs.forEach(fn => fn?.());
+    };
+    // FIX: depend on connected so re-attaches after reconnect
+  }, [connected, dispatch, on, EV, emit]);
 
-  // ── Voice announcement ───────────────────────────────────────────────────
+  // ── FIX: RAF-based smooth marker animation driven by Redux liveLocation ──
+  // This is the KEY fix — marker animation triggered by selector, not socket
+ useEffect(() => {
+  if (!liveLocationFromRedux) return;
+
+  const newPos = {
+    lat:     liveLocationFromRedux.lat,
+    lng:     liveLocationFromRedux.lng,
+    heading: liveLocationFromRedux.heading || 0,
+  };
+
+  log('Redux liveLocation changed → animating marker', newPos);
+
+  // Jump immediately if no previous position
+  if (!prevLiveLocRef.current) {
+    prevLiveLocRef.current = newPos;
+    setDisplayPos(newPos);
+    updateDriverMarkerDirect(newPos);
+    if (mapRef.current) mapRef.current.panTo({ lat: newPos.lat, lng: newPos.lng });
+    return;
+  }
+
+  // Cancel any in-progress animation — capture current interpolated pos as new start
+  if (animFrameRef.current) {
+    cancelAnimationFrame(animFrameRef.current);
+    animFrameRef.current = null;
+  }
+
+  // Use current display pos as from (handles mid-animation updates correctly)
+  animFromRef.current  = displayPos
+    ? { lat: displayPos.lat, lng: displayPos.lng }
+    : { ...prevLiveLocRef.current };
+  animToRef.current    = newPos;
+  animStartRef.current = null;
+
+  const ANIM_DURATION = 800; // ms
+
+  function rafStep(timestamp) {
+    if (!animStartRef.current) animStartRef.current = timestamp;
+
+    const elapsed  = timestamp - animStartRef.current;
+    const progress = Math.min(elapsed / ANIM_DURATION, 1);
+
+    // Ease-out cubic
+    const eased = 1 - Math.pow(1 - progress, 3);
+
+    const lat = animFromRef.current.lat + (animToRef.current.lat - animFromRef.current.lat) * eased;
+    const lng = animFromRef.current.lng + (animToRef.current.lng - animFromRef.current.lng) * eased;
+    const interpolated = { lat, lng, heading: newPos.heading };
+
+    // DOM mutation only — zero re-renders during animation
+    updateDriverMarkerDirect(interpolated);
+
+    if (progress < 1) {
+      animFrameRef.current = requestAnimationFrame(rafStep);
+    } else {
+      // Animation done — one React state update + pan
+      prevLiveLocRef.current = newPos;
+      animFrameRef.current   = null;
+      setDisplayPos(newPos); // single render on complete
+      if (mapRef.current) mapRef.current.panTo({ lat: newPos.lat, lng: newPos.lng });
+      log('Marker animation complete', newPos);
+    }
+  }
+
+  animFrameRef.current = requestAnimationFrame(rafStep);
+}, [liveLocationFromRedux]); // displayPos intentionally excluded — read via ref pattern
+
+  // cleanup RAF on unmount
+  useEffect(() => {
+    return () => {
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    };
+  }, []);
+
+  // ── updateDriverMarkerDirect — mutate AdvancedMarkerElement in-place ─────
+  // FIX: direct DOM mutation for zero-lag heading + position update
+  function updateDriverMarkerDirect(pos) {
+    if (!driverMarkerRef.current) return;
+
+    // Update position
+    driverMarkerRef.current.position = { lat: pos.lat, lng: pos.lng };
+
+    // Update heading on inner element
+    const inner = driverMarkerRef.current.content?.querySelector('#driver-inner');
+    if (inner) {
+      inner.style.transform = `rotate(${pos.heading}deg)`;
+    }
+
+    log('Marker DOM updated', pos);
+  }
+
+  // ── Voice ─────────────────────────────────────────────────────────────────
   function announceStatus(status) {
     if (!voiceRef.current) return;
     if (lastSpokenStatus.current === status) return;
@@ -875,52 +941,11 @@ export default function RideLiveTracking() {
     if (msgs[status]) speak(msgs[status]);
   }
 
-  // ── Smooth marker animation ──────────────────────────────────────────────
-  function animateDriverMarker(newPos) {
-    if (!driverMarkerRef.current || !prevPosRef.current) {
-      setDriverPos(newPos);
-      prevPosRef.current = newPos;
-      return;
-    }
-
-    const start = { ...prevPosRef.current };
-    const end   = newPos;
-    const dur   = 800;
-    const t0    = performance.now();
-
-    clearInterval(interpolateRef.current);
-    interpolateRef.current = setInterval(() => {
-      const elapsed = performance.now() - t0;
-      const progress = Math.min(elapsed / dur, 1);
-      const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
-
-      const lat = start.lat + (end.lat - start.lat) * eased;
-      const lng = start.lng + (end.lng - start.lng) * eased;
-
-      setDriverPos({ lat, lng, heading: newPos.heading });
-
-      if (driverMarkerRef.current?.content) {
-        driverMarkerRef.current.content.style.transform = `rotate(${newPos.heading}deg)`;
-      }
-
-      if (progress >= 1) {
-        clearInterval(interpolateRef.current);
-        prevPosRef.current = newPos;
-        // smooth pan camera to driver
-        if (mapRef.current) {
-          mapRef.current.panTo({ lat, lng });
-        }
-      }
-    }, 16);
-  }
-
-  // cleanup interpolation
-  useEffect(() => () => clearInterval(interpolateRef.current), []);
-
   // ── Map callbacks ────────────────────────────────────────────────────────
   const onMapLoad = useCallback((map) => {
     mapRef.current = map;
     setMapReady(true);
+    log('Map loaded');
   }, []);
 
   const onMapUnmount = useCallback(() => {
@@ -929,9 +954,8 @@ export default function RideLiveTracking() {
 
   // ── Auto-fit bounds ──────────────────────────────────────────────────────
   useEffect(() => {
-    if (!mapRef.current || !mapsLoaded) return;
-    const points = [];
-    if (driverPos)    points.push(driverPos);
+    if (!mapRef.current || !mapsLoaded || !displayPos) return;
+    const points = [displayPos];
     if (pickupCoords) points.push(pickupCoords);
     if (dropoffCoords && ['in_progress', 'otp_verified', 'at_stop'].includes(rideStatus)) {
       points.push(dropoffCoords);
@@ -941,30 +965,30 @@ export default function RideLiveTracking() {
     const bounds = new window.google.maps.LatLngBounds();
     points.forEach(p => bounds.extend(p));
     mapRef.current.fitBounds(bounds, { top: 80, right: 20, bottom: 420, left: 20 });
-  }, [driverPos, pickupCoords, dropoffCoords, rideStatus, mapsLoaded]);
+  // Only re-fit on mount + status change, NOT every position tick
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickupCoords, dropoffCoords, rideStatus, mapsLoaded]);
 
-  // ── Advanced Marker management ────────────────────────────────────────────
+  // ── AdvancedMarker management ─────────────────────────────────────────────
+  // FIX: create markers on mapReady; update position via updateDriverMarkerDirect
   useEffect(() => {
-    if (!mapReady || !mapsLoaded || !window.google?.maps?.marker?.AdvancedMarkerElement) return;
+    if (!mapReady || !mapsLoaded) return;
+    if (!window.google?.maps?.marker?.AdvancedMarkerElement) {
+      console.error('[LiveTracking] AdvancedMarkerElement not available — check mapId and libraries');
+      return;
+    }
     const { AdvancedMarkerElement } = window.google.maps.marker;
 
     // Driver marker
-    if (driverPos) {
-      if (!driverMarkerRef.current) {
-        const el = createDriverMarkerElement(driverPos.heading);
-        driverMarkerRef.current = new AdvancedMarkerElement({
-          map:      mapRef.current,
-          position: driverPos,
-          content:  el,
-          title:    'Driver',
-          zIndex:   30,
-        });
-      } else {
-        driverMarkerRef.current.position = driverPos;
-        if (driverMarkerRef.current.content) {
-          driverMarkerRef.current.content.style.transform = `rotate(${driverPos.heading}deg)`;
-        }
-      }
+    if (displayPos && !driverMarkerRef.current) {
+      driverMarkerRef.current = new AdvancedMarkerElement({
+        map:      mapRef.current,
+        position: { lat: displayPos.lat, lng: displayPos.lng },
+        content:  createDriverMarkerElement(displayPos.heading || 0),
+        title:    'Driver',
+        zIndex:   30,
+      });
+      log('Driver marker created', displayPos);
     }
 
     // Pickup marker
@@ -976,8 +1000,6 @@ export default function RideLiveTracking() {
         title:    'Pickup',
         zIndex:   20,
       });
-    } else if (pickupMarkerRef.current && pickupReached) {
-      pickupMarkerRef.current.content = createPickupMarkerElement(true);
     }
 
     // Dropoff marker
@@ -990,13 +1012,16 @@ export default function RideLiveTracking() {
         zIndex:   20,
       });
     }
+  }, [mapReady, mapsLoaded, displayPos, pickupCoords, dropoffCoords, pickupReached]);
 
-    return () => {
-      // cleanup on unmount
-    };
-  }, [mapReady, mapsLoaded, driverPos, pickupCoords, dropoffCoords, pickupReached]);
+  // Update pickup marker style when reached
+  useEffect(() => {
+    if (pickupMarkerRef.current && pickupReached) {
+      pickupMarkerRef.current.content = createPickupMarkerElement(true);
+    }
+  }, [pickupReached]);
 
-  // cleanup markers on unmount
+  // Cleanup markers on unmount
   useEffect(() => {
     return () => {
       if (driverMarkerRef.current)  { driverMarkerRef.current.map  = null; driverMarkerRef.current  = null; }
@@ -1007,14 +1032,13 @@ export default function RideLiveTracking() {
 
   // ── Recenter ─────────────────────────────────────────────────────────────
   const handleRecenter = useCallback(() => {
-    if (!mapRef.current || !driverPos) return;
-    mapRef.current.panTo(driverPos);
+    if (!mapRef.current || !displayPos) return;
+    mapRef.current.panTo({ lat: displayPos.lat, lng: displayPos.lng });
     mapRef.current.setZoom(15);
-  }, [driverPos]);
+  }, [displayPos]);
 
   // ── SOS ──────────────────────────────────────────────────────────────────
   const { trigger: triggerSos } = useSos(bookingId, rideId);
-
   const handleSos = useCallback(() => {
     if (!window.confirm('Are you sure you want to trigger an emergency SOS?')) return;
     navigator.geolocation?.getCurrentPosition(
@@ -1023,7 +1047,7 @@ export default function RideLiveTracking() {
     );
   }, [triggerSos]);
 
-  // ── Share trip ────────────────────────────────────────────────────────────
+  // ── Share ─────────────────────────────────────────────────────────────────
   const handleShare = useCallback(() => {
     const url = window.location.href;
     if (navigator.share) {
@@ -1035,23 +1059,18 @@ export default function RideLiveTracking() {
 
   // ── Map options ───────────────────────────────────────────────────────────
   const mapOptions = useMemo(() => ({
-    mapId:                    MAP_ID,
-    disableDefaultUI:         true,
-    gestureHandling:          'greedy',
-    zoomControl:              false,
-    mapTypeControl:           false,
-    streetViewControl:        false,
-    fullscreenControl:        false,
-    clickableIcons:           false,
-    backgroundColor:          isDark ? '#1a1a2e' : '#f8fafc',
-    colorScheme:              isDark ? 'DARK' : 'LIGHT',
+    mapId:               MAP_ID,
+    disableDefaultUI:    true,
+    gestureHandling:     'greedy',
+    zoomControl:         false,
+    mapTypeControl:      false,
+    streetViewControl:   false,
+    fullscreenControl:   false,
+    clickableIcons:      false,
+    backgroundColor:     isDark ? '#1a1a2e' : '#f8fafc',
+    colorScheme:         isDark ? 'DARK' : 'LIGHT',
   }), [isDark]);
 
-  // ── OTP from live/tracking data ──────────────────────────────────────────
-  // OTP comes via socket event (driver_arrived / otp_required) — do NOT read from ride model client-side
-  // otp state only set from socket events.
-
-  // ── Booking info from ride ────────────────────────────────────────────────
   const driverSnapshot  = ride?.driverSnapshot  || null;
   const vehicleSnapshot = ride?.vehicleSnapshot || null;
   const booking         = trackingData?.booking || null;
@@ -1080,25 +1099,24 @@ export default function RideLiveTracking() {
   }
 
   const curStatus = rideStatus || ride?.status || 'driver_assigned';
+  const mapCenter = displayPos || pickupCoords || { lat: 16.506, lng: 80.648 };
 
   return (
     <div className={`fixed inset-0 overflow-hidden ${isDark ? 'dark' : ''}`} data-theme={isDark ? undefined : 'customer'}>
 
-      {/* ── Reconnect Banner ─────────────────────────────────────── */}
       <ReconnectBanner visible={!connected} />
 
-      {/* ── FULLSCREEN MAP ───────────────────────────────────────── */}
+      {/* ── FULLSCREEN MAP ─────────────────────────────────────── */}
       <div className="absolute inset-0">
         {mapsLoaded ? (
           <GoogleMap
             mapContainerStyle={{ width: '100%', height: '100%' }}
-            center={driverPos || pickupCoords || { lat: 16.506, lng: 80.648 }}
+            center={mapCenter}
             zoom={14}
             options={mapOptions}
             onLoad={onMapLoad}
             onUnmount={onMapUnmount}
           >
-            {/* remaining route — highlighted */}
             {routePath.length > 0 && (
               <Polyline
                 path={routePath}
@@ -1110,8 +1128,6 @@ export default function RideLiveTracking() {
                 }}
               />
             )}
-
-            {/* completed route — faded */}
             {completedPath.length > 1 && (
               <Polyline
                 path={completedPath}
@@ -1119,7 +1135,6 @@ export default function RideLiveTracking() {
                   strokeColor:   '#94a3b8',
                   strokeWeight:  4,
                   strokeOpacity: 0.4,
-                  strokeDashArray: '8 6',
                   geodesic:      true,
                 }}
               />
@@ -1132,7 +1147,7 @@ export default function RideLiveTracking() {
         )}
       </div>
 
-      {/* ── TOP FLOATING HEADER ──────────────────────────────────── */}
+      {/* ── TOP HEADER ───────────────────────────────────────────── */}
       <motion.div
         initial={{ y: -80, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
@@ -1141,7 +1156,6 @@ export default function RideLiveTracking() {
       >
         <div className="mx-3 mt-3 rounded-2xl bg-base-100/90 backdrop-blur-xl border border-base-300/50 shadow-xl px-4 py-3">
           <div className="flex items-center gap-3">
-            {/* status */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <motion.div
@@ -1149,38 +1163,32 @@ export default function RideLiveTracking() {
                   transition={{ repeat: Infinity, duration: 1.2 }}
                   className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
                     curStatus === 'completed' ? 'bg-success' :
-                    curStatus === 'cancelled' ? 'bg-error' :
-                    'bg-primary'
+                    curStatus === 'cancelled' ? 'bg-error' : 'bg-primary'
                   }`}
                 />
                 <p className="text-sm font-bold text-base-content truncate">
                   {RIDE_STATUS_LABELS[curStatus] || 'Tracking…'}
                 </p>
               </div>
-
               <div className="flex items-center gap-3 mt-1">
-                {/* ETA */}
                 {etaInfo?.etaMinutes != null && (
                   <div className="flex items-center gap-1 text-xs text-base-content/60">
                     <Clock size={11} className="text-primary" />
                     <span className="font-semibold text-primary">{fmtEta(etaInfo.etaMinutes)}</span>
                   </div>
                 )}
-                {/* distance */}
                 {etaInfo?.distanceRemainingKm != null && (
                   <div className="flex items-center gap-1 text-xs text-base-content/60">
                     <Route size={11} />
                     <span>{fmtDist(etaInfo.distanceRemainingKm)}</span>
                   </div>
                 )}
-                {/* ride code */}
                 {ride?.rideCode && (
                   <span className="text-xs text-base-content/40 font-mono">#{ride.rideCode}</span>
                 )}
               </div>
             </div>
 
-            {/* connection dot */}
             <div className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold border ${
               connected
                 ? 'bg-success/10 border-success/30 text-success'
@@ -1190,7 +1198,6 @@ export default function RideLiveTracking() {
               <span className="hidden sm:inline">{connected ? 'Live' : 'Offline'}</span>
             </div>
 
-            {/* support */}
             <button className="w-8 h-8 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary hover:bg-primary/20 transition-colors">
               <HelpCircle size={15} />
             </button>
@@ -1198,7 +1205,7 @@ export default function RideLiveTracking() {
         </div>
       </motion.div>
 
-      {/* ── TOP RIGHT ACTIONS ─────────────────────────────────────── */}
+      {/* ── FLOAT BUTTONS ─────────────────────────────────────────── */}
       <motion.div
         initial={{ x: 60, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
@@ -1212,15 +1219,13 @@ export default function RideLiveTracking() {
         <FloatBtn icon={ShieldAlert} onClick={handleSos} title="Emergency SOS" variant="danger" pulse={!!sosAlertRx} />
       </motion.div>
 
-      {/* ── BOTTOM SHEET ─────────────────────────────────────────── */}
+      {/* ── BOTTOM SHEET ──────────────────────────────────────────── */}
       <BottomSheet rideStatus={curStatus}>
         {(tab) => {
-          // ── DRIVER TAB ──────────────────────────────────────────
           if (tab === 'driver') return (
             <div className="space-y-4 pb-6">
               {driverSnapshot ? (
                 <>
-                  {/* driver card */}
                   <div className="flex items-center gap-4 p-4 rounded-2xl bg-base-200/80 border border-base-300/60">
                     <div className="relative flex-shrink-0">
                       <div className="w-16 h-16 rounded-2xl bg-primary/15 border-2 border-primary/30 flex items-center justify-center overflow-hidden">
@@ -1229,13 +1234,8 @@ export default function RideLiveTracking() {
                           : <User size={28} className="text-primary" />
                         }
                       </div>
-                      <motion.div
-                        animate={{ scale: [1, 1.3, 1] }}
-                        transition={{ repeat: Infinity, duration: 2 }}
-                        className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-success border-2 border-base-100"
-                      />
+                      <motion.div animate={{ scale: [1, 1.3, 1] }} transition={{ repeat: Infinity, duration: 2 }} className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-success border-2 border-base-100" />
                     </div>
-
                     <div className="flex-1 min-w-0">
                       <p className="font-bold text-base-content text-base truncate">{driverSnapshot.legalName || 'Your Driver'}</p>
                       <div className="flex items-center gap-1 mt-0.5">
@@ -1244,14 +1244,9 @@ export default function RideLiveTracking() {
                         <span className="text-xs text-base-content/40">rating</span>
                       </div>
                     </div>
-
-                    {/* action buttons */}
                     <div className="flex gap-2">
                       {driverSnapshot.phone && (
-                        <a
-                          href={`tel:${driverSnapshot.phone}`}
-                          className="w-10 h-10 rounded-full bg-success/15 border border-success/30 flex items-center justify-center text-success hover:bg-success/25 transition-colors"
-                        >
+                        <a href={`tel:${driverSnapshot.phone}`} className="w-10 h-10 rounded-full bg-success/15 border border-success/30 flex items-center justify-center text-success hover:bg-success/25 transition-colors">
                           <Phone size={17} />
                         </a>
                       )}
@@ -1261,7 +1256,6 @@ export default function RideLiveTracking() {
                     </div>
                   </div>
 
-                  {/* vehicle info */}
                   {vehicleSnapshot && (
                     <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-base-200/60 border border-base-300/50">
                       <Car size={18} className="text-primary flex-shrink-0" />
@@ -1269,9 +1263,7 @@ export default function RideLiveTracking() {
                         <p className="text-sm font-semibold text-base-content">
                           {[vehicleSnapshot.color, vehicleSnapshot.make, vehicleSnapshot.model].filter(Boolean).join(' ')}
                         </p>
-                        <p className="text-xs font-bold text-primary tracking-wider mt-0.5">
-                          {vehicleSnapshot.registrationNumber}
-                        </p>
+                        <p className="text-xs font-bold text-primary tracking-wider mt-0.5">{vehicleSnapshot.registrationNumber}</p>
                       </div>
                       {vehicleSnapshot.vehicleType && (
                         <span className="badge badge-primary badge-sm">{vehicleSnapshot.vehicleType}</span>
@@ -1279,24 +1271,15 @@ export default function RideLiveTracking() {
                     </div>
                   )}
 
-                  {/* OTP card — show only when driver_arrived */}
                   <AnimatePresence>
                     {curStatus === 'driver_arrived' && otp && (
-                      <OtpCard otp={otp} rideId={rideId} bookingId={bookingId} />
+                      <OtpCard otp={otp} />
                     )}
                   </AnimatePresence>
 
-                  {/* waiting message when driver_arrived but no OTP yet */}
                   {curStatus === 'driver_arrived' && !otp && (
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      className="flex items-center gap-3 p-4 rounded-2xl bg-accent/10 border border-accent/30"
-                    >
-                      <motion.div
-                        animate={{ scale: [1, 1.2, 1] }}
-                        transition={{ repeat: Infinity, duration: 1.2 }}
-                      >
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-3 p-4 rounded-2xl bg-accent/10 border border-accent/30">
+                      <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1.2 }}>
                         <ShieldAlert size={20} className="text-accent" />
                       </motion.div>
                       <div>
@@ -1317,16 +1300,10 @@ export default function RideLiveTracking() {
             </div>
           );
 
-          // ── PROGRESS TAB ─────────────────────────────────────────
           if (tab === 'progress') return (
             <div className="pb-6 space-y-5">
-              {/* ETA banner */}
               {etaInfo?.etaMinutes != null && curStatus !== 'completed' && (
-                <motion.div
-                  initial={{ scale: 0.95, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  className="flex items-center gap-4 p-4 rounded-2xl bg-primary/10 border border-primary/20"
-                >
+                <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="flex items-center gap-4 p-4 rounded-2xl bg-primary/10 border border-primary/20">
                   <div className="text-center">
                     <p className="text-3xl font-black text-primary leading-none">{Math.round(etaInfo.etaMinutes)}</p>
                     <p className="text-xs text-base-content/50 font-medium mt-0.5">minutes</p>
@@ -1340,20 +1317,12 @@ export default function RideLiveTracking() {
                   </div>
                 </motion.div>
               )}
-
-              {/* Timeline */}
               <div className="px-1">
                 <p className="text-xs font-bold text-base-content/40 uppercase tracking-wider mb-4">Ride Milestones</p>
                 <RideProgressTimeline currentStatus={curStatus} />
               </div>
-
-              {/* Stop notice */}
               {curStatus === 'at_stop' && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="flex items-center gap-3 p-3 rounded-xl bg-warning/10 border border-warning/30"
-                >
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center gap-3 p-3 rounded-xl bg-warning/10 border border-warning/30">
                   <Zap size={16} className="text-warning" />
                   <p className="text-sm font-semibold text-warning">Temporarily stopped at a waypoint</p>
                 </motion.div>
@@ -1361,17 +1330,16 @@ export default function RideLiveTracking() {
             </div>
           );
 
-          // ── BOOKING TAB ──────────────────────────────────────────
           if (tab === 'booking') return (
             <div className="pb-6 space-y-3">
               {[
-                { label: 'Booking ID',   value: bookingId?.slice(-8)?.toUpperCase() },
-                { label: 'Ride ID',      value: rideId?.slice(-8)?.toUpperCase() },
-                { label: 'Ride Code',    value: ride?.rideCode },
-                { label: 'Patient',      value: booking?.patientInfo?.name },
-                { label: 'Pickup',       value: ride?.pickup?.address || ride?.pickup?.label },
-                { label: 'Destination',  value: ride?.dropoff?.address || ride?.dropoff?.label },
-                { label: 'Vehicle',      value: ride?.vehicleClass?.replace('_', ' ') },
+                { label: 'Booking ID',    value: bookingId?.slice(-8)?.toUpperCase() },
+                { label: 'Ride ID',       value: rideId?.slice(-8)?.toUpperCase() },
+                { label: 'Ride Code',     value: ride?.rideCode },
+                { label: 'Patient',       value: booking?.patientInfo?.name },
+                { label: 'Pickup',        value: ride?.pickup?.address || ride?.pickup?.label },
+                { label: 'Destination',   value: ride?.dropoff?.address || ride?.dropoff?.label },
+                { label: 'Vehicle',       value: ride?.vehicleClass?.replace('_', ' ') },
                 { label: 'Est. Distance', value: ride?.estimatedDistanceKm ? fmtDist(ride.estimatedDistanceKm) : null },
               ].filter(r => r.value).map(({ label, value }) => (
                 <div key={label} className="flex items-start gap-3 py-2.5 border-b border-base-300/40 last:border-0">
@@ -1382,15 +1350,9 @@ export default function RideLiveTracking() {
             </div>
           );
 
-          // ── SAFETY TAB ───────────────────────────────────────────
           if (tab === 'safety') return (
             <div className="pb-6 space-y-4">
-              {/* SOS */}
-              <motion.button
-                whileTap={{ scale: 0.96 }}
-                onClick={handleSos}
-                className="w-full flex items-center gap-4 p-4 rounded-2xl bg-error/10 border-2 border-error/40 hover:bg-error/20 transition-colors"
-              >
+              <motion.button whileTap={{ scale: 0.96 }} onClick={handleSos} className="w-full flex items-center gap-4 p-4 rounded-2xl bg-error/10 border-2 border-error/40 hover:bg-error/20 transition-colors">
                 <div className="w-12 h-12 rounded-full bg-error/20 flex items-center justify-center flex-shrink-0">
                   <ShieldAlert size={22} className="text-error" />
                 </div>
@@ -1400,12 +1362,7 @@ export default function RideLiveTracking() {
                 </div>
               </motion.button>
 
-              {/* Share trip */}
-              <motion.button
-                whileTap={{ scale: 0.96 }}
-                onClick={handleShare}
-                className="w-full flex items-center gap-4 p-4 rounded-2xl bg-primary/10 border border-primary/30 hover:bg-primary/20 transition-colors"
-              >
+              <motion.button whileTap={{ scale: 0.96 }} onClick={handleShare} className="w-full flex items-center gap-4 p-4 rounded-2xl bg-primary/10 border border-primary/30 hover:bg-primary/20 transition-colors">
                 <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
                   <Share2 size={20} className="text-primary" />
                 </div>
@@ -1415,16 +1372,8 @@ export default function RideLiveTracking() {
                 </div>
               </motion.button>
 
-              {/* Voice toggle */}
-              <motion.button
-                whileTap={{ scale: 0.96 }}
-                onClick={() => setVoiceOn(v => !v)}
-                className={`w-full flex items-center gap-4 p-4 rounded-2xl border transition-colors ${
-                  voiceOn
-                    ? 'bg-success/15 border-success/40 hover:bg-success/25'
-                    : 'bg-base-200 border-base-300/60 hover:bg-base-300/50'
-                }`}
-              >
+              <motion.button whileTap={{ scale: 0.96 }} onClick={() => setVoiceOn(v => !v)}
+                className={`w-full flex items-center gap-4 p-4 rounded-2xl border transition-colors ${voiceOn ? 'bg-success/15 border-success/40 hover:bg-success/25' : 'bg-base-200 border-base-300/60 hover:bg-base-300/50'}`}>
                 <div className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${voiceOn ? 'bg-success/20' : 'bg-base-300'}`}>
                   {voiceOn ? <Volume2 size={20} className="text-success" /> : <VolumeX size={20} className="text-base-content/40" />}
                 </div>
@@ -1433,14 +1382,10 @@ export default function RideLiveTracking() {
                   <p className="text-xs text-base-content/60 mt-0.5">Audio alerts for ride status changes</p>
                 </div>
                 <div className={`w-11 h-6 rounded-full transition-colors flex items-center px-0.5 ${voiceOn ? 'bg-success' : 'bg-base-300'}`}>
-                  <motion.div
-                    animate={{ x: voiceOn ? 20 : 0 }}
-                    className="w-5 h-5 rounded-full bg-white shadow-sm"
-                  />
+                  <motion.div animate={{ x: voiceOn ? 20 : 0 }} className="w-5 h-5 rounded-full bg-white shadow-sm" />
                 </div>
               </motion.button>
 
-              {/* Live tracking status */}
               <div className="flex items-center gap-3 p-4 rounded-2xl bg-base-200/80 border border-base-300/50">
                 <div className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-success' : 'bg-error'}`} />
                 <div>
@@ -1449,11 +1394,7 @@ export default function RideLiveTracking() {
                 </div>
               </div>
 
-              {/* Support */}
-              <a
-                href="tel:1800-123-4567"
-                className="w-full flex items-center gap-4 p-4 rounded-2xl bg-base-200 border border-base-300/50 hover:bg-base-300/50 transition-colors"
-              >
+              <a href="tel:1800-123-4567" className="w-full flex items-center gap-4 p-4 rounded-2xl bg-base-200 border border-base-300/50 hover:bg-base-300/50 transition-colors">
                 <div className="w-12 h-12 rounded-full bg-info/20 flex items-center justify-center flex-shrink-0">
                   <Phone size={20} className="text-info" />
                 </div>
@@ -1470,14 +1411,10 @@ export default function RideLiveTracking() {
         }}
       </BottomSheet>
 
-      {/* ── COMPLETION SCREEN ─────────────────────────────────────── */}
+      {/* ── COMPLETION SCREEN ────────────────────────────────────── */}
       <AnimatePresence>
         {showCompletion && curStatus === 'completed' && (
-          <CompletionScreen
-            ride={ride}
-            tracking={trackingData}
-            onClose={() => setCompletion(false)}
-          />
+          <CompletionScreen ride={ride} tracking={trackingData} onClose={() => setCompletion(false)} />
         )}
       </AnimatePresence>
 

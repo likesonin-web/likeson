@@ -4,12 +4,10 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Activity, Calendar, ClipboardList, FileText, Search,
-  Filter, ChevronDown, ChevronRight, Eye, CheckCircle2,
-  XCircle, Clock, AlertTriangle, TrendingUp, Users,
-  Stethoscope, RefreshCcw, Download, MoreVertical,
-  ArrowUpRight, ArrowDownRight, Layers, X, Bell,
-  BarChart2, PieChart as PieIcon, Pill, FlaskConical,
+  Activity, Calendar, ClipboardList, Search, Filter, 
+  ChevronDown, ChevronRight, Eye, CheckCircle2, XCircle, 
+  Clock, AlertTriangle, TrendingUp, RefreshCcw, X, 
+  BarChart2, PieChart as PieIcon, Layers
 } from 'lucide-react';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -20,14 +18,10 @@ import {
   fetchOPRecords,
   fetchOPRecordById,
   updateOPStatus,
-  adminFetchPrescriptions,
   selectOPRecords,
   selectOPRecordsTotal,
   selectSelectedOP,
-  selectAdminPrescriptions,
-  selectAdminPrescriptionsTotal,
   selectClinicalLoading,
-  selectClinicalError,
   clearSelectedOP,
 } from '@/store/slices/clinicalSlice';
 
@@ -81,7 +75,7 @@ const StatCard = ({ icon: Icon, label, value, sub, trend, color = 'primary', del
       </div>
       {trend !== undefined && (
         <span className={`flex items-center gap-0.5 text-xs font-bold ${trend >= 0 ? 'text-success' : 'text-error'}`}>
-          {trend >= 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
+          {trend >= 0 ? <Activity size={12} /> : <Activity size={12} />}
           {Math.abs(trend)}%
         </span>
       )}
@@ -125,7 +119,6 @@ const Spinner = () => (
 // ─── OP Detail Drawer ─────────────────────────────────────────────────────────
 
 const OPDetailDrawer = ({ op, onClose, onStatusChange, loading }) => {
-  const dispatch = useDispatch();
   const [newStatus, setNewStatus] = useState('');
   const [reason, setReason] = useState('');
   const [showStatusForm, setShowStatusForm] = useState(false);
@@ -362,26 +355,20 @@ export default function OPsManagement() {
   const opRecords       = useSelector(selectOPRecords);
   const opTotal         = useSelector(selectOPRecordsTotal);
   const selectedOP      = useSelector(selectSelectedOP);
-  const rxRecords       = useSelector(selectAdminPrescriptions);
-  const rxTotal         = useSelector(selectAdminPrescriptionsTotal);
 
   const opLoading  = useSelector(selectClinicalLoading('fetchOPRecords'));
-  const rxLoading  = useSelector(selectClinicalLoading('adminFetchPrescriptions'));
   const opxLoading = useSelector(selectClinicalLoading('fetchOPRecordById'));
   const updLoading = useSelector(selectClinicalLoading('updateOPStatus'));
 
   // Local UI state
-  const [activeTab, setActiveTab]         = useState('ops');         // 'ops' | 'prescriptions'
   const [opPage, setOpPage]               = useState(1);
-  const [rxPage, setRxPage]               = useState(1);
   const [opStatus, setOpStatus]           = useState('');
-  const [rxStatus, setRxStatus]           = useState('');
   const [search, setSearch]               = useState('');
   const [dateFrom, setDateFrom]           = useState('');
   const [dateTo, setDateTo]               = useState('');
   const [showFilters, setShowFilters]     = useState(false);
   const [drawerOpen, setDrawerOpen]       = useState(false);
-  const [chartView, setChartView]         = useState('area');        // 'area' | 'bar' | 'pie'
+  const [chartView, setChartView]         = useState('area');
 
   const LIMIT = 10;
 
@@ -393,15 +380,6 @@ export default function OPsManagement() {
     if (dateTo)   params.to     = dateTo;
     dispatch(fetchOPRecords(params));
   }, [dispatch, opPage, opStatus, dateFrom, dateTo]);
-
-  // Fetch Prescriptions
-  useEffect(() => {
-    const params = { page: rxPage, limit: LIMIT };
-    if (rxStatus) params.status = rxStatus;
-    if (dateFrom) params.from   = dateFrom;
-    if (dateTo)   params.to     = dateTo;
-    dispatch(adminFetchPrescriptions(params));
-  }, [dispatch, rxPage, rxStatus, dateFrom, dateTo]);
 
   const handleViewOP = useCallback((id) => {
     dispatch(fetchOPRecordById(id));
@@ -419,7 +397,6 @@ export default function OPsManagement() {
 
   const handleRefresh = () => {
     dispatch(fetchOPRecords({ page: opPage, limit: LIMIT, status: opStatus }));
-    dispatch(adminFetchPrescriptions({ page: rxPage, limit: LIMIT, status: rxStatus }));
   };
 
   // ── Stats derived from loaded data ──────────────────────────────────────────
@@ -430,12 +407,9 @@ export default function OPsManagement() {
       completedOPs: byStatus(opRecords, 'completed'),
       scheduledOPs: byStatus(opRecords, 'scheduled'),
       inProgressOPs: byStatus(opRecords, 'in_progress'),
-      totalRx:     rxTotal,
-      issuedRx:    byStatus(rxRecords, 'issued'),
-      dispensedRx: byStatus(rxRecords, 'dispensed'),
       revenue:     opRecords.reduce((s, r) => s + (r.consultationFee ?? 0), 0),
     };
-  }, [opRecords, rxRecords, opTotal, rxTotal]);
+  }, [opRecords, opTotal]);
 
   // ── Chart data ───────────────────────────────────────────────────────────────
   const opStatusPieData = useMemo(() => {
@@ -446,14 +420,6 @@ export default function OPsManagement() {
     }));
   }, [opRecords]);
 
-  const rxStatusPieData = useMemo(() => {
-    const counts = {};
-    rxRecords.forEach((r) => { counts[r.status] = (counts[r.status] ?? 0) + 1; });
-    return Object.entries(counts).map(([name, value]) => ({
-      name: RX_STATUS_META[name]?.label ?? name, value,
-    }));
-  }, [rxRecords]);
-
   // Build a daily OP trend for area chart (last 7 days from loaded data)
   const trendData = useMemo(() => {
     const days = {};
@@ -461,18 +427,14 @@ export default function OPsManagement() {
       const d = new Date();
       d.setDate(d.getDate() - i);
       const key = d.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
-      days[key] = { date: key, OPs: 0, Prescriptions: 0 };
+      days[key] = { date: key, OPs: 0 };
     }
     opRecords.forEach((r) => {
       const key = new Date(r.scheduledAt).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
       if (days[key]) days[key].OPs++;
     });
-    rxRecords.forEach((r) => {
-      const key = new Date(r.issuedAt || r.createdAt).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
-      if (days[key]) days[key].Prescriptions++;
-    });
     return Object.values(days);
-  }, [opRecords, rxRecords]);
+  }, [opRecords]);
 
   // Filter by search (client-side on name)
   const filteredOPs = useMemo(() => {
@@ -486,22 +448,11 @@ export default function OPsManagement() {
     );
   }, [opRecords, search]);
 
-  const filteredRx = useMemo(() => {
-    if (!search) return rxRecords;
-    const q = search.toLowerCase();
-    return rxRecords.filter(
-      (r) =>
-        r.rxNumber?.toLowerCase().includes(q) ||
-        r.patient?.name?.toLowerCase().includes(q)
-    );
-  }, [rxRecords, search]);
-
   const opTotalPages = Math.ceil(opTotal / LIMIT);
-  const rxTotalPages = Math.ceil(rxTotal / LIMIT);
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-base-100 font-poppins" data-theme="hospital">
+    <div className="min-h-screen bg-base-100 font-inter" data-theme="hospital">
 
       {/* ── Page Header ────────────────────────────────────────────────────── */}
       <div className="border-b border-base-300 bg-base-100 sticky top-0 z-30 backdrop-blur-strong">
@@ -515,7 +466,7 @@ export default function OPsManagement() {
                 <h1 className="font-montserrat font-black text-xl text-base-content tracking-tight">
                   OPs Management
                 </h1>
-                <p className="text-xs text-base-content/50">Out-patient records &amp; prescriptions</p>
+                <p className="text-xs text-base-content/50">Out-patient records analysis & track</p>
               </div>
             </div>
 
@@ -569,22 +520,12 @@ export default function OPsManagement() {
                       <option key={v} value={v}>{m.label}</option>
                     ))}
                   </select>
-                  <select
-                    className="input-field text-sm w-36"
-                    value={rxStatus}
-                    onChange={(e) => { setRxStatus(e.target.value); setRxPage(1); }}
-                  >
-                    <option value="">All Rx Status</option>
-                    {Object.entries(RX_STATUS_META).map(([v, m]) => (
-                      <option key={v} value={v}>{m.label}</option>
-                    ))}
-                  </select>
                   <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
                     className="input-field text-sm w-36" placeholder="From" />
                   <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
                     className="input-field text-sm w-36" placeholder="To" />
                   <button
-                    onClick={() => { setOpStatus(''); setRxStatus(''); setDateFrom(''); setDateTo(''); setSearch(''); }}
+                    onClick={() => { setOpStatus(''); setDateFrom(''); setDateTo(''); setSearch(''); }}
                     className="btn btn-ghost btn-sm text-error"
                   >
                     Clear
@@ -612,17 +553,8 @@ export default function OPsManagement() {
           <div className="col-span-2">
             <StatCard icon={Activity}     label="In Progress"      value={stats.inProgressOPs} delay={0.15} color="warning" />
           </div>
-          <div className="col-span-2">
-            <StatCard icon={FileText}     label="Total Rx"         value={stats.totalRx}       trend={6}   delay={0.20} color="secondary" />
-          </div>
-          <div className="col-span-2">
-            <StatCard icon={Pill}         label="Issued Rx"        value={stats.issuedRx}      delay={0.25} color="accent" />
-          </div>
-          <div className="col-span-2">
-            <StatCard icon={FlaskConical} label="Dispensed"        value={stats.dispensedRx}   delay={0.30} color="success" />
-          </div>
-          <div className="col-span-2">
-            <StatCard icon={TrendingUp}   label="Revenue (loaded)" value={`₹${stats.revenue.toLocaleString('en-IN')}`} delay={0.35} color="primary" />
+          <div className="col-span-4 md:col-span-8 xl:col-span-8">
+            <StatCard icon={TrendingUp}   label="Revenue (loaded)" value={`₹${stats.revenue.toLocaleString('en-IN')}`} delay={0.20} color="primary" />
           </div>
         </div>
 
@@ -630,7 +562,7 @@ export default function OPsManagement() {
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
+          transition={{ delay: 0.3 }}
           className="grid grid-cols-1 lg:grid-cols-3 gap-4"
         >
           {/* Trend chart */}
@@ -660,10 +592,6 @@ export default function OPsManagement() {
                       <stop offset="5%"  stopColor="var(--primary)"   stopOpacity={0.3} />
                       <stop offset="95%" stopColor="var(--primary)"   stopOpacity={0} />
                     </linearGradient>
-                    <linearGradient id="rxGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%"  stopColor="var(--secondary)" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="var(--secondary)" stopOpacity={0} />
-                    </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" />
                   <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.5 }} />
@@ -672,8 +600,7 @@ export default function OPsManagement() {
                     contentStyle={{ background: 'var(--base-200)', border: '1px solid var(--base-300)', borderRadius: 8, fontSize: 12 }}
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Area type="monotone" dataKey="OPs"           stroke="var(--primary)"   fill="url(#opGrad)" strokeWidth={2} dot={false} />
-                  <Area type="monotone" dataKey="Prescriptions" stroke="var(--secondary)" fill="url(#rxGrad)" strokeWidth={2} dot={false} />
+                  <Area type="monotone" dataKey="OPs" stroke="var(--primary)" fill="url(#opGrad)" strokeWidth={2} dot={false} />
                 </AreaChart>
               ) : (
                 <BarChart data={trendData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
@@ -682,381 +609,186 @@ export default function OPsManagement() {
                   <YAxis tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.5 }} />
                   <Tooltip contentStyle={{ background: 'var(--base-200)', border: '1px solid var(--base-300)', borderRadius: 8, fontSize: 12 }} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar dataKey="OPs"           fill="var(--primary)"   radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="Prescriptions" fill="var(--secondary)" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="OPs" fill="var(--primary)" radius={[4, 4, 0, 0]} />
                 </BarChart>
               )}
             </ResponsiveContainer>
           </div>
 
-          {/* Pie charts */}
-          <div className="flex flex-col gap-4">
-            <div className="card p-5 flex-1">
-              <div className="flex items-center gap-2 mb-3">
-                <PieIcon size={14} className="text-primary" />
-                <h3 className="font-montserrat font-extrabold text-base-content text-xs">OP Status Dist.</h3>
-              </div>
-              <ResponsiveContainer width="100%" height={90}>
-                <PieChart>
-                  <Pie data={opStatusPieData} dataKey="value" cx="50%" cy="50%" innerRadius={25} outerRadius={40} paddingAngle={3}>
-                    {opStatusPieData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
-                  </Pie>
-                  <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-                  <Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} />
-                </PieChart>
-              </ResponsiveContainer>
+          {/* Pie chart */}
+          <div className="card p-5 flex flex-col justify-center">
+            <div className="flex items-center gap-2 mb-3">
+              <PieIcon size={14} className="text-primary" />
+              <h3 className="font-montserrat font-extrabold text-base-content text-xs">OP Status Distribution</h3>
             </div>
-            <div className="card p-5 flex-1">
-              <div className="flex items-center gap-2 mb-3">
-                <PieIcon size={14} className="text-secondary" />
-                <h3 className="font-montserrat font-extrabold text-base-content text-xs">Rx Status Dist.</h3>
-              </div>
-              <ResponsiveContainer width="100%" height={90}>
-                <PieChart>
-                  <Pie data={rxStatusPieData} dataKey="value" cx="50%" cy="50%" innerRadius={25} outerRadius={40} paddingAngle={3}>
-                    {rxStatusPieData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
-                  </Pie>
-                  <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-                  <Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
+            <ResponsiveContainer width="100%" height={180}>
+              <PieChart>
+                <Pie data={opStatusPieData} dataKey="value" cx="50%" cy="50%" innerRadius={40} outerRadius={60} paddingAngle={3}>
+                  {opStatusPieData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                </Pie>
+                <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                <Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} />
+              </PieChart>
+            </ResponsiveContainer>
           </div>
         </motion.div>
 
-        {/* ── Tabs ────────────────────────────────────────────────────────── */}
+        {/* ── Dynamic Table Container ────────────────────────────────────── */}
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5 }}
+          transition={{ delay: 0.4 }}
           className="card overflow-hidden"
         >
-          {/* Tab bar */}
-          <div className="flex border-b border-base-300 bg-base-200">
-            {[
-              { key: 'ops',           label: 'Out-Patient Records', icon: ClipboardList, count: opTotal },
-              { key: 'prescriptions', label: 'Prescriptions',       icon: FileText,      count: rxTotal },
-            ].map((t) => (
-              <button
-                key={t.key}
-                onClick={() => setActiveTab(t.key)}
-                className={`flex items-center gap-2 px-5 py-3.5 text-sm font-semibold transition-colors relative
-                  ${activeTab === t.key
-                    ? 'text-primary'
-                    : 'text-base-content/50 hover:text-base-content/80'
-                  }`}
-              >
-                <t.icon size={15} />
-                {t.label}
-                <span className={`badge badge-xs ${activeTab === t.key ? 'badge-primary' : 'badge-secondary'}`}>
-                  {t.count}
-                </span>
-                {activeTab === t.key && (
-                  <motion.div layoutId="tab-underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
-                )}
-              </button>
-            ))}
+          <div className="p-5">
+            <SectionHeader
+              icon={ClipboardList}
+              title="Out-Patient Records"
+              subtitle={`${opTotal} total records`}
+            />
           </div>
 
-          {/* ── OP Records Table ──────────────────────────────────────────── */}
-          <AnimatePresence mode="wait">
-            {activeTab === 'ops' && (
-              <motion.div
-                key="ops"
-                initial={{ opacity: 0, x: -8 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 8 }}
-                transition={{ duration: 0.2 }}
-              >
-                <div className="p-5">
-                  <SectionHeader
-                    icon={ClipboardList}
-                    title="Out-Patient Records"
-                    subtitle={`${opTotal} total records`}
-                  />
-                </div>
-
-                {opLoading ? (
-                  <Spinner />
-                ) : filteredOPs.length === 0 ? (
-                  <EmptyState icon={ClipboardList} msg="No OP records found" />
-                ) : (
-                  <>
-                    {/* Desktop table */}
-                    <div className="hidden md:block overflow-x-auto">
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>OP Number</th>
-                            <th>Patient</th>
-                            <th>Type</th>
-                            <th>Scheduled</th>
-                            <th>Fee</th>
-                            <th>Status</th>
-                            <th>Follow-up</th>
-                            <th></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredOPs.map((op, idx) => (
-                            <motion.tr
-                              key={op._id}
-                              initial={{ opacity: 0, y: 4 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              transition={{ delay: idx * 0.03 }}
-                              className="group"
-                            >
-                              <td>
-                                <span className="font-mono text-xs font-bold text-primary">{op.opNumber}</span>
-                              </td>
-                              <td>
-                                <div>
-                                  <p className="font-semibold text-base-content text-sm">{op.patientName || op.patient?.name || '—'}</p>
-                                  {op.patient?.phone && <p className="text-xs text-base-content/50">{op.patient.phone}</p>}
-                                </div>
-                              </td>
-                              <td>
-                                <span className="badge badge-secondary badge-sm capitalize">
-                                  {op.consultationType?.replace('_', ' ') ?? '—'}
-                                </span>
-                              </td>
-                              <td>
-                                <div>
-                                  <p className="text-sm font-medium">{fmtDate(op.scheduledAt)}</p>
-                                  <p className="text-xs text-base-content/50">{fmtTime(op.scheduledAt)}</p>
-                                </div>
-                              </td>
-                              <td>
-                                <span className="font-bold text-primary">₹{op.consultationFee ?? 0}</span>
-                              </td>
-                              <td><StatusBadge status={op.status} /></td>
-                              <td>
-                                {op.followUpExpiry ? (
-                                  <span className={`text-xs font-semibold ${new Date() < new Date(op.followUpExpiry) ? 'text-success' : 'text-error'}`}>
-                                    {fmtDate(op.followUpExpiry)}
-                                  </span>
-                                ) : <span className="text-xs text-base-content/30">—</span>}
-                              </td>
-                              <td>
-                                <button
-                                  onClick={() => handleViewOP(op._id)}
-                                  className="btn btn-ghost btn-xs gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                                >
-                                  <Eye size={12} /> View
-                                </button>
-                              </td>
-                            </motion.tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {/* Mobile cards */}
-                    <div className="md:hidden divide-y divide-base-300">
-                      {filteredOPs.map((op, idx) => (
-                        <motion.div
-                          key={op._id}
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          transition={{ delay: idx * 0.04 }}
-                          className="p-4 flex items-start justify-between gap-3"
-                        >
-                          <div className="space-y-1 flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-mono text-xs font-bold text-primary">{op.opNumber}</span>
-                              <StatusBadge status={op.status} />
-                            </div>
-                            <p className="font-semibold text-base-content text-sm truncate">
-                              {op.patientName || op.patient?.name || '—'}
-                            </p>
-                            <p className="text-xs text-base-content/50">{fmtDateTime(op.scheduledAt)}</p>
-                            <p className="text-xs font-bold text-primary">₹{op.consultationFee ?? 0}</p>
+          {opLoading ? (
+            <Spinner />
+          ) : filteredOPs.length === 0 ? (
+            <EmptyState icon={ClipboardList} msg="No OP records found" />
+          ) : (
+            <>
+              {/* Desktop table */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>OP Number</th>
+                      <th>Patient</th>
+                      <th>Type</th>
+                      <th>Scheduled</th>
+                      <th>Fee</th>
+                      <th>Status</th>
+                      <th>Follow-up</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredOPs.map((op, idx) => (
+                      <motion.tr
+                        key={op._id}
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: idx * 0.03 }}
+                        className="group"
+                      >
+                        <td>
+                          <span className="font-mono text-xs font-bold text-primary">{op.opNumber}</span>
+                        </td>
+                        <td>
+                          <div>
+                            <p className="font-semibold text-base-content text-sm">{op.patientName || op.patient?.name || '—'}</p>
+                            {op.patient?.phone && <p className="text-xs text-base-content/50">{op.patient.phone}</p>}
                           </div>
-                          <button onClick={() => handleViewOP(op._id)} className="btn btn-ghost btn-circle btn-sm">
-                            <ChevronRight size={16} />
-                          </button>
-                        </motion.div>
-                      ))}
-                    </div>
-
-                    {/* Pagination */}
-                    {opTotalPages > 1 && (
-                      <div className="flex items-center justify-between px-5 py-3 border-t border-base-300">
-                        <p className="text-xs text-base-content/50">
-                          Page {opPage} of {opTotalPages} · {opTotal} records
-                        </p>
-                        <div className="flex gap-1">
+                        </td>
+                        <td>
+                          <span className="badge badge-secondary badge-sm capitalize">
+                            {op.consultationType?.replace('_', ' ') ?? '—'}
+                          </span>
+                        </td>
+                        <td>
+                          <div>
+                            <p className="text-sm font-medium">{fmtDate(op.scheduledAt)}</p>
+                            <p className="text-xs text-base-content/50">{fmtTime(op.scheduledAt)}</p>
+                          </div>
+                        </td>
+                        <td>
+                          <span className="font-bold text-primary">₹{op.consultationFee ?? 0}</span>
+                        </td>
+                        <td><StatusBadge status={op.status} /></td>
+                        <td>
+                          {op.followUpExpiry ? (
+                            <span className={`text-xs font-semibold ${new Date() < new Date(op.followUpExpiry) ? 'text-success' : 'text-error'}`}>
+                              {fmtDate(op.followUpExpiry)}
+                            </span>
+                          ) : <span className="text-xs text-base-content/30">—</span>}
+                        </td>
+                        <td>
                           <button
-                            disabled={opPage === 1}
-                            onClick={() => setOpPage((p) => p - 1)}
-                            className="btn btn-ghost btn-sm"
+                            onClick={() => handleViewOP(op._id)}
+                            className="btn btn-ghost btn-xs gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
                           >
-                            Prev
+                            <Eye size={12} /> View
                           </button>
-                          {Array.from({ length: Math.min(opTotalPages, 5) }, (_, i) => {
-                            const pg = i + 1;
-                            return (
-                              <button
-                                key={pg}
-                                onClick={() => setOpPage(pg)}
-                                className={`btn btn-sm ${opPage === pg ? 'btn-primary' : 'btn-ghost'}`}
-                              >
-                                {pg}
-                              </button>
-                            );
-                          })}
-                          <button
-                            disabled={opPage === opTotalPages}
-                            onClick={() => setOpPage((p) => p + 1)}
-                            className="btn btn-ghost btn-sm"
-                          >
-                            Next
-                          </button>
-                        </div>
+                        </td>
+                      </motion.tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile cards */}
+              <div className="md:hidden divide-y divide-base-300">
+                {filteredOPs.map((op, idx) => (
+                  <motion.div
+                    key={op._id}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: idx * 0.04 }}
+                    className="p-4 flex items-start justify-between gap-3"
+                  >
+                    <div className="space-y-1 flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono text-xs font-bold text-primary">{op.opNumber}</span>
+                        <StatusBadge status={op.status} />
                       </div>
-                    )}
-                  </>
-                )}
-              </motion.div>
-            )}
-
-            {/* ── Prescriptions Table ──────────────────────────────────── */}
-            {activeTab === 'prescriptions' && (
-              <motion.div
-                key="prescriptions"
-                initial={{ opacity: 0, x: 8 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -8 }}
-                transition={{ duration: 0.2 }}
-              >
-                <div className="p-5">
-                  <SectionHeader
-                    icon={FileText}
-                    title="Prescriptions"
-                    subtitle={`${rxTotal} total`}
-                  />
-                </div>
-
-                {rxLoading ? (
-                  <Spinner />
-                ) : filteredRx.length === 0 ? (
-                  <EmptyState icon={FileText} msg="No prescriptions found" />
-                ) : (
-                  <>
-                    {/* Desktop */}
-                    <div className="hidden md:block overflow-x-auto">
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>Rx Number</th>
-                            <th>Patient</th>
-                            <th>Doctor</th>
-                            <th>Issued</th>
-                            <th>Expires</th>
-                            <th>Medicines</th>
-                            <th>Lab Tests</th>
-                            <th>Status</th>
-                            <th>Signed</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredRx.map((rx, idx) => (
-                            <motion.tr
-                              key={rx._id}
-                              initial={{ opacity: 0, y: 4 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              transition={{ delay: idx * 0.03 }}
-                            >
-                              <td>
-                                <span className="font-mono text-xs font-bold text-secondary">{rx.rxNumber}</span>
-                              </td>
-                              <td>
-                                <div>
-                                  <p className="font-semibold text-sm text-base-content">{rx.patient?.name || '—'}</p>
-                                  {rx.patient?.phone && <p className="text-xs text-base-content/50">{rx.patient.phone}</p>}
-                                </div>
-                              </td>
-                              <td>
-                                <div>
-                                  <p className="text-sm font-medium">{rx.doctor?.name || '—'}</p>
-                                  <p className="text-xs text-base-content/50">{rx.doctor?.specialization || ''}</p>
-                                </div>
-                              </td>
-                              <td className="text-sm">{fmtDate(rx.issuedAt)}</td>
-                              <td>
-                                <span className={`text-xs font-semibold ${rx.expiresAt && new Date() > new Date(rx.expiresAt) ? 'text-error' : 'text-base-content'}`}>
-                                  {fmtDate(rx.expiresAt)}
-                                </span>
-                              </td>
-                              <td>
-                                <span className="badge badge-info badge-sm">{rx.medicines?.length ?? 0}</span>
-                              </td>
-                              <td>
-                                <span className="badge badge-accent badge-sm">{rx.labTests?.length ?? 0}</span>
-                              </td>
-                              <td><StatusBadge status={rx.status} meta={RX_STATUS_META} /></td>
-                              <td>
-                                {rx.isDigitallySigned
-                                  ? <CheckCircle2 size={14} className="text-success" />
-                                  : <XCircle size={14} className="text-base-content/30" />
-                                }
-                              </td>
-                            </motion.tr>
-                          ))}
-                        </tbody>
-                      </table>
+                      <p className="font-semibold text-base-content text-sm truncate">
+                        {op.patientName || op.patient?.name || '—'}
+                      </p>
+                      <p className="text-xs text-base-content/50">{fmtDateTime(op.scheduledAt)}</p>
+                      <p className="text-xs font-bold text-primary">₹{op.consultationFee ?? 0}</p>
                     </div>
+                    <button onClick={() => handleViewOP(op._id)} className="btn btn-ghost btn-circle btn-sm">
+                      <ChevronRight size={16} />
+                    </button>
+                  </motion.div>
+                ))}
+              </div>
 
-                    {/* Mobile */}
-                    <div className="md:hidden divide-y divide-base-300">
-                      {filteredRx.map((rx, idx) => (
-                        <motion.div
-                          key={rx._id}
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          transition={{ delay: idx * 0.04 }}
-                          className="p-4 space-y-1"
+              {/* Pagination */}
+              {opTotalPages > 1 && (
+                <div className="flex items-center justify-between px-5 py-3 border-t border-base-300">
+                  <p className="text-xs text-base-content/50">
+                    Page {opPage} of {opTotalPages} · {opTotal} records
+                  </p>
+                  <div className="flex gap-1">
+                    <button
+                      disabled={opPage === 1}
+                      onClick={() => setOpPage((p) => p - 1)}
+                      className="btn btn-ghost btn-sm"
+                    >
+                      Prev
+                    </button>
+                    {Array.from({ length: Math.min(opTotalPages, 5) }, (_, i) => {
+                      const pg = i + 1;
+                      return (
+                        <button
+                          key={pg}
+                          onClick={() => setOpPage(pg)}
+                          className={`btn btn-sm ${opPage === pg ? 'btn-primary' : 'btn-ghost'}`}
                         >
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono text-xs font-bold text-secondary">{rx.rxNumber}</span>
-                            <StatusBadge status={rx.status} meta={RX_STATUS_META} />
-                            {rx.isDigitallySigned && <CheckCircle2 size={12} className="text-success" />}
-                          </div>
-                          <p className="font-semibold text-sm text-base-content">{rx.patient?.name || '—'}</p>
-                          <p className="text-xs text-base-content/50">
-                            Dr. {rx.doctor?.name || '—'} · {fmtDate(rx.issuedAt)}
-                          </p>
-                          <div className="flex gap-2">
-                            <span className="badge badge-info badge-xs">{rx.medicines?.length ?? 0} meds</span>
-                            <span className="badge badge-accent badge-xs">{rx.labTests?.length ?? 0} tests</span>
-                          </div>
-                        </motion.div>
-                      ))}
-                    </div>
-
-                    {/* Pagination */}
-                    {rxTotalPages > 1 && (
-                      <div className="flex items-center justify-between px-5 py-3 border-t border-base-300">
-                        <p className="text-xs text-base-content/50">
-                          Page {rxPage} of {rxTotalPages} · {rxTotal} records
-                        </p>
-                        <div className="flex gap-1">
-                          <button disabled={rxPage === 1} onClick={() => setRxPage((p) => p - 1)} className="btn btn-ghost btn-sm">Prev</button>
-                          {Array.from({ length: Math.min(rxTotalPages, 5) }, (_, i) => {
-                            const pg = i + 1;
-                            return (
-                              <button key={pg} onClick={() => setRxPage(pg)} className={`btn btn-sm ${rxPage === pg ? 'btn-secondary' : 'btn-ghost'}`}>{pg}</button>
-                            );
-                          })}
-                          <button disabled={rxPage === rxTotalPages} onClick={() => setRxPage((p) => p + 1)} className="btn btn-ghost btn-sm">Next</button>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
+                          {pg}
+                        </button>
+                      );
+                    })}
+                    <button
+                      disabled={opPage === opTotalPages}
+                      onClick={() => setOpPage((p) => p + 1)}
+                      className="btn btn-ghost btn-sm"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </motion.div>
 
       </div>

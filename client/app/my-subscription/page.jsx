@@ -6,9 +6,10 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Stethoscope, Truck, Pill, Microscope, UserCheck, Home,
   Shield, Users, HeartPulse, Globe, Crown, Layers,
-  BadgeCheck, RefreshCw, X, Clock, ChevronDown, ChevronUp,
-  Gift, CreditCard, AlertCircle, CheckCircle2, ArrowRight,
+  BadgeCheck, RefreshCw, X, Clock, ChevronDown,
+  Gift, CreditCard, AlertCircle, ArrowRight,
   Zap, Activity, Calendar, TrendingUp, Info,
+  BarChart3,
 } from "lucide-react";
 
 import {
@@ -41,7 +42,7 @@ import {
 } from "@/store/slices/subscriptionSlice";
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  DESIGN TOKENS  (same as SubscriptionPage)
+//  DESIGN TOKENS
 // ─────────────────────────────────────────────────────────────────────────────
 const TIER = {
   "Basic Care": {
@@ -50,6 +51,13 @@ const TIER = {
     glow:      "rgba(59,130,246,0.35)",
     icon:      Shield,
     patternId: "zigzag",
+  },
+  "Standard Care": {
+    gradient:  "linear-gradient(135deg,#06b6d4 0%,#0284c7 100%)",
+    accent:    "#06b6d4",
+    glow:      "rgba(6,182,212,0.35)",
+    icon:      Activity,
+    patternId: "grid",
   },
   "Premium Care": {
     gradient:  "linear-gradient(135deg,#8b5cf6 0%,#6d28d9 100%)",
@@ -104,7 +112,7 @@ const PATTERNS = {
 };
 
 function PlanPattern({ patternId, planName }) {
-  const uid = `mysub-pat-${patternId}-${planName?.replace(/[\s']/g, "")}`;
+  const uid = `mysub-pat-${patternId}-${(planName || "").replace(/[\s']/g, "")}`;
   const PatternFn = PATTERNS[patternId] || PATTERNS.grid;
   return (
     <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ opacity: 0.1 }}>
@@ -121,13 +129,59 @@ function PlanPattern({ patternId, planName }) {
 // ─────────────────────────────────────────────────────────────────────────────
 function loadRazorpay() {
   return new Promise((resolve) => {
+    if (typeof window === "undefined") { resolve(false); return; }
     if (window.Razorpay) { resolve(true); return; }
     const script = document.createElement("script");
     script.src = "https://checkout.razorpay.com/v1/checkout.js";
-    script.onload = () => resolve(true);
+    script.onload  = () => resolve(true);
     script.onerror = () => resolve(false);
     document.body.appendChild(script);
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  CONFIRM DIALOG  (replaces window.confirm)
+// ─────────────────────────────────────────────────────────────────────────────
+function ConfirmDialog({ open, title, message, confirmLabel = "Confirm", cancelLabel = "Cancel", onConfirm, onCancel, accent = "#ef4444" }) {
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-[500] flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-msg"
+    >
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onCancel} aria-hidden="true" />
+      <div className="relative bg-base-100 border border-base-300 rounded-2xl p-6 w-full max-w-sm shadow-2xl space-y-4">
+        <div className="flex items-start gap-3">
+          <div
+            className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+            style={{ background: `${accent}18` }}
+            aria-hidden="true"
+          >
+            <AlertCircle size={18} style={{ color: accent }} />
+          </div>
+          <div>
+            <p id="confirm-title" className="text-sm font-black text-base-content">{title}</p>
+            <p id="confirm-msg"   className="text-xs mt-0.5 text-base-content/55">{message}</p>
+          </div>
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={onCancel}
+            className="flex-1 py-2.5 rounded-xl text-xs font-black bg-base-300 text-base-content"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            onClick={onConfirm}
+            className="flex-1 py-2.5 rounded-xl text-xs font-black text-white"
+            style={{ background: `linear-gradient(135deg, ${accent}, color-mix(in srgb, ${accent}, #000 20%))` }}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -136,11 +190,16 @@ function loadRazorpay() {
 function StatChip({ icon: Icon, label, value, accent, warn = false }) {
   return (
     <div className="flex flex-col items-center py-4 px-2 gap-1">
-      <Icon size={14} style={{ color: warn ? "#ef4444" : accent }} />
-      <span className="text-base font-black leading-none" style={{ color: warn ? "#ef4444" : "var(--base-content)" }}>
+      <Icon size={14} style={{ color: warn ? "#ef4444" : accent }} aria-hidden="true" />
+      <span
+        className="text-base font-black leading-none"
+        style={{ color: warn ? "#ef4444" : "var(--base-content)" }}
+      >
         {value}
       </span>
-      <span className="text-[9px] font-bold uppercase tracking-wider" style={{ opacity: 0.4 }}>{label}</span>
+      <span className="text-[9px] font-bold uppercase tracking-wider" style={{ opacity: 0.4 }}>
+        {label}
+      </span>
     </div>
   );
 }
@@ -149,71 +208,91 @@ function StatChip({ icon: Icon, label, value, accent, warn = false }) {
 //  ACTIVE PLAN HERO CARD
 // ─────────────────────────────────────────────────────────────────────────────
 function ActivePlanHeroCard({ sub, t, TIcon, daysLeft, isExpiring, progress, expiry }) {
-  const name = sub.plan?.fixedTier || sub.plan?.name || "Unknown Plan";
+  const name    = sub.plan?.fixedTier || sub.plan?.name || "Unknown Plan";
   const monthly = sub.plan?.pricing?.monthly ?? 0;
+  const isCustom = sub.planType === "custom";
 
   return (
     <div
       className="relative overflow-hidden rounded-2xl"
       style={{
-        background: "var(--base-100)",
-        border: `2px solid ${t.accent}`,
-        boxShadow: `0 12px 48px ${t.glow}`,
+        background:  "var(--base-100)",
+        border:      `2px solid ${t.accent}`,
+        boxShadow:   `0 12px 48px ${t.glow}`,
       }}
     >
-      {/* ── Gradient Header ── */}
+      {/* Gradient Header */}
       <div className="relative overflow-hidden" style={{ background: t.gradient, minHeight: 160 }}>
         <PlanPattern patternId={t.patternId} planName={name} />
 
-        {/* Rotating circles */}
         <motion.div
-          animate={{ rotate: 360 }} transition={{ duration: 50, repeat: Infinity, ease: "linear" }}
+          animate={{ rotate: 360 }}
+          transition={{ duration: 50, repeat: Infinity, ease: "linear" }}
           className="absolute -right-12 -top-12 w-44 h-44 rounded-full pointer-events-none"
           style={{ border: "28px solid rgba(255,255,255,0.07)" }}
         />
         <motion.div
-          animate={{ rotate: -360 }} transition={{ duration: 32, repeat: Infinity, ease: "linear" }}
+          animate={{ rotate: -360 }}
+          transition={{ duration: 32, repeat: Infinity, ease: "linear" }}
           className="absolute -right-4 top-8 w-20 h-20 rounded-full pointer-events-none"
           style={{ border: "12px solid rgba(255,255,255,0.06)" }}
         />
-        {/* Glow bottom */}
-        <div className="absolute bottom-0 left-0 right-0 h-16 pointer-events-none"
-          style={{ background: "linear-gradient(to top, rgba(0,0,0,0.15), transparent)" }} />
+        <div
+          className="absolute bottom-0 left-0 right-0 h-16 pointer-events-none"
+          style={{ background: "linear-gradient(to top, rgba(0,0,0,0.15), transparent)" }}
+        />
 
         <div className="relative z-10 p-6">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1 min-w-0">
-              {/* Status badge */}
+              {/* Status badges */}
               <div className="flex items-center gap-2 mb-3 flex-wrap">
                 <span
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-black"
                   style={{
-                    background: sub.status === "Trial" ? "rgba(245,158,11,.3)" : "rgba(255,255,255,0.2)",
-                    color: "white",
-                    backdropFilter: "blur(4px)",
+                    background:    sub.status === "Trial" ? "rgba(245,158,11,.3)" : "rgba(255,255,255,0.2)",
+                    color:         "white",
+                    backdropFilter:"blur(4px)",
                   }}
                 >
-                  {sub.status === "Trial" ? <Gift size={10} /> : <BadgeCheck size={10} />}
+                  {sub.status === "Trial" ? <Gift size={10} aria-hidden="true" /> : <BadgeCheck size={10} aria-hidden="true" />}
                   {sub.status === "Trial" ? "Free Trial Active" : "Active Subscription"}
                 </span>
+
+                {isCustom && (
+                  <span
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black"
+                    style={{ background: "rgba(255,255,255,0.15)", color: "white" }}
+                  >
+                    <Layers size={9} aria-hidden="true" /> Custom Plan
+                  </span>
+                )}
+
                 {sub.autoRenew && (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black"
-                    style={{ background: "rgba(255,255,255,0.15)", color: "white" }}>
-                    <RefreshCw size={9} /> Auto-renew On
+                  <span
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black"
+                    style={{ background: "rgba(255,255,255,0.15)", color: "white" }}
+                  >
+                    <RefreshCw size={9} aria-hidden="true" /> Auto-renew On
                   </span>
                 )}
               </div>
 
               {/* Plan name */}
               <div className="flex items-center gap-3 mb-1">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-                  style={{ background: "rgba(255,255,255,0.2)", backdropFilter: "blur(4px)" }}>
+                <div
+                  className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                  style={{ background: "rgba(255,255,255,0.2)", backdropFilter: "blur(4px)" }}
+                  aria-hidden="true"
+                >
                   <TIcon size={18} className="text-white" />
                 </div>
                 <div>
                   <h2 className="text-2xl font-black text-white leading-tight">{name}</h2>
                   <p className="text-white/55 text-xs mt-0.5">
-                    {sub.plan?.membership?.maxMembers === 1 ? "Individual plan" : `Up to ${sub.plan?.membership?.maxMembers} members`}
+                    {sub.plan?.membership?.maxMembers === 1
+                      ? "Individual plan"
+                      : `Up to ${sub.plan?.membership?.maxMembers} members`}
                   </p>
                 </div>
               </div>
@@ -231,17 +310,42 @@ function ActivePlanHeroCard({ sub, t, TIcon, daysLeft, isExpiring, progress, exp
         </div>
       </div>
 
-      {/* ── Stats row ── */}
+      {/* Stats row */}
       <div className="grid grid-cols-3 divide-x" style={{ borderBottom: "1px solid var(--base-300)" }}>
-        <StatChip icon={Clock}     label="Days Left"   value={daysLeft}                                   accent={t.accent} warn={isExpiring} />
-        <StatChip icon={Users}     label="Members"     value={sub.plan?.membership?.maxMembers ?? 1}       accent={t.accent} />
-        <StatChip icon={Calendar}  label="Renews"      value={expiry ? expiry.toLocaleDateString("en-IN", { month: "short", day: "numeric" }) : "—"} accent={t.accent} />
+        <StatChip
+          icon={Clock}
+          label="Days Left"
+          value={daysLeft}
+          accent={t.accent}
+          warn={isExpiring}
+        />
+        <StatChip
+          icon={Users}
+          label="Members"
+          value={sub.plan?.membership?.maxMembers ?? 1}
+          accent={t.accent}
+        />
+        <StatChip
+          icon={Calendar}
+          label="Renews"
+          value={
+            expiry
+              ? expiry.toLocaleDateString("en-IN", { month: "short", day: "numeric" })
+              : "—"
+          }
+          accent={t.accent}
+        />
       </div>
 
-      {/* ── Progress bar ── */}
+      {/* Progress bar */}
       <div className="px-6 pt-5 pb-2">
-        <div className="flex items-center justify-between text-[10px] font-bold mb-2" style={{ opacity: 0.5 }}>
-          <span className="flex items-center gap-1"><TrendingUp size={10} /> Billing period</span>
+        <div
+          className="flex items-center justify-between text-[10px] font-bold mb-2"
+          style={{ opacity: 0.5 }}
+        >
+          <span className="flex items-center gap-1">
+            <TrendingUp size={10} aria-hidden="true" /> Billing period
+          </span>
           <span>{expiry ? expiry.toLocaleDateString("en-IN") : "—"}</span>
         </div>
         <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--base-300)" }}>
@@ -255,43 +359,115 @@ function ActivePlanHeroCard({ sub, t, TIcon, daysLeft, isExpiring, progress, exp
         </div>
         {isExpiring && (
           <motion.p
-            animate={{ opacity: [1, 0.5, 1] }} transition={{ duration: 1.5, repeat: Infinity }}
+            animate={{ opacity: [1, 0.5, 1] }}
+            transition={{ duration: 1.5, repeat: Infinity }}
             className="text-[10px] font-bold mt-2 flex items-center gap-1"
             style={{ color: "#ef4444" }}
+            role="alert"
+            aria-live="polite"
           >
-            <AlertCircle size={10} /> Expiring soon — renew to avoid interruption
+            <AlertCircle size={10} aria-hidden="true" /> Expiring soon — renew to avoid interruption
           </motion.p>
         )}
       </div>
 
-      {/* ── Plan benefits preview ── */}
+      {/* Benefits preview — fixed vs custom */}
       <div className="px-6 py-4">
-        <p className="text-[10px] font-black uppercase tracking-widest mb-3" style={{ opacity: 0.4 }}>Your Benefits</p>
-        <div className="grid grid-cols-2 gap-2">
-          {[
-            { icon: Stethoscope, label: "Consultations", value: sub.plan?.consultations?.freePerMonth === -1 ? "Unlimited" : `${sub.plan?.consultations?.freePerMonth ?? 0}/mo` },
-            { icon: Pill,        label: "Pharmacy",       value: `Up to ${sub.plan?.pharmacy?.discountMax ?? 0}% off` },
-            { icon: Microscope,  label: "Diagnostics",    value: `${sub.plan?.diagnostics?.discountPercent ?? 0}% off` },
-            { icon: Truck,       label: "Transport",      value: sub.plan?.transport?.isApplicable ? `₹${sub.plan?.transport?.ratePerKm ?? 0}/km` : "N/A" },
-            { icon: UserCheck,   label: "Care Assistant", value: sub.plan?.careAssistant?.included ? "Included" : "Not included" },
-            { icon: Home,        label: "Home Lab",       value: sub.plan?.diagnostics?.homeSampleCollection ? "Available" : "N/A" },
-          ].map((b, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, x: -8 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.1 + i * 0.05 }}
-              className="flex items-center gap-2 p-2.5 rounded-xl"
-              style={{ background: `${t.accent}08`, border: `1px solid ${t.accent}18` }}
+        <p className="text-[10px] font-black uppercase tracking-widest mb-3" style={{ opacity: 0.4 }}>
+          Your Benefits
+        </p>
+
+        {isCustom && sub.plan?.customOptions?.length > 0 ? (
+          /* Custom plan: show option blocks */
+          <div className="space-y-2">
+            {sub.plan.customOptions
+              .filter((o) => o.optionKey === "transport" ? o.quantity >= 0 : o.quantity > 0)
+              .map((opt, i) => (
+                <motion.div
+                  key={i}
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.1 + i * 0.05 }}
+                  className="flex items-center justify-between p-2.5 rounded-xl"
+                  style={{ background: `${t.accent}08`, border: `1px solid ${t.accent}18` }}
+                >
+                  <span className="text-xs font-semibold text-base-content/70">{opt.label}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-base-content/50">×{opt.quantity}</span>
+                    <span className="text-xs font-black" style={{ color: t.accent }}>
+                      ₹{opt.lineTotal?.toFixed(0) ?? 0}
+                    </span>
+                  </div>
+                </motion.div>
+              ))}
+            <div
+              className="flex items-center justify-between pt-2 mt-1"
+              style={{ borderTop: `1px solid ${t.accent}25` }}
             >
-              <b.icon size={12} style={{ color: t.accent, flexShrink: 0 }} />
-              <div className="min-w-0">
-                <p className="text-[9px] font-bold uppercase tracking-wide" style={{ opacity: 0.45 }}>{b.label}</p>
-                <p className="text-[11px] font-black truncate">{b.value}</p>
-              </div>
-            </motion.div>
-          ))}
-        </div>
+              <span className="text-xs font-black text-base-content/60">Monthly total</span>
+              <span className="text-sm font-black" style={{ color: t.accent }}>
+                ₹{sub.plan?.pricing?.monthly ?? 0}/mo
+              </span>
+            </div>
+          </div>
+        ) : (
+          /* Fixed plan: standard benefits grid */
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              {
+                icon:  Stethoscope,
+                label: "Consultations",
+                value: sub.plan?.consultations?.freePerMonth === -1
+                  ? "Unlimited"
+                  : `${sub.plan?.consultations?.freePerMonth ?? 0}/mo`,
+              },
+              {
+                icon:  Pill,
+                label: "Pharmacy",
+                value: `Up to ${sub.plan?.pharmacy?.discountMax ?? 0}% off`,
+              },
+              {
+                icon:  Microscope,
+                label: "Diagnostics",
+                value: `${sub.plan?.diagnostics?.discountPercent ?? 0}% off`,
+              },
+              {
+                icon:  Truck,
+                label: "Transport",
+                value: sub.plan?.transport?.isApplicable
+                  ? `₹${sub.plan?.transport?.ratePerKm ?? 0}/km`
+                  : "N/A",
+              },
+              {
+                icon:  UserCheck,
+                label: "Care Assistant",
+                value: sub.plan?.careAssistant?.included ? "Included" : "Not included",
+              },
+              {
+                icon:  Home,
+                label: "Home Lab",
+                value: sub.plan?.diagnostics?.homeSampleCollection ? "Available" : "N/A",
+              },
+            ].map((b, i) => (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, x: -8 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 0.1 + i * 0.05 }}
+                className="flex items-center gap-2 p-2.5 rounded-xl"
+                style={{ background: `${t.accent}08`, border: `1px solid ${t.accent}18` }}
+              >
+                <b.icon size={12} style={{ color: t.accent, flexShrink: 0 }} aria-hidden="true" />
+                <div className="min-w-0">
+                  <p className="text-[9px] font-bold uppercase tracking-wide" style={{ opacity: 0.45 }}>
+                    {b.label}
+                  </p>
+                  <p className="text-[11px] font-black truncate">{b.value}</p>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -300,26 +476,36 @@ function ActivePlanHeroCard({ sub, t, TIcon, daysLeft, isExpiring, progress, exp
 // ─────────────────────────────────────────────────────────────────────────────
 //  ACTION BUTTONS PANEL
 // ─────────────────────────────────────────────────────────────────────────────
-function ActionPanel({ sub, t, onToggleAutoRenew, onCancel, onConvertTrial, cancelLoading, toggleLoading, trialConvertLoading }) {
+function ActionPanel({
+  sub, t,
+  onToggleAutoRenew, onCancel, onConvertTrial,
+  cancelLoading, toggleLoading, trialConvertLoading,
+}) {
   return (
     <div className="space-y-3">
       {/* Convert trial CTA */}
       {sub.status === "Trial" && (
         <motion.button
-          whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
           onClick={onConvertTrial}
           disabled={trialConvertLoading}
           className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl text-sm font-black text-white relative overflow-hidden"
           style={{ background: t.gradient, boxShadow: `0 6px 24px ${t.glow}` }}
+          aria-label={`Convert trial to paid — ₹${sub.plan?.pricing?.monthly ?? 0}/month`}
+          aria-busy={trialConvertLoading}
         >
-          {/* Shimmer */}
           <motion.div
             animate={{ x: ["-100%", "200%"] }}
             transition={{ duration: 2, repeat: Infinity, repeatDelay: 1.5 }}
             className="absolute inset-y-0 w-1/3 pointer-events-none"
             style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent)" }}
+            aria-hidden="true"
           />
-          {trialConvertLoading ? <RefreshCw size={15} className="animate-spin" /> : <CreditCard size={15} />}
+          {trialConvertLoading
+            ? <RefreshCw size={15} className="animate-spin" aria-hidden="true" />
+            : <CreditCard size={15} aria-hidden="true" />
+          }
           Convert to Paid — ₹{sub.plan?.pricing?.monthly ?? 0}/month
         </motion.button>
       )}
@@ -331,19 +517,24 @@ function ActionPanel({ sub, t, onToggleAutoRenew, onCancel, onConvertTrial, canc
         className="w-full flex items-center justify-between gap-3 px-5 py-4 rounded-2xl text-sm font-bold transition-all"
         style={{
           background: sub.autoRenew ? `${t.accent}10` : "var(--base-200)",
-          border: sub.autoRenew ? `1.5px solid ${t.accent}35` : "1.5px solid var(--base-300)",
-          color: sub.autoRenew ? t.accent : "var(--base-content)",
+          border:     sub.autoRenew ? `1.5px solid ${t.accent}35` : "1.5px solid var(--base-300)",
+          color:      sub.autoRenew ? t.accent : "var(--base-content)",
         }}
+        aria-pressed={sub.autoRenew}
+        aria-label={`Auto-renew is ${sub.autoRenew ? "on" : "off"}. Click to toggle.`}
+        aria-busy={toggleLoading}
       >
         <div className="flex items-center gap-3">
           {toggleLoading
-            ? <RefreshCw size={16} className="animate-spin" />
-            : <RefreshCw size={16} style={{ color: sub.autoRenew ? t.accent : "inherit" }} />
+            ? <RefreshCw size={16} className="animate-spin" aria-hidden="true" />
+            : <RefreshCw size={16} style={{ color: sub.autoRenew ? t.accent : "inherit" }} aria-hidden="true" />
           }
           <div className="text-left">
             <p className="text-sm font-black">Auto-Renew</p>
             <p className="text-[10px] font-semibold" style={{ opacity: 0.5 }}>
-              {sub.autoRenew ? "Your plan renews automatically" : "Your plan won't auto-renew"}
+              {sub.autoRenew
+                ? "Your plan renews automatically"
+                : "Your plan won't auto-renew"}
             </p>
           </div>
         </div>
@@ -351,6 +542,8 @@ function ActionPanel({ sub, t, onToggleAutoRenew, onCancel, onConvertTrial, canc
         <div
           className="relative rounded-full flex-shrink-0 transition-colors duration-300"
           style={{ width: 48, height: 26, background: sub.autoRenew ? t.accent : "var(--base-300)" }}
+          role="presentation"
+          aria-hidden="true"
         >
           <motion.div
             animate={{ x: sub.autoRenew ? 24 : 2 }}
@@ -365,93 +558,141 @@ function ActionPanel({ sub, t, onToggleAutoRenew, onCancel, onConvertTrial, canc
       <button
         onClick={onCancel}
         disabled={cancelLoading}
-        className="w-full flex items-center justify-center gap-2 px-5 py-3.5 rounded-2xl text-sm font-bold transition-all"
-        style={{ background: "rgba(239,68,68,.06)", color: "#ef4444", border: "1.5px solid rgba(239,68,68,.2)" }}
+        className="w-full flex items-center justify-center gap-2 px-5 py-3.5 rounded-2xl text-sm font-bold transition-all disabled:opacity-60"
+        style={{
+          background: "rgba(239,68,68,.06)",
+          color:      "#ef4444",
+          border:     "1.5px solid rgba(239,68,68,.2)",
+        }}
+        aria-label="Cancel subscription"
+        aria-busy={cancelLoading}
       >
-        {cancelLoading ? <RefreshCw size={14} className="animate-spin" /> : <X size={14} />}
+        {cancelLoading
+          ? <RefreshCw size={14} className="animate-spin" aria-hidden="true" />
+          : <X size={14} aria-hidden="true" />
+        }
         Cancel Subscription
       </button>
 
       <p className="text-[10px] font-semibold text-center" style={{ opacity: 0.35 }}>
-        <Info size={9} className="inline mr-1" />
-        You'll retain access until {new Date(sub.expiryDate).toLocaleDateString("en-IN")}
+        <Info size={9} className="inline mr-1" aria-hidden="true" />
+        You&apos;ll retain access until{" "}
+        {sub.expiryDate
+          ? new Date(sub.expiryDate).toLocaleDateString("en-IN")
+          : "—"}
       </p>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  HISTORY LIST
+//  SUBSCRIPTION HISTORY LIST
 // ─────────────────────────────────────────────────────────────────────────────
 function SubscriptionHistory({ history, pagination, loading, onPageChange }) {
   if (loading && history.length === 0) {
     return (
-      <div className="flex justify-center py-8">
-        <RefreshCw size={18} className="animate-spin" style={{ opacity: 0.35 }} />
+      <div className="flex justify-center py-8" role="status" aria-label="Loading history">
+        <RefreshCw size={18} className="animate-spin" style={{ opacity: 0.35 }} aria-hidden="true" />
       </div>
     );
   }
-  if (history.length === 0) return (
-    <p className="text-center text-xs font-semibold py-6" style={{ opacity: 0.4 }}>No history yet</p>
-  );
 
-  const STATUS_COLORS = { Active: "#10b981", Trial: "#f59e0b", Cancelled: "#6b7280", Expired: "#ef4444" };
+  if (history.length === 0) {
+    return (
+      <p className="text-center text-xs font-semibold py-6" style={{ opacity: 0.4 }}>
+        No history yet
+      </p>
+    );
+  }
+
+  const STATUS_COLORS = {
+    Active:    "#10b981",
+    Trial:     "#f59e0b",
+    Cancelled: "#6b7280",
+    Expired:   "#ef4444",
+    Paused:    "#8b5cf6",
+  };
 
   return (
     <div className="space-y-2">
       {history.map((h, i) => {
-        const name = h.plan?.fixedTier || h.plan?.name || "Plan";
-        const t    = getTier(name);
+        const name        = h.plan?.fixedTier || h.plan?.name || "Plan";
+        const t           = getTier(name);
         const statusColor = STATUS_COLORS[h.status] || "#6b7280";
+        const isCustom    = h.planType === "custom";
         return (
           <motion.div
-            key={h._id}
+            key={h._id || i}
             initial={{ opacity: 0, x: -12 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: i * 0.05 }}
             className="flex items-center gap-3 p-3.5 rounded-xl"
             style={{ background: "var(--base-200)", border: "1px solid var(--base-300)" }}
           >
-            <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
-              style={{ background: t.gradient }}>
+            <div
+              className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
+              style={{ background: t.gradient }}
+              aria-hidden="true"
+            >
               <t.icon size={14} className="text-white" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-xs font-black truncate">{name}</p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-xs font-black truncate">{name}</p>
+                {isCustom && (
+                  <span
+                    className="text-[9px] font-black px-1.5 py-0.5 rounded-full flex-shrink-0"
+                    style={{ background: `${CUSTOM_TIER.accent}18`, color: CUSTOM_TIER.accent }}
+                  >
+                    Custom
+                  </span>
+                )}
+              </div>
               <p className="text-[10px] font-semibold" style={{ opacity: 0.4 }}>
-                {h.createdAt ? new Date(h.createdAt).toLocaleDateString("en-IN") : "—"}
+                {h.createdAt  ? new Date(h.createdAt).toLocaleDateString("en-IN")  : "—"}
                 {" → "}
                 {h.expiryDate ? new Date(h.expiryDate).toLocaleDateString("en-IN") : "—"}
               </p>
             </div>
             <div className="text-right flex-shrink-0">
-              <span className="text-[10px] font-black px-2 py-1 rounded-full"
-                style={{ background: `${statusColor}15`, color: statusColor }}>
+              <span
+                className="text-[10px] font-black px-2 py-1 rounded-full"
+                style={{ background: `${statusColor}15`, color: statusColor }}
+              >
                 {h.status}
               </span>
-              {h.plan?.pricing?.monthly && (
-                <p className="text-[10px] font-bold mt-0.5" style={{ opacity: 0.4 }}>₹{h.plan.pricing.monthly}/mo</p>
+              {h.plan?.pricing?.monthly != null && (
+                <p className="text-[10px] font-bold mt-0.5" style={{ opacity: 0.4 }}>
+                  ₹{h.plan.pricing.monthly}/mo
+                </p>
               )}
             </div>
           </motion.div>
         );
       })}
 
+      {/* Pagination */}
       {pagination.pages > 1 && (
-        <div className="flex justify-center gap-2 pt-2">
-          <button onClick={() => onPageChange(Math.max(1, pagination.page - 1))}
+        <div className="flex justify-center gap-2 pt-2" role="navigation" aria-label="History pagination">
+          <button
+            onClick={() => onPageChange(Math.max(1, pagination.page - 1))}
             disabled={pagination.page === 1}
-            className="px-3 py-1.5 rounded-lg text-xs font-bold"
-            style={{ background: "var(--base-200)", opacity: pagination.page === 1 ? 0.4 : 1 }}>
+            className="px-3 py-1.5 rounded-lg text-xs font-bold transition-opacity disabled:opacity-40"
+            style={{ background: "var(--base-200)" }}
+            aria-label="Previous page"
+          >
             ‹ Prev
           </button>
           <span className="px-3 py-1.5 text-xs font-black" style={{ opacity: 0.5 }}>
             {pagination.page} / {pagination.pages}
           </span>
-          <button onClick={() => onPageChange(Math.min(pagination.pages, pagination.page + 1))}
+          <button
+            onClick={() => onPageChange(Math.min(pagination.pages, pagination.page + 1))}
             disabled={pagination.page === pagination.pages}
-            className="px-3 py-1.5 rounded-lg text-xs font-bold"
-            style={{ background: "var(--base-200)", opacity: pagination.page === pagination.pages ? 0.4 : 1 }}>
+            className="px-3 py-1.5 rounded-lg text-xs font-bold transition-opacity disabled:opacity-40"
+            style={{ background: "var(--base-200)" }}
+            aria-label="Next page"
+          >
             Next ›
           </button>
         </div>
@@ -461,7 +702,93 @@ function SubscriptionHistory({ history, pagination, loading, onPageChange }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  EMPTY STATE — no active subscription
+//  USAGE SUMMARY CARD  (current month)
+// ─────────────────────────────────────────────────────────────────────────────
+function UsageSummaryCard({ sub, t }) {
+  const usage  = sub.currentMonthUsage;
+  const limits = sub.limits;
+  if (!limits) return null;
+
+  const items = [
+    {
+      label: "Consultations",
+      used:  usage?.consultationsUsed       ?? 0,
+      max:   limits.consultationsPerMonth   ?? 0,
+      icon:  Stethoscope,
+    },
+    {
+      label: "Lab Tests",
+      used:  usage?.labTestsUsed            ?? 0,
+      max:   limits.labTestsPerMonth        ?? 0,
+      icon:  Microscope,
+    },
+    {
+      label: "Transport Rides",
+      used:  usage?.transportRidesUsed      ?? 0,
+      max:   limits.transportRidesPerMonth  ?? null,
+      icon:  Truck,
+    },
+    {
+      label: "Care Visits",
+      used:  usage?.careAssistantVisitsUsed ?? 0,
+      max:   limits.careAssistantVisitsPerMonth ?? null,
+      icon:  UserCheck,
+    },
+  ].filter((item) => item.max !== null && item.max > 0);
+
+  if (!items.length) return null;
+
+  return (
+    <div
+      className="rounded-2xl p-4 space-y-3"
+      style={{ background: `${t.accent}08`, border: `1px solid ${t.accent}20` }}
+      aria-label="Monthly usage summary"
+    >
+      <div className="flex items-center gap-2">
+        <BarChart3 size={13} style={{ color: t.accent }} aria-hidden="true" />
+        <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: t.accent }}>
+          This Month&apos;s Usage
+        </p>
+      </div>
+      <div className="space-y-2.5">
+        {items.map((item, i) => {
+          const pct     = item.max === -1 ? 0 : Math.min(100, (item.used / item.max) * 100);
+          const isLimit = item.max !== -1 && item.used >= item.max;
+          return (
+            <div key={i}>
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-1.5">
+                  <item.icon size={10} style={{ color: t.accent }} aria-hidden="true" />
+                  <span className="text-[11px] font-semibold text-base-content/70">{item.label}</span>
+                </div>
+                <span
+                  className="text-[11px] font-black"
+                  style={{ color: isLimit ? "#ef4444" : t.accent }}
+                >
+                  {item.used} / {item.max === -1 ? "∞" : item.max}
+                </span>
+              </div>
+              {item.max !== -1 && (
+                <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--base-300)" }}>
+                  <motion.div
+                    initial={{ width: 0 }}
+                    animate={{ width: `${pct}%` }}
+                    transition={{ duration: 1, ease: "easeOut", delay: i * 0.1 }}
+                    className="h-full rounded-full"
+                    style={{ background: isLimit ? "#ef4444" : t.gradient }}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  EMPTY STATE
 // ─────────────────────────────────────────────────────────────────────────────
 function EmptyState() {
   return (
@@ -470,23 +797,45 @@ function EmptyState() {
         animate={{ y: [0, -10, 0] }}
         transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
         className="w-20 h-20 rounded-3xl flex items-center justify-center"
-        style={{ background: "linear-gradient(135deg,#3b82f6,#8b5cf6)", boxShadow: "0 16px 40px rgba(139,92,246,0.3)" }}
+        style={{
+          background:  "linear-gradient(135deg,#3b82f6,#8b5cf6)",
+          boxShadow:   "0 16px 40px rgba(139,92,246,0.3)",
+        }}
+        aria-hidden="true"
       >
         <HeartPulse size={32} className="text-white" />
       </motion.div>
       <div>
         <h2 className="text-xl font-black mb-1">No Active Subscription</h2>
-        <p className="text-sm" style={{ opacity: 0.45 }}>You don't have an active health plan yet.</p>
+        <p className="text-sm" style={{ opacity: 0.45 }}>
+          You don&apos;t have an active health plan yet.
+        </p>
       </div>
       <motion.a
         href="/subscriptions"
         whileHover={{ scale: 1.03 }}
         whileTap={{ scale: 0.97 }}
         className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl text-sm font-black text-white"
-        style={{ background: "linear-gradient(135deg,#3b82f6,#8b5cf6)", boxShadow: "0 6px 24px rgba(139,92,246,0.35)" }}
+        style={{
+          background:  "linear-gradient(135deg,#3b82f6,#8b5cf6)",
+          boxShadow:   "0 6px 24px rgba(139,92,246,0.35)",
+        }}
       >
-        <Zap size={15} /> Browse Plans
+        <Zap size={15} aria-hidden="true" /> Browse Plans
       </motion.a>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PAGE SKELETON
+// ─────────────────────────────────────────────────────────────────────────────
+function PageSkeleton() {
+  return (
+    <div className="max-w-2xl mx-auto px-4 py-12 space-y-6" role="status" aria-label="Loading">
+      <div className="skeleton h-10 w-48 rounded-xl" />
+      <div className="skeleton h-64 rounded-2xl" />
+      <div className="skeleton h-40 rounded-2xl" />
     </div>
   );
 }
@@ -497,240 +846,334 @@ function EmptyState() {
 export default function MySubscriptionPage() {
   const dispatch = useDispatch();
 
-  const mySub          = useSelector(selectMySubscription);
-  const isActive       = useSelector(selectMySubIsActive);
-  const isOnTrial      = useSelector(selectMySubIsOnTrial);
-  const autoRenew      = useSelector(selectMySubAutoRenew);
-  const subLoading     = useSelector(selectMySubLoading);
-  const cancelLoading  = useSelector(selectCancelLoading);
-  const toggleLoading  = useSelector(selectToggleAutoRenewLoading);
+  // ── Selectors ──────────────────────────────────────────────────────────────
+  const mySub         = useSelector(selectMySubscription);
+  const isActive      = useSelector(selectMySubIsActive);
+  const isOnTrial     = useSelector(selectMySubIsOnTrial);
+  const autoRenew     = useSelector(selectMySubAutoRenew);
+  const subLoading    = useSelector(selectMySubLoading);
+  const cancelLoading = useSelector(selectCancelLoading);
+  const toggleLoading = useSelector(selectToggleAutoRenewLoading);
 
   const history        = useSelector(selectMyHistory);
   const historyPag     = useSelector(selectMyHistoryPagination);
   const historyLoading = useSelector(selectMyHistoryLoading);
 
-  const trialStatus          = useSelector(selectTrialStatus);
-  const isOnActiveTrial      = useSelector(selectIsOnActiveTrial);
-  const trialDaysLeft        = useSelector(selectTrialDaysLeft);
-  const trialOrder           = useSelector(selectTrialOrder);
-  const trialConvertLoading  = useSelector(selectTrialConvertLoading);
-  const trialVerifyLoading   = useSelector(selectTrialVerifyConvertLoading);
+  const trialStatus         = useSelector(selectTrialStatus);
+  const isOnActiveTrial     = useSelector(selectIsOnActiveTrial);
+  const trialDaysLeft       = useSelector(selectTrialDaysLeft);
+  const trialOrder          = useSelector(selectTrialOrder);
+  const trialConvertLoading = useSelector(selectTrialConvertLoading);
+  const trialVerifyLoading  = useSelector(selectTrialVerifyConvertLoading);
 
-  const [showHistory, setShowHistory] = useState(false);
-  const [historyPage, setHistoryPage] = useState(1);
+  // ── Local state ────────────────────────────────────────────────────────────
+  const [showHistory,  setShowHistory]  = useState(false);
+  const [historyPage,  setHistoryPage]  = useState(1);
+  const [confirmState, setConfirmState] = useState(null); // { title, message, onConfirm }
 
+  const RZP_KEY = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
+
+  // ── Initial fetches ────────────────────────────────────────────────────────
   useEffect(() => {
     dispatch(fetchMySubscription());
     dispatch(fetchTrialStatus());
   }, [dispatch]);
 
+  // ── History fetch on expand / page change ──────────────────────────────────
   useEffect(() => {
     if (showHistory) dispatch(fetchMySubscriptionHistory({ page: historyPage, limit: 6 }));
   }, [showHistory, historyPage, dispatch]);
 
-  // Trial Razorpay conversion
+  // ── Trial Razorpay conversion ──────────────────────────────────────────────
   useEffect(() => {
-    if (trialOrder?.orderId) {
-      (async () => {
-        const loaded = await loadRazorpay();
-        if (!loaded) { alert("Failed to load Razorpay."); return; }
-        const planName = mySub?.plan?.fixedTier || mySub?.plan?.name || "";
-        const t = getTier(planName);
-        const options = {
-          key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "rzp_test_ST1ytIDhRNEoT3",
-          amount: trialOrder.amount * 100,
-          currency: trialOrder.currency || "INR",
-          name: "Likeson Health",
-          description: "Convert Trial to Paid Subscription",
-          order_id: trialOrder.orderId,
-          handler: async (response) => {
+    if (!trialOrder?.orderId) return;
+
+    (async () => {
+      if (!RZP_KEY) {
+        alert("Payment gateway not configured. Contact support.");
+        dispatch(clearTrialOrder());
+        return;
+      }
+      const loaded = await loadRazorpay();
+      if (!loaded) {
+        alert("Failed to load Razorpay. Check your connection.");
+        dispatch(clearTrialOrder());
+        return;
+      }
+
+      const planName = mySub?.plan?.fixedTier || mySub?.plan?.name || "";
+      const t        = getTier(planName);
+
+      // FIX: guard against double-paise (if backend returns paise already)
+      const amountInPaise =
+        trialOrder.amount < 100_000
+          ? Math.round(trialOrder.amount * 100)
+          : Math.round(trialOrder.amount);
+
+      const rzp = new window.Razorpay({
+        key:         RZP_KEY,
+        amount:      amountInPaise,
+        currency:    trialOrder.currency || "INR",
+        name:        "Likeson Health",
+        description: `Convert trial — ${planName}`,
+        order_id:    trialOrder.orderId,
+        image:       "/logo.png",
+        handler: async (response) => {
+          try {
             await dispatch(verifyTrialConversion({
               razorpay_order_id:   response.razorpay_order_id,
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_signature:  response.razorpay_signature,
+              amount:              trialOrder.amount,
             }));
             dispatch(clearTrialOrder());
             dispatch(fetchMySubscription());
-          },
-          prefill: { name: "", email: "", contact: "" },
-          theme: { color: t.accent || "#8b5cf6" },
-          modal: { ondismiss: () => dispatch(clearTrialOrder()) },
-        };
-        const rzp = new window.Razorpay(options);
-        rzp.on("payment.failed", (r) => {
-          alert(`Payment failed: ${r.error.description}`);
-          dispatch(clearTrialOrder());
-        });
-        rzp.open();
-      })();
-    }
-  }, [trialOrder]);
+          } catch {
+            alert("Payment verification failed. Contact support.");
+            dispatch(clearTrialOrder());
+          }
+        },
+        prefill: { name: "", email: "", contact: "" },
+        theme:   { color: t.accent || "#8b5cf6" },
+        modal:   { ondismiss: () => dispatch(clearTrialOrder()) },
+      });
 
+      rzp.on("payment.failed", (r) => {
+        alert(`Payment failed: ${r.error?.description || "Unknown error"}`);
+        dispatch(clearTrialOrder());
+      });
+      rzp.open();
+    })();
+  }, [trialOrder?.orderId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Handlers ───────────────────────────────────────────────────────────────
+
+  // FIX: use ConfirmDialog instead of window.confirm
   const handleCancel = useCallback(() => {
-    if (window.confirm("Cancel your subscription? You'll retain access until the current period ends."))
-      dispatch(cancelSubscription()).then(() => dispatch(fetchMySubscription()));
+    setConfirmState({
+      title:        "Cancel subscription?",
+      message:      "You'll retain access until the current billing period ends. This cannot be undone.",
+      confirmLabel: "Yes, Cancel",
+      accent:       "#ef4444",
+      onConfirm:    async () => {
+        setConfirmState(null);
+        await dispatch(cancelSubscription());
+        dispatch(fetchMySubscription());
+      },
+    });
   }, [dispatch]);
 
+  // FIX: optimistic toggle + async confirm
   const handleToggleAutoRenew = useCallback(() => {
-    dispatch(optimisticToggleAutoRenew());
-    dispatch(toggleAutoRenew());
-  }, [dispatch]);
+    const turningOff = autoRenew;
+    if (turningOff) {
+      setConfirmState({
+        title:        "Disable auto-renew?",
+        message:      "Your plan won't renew automatically when it expires.",
+        confirmLabel: "Disable",
+        accent:       "#f59e0b",
+        onConfirm: () => {
+          setConfirmState(null);
+          dispatch(optimisticToggleAutoRenew());
+          dispatch(toggleAutoRenew());
+        },
+      });
+    } else {
+      dispatch(optimisticToggleAutoRenew());
+      dispatch(toggleAutoRenew());
+    }
+  }, [dispatch, autoRenew]);
 
   const handleConvertTrial = useCallback(() => {
     dispatch(initiateTrialConversion({}));
   }, [dispatch]);
 
-  // ── Derived ──
+  const closeConfirm = useCallback(() => setConfirmState(null), []);
+
+  // ── Derived values ─────────────────────────────────────────────────────────
   const planName  = mySub?.plan?.fixedTier || mySub?.plan?.name || "";
   const t         = getTier(planName);
   const TIcon     = t.icon;
   const expiry    = mySub?.expiryDate ? new Date(mySub.expiryDate) : null;
-  const daysLeft  = expiry ? Math.max(0, Math.ceil((expiry - Date.now()) / 86400000)) : 0;
+  const daysLeft  = expiry ? Math.max(0, Math.ceil((expiry - Date.now()) / 86_400_000)) : 0;
   const isExpiring = daysLeft <= 7 && daysLeft > 0;
+  // Progress = how much of billing period has elapsed (0% = just started, 100% = expired)
   const progress  = expiry ? Math.min(100, Math.max(0, (1 - daysLeft / 30) * 100)) : 0;
-
-  // ── Loading ──
-  if (subLoading) {
-    return (
-      <div className="max-w-2xl mx-auto px-4 py-12 space-y-6">
-        <div className="skeleton h-10 w-48 rounded-xl" />
-        <div className="skeleton h-64 rounded-2xl" />
-        <div className="skeleton h-40 rounded-2xl" />
-      </div>
-    );
-  }
 
   const hasActiveSub = mySub && (isActive || isOnTrial);
 
+  // ── Loading state ──────────────────────────────────────────────────────────
+  if (subLoading && !mySub) return <PageSkeleton />;
+
   return (
-    <div className="min-h-screen" style={{ background: "var(--base-100)" }}>
-      <div className="max-w-2xl mx-auto px-4 py-10 space-y-8">
+    <>
+      <div className="min-h-screen" style={{ background: "var(--base-100)" }}>
+        <div className="max-w-2xl mx-auto px-4 py-10 space-y-8">
 
-        {/* ── Page Header ── */}
-        <motion.div initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }}>
-          <div className="flex items-center justify-between flex-wrap gap-3">
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-widest mb-0.5" style={{ opacity: 0.4 }}>Account</p>
-              <h1 className="text-2xl font-black">My Subscription</h1>
-            </div>
-            {hasActiveSub && (
-              <motion.div
-                animate={{ opacity: [0.6, 1, 0.6] }}
-                transition={{ duration: 2, repeat: Infinity }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-black"
-                style={{ background: `${t.accent}15`, color: t.accent, border: `1.5px solid ${t.accent}30` }}
-              >
-                <Activity size={11} />
-                {isOnTrial ? "Trial Active" : "Subscription Active"}
-              </motion.div>
-            )}
-          </div>
-        </motion.div>
-
-        {/* ── No subscription ── */}
-        {!hasActiveSub && <EmptyState />}
-
-        {/* ── Active subscription ── */}
-        <AnimatePresence>
-          {hasActiveSub && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="space-y-5"
-            >
-              {/* Hero card */}
-              <ActivePlanHeroCard
-                sub={mySub}
-                t={t}
-                TIcon={TIcon}
-                daysLeft={daysLeft}
-                isExpiring={isExpiring}
-                progress={progress}
-                expiry={expiry}
-              />
-
-              {/* Action panel */}
-              <ActionPanel
-                sub={mySub}
-                t={t}
-                onToggleAutoRenew={handleToggleAutoRenew}
-                onCancel={handleCancel}
-                onConvertTrial={handleConvertTrial}
-                cancelLoading={cancelLoading}
-                toggleLoading={toggleLoading}
-                trialConvertLoading={trialConvertLoading}
-              />
-
-              {/* ── History toggle ── */}
+          {/* Page Header */}
+          <motion.div initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }}>
+            <div className="flex items-center justify-between flex-wrap gap-3">
               <div>
-                <button
-                  onClick={() => setShowHistory((v) => !v)}
-                  className="flex items-center gap-2 w-full px-5 py-4 rounded-2xl text-sm font-bold transition-all"
-                  style={{ background: "var(--base-200)", border: "1.5px solid var(--base-300)" }}
+                <p
+                  className="text-[10px] font-black uppercase tracking-widest mb-0.5"
+                  style={{ opacity: 0.4 }}
                 >
-                  <motion.div animate={{ rotate: showHistory ? 180 : 0 }} transition={{ duration: 0.3 }}>
-                    <ChevronDown size={15} />
-                  </motion.div>
-                  <span className="flex-1 text-left">Subscription History</span>
-                  {historyPag.total > 0 && (
-                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full"
-                      style={{ background: "var(--base-300)", opacity: 0.7 }}>
-                      {historyPag.total}
-                    </span>
-                  )}
-                </button>
-
-                <AnimatePresence>
-                  {showHistory && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: "auto" }}
-                      exit={{ opacity: 0, height: 0 }}
-                      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-                      className="overflow-hidden"
-                    >
-                      <div className="pt-3">
-                        <SubscriptionHistory
-                          history={history}
-                          pagination={historyPag}
-                          loading={historyLoading}
-                          onPageChange={(p) => setHistoryPage(p)}
-                        />
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                  Account
+                </p>
+                <h1 className="text-2xl font-black">My Subscription</h1>
               </div>
 
-              {/* ── Browse more plans CTA ── */}
-              <motion.a
-                href="/subscriptions"
-                whileHover={{ y: -2 }}
-                className="flex items-center justify-between gap-3 px-5 py-4 rounded-2xl text-sm font-bold transition-all group"
-                style={{ background: "var(--base-200)", border: "1.5px solid var(--base-300)" }}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl flex items-center justify-center"
-                    style={{ background: "color-mix(in srgb, var(--primary), transparent 88%)" }}>
-                    <Zap size={15} style={{ color: "var(--primary)" }} />
-                  </div>
-                  <div>
-                    <p className="font-black text-sm">Explore Other Plans</p>
-                    <p className="text-[10px] font-semibold" style={{ opacity: 0.45 }}>Upgrade or switch your healthcare plan</p>
-                  </div>
-                </div>
+              {hasActiveSub && (
                 <motion.div
-                  animate={{ x: [0, 4, 0] }}
-                  transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
+                  animate={{ opacity: [0.6, 1, 0.6] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-black"
+                  style={{
+                    background: `${t.accent}15`,
+                    color:      t.accent,
+                    border:     `1.5px solid ${t.accent}30`,
+                  }}
+                  aria-label={isOnTrial ? "Trial active" : "Subscription active"}
                 >
-                  <ArrowRight size={16} style={{ color: "var(--primary)" }} />
+                  <Activity size={11} aria-hidden="true" />
+                  {isOnTrial ? "Trial Active" : "Subscription Active"}
                 </motion.div>
-              </motion.a>
-            </motion.div>
-          )}
-        </AnimatePresence>
+              )}
+            </div>
+          </motion.div>
 
+          {/* No subscription */}
+          {!hasActiveSub && !subLoading && <EmptyState />}
+
+          {/* Active subscription */}
+          <AnimatePresence>
+            {hasActiveSub && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="space-y-5"
+              >
+                {/* Hero card */}
+                <ActivePlanHeroCard
+                  sub={mySub}
+                  t={t}
+                  TIcon={TIcon}
+                  daysLeft={daysLeft}
+                  isExpiring={isExpiring}
+                  progress={progress}
+                  expiry={expiry}
+                />
+
+                {/* Usage summary */}
+                <UsageSummaryCard sub={mySub} t={t} />
+
+                {/* Action panel */}
+                <ActionPanel
+                  sub={mySub}
+                  t={t}
+                  onToggleAutoRenew={handleToggleAutoRenew}
+                  onCancel={handleCancel}
+                  onConvertTrial={handleConvertTrial}
+                  cancelLoading={cancelLoading}
+                  toggleLoading={toggleLoading}
+                  trialConvertLoading={trialConvertLoading || trialVerifyLoading}
+                />
+
+                {/* History toggle */}
+                <div>
+                  <button
+                    onClick={() => setShowHistory((v) => !v)}
+                    className="flex items-center gap-2 w-full px-5 py-4 rounded-2xl text-sm font-bold transition-all"
+                    style={{ background: "var(--base-200)", border: "1.5px solid var(--base-300)" }}
+                    aria-expanded={showHistory}
+                    aria-controls="subscription-history"
+                  >
+                    <motion.div animate={{ rotate: showHistory ? 180 : 0 }} transition={{ duration: 0.3 }}>
+                      <ChevronDown size={15} aria-hidden="true" />
+                    </motion.div>
+                    <span className="flex-1 text-left">Subscription History</span>
+                    {historyPag.total > 0 && (
+                      <span
+                        className="text-[10px] font-black px-2 py-0.5 rounded-full"
+                        style={{ background: "var(--base-300)", opacity: 0.7 }}
+                        aria-label={`${historyPag.total} records`}
+                      >
+                        {historyPag.total}
+                      </span>
+                    )}
+                  </button>
+
+                  <AnimatePresence>
+                    {showHistory && (
+                      <motion.div
+                        id="subscription-history"
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        exit={{ opacity: 0, height: 0 }}
+                        transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+                        className="overflow-hidden"
+                      >
+                        <div className="pt-3">
+                          <SubscriptionHistory
+                            history={history}
+                            pagination={historyPag}
+                            loading={historyLoading}
+                            onPageChange={(p) => setHistoryPage(p)}
+                          />
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+                {/* Browse more plans CTA */}
+                <motion.a
+                  href="/subscriptions"
+                  whileHover={{ y: -2 }}
+                  className="flex items-center justify-between gap-3 px-5 py-4 rounded-2xl text-sm font-bold transition-all group"
+                  style={{ background: "var(--base-200)", border: "1.5px solid var(--base-300)" }}
+                  aria-label="Explore other subscription plans"
+                >
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-9 h-9 rounded-xl flex items-center justify-center"
+                      style={{ background: "color-mix(in srgb, var(--primary), transparent 88%)" }}
+                      aria-hidden="true"
+                    >
+                      <Zap size={15} style={{ color: "var(--primary)" }} />
+                    </div>
+                    <div>
+                      <p className="font-black text-sm">Explore Other Plans</p>
+                      <p className="text-[10px] font-semibold" style={{ opacity: 0.45 }}>
+                        Upgrade or switch your healthcare plan
+                      </p>
+                    </div>
+                  </div>
+                  <motion.div
+                    animate={{ x: [0, 4, 0] }}
+                    transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
+                    aria-hidden="true"
+                  >
+                    <ArrowRight size={16} style={{ color: "var(--primary)" }} />
+                  </motion.div>
+                </motion.a>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+        </div>
       </div>
-    </div>
+
+      {/* Confirm dialog (replaces window.confirm) */}
+      <ConfirmDialog
+        open={Boolean(confirmState)}
+        title={confirmState?.title}
+        message={confirmState?.message}
+        confirmLabel={confirmState?.confirmLabel}
+        accent={confirmState?.accent}
+        onConfirm={confirmState?.onConfirm}
+        onCancel={closeConfirm}
+      />
+    </>
   );
 }

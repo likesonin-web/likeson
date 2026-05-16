@@ -45,7 +45,7 @@ function StatusBadge({ status, size = "md" }) {
   };
   const cfg = map[status] || { label: status || "Unknown", cls: "badge" };
   return (
-    <span className={`${cfg.cls} ${size === "lg" ? "text-sm px-4 py-1.5" : ""}`}>
+    <span className={`${cfg.cls} ${size === "lg" ? "text-[10px] sm:text-sm px-3 sm:px-4 py-1.5" : "text-[10px]"}`}>
       {cfg.label}
     </span>
   );
@@ -53,7 +53,6 @@ function StatusBadge({ status, size = "md" }) {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // REUSABLE: FILE/URL UPLOAD FIELD
-// Supports: drag-drop file, file picker, or paste URL
 // ═══════════════════════════════════════════════════════════════════════════════
 function DocUploadField({ label, currentUrl, onUpload, folder, accept = "image/*,.pdf", required = false }) {
   const dispatch        = useDispatch();
@@ -98,12 +97,12 @@ function DocUploadField({ label, currentUrl, onUpload, folder, accept = "image/*
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
         <label className="text-sm font-semibold text-base-content">
           {label} {required && <span className="text-error">*</span>}
         </label>
         {/* Mode toggle */}
-        <div className="flex rounded-lg overflow-hidden border border-base-300 text-xs">
+        <div className="flex rounded-lg overflow-hidden border border-base-300 text-[10px] self-start sm:self-auto">
           {[["file", Camera], ["url", Link2]].map(([m, Icon]) => (
             <button
               key={m}
@@ -144,7 +143,7 @@ function DocUploadField({ label, currentUrl, onUpload, folder, accept = "image/*
           {isLoading ? (
             <div className="flex flex-col items-center gap-2">
               <Loader2 size={24} className="animate-spin text-primary" />
-              <p className="text-xs text-base-content/60">Uploading…</p>
+              <p className="text-[10px] text-base-content/60">Uploading…</p>
             </div>
           ) : (
             <>
@@ -153,7 +152,7 @@ function DocUploadField({ label, currentUrl, onUpload, folder, accept = "image/*
               </div>
               <div className="text-center">
                 <p className="text-sm font-semibold text-base-content">Drop file or click to browse</p>
-                <p className="text-xs text-base-content/40 mt-0.5">JPG, PNG, PDF — max 10 MB</p>
+                <p className="text-[10px] text-base-content/40 mt-0.5">JPG, PNG, PDF — max 10 MB</p>
               </div>
             </>
           )}
@@ -162,20 +161,20 @@ function DocUploadField({ label, currentUrl, onUpload, folder, accept = "image/*
 
       {/* URL mode */}
       {mode === "url" && (
-        <div className="flex gap-2">
+        <div className="flex flex-col sm:flex-row gap-2">
           <input
             type="url"
             value={urlInput}
             onChange={(e) => setUrlInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleUrlSubmit()}
             placeholder="Paste document URL…"
-            className="input-field flex-1 text-sm"
+            className="input-field flex-1 text-sm w-full"
           />
           <button
             type="button"
             onClick={handleUrlSubmit}
             disabled={!urlInput.trim()}
-            className="btn-primary-cta text-xs px-4 disabled:opacity-40"
+            className="btn-primary-cta text-[10px] px-4 py-2.5 sm:py-0 disabled:opacity-40 w-full sm:w-auto"
           >
             Apply
           </button>
@@ -191,19 +190,19 @@ function DocUploadField({ label, currentUrl, onUpload, folder, accept = "image/*
             exit={{ opacity: 0, height: 0 }}
             className="overflow-hidden"
           >
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-success/5 border border-success/20">
+            <div className="flex items-center gap-2 sm:gap-3 p-3 rounded-xl bg-success/5 border border-success/20">
               <CheckCircle2 size={16} className="text-success shrink-0" />
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold text-success">Document set</p>
-                <p className="text-xs text-base-content/50 truncate">{preview}</p>
+                <p className="text-[10px] font-semibold text-success">Document set</p>
+                <p className="text-[10px] text-base-content/50 truncate">{preview}</p>
               </div>
-              <a href={preview} target="_blank" rel="noreferrer" className="text-primary hover:text-primary/70">
+              <a href={preview} target="_blank" rel="noreferrer" className="text-primary hover:text-primary/70 p-1">
                 <ExternalLink size={14} />
               </a>
               <button
                 type="button"
                 onClick={() => { setPreview(""); onUpload(""); }}
-                className="text-base-content/30 hover:text-error"
+                className="text-base-content/30 hover:text-error p-1"
               >
                 <X size={14} />
               </button>
@@ -253,7 +252,7 @@ function KycStatus({ profile, router }) {
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
-        className={`card p-8 text-center ${
+        className={`card p-5 sm:p-8 text-center ${
           isComplete  ? "border-success/40 bg-success/3" :
           isRejected  ? "border-error/40 bg-error/3" :
           isPending   ? "border-warning/40 bg-warning/3" :
@@ -263,23 +262,25 @@ function KycStatus({ profile, router }) {
         <div className="flex justify-center mb-4">
           {statusIcon[kycStatus]}
         </div>
-        <StatusBadge status={kycStatus} size="lg" />
+        <div>
+          <StatusBadge status={kycStatus} size="lg" />
+        </div>
         <p className="text-sm text-base-content/70 mt-3 max-w-sm mx-auto">
           {statusMsg[kycStatus]}
         </p>
         {isRejected && (
           <div className="mt-4 p-3 rounded-xl bg-error/5 border border-error/20 text-left">
-            <p className="text-xs font-semibold text-error flex items-center gap-1.5">
+            <p className="text-[10px] font-semibold text-error flex items-center gap-1.5">
               <AlertTriangle size={12} /> Rejection Reason
             </p>
-            <p className="text-xs text-base-content/70 mt-1">{profile?.kycRejectionReason}</p>
+            <p className="text-[10px] text-base-content/70 mt-1">{profile?.kycRejectionReason}</p>
           </div>
         )}
         {!isComplete && (
-          <div className="flex gap-3 justify-center mt-6">
+          <div className="flex gap-3 justify-center mt-6 w-full sm:w-auto">
             <button
               onClick={() => router.push("/doctor/kyc/aadhaar")}
-              className="btn-primary-cta text-xs px-5 py-2.5"
+              className="btn-primary-cta text-[10px] px-5 py-2.5 w-full sm:w-auto"
             >
               {kycStatus === "not-submitted" ? "Start KYC" : "Update KYC"}
             </button>
@@ -292,7 +293,7 @@ function KycStatus({ profile, router }) {
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
-        className="card p-6"
+        className="card p-4 sm:p-6"
       >
         <div className="flex items-center gap-2 mb-4">
           <Shield size={18} className="text-primary" />
@@ -300,24 +301,24 @@ function KycStatus({ profile, router }) {
         </div>
         <div className="space-y-3">
           {docs.map(({ label, url, verified }) => (
-            <div key={label} className="flex items-center justify-between gap-4 p-3 rounded-xl bg-base-200/40">
+            <div key={label} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-xl bg-base-200/40">
               <div className="flex items-center gap-3">
-                <div className={`w-2 h-2 rounded-full ${url ? (verified ? "bg-success" : "bg-warning") : "bg-base-300"}`} />
+                <div className={`w-2 h-2 rounded-full shrink-0 ${url ? (verified ? "bg-success" : "bg-warning") : "bg-base-300"}`} />
                 <span className="text-sm font-medium text-base-content">{label}</span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 self-start sm:self-auto pl-5 sm:pl-0">
                 {url ? (
                   <>
                     {verified
                       ? <CheckCircle2 size={14} className="text-success" />
                       : <Clock size={14} className="text-warning" />
                     }
-                    <a href={url} target="_blank" rel="noreferrer" className="text-primary text-xs hover:underline flex items-center gap-1">
+                    <a href={url} target="_blank" rel="noreferrer" className="text-primary text-[10px] hover:underline flex items-center gap-1">
                       View <ExternalLink size={10} />
                     </a>
                   </>
                 ) : (
-                  <span className="text-xs text-base-content/40">Not uploaded</span>
+                  <span className="text-[10px] text-base-content/40">Not uploaded</span>
                 )}
               </div>
             </div>
@@ -333,9 +334,9 @@ function KycStatus({ profile, router }) {
         className="flex items-start gap-3 p-4 rounded-xl bg-info/5 border border-info/20"
       >
         <Info size={16} className="text-info shrink-0 mt-0.5" />
-        <div className="text-xs text-base-content/70 space-y-1">
-          <p className="font-semibold text-info">Why is KYC required?</p>
-          <p>KYC (Know Your Customer) verification ensures platform integrity and enables secure payment settlements to your bank account.</p>
+        <div className="text-[10px] text-base-content/70 space-y-1">
+          <p className="font-bold font-family-montserrat text-info">Why is KYC required?</p>
+          <p className="text-xs">KYC verification ensures platform integrity and enables secure payment settlements to your bank account.</p>
         </div>
       </motion.div>
     </div>
@@ -395,18 +396,20 @@ function AadhaarVerification({ profile, doctorId }) {
 
   return (
     <div className="space-y-6">
-      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="card p-6">
-        <div className="flex items-start gap-3 mb-6">
-          <div className="p-2 rounded-xl bg-primary/10">
-            <ScanLine size={20} className="text-primary" />
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="card p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row items-start justify-between gap-4 mb-6">
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-xl bg-primary/10 shrink-0">
+              <ScanLine size={20} className="text-primary" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-base-content text-base sm:text-lg">Aadhaar Card Verification</h3>
+              <p className="text-[10px] sm:text-sm text-base-content/60 mt-0.5">
+                Upload both sides of your Aadhaar card
+              </p>
+            </div>
           </div>
-          <div>
-            <h3 className="font-semibold text-base-content text-lg">Aadhaar Card Verification</h3>
-            <p className="text-sm text-base-content/60 mt-0.5">
-              Upload both sides of your Aadhaar card
-            </p>
-          </div>
-          <div className="ml-auto">
+          <div className="sm:ml-auto self-start sm:self-auto pl-11 sm:pl-0">
             <StatusBadge status={kyc.aadhaarVerified ? "verified" : (profile?.kycStatus || "not-submitted")} />
           </div>
         </div>
@@ -424,10 +427,10 @@ function AadhaarVerification({ profile, doctorId }) {
               onChange={(e) => setForm({ ...form, aadhaarNumber: e.target.value })}
               placeholder="XXXX XXXX XXXX"
               maxLength={14}
-              className={`input-field w-full font-mono tracking-widest text-base ${errors.aadhaarNumber ? "border-error focus:border-error" : ""}`}
+              className={`input-field w-full font-mono tracking-widest text-sm sm:text-base ${errors.aadhaarNumber ? "border-error focus:border-error" : ""}`}
             />
             {errors.aadhaarNumber && (
-              <p className="text-xs text-error mt-1 flex items-center gap-1">
+              <p className="text-[10px] text-error mt-1 flex items-center gap-1">
                 <XCircle size={12} /> {errors.aadhaarNumber}
               </p>
             )}
@@ -443,7 +446,7 @@ function AadhaarVerification({ profile, doctorId }) {
               required
             />
             {errors.aadhaarFrontUrl && (
-              <p className="text-xs text-error mt-1 flex items-center gap-1">
+              <p className="text-[10px] text-error mt-1 flex items-center gap-1">
                 <XCircle size={12} /> {errors.aadhaarFrontUrl}
               </p>
             )}
@@ -459,7 +462,7 @@ function AadhaarVerification({ profile, doctorId }) {
               required
             />
             {errors.aadhaarBackUrl && (
-              <p className="text-xs text-error mt-1 flex items-center gap-1">
+              <p className="text-[10px] text-error mt-1 flex items-center gap-1">
                 <XCircle size={12} /> {errors.aadhaarBackUrl}
               </p>
             )}
@@ -467,7 +470,7 @@ function AadhaarVerification({ profile, doctorId }) {
 
           {/* Guidelines */}
           <div className="p-3 rounded-xl bg-base-200/50 space-y-1.5">
-            <p className="text-xs font-semibold text-base-content flex items-center gap-1.5">
+            <p className="text-[10px] font-semibold text-base-content flex items-center gap-1.5">
               <Info size={12} className="text-info" /> Upload Guidelines
             </p>
             {[
@@ -476,18 +479,18 @@ function AadhaarVerification({ profile, doctorId }) {
               "Accepted formats: JPG, PNG, PDF (max 10MB each)",
               "Do not mask or hide any part of the document",
             ].map((tip) => (
-              <p key={tip} className="text-xs text-base-content/50 flex items-start gap-1.5">
-                <span className="text-primary mt-0.5">•</span> {tip}
+              <p key={tip} className="text-[10px] text-base-content/50 flex items-start gap-1.5">
+                <span className="text-primary mt-0.5">•</span> <span className="flex-1">{tip}</span>
               </p>
             ))}
           </div>
 
-          <div className="flex justify-end">
+          <div className="flex justify-end pt-2">
             <button
               type="button"
               onClick={handleSubmit}
               disabled={loading.updateDoctorKyc}
-              className="btn-primary-cta flex items-center gap-2 disabled:opacity-60"
+              className="btn-primary-cta flex items-center justify-center gap-2 disabled:opacity-60 w-full sm:w-auto"
             >
               {loading.updateDoctorKyc
                 ? <Loader2 size={16} className="animate-spin" />
@@ -542,31 +545,33 @@ function PanVerification({ profile, doctorId }) {
 
   return (
     <div className="space-y-6">
-      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="card p-6">
-        <div className="flex items-start gap-3 mb-6">
-          <div className="p-2 rounded-xl bg-primary/10">
-            <FileText size={20} className="text-primary" />
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="card p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row items-start justify-between gap-4 mb-6">
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-xl bg-primary/10 shrink-0">
+              <FileText size={20} className="text-primary" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-base-content text-base sm:text-lg">PAN Card Verification</h3>
+              <p className="text-[10px] sm:text-sm text-base-content/60 mt-0.5">Required for payment settlement and tax compliance</p>
+            </div>
           </div>
-          <div>
-            <h3 className="font-semibold text-base-content text-lg">PAN Card Verification</h3>
-            <p className="text-sm text-base-content/60 mt-0.5">Required for payment settlement and tax compliance</p>
-          </div>
-          <div className="ml-auto">
+          <div className="sm:ml-auto self-start sm:self-auto pl-11 sm:pl-0">
             <StatusBadge status={kyc.panVerified ? "verified" : (profile?.kycStatus || "not-submitted")} />
           </div>
         </div>
 
         {/* PAN visual preview */}
-        <div className="relative h-36 rounded-2xl bg-gradient-to-br from-primary/80 to-secondary/80 overflow-hidden mb-6 flex items-center justify-center select-none">
+        <div className="relative h-28 sm:h-36 rounded-2xl bg-gradient-to-br from-primary/80 to-secondary/80 overflow-hidden mb-6 flex items-center justify-center select-none p-4 text-center">
           <div className="absolute inset-0 opacity-10"
             style={{ backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 20px, rgba(255,255,255,.1) 20px, rgba(255,255,255,.1) 21px)" }}
           />
-          <div className="text-center">
-            <p className="text-white/60 text-xs font-semibold tracking-widest uppercase">Income Tax Department</p>
-            <p className="text-white font-extrabold text-2xl mt-1 tracking-[0.3em] font-montserrat">
+          <div className="text-center w-full min-w-0">
+            <p className="text-white/60 text-[10px] sm:text-[10px] font-semibold tracking-widest uppercase">Income Tax Department</p>
+            <p className="text-white font-extrabold text-lg sm:text-2xl mt-1 tracking-[0.15em] sm:tracking-[0.3em] font-montserrat truncate">
               {form.panNumber ? form.panNumber.toUpperCase() : "XXXXX0000X"}
             </p>
-            <p className="text-white/60 text-xs mt-1">Permanent Account Number</p>
+            <p className="text-white/60 text-[10px] sm:text-[10px] mt-1">Permanent Account Number</p>
           </div>
         </div>
 
@@ -582,14 +587,14 @@ function PanVerification({ profile, doctorId }) {
               onChange={(e) => setForm({ ...form, panNumber: e.target.value.toUpperCase() })}
               placeholder="ABCDE1234F"
               maxLength={10}
-              className={`input-field w-full font-mono tracking-[0.25em] uppercase text-base ${errors.panNumber ? "border-error" : ""}`}
+              className={`input-field w-full font-mono tracking-[0.15em] sm:tracking-[0.25em] uppercase text-sm sm:text-base ${errors.panNumber ? "border-error" : ""}`}
             />
             {errors.panNumber && (
-              <p className="text-xs text-error mt-1 flex items-center gap-1">
+              <p className="text-[10px] text-error mt-1 flex items-center gap-1">
                 <XCircle size={12} /> {errors.panNumber}
               </p>
             )}
-            <p className="text-xs text-base-content/40 mt-1">Format: 5 letters, 4 digits, 1 letter (e.g., ABCDE1234F)</p>
+            <p className="text-[10px] text-base-content/40 mt-1">Format: 5 letters, 4 digits, 1 letter (e.g., ABCDE1234F)</p>
           </div>
 
           {/* PAN image */}
@@ -602,7 +607,7 @@ function PanVerification({ profile, doctorId }) {
               required
             />
             {errors.panCardUrl && (
-              <p className="text-xs text-error mt-1 flex items-center gap-1">
+              <p className="text-[10px] text-error mt-1 flex items-center gap-1">
                 <XCircle size={12} /> {errors.panCardUrl}
               </p>
             )}
@@ -611,18 +616,18 @@ function PanVerification({ profile, doctorId }) {
           {/* GST note */}
           <div className="flex items-start gap-3 p-3 rounded-xl bg-warning/5 border border-warning/20">
             <AlertTriangle size={14} className="text-warning shrink-0 mt-0.5" />
-            <p className="text-xs text-base-content/70">
+            <p className="text-[10px] text-base-content/70">
               Your PAN is used for TDS deduction on platform fee settlements.
               Ensure the name matches your bank account exactly.
             </p>
           </div>
 
-          <div className="flex justify-end">
+          <div className="flex justify-end pt-2">
             <button
               type="button"
               onClick={handleSubmit}
               disabled={loading.updateDoctorKyc}
-              className="btn-primary-cta flex items-center gap-2 disabled:opacity-60"
+              className="btn-primary-cta flex items-center justify-center gap-2 disabled:opacity-60 w-full sm:w-auto"
             >
               {loading.updateDoctorKyc
                 ? <Loader2 size={16} className="animate-spin" />
@@ -661,31 +666,35 @@ export default function KycVerification() {
 
   return (
     <div className="min-h-screen bg-base-100">
-      {/* ── Header ───────────────────────────────────────────── */}
+      {/* Header */}
       <div className="border-b border-base-300 bg-base-100 sticky top-0 z-30">
-        <div className="container-custom py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-xl bg-primary/10">
+        <div className="container-custom py-4 px-4 sm:px-6">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="p-2 rounded-xl bg-primary/10 shrink-0">
                 <ShieldCheck size={20} className="text-primary" />
               </div>
-              <div>
-                <h1 className="text-xl font-extrabold font-montserrat text-base-content tracking-tight">
+              <div className="min-w-0">
+                <h1 className="text-lg sm:text-xl font-extrabold font-montserrat text-base-content tracking-tight truncate">
                   KYC & Verification
                 </h1>
-                <p className="text-xs text-base-content/50">
+                <p className="text-[10px] sm:text-[10px] text-base-content/50 truncate">
                   Identity and document verification
                 </p>
               </div>
             </div>
-            <StatusBadge status={profile?.kycStatus || "not-submitted"} />
+            <div className="shrink-0">
+              <StatusBadge status={profile?.kycStatus || "not-submitted"} />
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="container-custom py-6">
-        <div className="flex gap-6">
-          {/* ── Sidebar ─────────────────────────────────────── */}
+      <div className="container-custom py-4 sm:py-6 px-4 sm:px-6">
+        {/* Main Content Layout Wrapper */}
+        <div className="flex flex-col md:flex-row gap-4 md:gap-6">
+          
+          {/* Sidebar - Desktop Only */}
           <aside className="hidden md:flex flex-col gap-1 w-56 shrink-0">
             {links.map(({ name, section: sec, icon: Icon }) => {
               const isActive = sec === section;
@@ -708,7 +717,7 @@ export default function KycVerification() {
 
             {/* KYC progress mini card */}
             <div className="mt-4 p-3 rounded-xl bg-base-200/50 border border-base-300">
-              <p className="text-xs font-semibold text-base-content/60 mb-2">Document Status</p>
+              <p className="text-[10px] font-semibold text-base-content/60 mb-2">Document Status</p>
               {[
                 { label: "Aadhaar", done: !!profile?.kyc?.aadhaarFrontUrl },
                 { label: "PAN",     done: !!profile?.kyc?.panCardUrl },
@@ -718,7 +727,7 @@ export default function KycVerification() {
                     ? <CheckCircle2 size={12} className="text-success" />
                     : <div className="w-3 h-3 rounded-full border-2 border-base-300" />
                   }
-                  <span className={`text-xs font-medium ${done ? "text-success" : "text-base-content/40"}`}>
+                  <span className={`text-[10px] font-medium ${done ? "text-success" : "text-base-content/40"}`}>
                     {label}
                   </span>
                 </div>
@@ -726,29 +735,29 @@ export default function KycVerification() {
             </div>
           </aside>
 
-          {/* ── Mobile tab bar ──────────────────────────────── */}
-          <div className="md:hidden mb-4 w-full -mt-2">
-            <div className="flex overflow-x-auto gap-2 pb-2 no-scrollbar">
+          {/* Mobile Navigation Tab Bar - Mobile Only */}
+          <div className="block md:hidden w-full mb-2">
+            <div className="flex overflow-x-auto gap-2 pb-2 scrollbar-none snap-x PlanHeader-scroll">
               {links.map(({ name, section: sec, icon: Icon }) => {
                 const isActive = sec === section;
                 return (
                   <button
                     key={sec}
                     onClick={() => router.push(`/doctor/kyc${sec ? `/${sec}` : ""}`)}
-                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
-                      isActive ? "bg-primary text-primary-content" : "bg-base-200 text-base-content/70"
+                    className={`flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-[10px] font-semibold whitespace-nowrap transition-all snap-start ${
+                      isActive ? "bg-primary text-primary-content shadow-sm" : "bg-base-200 text-base-content/70"
                     }`}
                   >
-                    <Icon size={14} />
-                    {name.split(" ")[0]}
+                    <Icon size={14} className="shrink-0" />
+                    {name}
                   </button>
                 );
               })}
             </div>
           </div>
 
-          {/* ── Main content ─────────────────────────────────── */}
-          <main className="flex-1 min-w-0">
+          {/* Content Pane */}
+          <main className="flex-1 min-w-0 w-full">
             {loading.fetchMyDoctorProfile && !profile ? (
               <div className="flex items-center justify-center py-24">
                 <div className="flex flex-col items-center gap-3">
@@ -764,6 +773,7 @@ export default function KycVerification() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -12 }}
                   transition={{ duration: 0.25 }}
+                  className="w-full"
                 >
                   {sectionMap[section] ?? (
                     <div className="card p-8 text-center">

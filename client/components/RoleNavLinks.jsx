@@ -103,7 +103,7 @@ const NAVIGATION_MAP = {
     { name: 'My Account', href: '/settings/account',    icon: SquareUserRound },
     { name: 'Security',   href: '/settings/security',   icon: Shield          },
   ],
-  'lab partner': [
+  'lab_partner': [
     { name: 'Requests',   href: '/lab/requests',        icon: FlaskConical    },
     { name: 'Uploads',    href: '/lab/uploads',         icon: ClipboardList   },
     { name: 'Tracking',   href: '/lab/tracking',        icon: History         },

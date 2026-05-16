@@ -169,18 +169,18 @@ function StepCard({ step, done, index, isLast, isActive, onSelect, selected }) {
           {/* Text */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className={`text-xs font-bold uppercase tracking-widest ${
+              <span className={`text-[10px] font-bold uppercase tracking-widest ${
                 done ? 'text-[color:var(--color-success)]' : 'text-[color:var(--color-base-content)]/40'
               }`}>
                 Step {index + 1}
               </span>
               {!done && step.key === 'verified' && (
-                <span className="flex items-center gap-1 text-xs text-[color:var(--color-info)] font-semibold">
+                <span className="flex items-center gap-1 text-[10px] text-[color:var(--color-info)] font-semibold">
                   <Lock size={10} /> Admin only
                 </span>
               )}
             </div>
-            <p className={`mt-0.5 font-bold text-sm ${
+            <p className={`mt-0.5 font-bold text-xs ${
               done
                 ? 'text-[color:var(--color-base-content)]/60 line-through'
                 : 'text-[color:var(--color-base-content)]'
@@ -211,14 +211,14 @@ function StepCard({ step, done, index, isLast, isActive, onSelect, selected }) {
               className="overflow-hidden"
             >
               <div className="px-6 pb-5 pt-0 border-t border-[color:var(--color-base-300)]/60">
-                <p className="mt-4 text-sm text-[color:var(--color-base-content)]/65 leading-relaxed">
+                <p className="mt-4 text-xs text-[color:var(--color-base-content)]/65 leading-relaxed">
                   {step.description}
                 </p>
 
                 {/* Tip */}
                 <div className="mt-3 flex items-start gap-2 rounded-xl bg-[color:var(--color-base-200)] p-3">
                   <Sparkles size={13} className="flex-shrink-0 mt-0.5" style={{ color: step.color }} />
-                  <p className="text-xs text-[color:var(--color-base-content)]/55 leading-relaxed">
+                  <p className="text-[10px] text-[color:var(--color-base-content)]/55 leading-relaxed">
                     {step.tip}
                   </p>
                 </div>
@@ -226,7 +226,7 @@ function StepCard({ step, done, index, isLast, isActive, onSelect, selected }) {
                 {step.action && step.href && !done && (
                   <a
                     href={step.href}
-                    className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-white transition-all duration-200 hover:opacity-90 hover:gap-3"
+                    className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white transition-all duration-200 hover:opacity-90 hover:gap-3"
                     style={{ background: step.color }}
                   >
                     {step.action}
@@ -234,7 +234,7 @@ function StepCard({ step, done, index, isLast, isActive, onSelect, selected }) {
                   </a>
                 )}
                 {done && (
-                  <div className="mt-4 flex items-center gap-2 text-sm font-semibold text-[color:var(--color-success)]">
+                  <div className="mt-4 flex items-center gap-2 text-xs font-semibold text-[color:var(--color-success)]">
                     <CheckCircle2 size={15} />
                     Completed
                   </div>
@@ -290,7 +290,7 @@ function CircularProgress({ percent, color }) {
         >
           {percent}%
         </motion.span>
-        <span className="text-xs text-[color:var(--color-base-content)]/45 font-semibold">complete</span>
+        <span className="text-[10px] text-[color:var(--color-base-content)]/45 font-semibold">complete</span>
       </div>
     </div>
   );
@@ -341,16 +341,16 @@ export default function Onboarding() {
   }
 
   return (
-    <div className="min-h-screen bg-[color:var(--color-base-200)] p-6 lg:p-8">
+    <div className="min-h-screen bg-[color:var(--color-base-200)] p-2">
       {/* ── Page Header ── */}
       <motion.div variants={fadeUp} custom={0} initial="hidden" animate="visible" className="mb-8">
-        <span className="text-xs font-bold uppercase tracking-widest text-[color:var(--color-primary)]/70">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-[color:var(--color-primary)]/70">
           Setup
         </span>
         <h1 className="mt-1 text-3xl lg:text-4xl font-black text-[color:var(--color-base-content)] font-[family-name:var(--font-display)] leading-tight">
           Hospital Onboarding
         </h1>
-        <p className="mt-2 text-sm text-[color:var(--color-base-content)]/55 max-w-lg">
+        <p className="mt-2 text-xs text-[color:var(--color-base-content)]/55 max-w-lg">
           Complete each step to get your hospital verified and live on the Likeson Healthcare platform.
         </p>
       </motion.div>
@@ -385,7 +385,7 @@ export default function Onboarding() {
             animate="visible"
             className="rounded-2xl border border-[color:var(--color-base-300)] bg-[color:var(--color-base-100)] p-6 shadow-sm"
           >
-            <h3 className="text-sm font-bold text-[color:var(--color-base-content)]/60 uppercase tracking-widest mb-6">
+            <h3 className="text-xs font-bold text-[color:var(--color-base-content)]/60 uppercase tracking-widest mb-6">
               Overall Progress
             </h3>
 
@@ -396,10 +396,10 @@ export default function Onboarding() {
                   {completedSteps}
                   <span className="text-xl text-[color:var(--color-base-content)]/35">/{totalSteps}</span>
                 </p>
-                <p className="text-sm text-[color:var(--color-base-content)]/50 mt-1">steps completed</p>
+                <p className="text-xs text-[color:var(--color-base-content)]/50 mt-1">steps completed</p>
 
                 {percent < 100 && nextPending && (
-                  <div className="mt-3 flex items-start gap-2 text-xs text-[color:var(--color-warning)] font-semibold">
+                  <div className="mt-3 flex items-start gap-2 text-[10px] text-[color:var(--color-warning)] font-semibold">
                     <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
                     Next: {nextPending.title}
                   </div>
@@ -408,7 +408,7 @@ export default function Onboarding() {
                   <motion.div
                     initial={{ scale: 0.8, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
-                    className="mt-3 flex items-center gap-2 text-xs font-bold text-[color:var(--color-success)]"
+                    className="mt-3 flex items-center gap-2 text-[10px] font-bold text-[color:var(--color-success)]"
                   >
                     <CheckCircle2 size={14} />
                     All steps done!
@@ -428,8 +428,8 @@ export default function Onboarding() {
               />
             </div>
             <div className="flex justify-between mt-2">
-              <span className="text-xs text-[color:var(--color-base-content)]/40">0%</span>
-              <span className="text-xs text-[color:var(--color-base-content)]/40">100%</span>
+              <span className="text-[10px] text-[color:var(--color-base-content)]/40">0%</span>
+              <span className="text-[10px] text-[color:var(--color-base-content)]/40">100%</span>
             </div>
           </motion.div>
 
@@ -441,7 +441,7 @@ export default function Onboarding() {
             animate="visible"
             className="rounded-2xl border border-[color:var(--color-base-300)] bg-[color:var(--color-base-100)] p-6 shadow-sm"
           >
-            <h3 className="text-sm font-bold text-[color:var(--color-base-content)]/60 uppercase tracking-widest mb-4">
+            <h3 className="text-xs font-bold text-[color:var(--color-base-content)]/60 uppercase tracking-widest mb-4">
               Checklist
             </h3>
             <div className="space-y-2.5">
@@ -461,7 +461,7 @@ export default function Onboarding() {
                     ) : (
                       <Circle size={16} className="flex-shrink-0 text-[color:var(--color-base-content)]/25" />
                     )}
-                    <span className={`text-sm ${done ? 'text-[color:var(--color-base-content)]/40 line-through' : 'text-[color:var(--color-base-content)]'}`}>
+                    <span className={`text-xs ${done ? 'text-[color:var(--color-base-content)]/40 line-through' : 'text-[color:var(--color-base-content)]'}`}>
                       {step.title}
                     </span>
                   </motion.div>
@@ -491,13 +491,13 @@ export default function Onboarding() {
                 <p className="text-white font-black text-lg font-[family-name:var(--font-display)] leading-snug">
                   Almost there!
                 </p>
-                <p className="text-white/70 text-sm mt-1 mb-4">
+                <p className="text-white/70 text-xs mt-1 mb-4">
                   Complete {totalSteps - completedSteps} more step{totalSteps - completedSteps > 1 ? 's' : ''} to go live on the platform.
                 </p>
                 {nextPending?.href && (
                   <a
                     href={nextPending.href}
-                    className="inline-flex items-center gap-2 bg-white/20 hover:bg-white/30 text-white text-sm font-bold px-4 py-2 rounded-xl transition-all duration-200"
+                    className="inline-flex items-center gap-2 bg-white/20 hover:bg-white/30 text-white text-xs font-bold px-4 py-2 rounded-xl transition-all duration-200"
                   >
                     Continue Setup <ArrowRight size={14} />
                   </a>
@@ -520,7 +520,7 @@ export default function Onboarding() {
                 <p className="text-white font-black text-lg font-[family-name:var(--font-display)]">
                   Onboarding Complete!
                 </p>
-                <p className="text-white/75 text-sm mt-1">
+                <p className="text-white/75 text-xs mt-1">
                   Your profile is under admin review. You'll be notified within 24–48 hours.
                 </p>
               </div>

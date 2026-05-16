@@ -46,61 +46,220 @@ const STATUS_CONFIG = {
 // ── Marker HTML creators ──────────────────────────────────────────────────────
 function createDriverMarkerHtml(heading) {
   return `
-    <div style="position:relative;width:48px;height:48px;transform:rotate(${heading}deg);transition:transform 0.3s ease;">
-      <div style="
-        width:48px;height:48px;border-radius:50% 50% 50% 0;
-        background:linear-gradient(135deg,#6366f1,#8b5cf6);
-        transform:rotate(-45deg);
-        box-shadow:0 4px 20px rgba(99,102,241,0.5);
-        border:3px solid white;
-      "></div>
-      <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
-        <svg width="20" height="20" fill="white" viewBox="0 0 24 24" style="transform:rotate(45deg)">
-          <path d="M12 2L4 20l8-4 8 4L12 2z"/>
-        </svg>
-      </div>
-    </div>
+    <div style="position: relative; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center;">
+  
+  <!-- The Pulse Ripple (Background) -->
+  <div style="
+    position: absolute;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: rgba(66, 133, 244, 0.4);
+    animation: google-pulse 2s infinite ease-out;
+  "></div>
+
+  <!-- Rotating Container -->
+  <div style="
+    position: relative;
+    width: 48px; 
+    height: 48px; 
+    background: #4285F4; 
+    border-radius: 50%; 
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    box-shadow: 0 4px 12px rgba(66, 133, 244, 0.5);
+    transform: rotate(${heading}deg);
+    transition: transform 0.3s ease-out;
+    z-index: 2;
+  ">
+    <!-- Directional Beam (FOV) -->
     <div style="
-      position:absolute;bottom:-8px;left:50%;transform:translateX(-50%);
-      width:8px;height:8px;border-radius:50%;
-      background:rgba(99,102,241,0.4);
-      animation:pulse 1.5s infinite;
+      position: absolute;
+      top: -20px;
+      width: 0; 
+      height: 0; 
+      border-left: 15px solid transparent;
+      border-right: 15px solid transparent;
+      border-bottom: 30px solid rgba(66, 133, 244, 0.3);
+      filter: blur(3px);
+      transform: translateY(-5px);
     "></div>
+
+    <!-- Navigation Chevron (Centered) -->
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="white" style="
+      display: block;
+      filter: drop-shadow(0 2px 2px rgba(0,0,0,0.2));
+      animation: arrow-float 1.5s ease-in-out infinite;
+    ">
+      <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/>
+    </svg>
+  </div>
+</div>
+
+<style>
+/* Ripple animation expanding outwards */
+@keyframes google-pulse {
+  0% { transform: scale(0.8); opacity: 0.8; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
+/* Subtle "active" breathing for the arrow */
+@keyframes arrow-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px) scale(1.05); }
+}
+</style>
   `;
 }
 
 function createPickupMarkerHtml() {
   return `
-    <div style="position:relative;text-align:center;">
-      <div style="
-        width:44px;height:44px;border-radius:50%;
-        background:linear-gradient(135deg,#10b981,#34d399);
-        display:flex;align-items:center;justify-content:center;
-        box-shadow:0 4px 20px rgba(16,185,129,0.5);
-        border:3px solid white;
-        animation:markerPulse 2s infinite;
-      ">
-        <span style="color:white;font-weight:900;font-size:18px;">P</span>
-      </div>
-      <div style="margin-top:2px;background:white;padding:2px 6px;border-radius:8px;font-size:10px;font-weight:700;color:#10b981;box-shadow:0 2px 8px rgba(0,0,0,0.15);">PICKUP</div>
+    <!-- Main Icon Container -->
+    <div style="
+      position: relative;
+      width: 46px; height: 46px;
+      background: linear-gradient(135deg, #10b981, #059669);
+      border-radius: 50%;
+      border: 3px solid white;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 15px rgba(16, 185, 129, 0.6);
+      z-index: 2;
+      animation: driverBounce 2s infinite ease-in-out;
+    ">
+      <span style="
+        color: white;
+        font-family: 'Inter', sans-serif;
+        font-weight: 900;
+        font-size: 22px;
+      ">P</span>
     </div>
+
+    <!-- Triangle Pointer -->
+    <div style="
+      width: 0; height: 0;
+      border-left: 6px solid transparent;
+      border-right: 6px solid transparent;
+      border-top: 8px solid white;
+      margin-top: -2px;
+      z-index: 1;
+      filter: drop-shadow(0 2px 2px rgba(0,0,0,0.1));
+    "></div>
+
+    <!-- Driver Label Card -->
+    <div style="
+      margin-top: 2px;
+      background: #10b981;
+      color: white;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-family: sans-serif;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+      border: 1.5px solid white;
+      white-space: nowrap;
+    ">
+      Pickup
+    </div>
+
+    <style>
+      @keyframes driverBounce {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-5px); }
+      }
+      
+      /* Optional: Add a soft ground shadow that stays on the map */
+      .ground-shadow {
+        position: absolute;
+        bottom: 18px;
+        width: 12px; height: 4px;
+        background: rgba(0,0,0,0.2);
+        border-radius: 50%;
+        filter: blur(2px);
+      }
+    </style>
+    <div class="ground-shadow"></div>
   `;
 }
 
 function createDropoffMarkerHtml() {
   return `
-    <div style="position:relative;text-align:center;">
-      <div style="
-        width:44px;height:44px;border-radius:50%;
-        background:linear-gradient(135deg,#ef4444,#f97316);
-        display:flex;align-items:center;justify-content:center;
-        box-shadow:0 4px 20px rgba(239,68,68,0.5);
-        border:3px solid white;
-      ">
-        <span style="color:white;font-weight:900;font-size:18px;">D</span>
-      </div>
-      <div style="margin-top:2px;background:white;padding:2px 6px;border-radius:8px;font-size:10px;font-weight:700;color:#ef4444;box-shadow:0 2px 8px rgba(0,0,0,0.15);">DROP</div>
+    <!-- Main Icon Container -->
+    <div style="
+      position: relative;
+      width: 46px; height: 46px;
+      background: linear-gradient(135deg, #ef4444, #f97316);
+      border-radius: 50%;
+      border: 3px solid white;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 15px rgba(239, 68, 68, 0.6);
+      z-index: 2;
+      animation: dropBounce 2.2s infinite ease-in-out;
+    ">
+      <span style="
+        color: white;
+        font-family: 'Inter', sans-serif;
+        font-weight: 900;
+        font-size: 22px;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      ">D</span>
     </div>
+
+    <!-- Triangle Pointer -->
+    <div style="
+      width: 0; height: 0;
+      border-left: 6px solid transparent;
+      border-right: 6px solid transparent;
+      border-top: 8px solid white;
+      margin-top: -2px;
+      z-index: 1;
+      filter: drop-shadow(0 2px 2px rgba(0,0,0,0.1));
+    "></div>
+
+    <!-- Drop-off Label Card -->
+    <div style="
+      margin-top: 2px;
+      background: #ef4444;
+      color: white;
+      padding: 3px 12px;
+      border-radius: 20px;
+      font-family: sans-serif;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+      border: 1.5px solid white;
+      white-space: nowrap;
+    ">
+      Drop-off
+    </div>
+
+    <style>
+      @keyframes dropBounce {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-6px); }
+      }
+      
+      .drop-ground-shadow {
+        position: absolute;
+        bottom: 18px;
+        width: 14px; height: 4px;
+        background: rgba(0,0,0,0.2);
+        border-radius: 50%;
+        filter: blur(2px);
+        animation: dropShadowScale 2.2s infinite ease-in-out;
+      }
+
+      @keyframes dropShadowScale {
+        0%, 100% { transform: scale(1); opacity: 0.2; }
+        50% { transform: scale(1.2); opacity: 0.1; }
+      }
+    </style>
+    <div class="drop-ground-shadow"></div>
   `;
 }
 

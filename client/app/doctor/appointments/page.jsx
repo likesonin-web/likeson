@@ -559,7 +559,7 @@ export default function AppointmentsManagement() {
           </select>
 
           {/* Date range */}
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-col md:flex-row items-center gap-1.5">
             <input
               type="date"
               className="input-field text-sm w-auto"

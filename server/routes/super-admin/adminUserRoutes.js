@@ -432,7 +432,7 @@ router.post('/create/transport-partner', async (req, res) => {
       });
     }
 
-    const agency = await TransportPartner.findById(agencyId).session(session);
+   const agency = await TransportPartner.findById(agencyId).session(session); // ✓ correct
     if (!agency) {
       return res.status(404).json({
         success: false,
@@ -806,9 +806,13 @@ router.get('/analytics/overview', async (req, res) => {
     ]);
 
     const topServiceCities = await CareAssistantProfile.aggregate([
-      { $match: { 'availability.currentCity': { $exists: true, $ne: null, $ne: '' } } },
-      { $group: { _id: '$availability.currentCity', count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
+    
+ 
+{ $match: { $and: [
+  { 'availability.currentCity': { $exists: true } },
+  { 'availability.currentCity': { $ne: null } },
+  { 'availability.currentCity': { $ne: '' } },
+]}},
       { $limit: 5 },
     ]);
 
@@ -2303,7 +2307,7 @@ router.patch('/:id/security/kyc', async (req, res) => {
         message: `kycStatus must be one of: ${validStatuses.join(', ')}`,
       });
     }
-
+    
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: 'Invalid user ID.' });
     }

@@ -139,3 +139,11 @@ export const flushAllCache = async () => {
     console.error("flushAllCache error:", err.message);
   }
 };
+
+export const invalidatePatternBatch = async (patterns = []) => {
+  let total = 0;
+  for (const pattern of patterns) {
+    total += await invalidatePattern(pattern);
+  }
+  return total;
+};

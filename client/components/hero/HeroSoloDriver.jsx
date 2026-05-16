@@ -6,9 +6,11 @@ import {
   MapPin, Star, TrendingUp, Clock, Shield, Zap, ChevronRight,
   DollarSign, Navigation, Bell, CheckCircle, ArrowRight,
   Car, Calendar, Award, BarChart2, Users, Menu, X, Phone,
-  Wallet, Route, AlertCircle, Sun, Moon
+  Wallet, Route, AlertCircle, Sun, Moon,
+  User
 } from "lucide-react";
 import Container from "../ui/Container";
+import Link from "next/link";
 
 /* ─── Animation Variants ──────────────────────────────────────── */
 const fadeUp = {
@@ -313,14 +315,14 @@ function Hero() {
             </motion.p>
 
             <motion.div variants={fadeUp} custom={3} className="flex flex-wrap gap-3 pt-2">
-              <button className="btn-primary-cta flex items-center gap-2">
-                Start Earning
+              <Link href={'partner/solo/dashboard'} className="btn-primary-cta flex items-center gap-2">
+                Go to Dashbaord
                 <ArrowRight className="w-4 h-4" />
-              </button>
-              <button className="btn-secondary flex items-center gap-2">
-                <Phone className="w-4 h-4" />
-                Talk to Us
-              </button>
+              </Link>
+              <Link href={'partner/solo/profile'} className="btn-secondary btn flex items-center gap-2">
+                <User className="w-4 h-4" />
+                Go to Profile
+              </Link>
             </motion.div>
 
             <motion.div variants={fadeUp} custom={4} className="flex items-center gap-6 pt-2">

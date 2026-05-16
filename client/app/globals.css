@@ -61,16 +61,13 @@
 
 /* ============================================================
    SHARED SEMANTIC TOKENS — same across ALL themes
-   Override only primary/secondary/accent per role
    ============================================================ */
 :root, [data-theme] {
-  /* ── Pure white base ───────────────────────────────────── */
   --base-100:     oklch(100%  0       0);
   --base-200:     oklch(97.5% 0.003 240);
   --base-300:     oklch(93%   0.006 240);
   --base-content: oklch(20%   0.012 240);
 
-  /* ── Semantic colors — warm, not flat ───────────────────── */
   --info:    oklch(58% 0.16 232);
   --success: oklch(58% 0.18 152);
   --warning: oklch(72% 0.17  72);
@@ -81,17 +78,14 @@
   --warning-content: oklch(15% 0.04 72);
   --error-content:   oklch(99% 0 0);
 
-  /* ── Neutral ─────────────────────────────────────────────── */
   --neutral:         oklch(22% 0.010 240);
   --neutral-content: oklch(99% 0     0);
 
-  /* ── Radius — friendly rounded, not sharp ─────────────────── */
   --r-selector: 0.5rem;
   --r-field:    0.5rem;
   --r-box:      1rem;
   --border-width: 1px;
 
-  /* ── Chart palette — unified across roles ───────────────── */
   --chart-1: var(--primary);
   --chart-2: var(--secondary);
   --chart-3: oklch(58% 0.18 152);
@@ -102,8 +96,7 @@
 
 
 /* ============================================================
-   DEFAULT — Base theme (no role selected)
-   Signature: Sky blue — trustworthy, clean, open
+   DEFAULT — Base theme
    ============================================================ */
 :root {
   --primary:         oklch(54% 0.19 242);
@@ -146,26 +139,9 @@
 
 /* ============================================================
    ROLE THEMES — LIGHT
-   Every role: same pure white base, same semantic colors
-   Only primary / secondary / accent / shadow change
-   ============================================================
-
-   HUES ASSIGNED (no two roles share the same hue band):
-   superadmin   → deep violet  (h 270)
-   admin        → slate blue   (h 228)
-   doctor       → royal blue   (h 250)   ← signature medical
-   hospital     → navy         (h 245)
-   transport    → teal-cyan    (h 192)
-   driver       → amber-orange (h  52)
-   solodriverpartner → gold    (h  78)
-   customer     → sky coral    (h 215 + warm accent)
-   pharmacy     → emerald      (h 158)
-   care-assistant → rose       (h  12)
-   finance      → forest green (h 156)
-   lab          → purple       (h 285)
    ============================================================ */
 
-/* ── SUPERADMIN — Deep Violet. Authority. Bold but refined. ── */
+/* ── SUPERADMIN — Deep Violet ── */
 [data-theme="superadmin"] {
   --primary:         oklch(46% 0.26 272);
   --primary-content: oklch(99% 0    0);
@@ -176,7 +152,7 @@
   --shadow-depth: 0 10px 28px -4px rgba(70, 10, 220, 0.14);
 }
 
-/* ── ADMIN — Steel Blue. Reliable. Command. ── */
+/* ── ADMIN — Steel Blue ── */
 [data-theme="admin"] {
   --primary:         oklch(48% 0.18 228);
   --primary-content: oklch(99% 0    0);
@@ -187,7 +163,7 @@
   --shadow-depth: 0 8px 22px -4px rgba(20, 60, 160, 0.12);
 }
 
-/* ── DOCTOR — Royal Blue. Trust. Precision. Care. ── */
+/* ── DOCTOR — Royal Blue ── */
 [data-theme="doctor"] {
   --primary:         oklch(50% 0.22 250);
   --primary-content: oklch(99% 0    0);
@@ -198,7 +174,7 @@
   --shadow-depth: 0 8px 22px -4px rgba(20, 60, 200, 0.12);
 }
 
-/* ── HOSPITAL — Navy. Institution. Sterile confidence. ── */
+/* ── HOSPITAL — Navy ── */
 [data-theme="hospital"] {
   --primary:         oklch(40% 0.20 245);
   --primary-content: oklch(99% 0    0);
@@ -209,7 +185,7 @@
   --shadow-depth: 0 8px 20px -3px rgba(10, 30, 120, 0.13);
 }
 
-/* ── TRANSPORT PARTNER — Teal. Movement. Flow. ── */
+/* ── TRANSPORT PARTNER — Teal ── */
 [data-theme="transport"],
 [data-theme="transportpartner"] {
   --primary:         oklch(54% 0.20 192);
@@ -221,7 +197,7 @@
   --shadow-depth: 0 8px 20px -3px rgba(0, 130, 145, 0.12);
 }
 
-/* ── DRIVER — Amber. Energy. Road. Action. ── */
+/* ── DRIVER — Amber ── */
 [data-theme="driver"] {
   --primary:         oklch(64% 0.22  52);
   --primary-content: oklch(14% 0.04  52);
@@ -232,7 +208,7 @@
   --shadow-depth: 0 8px 22px -4px rgba(200, 110, 0, 0.14);
 }
 
-/* ── SOLO DRIVER PARTNER — Gold. Independent. Warm trust. ── */
+/* ── SOLO DRIVER PARTNER — Gold ── */
 [data-theme="solodriverpartner"] {
   --primary:         oklch(58% 0.19 250);
   --primary-content: oklch(99% 0    0);
@@ -243,7 +219,7 @@
   --shadow-depth: 0 6px 16px -3px rgba(0, 0, 0, 0.09);
 }
 
-/* ── CUSTOMER — Sky + Coral warmth. Friendly. Welcoming. ── */
+/* ── CUSTOMER — Sky + Coral ── */
 [data-theme="customer"] {
   --primary:         oklch(56% 0.18 215);
   --primary-content: oklch(99% 0    0);
@@ -257,7 +233,7 @@
   --shadow-depth: 0 8px 22px -4px rgba(0, 110, 200, 0.10);
 }
 
-/* ── PHARMACY — Emerald. Health. Fresh. Natural. ── */
+/* ── PHARMACY — Emerald ── */
 [data-theme="pharmacy"] {
   --primary:         oklch(50% 0.22 158);
   --primary-content: oklch(99% 0    0);
@@ -268,7 +244,7 @@
   --shadow-depth: 0 8px 20px -3px rgba(0, 130, 80, 0.11);
 }
 
-/* ── CARE ASSISTANT — Rose. Warmth. Empathy. Gentle care. ── */
+/* ── CARE ASSISTANT — Rose ── */
 [data-theme="care-assistant"] {
   --primary:         oklch(58% 0.20  12);
   --primary-content: oklch(99% 0     0);
@@ -282,7 +258,7 @@
   --shadow-depth: 0 10px 24px -4px rgba(200, 50, 80, 0.11);
 }
 
-/* ── FINANCE — Forest Green. Wealth. Stability. Prestige. ── */
+/* ── FINANCE — Forest Green ── */
 [data-theme="finance"] {
   --primary:         oklch(40% 0.18 156);
   --primary-content: oklch(99% 0    0);
@@ -296,7 +272,7 @@
   --shadow-depth: 0 8px 24px -4px rgba(0, 70, 35, 0.14);
 }
 
-/* ── LAB / LAB PARTNER — Purple. Science. Discovery. Precise. ── */
+/* ── LAB / LAB PARTNER — Purple ── */
 [data-theme="lab"],
 [data-theme="lab-partner"] {
   --primary:         oklch(55% 0.24 285);
@@ -311,10 +287,23 @@
   --shadow-depth: 0 8px 22px -4px rgba(100, 30, 210, 0.14);
 }
 
+/* ── BLOOD BANK — Crimson Red. Life. Urgency. Vital. ── */
+[data-theme="blood_bank"] {
+  --primary:         oklch(48% 0.24  18);
+  --primary-content: oklch(99% 0     0);
+  --secondary:       oklch(58% 0.18  30);
+  --secondary-content: oklch(99% 0   0);
+  --accent:          oklch(68% 0.16 345);
+  --accent-content:  oklch(99% 0     0);
+  --r-selector: 0.5rem;
+  --r-field:    0.5rem;
+  --r-box:      0.875rem;
+  --shadow-depth: 0 10px 28px -4px rgba(180, 20, 20, 0.16);
+}
+
 
 /* ============================================================
    DARK MODE — ALL ROLES
-   Same pattern: lift lightness, boost chroma slightly
    ============================================================ */
 
 /* SUPERADMIN DARK */
@@ -513,6 +502,22 @@
   --shadow-depth: 0 12px 30px -5px rgba(80, 10, 200, 0.50);
 }
 
+/* ── BLOOD BANK DARK — Deep Crimson. Urgent. Vital. ── */
+[data-theme="blood_bank"].dark,
+.dark [data-theme="blood_bank"] {
+  --base-100:     oklch(13%  0.020  18);
+  --base-200:     oklch(17%  0.024  18);
+  --base-300:     oklch(24%  0.028  18);
+  --base-content: oklch(93%  0.008  20);
+  --primary:         oklch(62% 0.26  18);
+  --primary-content: oklch(99% 0     0);
+  --secondary:       oklch(68% 0.20  30);
+  --secondary-content: oklch(99% 0   0);
+  --accent:          oklch(74% 0.18 345);
+  --accent-content:  oklch(99% 0     0);
+  --shadow-depth: 0 14px 36px -6px rgba(180, 10, 10, 0.55);
+}
+
 
 /* ============================================================
    BASE LAYER
@@ -621,7 +626,7 @@
    ============================================================ */
 @layer components {
 
-  /* ── Button base ─────────────────────────────────────────── */
+  /* ── Button base ── */
   .btn {
     font-family: var(--font-family-poppins);
     display: inline-flex;
@@ -656,7 +661,6 @@
     pointer-events: none;
   }
 
-  /* sizes */
   .btn-sm  { padding: 0.375rem 0.75rem; font-size: 0.8125rem; }
   .btn-xs  { padding: 0.25rem  0.5rem;  font-size: 0.75rem;   }
   .btn-lg  { padding: 0.75rem  1.5rem;  font-size: 1rem;      }
@@ -668,7 +672,6 @@
   .btn-sm.btn-circle { width: 1.875rem; height: 1.875rem; }
   .btn-xs.btn-circle { width: 1.5rem;   height: 1.5rem;   }
 
-  /* colour variants */
   .btn-primary {
     background-color: var(--primary);
     color: var(--primary-content);
@@ -740,7 +743,6 @@
     color: var(--primary-content);
   }
 
-  /* CTA — gradient hero button */
   .btn-primary-cta {
     font-family: var(--font-family-poppins);
     background: var(--bg-gradient-primary);
@@ -773,7 +775,7 @@
   .btn-success-cta:hover  { filter: brightness(1.08); transform: scale(1.04); }
   .btn-success-cta:active { transform: scale(0.96); }
 
-  /* ── Glass Card ──────────────────────────────────────────── */
+  /* ── Glass Card ── */
   .glass-card {
     background: linear-gradient(
       135deg,
@@ -792,7 +794,7 @@
     transform: translateY(-2px);
   }
 
-  /* ── Card ────────────────────────────────────────────────── */
+  /* ── Card ── */
   .card {
     background-color: var(--base-100);
     border: var(--border-width) solid var(--base-300);
@@ -806,7 +808,7 @@
     transform: translateY(-1px);
   }
 
-  /* ── Input ───────────────────────────────────────────────── */
+  /* ── Input ── */
   .input-field {
     font-family: var(--font-family-poppins);
     border-radius: var(--r-field);
@@ -826,7 +828,7 @@
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary), transparent 80%);
   }
 
-  /* ── Badges ──────────────────────────────────────────────── */
+  /* ── Badges ── */
   .badge {
     font-family: var(--font-family-poppins);
     @apply inline-flex items-center gap-1.5 px-3 py-1
@@ -873,7 +875,7 @@
     border: 1px solid color-mix(in srgb, var(--info), transparent 72%);
   }
 
-  /* ── Alerts ──────────────────────────────────────────────── */
+  /* ── Alerts ── */
   .alert {
     @apply px-4 py-3 border-l-4 flex items-start gap-3;
     border-radius: var(--r-field);
@@ -883,7 +885,7 @@
   .alert-warning { background-color: color-mix(in srgb, var(--warning), transparent 91%); border-left-color: var(--warning); color: var(--base-content); }
   .alert-error   { background-color: color-mix(in srgb, var(--error),   transparent 91%); border-left-color: var(--error);   color: var(--base-content); }
 
-  /* ── Role badge ──────────────────────────────────────────── */
+  /* ── Role badge ── */
   .role-badge {
     display: inline-flex;
     align-items: center;
@@ -900,7 +902,7 @@
     transition: background-color 0.2s, color 0.2s;
   }
 
-  /* ── Status dot ──────────────────────────────────────────── */
+  /* ── Status dot ── */
   .status-dot {
     display: inline-block;
     width: 0.5rem; height: 0.5rem;
@@ -911,7 +913,7 @@
   .status-dot-error   { background-color: var(--error);   }
   .status-dot-info    { background-color: var(--info);    }
 
-  /* ── Progress bar ────────────────────────────────────────── */
+  /* ── Progress bar ── */
   .progress-bar {
     width: 100%; height: 0.5rem;
     background-color: var(--base-300);
@@ -925,10 +927,10 @@
     transition: width 0.5s ease;
   }
 
-  /* ── Stat card ───────────────────────────────────────────── */
+  /* ── Stat card ── */
   .stat-card {
     background-color: var(--base-200);
-    border-radius: 2px ;
+    border-radius: 2px;
     border: var(--border-width) solid var(--base-300);
     @apply p-5;
     transition: background-color 0.25s, transform 0.2s, border-color 0.25s;
@@ -948,9 +950,8 @@
     color: color-mix(in oklch, var(--base-content) 55%, transparent);
     margin-top: 0.25rem;
   }
-  
 
-  /* ── Spinner / Loading ───────────────────────────────────── */
+  /* ── Spinner ── */
   .spinner,
   .loading {
     display: inline-block;
@@ -968,11 +969,11 @@
 
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* ── Skeleton / Divider ──────────────────────────────────── */
+  /* ── Skeleton / Divider ── */
   .skeleton { @apply bg-base-300 rounded animate-pulse; }
   .divider  { @apply h-px bg-base-300 my-6; }
 
-  /* ── Section headings ────────────────────────────────────── */
+  /* ── Section headings ── */
   .section-heading {
     font-family: var(--font-family-montserrat);
     @apply text-2xl md:text-3xl lg:text-4xl font-extrabold tracking-tight text-base-content mb-4;
@@ -983,7 +984,7 @@
     color: color-mix(in oklch, var(--base-content) 65%, transparent);
   }
 
-  /* ── Avatar ──────────────────────────────────────────────── */
+  /* ── Avatar ── */
   .avatar {
     display: inline-flex;
     align-items: center;
@@ -1006,7 +1007,7 @@
     font-weight: 700; font-size: 0.875rem;
   }
 
-  /* ── Checkbox ────────────────────────────────────────────── */
+  /* ── Checkbox ── */
   .checkbox {
     appearance: none; -webkit-appearance: none;
     display: inline-flex; align-items: center; justify-content: center;
@@ -1032,7 +1033,7 @@
   .checkbox-error:checked   { background-color: var(--error);   border-color: var(--error);   }
   .checkbox-warning:checked { background-color: var(--warning); border-color: var(--warning); }
 
-  /* ── Label ───────────────────────────────────────────────── */
+  /* ── Label ── */
   .label {
     display: flex; align-items: center; gap: 0.5rem;
     padding: 0.25rem 0; cursor: pointer;
@@ -1047,7 +1048,7 @@
     color: color-mix(in oklch, var(--base-content) 55%, transparent);
   }
 
-  /* ── Table ───────────────────────────────────────────────── */
+  /* ── Table ── */
   .table {
     width: 100%; border-collapse: collapse;
     font-size: 0.875rem; color: var(--base-content);
@@ -1116,7 +1117,6 @@
     background-color: color-mix(in srgb, var(--base-200) 88%, var(--primary) 12%);
   }
 
-  /* text colours */
   .text-primary   { color: var(--primary);   }
   .text-secondary { color: var(--secondary); }
   .text-accent    { color: var(--accent);    }
@@ -1125,7 +1125,6 @@
   .text-error     { color: var(--error);     }
   .text-info      { color: var(--info);      }
 
-  /* bg colours */
   .bg-primary   { background-color: var(--primary);   }
   .bg-secondary { background-color: var(--secondary); }
   .bg-accent    { background-color: var(--accent);    }
@@ -1134,9 +1133,10 @@
   .bg-error     { background-color: var(--error);     }
   .bg-info      { background-color: var(--info);      }
 
-  /* bg with opacity */
   .bg-primary\/5    { background-color: color-mix(in srgb, var(--primary),   transparent 95%); }
+  .bg-primary\/8    { background-color: color-mix(in srgb, var(--primary),   transparent 92%); }
   .bg-primary\/10   { background-color: color-mix(in srgb, var(--primary),   transparent 90%); }
+  .bg-primary\/15   { background-color: color-mix(in srgb, var(--primary),   transparent 85%); }
   .bg-primary\/20   { background-color: color-mix(in srgb, var(--primary),   transparent 80%); }
   .bg-secondary\/10 { background-color: color-mix(in srgb, var(--secondary), transparent 90%); }
   .bg-secondary\/20 { background-color: color-mix(in srgb, var(--secondary), transparent 80%); }
@@ -1151,7 +1151,6 @@
   .bg-info\/10      { background-color: color-mix(in srgb, var(--info),      transparent 90%); }
   .bg-base-300\/60  { background-color: color-mix(in srgb, var(--base-300),  transparent 40%); }
 
-  /* border opacity */
   .border-primary\/20  { border-color: color-mix(in srgb, var(--primary), transparent 80%); }
   .border-primary\/30  { border-color: color-mix(in srgb, var(--primary), transparent 70%); }
   .border-primary\/50  { border-color: color-mix(in srgb, var(--primary), transparent 50%); }
@@ -1164,23 +1163,19 @@
   .border-info\/30     { border-color: color-mix(in srgb, var(--info),    transparent 70%); }
   .border-accent\/30   { border-color: color-mix(in srgb, var(--accent),  transparent 70%); }
 
-  /* text opacity */
   .text-base-content\/30 { color: color-mix(in oklch, var(--base-content) 30%, transparent); }
   .text-base-content\/40 { color: color-mix(in oklch, var(--base-content) 40%, transparent); }
   .text-base-content\/50 { color: color-mix(in oklch, var(--base-content) 50%, transparent); }
   .text-base-content\/60 { color: color-mix(in oklch, var(--base-content) 60%, transparent); }
   .text-base-content\/70 { color: color-mix(in oklch, var(--base-content) 70%, transparent); }
 
-  /* focus ring */
   .focus\:ring-primary\/50:focus {
     --tw-ring-color: color-mix(in srgb, var(--primary), transparent 50%);
     box-shadow: 0 0 0 3px var(--tw-ring-color);
   }
 
-  /* animation */
   .animate-spin { animation: spin 1s linear infinite; }
 
-  /* responsive visibility */
   .show-mobile { display: block; }
   .hide-mobile { display: none;  }
   @media (min-width: 768px) {
@@ -1188,7 +1183,6 @@
     .hide-mobile { display: block; }
   }
 
-  /* scrollbar thin */
   .scrollbar-thin {
     scrollbar-width: thin;
     scrollbar-color: var(--primary) var(--base-200);
@@ -1258,5 +1252,3 @@
   .glass-card { border: 1px solid #e5e7eb; background: white; }
   .no-print   { display: none !important; }
 }
-
- 

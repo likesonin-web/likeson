@@ -213,7 +213,7 @@ const ROLE_PALETTES = {
     shadowColor: 'color-mix(in srgb, var(--primary) 30%, transparent)', label: 'Finance',
     icon: BadgeDollarSign, dataTheme: 'finance',
   },
-  'lab partner': {
+  'lab_partner': {
     accent: 'var(--primary)', bg: 'color-mix(in srgb, var(--primary) 8%, transparent)',
     barGradient: 'linear-gradient(90deg, var(--primary), var(--secondary))',
     pillBg: 'color-mix(in srgb, var(--primary) 12%, transparent)', pillText: 'var(--primary)',

@@ -6,11 +6,11 @@ import { motion } from 'framer-motion';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   RadialBarChart, RadialBar,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import {
   TrendingUp, Activity, Users, DollarSign,
-  Video, Home, Stethoscope, Calendar, BarChart2
+  Video, Home, Stethoscope, BarChart2,
 } from 'lucide-react';
 import {
   fetchMyDoctorProfile,
@@ -20,27 +20,30 @@ import {
   selectHospitalLoading,
 } from '@/store/slices/hospitalSlice';
 
+/* ─── animation ─── */
 const fadeUp = {
-  hidden: { opacity: 0, y: 20 },
-  show: (i = 0) => ({ opacity: 1, y: 0, transition: { delay: i * 0.08, duration: 0.45, ease: 'easeOut' } }),
+  hidden: { opacity: 0, y: 16 },
+  show: (i = 0) => ({
+    opacity: 1, y: 0,
+    transition: { delay: i * 0.07, duration: 0.4, ease: 'easeOut' },
+  }),
 };
 
-const CHART_COLORS = {
-  blue:   '#3b82f6',
-  violet: '#8b5cf6',
-  teal:   '#14b8a6',
-  amber:  '#f59e0b',
-  rose:   '#f43f5e',
-  emerald:'#10b981',
-};
-
+/* ─── custom tooltip ─── */
 const CustomTooltip = ({ active, payload, label, prefix = '', suffix = '' }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div className="bg-slate-900 border border-white/10 rounded-xl px-3 py-2.5 shadow-2xl">
-      {label && <p className="text-xs text-slate-400 mb-1">{label}</p>}
+    <div
+      className="rounded-xl px-3 py-2.5 text-sm shadow-2xl border"
+      style={{
+        background: 'var(--base-200)',
+        borderColor: 'color-mix(in srgb, var(--primary), transparent 65%)',
+        color: 'var(--base-content)',
+      }}
+    >
+      {label && <p className="text-xs mb-1" style={{ color: 'color-mix(in oklch, var(--base-content) 55%, transparent)' }}>{label}</p>}
       {payload.map((p, i) => (
-        <p key={i} className="text-sm font-bold" style={{ color: p.color || p.fill }}>
+        <p key={i} className="font-bold" style={{ color: p.color || p.fill || 'var(--primary)' }}>
           {p.name}: {prefix}{typeof p.value === 'number' ? p.value.toLocaleString('en-IN') : p.value}{suffix}
         </p>
       ))}
@@ -48,50 +51,87 @@ const CustomTooltip = ({ active, payload, label, prefix = '', suffix = '' }) => 
   );
 };
 
-// Generate synthetic monthly data from lifetime stats
+/* ─── synthetic monthly data ─── */
 const buildMonthlyData = (stats) => {
   const months = ['Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
   const total = stats?.totalConsultations || 0;
-  const earn  = stats?.totalEarnings || 0;
-  return months.map((m, i) => ({
+  const earn = stats?.totalEarnings || 0;
+  return months.map((m) => ({
     month: m,
     consultations: Math.round((total / 8) * (0.6 + Math.random() * 0.8)),
-    earnings:      Math.round((earn / 8) * (0.6 + Math.random() * 0.8)),
-    referrals:     Math.round(((stats?.totalReferrals || 0) / 8) * (0.5 + Math.random())),
+    earnings: Math.round((earn / 8) * (0.6 + Math.random() * 0.8)),
+    referrals: Math.round(((stats?.totalReferrals || 0) / 8) * (0.5 + Math.random())),
   }));
 };
 
-const StatChip = ({ icon: Icon, label, value, color, delay }) => (
+/* ─── KPI chip ─── */
+const StatChip = ({ icon: Icon, label, value, delay }) => (
   <motion.div
     variants={fadeUp} custom={delay} initial="hidden" animate="show"
-    className="flex items-center gap-3 p-4 rounded-xl border border-white/[0.06] bg-slate-900/60"
+    className="flex items-center gap-3 p-4 rounded-xl border"
+    style={{
+      background: 'var(--base-200)',
+      borderColor: 'color-mix(in srgb, var(--base-content), transparent 88%)',
+    }}
   >
-    <div className={`p-2 rounded-lg bg-gradient-to-br ${color} shadow`}>
-      <Icon className="w-4 h-4 text-white" />
+    <div
+      className="p-2 rounded-lg flex-shrink-0"
+      style={{ background: 'color-mix(in srgb, var(--primary), transparent 82%)', color: 'var(--primary)' }}
+    >
+      <Icon className="w-4 h-4" />
     </div>
-    <div>
-      <p className="text-lg font-black text-white font-mono">{value}</p>
-      <p className="text-[11px] text-slate-500">{label}</p>
+    <div className="min-w-0">
+      <p className="text-lg font-black font-mono truncate" style={{ color: 'var(--base-content)' }}>{value}</p>
+      <p className="text-[11px] font-medium uppercase tracking-wide truncate"
+        style={{ color: 'color-mix(in oklch, var(--base-content) 48%, transparent)' }}>
+        {label}
+      </p>
     </div>
   </motion.div>
 );
 
+/* ─── tab button ─── */
 const TabBtn = ({ active, onClick, children }) => (
   <button
     onClick={onClick}
-    className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-      active ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'
-    }`}
+    className="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all"
+    style={
+      active
+        ? { background: 'var(--primary)', color: 'var(--primary-content)' }
+        : { background: 'transparent', color: 'color-mix(in oklch, var(--base-content) 55%, transparent)' }
+    }
   >
     {children}
   </button>
 );
 
+/* ─── section card ─── */
+const SectionCard = ({ children, delay, className = '' }) => (
+  <motion.div
+    variants={fadeUp} custom={delay} initial="hidden" animate="show"
+    className={`p-5 rounded-2xl border ${className}`}
+    style={{
+      background: 'var(--base-200)',
+      borderColor: 'color-mix(in srgb, var(--base-content), transparent 88%)',
+    }}
+  >
+    {children}
+  </motion.div>
+);
+
+const SectionTitle = ({ children }) => (
+  <h2 className="text-xs font-bold uppercase tracking-widest mb-4"
+    style={{ color: 'color-mix(in oklch, var(--base-content) 55%, transparent)' }}>
+    {children}
+  </h2>
+);
+
+/* ─── main page ─── */
 export default function Analytics() {
   const dispatch = useDispatch();
-  const profile  = useSelector(selectMyDoctorProfile);
-  const stats    = useSelector(selectDoctorStats);
-  const loading  = useSelector(selectHospitalLoading);
+  const profile = useSelector(selectMyDoctorProfile);
+  const stats = useSelector(selectDoctorStats);
+  const loading = useSelector(selectHospitalLoading);
   const [tab, setTab] = useState('earnings');
 
   useEffect(() => {
@@ -105,197 +145,261 @@ export default function Analytics() {
   const s = stats?.stats || {};
   const isLoading = loading.fetchMyDoctorProfile || loading.fetchDoctorStats;
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const monthlyData = useMemo(() => buildMonthlyData(s), [s.totalConsultations, s.totalEarnings]);
 
   const consultTypeData = [
-    { name: 'In-Person',   value: s.totalConsultations  - (s.totalVideoConsultations || 0) - (s.totalHomeVisits || 0), fill: CHART_COLORS.blue },
-    { name: 'Video',       value: s.totalVideoConsultations || 0,  fill: CHART_COLORS.violet },
-    { name: 'Home Visit',  value: s.totalHomeVisits || 0,          fill: CHART_COLORS.teal },
-  ].filter(d => d.value > 0);
+    { name: 'In-Person', value: (s.totalConsultations || 0) - (s.totalVideoConsultations || 0) - (s.totalHomeVisits || 0) },
+    { name: 'Video', value: s.totalVideoConsultations || 0 },
+    { name: 'Home Visit', value: s.totalHomeVisits || 0 },
+  ].filter((d) => d.value > 0);
+
+  // CSS-var-driven colors for charts — injected inline so Recharts can consume them
+  const C = {
+    primary:   'var(--primary)',
+    secondary: 'var(--secondary)',
+    accent:    'var(--accent)',
+    success:   'var(--success)',
+    warning:   'var(--warning)',
+    error:     'var(--error)',
+  };
+
+  // Pie slice colours from theme
+  const pieColors = [C.primary, C.secondary, C.accent];
 
   const settlementData = [
-    { name: 'Settled',   value: s.totalSettled || 0,      fill: CHART_COLORS.emerald },
-    { name: 'Pending',   value: s.pendingSettlement || 0, fill: CHART_COLORS.amber },
-  ];
-
-  const radialData = [
-    { name: 'Commission', value: Math.min(100, Math.round(((s.totalCommissionEarned || 0) / Math.max(s.totalEarnings || 1, 1)) * 100)), fill: CHART_COLORS.violet },
+    { name: 'Settled', value: s.totalSettled || 0, fill: C.success },
+    { name: 'Pending', value: s.pendingSettlement || 0, fill: C.warning },
   ];
 
   const chips = [
-    { icon: Stethoscope, label: 'Consultations',    value: s.totalConsultations || 0,       color: 'from-blue-600 to-blue-500',    delay: 1 },
-    { icon: Video,       label: 'Video Sessions',   value: s.totalVideoConsultations || 0,  color: 'from-violet-600 to-violet-500', delay: 2 },
-    { icon: Home,        label: 'Home Visits',      value: s.totalHomeVisits || 0,          color: 'from-teal-600 to-teal-500',    delay: 3 },
-    { icon: Users,       label: 'Referrals',        value: s.totalReferrals || 0,           color: 'from-amber-600 to-amber-500',  delay: 4 },
-    { icon: DollarSign,  label: 'Total Earned',     value: `₹${(s.totalEarnings || 0).toLocaleString('en-IN')}`, color: 'from-emerald-600 to-emerald-500', delay: 5 },
-    { icon: TrendingUp,  label: 'Commission',       value: `₹${(s.totalCommissionEarned || 0).toLocaleString('en-IN')}`, color: 'from-rose-600 to-rose-500', delay: 6 },
+    { icon: Stethoscope, label: 'Consultations',  value: s.totalConsultations || 0,                                               delay: 1 },
+    { icon: Video,       label: 'Video Sessions', value: s.totalVideoConsultations || 0,                                          delay: 2 },
+    { icon: Home,        label: 'Home Visits',    value: s.totalHomeVisits || 0,                                                  delay: 3 },
+    { icon: Users,       label: 'Referrals',      value: s.totalReferrals || 0,                                                   delay: 4 },
+    { icon: DollarSign,  label: 'Total Earned',   value: `₹${(s.totalEarnings || 0).toLocaleString('en-IN')}`,                   delay: 5 },
+    { icon: TrendingUp,  label: 'Commission',     value: `₹${(s.totalCommissionEarned || 0).toLocaleString('en-IN')}`,           delay: 6 },
   ];
 
+  const axisStyle = { fill: 'color-mix(in oklch, var(--base-content) 40%, transparent)', fontSize: 11 };
+  const gridStyle = 'color-mix(in srgb, var(--base-content), transparent 90%)';
+
   return (
-    <div className="min-h-screen bg-[#080c14] text-white font-[family-name:var(--font-family-poppins)]">
-      <div className="fixed inset-0 pointer-events-none">
-        <div className="absolute top-0 left-1/3 w-96 h-96 bg-blue-600/7 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/4 right-1/4 w-72 h-72 bg-violet-600/5 rounded-full blur-3xl" />
-      </div>
+    <div className="min-h-screen font-[family-name:var(--font-family-poppins)]"
+      style={{ background: 'var(--base-100)', color: 'var(--base-content)' }}>
 
       <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 py-8">
 
-        {/* Header */}
+        {/* ── Header ── */}
         <motion.div variants={fadeUp} custom={0} initial="hidden" animate="show" className="mb-8">
           <div className="flex items-center gap-3 mb-1">
-            <div className="p-2.5 rounded-xl bg-gradient-to-br from-blue-600 to-violet-500 shadow-lg shadow-blue-600/20">
-              <BarChart2 className="w-5 h-5 text-white" />
+            <div className="p-2.5 rounded-xl" style={{ background: 'var(--primary)', color: 'var(--primary-content)' }}>
+              <BarChart2 className="w-5 h-5" />
             </div>
-            <h1 className="text-2xl font-black tracking-tight">Analytics</h1>
+            <h1 className="text-2xl font-black tracking-tight" style={{ color: 'var(--base-content)' }}>
+              Analytics
+            </h1>
           </div>
-          <p className="text-slate-500 text-sm ml-12">Your consultation and earnings overview</p>
+          <p className="text-sm ml-[3.25rem]"
+            style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }}>
+            Consultation &amp; earnings overview
+          </p>
         </motion.div>
 
-        {/* KPI chips */}
+        {/* ── KPI chips ── */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-8">
           {isLoading
-            ? Array(6).fill(0).map((_, i) => <div key={i} className="h-20 rounded-xl bg-slate-900 animate-pulse" />)
-            : chips.map(c => <StatChip key={c.label} {...c} />)
+            ? Array(6).fill(0).map((_, i) => (
+                <div key={i} className="h-20 rounded-xl animate-pulse"
+                  style={{ background: 'var(--base-300)' }} />
+              ))
+            : chips.map((c) => <StatChip key={c.label} {...c} />)
           }
         </div>
 
-        {/* Main charts row */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+        {/* ── Main row: trend + pie ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
 
-          {/* Trend Chart */}
-          <motion.div variants={fadeUp} custom={7} initial="hidden" animate="show"
-            className="lg:col-span-2 p-5 rounded-2xl border border-white/[0.06] bg-slate-900/50">
+          {/* Trend area chart */}
+          <SectionCard delay={7} className="lg:col-span-2">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-bold text-slate-300">Monthly Trend</h2>
-              <div className="flex gap-1 bg-slate-800/60 p-1 rounded-lg">
-                <TabBtn active={tab === 'earnings'}      onClick={() => setTab('earnings')}>Earnings</TabBtn>
-                <TabBtn active={tab === 'consultations'} onClick={() => setTab('consultations')}>Consults</TabBtn>
-                <TabBtn active={tab === 'referrals'}     onClick={() => setTab('referrals')}>Referrals</TabBtn>
+              <SectionTitle>Monthly Trend</SectionTitle>
+              <div className="flex gap-1 p-1 rounded-lg"
+                style={{ background: 'var(--base-300)' }}>
+                {['earnings', 'consultations', 'referrals'].map((t) => (
+                  <TabBtn key={t} active={tab === t} onClick={() => setTab(t)}>
+                    {t.charAt(0).toUpperCase() + t.slice(1)}
+                  </TabBtn>
+                ))}
               </div>
             </div>
-            {isLoading ? (
-              <div className="h-52 bg-slate-800 rounded-xl animate-pulse" />
-            ) : (
-              <ResponsiveContainer width="100%" height={220}>
-                <AreaChart data={monthlyData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="grad1" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%"  stopColor={CHART_COLORS.blue} stopOpacity={0.3} />
-                      <stop offset="95%" stopColor={CHART_COLORS.blue} stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                  <XAxis dataKey="month" tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<CustomTooltip prefix={tab === 'earnings' ? '₹' : ''} />} />
-                  <Area
-                    type="monotone" dataKey={tab} stroke={CHART_COLORS.blue} strokeWidth={2}
-                    fill="url(#grad1)" dot={{ fill: CHART_COLORS.blue, strokeWidth: 0, r: 3 }}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </motion.div>
 
-          {/* Consult Type Pie */}
-          <motion.div variants={fadeUp} custom={8} initial="hidden" animate="show"
-            className="p-5 rounded-2xl border border-white/[0.06] bg-slate-900/50">
-            <h2 className="text-sm font-bold text-slate-300 mb-4">Consultation Types</h2>
-            {isLoading ? (
-              <div className="h-52 bg-slate-800 rounded-xl animate-pulse" />
-            ) : consultTypeData.length > 0 ? (
-              <>
-                <ResponsiveContainer width="100%" height={160}>
-                  <PieChart>
-                    <Pie
-                      data={consultTypeData} cx="50%" cy="50%"
-                      innerRadius={45} outerRadius={72}
-                      dataKey="value" stroke="none"
-                    >
-                      {consultTypeData.map((d, i) => <Cell key={i} fill={d.fill} />)}
-                    </Pie>
-                    <Tooltip content={<CustomTooltip />} />
-                  </PieChart>
+            {isLoading
+              ? <div className="h-52 rounded-xl animate-pulse" style={{ background: 'var(--base-300)' }} />
+              : (
+                <ResponsiveContainer width="100%" height={220}>
+                  <AreaChart data={monthlyData} margin={{ top: 5, right: 4, left: -22, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%"   stopColor="var(--primary)" stopOpacity={0.25} />
+                        <stop offset="100%" stopColor="var(--primary)" stopOpacity={0.02} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke={gridStyle} />
+                    <XAxis dataKey="month" tick={axisStyle} axisLine={false} tickLine={false} />
+                    <YAxis tick={axisStyle} axisLine={false} tickLine={false} />
+                    <Tooltip content={<CustomTooltip prefix={tab === 'earnings' ? '₹' : ''} />} />
+                    <Area
+                      type="monotone" dataKey={tab}
+                      stroke="var(--primary)" strokeWidth={2}
+                      fill="url(#areaGrad)"
+                      dot={{ fill: 'var(--primary)', strokeWidth: 0, r: 3 }}
+                      activeDot={{ r: 5, fill: 'var(--primary)' }}
+                    />
+                  </AreaChart>
                 </ResponsiveContainer>
-                <div className="space-y-2 mt-2">
-                  {consultTypeData.map(d => (
-                    <div key={d.name} className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full" style={{ background: d.fill }} />
-                        <span className="text-xs text-slate-400">{d.name}</span>
-                      </div>
-                      <span className="text-xs font-bold text-white">{d.value}</span>
+              )
+            }
+          </SectionCard>
+
+          {/* Consultation type pie */}
+          <SectionCard delay={8}>
+            <SectionTitle>Consultation Types</SectionTitle>
+            {isLoading
+              ? <div className="h-52 rounded-xl animate-pulse" style={{ background: 'var(--base-300)' }} />
+              : consultTypeData.length > 0
+                ? (
+                  <>
+                    <ResponsiveContainer width="100%" height={160}>
+                      <PieChart>
+                        <Pie
+                          data={consultTypeData} cx="50%" cy="50%"
+                          innerRadius={44} outerRadius={70}
+                          dataKey="value" stroke="none"
+                          paddingAngle={3}
+                        >
+                          {consultTypeData.map((_, i) => (
+                            <Cell key={i} fill={pieColors[i % pieColors.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip content={<CustomTooltip />} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="space-y-2 mt-3">
+                      {consultTypeData.map((d, i) => (
+                        <div key={d.name} className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full"
+                              style={{ background: pieColors[i % pieColors.length] }} />
+                            <span className="text-xs"
+                              style={{ color: 'color-mix(in oklch, var(--base-content) 60%, transparent)' }}>
+                              {d.name}
+                            </span>
+                          </div>
+                          <span className="text-xs font-bold" style={{ color: 'var(--base-content)' }}>
+                            {d.value}
+                          </span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div className="h-40 flex items-center justify-center text-slate-600 text-sm">No data yet</div>
-            )}
-          </motion.div>
+                  </>
+                )
+                : (
+                  <div className="h-40 flex items-center justify-center text-sm"
+                    style={{ color: 'color-mix(in oklch, var(--base-content) 35%, transparent)' }}>
+                    No data yet
+                  </div>
+                )
+            }
+          </SectionCard>
         </div>
 
-        {/* Bottom row */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* ── Bottom row: bar + settlement ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
 
-          {/* Bar chart - Monthly referrals */}
-          <motion.div variants={fadeUp} custom={9} initial="hidden" animate="show"
-            className="p-5 rounded-2xl border border-white/[0.06] bg-slate-900/50">
-            <h2 className="text-sm font-bold text-slate-300 mb-4">Monthly Referrals</h2>
-            {isLoading ? <div className="h-40 bg-slate-800 rounded-xl animate-pulse" /> : (
-              <ResponsiveContainer width="100%" height={160}>
-                <BarChart data={monthlyData} margin={{ top: 0, right: 0, left: -25, bottom: 0 }} barSize={14}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                  <XAxis dataKey="month" tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Bar dataKey="referrals" fill={CHART_COLORS.amber} radius={[4,4,0,0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </motion.div>
+          {/* Monthly referrals bar */}
+          <SectionCard delay={9}>
+            <SectionTitle>Monthly Referrals</SectionTitle>
+            {isLoading
+              ? <div className="h-40 rounded-xl animate-pulse" style={{ background: 'var(--base-300)' }} />
+              : (
+                <ResponsiveContainer width="100%" height={160}>
+                  <BarChart data={monthlyData} margin={{ top: 0, right: 0, left: -26, bottom: 0 }} barSize={13}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={gridStyle} />
+                    <XAxis dataKey="month" tick={axisStyle} axisLine={false} tickLine={false} />
+                    <YAxis tick={axisStyle} axisLine={false} tickLine={false} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Bar dataKey="referrals" fill="var(--accent)" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )
+            }
+          </SectionCard>
 
           {/* Settlement breakdown */}
-          <motion.div variants={fadeUp} custom={10} initial="hidden" animate="show"
-            className="p-5 rounded-2xl border border-white/[0.06] bg-slate-900/50">
-            <h2 className="text-sm font-bold text-slate-300 mb-4">Settlement Breakdown</h2>
-            {isLoading ? <div className="h-40 bg-slate-800 rounded-xl animate-pulse" /> : (
-              <div className="flex items-center gap-6">
-                <ResponsiveContainer width={140} height={140}>
-                  <RadialBarChart innerRadius={35} outerRadius={68} data={settlementData} startAngle={90} endAngle={-270}>
-                    <RadialBar dataKey="value" cornerRadius={6} />
-                    <Tooltip content={<CustomTooltip prefix="₹" />} />
-                  </RadialBarChart>
-                </ResponsiveContainer>
-                <div className="flex-1 space-y-4">
-                  {settlementData.map(d => (
-                    <div key={d.name}>
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="flex items-center gap-2">
-                          <div className="w-2.5 h-2.5 rounded-full" style={{ background: d.fill }} />
-                          <span className="text-xs text-slate-400">{d.name}</span>
+          <SectionCard delay={10}>
+            <SectionTitle>Settlement Breakdown</SectionTitle>
+            {isLoading
+              ? <div className="h-40 rounded-xl animate-pulse" style={{ background: 'var(--base-300)' }} />
+              : (
+                <div className="flex items-center gap-5">
+                  <ResponsiveContainer width={130} height={130}>
+                    <RadialBarChart
+                      innerRadius={32} outerRadius={62}
+                      data={settlementData}
+                      startAngle={90} endAngle={-270}
+                    >
+                      <RadialBar dataKey="value" cornerRadius={5} />
+                      <Tooltip content={<CustomTooltip prefix="₹" />} />
+                    </RadialBarChart>
+                  </ResponsiveContainer>
+
+                  <div className="flex-1 space-y-4">
+                    {settlementData.map((d) => {
+                      const pct = Math.round((d.value / Math.max(1, s.totalEarnings || 1)) * 100);
+                      return (
+                        <div key={d.name}>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 rounded-full" style={{ background: d.fill }} />
+                              <span className="text-xs font-medium"
+                                style={{ color: 'color-mix(in oklch, var(--base-content) 60%, transparent)' }}>
+                                {d.name}
+                              </span>
+                            </div>
+                            <span className="text-xs font-bold" style={{ color: 'var(--base-content)' }}>
+                              ₹{d.value.toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                          <div className="h-1.5 rounded-full overflow-hidden"
+                            style={{ background: 'var(--base-300)' }}>
+                            <motion.div
+                              initial={{ width: 0 }}
+                              animate={{ width: `${pct}%` }}
+                              transition={{ duration: 0.9, ease: 'easeOut', delay: 0.4 }}
+                              className="h-full rounded-full"
+                              style={{ background: d.fill }}
+                            />
+                          </div>
                         </div>
-                        <span className="text-xs font-bold text-white">₹{d.value.toLocaleString('en-IN')}</span>
-                      </div>
-                      <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                        <motion.div
-                          initial={{ width: 0 }}
-                          animate={{ width: `${Math.round((d.value / Math.max(1, (s.totalEarnings || 1))) * 100)}%` }}
-                          transition={{ duration: 1, ease: 'easeOut', delay: 0.5 }}
-                          className="h-full rounded-full"
-                          style={{ background: d.fill }}
-                        />
-                      </div>
+                      );
+                    })}
+
+                    <div className="pt-3 border-t"
+                      style={{ borderColor: 'color-mix(in srgb, var(--base-content), transparent 88%)' }}>
+                      <p className="text-[11px] uppercase tracking-wider font-semibold mb-0.5"
+                        style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}>
+                        Total Earnings
+                      </p>
+                      <p className="text-base font-black" style={{ color: 'var(--primary)' }}>
+                        ₹{(s.totalEarnings || 0).toLocaleString('en-IN')}
+                      </p>
                     </div>
-                  ))}
-                  <div className="pt-2 border-t border-white/[0.06]">
-                    <p className="text-xs text-slate-500">Total Earnings</p>
-                    <p className="text-base font-black text-white">₹{(s.totalEarnings || 0).toLocaleString('en-IN')}</p>
                   </div>
                 </div>
-              </div>
-            )}
-          </motion.div>
+              )
+            }
+          </SectionCard>
         </div>
 
       </div>

@@ -201,6 +201,9 @@ app.use('/api/clinical',prescriptionCareRouter)
 
 import bloodBankRouter from './routes/bloodbankRouter.js';
 app.use('/api/blood-banks', bloodBankRouter);
+
+import adminAnalyticsRouter from './routes/super-admin/adminanalyticsRouter.js';
+app.use('/api/admin/analytics', adminAnalyticsRouter);
 /* ---------------- Logs ---------------- */
 
 app.use(morgan(NODE_ENV === "development" ? "dev" : "combined"));

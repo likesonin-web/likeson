@@ -52,7 +52,7 @@ export const HOSPITAL_MANAGER_DASHBOARD_LINKS = [
     links: [
       { name: "Upcoming Bookings",  href: "/hospital-manager/bookings/upcoming",  icon: <CalendarCheck size={18} /> },
       { name: "All OP Records",     href: "/hospital-manager/ops",               icon: <ClipboardList size={18} /> },
-      { name: "Follow-up Tracker",  href: "/hospital-manager/ops/valid-followups", icon: <FileClock size={18} />     },
+          
     ],
   },
 
@@ -98,7 +98,7 @@ export const HOSPITAL_MANAGER_DASHBOARD_LINKS = [
       { name: "Account Details",    href: "/hospital-manager/settings/account", icon: <UserRound size={18} />    },
       { name: "Active Sessions",    href: "/hospital-manager/security/sessions", icon: <Smartphone size={18} />  },
       { name: "Security & Password", href: "/hospital-manager/security/password", icon: <KeyRound size={18} />    },
-      { name: "System Logs",        href: "/hospital-manager/logs",             icon: <History size={18} />      },
+      
     ],
   },
 ];

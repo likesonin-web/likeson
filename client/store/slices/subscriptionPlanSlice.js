@@ -670,14 +670,19 @@ const subscriptionPlanSlice = createSlice({
     customPlanError: null,
   },
 
-  reducers: {
-    clearError:        (state) => { state.error = null; },
-    clearCustomPlanError: (state) => { state.customPlanError = null; },
-    clearPendingOrder: (state) => { state.pendingOrder = null; },
-    clearTrialOrder:   (state) => { state.trialOrder = null; },
-    // Optimistically set selected plan (e.g. from plan list click before fetching)
-    setSelectedPlan:   (state, { payload }) => { state.selectedPlan = payload; },
+  // WHERE: reducers object in createSlice
+reducers: {
+  clearError:               (state) => { state.error = null; },
+  clearCustomPlanError:     (state) => { state.customPlanError = null; },
+  clearPendingOrder:        (state) => { state.pendingOrder = null; },
+  clearTrialOrder:          (state) => { state.trialOrder = null; },
+  setSelectedPlan:          (state, { payload }) => { state.selectedPlan = payload; },
+  optimisticToggleAutoRenew:(state) => {          // ← ADD THIS
+    if (state.mySubscription) {
+      state.mySubscription.autoRenew = !state.mySubscription.autoRenew;
+    }
   },
+},
 
   extraReducers: (builder) => {
     // ── tiny helpers ──────────────────────────────────────────────────────────
@@ -1050,6 +1055,7 @@ export const {
   clearPendingOrder,
   clearTrialOrder,
   setSelectedPlan,
+  optimisticToggleAutoRenew, // ← ADD
 } = subscriptionPlanSlice.actions;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1150,4 +1156,12 @@ export const selectCronLoading               = (state) => sel(state).loading.cro
 export const selectSubscriptionError = (state) => sel(state).error;
 export const selectCustomPlanErrorMsg = (state) => sel(state).customPlanError;
 
+
+// WHERE: selectors section, add:
+export const selectMyHistory            = (state) => sel(state).subscriptionHistory;
+export const selectMyHistoryPagination  = (state) => sel(state).historyPagination;
+export const selectMyHistoryLoading     = (state) => sel(state).loading.history;
+export const selectToggleAutoRenewLoading = (state) => sel(state).loading.autoRenew;
+// (selectAutoRenewLoading exists but page imports selectToggleAutoRenewLoading)// WHERE: selectors section
+export const selectMySubAutoRenew = (state) => sel(state).mySubscription?.autoRenew ?? false;
 export default subscriptionPlanSlice.reducer;

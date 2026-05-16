@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Wallet, Building2, Hash, CreditCard, User, Link,
   ShieldCheck, AlertCircle, CheckCircle, Eye, EyeOff,
-  Save, Loader2, FileText, Phone
+  Save, Loader2, FileText, Phone,
 } from 'lucide-react';
 import {
   fetchMyDoctorProfile,
@@ -15,21 +15,28 @@ import {
   selectHospitalLoading,
 } from '@/store/slices/hospitalSlice';
 
+/* ─── animation ─── */
 const fadeUp = {
-  hidden: { opacity: 0, y: 20 },
-  show: (i = 0) => ({ opacity: 1, y: 0, transition: { delay: i * 0.07, duration: 0.45, ease: 'easeOut' } }),
+  hidden: { opacity: 0, y: 16 },
+  show: (i = 0) => ({
+    opacity: 1, y: 0,
+    transition: { delay: i * 0.07, duration: 0.4, ease: 'easeOut' },
+  }),
 };
 
+/* ─── field wrapper ─── */
 const Field = ({ label, icon: Icon, children, required }) => (
   <div className="space-y-1.5">
-    <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-      <Icon className="w-3.5 h-3.5" /> {label}
-      {required && <span className="text-red-400">*</span>}
+    <label className="flex items-center gap-1.5 text-xs font-semibold text-base-content/50 uppercase tracking-wider">
+      <Icon className="w-3.5 h-3.5 text-primary" />
+      {label}
+      {required && <span className="text-error">*</span>}
     </label>
     {children}
   </div>
 );
 
+/* ─── input ─── */
 const Input = ({ value, onChange, placeholder, type = 'text', disabled, className = '' }) => (
   <input
     type={type}
@@ -37,29 +44,42 @@ const Input = ({ value, onChange, placeholder, type = 'text', disabled, classNam
     onChange={onChange}
     placeholder={placeholder}
     disabled={disabled}
-    className={`w-full px-4 py-3 rounded-xl bg-slate-800/60 border border-white/[0.07] text-white placeholder-slate-500
-      text-sm outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20 transition-all
-      disabled:opacity-40 disabled:cursor-not-allowed ${className}`}
+    className={`input-field ${className}`}
   />
 );
 
+/* ─── section card ─── */
+const SectionCard = ({ children }) => (
+  <div className="p-6 rounded-2xl border border-base-300/60 bg-base-200 space-y-5">
+    {children}
+  </div>
+);
+
+const SectionTitle = ({ children, icon: Icon }) => (
+  <h2 className="text-xs font-bold text-base-content/50 uppercase tracking-widest flex items-center gap-2">
+    <Icon className="w-3.5 h-3.5 text-primary" />
+    {children}
+  </h2>
+);
+
+/* ─── main page ─── */
 export default function BankDetails() {
   const dispatch = useDispatch();
   const profile  = useSelector(selectMyDoctorProfile);
   const loading  = useSelector(selectHospitalLoading);
 
   const [form, setForm] = useState({
-    accountHolderName: '',
-    accountNumber: '',
-    ifscCode: '',
-    bankName: '',
-    branchName: '',
-    upiId: '',
-    gstNumber: '',
+    accountHolderName:  '',
+    accountNumber:      '',
+    ifscCode:           '',
+    bankName:           '',
+    branchName:         '',
+    upiId:              '',
+    gstNumber:          '',
     cancelledChequeUrl: '',
   });
   const [showAccount, setShowAccount] = useState(false);
-  const [dirty, setDirty] = useState(false);
+  const [dirty, setDirty]             = useState(false);
 
   useEffect(() => {
     if (!profile) dispatch(fetchMyDoctorProfile());
@@ -68,7 +88,7 @@ export default function BankDetails() {
   useEffect(() => {
     if (profile?.bankDetails) {
       const bd = profile.bankDetails;
-      setForm(f => ({
+      setForm((f) => ({
         ...f,
         accountHolderName:  bd.accountHolderName  || '',
         ifscCode:           bd.ifscCode            || '',
@@ -81,7 +101,10 @@ export default function BankDetails() {
     }
   }, [profile]);
 
-  const set = (key) => (e) => { setForm(f => ({ ...f, [key]: e.target.value })); setDirty(true); };
+  const set = (key) => (e) => {
+    setForm((f) => ({ ...f, [key]: e.target.value }));
+    setDirty(true);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -92,95 +115,106 @@ export default function BankDetails() {
     setDirty(false);
   };
 
-  const isSaving = loading.updateDoctorBankDetails;
-  const bd = profile?.bankDetails;
+  const isSaving   = loading.updateDoctorBankDetails;
+  const bd         = profile?.bankDetails;
   const isVerified = bd?.isBankVerified;
 
   return (
-    <div className="min-h-screen bg-[#080c14] text-white font-[family-name:var(--font-family-poppins)]">
-      <div className="fixed inset-0 pointer-events-none">
-        <div className="absolute top-0 right-1/3 w-80 h-80 bg-emerald-600/6 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/4 left-1/4 w-64 h-64 bg-blue-600/5 rounded-full blur-3xl" />
-      </div>
+    <div className="min-h-screen bg-base-100 text-base-content font-[family-name:var(--font-family-poppins)]">
 
       <div className="relative z-10 max-w-3xl mx-auto px-4 sm:px-6 py-8">
 
-        {/* Header */}
+        {/* ── Header ── */}
         <motion.div variants={fadeUp} custom={0} initial="hidden" animate="show" className="mb-8">
           <div className="flex items-center gap-3 mb-1">
-            <div className="p-2.5 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-500 shadow-lg shadow-emerald-600/20">
-              <Wallet className="w-5 h-5 text-white" />
+            <div className="p-2.5 rounded-xl bg-primary">
+              <Wallet className="w-5 h-5 text-primary-content" />
             </div>
-            <h1 className="text-2xl font-black tracking-tight">Bank Details</h1>
+            <h1 className="text-2xl font-black tracking-tight text-base-content">Bank Details</h1>
           </div>
-          <p className="text-slate-500 text-sm ml-12">Manage your bank account for earnings settlement</p>
+          <p className="text-sm text-base-content/50 ml-[3.25rem]">
+            Manage your bank account for earnings settlement
+          </p>
         </motion.div>
 
-        {/* Verification status banner */}
+        {/* ── Verification banner ── */}
         <AnimatePresence>
           {profile && (
             <motion.div
               variants={fadeUp} custom={1} initial="hidden" animate="show"
-              className={`mb-6 flex items-start gap-3 p-4 rounded-xl border
-                ${isVerified
-                  ? 'border-emerald-500/20 bg-emerald-500/5'
-                  : 'border-amber-500/20 bg-amber-500/5'}`}
+              className={`mb-6 flex items-start gap-3 p-4 rounded-xl border ${
+                isVerified
+                  ? 'border-success/30 bg-success/5'
+                  : 'border-warning/30 bg-warning/5'
+              }`}
             >
               {isVerified
-                ? <ShieldCheck className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
-                : <AlertCircle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                ? <ShieldCheck className="w-5 h-5 text-success flex-shrink-0 mt-0.5" />
+                : <AlertCircle className="w-5 h-5 text-warning flex-shrink-0 mt-0.5" />
               }
               <div>
-                <p className={`text-sm font-semibold ${isVerified ? 'text-emerald-300' : 'text-amber-300'}`}>
+                <p className={`text-sm font-semibold ${isVerified ? 'text-success' : 'text-warning'}`}>
                   {isVerified ? 'Bank Account Verified' : 'Pending Verification'}
                 </p>
-                <p className="text-xs text-slate-400 mt-0.5">
+                <p className="text-xs text-base-content/50 mt-0.5">
                   {isVerified
                     ? `Verified on ${bd?.verifiedAt ? new Date(bd.verifiedAt).toLocaleDateString('en-IN') : '—'}`
-                    : 'Your bank details will be reviewed by admin. Settlements activate after verification.'}
+                    : 'Your bank details will be reviewed by admin. Settlements activate after verification.'
+                  }
                 </p>
                 {bd?.accountLast4 && (
-                  <p className="text-xs text-slate-500 mt-1">Account ending in •••• {bd.accountLast4}</p>
+                  <p className="text-xs text-base-content/30 mt-1">
+                    Account ending in •••• {bd.accountLast4}
+                  </p>
                 )}
               </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Form */}
+        {/* ── Form ── */}
         <motion.form
           onSubmit={handleSubmit}
           variants={fadeUp} custom={2} initial="hidden" animate="show"
-          className="space-y-6"
+          className="space-y-5"
         >
-          {/* Primary Section */}
-          <div className="p-6 rounded-2xl border border-white/[0.06] bg-slate-900/50 space-y-5">
-            <h2 className="text-sm font-bold text-slate-300 uppercase tracking-widest flex items-center gap-2">
-              <Building2 className="w-3.5 h-3.5 text-blue-400" /> Account Information
-            </h2>
+          {/* Account information */}
+          <SectionCard>
+            <SectionTitle icon={Building2}>Account Information</SectionTitle>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <Field label="Account Holder Name" icon={User} required>
-                <Input value={form.accountHolderName} onChange={set('accountHolderName')} placeholder="As per bank records" />
+                <Input
+                  value={form.accountHolderName}
+                  onChange={set('accountHolderName')}
+                  placeholder="As per bank records"
+                />
               </Field>
 
               <Field label="Bank Name" icon={Building2} required>
-                <Input value={form.bankName} onChange={set('bankName')} placeholder="e.g. State Bank of India" />
+                <Input
+                  value={form.bankName}
+                  onChange={set('bankName')}
+                  placeholder="e.g. State Bank of India"
+                />
               </Field>
 
-              <Field label={`Account Number ${bd?.accountLast4 ? `(•••• ${bd.accountLast4})` : ''}`} icon={CreditCard}>
+              <Field
+                label={`Account Number${bd?.accountLast4 ? ` (•••• ${bd.accountLast4})` : ''}`}
+                icon={CreditCard}
+              >
                 <div className="relative">
                   <Input
                     type={showAccount ? 'text' : 'password'}
                     value={form.accountNumber}
                     onChange={set('accountNumber')}
-                    placeholder={bd?.accountLast4 ? `Leave blank to keep ••••${bd.accountLast4}` : "Enter account number"}
+                    placeholder={bd?.accountLast4 ? `Leave blank to keep ••••${bd.accountLast4}` : 'Enter account number'}
                     className="pr-10"
                   />
                   <button
                     type="button"
-                    onClick={() => setShowAccount(v => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors"
+                    onClick={() => setShowAccount((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-base-content/40 hover:text-base-content transition-colors"
                   >
                     {showAccount ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -190,43 +224,61 @@ export default function BankDetails() {
               <Field label="IFSC Code" icon={Hash} required>
                 <Input
                   value={form.ifscCode}
-                  onChange={(e) => { setForm(f => ({ ...f, ifscCode: e.target.value.toUpperCase() })); setDirty(true); }}
+                  onChange={(e) => {
+                    setForm((f) => ({ ...f, ifscCode: e.target.value.toUpperCase() }));
+                    setDirty(true);
+                  }}
                   placeholder="e.g. SBIN0001234"
                   className="uppercase tracking-widest font-mono"
                 />
               </Field>
 
               <Field label="Branch Name" icon={Building2}>
-                <Input value={form.branchName} onChange={set('branchName')} placeholder="e.g. Vijayawada Main Branch" />
+                <Input
+                  value={form.branchName}
+                  onChange={set('branchName')}
+                  placeholder="e.g. Vijayawada Main Branch"
+                />
               </Field>
 
               <Field label="UPI ID" icon={Phone}>
-                <Input value={form.upiId} onChange={set('upiId')} placeholder="name@bankname" />
+                <Input
+                  value={form.upiId}
+                  onChange={set('upiId')}
+                  placeholder="name@bankname"
+                />
               </Field>
             </div>
-          </div>
+          </SectionCard>
 
-          {/* Secondary Section */}
-          <div className="p-6 rounded-2xl border border-white/[0.06] bg-slate-900/50 space-y-5">
-            <h2 className="text-sm font-bold text-slate-300 uppercase tracking-widest flex items-center gap-2">
-              <FileText className="w-3.5 h-3.5 text-violet-400" /> Tax & Documents
-            </h2>
+          {/* Tax & documents */}
+          <SectionCard>
+            <SectionTitle icon={FileText}>Tax &amp; Documents</SectionTitle>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <Field label="GST Number" icon={Hash}>
-                <Input value={form.gstNumber} onChange={set('gstNumber')} placeholder="22AAAAA0000A1Z5" className="uppercase font-mono" />
+                <Input
+                  value={form.gstNumber}
+                  onChange={set('gstNumber')}
+                  placeholder="22AAAAA0000A1Z5"
+                  className="uppercase font-mono"
+                />
               </Field>
 
               <Field label="Cancelled Cheque URL" icon={Link}>
-                <Input value={form.cancelledChequeUrl} onChange={set('cancelledChequeUrl')} placeholder="https://..." />
+                <Input
+                  value={form.cancelledChequeUrl}
+                  onChange={set('cancelledChequeUrl')}
+                  placeholder="https://…"
+                />
               </Field>
             </div>
-          </div>
+          </SectionCard>
 
           {/* Info note */}
-          <div className="flex items-start gap-2.5 px-4 py-3 rounded-xl bg-blue-500/5 border border-blue-500/15">
-            <ShieldCheck className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-slate-400 leading-relaxed">
+          <div className="flex items-start gap-2.5 px-4 py-3 rounded-xl bg-info/10 border border-info/30">
+            <ShieldCheck className="w-4 h-4 text-info flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-base-content/50 leading-relaxed">
               Updating bank details will reset verification status. Admin will re-verify within 1–2 business days before settlements resume. Account number is stored securely and only the last 4 digits are visible.
             </p>
           </div>
@@ -237,9 +289,7 @@ export default function BankDetails() {
             disabled={isSaving || !dirty}
             whileHover={{ scale: isSaving || !dirty ? 1 : 1.02 }}
             whileTap={{ scale: isSaving || !dirty ? 1 : 0.97 }}
-            className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl font-bold text-sm
-              bg-gradient-to-r from-emerald-600 to-teal-500 text-white shadow-lg shadow-emerald-600/20
-              disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            className="btn btn-primary w-full py-3.5 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {isSaving
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
@@ -248,7 +298,7 @@ export default function BankDetails() {
           </motion.button>
 
           {!dirty && bd?.isBankVerified === false && bd?.accountLast4 && (
-            <div className="flex items-center justify-center gap-2 text-xs text-slate-500">
+            <div className="flex items-center justify-center gap-2 text-xs text-base-content/40">
               <CheckCircle className="w-3.5 h-3.5" /> Details saved. Awaiting admin verification.
             </div>
           )}

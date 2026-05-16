@@ -128,14 +128,15 @@ const subscriptionPlanSchema = new Schema(
      */
     fixedTier: {
       type: String,
-      enum: [
-        'Basic Care',
-        'Premium Care',
-        'Family Care',
-        'Pregnant Women Care',
-        "NRI's Care",
-        null,
-      ],
+    enum: [
+  'Basic Care',
+  'Standard Care',   // ← ADD THIS
+  'Premium Care',
+  'Family Care',
+  'Pregnant Women Care',
+  "NRI's Care",
+  null,
+],
       default: null,
     },
 

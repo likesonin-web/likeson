@@ -302,11 +302,7 @@ class SocketService {
         });
       },
       (err) => console.error('[GPS]', err.message),
-      {
-        enableHighAccuracy: true,
-        maximumAge:         intervalMs,
-        timeout:            10_000,
-      }
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 10_000 }
     );
   }
 

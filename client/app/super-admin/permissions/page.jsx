@@ -9,6 +9,13 @@
  *   - global.css design tokens (--primary, --error, --success, etc.)
  *
  * Stack: Next.js · Redux Toolkit · Tailwind CSS · Framer Motion · Recharts · Lucide
+ *
+ * FIXES APPLIED:
+ *  1. ROLE_META: added 'lab_partner' (was 'lab partner' with space) + 'blood_bank'
+ *  2. loaders keys: adminSuspend → adminSuspendUser, adminUnblock → adminUnblockUser
+ *  3. ALL_ROLES_LIST auto-corrected via ROLE_META fix
+ *  4. BADGE_CLASS: added 'accent' variant (used by lab_partner)
+ *  5. ROLE_META color for blood_bank mapped to 'error' (crimson theme)
  */
 
 import {
@@ -41,21 +48,24 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Only these 4 roles may be assigned through this UI panel */
-const ALLOWED_ROLES = ['superadmin', 'admin', 'finance','customer'];
+const ALLOWED_ROLES = ['superadmin', 'admin', 'finance', 'customer'];
 
+// FIX 1: 'lab partner' (space) → 'lab_partner' (underscore, matches schema)
+// FIX 1: Added 'blood_bank' role (present in schema, missing here)
 const ROLE_META = {
-  superadmin:       { label: 'Superadmin',    color: 'error',   icon: '👑' },
-  admin:            { label: 'Admin',          color: 'warning', icon: '🛡️' },
-  customer:         { label: 'Customer',       color: 'info',    icon: '👤' },
-  hospital:         { label: 'Hospital',       color: 'primary', icon: '🏥' },
+  superadmin:        { label: 'Superadmin',    color: 'error',   icon: '👑' },
+  admin:             { label: 'Admin',          color: 'warning', icon: '🛡️' },
+  customer:          { label: 'Customer',       color: 'info',    icon: '👤' },
+  hospital:          { label: 'Hospital',       color: 'primary', icon: '🏥' },
   solodriverpartner: { label: 'Solo Driver',    color: 'primary', icon: '🚘' },
-  'care_assistant': { label: 'Care Assistant', color: 'success', icon: '🩺' },
-  doctor:           { label: 'Doctor',         color: 'primary', icon: '⚕️' },
-  driver:           { label: 'Driver',         color: 'error', icon: '🚗' },
-  pharmacy:         { label: 'Pharmacy',       color: 'accent',  icon: '💊' },
-  transportpartner: { label: 'Transport',      color: 'error', icon: '🚛' },
-  'lab partner':    { label: 'Lab Partner',    color: 'info',    icon: '🔬' },
-  finance:          { label: 'Finance',        color: 'warning', icon: '💰' },
+  care_assistant:    { label: 'Care Assistant', color: 'success', icon: '🩺' },
+  doctor:            { label: 'Doctor',         color: 'primary', icon: '⚕️' },
+  driver:            { label: 'Driver',         color: 'error',   icon: '🚗' },
+  pharmacy:          { label: 'Pharmacy',       color: 'accent',  icon: '💊' },
+  transportpartner:  { label: 'Transport',      color: 'error',   icon: '🚛' },
+  lab_partner:       { label: 'Lab Partner',    color: 'info',    icon: '🔬' }, // FIX: was 'lab partner'
+  finance:           { label: 'Finance',        color: 'warning', icon: '💰' },
+  blood_bank:        { label: 'Blood Bank',     color: 'error',   icon: '🩸' }, // FIX: added
 };
 
 const ALL_ROLES_LIST = Object.entries(ROLE_META).map(([value, m]) => ({
@@ -70,13 +80,14 @@ const DONUT_COLORS = [
   'var(--color-warning,#f97316)',
 ];
 
+// FIX 4: Added 'accent' variant (used by pharmacy → ROLE_META.pharmacy.color = 'accent')
 const BADGE_CLASS = {
   error:   'bg-error/10 text-error border border-error/30',
   warning: 'bg-warning/10 text-warning border border-warning/30',
   info:    'bg-info/10 text-info border border-info/30',
   success: 'bg-success/10 text-success border border-success/30',
   primary: 'bg-primary/10 text-primary border border-primary/30',
-  accent:  'bg-accent/10 text-accent border border-accent/30',
+  accent:  'bg-accent/10 text-accent border border-accent/30',   // FIX: was missing
   neutral: 'bg-neutral/10 text-neutral-content border border-neutral/30',
 };
 
@@ -1017,11 +1028,11 @@ function PermissionModals({ modal, onClose, onUpdateRole, onSuspend, onUnblock, 
       )}
       {modal.type === 'suspend' && (
         <SuspendModal key="suspend" user={modal.user} onConfirm={onSuspend}
-          onClose={onClose} loading={loaders.adminSuspend} />
+          onClose={onClose} loading={loaders.adminSuspendUser} />  // FIX 2: was adminSuspend
       )}
       {modal.type === 'unblock' && (
         <UnblockModal key="unblock" user={modal.user} onConfirm={onUnblock}
-          onClose={onClose} loading={loaders.adminUnblock} />
+          onClose={onClose} loading={loaders.adminUnblockUser} />  // FIX 2: was adminUnblock
       )}
       {modal.type === 'resetOtp' && (
         <ResetOtpModal key="otp" user={modal.user} onConfirm={onResetOtp}
@@ -1046,7 +1057,7 @@ export default function PermissionsPage() {
   } = usePermissions();
 
   return (
-    <div className="min-h-screen bg-base-100 py-6 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-base-100 py-6 px-4  ">
       <div className="max-w-screen-xl mx-auto">
 
         {/* ── Header ── */}

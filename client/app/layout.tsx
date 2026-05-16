@@ -6,7 +6,7 @@ import StoreProvider from '@/store/StoreProvider';
 import LayoutConditionalWrapper from '@/components/ui/LayoutConditionalWrapper';
 import { ThemeProvider } from '@/components/theme-provider';
 import { Toaster } from 'react-hot-toast';
-import AuthSocketBridge from '@/context/AuthSocketBridge'; // ← new thin client component
+import AuthSocketBridge from '@/context/AuthSocketBridge';
 
 const poppins = Poppins({
   subsets: ['latin'],
@@ -37,19 +37,17 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      // Added font variables here so they map seamlessly into your CSS/Tailwind runtime
       className={`${poppins.variable} ${montserrat.variable} scroll-smooth`}
       suppressHydrationWarning
     >
-      <body className="font-poppins antialiased" suppressHydrationWarning>
+      {/* 
+        Ensured both font families are declared on the body variable list 
+        to guarantee the preloaded resources are actively consumed on boot.
+      */}
+      <body className="font-poppins antialiased var(--font-montserrat)" suppressHydrationWarning>
         <StoreProvider>
           <ThemeProvider attribute="class" defaultTheme="light">
-            {/*
-              AuthSocketBridge is a 'use client' component that:
-                1. Reads `token` from Redux (selectToken from userSlice)
-                2. Passes it down to SocketProvider
-              This keeps layout.tsx a pure Server Component while still
-              connecting the socket only after the user has a valid JWT.
-            */}
             <AuthSocketBridge>
               <ConnectivityWrapper>
                 <LayoutConditionalWrapper>
@@ -67,7 +65,7 @@ export default function RootLayout({
                   color: 'var(--neutral-content)',
                   fontSize: '13px',
                   fontWeight: '600',
-                  fontFamily: 'var(--font-poppins)',
+                  fontFamily: 'var(--font-poppins), sans-serif',
                   border: '1px solid var(--base-300)',
                   boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)',
                 },

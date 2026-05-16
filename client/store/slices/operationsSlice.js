@@ -316,6 +316,7 @@ export const fetchHospitalOps = mkThunk(
 export const fetchHospitalValidOps = mkThunk(
   'operations/fetchHospitalValidOps',
   async ({ hospitalId, doctorId, patientId, page = 1, limit = 20 } = {}) => {
+ 
     const { data } = await API.get(`${BASE}/hospital/${hospitalId}/valid-ops`, {
       params: { doctorId, patientId, page, limit },
     });

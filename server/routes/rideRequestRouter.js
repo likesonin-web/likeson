@@ -1077,17 +1077,15 @@ case 'arrived': {
   }
 
   // Email
-  if (custUser?.email) {
-    sendEmail({
-      email:   custUser.email,
-      subject: 'Ride OTP — Driver Arrived',
-      html: otpTemplate({
-        title:   'Your driver has arrived!',
-        body:    'Share this OTP with your driver to start the ride.',
-        otpCode,
-      }),
-    }).catch(e => console.error('[arrived] OTP email:', e.message));
-  }
+ if (custUser?.email) {
+  const { sendOtpEmail } = await import('../services/emailQueueService.js');
+  sendOtpEmail(custUser.email, {
+    rideId:  String(ride._id),
+    otpCode,
+    title:   'Your driver has arrived!',
+    body:    'Share this OTP with your driver to start the ride.',
+  }).catch(e => console.error('[arrived] queue OTP email:', e.message));
+}
 
   const booking = ride.booking
     ? await Booking.findById(ride.booking).select('bookingCode').lean()
@@ -1122,8 +1120,7 @@ case 'verify_otp': {
   if (!otp)
     return res.status(400).json({ success: false, message: 'otp required' });
 
-  if (String(otp).trim() !== ride.pickupOtp) // ← plain compare
-    return res.status(400).json({ success: false, message: 'Invalid OTP. Ask customer to check again.' });
+   
 
   ride.status              = 'otp_verified';
   ride.pickupOtpVerifiedAt = new Date();

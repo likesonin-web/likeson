@@ -18,7 +18,7 @@ import {
   Timer, RefreshCw, Zap, Hospital, Info,
   Search, Receipt, ShieldCheck,
   Percent, AlertTriangle, Phone, X,
-  Clock, ChevronDown, ChevronUp, LocateFixed,
+  Clock, ChevronDown, ChevronUp, LocateFixed, Star,
 } from 'lucide-react';
 
 import {
@@ -46,14 +46,10 @@ import {
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const GMAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || 'AIzaSyBkwZzM-ZJCCHUg5hG5vbT9OSIeUPVi_qw';
-const RAZORPAY_KEY = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_SV43jVcrs5wKAM';
+const GMAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || '';
+const RAZORPAY_KEY = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '';
 const VIJAYAWADA = { lat: 16.5062, lng: 80.6480 };
 const GMAPS_LIBRARIES = ['places'];
-
- 
-
- 
 
 const ALL_STEP_DEFS = {
   service:  { id: 'service',  label: 'Service',  icon: Zap          },
@@ -132,6 +128,7 @@ const getSteps = (bookingType) => {
 };
 
 const loadRazorpay = () => new Promise((resolve) => {
+  if (typeof window === 'undefined') { resolve(false); return; }
   if (window.Razorpay) { resolve(true); return; }
   const s = document.createElement('script');
   s.src = 'https://checkout.razorpay.com/v1/checkout.js';
@@ -145,7 +142,7 @@ const openRazorpay = async ({ order, name, description, prefill, onSuccess, onFa
   if (!loaded) { onFailure?.('Razorpay failed to load'); return; }
   const options = {
     key: RAZORPAY_KEY,
-    amount: order.amount * 100,
+    amount: Math.round(order.amount * 100),
     currency: order.currency || 'INR',
     name: 'Likeson.in',
     description: description || 'Healthcare Booking',
@@ -164,6 +161,71 @@ const openRazorpay = async ({ order, name, description, prefill, onSuccess, onFa
   const rz = new window.Razorpay(options);
   rz.on('payment.failed', (response) => onFailure?.(response.error?.description || 'Payment failed'));
   rz.open();
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUBSCRIPTION COVERAGE HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * resolveConsultFee
+ * Priority:
+ *  1. follow_up → followUpFee (never consumed from sub quota)
+ *  2. sub coverage active & quota remaining → 0
+ *  3. doctorFees consult type fee
+ *  4. fallback 600
+ */
+const resolveConsultFee = (form, followUpCheck) => {
+  if (form.bookingType === 'follow_up') {
+    const fee = followUpCheck?.isEligible ? (followUpCheck.followUpFee || 0) : 0;
+    return { fee, isFree: fee === 0, reason: 'Follow-up fee (independent of subscription)' };
+  }
+
+  const sub = form.subCoverage;
+
+  if (sub?.consultationFree) {
+    return { fee: 0, isFree: true, reason: sub.consultationQuota || 'Covered by subscription' };
+  }
+
+  let fee = 0;
+  if (form.doctorFees) {
+    if (form.bookingType === 'doctor_online' || form.consultationType === 'video') {
+      fee = form.doctorFees.videoFee || 0;
+    } else if (form.consultationType === 'homeVisit') {
+      fee = form.doctorFees.homeVisitFee || 0;
+    } else {
+      fee = form.doctorFees.inPersonFee || 0;
+    }
+  } else {
+    fee = 600;
+  }
+  return { fee, isFree: false, reason: sub?.consultationQuota || null };
+};
+
+/**
+ * resolveCaFee
+ * Returns {fee, isFree, reason} for care assistant.
+ */
+const resolveCaFee = (form, caTiers) => {
+  const sub = form.subCoverage;
+  if (sub?.careAssistantFree) {
+    return { fee: 0, isFree: true, reason: sub.careAssistantQuota || 'Covered by subscription' };
+  }
+  const durHours = form.durationHours || (caTiers[0]?.hours ?? 4);
+  const caTier = caTiers.find(t => t.hours === durHours) || caTiers[0];
+  return { fee: caTier?.price || 0, isFree: false, reason: null };
+};
+
+/**
+ * resolveTransportFee
+ * Transport NEVER free. Sub gives lower km rate, not zero fare.
+ */
+const resolveTransportFee = (transportEstimate) => {
+  if (!transportEstimate) return { fee: 0, ratePerKm: null };
+  return {
+    fee: transportEstimate.totalTransportFee || 0,
+    ratePerKm: transportEstimate.ratePerKm || null,
+  };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -261,7 +323,7 @@ function SCard({ title, icon: Icon, accent, children, className = '' }) {
   );
 }
 
-function AvailPill({ avail, loading }) {
+function AvailPill({ avail, loading, onReset }) {
   if (loading) return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-base-200 border border-base-300 text-base-content/50" style={PP}>
       <Loader2 size={8} className="animate-spin" />Checking…
@@ -283,16 +345,79 @@ function AvailPill({ avail, loading }) {
   );
 }
 
-function FareRow({ label, value, note, accent, bold, highlight }) {
+/** Sub coverage tag shown next to prices */
+function SubTag({ isFree, reason, className = '' }) {
+  if (!isFree) return null;
   return (
-    <div className={`flex items-start justify-between gap-2 py-2 px-2.5 rounded-lg ${highlight ? 'bg-primary/5 border border-primary/15' : ''}`}>
+    <span
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-black border ${className}`}
+      style={{ background:'rgba(16,185,129,0.1)', color:'#059669', borderColor:'rgba(16,185,129,0.3)', ...PP }}
+      title={reason || 'Covered by subscription'}
+    >
+      <Star size={7} />FREE · Sub
+    </span>
+  );
+}
+
+function FareRow({ label, value, note, accent, bold, highlight, sub, isFree, freeReason }) {
+  return (
+    <div className={`flex items-start justify-between gap-2 py-2 px-2.5 rounded-lg ${highlight ? 'bg-primary/5 border border-primary/15' : sub ? 'bg-base-200/40' : ''}`}>
       <div className="flex-1 min-w-0">
-        <p className={`text-xs ${bold ? 'font-black' : 'font-semibold'} leading-snug`} style={{ color: accent || 'var(--base-content)', ...PP }}>{label}</p>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <p className={`text-xs ${bold ? 'font-black' : sub ? 'font-medium' : 'font-semibold'} leading-snug`}
+            style={{ color: accent || (sub ? 'var(--base-content)' : 'var(--base-content)'), opacity: sub ? 0.6 : 1, ...PP }}>{label}</p>
+          {isFree && <SubTag isFree={isFree} reason={freeReason} />}
+        </div>
         {note && <p className="text-[9px] text-base-content/40 mt-0.5 leading-snug" style={PP}>{note}</p>}
       </div>
-      <p className={`text-xs whitespace-nowrap flex-shrink-0 ${bold ? 'font-black' : 'font-bold'}`}
-        style={{ color: accent || 'var(--base-content)', ...PP }}>{value}</p>
+      <p className={`text-xs whitespace-nowrap flex-shrink-0 ${bold ? 'font-black' : sub ? 'font-medium opacity-60' : 'font-bold'}`}
+        style={{ color: isFree ? '#059669' : (accent || 'var(--base-content)'), ...PP }}>
+        {isFree ? 'FREE' : value}
+      </p>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUBSCRIPTION COVERAGE BANNER
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SubCoverageBanner({ subCoverage }) {
+  if (!subCoverage) return null;
+  const hasCoverage = subCoverage.consultationFree || subCoverage.careAssistantFree;
+  const hasSubRate  = subCoverage.kmRateSource === 'subscription';
+  if (!hasCoverage && !hasSubRate) return null;
+
+  return (
+    <motion.div initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }}
+      className="flex items-start gap-2 p-3 rounded-xl border border-emerald-200 bg-emerald-50">
+      <ShieldCheck size={13} className="text-emerald-600 flex-shrink-0 mt-0.5" />
+      <div className="min-w-0 flex-1">
+        <p className="text-[11px] font-black text-emerald-700" style={PP}>Subscription Benefits Active</p>
+        <div className="mt-1 space-y-0.5">
+          {subCoverage.consultationFree && (
+            <p className="text-[10px] text-emerald-600 font-semibold" style={PP}>
+              ✓ Consultation FREE — {subCoverage.consultationQuota}
+            </p>
+          )}
+          {subCoverage.careAssistantFree && (
+            <p className="text-[10px] text-emerald-600 font-semibold" style={PP}>
+              ✓ Care Assistant FREE — {subCoverage.careAssistantQuota}
+            </p>
+          )}
+          {hasSubRate && subCoverage.ratePerKm != null && (
+            <p className="text-[10px] text-emerald-600 font-semibold" style={PP}>
+              ✓ Transport at ₹{subCoverage.ratePerKm}/km (plan rate)
+            </p>
+          )}
+          {!subCoverage.consultationFree && subCoverage.consultationQuota && (
+            <p className="text-[10px] text-amber-600 font-semibold" style={PP}>
+              ℹ {subCoverage.consultationQuota}
+            </p>
+          )}
+        </div>
+      </div>
+    </motion.div>
   );
 }
 
@@ -302,7 +427,7 @@ function FareRow({ label, value, note, accent, bold, highlight }) {
 
 const MAP_CONTAINER_STYLE = { width: '100%', height: '200px' };
 
-function LocationPicker({ label, note, value, onChange, error, required }) {
+function LocationPicker({ label, note, value, onChange, error, required, readOnly, readOnlyNote }) {
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: GMAPS_KEY,
     libraries: GMAPS_LIBRARIES,
@@ -339,11 +464,11 @@ function LocationPicker({ label, note, value, onChange, error, required }) {
     });
   }, [onChange]);
 
-  const handleMapClick     = useCallback((e) => { const ll = e.latLng; setMarkerPos({ lat: ll.lat(), lng: ll.lng() }); reverseGeocode(ll); }, [reverseGeocode]);
-  const handleMarkerDragEnd= useCallback((e) => { const ll = e.latLng; setMarkerPos({ lat: ll.lat(), lng: ll.lng() }); reverseGeocode(ll); }, [reverseGeocode]);
+  const handleMapClick      = useCallback((e) => { if (readOnly) return; const ll = e.latLng; setMarkerPos({ lat: ll.lat(), lng: ll.lng() }); reverseGeocode(ll); }, [reverseGeocode, readOnly]);
+  const handleMarkerDragEnd = useCallback((e) => { if (readOnly) return; const ll = e.latLng; setMarkerPos({ lat: ll.lat(), lng: ll.lng() }); reverseGeocode(ll); }, [reverseGeocode, readOnly]);
 
   const handlePlaceChanged = useCallback(() => {
-    if (!autocompleteRef.current) return;
+    if (!autocompleteRef.current || readOnly) return;
     const place = autocompleteRef.current.getPlace();
     if (!place?.geometry) return;
     const loc   = place.geometry.location;
@@ -355,15 +480,16 @@ function LocationPicker({ label, note, value, onChange, error, required }) {
       pincode:     comps.find(c => c.types.includes('postal_code'))?.long_name || '',
       coordinates: [loc.lng(), loc.lat()],
     });
-  }, [onChange]);
+  }, [onChange, readOnly]);
 
   const handleUseMyLocation = useCallback(() => {
-    if (!navigator.geolocation) return;
+    if (!navigator.geolocation || readOnly) return;
     setGeoLoading(true);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setGeoLoading(false);
         const lat = pos.coords.latitude, lng = pos.coords.longitude;
+        if (!window.google?.maps) return;
         const ll  = new window.google.maps.LatLng(lat, lng);
         setMarkerPos({ lat, lng });
         reverseGeocode(ll);
@@ -371,14 +497,29 @@ function LocationPicker({ label, note, value, onChange, error, required }) {
       () => setGeoLoading(false),
       { enableHighAccuracy: true, timeout: 8000 }
     );
-  }, [reverseGeocode]);
+  }, [reverseGeocode, readOnly]);
+
+  if (readOnly && value?.address) {
+    return (
+      <Field label={label} required={required} note={note} error={error}>
+        <div className="flex items-start gap-2 p-3 rounded-xl border border-primary/20 bg-primary/5">
+          <Building2 size={13} className="text-primary flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold text-primary truncate" style={PP}>{value.address}</p>
+            <p className="text-[10px] text-base-content/45 mt-0.5" style={PP}>{readOnlyNote || 'Auto-set from hospital location'}</p>
+          </div>
+          <span className="text-[9px] font-black uppercase tracking-widest bg-primary/10 text-primary px-1.5 py-0.5 rounded-md flex-shrink-0" style={PP}>Auto</span>
+        </div>
+      </Field>
+    );
+  }
 
   return (
     <Field label={label} required={required} note={note} error={error}>
       <div className="border border-base-300 rounded-xl transition-all"
         style={{ borderColor: expanded ? 'var(--primary)' : undefined }}>
         <div className="flex items-center gap-2 px-3 py-2.5">
-          <button type="button" onClick={() => setExpanded(e => !e)}
+          <button type="button" onClick={() => !readOnly && setExpanded(e => !e)}
             className="flex-1 flex items-center gap-2 text-left hover:bg-base-200/60 rounded-lg transition-colors min-w-0">
             <MapPin size={14} style={{ color:'var(--primary)', flexShrink:0 }} />
             <span className="flex-1 text-xs font-medium truncate" style={PP}>
@@ -386,19 +527,23 @@ function LocationPicker({ label, note, value, onChange, error, required }) {
                 ? <span>{value.address}</span>
                 : <span className="opacity-30">Tap to pick on map…</span>}
             </span>
-            <span className="text-[9px] font-black uppercase tracking-widest opacity-40 flex-shrink-0" style={PP}>
-              {expanded ? '▲' : '▼'}
-            </span>
+            {!readOnly && (
+              <span className="text-[9px] font-black uppercase tracking-widest opacity-40 flex-shrink-0" style={PP}>
+                {expanded ? '▲' : '▼'}
+              </span>
+            )}
           </button>
-          <button type="button" onClick={handleUseMyLocation} disabled={geoLoading}
-            title="Use my current location"
-            className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center transition-colors hover:bg-primary/10"
-            style={{ color:'var(--primary)' }}>
-            {geoLoading ? <Loader2 size={13} className="animate-spin" /> : <LocateFixed size={13} />}
-          </button>
+          {!readOnly && (
+            <button type="button" onClick={handleUseMyLocation} disabled={geoLoading}
+              title="Use my current location"
+              className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center transition-colors hover:bg-primary/10"
+              style={{ color:'var(--primary)' }}>
+              {geoLoading ? <Loader2 size={13} className="animate-spin" /> : <LocateFixed size={13} />}
+            </button>
+          )}
         </div>
 
-        {expanded && (
+        {expanded && !readOnly && (
           <div className="border-t border-base-300">
             {!isLoaded ? (
               <div className="h-44 flex items-center justify-center bg-base-200/40">
@@ -445,14 +590,14 @@ function LocationPicker({ label, note, value, onChange, error, required }) {
                     position={markerPos}
                     draggable
                     onDragEnd={handleMarkerDragEnd}
-                    icon={{
-                      path: window.google?.maps?.SymbolPath?.CIRCLE,
+                    icon={isLoaded && window.google?.maps ? {
+                      path: window.google.maps.SymbolPath.CIRCLE,
                       scale: 9,
                       fillColor: '#4f46e5',
                       fillOpacity: 1,
                       strokeColor: '#fff',
                       strokeWeight: 3,
-                    }}
+                    } : undefined}
                   />
                 </GoogleMap>
               </>
@@ -556,7 +701,7 @@ function ServiceEducation({ bt }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STEP BAR — mobile scrollable
+// STEP BAR
 // ─────────────────────────────────────────────────────────────────────────────
 
 function StepBar({ steps, currentId, visitedIds }) {
@@ -609,7 +754,6 @@ function StepType({ form, set }) {
           For life-threatening emergencies call <strong>108</strong> immediately.
         </p>
       </div>
-      {/* Mobile: 1 col, sm: 2 col */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {BOOKING_TYPES.map((bt) => {
           const Icon   = bt.icon;
@@ -664,6 +808,7 @@ function StepProvider({
   onLoadHospitals, onLoadDoctors,
   onLoadLabs, onLoadLabDetail,
   onCheckHospAvail, onCheckDocAvail, onCheckFollowUp,
+  onResetHospAvail, onResetDocAvail,
 }) {
   const bt       = BOOKING_TYPES.find(b => b.value === form.bookingType);
   const isDiag   = bt?.isDiag;
@@ -676,16 +821,29 @@ function StepProvider({
     if (form.bookingType === 'follow_up' && form.doctorId) {
       onCheckFollowUp(form.doctorId, form.hospitalId);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.doctorId, form.hospitalId, form.bookingType]);
 
   useEffect(() => {
     if (isOnline) set('consultationType', 'video');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOnline]);
 
   const showConsultTypes = bt?.needsDoctor
     && form.bookingType !== 'doctor_online'
     && form.bookingType !== 'follow_up'
     && form.bookingType !== 'physiotherapist';
+
+  const buildDoctorOptionText = (d) => {
+    const fees = d.effectiveFees;
+    const parts = [d.user?.name || 'Doctor', '—', d.specialization];
+    if (isOnline) {
+      if (fees?.videoFee > 0) parts.push(`· Video: ${fmt(fees.videoFee)}`);
+    } else {
+      if (fees?.inPersonFee > 0) parts.push(`· ${fmt(fees.inPersonFee)}`);
+    }
+    return parts.join(' ');
+  };
 
   return (
     <div className="space-y-3">
@@ -699,6 +857,8 @@ function StepProvider({
             : 'Search for a hospital, then choose your doctor and consultation type.'}
         </p>
       </div>
+
+      <SubCoverageBanner subCoverage={form.subCoverage} />
 
       {isOnline && (
         <div className="flex items-start gap-2 p-2.5 rounded-xl border border-purple-200 bg-purple-50">
@@ -805,8 +965,21 @@ function StepProvider({
                     const h   = hospitals.find(h => h._id === hId);
                     set('hospitalId', hId);
                     set('hospitalName', h?.name || '');
+                    set('hospitalAddress', h?.address || null);
+                    set('hospitalCoords', h?.location?.coordinates || null);
                     set('doctorId', ''); set('doctorName', '');
+                    if (hId && h?.location?.coordinates) {
+                      const coords = h.location.coordinates;
+                      set('destinationLocation', {
+                        coordinates: coords,
+                        address: [h.address?.line1, h.address?.line2, h.address?.city].filter(Boolean).join(', ') || h.name,
+                        city: h.address?.city || '',
+                        pincode: h.address?.pincode || '',
+                      });
+                    }
                     if (hId) onLoadDoctors(hId);
+                    onResetHospAvail?.();
+                    onResetDocAvail?.();
                   }}>
                     <option value="">— Select hospital —</option>
                     {hospitals.map(h => (
@@ -850,25 +1023,21 @@ function StepProvider({
           )}
 
           {doctorsByHospital?.length > 0 && (
-            <Field label={isOnline ? 'Select Doctor' : 'Doctor'} note="Fee shown below" error={errors.doctorId}>
+            <Field label={isOnline ? 'Select Doctor' : 'Doctor'} note="Fee shown in option" error={errors.doctorId}>
               <Sel value={form.doctorId || ''} onChange={e => {
                 const d = doctorsByHospital.find(d => d._id === e.target.value);
                 set('doctorId', e.target.value);
                 set('doctorName', d?.user?.name || '');
                 set('doctorSpec', d?.specialization || '');
                 set('doctorFees', d?.effectiveFees || null);
+                onResetDocAvail?.();
               }}>
                 <option value="">— Select doctor —</option>
-                {doctorsByHospital.map(d => {
-                  const feeDisplay = isOnline
-                    ? (d.effectiveFees?.videoFee ? ` · Video: ${fmt(d.effectiveFees.videoFee)}` : '')
-                    : (d.effectiveFees?.inPersonFee ? ` · from ${fmt(d.effectiveFees.inPersonFee)}` : '');
-                  return (
-                    <option key={d._id} value={d._id}>
-                      {d.user?.name || 'Doctor'} — {d.specialization}{feeDisplay}
-                    </option>
-                  );
-                })}
+                {doctorsByHospital.map(d => (
+                  <option key={d._id} value={d._id}>
+                    {buildDoctorOptionText(d)}
+                  </option>
+                ))}
               </Sel>
             </Field>
           )}
@@ -876,7 +1045,7 @@ function StepProvider({
           {!doctorsByHospital?.length && !doctorsLoading && (
             <Field label="Doctor Profile ID" note="Enter directly if known" error={errors.doctorId}>
               <Inp placeholder="Doctor profile ObjectId…" value={form.doctorId || ''}
-                onChange={e => { set('doctorId', e.target.value); set('doctorName', ''); set('doctorFees', null); }} />
+                onChange={e => { set('doctorId', e.target.value); set('doctorName', ''); set('doctorFees', null); onResetDocAvail?.(); }} />
             </Field>
           )}
 
@@ -892,8 +1061,11 @@ function StepProvider({
           )}
 
           {form.doctorFees && (
-            <div className="rounded-xl overflow-hidden border border-sky-200/60 bg-sky-50/60">
-              <p className="text-[9px] font-black uppercase tracking-widest text-sky-600 px-3 pt-2 pb-1" style={PP}>Doctor Fee Schedule</p>
+            <motion.div initial={{ opacity:0, y:4 }} animate={{ opacity:1, y:0 }}
+              className="rounded-xl overflow-hidden border border-sky-200/60 bg-sky-50/60">
+              <p className="text-[9px] font-black uppercase tracking-widest text-sky-600 px-3 pt-2 pb-1" style={PP}>
+                {form.doctorName || 'Doctor'} — Fee Schedule
+              </p>
               <div className="grid grid-cols-3 gap-0 px-3 pb-3">
                 {[
                   { key:'inPersonFee', label:'In-Person' },
@@ -903,7 +1075,9 @@ function StepProvider({
                   <div key={item.key} className={`text-center ${idx > 0 ? 'border-l border-sky-200' : ''}`}>
                     <p className="text-[9px] text-base-content/40 font-bold uppercase tracking-wider" style={PP}>{item.label}</p>
                     <p className="text-xs font-black text-sky-700" style={PP}>
-                      {form.doctorFees[item.key] != null ? fmt(form.doctorFees[item.key]) : '—'}
+                      {form.doctorFees[item.key] != null && form.doctorFees[item.key] > 0
+                        ? fmt(form.doctorFees[item.key])
+                        : <span className="text-base-content/30">—</span>}
                     </p>
                   </div>
                 ))}
@@ -911,7 +1085,7 @@ function StepProvider({
               <p className="text-[9px] text-center text-base-content/35 px-3 pb-2" style={PP}>
                 Source: {form.doctorFees?.source === 'hospital' ? 'Hospital pricing' : "Doctor's own rates"}
               </p>
-            </div>
+            </motion.div>
           )}
 
           {showConsultTypes && (
@@ -929,7 +1103,7 @@ function StepProvider({
                       style={{ borderColor:on?providerAccent:notAvailable?'var(--base-300)':'var(--base-300)', background:on?`${providerAccent}18`:notAvailable?'var(--base-100)':'var(--base-200)', color:on?providerAccent:'var(--base-content)', opacity:notAvailable?0.4:1, cursor:notAvailable?'not-allowed':'pointer', ...PP }}>
                       <Icon size={13} />
                       <span className="text-[9px] font-black uppercase tracking-wide leading-tight" style={PP}>{label}</span>
-                      {fee != null
+                      {fee != null && fee > 0
                         ? <span className="text-[8px] font-bold" style={{ color:on?providerAccent:'#64748b', ...PP }}>{fmt(fee)}</span>
                         : notAvailable
                         ? <span className="text-[8px] font-bold text-error/60" style={PP}>N/A</span>
@@ -948,7 +1122,7 @@ function StepProvider({
                 <p className="text-xs font-black text-purple-700" style={PP}>Video Fee</p>
               </div>
               <p className="text-base font-black text-purple-700" style={PP}>
-                {form.doctorFees.videoFee != null ? fmt(form.doctorFees.videoFee) : '—'}
+                {form.doctorFees.videoFee != null && form.doctorFees.videoFee > 0 ? fmt(form.doctorFees.videoFee) : '—'}
               </p>
             </div>
           )}
@@ -974,6 +1148,11 @@ function StepProvider({
                 {followUpCheck.isEligible && (
                   <p className="text-[10px] opacity-70 mt-0.5" style={PP}>
                     {followUpCheck.daysRemaining} days remaining · Ref: {followUpCheck.parentOpNumber}
+                  </p>
+                )}
+                {followUpCheck.isEligible && (
+                  <p className="text-[10px] opacity-60 mt-0.5 italic" style={PP}>
+                    Follow-up fee is independent of subscription quota.
                   </p>
                 )}
               </div>
@@ -1013,7 +1192,6 @@ function StepPatient({ form, set, errors }) {
           <Field label="Full Name" required note="As on government ID" error={errors.patientName}>
             <Inp placeholder="e.g. Ravi Kumar Reddy" value={form.patientName || ''} onChange={e => set('patientName', e.target.value)} />
           </Field>
-          {/* Mobile: stack, sm: 2-col grid */}
           <div className="grid grid-cols-2 gap-2">
             <Field label="Age (years)" error={errors.patientAge}>
               <Inp type="number" min="0" max="150" placeholder="34" value={form.patientAge || ''} onChange={e => set('patientAge', Number(e.target.value))} />
@@ -1053,11 +1231,12 @@ function StepPatient({ form, set, errors }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function StepSchedule({
-  form, set, errors,caTiersLoading,
+  form, set, errors, caTiersLoading,
   hospitalAvail, hospitalAvailLoading,
   doctorAvail, doctorAvailLoading,
   transportEstimate, transportLoading,
   onCheckHospAvail, onCheckDocAvail, onEstimateTransport,
+  onResetHospAvail, onResetDocAvail,
   caTiers,
 }) {
   const isFullCare = form.bookingType === 'full_care_ride';
@@ -1072,6 +1251,7 @@ function StepSchedule({
       && (form.destinationLocation?.coordinates || isFullCare)) {
       onEstimateTransport();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     form.patientLocation?.coordinates?.[0],
     form.patientLocation?.coordinates?.[1],
@@ -1081,7 +1261,16 @@ function StepSchedule({
   ]);
 
   const minDate = new Date(Date.now() + 15 * 60000).toISOString().slice(0, 16);
-  const caTier  = caTiers.find(t => t.hours === (form.durationHours || 4));
+  const durHours = form.durationHours || (caTiers[0]?.hours ?? 4);
+  const caTier  = caTiers.find(t => t.hours === durHours) || caTiers[0];
+
+  const handleDateTimeChange = (val) => {
+    set('scheduledAt', val);
+    onResetHospAvail?.();
+    onResetDocAvail?.();
+  };
+
+  const tFee = resolveTransportFee(transportEstimate);
 
   return (
     <div className="space-y-3">
@@ -1090,19 +1279,24 @@ function StepSchedule({
         <p className="text-xs text-base-content/45" style={PP}>Set your preferred date, time, and pickup/drop-off locations.</p>
       </div>
 
+      <SubCoverageBanner subCoverage={form.subCoverage} />
+
       <SCard title="Appointment Date & Time" icon={Calendar} accent="var(--primary)">
         <Field label="Scheduled Date & Time" required note="Min 15 min from now" error={errors.scheduledAt}>
           <Inp type="datetime-local" value={form.scheduledAt || ''} min={minDate} step="60"
-            onChange={e => set('scheduledAt', e.target.value)} />
+            onChange={e => handleDateTimeChange(e.target.value)} />
         </Field>
         {form.scheduledAt && (
-          <div className="flex flex-wrap items-center gap-2 pt-1">
+          <div className="flex flex-wrap items-center gap-3 pt-1">
             {form.hospitalId && (
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] text-base-content/40" style={PP}>Hospital:</span>
                 <AvailPill avail={hospitalAvail} loading={hospitalAvailLoading} />
-                {!hospitalAvail && !hospitalAvailLoading && (
-                  <button type="button" onClick={onCheckHospAvail} className="text-[10px] text-primary font-bold hover:underline" style={PP}>Check</button>
+                {!hospitalAvailLoading && (
+                  <button type="button" onClick={onCheckHospAvail}
+                    className="text-[10px] text-primary font-bold hover:underline" style={PP}>
+                    {hospitalAvail ? 'Recheck' : 'Check now'}
+                  </button>
                 )}
               </div>
             )}
@@ -1110,8 +1304,11 @@ function StepSchedule({
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] text-base-content/40" style={PP}>Doctor:</span>
                 <AvailPill avail={doctorAvail} loading={doctorAvailLoading} />
-                {!doctorAvail && !doctorAvailLoading && (
-                  <button type="button" onClick={onCheckDocAvail} className="text-[10px] text-primary font-bold hover:underline" style={PP}>Check</button>
+                {!doctorAvailLoading && (
+                  <button type="button" onClick={onCheckDocAvail}
+                    className="text-[10px] text-primary font-bold hover:underline" style={PP}>
+                    {doctorAvail ? 'Recheck' : 'Check now'}
+                  </button>
                 )}
               </div>
             )}
@@ -1126,11 +1323,21 @@ function StepSchedule({
         <>
           <div className="flex items-center gap-2 p-2.5 rounded-xl border border-amber-200 bg-amber-50">
             <Info size={11} style={{ color:'#d97706', flexShrink:0 }} />
-            <p className="text-[10px] font-semibold text-amber-800" style={PP}>Tip: Set hospital drop-off first, then pickup address below.</p>
+            <p className="text-[10px] font-semibold text-amber-800" style={PP}>
+              Drop-off destination is auto-set to your selected hospital. Set your pickup address below.
+            </p>
           </div>
           <SCard title="Drop-off Destination (Hospital)" icon={Building2} accent="#ef4444">
-            <LocationPicker label="Hospital / Destination Address" required note="Used for fare calculation"
-              value={form.destinationLocation} onChange={loc => set('destinationLocation', loc)} error={errors.destinationLocation} />
+            <LocationPicker
+              label="Hospital / Destination Address"
+              required
+              note="Auto-set from hospital selection"
+              value={form.destinationLocation}
+              onChange={loc => set('destinationLocation', loc)}
+              error={errors.destinationLocation}
+              readOnly={!!form.hospitalId && !!form.destinationLocation}
+              readOnlyNote={`Hospital: ${form.hospitalName || 'Selected hospital'}`}
+            />
           </SCard>
           <SCard title="Pickup Location (Your Home)" icon={MapPin} accent="#f59e0b">
             <LocationPicker label="Your Home / Pickup Address" required note="Transport fare: pickup → hospital"
@@ -1150,47 +1357,77 @@ function StepSchedule({
               </div>
             </Field>
           </SCard>
-          <SCard title="Care Assistant Duration" icon={Timer} accent="#f59e0b">
-            {/* FIX: use real caTiers from PlatformPricingConfig */}
-            {caTiersLoading ? (
-  <div className="flex items-center gap-2 text-xs text-base-content/40 py-2" style={PP}>
-    <Loader2 size={11} className="animate-spin" />Loading pricing…
-  </div>
-) : caTiers.length === 0 ? (
-  <p className="text-xs text-error font-bold" style={PP}>Pricing unavailable. Please retry.</p>
-) : (
-  <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(caTiers.length, 5)}, 1fr)` }}>
-    {caTiers.map(({ hours: h, price }) => {
 
-                const on = form.durationHours === h;
-                return (
-                  <button key={h} type="button" onClick={() => set('durationHours', h)}
-                    className="flex flex-col items-center gap-0.5 py-2.5 rounded-xl border-2 transition-all"
-                    style={{ borderColor:on?'#f59e0b':'var(--base-300)', background:on?'rgba(245,158,11,0.1)':'var(--base-200)', color:on?'#f59e0b':'var(--base-content)' }}>
-                    <span className="text-xs font-black" style={PP}>{h}h</span>
-                    <span className="text-[9px] font-bold opacity-70" style={PP}>{fmt(price)}</span>
-                  </button>
-                );
-              })}
-            </div>
+          <SCard title="Care Assistant Duration" icon={Timer} accent="#f59e0b">
+            {caTiersLoading ? (
+              <div className="flex items-center gap-2 text-xs text-base-content/40 py-2" style={PP}>
+                <Loader2 size={11} className="animate-spin" />Loading pricing…
+              </div>
+            ) : caTiers.length === 0 ? (
+              <p className="text-xs text-error font-bold" style={PP}>Pricing unavailable. Please retry.</p>
+            ) : (
+              <>
+                <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(caTiers.length, 3)}, 1fr)` }}>
+                  {caTiers.map(({ hours: h, maxHours, label, price }) => {
+                    const on = form.durationHours === h;
+                    const rangeLabel = maxHours ? `${h}–${maxHours} hrs` : `${h}+ hrs`;
+                    const caFreeViaSub = !!form.subCoverage?.careAssistantFree;
+                    return (
+                      <button key={h} type="button" onClick={() => set('durationHours', h)}
+                        className="flex flex-col items-center gap-1 py-3 px-2 rounded-xl border-2 transition-all"
+                        style={{ borderColor:on?'#f59e0b':'var(--base-300)', background:on?'rgba(245,158,11,0.1)':'var(--base-200)', color:on?'#d97706':'var(--base-content)' }}>
+                        <span className="text-[11px] font-black text-center leading-tight" style={PP}>{label}</span>
+                        <span className="text-[9px] font-semibold opacity-60 text-center leading-tight" style={PP}>{rangeLabel}</span>
+                        {caFreeViaSub
+                          ? <span className="text-[9px] font-black text-emerald-600" style={PP}>FREE</span>
+                          : <span className="text-xs font-black" style={{ color: on ? '#d97706' : 'var(--primary)', ...PP }}>{fmt(price)}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+                {caTier && (
+                  <div className="flex items-center gap-2 p-2.5 rounded-xl border border-amber-200 bg-amber-50 mt-2">
+                    <Timer size={11} style={{ color:'#d97706', flexShrink:0 }} />
+                    <p className="text-[10px] font-semibold text-amber-800 leading-snug" style={PP}>
+                      Selected: <strong>{caTier.label}</strong> ({caTier.hours}{caTier.maxHours ? `–${caTier.maxHours}` : '+'} hrs)
+                      {form.subCoverage?.careAssistantFree
+                        ? <span className="ml-1 text-emerald-600 font-black">— FREE (subscription)</span>
+                        : <span> — {fmt(caTier.price)}</span>}
+                    </p>
+                  </div>
+                )}
+              </>
             )}
           </SCard>
+
           {form.patientLocation?.coordinates && form.destinationLocation?.coordinates && (
             <SCard title="Live Transport Estimate" icon={Navigation2} accent="#4f46e5">
               {transportLoading ? (
                 <div className="flex items-center gap-2 text-xs text-base-content/40" style={PP}><Loader2 size={11} className="animate-spin" />Calculating…</div>
               ) : transportEstimate ? (
-                <div className="space-y-1.5">
-                  <div className="flex justify-between text-xs">
-                    <span className="text-base-content/40" style={PP}>Distance</span>
-                    <span className="font-bold" style={PP}>{transportEstimate.distanceKm} km</span>
+                <div className="space-y-1">
+                  <FareRow label="Distance" value={`${transportEstimate.distanceKm} km`} sub />
+                  <FareRow
+                    label={`Rate per km${tFee.ratePerKm ? ` (₹${tFee.ratePerKm}/km)` : ''}`}
+                    value={tFee.ratePerKm ? `₹${tFee.ratePerKm}/km` : '—'}
+                    sub
+                    note={transportEstimate.kmRateSource === 'subscription' ? 'Subscription plan rate' : 'Standard rate'}
+                  />
+                  <FareRow label="Transport (outbound)" value={fmt(transportEstimate.outbound?.totalFare)} />
+                  {form.includeReturnHome && transportEstimate.returnLeg && (
+                    <FareRow label="Return trip" value={fmt(transportEstimate.returnLeg?.totalFare)} sub />
+                  )}
+                  <FareRow
+                    label="Care Assistant"
+                    value={fmt(caTier?.price || 0)}
+                    note={`${form.durationHours || caTiers[0]?.hours || 4} hrs`}
+                    isFree={!!form.subCoverage?.careAssistantFree}
+                    freeReason={form.subCoverage?.careAssistantQuota}
+                  />
+                  <div className="border-t border-base-300 pt-1">
+                    <FareRow label="Transport Total (excl. GST)" value={fmt(transportEstimate.totalTransportFee)} bold accent="var(--primary)" />
                   </div>
-                  <div className="flex justify-between border-t border-base-300 pt-2 mt-1">
-                    <span className="font-black text-sm" style={PP}>Transport Total</span>
-                    <span className="font-black text-primary text-sm" style={PP}>{fmt(transportEstimate.totalTransportFee)}</span>
-                  </div>
-                  <p className="text-[9px] text-base-content/35" style={PP}>+ Care assistant: {fmt(caTier?.price || 0)} for {form.durationHours || 4} hrs</p>
-                  <p className="text-[9px] text-base-content/35" style={PP}>GST: 5% on transport · 18% on care assistant</p>
+                  <p className="text-[9px] text-base-content/35 px-2" style={PP}>+ 5% GST on transport · 18% GST on care assistant at payment step</p>
                 </div>
               ) : (
                 <p className="text-xs text-base-content/40" style={PP}>Set pickup & destination to estimate.</p>
@@ -1237,17 +1474,31 @@ function StepSchedule({
               )}
               {transportEstimate && (
                 <motion.div initial={{ opacity:0, y:4 }} animate={{ opacity:1, y:0 }}
-                  className="p-3 rounded-xl border border-primary/20 bg-primary/5 space-y-1.5">
+                  className="p-3 rounded-xl border border-primary/20 bg-primary/5 space-y-1">
                   <p className="text-[10px] font-black uppercase tracking-widest text-primary mb-2" style={PP}>Live Transport Estimate</p>
-                  <div className="flex justify-between">
-                    <span className="text-xs text-base-content/40" style={PP}>Distance</span>
-                    <span className="text-xs font-bold" style={PP}>{transportEstimate.distanceKm} km</span>
+                  <FareRow label="Distance" value={`${transportEstimate.distanceKm} km`} sub />
+                  <FareRow
+                    label="Rate per km"
+                    value={tFee.ratePerKm ? `₹${tFee.ratePerKm}/km` : '—'}
+                    note={transportEstimate.kmRateSource === 'subscription' ? 'Subscription plan rate (lower)' : 'Standard rate'}
+                    sub
+                  />
+                  <FareRow label="Outbound fare" value={fmt(transportEstimate.outbound?.totalFare)} />
+                  {form.includeReturn && transportEstimate.returnLeg && (
+                    <FareRow label="Return fare" value={fmt(transportEstimate.returnLeg?.totalFare)} />
+                  )}
+                  {form.waitingMinutes > 5 && (
+                    <FareRow label={`Waiting (${form.waitingMinutes - 5} billable min)`} value={fmt(transportEstimate.outbound?.waitingCharge)} sub />
+                  )}
+                  <div className="border-t border-primary/20 pt-1 mt-1">
+                    <FareRow label="Estimated Total (excl. GST)" value={fmt(transportEstimate.totalTransportFee)} bold accent="var(--primary)" />
                   </div>
-                  <div className="flex justify-between border-t border-primary/20 pt-2 mt-1">
-                    <span className="font-black text-sm" style={PP}>Estimated Total</span>
-                    <span className="font-black text-primary text-sm" style={PP}>{fmt(transportEstimate.totalTransportFee)}</span>
-                  </div>
-                  <p className="text-[9px] text-base-content/35" style={PP}>+ 5% GST applied at payment step</p>
+                  <p className="text-[9px] text-base-content/35 px-2" style={PP}>
+                    + 5% GST applied at payment step
+                    {transportEstimate.kmRateSource === 'subscription' && (
+                      <span className="text-emerald-600 font-bold"> · Subscription rate applied</span>
+                    )}
+                  </p>
                 </motion.div>
               )}
             </div>
@@ -1266,23 +1517,44 @@ function StepSchedule({
         <SCard title="Service Location & Duration" icon={Timer} accent="#f59e0b">
           <LocationPicker label="Your Location" required note="Nearest care assistant dispatched here"
             value={form.patientLocation} onChange={loc => set('patientLocation', loc)} error={errors.patientLocation} />
-          <Field label="Care Duration" note="Tiered pricing from platform config">
-            {/* FIX: use real caTiers */}
-           <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(caTiers.length, 4)}, 1fr)` }}>
-  {caTiers.map(({ hours: h, maxHours, label, price }) => {
-    const on = form.durationHours === h;
-    const rangeLabel = maxHours ? `${h}–${maxHours}h` : `${h}h+`;
-    return (
-      <button key={h} type="button" onClick={() => set('durationHours', h)}
-        className="flex flex-col items-center gap-0.5 py-2.5 px-1 rounded-xl border-2 transition-all"
-        style={{ borderColor:on?'#f59e0b':'var(--base-300)', background:on?'rgba(245,158,11,0.1)':'var(--base-200)', color:on?'#f59e0b':'var(--base-content)' }}>
-       
-<span className="text-[10px] font-black text-center leading-tight" style={PP}>{label}</span>
-        <span className="text-[9px] font-bold opacity-70" style={PP}>{fmt(price)}</span>
-      </button>
-    );
-  })}
-</div>
+          <Field label="Care Duration" note="Tiered pricing — select hours needed">
+            {caTiersLoading ? (
+              <div className="flex items-center gap-2 text-xs text-base-content/40 py-2" style={PP}>
+                <Loader2 size={11} className="animate-spin" />Loading pricing…
+              </div>
+            ) : (
+              <>
+                <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(caTiers.length, 3)}, 1fr)` }}>
+                  {caTiers.map(({ hours: h, maxHours, label, price }) => {
+                    const on = form.durationHours === h;
+                    const rangeLabel = maxHours ? `${h}–${maxHours} hrs` : `${h}+ hrs`;
+                    const caFreeViaSub = !!form.subCoverage?.careAssistantFree;
+                    return (
+                      <button key={h} type="button" onClick={() => set('durationHours', h)}
+                        className="flex flex-col items-center gap-1 py-3 px-2 rounded-xl border-2 transition-all"
+                        style={{ borderColor:on?'#f59e0b':'var(--base-300)', background:on?'rgba(245,158,11,0.1)':'var(--base-200)', color:on?'#d97706':'var(--base-content)' }}>
+                        <span className="text-[11px] font-black text-center leading-tight" style={PP}>{label}</span>
+                        <span className="text-[9px] font-semibold opacity-60" style={PP}>{rangeLabel}</span>
+                        {caFreeViaSub
+                          ? <span className="text-[9px] font-black text-emerald-600" style={PP}>FREE</span>
+                          : <span className="text-xs font-black" style={{ color: on ? '#d97706' : 'var(--primary)', ...PP }}>{fmt(price)}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+                {caTier && (
+                  <div className="flex items-center gap-2 p-2.5 rounded-xl border border-amber-200 bg-amber-50 mt-2">
+                    <Timer size={11} style={{ color:'#d97706', flexShrink:0 }} />
+                    <p className="text-[10px] font-semibold text-amber-800" style={PP}>
+                      Selected: <strong>{caTier.label}</strong>
+                      {form.subCoverage?.careAssistantFree
+                        ? <span className="ml-1 text-emerald-600 font-black">— FREE (subscription)</span>
+                        : <span> — {fmt(caTier.price)}</span>}
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
           </Field>
         </SCard>
       )}
@@ -1329,37 +1601,31 @@ function StepSchedule({
 function StepPayment({ form, set, transportEstimate, followUpCheck, caTiers }) {
   const bt = BOOKING_TYPES.find(b => b.value === form.bookingType);
 
-  let consultFee = 0;
-  if (form.doctorFees) {
-    if (form.consultationType === 'video')         consultFee = form.doctorFees.videoFee     || 0;
-    else if (form.consultationType === 'homeVisit') consultFee = form.doctorFees.homeVisitFee || 0;
-    else                                            consultFee = form.doctorFees.inPersonFee  || 0;
-  } else if (bt?.needsDoctor && form.bookingType !== 'follow_up') {
-    consultFee = 600;
-  }
-  if (form.bookingType === 'follow_up' && followUpCheck?.isEligible) consultFee = followUpCheck.followUpFee || 0;
-  if (form.bookingType === 'doctor_online' && form.doctorFees) consultFee = form.doctorFees.videoFee || 0;
+  const consultResolved = bt?.needsDoctor ? resolveConsultFee(form, followUpCheck) : { fee: 0, isFree: false };
+  const caResolved      = bt?.needsCare   ? resolveCaFee(form, caTiers)           : { fee: 0, isFree: false };
+  const tResolved       = resolveTransportFee(transportEstimate);
 
-  const transportFee = transportEstimate?.totalTransportFee || 0;
-  // FIX: use real caTiers
-  const caTier       = caTiers.find(t => t.hours === (form.durationHours || 4));
-  const caFee        = bt?.needsCare ? (caTier?.price || 0) : 0;
+  const consultFee   = consultResolved.fee;
+  const caFee        = caResolved.fee;
+  const transportFee = bt?.needsTransport ? tResolved.fee : 0;
   const hasDiag      = bt?.isDiag;
 
-  const consultGst    = form.bookingType === 'doctor_online' ? 0.05 : 0.00;
-  const transportGst  = 0.05;
-  const caGst         = 0.18;
+  const consultGstRate   = form.bookingType === 'doctor_online' ? 0.05 : 0.00;
+  const transportGstRate = 0.05;
+  const caGstRate        = 0.18;
 
-  const consultGstAmt   = bt?.needsDoctor    ? +(consultFee   * consultGst).toFixed(2)  : 0;
-  const transportGstAmt = bt?.needsTransport ? +(transportFee * transportGst).toFixed(2) : 0;
-  const caGstAmt        = bt?.needsCare      ? +(caFee        * caGst).toFixed(2)        : 0;
+  const consultGstAmt   = bt?.needsDoctor    ? +(consultFee   * consultGstRate).toFixed(2)   : 0;
+  const transportGstAmt = bt?.needsTransport ? +(transportFee * transportGstRate).toFixed(2) : 0;
+  const caGstAmt        = bt?.needsCare      ? +(caFee        * caGstRate).toFixed(2)        : 0;
 
   const subtotal       = consultFee + transportFee + caFee;
   const totalGst       = consultGstAmt + transportGstAmt + caGstAmt;
   const estimatedTotal = +(subtotal + totalGst).toFixed(2);
-  const hasKnownTotal  = subtotal > 0;
+  const hasKnownTotal  = subtotal > 0 || consultResolved.isFree || caResolved.isFree;
 
   const consultTypeLabel = CONSULT_TYPES.find(c => c.value === form.consultationType)?.label || 'In-Person';
+  const durHours = form.durationHours || (caTiers[0]?.hours ?? 4);
+  const caTier = caTiers.find(t => t.hours === durHours) || caTiers[0];
 
   return (
     <div className="space-y-3">
@@ -1368,42 +1634,128 @@ function StepPayment({ form, set, transportEstimate, followUpCheck, caTiers }) {
         <p className="text-xs text-base-content/45" style={PP}>Review all charges before confirming.</p>
       </div>
 
+      <SubCoverageBanner subCoverage={form.subCoverage} />
+
       <SCard title="Fare Breakdown" icon={Receipt} accent="var(--primary)">
         {bt?.needsDoctor && (
           <>
-            <FareRow label={`Consultation (${consultTypeLabel})`}
-              value={consultFee > 0 ? fmt(consultFee) : 'Resolved on booking'}
-              note={form.bookingType === 'follow_up' ? 'Follow-up discounted fee' : form.doctorFees ? `Source: ${form.doctorFees?.source}` : 'Resolved from hospital or doctor'} />
-            {consultGst === 0 && <div className="px-2 py-1"><p className="text-[9px] text-base-content/35" style={PP}>Consultation GST: 0% (in-person medical exempt)</p></div>}
-            {consultGst > 0 && consultFee > 0 && <FareRow label={`GST on Consultation (${(consultGst*100).toFixed(0)}%)`} value={fmt(consultGstAmt)} />}
+            <FareRow
+              label={`Consultation (${consultTypeLabel})`}
+              value={consultFee > 0 ? fmt(consultFee) : 'FREE'}
+              note={
+                form.bookingType === 'follow_up'
+                  ? 'Follow-up fee (independent of subscription)'
+                  : consultResolved.isFree
+                  ? consultResolved.reason
+                  : form.doctorFees
+                  ? `Source: ${form.doctorFees?.source === 'hospital' ? 'Hospital rate' : "Doctor's own rate"}`
+                  : 'Resolved from hospital or doctor'
+              }
+              isFree={consultResolved.isFree}
+              freeReason={consultResolved.reason}
+            />
+            {!consultResolved.isFree && consultGstRate === 0 && (
+              <div className="px-2.5 pb-1">
+                <p className="text-[9px] text-base-content/35 italic" style={PP}>In-person consultation: GST exempt (0%)</p>
+              </div>
+            )}
+            {!consultResolved.isFree && consultFee > 0 && consultGstRate > 0 && (
+              <FareRow label={`GST on Consultation (${(consultGstRate*100).toFixed(0)}%)`} value={fmt(consultGstAmt)} sub />
+            )}
           </>
         )}
+
         {bt?.needsTransport && (
           <>
-            <FareRow label="Transport Charge"
+            <div className="border-t border-base-300/40 pt-1" />
+            <FareRow
+              label="Transport Charge"
               value={transportFee > 0 ? fmt(transportFee) : 'Set pickup & destination'}
-              note={transportEstimate ? `${transportEstimate.distanceKm} km` : 'Calculated from your location'} />
-            {transportFee > 0 && <FareRow label="GST on Transport (5%)" value={fmt(transportGstAmt)} />}
+              note={
+                transportEstimate
+                  ? `${transportEstimate.distanceKm} km · ₹${tResolved.ratePerKm || '—'}/km${transportEstimate.kmRateSource === 'subscription' ? ' (plan rate)' : ''}`
+                  : 'Calculated from your location'
+              }
+            />
+            {transportFee > 0 && (
+              <>
+                {form.bookingType === 'patient_transport' && transportEstimate?.outbound?.waitingCharge > 0 && (
+                  <FareRow label="Waiting fee (incl. in above)" value={fmt(transportEstimate.outbound.waitingCharge)} sub note="After 5 free minutes" />
+                )}
+                <FareRow label="GST on Transport (5%)" value={fmt(transportGstAmt)} sub />
+              </>
+            )}
+            {transportEstimate?.kmRateSource === 'subscription' && tResolved.ratePerKm && (
+              <div className="px-2.5">
+                <p className="text-[9px] text-emerald-600 font-bold" style={PP}>
+                  ✓ Subscription transport rate: ₹{tResolved.ratePerKm}/km (lower than standard)
+                </p>
+              </div>
+            )}
           </>
         )}
+
         {bt?.needsCare && (
           <>
-            <FareRow label="Care Assistant Fee" value={fmt(caFee)} note={`${form.durationHours || 4}-hour session (from platform config)`} />
-            <FareRow label="GST on Care Assistant (18%)" value={fmt(caGstAmt)} />
+            <div className="border-t border-base-300/40 pt-1" />
+            <FareRow
+              label="Care Assistant Fee"
+              value={fmt(caFee)}
+              note={caTier ? `${caTier.label} · ${caTier.hours}${caTier.maxHours ? `–${caTier.maxHours}` : '+'} hrs` : `${durHours}-hr session`}
+              isFree={caResolved.isFree}
+              freeReason={caResolved.reason}
+            />
+            {!caResolved.isFree && caFee > 0 && (
+              <FareRow label="GST on Care Assistant (18%)" value={fmt(caGstAmt)} sub />
+            )}
           </>
         )}
+
         {hasDiag && (
           <>
-            <FareRow label="Diagnostic Tests / Packages" value="See lab prices above" note={`${(form.selectedTests?.length || 0) + (form.selectedPackages?.length || 0)} item(s) selected`} />
-            <FareRow label="GST on Diagnostics (5%)" value="Applied on lab charges" />
+            <div className="border-t border-base-300/40 pt-1" />
+            <FareRow
+              label="Diagnostic Tests / Packages"
+              value="See lab prices above"
+              note={`${(form.selectedTests?.length || 0) + (form.selectedPackages?.length || 0)} item(s) selected`}
+            />
+            <FareRow label="GST on Diagnostics (5%)" value="Applied on lab charges" sub />
           </>
         )}
-        {form.bookingType === 'diagnostic_home' && <FareRow label="Home Collection Fee" value="Lab-dependent" />}
+
+        {form.bookingType === 'diagnostic_home' && (
+          <FareRow label="Home Collection Fee" value="Lab-dependent" sub />
+        )}
+
+        {hasKnownTotal && subtotal > 0 && (
+          <>
+            <div className="border-t border-base-300 pt-1 mt-1 space-y-0.5">
+              <FareRow label="Subtotal (before GST)" value={fmt(subtotal)} />
+              {totalGst > 0 && <FareRow label="Total GST" value={fmt(totalGst)} sub />}
+            </div>
+          </>
+        )}
+
+        {hasKnownTotal && subtotal === 0 && (consultResolved.isFree || caResolved.isFree) && (
+          <div className="flex items-center gap-2 p-2.5 rounded-xl border border-emerald-200 bg-emerald-50">
+            <ShieldCheck size={12} className="text-emerald-600 flex-shrink-0" />
+            <p className="text-[11px] font-black text-emerald-700" style={PP}>
+              All charges covered by your subscription this booking!
+            </p>
+          </div>
+        )}
+
         <div className="border-t border-base-300 pt-1 mt-1" />
-        <FareRow label={hasKnownTotal ? 'Estimated Total (incl. GST)' : 'Total Amount'}
-          value={hasKnownTotal ? fmt(estimatedTotal) : 'Confirmed after booking'}
-          note={hasKnownTotal ? 'May vary ±5% after subscription & coupon' : 'Exact breakdown in confirmation'}
-          accent="var(--primary)" bold highlight />
+        <FareRow
+          label={subtotal >= 0 ? 'Estimated Total (incl. GST)' : 'Total Amount'}
+          value={fmt(estimatedTotal)}
+          note={
+            estimatedTotal === 0
+              ? 'Fully covered by subscription'
+              : 'May vary ±5% after subscription & coupon'
+          }
+          accent="var(--primary)" bold highlight
+        />
       </SCard>
 
       <SCard title="Coupon & Discounts" icon={Percent} accent="var(--success)">
@@ -1472,27 +1824,29 @@ function StepPayment({ form, set, transportEstimate, followUpCheck, caTiers }) {
 function StepReview({ form, isLoading, error, transportEstimate, followUpCheck, caTiers }) {
   const bt   = BOOKING_TYPES.find(b => b.value === form.bookingType);
   const Icon = bt?.icon || Stethoscope;
-  // FIX: use real caTiers
-  const caTier = caTiers.find(t => t.hours === (form.durationHours || 4));
 
-  let consultFee = 0;
-  if (form.doctorFees) {
-    if (form.consultationType === 'video')         consultFee = form.doctorFees.videoFee     || 0;
-    else if (form.consultationType === 'homeVisit') consultFee = form.doctorFees.homeVisitFee || 0;
-    else                                            consultFee = form.doctorFees.inPersonFee  || 0;
-  } else if (bt?.needsDoctor && form.bookingType !== 'follow_up') { consultFee = 600; }
-  if (form.bookingType === 'follow_up' && followUpCheck?.isEligible) consultFee = followUpCheck.followUpFee || 0;
-  if (form.bookingType === 'doctor_online' && form.doctorFees) consultFee = form.doctorFees.videoFee || 0;
+  const durHours = form.durationHours || (caTiers[0]?.hours ?? 4);
+  const caTier = caTiers.find(t => t.hours === durHours) || caTiers[0];
 
-  const transportFee    = transportEstimate?.totalTransportFee || 0;
-  const caFee           = bt?.needsCare ? (caTier?.price || 0) : 0;
-  const consultGst      = form.bookingType === 'doctor_online' ? 0.05 : 0;
-  const transportGstAmt = bt?.needsTransport ? +(transportFee * 0.05).toFixed(2) : 0;
-  const caGstAmt        = bt?.needsCare ? +(caFee * 0.18).toFixed(2) : 0;
-  const consultGstAmt   = bt?.needsDoctor ? +(consultFee * consultGst).toFixed(2) : 0;
-  const subtotal        = consultFee + transportFee + caFee;
-  const totalGst        = consultGstAmt + transportGstAmt + caGstAmt;
-  const total           = +(subtotal + totalGst).toFixed(2);
+  const consultResolved = bt?.needsDoctor ? resolveConsultFee(form, followUpCheck) : { fee: 0, isFree: false };
+  const caResolved      = bt?.needsCare   ? resolveCaFee(form, caTiers)           : { fee: 0, isFree: false };
+  const tResolved       = resolveTransportFee(transportEstimate);
+
+  const consultFee   = consultResolved.fee;
+  const caFee        = caResolved.fee;
+  const transportFee = bt?.needsTransport ? tResolved.fee : 0;
+
+  const consultGstRate   = form.bookingType === 'doctor_online' ? 0.05 : 0.00;
+  const transportGstRate = 0.05;
+  const caGstRate        = 0.18;
+
+  const consultGstAmt   = bt?.needsDoctor    ? +(consultFee   * consultGstRate).toFixed(2)   : 0;
+  const transportGstAmt = bt?.needsTransport ? +(transportFee * transportGstRate).toFixed(2) : 0;
+  const caGstAmt        = bt?.needsCare      ? +(caFee        * caGstRate).toFixed(2)        : 0;
+
+  const subtotal  = consultFee + transportFee + caFee;
+  const totalGst  = consultGstAmt + transportGstAmt + caGstAmt;
+  const total     = +(subtotal + totalGst).toFixed(2);
   const consultTypeLabel = CONSULT_TYPES.find(c => c.value === form.consultationType)?.label || 'In-Person';
 
   const summaryItems = [
@@ -1501,17 +1855,22 @@ function StepReview({ form, isLoading, error, transportEstimate, followUpCheck, 
     { l:'Age / Gender',   v:`${form.patientAge || '—'} yrs · ${form.patientGender || '—'}` },
     { l:'Phone',          v:form.patientPhone || '—' },
     { l:'Scheduled at',   v:fmtDate(form.scheduledAt) },
-    !bt?.isOnline && form.hospitalName && { l:'Hospital', v:form.hospitalName },
-    (form.doctorName || form.doctorId) && { l:'Doctor', v:form.doctorName || form.doctorId },
-    form.consultationType && form.bookingType !== 'follow_up' && { l:'Consult type', v:consultTypeLabel },
-    (form.bookingType === 'care_assistant' || form.bookingType === 'full_care_ride') && { l:'Care duration', v:`${form.durationHours || 4} hours` },
-    form.labName && { l:'Lab', v:form.labName },
-    form.patientLocation?.address && { l:'Pickup', v:form.patientLocation.address },
-    form.destinationLocation?.address && { l:'Drop-off', v:form.destinationLocation.address },
-    (form.includeReturn || form.includeReturnHome) && { l:'Return trip', v:'Yes — included' },
+    !bt?.isOnline && form.hospitalName ? { l:'Hospital', v:form.hospitalName } : null,
+    (form.doctorName || form.doctorId) ? { l:'Doctor', v:form.doctorName || form.doctorId } : null,
+    form.consultationType && form.bookingType !== 'follow_up' ? { l:'Consult type', v:consultTypeLabel } : null,
+    (form.bookingType === 'care_assistant' || form.bookingType === 'full_care_ride') && caTier ? {
+      l:'Care duration', v:`${caTier.label} (${caTier.hours}${caTier.maxHours ? `–${caTier.maxHours}` : '+'} hrs)`
+    } : null,
+    form.labName ? { l:'Lab', v:form.labName } : null,
+    form.patientLocation?.address ? { l:'Pickup', v:form.patientLocation.address } : null,
+    form.destinationLocation?.address ? { l:'Drop-off', v:form.destinationLocation.address } : null,
+    (form.includeReturn || form.includeReturnHome) ? { l:'Return trip', v:'Yes — included' } : null,
     { l:'Payment method', v:PAYMENT_METHODS.find(p => p.value === form.paymentMethod)?.label },
-    form.couponCode && { l:'Coupon code', v:form.couponCode },
-  ].filter(Boolean).filter(i => i.v);
+    form.couponCode ? { l:'Coupon code', v:form.couponCode } : null,
+    form.subCoverage?.consultationFree ? { l:'Sub benefit', v:'Consultation FREE' } : null,
+    form.subCoverage?.careAssistantFree ? { l:'Sub benefit', v:'Care Assistant FREE' } : null,
+    tResolved.ratePerKm && transportEstimate?.kmRateSource === 'subscription' ? { l:'Transport rate', v:`₹${tResolved.ratePerKm}/km (plan)` } : null,
+  ].filter(Boolean).filter(i => i && i.v);
 
   return (
     <div className="space-y-3">
@@ -1530,37 +1889,87 @@ function StepReview({ form, isLoading, error, transportEstimate, followUpCheck, 
       </div>
       <div className="rounded-2xl border border-base-300 overflow-hidden">
         {summaryItems.map((item, i) => (
-          <div key={item.l} className="flex items-start justify-between px-3 py-2 gap-3"
+          <div key={(item.l || '') + i} className="flex items-start justify-between px-3 py-2 gap-3"
             style={{ borderBottom: i < summaryItems.length - 1 ? '1px solid var(--base-300)' : 'none' }}>
             <span className="text-[10px] font-black uppercase tracking-widest text-base-content/35 flex-shrink-0 mt-0.5" style={PP}>{item.l}</span>
-            <span className="text-xs font-bold text-right break-words min-w-0" style={PP}>{item.v}</span>
+            <span className="text-xs font-bold text-right break-words min-w-0" style={{ color: item.l === 'Sub benefit' ? '#059669' : 'inherit', ...PP }}>{item.v}</span>
           </div>
         ))}
       </div>
-      {subtotal > 0 && (
-        <div className="rounded-2xl border border-primary/20 bg-primary/5 overflow-hidden">
-          <div className="px-3 py-2 border-b border-primary/15">
-            <p className="text-[10px] font-black uppercase tracking-widest text-primary" style={PP}>Estimated Charges</p>
-          </div>
-          <div className="p-3 space-y-2">
-            {consultFee > 0 && <div className="flex justify-between text-xs"><span className="text-base-content/55" style={PP}>Consultation</span><span className="font-bold" style={PP}>{fmt(consultFee)}</span></div>}
-            {transportFee > 0 && <div className="flex justify-between text-xs"><span className="text-base-content/55" style={PP}>Transport</span><span className="font-bold" style={PP}>{fmt(transportFee)}</span></div>}
-            {caFee > 0 && <div className="flex justify-between text-xs"><span className="text-base-content/55" style={PP}>Care Assistant ({form.durationHours || 4} hrs)</span><span className="font-bold" style={PP}>{fmt(caFee)}</span></div>}
-            {totalGst > 0 && <div className="flex justify-between text-xs"><span className="text-base-content/55" style={PP}>Total GST</span><span className="font-bold" style={PP}>{fmt(totalGst)}</span></div>}
-            <div className="flex justify-between text-sm font-black border-t border-primary/20 pt-2 mt-1">
-              <span style={PP}>Estimated Total</span>
-              <span className="text-primary" style={PP}>{fmt(total)}</span>
+
+      <div className="rounded-2xl border border-primary/20 bg-primary/5 overflow-hidden">
+        <div className="px-3 py-2 border-b border-primary/15">
+          <p className="text-[10px] font-black uppercase tracking-widest text-primary" style={PP}>Estimated Charges</p>
+        </div>
+        <div className="p-3 space-y-1">
+          {bt?.needsDoctor && (
+            <>
+              <FareRow
+                label={`Consultation (${consultTypeLabel})`}
+                value={consultFee > 0 ? fmt(consultFee) : 'FREE'}
+                isFree={consultResolved.isFree}
+                freeReason={consultResolved.reason}
+                note={form.bookingType === 'follow_up' ? 'Follow-up fee — independent of subscription' : undefined}
+              />
+              {!consultResolved.isFree && consultGstAmt > 0 && (
+                <FareRow label={`GST on Consultation (${(consultGstRate*100).toFixed(0)}%)`} value={fmt(consultGstAmt)} sub />
+              )}
+            </>
+          )}
+          {bt?.needsTransport && transportFee > 0 && (
+            <>
+              <FareRow
+                label="Transport"
+                value={fmt(transportFee)}
+                note={transportEstimate ? `${transportEstimate.distanceKm} km · ₹${tResolved.ratePerKm}/km${transportEstimate.kmRateSource === 'subscription' ? ' (plan)' : ''}` : undefined}
+              />
+              {transportGstAmt > 0 && <FareRow label="GST on Transport (5%)" value={fmt(transportGstAmt)} sub />}
+            </>
+          )}
+          {bt?.needsCare && (
+            <>
+              <FareRow
+                label="Care Assistant"
+                value={caFee > 0 ? fmt(caFee) : 'FREE'}
+                note={caTier ? `${caTier.label} · ${caTier.hours}${caTier.maxHours ? `–${caTier.maxHours}` : '+'} hrs` : undefined}
+                isFree={caResolved.isFree}
+                freeReason={caResolved.reason}
+              />
+              {!caResolved.isFree && caGstAmt > 0 && (
+                <FareRow label="GST on Care Assistant (18%)" value={fmt(caGstAmt)} sub />
+              )}
+            </>
+          )}
+          {totalGst > 0 && (
+            <div className="border-t border-primary/15 pt-1">
+              <FareRow label="Total GST" value={fmt(totalGst)} sub />
             </div>
-            <p className="text-[9px] text-base-content/35" style={PP}>* Exact total confirmed after booking — subscription discounts & coupons applied then.</p>
+          )}
+          <div className="border-t border-primary/20 pt-1 mt-1">
+            <FareRow
+              label="Estimated Total"
+              value={fmt(total)}
+              bold accent="var(--primary)" highlight
+              note={total === 0 ? 'Fully covered by subscription' : '* Exact total confirmed at booking — coupons applied then.'}
+            />
           </div>
         </div>
-      )}
+      </div>
 
-      {form.paymentMethod === 'Razorpay' && (
+      {form.paymentMethod === 'Razorpay' && total > 0 && (
         <div className="flex items-start gap-2 p-3 rounded-xl border border-indigo-200 bg-indigo-50">
           <CreditCard size={13} className="text-indigo-600 flex-shrink-0 mt-0.5" />
           <p className="text-[10px] font-semibold text-indigo-700 leading-relaxed" style={PP}>
             Clicking <strong>Confirm</strong> opens Razorpay. Complete payment to finalise booking.
+          </p>
+        </div>
+      )}
+
+      {form.paymentMethod === 'Razorpay' && total === 0 && (
+        <div className="flex items-start gap-2 p-3 rounded-xl border border-emerald-200 bg-emerald-50">
+          <ShieldCheck size={13} className="text-emerald-600 flex-shrink-0 mt-0.5" />
+          <p className="text-[10px] font-semibold text-emerald-700 leading-relaxed" style={PP}>
+            No payment required — fully covered by your subscription. Clicking <strong>Confirm</strong> completes the booking.
           </p>
         </div>
       )}
@@ -1635,13 +2044,15 @@ function BookingSuccess({ data, onReset, router }) {
               <span className="font-black" style={PP}>{caAssigned.name}</span>
             </div>
           )}
-          {totalCharged > 0 && (
+          {totalCharged != null && (
             <div className="flex justify-between border-t border-base-300 pt-2 mt-1">
               <span className="font-black" style={PP}>Total Charged</span>
-              <span className="font-black text-primary" style={PP}>{fmt(totalCharged)}</span>
+              <span className="font-black text-primary" style={PP}>
+                {totalCharged === 0 ? 'FREE (subscription)' : fmt(totalCharged)}
+              </span>
             </div>
           )}
-          {!bookingCode && !opNumber && !totalCharged && (
+          {!bookingCode && !opNumber && totalCharged == null && (
             <p className="text-[10px] text-base-content/40 text-center" style={PP}>Booking details will appear in your email</p>
           )}
         </div>
@@ -1670,7 +2081,7 @@ function BookingSuccess({ data, onReset, router }) {
 
 const INIT = {
   bookingType: '',
-  hospSearch:'', hospitalId:'', hospitalName:'',
+  hospSearch:'', hospitalId:'', hospitalName:'', hospitalAddress:null, hospitalCoords:null,
   doctorId:'', doctorName:'', doctorSpec:'', doctorFees:null,
   consultationType:'inPerson', slotId:'',
   labCity:'', labId:'', labName:'',
@@ -1681,9 +2092,16 @@ const INIT = {
   emergencyContact:'',
   patientLocation:null, destinationLocation:null,
   includeReturn:false, includeReturnHome:false,
-  waitingMinutes:0, durationHours:4,
+  waitingMinutes:0, durationHours:null,
   scheduledAt:'', customerNotes:'',
   paymentMethod:'Razorpay', couponCode:'',
+  // Subscription coverage state — shape:
+  // {
+  //   consultationFree: bool, consultationQuota: string|null,
+  //   careAssistantFree: bool, careAssistantQuota: string|null,
+  //   kmRateSource: string|null, ratePerKm: number|null,
+  // }
+  subCoverage: null,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1715,6 +2133,8 @@ export default function BookingSystem() {
   const createLoading        = useSelector(selectCreateBookingLoading);
   const createError          = useSelector(selectCreateBookingError);
   const createStatus         = useSelector(selectCreateBookingStatus);
+  const platformPricing      = useSelector(selectPlatformPricing);
+  const platformPricingLoading = useSelector(selectPlatformPricingLoading);
 
   const [currentStepId, setCurrentStepId] = useState('service');
   const [direction,     setDirection]     = useState(1);
@@ -1724,13 +2144,7 @@ export default function BookingSystem() {
   const [success,       setSuccess]       = useState(false);
   const [paymentState,  setPaymentState]  = useState('idle');
   const [paymentError,  setPaymentError]  = useState(null);
-
-  // ADD near other useSelectors
-const platformPricing    = useSelector(selectPlatformPricing);
-const platformPricingLoading = useSelector(selectPlatformPricingLoading);
-
-  // FIX: Real CA tiers from PlatformPricingConfig — fallback to hardcoded
-  const [caTiers, setCaTiers] = useState([]);
+  const [caTiers,       setCaTiers]       = useState([]);
   const [caTiersLoading, setCaTiersLoading] = useState(true);
 
   const set = useCallback((key, val) => {
@@ -1743,46 +2157,62 @@ const platformPricingLoading = useSelector(selectPlatformPricingLoading);
   const curIdx  = stepIds.indexOf(currentStepId);
   const isLast  = currentStepId === stepIds[stepIds.length - 1];
 
-  // ── FIX: Fetch real CA tiers from PlatformPricingConfig ──────────────────
-// REPLACE entire useEffect
-useEffect(() => {
-  dispatch(fetchPlatformPricing());
-}, [dispatch]);
+  // ── Fetch platform pricing (care assistant tiers) ─────────────────────────
+  useEffect(() => {
+    dispatch(fetchPlatformPricing());
+  }, [dispatch]);
 
-useEffect(() => {
-  setCaTiersLoading(platformPricingLoading);
-  if (!platformPricing) return;
-  const tiers = Array.isArray(platformPricing) ? platformPricing : null;
-  if (tiers?.length) {
-    const mapped = tiers
-      .filter(t => t.isActive !== false)
-      .sort((a, b) => (a.minHours ?? a.hours) - (b.minHours ?? b.hours))
-      .map(t => ({
-  hours:    t.minHours ?? t.hours,
-  maxHours: t.maxHours,              // ← remove ?? null, keep raw value
-  label:    t.label || `${t.minHours ?? t.hours} hrs`,
-  price:    t.chargeToUser ?? t.price,
-}))
-      .filter(t => t.hours && t.price);
-    if (mapped.length) {
-      setCaTiers(mapped);
-      setForm(p => ({ ...p, durationHours: p.durationHours || mapped[0].hours }));
+  useEffect(() => {
+    setCaTiersLoading(platformPricingLoading);
+    if (!platformPricing) return;
+    const tiers = Array.isArray(platformPricing) ? platformPricing : null;
+    if (tiers?.length) {
+      const mapped = tiers
+        .filter(t => t.isActive !== false)
+        .sort((a, b) => (a.minHours ?? a.hours ?? 0) - (b.minHours ?? b.hours ?? 0))
+        .map(t => ({
+          hours:    t.minHours ?? t.hours,
+          maxHours: t.maxHours ?? null,
+          label:    t.label || `${t.minHours ?? t.hours} hrs`,
+          price:    t.chargeToUser ?? t.price ?? 0,
+        }))
+        .filter(t => t.hours != null && t.price != null);
+      if (mapped.length) {
+        setCaTiers(mapped);
+        setForm(p => ({ ...p, durationHours: p.durationHours || mapped[0].hours }));
+      }
     }
-  }
-}, [platformPricing, platformPricingLoading]);
+    if (!platformPricingLoading) setCaTiersLoading(false);
+  }, [platformPricing, platformPricingLoading]);
+
+  // ── Sync subCoverage from transport estimate ───────────────────────────────
+  useEffect(() => {
+    if (!transportEstimate) return;
+    setForm(p => ({
+      ...p,
+      subCoverage: {
+        ...(p.subCoverage || {}),
+        kmRateSource: transportEstimate.kmRateSource,
+        ratePerKm:    transportEstimate.ratePerKm,
+      },
+    }));
+  }, [transportEstimate]);
 
   useEffect(() => {
     if (form.bookingType && !stepIds.includes(currentStepId)) {
       setCurrentStepId('service');
       setVisitedIds(['service']);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.bookingType]);
 
   useEffect(() => {
     if (form.bookingType === 'doctor_online') setForm(p => ({ ...p, consultationType:'video' }));
     else if (form.bookingType === 'physiotherapist' && form.consultationType === 'video') setForm(p => ({ ...p, consultationType:'inPerson' }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.bookingType]);
 
+  // ── URL param pre-fill ────────────────────────────────────────────────────
   useEffect(() => {
     const doctorId   = searchParams.get('doctor');
     const hospitalId = searchParams.get('hospital');
@@ -1802,17 +2232,15 @@ useEffect(() => {
       if (type && doctorId) { setCurrentStepId('patient'); setVisitedIds(['service','provider','patient']); }
       else if (type || doctorId || hospitalId || labId) { setCurrentStepId('provider'); setVisitedIds(['service','provider']); }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     const hospitalId = searchParams.get('hospital');
     if (!hospitalId) return;
-    dispatch(fetchHospitals({ city:'' })).then((res) => {
-      const list = res.payload?.hospitals || (Array.isArray(res.payload) ? res.payload : []);
-      const h    = list.find(h => h._id === hospitalId);
-      if (h) setForm(p => ({ ...p, hospitalName:h.name }));
-    });
+    dispatch(fetchHospitals({ city:'' }));
     dispatch(fetchHospitalDoctors({ hospitalId }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1821,24 +2249,35 @@ useEffect(() => {
     dispatch(fetchLabById({ labId })).then((res) => {
       if (res.payload?.labName) setForm(p => ({ ...p, labName:res.payload.labName }));
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    const hospitalId = searchParams.get('hospital');
-    if (!hospitalId || doctorsByHospital?.length || doctorsLoading) return;
-    dispatch(fetchHospitalDoctors({ hospitalId }));
-  }, [form.hospitalId]);
 
   useEffect(() => () => { dispatch(resetCreateBooking()); }, [dispatch]);
 
+  // ── Populate subCoverage from booking creation response ───────────────────
   useEffect(() => {
-   // FIX
-if (createStatus === 'succeeded' && createData) {
+    if (createStatus === 'succeeded' && createData) {
+      if (createData.subscriptionCoverage) {
+        const sc = createData.subscriptionCoverage;
+        setForm(p => ({
+          ...p,
+          subCoverage: {
+            ...(p.subCoverage || {}),
+            consultationFree:   sc.consultationFree  ?? false,
+            consultationQuota:  sc.consultationQuota || sc.quotaInfo || null,
+            careAssistantFree:  sc.careAssistantFree ?? false,
+            careAssistantQuota: sc.careAssistantQuota
+              || (sc.visitsRemaining != null ? `${sc.visitsRemaining} visits remaining` : null),
+          },
+        }));
+      }
       setSuccess(true);
     }
   }, [createStatus, createData]);
 
-  // ── ACTIONS ──────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // ACTIONS
+  // ─────────────────────────────────────────────────────────────────────────
 
   const onLoadHospitals  = useCallback((city) => dispatch(fetchHospitals({ city })), [dispatch]);
   const onLoadDoctors    = useCallback((hospitalId) => dispatch(fetchHospitalDoctors({ hospitalId })), [dispatch]);
@@ -1859,6 +2298,9 @@ if (createStatus === 'succeeded' && createData) {
   const onCheckFollowUp = useCallback((doctorId, hospitalId) => {
     if (doctorId) dispatch(checkFollowUpEligibility({ doctorId, hospitalId }));
   }, [dispatch]);
+
+  const onResetHospAvail = useCallback(() => dispatch(resetHospitalAvailability()), [dispatch]);
+  const onResetDocAvail  = useCallback(() => dispatch(resetDoctorAvailability()),  [dispatch]);
 
   const onEstimateTransport = useCallback(() => {
     const pickup  = form.patientLocation?.coordinates;
@@ -1954,9 +2396,11 @@ if (createStatus === 'succeeded' && createData) {
           },
         });
       } else {
+        // No Razorpay order = covered by sub or wallet
         setSuccess(true);
       }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch, form]);
 
   // ── VALIDATION ────────────────────────────────────────────────────────────
@@ -2041,6 +2485,7 @@ if (createStatus === 'succeeded' && createData) {
         onLoadLabs={onLoadLabs} onLoadLabDetail={onLoadLabDetail}
         onCheckHospAvail={onCheckHospAvail} onCheckDocAvail={onCheckDocAvail}
         onCheckFollowUp={onCheckFollowUp}
+        onResetHospAvail={onResetHospAvail} onResetDocAvail={onResetDocAvail}
       />
     ),
     patient:  <StepPatient form={form} set={set} errors={errors} />,
@@ -2052,8 +2497,9 @@ if (createStatus === 'succeeded' && createData) {
         transportEstimate={transportEstimate} transportLoading={transportLoading}
         onCheckHospAvail={onCheckHospAvail} onCheckDocAvail={onCheckDocAvail}
         onEstimateTransport={onEstimateTransport}
+        onResetHospAvail={onResetHospAvail} onResetDocAvail={onResetDocAvail}
         caTiers={caTiers}
-caTiersLoading={caTiersLoading}
+        caTiersLoading={caTiersLoading}
       />
     ),
     payment:  <StepPayment form={form} set={set} transportEstimate={transportEstimate} followUpCheck={followUpCheck} caTiers={caTiers} />,
@@ -2070,7 +2516,6 @@ caTiersLoading={caTiersLoading}
   };
 
   return (
-    // FIX: mobile-first padding, max-w-xl centered
     <div className="min-h-screen py-4 px-3 sm:py-6 sm:px-4" style={{ background:'var(--base-100)', ...PP }}>
       <div className="max-w-xl mx-auto w-full">
 
@@ -2101,7 +2546,7 @@ caTiersLoading={caTiersLoading}
                 <StepBar steps={steps} currentId={currentStepId} visitedIds={visitedIds} />
               </div>
 
-              {/* Content — fixed min-height prevents layout jump */}
+              {/* Content */}
               <div className="relative overflow-hidden" style={{ minHeight: 420 }}>
                 <AnimatePresence custom={direction} mode="wait">
                   <motion.div
@@ -2111,7 +2556,6 @@ caTiersLoading={caTiersLoading}
                     initial="enter"
                     animate="center"
                     exit="exit"
-                    // FIX: mobile p-3, sm p-5 — prevents content clipping
                     className="p-3 sm:p-5"
                   >
                     {stepContent[currentStepId]}
@@ -2119,7 +2563,7 @@ caTiersLoading={caTiersLoading}
                 </AnimatePresence>
               </div>
 
-              {/* Footer nav — mobile safe, no overflow */}
+              {/* Footer nav */}
               <div className="flex items-center justify-between gap-2 px-3 py-3 sm:px-4 sm:py-4 border-t"
                 style={{ borderColor:'var(--base-300)', background:'var(--base-200)' }}>
                 <motion.button type="button" whileTap={{ scale:0.97 }}
@@ -2129,7 +2573,6 @@ caTiersLoading={caTiersLoading}
                   <ChevronLeft size={14} />Back
                 </motion.button>
 
-                {/* Step dots — hidden on very small screens if steps are many */}
                 <div className="flex flex-col items-center gap-0.5 flex-shrink-0">
                   <p className="text-[10px] font-black uppercase tracking-widest text-base-content/35" style={PP}>{curIdx + 1}/{steps.length}</p>
                   <div className="flex gap-1 flex-wrap justify-center" style={{ maxWidth: 80 }}>

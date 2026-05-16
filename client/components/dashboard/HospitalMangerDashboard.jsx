@@ -233,7 +233,7 @@ const SidebarSection = memo(function SidebarSection({
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.22, ease: "easeInOut" }}
-            className="overflow-hidden ml-5 mt-0.5 border-l-2 border-base-300/60"
+            className="overflow-hidden ml-5 mt-0.5  "
           >
             {section.links.map((link, idx) => (
               <NavItem key={idx} link={link} isActive={pathname === link.href} />
@@ -430,7 +430,7 @@ const HospitalManagerDashboard = ({ children }) => {
         </nav>
 
         {/* Sidebar footer */}
-        <div className="border-t border-base-300 p-3 shrink-0">
+        <div className="border-t border-base-300   shrink-0">
           <button
             onClick={handleLogout}
             className={cn(
@@ -452,7 +452,7 @@ const HospitalManagerDashboard = ({ children }) => {
         )}
       >
         {/* ── Global header ────────────────────────────────────────────── */}
-        <header className="sticky top-0 z-40 flex h-[68px] w-full items-center justify-between border-b border-base-300 bg-base-100/80 backdrop-blur-xl px-5 lg:px-8 shrink-0">
+        <header className="sticky top-0 z-40 flex h-[68px] w-full items-center justify-between border-b border-base-300 bg-base-100/80 backdrop-blur-xl   shrink-0">
 
           {/* Left */}
           <div className="flex items-center gap-4">
@@ -625,7 +625,7 @@ const HospitalManagerDashboard = ({ children }) => {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.28, ease: "easeOut" }}
-            className="rounded-xl border border-base-300 bg-base-200/35 min-h-[75vh] p-4 sm:p-6 shadow-inner relative overflow-hidden"
+            className="rounded-xl border border-base-300 bg-base-200/35 min-h-[75vh] p-2 shadow-inner relative overflow-hidden"
           >
             {/* Decorative tint */}
             <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-primary/4 blur-[130px] rounded-full pointer-events-none" />

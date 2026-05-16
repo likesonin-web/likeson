@@ -539,12 +539,13 @@ class BookingSocketService {
 
             // 9. Live location to booking room
             this.io.to(`booking:${bookingId}`).emit('location_update', {
-              lat, lng, heading: heading ?? 0, speed: speed ?? 0, accuracy: accuracy ?? null,
-              role:          role === 'solodriverpartner' ? 'solo_driver' : 'driver',
-              rideStatus:    ride.status,
-              currentTarget: resolveMapTarget(ride.status),
-              updatedAt:     new Date().toISOString(),
-            });
+  lat, lng, heading, speed, accuracy,
+  rideId,           // ← ADD
+  bookingId,        // ← ADD
+  role, rideStatus,
+  currentTarget: resolveMapTarget(ride.status),
+  updatedAt: new Date().toISOString(),
+});
           }
         }
 
@@ -763,12 +764,10 @@ class BookingSocketService {
 
         // Hash comparison (OTP_SECRET consistent with hashOtp in shared)
         const crypto = await import('crypto');
-        const hash   = crypto.default
-          .createHmac('sha256', process.env.OTP_SECRET || 'likeson-otp-secret')
-          .update(String(otp).trim())
-          .digest('hex');
+        const hash   = crypto.createHmac('sha256', process.env.OTP_SECRET || 'likeson-otp-secret')
+          .update(String(otp)).digest('hex');
 
-        if (String(otp).trim() !== ride.pickupOtp) {
+        if (hash !== ride.pickupOtp) {
   socket.emit('otp_result', { success: false, message: 'Invalid OTP' });
   this.io.to(`booking:${bookingId}`).emit('otp_wrong_attempt', {
     bookingId, timestamp: new Date().toISOString(),

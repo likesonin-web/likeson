@@ -914,7 +914,7 @@ export default function BookingsManagement() {
 
   return (
     <div data-theme="hospital" className="min-h-screen bg-base-100">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+      <div className="max-w-7xl mx-auto px-4  py-6 space-y-6">
 
         {/* ── Page header ── */}
         <motion.div variants={fadeUp} initial="hidden" animate="visible" className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

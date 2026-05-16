@@ -76,7 +76,7 @@ function SectionCard({ title, subtitle, icon: Icon, iconColor, children, action 
           <div>
             <h3 className="font-black text-base font-montserrat" style={{ color: 'var(--base-content)' }}>{title}</h3>
             {subtitle && (
-              <p className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
+              <p className="text-[10px]" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
                 {subtitle}
               </p>
             )}
@@ -103,12 +103,12 @@ function ConfirmDialog({ open, onClose, onConfirm, title, body, danger = false, 
             exit={{ opacity: 0, scale: 0.9 }} transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
             className="glass-card p-6 w-full max-w-sm space-y-4">
             <h4 className="font-black text-lg font-montserrat">{title}</h4>
-            <p className="text-sm" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 35%)' }}>{body}</p>
+            <p className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 35%)' }}>{body}</p>
             <div className="flex gap-3">
               <button onClick={onClose}
-                className="btn-secondary flex-1 py-2 text-xs">Cancel</button>
+                className="btn-secondary flex-1 py-2 text-[10px]">Cancel</button>
               <button onClick={onConfirm} disabled={loading}
-                className="flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-2 transition-all"
+                className="flex-1 py-2 text-[10px] font-bold rounded-lg flex items-center justify-center gap-2 transition-all"
                 style={{ background: danger ? 'var(--error)' : 'var(--primary)', color: danger ? 'var(--error-content)' : 'var(--primary-content)' }}>
                 {loading ? <Loader2 size={13} className="animate-spin" /> : null}
                 Confirm
@@ -134,7 +134,7 @@ function SessionRow({ session, onRevoke, loading, currentFp }) {
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <p className="text-sm font-semibold truncate" style={{ color: 'var(--base-content)' }}>
+          <p className="text-xs font-semibold truncate" style={{ color: 'var(--base-content)' }}>
             {session.deviceName ?? 'Unknown Device'}
           </p>
           {isCurrent && (
@@ -145,15 +145,15 @@ function SessionRow({ session, onRevoke, loading, currentFp }) {
           )}
         </div>
         <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-          <span className="text-xs flex items-center gap-1"
+          <span className="text-[10px] flex items-center gap-1"
             style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
             <MapPin size={10} /> {maskIp(session.ipAddress)}
           </span>
-          <span className="text-xs flex items-center gap-1"
+          <span className="text-[10px] flex items-center gap-1"
             style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
             <Clock size={10} /> {relativeTime(session.lastActiveAt)}
           </span>
-          <span className="text-xs capitalize"
+          <span className="text-[10px] capitalize"
             style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
             {session.platform}
           </span>
@@ -161,7 +161,7 @@ function SessionRow({ session, onRevoke, loading, currentFp }) {
       </div>
       {!isCurrent && (
         <button onClick={() => onRevoke(session._id)} disabled={loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex-shrink-0"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all flex-shrink-0"
           style={{ background: 'color-mix(in srgb, var(--error), transparent 88%)', color: 'var(--error)' }}>
           {loading ? <Loader2 size={12} className="animate-spin" /> : <LogOut size={12} />}
           Sign out
@@ -182,12 +182,12 @@ function DeviceRow({ device, onRemove, loading }) {
         {platformIcon(device.platform)}
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold truncate" style={{ color: 'var(--base-content)' }}>
+        <p className="text-xs font-semibold truncate" style={{ color: 'var(--base-content)' }}>
           {device.deviceName ?? 'Unknown Device'}
         </p>
         <div className="flex items-center gap-3 mt-0.5">
-          <span className="text-xs capitalize badge badge-primary">{device.platform}</span>
-          <span className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
+          <span className="text-[10px] capitalize badge badge-primary">{device.platform}</span>
+          <span className="text-[10px]" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 50%)' }}>
             {relativeTime(device.lastUsedAt)}
           </span>
         </div>
@@ -205,7 +205,7 @@ function DeviceRow({ device, onRemove, loading }) {
 const CustomTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div className="glass-card px-3 py-2 text-xs space-y-0.5">
+    <div className="glass-card px-3 py-2 text-[10px] space-y-0.5">
       <p className="font-semibold" style={{ color: 'var(--base-content)' }}>{label}</p>
       {payload.map((p) => (
         <p key={p.name} style={{ color: p.color }}>
@@ -314,7 +314,7 @@ export default function Security() {
               <Icon size={18} style={{ color }} />
             </div>
             <div>
-              <p className="text-xs font-semibold" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>{label}</p>
+              <p className="text-[10px] font-semibold" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>{label}</p>
               <p className="text-lg font-black font-montserrat" style={{ color: 'var(--base-content)' }}>{value}</p>
             </div>
           </motion.div>
@@ -328,7 +328,7 @@ export default function Security() {
 
           {/* Area chart */}
           <div className="glass-card p-5 lg:col-span-2">
-            <p className="font-black text-sm font-montserrat mb-4" style={{ color: 'var(--base-content)' }}>
+            <p className="font-black text-xs font-montserrat mb-4" style={{ color: 'var(--base-content)' }}>
               Session Activity (Last 7 Days)
             </p>
             <ResponsiveContainer width="100%" height={180}>
@@ -354,7 +354,7 @@ export default function Security() {
 
           {/* Pie chart */}
           <div className="glass-card p-5">
-            <p className="font-black text-sm font-montserrat mb-4" style={{ color: 'var(--base-content)' }}>
+            <p className="font-black text-xs font-montserrat mb-4" style={{ color: 'var(--base-content)' }}>
               Platform Split
             </p>
             <ResponsiveContainer width="100%" height={140}>
@@ -370,7 +370,7 @@ export default function Security() {
             </ResponsiveContainer>
             <div className="space-y-1 mt-2">
               {platformData.map(({ name, value }, i) => (
-                <div key={name} className="flex items-center justify-between text-xs">
+                <div key={name} className="flex items-center justify-between text-[10px]">
                   <span className="flex items-center gap-1.5" style={{ color: 'var(--base-content)' }}>
                     <span className="w-2.5 h-2.5 rounded-full" style={{ background: PIE_COLORS[i % PIE_COLORS.length] }} />
                     <span className="capitalize">{name}</span>
@@ -398,7 +398,7 @@ export default function Security() {
               </button>
               {sessions.length > 1 && (
                 <button onClick={() => setShowRevokeAll(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all"
                   style={{ background: 'color-mix(in srgb, var(--error), transparent 88%)', color: 'var(--error)' }}>
                   <LogOut size={12} /> Sign out all
                 </button>
@@ -423,7 +423,7 @@ export default function Security() {
                 ) : sessions.length === 0 ? (
                   <div className="text-center py-8">
                     <WifiOff size={32} className="mx-auto mb-2 opacity-30" style={{ color: 'var(--base-content)' }} />
-                    <p className="text-sm" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
+                    <p className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
                       No active sessions
                     </p>
                   </div>
@@ -471,7 +471,7 @@ export default function Security() {
                 ) : tokens.length === 0 ? (
                   <div className="text-center py-8">
                     <Smartphone size={32} className="mx-auto mb-2 opacity-30" style={{ color: 'var(--base-content)' }} />
-                    <p className="text-sm" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
+                    <p className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
                       No registered devices
                     </p>
                   </div>
@@ -510,7 +510,7 @@ export default function Security() {
               { label: 'Google linked',     ok: !!user?.googleAuth?.googleId, icon: Globe },
             ].map(({ label, ok, icon: Icon }) => (
               <div key={label} className="flex items-center justify-between">
-                <span className="text-sm flex items-center gap-2" style={{ color: 'var(--base-content)' }}>
+                <span className="text-xs flex items-center gap-2" style={{ color: 'var(--base-content)' }}>
                   <Icon size={14} style={{ color: ok ? 'var(--success)' : 'var(--base-300)' }} />
                   {label}
                 </span>
@@ -536,14 +536,14 @@ export default function Security() {
                   <CheckCircle2 size={18} style={{ color: 'var(--success)' }} />
                 </div>
                 <div>
-                  <p className="text-sm font-semibold" style={{ color: 'var(--base-content)' }}>Google Connected</p>
-                  <p className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
+                  <p className="text-xs font-semibold" style={{ color: 'var(--base-content)' }}>Google Connected</p>
+                  <p className="text-[10px]" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
                     Sign in with Google is enabled
                   </p>
                 </div>
               </div>
               <button onClick={() => setShowGoogleUnlink(true)}
-                className="w-full py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2"
+                className="w-full py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-2"
                 style={{ background: 'color-mix(in srgb, var(--error), transparent 88%)', color: 'var(--error)' }}>
                 <X size={13} /> Unlink Google Account
               </button>
@@ -551,7 +551,7 @@ export default function Security() {
           ) : (
             <div className="text-center py-4 space-y-2">
               <Globe size={32} className="mx-auto opacity-30" style={{ color: 'var(--base-content)' }} />
-              <p className="text-sm" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
+              <p className="text-xs" style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>
                 No Google account linked
               </p>
             </div>
@@ -575,9 +575,9 @@ export default function Security() {
               { label: 'Password Changed', value: activity.passwordChangedAt ? relativeTime(activity.passwordChangedAt) : 'Never' },
             ].map(({ label, value }) => (
               <div key={label} className="space-y-0.5">
-                <p className="text-xs font-semibold"
+                <p className="text-[10px] font-semibold"
                   style={{ color: 'color-mix(in srgb, var(--base-content), transparent 45%)' }}>{label}</p>
-                <p className="text-sm font-bold" style={{ color: 'var(--base-content)' }}>{value}</p>
+                <p className="text-xs font-bold" style={{ color: 'var(--base-content)' }}>{value}</p>
               </div>
             ))}
           </div>
