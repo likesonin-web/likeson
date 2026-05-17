@@ -519,6 +519,6 @@ function haversineKm([lng1, lat1], [lng2, lat2]) {
 function toRad(deg) { return deg * (Math.PI / 180); }
 
 // ─────────────────────────────────────────────────────────────────────────────
-
+rideTrackingSchema.index({ ride: 1 }, { unique: true });
 const RideTracking = mongoose.model('RideTracking', rideTrackingSchema);
 export default RideTracking;

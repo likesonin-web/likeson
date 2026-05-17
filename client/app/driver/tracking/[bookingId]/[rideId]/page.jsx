@@ -3,9 +3,9 @@
 import React, {
   useEffect, useRef, useCallback, useState, useMemo, memo,
 } from 'react';
-import { useParams } from 'next/navigation';
-import { useDispatch } from 'react-redux';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useParams, useRouter }         from 'next/navigation';
+import { useDispatch }                  from 'react-redux';
+import { motion, AnimatePresence }      from 'framer-motion';
 import {
   GoogleMap, useJsApiLoader, DirectionsRenderer,
 } from '@react-google-maps/api';
@@ -15,258 +15,81 @@ import {
   Compass, Maximize2, ChevronDown, Clock, Zap,
   Shield, ShieldAlert, RotateCcw, ArrowLeft, ArrowRight,
   ArrowUp, AlertCircle, Loader2, CheckSquare, Play,
-  Square, X, MapPinOff,
+  Square, X, MapPinOff, ChevronLeft,
 } from 'lucide-react';
 
-import { useRideTracking } from '@/hooks/useRideTracking';
+import { useRideTracking }    from '@/hooks/useRideTracking';
 import { useVoiceNavigation } from '@/hooks/useVoiceNavigation';
 import {
   smoothHeading, formatEta, formatDistance,
-  formatSpeed, parseDirectionSteps, distanceKm, getManeuverIcon, stripHtml,
+  formatSpeed, parseDirectionSteps, distanceKm,
+  getManeuverIcon, stripHtml, findCurrentStepIndex,
 } from '@/utils/navigationUtils';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-const GOOGLE_MAPS_LIBRARIES = ['geometry', 'marker'];
-const MAP_ID = process.env.NEXT_PUBLIC_MAP_ID || '33a293614af186975a18525f';
-const MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || 'AIzaSyBkwZzM-ZJCCHUg5hG5vbT9OSIeUPVi_qw';
-const STEP_COMPLETE_THRESHOLD_KM = 0.05;
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const GOOGLE_MAPS_LIBRARIES  = ['geometry', 'marker'];
+const MAP_ID                 = process.env.NEXT_PUBLIC_MAP_ID             || '33a293614af186975a18525f';
+const MAPS_KEY               = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY    || '';
+const STEP_ARRIVAL_THRESHOLD = 0.04;   // 40 m  — advance to next step
+const ARRIVAL_THRESHOLD_KM   = 0.05;   // 50 m  — announce destination arrival
+const ROUTE_RECALC_THRESHOLD = 0.15;   // 150 m — off-route → recalculate
 
 const STATUS_CONFIG = {
-  driver_assigned:  { label: 'Assigned',    color: 'text-warning',  bg: 'bg-warning/10',  border: 'border-warning/30' },
-  driver_accepted:  { label: 'Accepted',    color: 'text-info',     bg: 'bg-info/10',     border: 'border-info/30' },
-  driver_en_route:  { label: 'En Route',    color: 'text-primary',  bg: 'bg-primary/10',  border: 'border-primary/30' },
-  driver_arrived:   { label: 'Arrived',     color: 'text-accent',   bg: 'bg-accent/10',   border: 'border-accent/30' },
-  otp_verified:     { label: 'OTP ✓',       color: 'text-success',  bg: 'bg-success/10',  border: 'border-success/30' },
-  in_progress:      { label: 'In Progress', color: 'text-success',  bg: 'bg-success/10',  border: 'border-success/30' },
-  at_stop:          { label: 'At Stop',     color: 'text-warning',  bg: 'bg-warning/10',  border: 'border-warning/30' },
-  completed:        { label: 'Completed',   color: 'text-success',  bg: 'bg-success/10',  border: 'border-success/30' },
-  cancelled:        { label: 'Cancelled',   color: 'text-error',    bg: 'bg-error/10',    border: 'border-error/30' },
+  driver_assigned: { label: 'Assigned',    color: '#f59e0b', bg: 'rgba(245,158,11,0.15)',  border: 'rgba(245,158,11,0.35)' },
+  driver_accepted: { label: 'Accepted',    color: '#3b82f6', bg: 'rgba(59,130,246,0.15)',  border: 'rgba(59,130,246,0.35)' },
+  driver_en_route: { label: 'En Route',    color: '#06b6d4', bg: 'rgba(6,182,212,0.15)',   border: 'rgba(6,182,212,0.35)' },
+  driver_arrived:  { label: 'Arrived',     color: '#8b5cf6', bg: 'rgba(139,92,246,0.15)',  border: 'rgba(139,92,246,0.35)' },
+  otp_verified:    { label: 'OTP ✓',       color: '#10b981', bg: 'rgba(16,185,129,0.15)',  border: 'rgba(16,185,129,0.35)' },
+  in_progress:     { label: 'In Progress', color: '#22c55e', bg: 'rgba(34,197,94,0.15)',   border: 'rgba(34,197,94,0.35)' },
+  at_stop:         { label: 'At Stop',     color: '#f97316', bg: 'rgba(249,115,22,0.15)',  border: 'rgba(249,115,22,0.35)' },
+  completed:       { label: 'Completed',   color: '#64748b', bg: 'rgba(100,116,139,0.15)', border: 'rgba(100,116,139,0.35)' },
+  cancelled:       { label: 'Cancelled',   color: '#ef4444', bg: 'rgba(239,68,68,0.15)',   border: 'rgba(239,68,68,0.35)' },
 };
 
-// ── Marker HTML creators ──────────────────────────────────────────────────────
-function createDriverMarkerHtml(heading) {
-  return `
-    <div style="position: relative; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center;">
-  
-  <!-- The Pulse Ripple (Background) -->
-  <div style="
-    position: absolute;
-    width: 48px;
-    height: 48px;
-    border-radius: 50%;
-    background: rgba(66, 133, 244, 0.4);
-    animation: google-pulse 2s infinite ease-out;
-  "></div>
+// ─────────────────────────────────────────────────────────────────────────────
+// MARKER HTML  (unchanged — rendered into a raw DOM div, not React)
+// ─────────────────────────────────────────────────────────────────────────────
 
-  <!-- Rotating Container -->
-  <div style="
-    position: relative;
-    width: 48px; 
-    height: 48px; 
-    background: #4285F4; 
-    border-radius: 50%; 
-    display: flex; 
-    align-items: center; 
-    justify-content: center;
-    box-shadow: 0 4px 12px rgba(66, 133, 244, 0.5);
-    transform: rotate(${heading}deg);
-    transition: transform 0.3s ease-out;
-    z-index: 2;
-  ">
-    <!-- Directional Beam (FOV) -->
-    <div style="
-      position: absolute;
-      top: -20px;
-      width: 0; 
-      height: 0; 
-      border-left: 15px solid transparent;
-      border-right: 15px solid transparent;
-      border-bottom: 30px solid rgba(66, 133, 244, 0.3);
-      filter: blur(3px);
-      transform: translateY(-5px);
-    "></div>
-
-    <!-- Navigation Chevron (Centered) -->
-    <svg width="26" height="26" viewBox="0 0 24 24" fill="white" style="
-      display: block;
-      filter: drop-shadow(0 2px 2px rgba(0,0,0,0.2));
-      animation: arrow-float 1.5s ease-in-out infinite;
-    ">
-      <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/>
-    </svg>
+const createDriverMarkerHtml = (heading = 0) => `
+  <div style="position:relative;width:64px;height:64px;display:flex;align-items:center;justify-content:center;">
+    <div style="position:absolute;width:48px;height:48px;border-radius:50%;background:rgba(66,133,244,0.35);animation:gPulse 2s infinite ease-out;"></div>
+    <div style="position:relative;width:44px;height:44px;background:#4285F4;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(66,133,244,0.55);transform:rotate(${heading}deg);transition:transform 0.25s ease-out;z-index:2;">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="white"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
+    </div>
   </div>
-</div>
+  <style>@keyframes gPulse{0%{transform:scale(0.8);opacity:0.8}100%{transform:scale(2.4);opacity:0}}</style>
+`;
 
-<style>
-/* Ripple animation expanding outwards */
-@keyframes google-pulse {
-  0% { transform: scale(0.8); opacity: 0.8; }
-  100% { transform: scale(2.2); opacity: 0; }
-}
-
-/* Subtle "active" breathing for the arrow */
-@keyframes arrow-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-1px) scale(1.05); }
-}
-</style>
-  `;
-}
-
-function createPickupMarkerHtml() {
-  return `
-    <!-- Main Icon Container -->
-    <div style="
-      position: relative;
-      width: 46px; height: 46px;
-      background: linear-gradient(135deg, #10b981, #059669);
-      border-radius: 50%;
-      border: 3px solid white;
-      display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 4px 15px rgba(16, 185, 129, 0.6);
-      z-index: 2;
-      animation: driverBounce 2s infinite ease-in-out;
-    ">
-      <span style="
-        color: white;
-        font-family: 'Inter', sans-serif;
-        font-weight: 900;
-        font-size: 22px;
-      ">P</span>
+const createPickupMarkerHtml = () => `
+  <div style="display:flex;flex-direction:column;align-items:center;">
+    <div style="width:42px;height:42px;background:linear-gradient(135deg,#10b981,#059669);border-radius:50%;border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(16,185,129,0.55);">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
     </div>
+    <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid #10b981;margin-top:-1px;"></div>
+    <div style="background:#10b981;color:#fff;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;margin-top:2px;box-shadow:0 2px 8px rgba(0,0,0,0.2);">Pickup</div>
+  </div>
+`;
 
-    <!-- Triangle Pointer -->
-    <div style="
-      width: 0; height: 0;
-      border-left: 6px solid transparent;
-      border-right: 6px solid transparent;
-      border-top: 8px solid white;
-      margin-top: -2px;
-      z-index: 1;
-      filter: drop-shadow(0 2px 2px rgba(0,0,0,0.1));
-    "></div>
-
-    <!-- Driver Label Card -->
-    <div style="
-      margin-top: 2px;
-      background: #10b981;
-      color: white;
-      padding: 3px 10px;
-      border-radius: 20px;
-      font-family: sans-serif;
-      font-size: 11px;
-      font-weight: 800;
-      letter-spacing: 0.5px;
-      text-transform: uppercase;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-      border: 1.5px solid white;
-      white-space: nowrap;
-    ">
-      Pickup
+const createDropoffMarkerHtml = () => `
+  <div style="display:flex;flex-direction:column;align-items:center;">
+    <div style="width:42px;height:42px;background:linear-gradient(135deg,#ef4444,#f97316);border-radius:50%;border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(239,68,68,0.55);">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
     </div>
+    <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid #ef4444;margin-top:-1px;"></div>
+    <div style="background:#ef4444;color:#fff;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;margin-top:2px;box-shadow:0 2px 8px rgba(0,0,0,0.2);">Drop-off</div>
+  </div>
+`;
 
-    <style>
-      @keyframes driverBounce {
-        0%, 100% { transform: translateY(0); }
-        50% { transform: translateY(-5px); }
-      }
-      
-      /* Optional: Add a soft ground shadow that stays on the map */
-      .ground-shadow {
-        position: absolute;
-        bottom: 18px;
-        width: 12px; height: 4px;
-        background: rgba(0,0,0,0.2);
-        border-radius: 50%;
-        filter: blur(2px);
-      }
-    </style>
-    <div class="ground-shadow"></div>
-  `;
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// OTP MODAL
+// ─────────────────────────────────────────────────────────────────────────────
 
-function createDropoffMarkerHtml() {
-  return `
-    <!-- Main Icon Container -->
-    <div style="
-      position: relative;
-      width: 46px; height: 46px;
-      background: linear-gradient(135deg, #ef4444, #f97316);
-      border-radius: 50%;
-      border: 3px solid white;
-      display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 4px 15px rgba(239, 68, 68, 0.6);
-      z-index: 2;
-      animation: dropBounce 2.2s infinite ease-in-out;
-    ">
-      <span style="
-        color: white;
-        font-family: 'Inter', sans-serif;
-        font-weight: 900;
-        font-size: 22px;
-        text-shadow: 0 1px 2px rgba(0,0,0,0.1);
-      ">D</span>
-    </div>
-
-    <!-- Triangle Pointer -->
-    <div style="
-      width: 0; height: 0;
-      border-left: 6px solid transparent;
-      border-right: 6px solid transparent;
-      border-top: 8px solid white;
-      margin-top: -2px;
-      z-index: 1;
-      filter: drop-shadow(0 2px 2px rgba(0,0,0,0.1));
-    "></div>
-
-    <!-- Drop-off Label Card -->
-    <div style="
-      margin-top: 2px;
-      background: #ef4444;
-      color: white;
-      padding: 3px 12px;
-      border-radius: 20px;
-      font-family: sans-serif;
-      font-size: 11px;
-      font-weight: 800;
-      letter-spacing: 0.5px;
-      text-transform: uppercase;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-      border: 1.5px solid white;
-      white-space: nowrap;
-    ">
-      Drop-off
-    </div>
-
-    <style>
-      @keyframes dropBounce {
-        0%, 100% { transform: translateY(0); }
-        50% { transform: translateY(-6px); }
-      }
-      
-      .drop-ground-shadow {
-        position: absolute;
-        bottom: 18px;
-        width: 14px; height: 4px;
-        background: rgba(0,0,0,0.2);
-        border-radius: 50%;
-        filter: blur(2px);
-        animation: dropShadowScale 2.2s infinite ease-in-out;
-      }
-
-      @keyframes dropShadowScale {
-        0%, 100% { transform: scale(1); opacity: 0.2; }
-        50% { transform: scale(1.2); opacity: 0.1; }
-      }
-    </style>
-    <div class="drop-ground-shadow"></div>
-  `;
-}
-
-// ── OTP Modal ─────────────────────────────────────────────────────────────────
 const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
   const [digits, setDigits] = useState(['', '', '', '']);
-  const inputRefs = [useRef(), useRef(), useRef(), useRef()];
+  const inputRefs           = [useRef(), useRef(), useRef(), useRef()];
 
   const handleChange = (i, val) => {
     if (!/^\d?$/.test(val)) return;
@@ -280,9 +103,12 @@ const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
     if (e.key === 'Backspace' && !digits[i] && i > 0) inputRefs[i - 1].current?.focus();
   };
 
-  const handleSubmit = () => {
-    const otp = digits.join('');
-    if (otp.length === 4) onVerify(otp);
+  const handlePaste = (e) => {
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 4);
+    if (pasted.length === 4) {
+      setDigits(pasted.split(''));
+      inputRefs[3].current?.focus();
+    }
   };
 
   const filled = digits.every(d => d !== '');
@@ -292,25 +118,31 @@ const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center px-4"
+      style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)' }}
     >
       <motion.div
-        initial={{ scale: 0.8, opacity: 0, y: 40 }}
+        initial={{ scale: 0.85, opacity: 0, y: 40 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
-        exit={{ scale: 0.8, opacity: 0, y: 40 }}
-        transition={{ type: 'spring', damping: 20, stiffness: 300 }}
-        className="bg-base-100 rounded-2xl p-6 w-full max-w-sm shadow-2xl border border-base-300"
+        exit={{ scale: 0.85, opacity: 0, y: 40 }}
+        transition={{ type: 'spring', damping: 22, stiffness: 320 }}
+        className="w-full max-w-sm rounded-3xl p-7 bg-base-200 border border-base-300 shadow-[0_24px_60px_rgba(0,0,0,0.6)]"
       >
-        <div className="flex items-center justify-between mb-4">
+        {/* Header */}
+        <div className="flex items-start justify-between mb-5">
           <div>
-            <h3 className="text-lg font-bold text-base-content">Verify OTP</h3>
-            <p className="text-xs text-base-content/50 mt-0.5">Enter 4-digit code from customer</p>
+            <h3 className="text-lg font-black text-base-content m-0">Verify OTP</h3>
+            <p className="text-xs text-base-content/50 mt-1">Enter 4-digit code from customer</p>
           </div>
-          <button onClick={onClose} className="btn btn-ghost btn-sm btn-circle">
+          <button
+            onClick={onClose}
+            className="w-8 h-8 rounded-xl bg-base-300 border border-base-300 flex items-center justify-center cursor-pointer text-base-content/60 hover:text-base-content transition-colors"
+          >
             <X size={16} />
           </button>
         </div>
 
+        {/* Digits */}
         <div className="flex gap-3 justify-center my-6">
           {digits.map((d, i) => (
             <input
@@ -322,78 +154,89 @@ const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
               value={d}
               onChange={e => handleChange(i, e.target.value)}
               onKeyDown={e => handleKeyDown(i, e)}
-              className={`
-                w-14 h-14 text-2xl font-bold text-center rounded-xl border-2 outline-none
-                transition-all duration-200
-                ${d ? 'border-primary bg-primary/10 text-primary' : 'border-base-300 bg-base-200 text-base-content'}
-                focus:border-primary focus:bg-primary/5
-              `}
+              onPaste={handlePaste}
+              autoFocus={i === 0}
+              className="font-poppins"
+              style={{
+                width: 58, height: 62,
+                fontSize: 26, fontWeight: 800, textAlign: 'center',
+                borderRadius: 14,
+                background: d ? 'rgba(59,130,246,0.15)' : 'var(--base-300)',
+                border: `2px solid ${d ? 'var(--primary)' : 'var(--base-300)'}`,
+                color: d ? 'var(--primary)' : 'var(--base-content)',
+                outline: 'none',
+                transition: 'border-color 0.2s, color 0.2s',
+                fontFamily: 'inherit',
+                opacity: 0.9,
+              }}
             />
           ))}
         </div>
 
+        {/* Error */}
         <AnimatePresence>
           {error && (
             <motion.div
               initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
-              className="flex items-center gap-2 text-error text-sm mb-4 bg-error/10 rounded-lg px-3 py-2"
+              className="flex items-center gap-2 alert alert-error rounded-xl px-3 py-2 mb-4 text-xs font-semibold"
             >
               <AlertCircle size={14} />
-              <span>{error}</span>
+              {error}
             </motion.div>
           )}
         </AnimatePresence>
 
-        <button
-          onClick={handleSubmit}
+        <motion.button
+          whileTap={{ scale: 0.97 }}
+          onClick={() => filled && onVerify(digits.join(''))}
           disabled={!filled || loading}
-          className="btn btn-primary w-full rounded-xl py-3 font-bold text-base"
+          className={`btn btn-lg w-full rounded-2xl font-bold text-base flex items-center justify-center gap-2 ${filled && !loading ? 'btn-primary' : 'btn-ghost'}`}
+          style={{ fontFamily: 'inherit' }}
         >
-          {loading ? (
-            <div className="flex items-center gap-2">
-              <Loader2 size={16} className="animate-spin" />
-              Verifying...
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <CheckCircle size={16} />
-              Verify OTP
-            </div>
-          )}
-        </button>
+          {loading
+            ? <><Loader2 size={16} className="animate-spin" /> Verifying...</>
+            : <><CheckCircle size={16} /> Verify OTP</>}
+        </motion.button>
       </motion.div>
     </motion.div>
   );
 });
 
-// ── Nav Instruction Card ──────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// NAV INSTRUCTION CARD  — success / green theming via global CSS tokens
+// ─────────────────────────────────────────────────────────────────────────────
+
 const NavInstructionCard = memo(function NavInstructionCard({ step }) {
   if (!step) return null;
-  const maneuver = getManeuverIcon(step.maneuver || step.instruction || '');
-  const isLeft = maneuver === 'turn-left';
-  const isRight = maneuver === 'turn-right';
+  const type = getManeuverIcon(step.maneuver || step.instruction || '');
+
+  // Icon and tint — all three branches resolve to success-green
+  const IconEl =
+    type === 'turn-left'  ? <ArrowLeft  size={22} className="text-base-100" />
+    : type === 'turn-right' ? <ArrowRight size={22} className="text-base-100" />
+    :                          <ArrowUp    size={22} className="text-base-100" />;
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: -20 }}
+      key={step.instruction}
+      initial={{ opacity: 0, y: -12 }}
       animate={{ opacity: 1, y: 0 }}
-      className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-base-100/95 border border-base-300/60 shadow-xl"
+      exit={{ opacity: 0, y: -12 }}
+      className="flex   gap-3 px-4 py-2 rounded-md border border-success bg-success shadow-[0_8px_24px_rgba(0,0,0,0.4)]"
     >
-      <div className={`
-        w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0
-        ${isLeft ? 'bg-blue-500/20' : isRight ? 'bg-orange-500/20' : 'bg-success/20'}
-      `}>
-        {isLeft
-          ? <ArrowLeft size={24} className="text-blue-400" />
-          : isRight
-            ? <ArrowRight size={24} className="text-orange-400" />
-            : <ArrowUp size={24} className="text-success" />}
+      {/* Icon bubble */}
+      <div className="      border border-success/30">
+        {IconEl}
       </div>
+
+      {/* Text */}
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-bold truncate text-base-content">{step.instruction}</p>
-        <p className="text-xs mt-0.5 text-base-content/50">
+        <p className="text-sm font-bold text-base-100 truncate m-0">
+          {step.instruction}
+        </p>
+        <p className="text-xs text-base-300 mt-0.5 font-semibold">
           {step.distanceText || formatDistance(step.distanceMeters / 1000)}
         </p>
       </div>
@@ -401,201 +244,213 @@ const NavInstructionCard = memo(function NavInstructionCard({ step }) {
   );
 });
 
-// ── Info Row ──────────────────────────────────────────────────────────────────
-function InfoRow({ label, value, mono }) {
-  if (!value) return null;
-  return (
-    <div className="flex justify-between items-center">
-      <span className="text-xs text-base-content/40">{label}</span>
-      <span className={`text-xs font-semibold text-base-content ${mono ? 'font-mono' : ''}`}>
-        {value}
-      </span>
-    </div>
-  );
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// BOTTOM SHEET
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ── Bottom Sheet ──────────────────────────────────────────────────────────────
 const BottomSheet = memo(function BottomSheet({ ride, booking, open, onToggle }) {
-  if (!ride && !booking) return null;
-
-  const rd = ride?.tracking?.ride || ride;
-  const bk = booking || rd?.booking;
+  const rd        = ride?.tracking?.ride || ride?.ride || ride;
+  const bk        = booking || rd?.booking;
   const statusCfg = STATUS_CONFIG[rd?.status] || STATUS_CONFIG.driver_assigned;
+
+  const InfoRow = ({ label, value, mono }) => {
+    if (!value) return null;
+    return (
+      <div className="flex justify-between py-1.5 border-b border-base-300/60 last:border-b-0">
+        <span className="text-[11px] text-base-content/50 font-semibold uppercase tracking-wide">{label}</span>
+        <span className={`text-xs text-base-content/70 font-semibold ${mono ? 'font-mono' : ''}`}>{value}</span>
+      </div>
+    );
+  };
 
   return (
     <motion.div
       initial={{ y: '100%' }}
-      animate={{ y: open ? '0%' : 'calc(100% - 80px)' }}
-      transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-      className="fixed bottom-0 left-0 right-0 z-30 rounded-t-3xl border-t bg-base-100 border-base-300 shadow-2xl max-h-[80vh] overflow-hidden"
+      animate={{ y: open ? '0%' : 'calc(100% - 76px)' }}
+      transition={{ type: 'spring', damping: 26, stiffness: 280 }}
+      className="fixed bottom-0 left-0 right-0 z-30 rounded-t-3xl bg-base-200 border border-base-300 border-b-0 shadow-[0_-8px_40px_rgba(0,0,0,0.4)]"
+      style={{ maxHeight: '82vh', overflow: 'hidden' }}
     >
-      {/* Handle */}
-      <button onClick={onToggle} className="w-full flex flex-col items-center pt-3 pb-2">
-        <div className="w-10 h-1 rounded-full bg-base-300" />
-        <div className="flex items-center justify-between w-full px-4 mt-2">
+      {/* Handle + summary row */}
+      <button
+        onClick={onToggle}
+        className="w-full bg-transparent border-none cursor-pointer px-4 pt-3 pb-2 flex flex-col items-center"
+      >
+        <div className="w-9 h-1 rounded-full bg-base-300 mb-2.5" />
+        <div className="flex items-center justify-between w-full">
           <span className="text-sm font-bold text-base-content">Ride Details</span>
           <div className="flex items-center gap-2">
-            <span className={`badge badge-sm ${statusCfg.bg} ${statusCfg.color} border ${statusCfg.border}`}>
+            <span
+              className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest border"
+              style={{ background: statusCfg.bg, borderColor: statusCfg.border, color: statusCfg.color }}
+            >
               {statusCfg.label}
             </span>
-            <motion.div animate={{ rotate: open ? 180 : 0 }}>
-              <ChevronDown size={16} className="text-base-content/50" />
+            <motion.div animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.2 }}>
+              <ChevronDown size={15} className="text-base-content/40" />
             </motion.div>
           </div>
         </div>
       </button>
 
-      {/* Content */}
-      <div className="overflow-y-auto max-h-[65vh] px-4 pb-6 space-y-4">
-        {/* Customer */}
-        {bk?.customer && (
-          <div className="rounded-xl p-4 bg-base-200 border border-base-300">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
-                <User size={18} className="text-primary" />
-              </div>
-              <div className="flex-1">
-                <p className="font-bold text-sm text-base-content">
-                  {bk.customer?.name || bk.patientInfo?.name || 'Patient'}
-                </p>
-                <p className="text-xs text-base-content/50">{bk.customer?.phone || '—'}</p>
-              </div>
-              {bk.customer?.phone && (
-                <a href={`tel:${bk.customer.phone}`} className="btn btn-success btn-sm btn-circle">
-                  <Phone size={14} />
-                </a>
-              )}
-            </div>
-          </div>
-        )}
+      {/* Scrollable content */}
+      <div className="overflow-y-auto px-4 pb-6" style={{ maxHeight: 'calc(82vh - 76px)' }}>
 
-        {/* Patient info */}
-        {bk?.patientInfo && (
-          <div className="rounded-xl p-4 bg-base-200 border border-base-300">
-            <p className="text-xs font-bold uppercase tracking-wider mb-2 text-base-content/50">Patient</p>
-            <div className="space-y-1">
-              <InfoRow label="Name" value={bk.patientInfo.name} />
-              <InfoRow label="Age" value={bk.patientInfo.age ? `${bk.patientInfo.age} yrs` : null} />
-              <InfoRow label="Gender" value={bk.patientInfo.gender} />
-              <InfoRow label="Blood" value={bk.patientInfo.bloodGroup} />
+        {/* Customer card */}
+        {(bk?.customer || bk?.patientInfo) && (
+          <div className="flex items-center gap-3 p-3 rounded-2xl mb-3 bg-base-300/60 border border-base-300">
+            <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center"
+              style={{ background: 'linear-gradient(135deg, var(--primary), var(--secondary))' }}>
+              <User size={17} color="#fff" />
             </div>
+            <div className="flex-1">
+              <p className="text-sm font-bold text-base-content m-0">
+                {bk.customer?.name || bk.patientInfo?.name || 'Patient'}
+              </p>
+              <p className="text-xs text-base-content/40 mt-0.5 m-0">
+                {bk.customer?.phone || '—'}
+              </p>
+            </div>
+            {bk.customer?.phone && (
+              <a
+                href={`tel:${bk.customer.phone}`}
+                className="w-9 h-9 rounded-xl flex items-center justify-center text-success bg-success/10 border border-success/30 no-underline transition-colors hover:bg-success/20"
+              >
+                <Phone size={15} />
+              </a>
+            )}
           </div>
         )}
 
         {/* Route */}
-        <div className="rounded-xl p-4 space-y-3 bg-base-200 border border-base-300">
-          <p className="text-xs font-bold uppercase tracking-wider text-base-content/50">Route</p>
+        <div className="p-3 rounded-2xl mb-3 bg-base-300/60 border border-base-300">
+          <p className="text-[10px] text-base-content/40 font-bold uppercase tracking-widest m-0 mb-2.5">Route</p>
           <div className="flex gap-3">
-            <div className="flex flex-col items-center gap-1 pt-1">
-              <div className="w-3 h-3 rounded-full bg-success border-2 border-white" />
-              <div className="w-0.5 h-8 bg-base-300" />
-              <div className="w-3 h-3 rounded-full bg-error border-2 border-white" />
+            <div className="flex flex-col items-center gap-0.5 pt-1">
+              <div className="w-2.5 h-2.5 rounded-full bg-success border-2 border-base-100 flex-shrink-0" />
+              <div className="w-0.5 h-7 bg-base-300" />
+              <div className="w-2.5 h-2.5 rounded-full bg-error border-2 border-base-100 flex-shrink-0" />
             </div>
-            <div className="flex-1 space-y-3">
+            <div className="flex-1 flex flex-col gap-3">
               <div>
-                <p className="text-xs font-semibold text-base-content">
+                <p className="text-xs font-semibold text-base-content m-0">
                   {rd?.pickup?.address || rd?.pickup?.label || bk?.patientLocation?.address || 'Pickup'}
                 </p>
-                <p className="text-xs text-base-content/40">Pickup</p>
+                <p className="text-[10px] text-base-content/40 mt-0.5 m-0">Pickup</p>
               </div>
               <div>
-                <p className="text-xs font-semibold text-base-content">
-                  {rd?.dropoff?.address || rd?.dropoff?.label || bk?.destinationLocation?.address || 'Drop'}
+                <p className="text-xs font-semibold text-base-content m-0">
+                  {rd?.dropoff?.address || rd?.dropoff?.label || bk?.destinationLocation?.address || 'Drop-off'}
                 </p>
-                <p className="text-xs text-base-content/40">Drop-off</p>
+                <p className="text-[10px] text-base-content/40 mt-0.5 m-0">Drop-off</p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Booking */}
-        <div className="rounded-xl p-4 space-y-2 bg-base-200 border border-base-300">
-          <p className="text-xs font-bold uppercase tracking-wider mb-2 text-base-content/50">Booking</p>
+        {/* Booking info */}
+        <div className="p-3 rounded-2xl bg-base-300/60 border border-base-300">
+          <p className="text-[10px] text-base-content/40 font-bold uppercase tracking-widest m-0 mb-2">Booking</p>
           <InfoRow label="Booking Code" value={bk?.bookingCode} mono />
-          <InfoRow label="Ride Code" value={rd?.rideCode} mono />
-          <InfoRow label="Type" value={bk?.bookingType?.replace(/_/g, ' ')} />
-          <InfoRow label="Payment" value={bk?.paymentStatus || bk?.fareBreakdown?.currency} />
-          {bk?.fareBreakdown?.totalAmount && <InfoRow label="Fare" value={`₹${bk.fareBreakdown.totalAmount}`} />}
-          {bk?.fareBreakdown?.transportFee && <InfoRow label="Transport" value={`₹${bk.fareBreakdown.transportFee}`} />}
+          <InfoRow label="Ride Code"    value={rd?.rideCode}    mono />
+          <InfoRow label="Type"         value={bk?.bookingType?.replace(/_/g, ' ')} />
+          <InfoRow label="Payment"      value={bk?.paymentStatus} />
+          <InfoRow label="Total Fare"   value={bk?.fareBreakdown?.totalAmount ? `₹${bk.fareBreakdown.totalAmount}` : null} />
+          <InfoRow label="Transport"    value={bk?.fareBreakdown?.transportFee ? `₹${bk.fareBreakdown.transportFee}` : null} />
         </div>
-
-        {/* Notes */}
-        {bk?.internalNotes && (
-          <div className="rounded-xl p-4 bg-amber-50 border border-amber-200">
-            <div className="flex gap-2">
-              <FileText size={14} className="text-warning flex-shrink-0 mt-0.5" />
-              <p className="text-xs text-amber-800">{bk.internalNotes}</p>
-            </div>
-          </div>
-        )}
       </div>
     </motion.div>
   );
 });
 
-// ── Ride Completed ────────────────────────────────────────────────────────────
-const RideCompletedScreen = memo(function RideCompletedScreen({ ride }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPLETED SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+
+const RideCompletedScreen = memo(function RideCompletedScreen({ ride, onBack }) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="fixed inset-0 z-50 bg-base-100 flex flex-col items-center justify-center p-6"
+      className="fixed inset-0 z-[70] bg-base-100 flex flex-col items-center justify-center px-6 font-poppins"
     >
       <motion.div
         initial={{ scale: 0 }}
         animate={{ scale: 1 }}
-        transition={{ delay: 0.2, type: 'spring', damping: 15 }}
-        className="w-24 h-24 rounded-full bg-success/20 flex items-center justify-center mb-6"
+        transition={{ delay: 0.2, type: 'spring', damping: 14 }}
+        className="w-[88px] h-[88px] rounded-full flex items-center justify-center mb-6 bg-success/10 border-2 border-success/30"
       >
-        <CheckCircle size={48} className="text-success" />
+        <CheckCircle size={44} className="text-success" />
       </motion.div>
+
       <motion.h2
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.4 }}
-        className="text-2xl font-bold text-base-content mb-2"
+        transition={{ delay: 0.35 }}
+        className="text-2xl font-black text-base-content text-center m-0 mb-2"
       >
         Ride Completed!
       </motion.h2>
+
       <motion.p
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.5 }}
-        className="text-base-content/50 text-sm text-center"
+        transition={{ delay: 0.45 }}
+        className="text-sm text-base-content/50 text-center m-0 mb-7"
       >
-        {ride?.rideCode && `Ride ${ride.rideCode}`} has been completed successfully.
+        {ride?.rideCode ? `Ride ${ride.rideCode}` : 'Ride'} completed successfully.
       </motion.p>
+
       {ride?.actualDistanceKm && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.6 }}
-          className="mt-6 bg-base-200 rounded-2xl px-6 py-4 text-center"
+          transition={{ delay: 0.55 }}
+          className="px-8 py-4 rounded-3xl text-center mb-7 bg-base-200 border border-base-300"
         >
-          <p className="text-3xl font-black text-primary">{ride.actualDistanceKm} km</p>
-          <p className="text-xs text-base-content/50 mt-1">Total Distance</p>
+          <p className="text-[34px] font-black text-primary m-0">{ride.actualDistanceKm} km</p>
+          <p className="text-[11px] text-base-content/40 mt-1 m-0 uppercase tracking-widest font-semibold">Total Distance</p>
         </motion.div>
       )}
+
+      <motion.button
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.65 }}
+        whileTap={{ scale: 0.97 }}
+        onClick={onBack}
+        className="btn btn-primary btn-lg rounded-2xl px-10 font-bold text-base shadow-primary"
+        style={{ fontFamily: 'inherit' }}
+      >
+        Back to Bookings
+      </motion.button>
     </motion.div>
   );
 });
 
-// ── Loading Skeleton ──────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// LOADING SKELETON
+// ─────────────────────────────────────────────────────────────────────────────
+
 const LoadingSkeleton = memo(function LoadingSkeleton() {
   return (
-    <div className="fixed inset-0 bg-base-200 flex flex-col items-center justify-center gap-4">
-      <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
+    <div className="fixed inset-0 bg-base-100 flex flex-col items-center justify-center gap-4 font-poppins">
+      <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
         <Loader2 size={28} className="text-primary animate-spin" />
       </div>
-      <p className="text-sm font-medium text-base-content/60">Loading navigation...</p>
+      <p className="text-sm text-base-content/50 font-semibold">Loading navigation...</p>
     </div>
   );
 });
 
-// ── MAIN COMPONENT ────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function RideLiveTracking() {
-  const params = useParams();
-  const rideId = params?.rideId;
+  const params    = useParams();
+  const router    = useRouter();
+  const rideId    = params?.rideId;
   const bookingId = params?.bookingId;
 
   const {
@@ -606,33 +461,35 @@ export default function RideLiveTracking() {
   } = useRideTracking({ rideId, bookingId });
 
   const {
-    voiceEnabled, toggleVoice, announceManeuver,
-    announceArrival, announceRerouting,
+    voiceEnabled, toggleVoice,
+    announceManeuver, announceArrival, announceRerouting, resetManeuverBands,
   } = useVoiceNavigation();
 
-  // Map refs — one source of truth per marker
-  const mapRef = useRef(null);
-  const dirServiceRef = useRef(null);
-  const driverMarkerRef = useRef(null);
-  const pickupMarkerRef = useRef(null);
+  // ── Map refs ────────────────────────────────────────────────
+  const mapRef           = useRef(null);
+  const dirServiceRef    = useRef(null);
+  const driverMarkerRef  = useRef(null);
+  const pickupMarkerRef  = useRef(null);
   const dropoffMarkerRef = useRef(null);
+  const markersInitRef   = useRef(false);
   const smoothHeadingRef = useRef(0);
-  const markersInitializedRef = useRef(false);
 
-  const [mapLoaded, setMapLoaded] = useState(false);
-  const [followMode, setFollowMode] = useState(true);
-  const [directions, setDirections] = useState(null);
-  const [navSteps, setNavSteps] = useState([]);
-  const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [showOtpModal, setShowOtpModal] = useState(false);
-  const [otpLoading, setOtpLoading] = useState(false);
-  const [otpError, setOtpError] = useState(null);
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [mapTilt] = useState(45);
-  const [showCompleted, setShowCompleted] = useState(false);
-  const [isRerouting, setIsRerouting] = useState(false);
-  const [sosActive, setSosActive] = useState(false);
+  // ── State ───────────────────────────────────────────────────
+  const [mapLoaded,      setMapLoaded]      = useState(false);
+  const [followMode,     setFollowMode]     = useState(true);
+  const [directions,     setDirections]     = useState(null);
+  const [navSteps,       setNavSteps]       = useState([]);
+  const [currentStepIdx, setCurrentStepIdx] = useState(0);
+  const [showOtpModal,   setShowOtpModal]   = useState(false);
+  const [otpLoading,     setOtpLoading]     = useState(false);
+  const [otpError,       setOtpError]       = useState(null);
+  const [sheetOpen,      setSheetOpen]      = useState(false);
+  const [showCompleted,  setShowCompleted]  = useState(false);
+  const [isRerouting,    setIsRerouting]    = useState(false);
+  const [sosActive,      setSosActive]      = useState(false);
+  const [arrivedSpoken,  setArrivedSpoken]  = useState(false);
 
+  // ── Derived ─────────────────────────────────────────────────
   const navTargetType = useMemo(() => {
     if (!rideStatus) return 'pickup';
     return ['otp_verified', 'in_progress', 'at_stop', 'completed'].includes(rideStatus)
@@ -640,7 +497,7 @@ export default function RideLiveTracking() {
       : 'pickup';
   }, [rideStatus]);
 
-  const rd = tracking?.ride || ride;
+  const rd = tracking?.ride || tracking?.tracking?.ride || ride;
   const bk = rd?.booking || null;
 
   const pickupCoords = useMemo(() => {
@@ -659,88 +516,81 @@ export default function RideLiveTracking() {
 
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: MAPS_KEY,
-    libraries: GOOGLE_MAPS_LIBRARIES,
-    mapIds: [MAP_ID],
+    libraries:        GOOGLE_MAPS_LIBRARIES,
+    mapIds:           [MAP_ID],
   });
 
-  // ── Completed screen ────────────────────────────────────────
+  // ── Completed screen trigger ─────────────────────────────────
   useEffect(() => {
     if (rideStatus === 'completed') {
-      const t = setTimeout(() => setShowCompleted(true), 1500);
+      const t = setTimeout(() => setShowCompleted(true), 1800);
       return () => clearTimeout(t);
     }
-    setShowCompleted(false);
   }, [rideStatus]);
 
-  // ── Auto OTP modal ──────────────────────────────────────────
+  // ── Auto-show OTP modal when arrived ────────────────────────
   useEffect(() => {
-    if (rideStatus === 'driver_arrived') setShowOtpModal(true);
+    if (rideStatus === 'driver_arrived' && !showOtpModal) setShowOtpModal(true);
   }, [rideStatus]);
 
-  // ── Map init ────────────────────────────────────────────────
+  // ── Reset step/maneuver bands when nav target changes ────────
+  useEffect(() => {
+    setCurrentStepIdx(0);
+    resetManeuverBands();
+    setArrivedSpoken(false);
+  }, [navTargetType, resetManeuverBands]);
+
+  // ── Google Map load ──────────────────────────────────────────
   const onMapLoad = useCallback((map) => {
-    mapRef.current = map;
+    mapRef.current       = map;
     dirServiceRef.current = new window.google.maps.DirectionsService();
     setMapLoaded(true);
   }, []);
 
-  // ── Cleanup markers on unmount ──────────────────────────────
+  // ── Marker cleanup on unmount ────────────────────────────────
   useEffect(() => {
     return () => {
-      if (driverMarkerRef.current) {
-        driverMarkerRef.current.map = null;
-        driverMarkerRef.current = null;
-      }
-      if (pickupMarkerRef.current) {
-        pickupMarkerRef.current.map = null;
-        pickupMarkerRef.current = null;
-      }
-      if (dropoffMarkerRef.current) {
-        dropoffMarkerRef.current.map = null;
-        dropoffMarkerRef.current = null;
-      }
-      markersInitializedRef.current = false;
+      [driverMarkerRef, pickupMarkerRef, dropoffMarkerRef].forEach(ref => {
+        if (ref.current) { ref.current.map = null; ref.current = null; }
+      });
+      markersInitRef.current = false;
     };
   }, []);
 
-  // ── Driver marker (update only, no re-create) ───────────────
+  // ── Driver marker — update position + heading each GPS tick ──
   useEffect(() => {
     if (!mapLoaded || !mapRef.current || !currentPosition) return;
     if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
 
     const { lat, lng, heading = 0 } = currentPosition;
     smoothHeadingRef.current = smoothHeading(smoothHeadingRef.current, heading, 0.2);
+    const h = smoothHeadingRef.current;
 
     if (!driverMarkerRef.current) {
       const el = document.createElement('div');
-      el.innerHTML = createDriverMarkerHtml(smoothHeadingRef.current);
+      el.innerHTML = createDriverMarkerHtml(h);
       driverMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
-        map: mapRef.current,
-        content: el,
+        map:      mapRef.current,
+        content:  el,
         position: { lat, lng },
-        zIndex: 10,
+        zIndex:   10,
       });
     } else {
       driverMarkerRef.current.position = { lat, lng };
       if (driverMarkerRef.current.content) {
-        driverMarkerRef.current.content.innerHTML = createDriverMarkerHtml(smoothHeadingRef.current);
+        driverMarkerRef.current.content.innerHTML = createDriverMarkerHtml(h);
       }
     }
 
     if (followMode) {
-      mapRef.current.moveCamera({
-        center: { lat, lng },
-        heading: smoothHeadingRef.current,
-        tilt: mapTilt,
-        zoom: 17,
-      });
+      mapRef.current.moveCamera({ center: { lat, lng }, heading: h, tilt: 45, zoom: 17 });
     }
-  }, [currentPosition, mapLoaded, followMode, mapTilt]);
+  }, [currentPosition, mapLoaded, followMode]);
 
-  // ── Pickup / Dropoff markers — create once only ─────────────
+  // ── Pickup / Dropoff markers — create once ───────────────────
   useEffect(() => {
-    if (!mapLoaded || !window.google?.maps?.marker?.AdvancedMarkerElement) return;
-    if (markersInitializedRef.current) return; // guard: no duplicates
+    if (!mapLoaded || markersInitRef.current) return;
+    if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
 
     let created = false;
 
@@ -748,49 +598,45 @@ export default function RideLiveTracking() {
       const el = document.createElement('div');
       el.innerHTML = createPickupMarkerHtml();
       pickupMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
-        map: mapRef.current,
-        content: el,
-        position: pickupCoords,
-        zIndex: 5,
+        map: mapRef.current, content: el, position: pickupCoords, zIndex: 5,
       });
       created = true;
     }
-
     if (dropoffCoords && !dropoffMarkerRef.current) {
       const el = document.createElement('div');
       el.innerHTML = createDropoffMarkerHtml();
       dropoffMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
-        map: mapRef.current,
-        content: el,
-        position: dropoffCoords,
-        zIndex: 5,
+        map: mapRef.current, content: el, position: dropoffCoords, zIndex: 5,
       });
       created = true;
     }
-
-    if (created) markersInitializedRef.current = true;
+    if (created) markersInitRef.current = true;
   }, [mapLoaded, pickupCoords, dropoffCoords]);
 
-  // ── Route calculation ───────────────────────────────────────
+  // ── Route calculation ────────────────────────────────────────
   const calculateRoute = useCallback(async (origin, destination) => {
     if (!dirServiceRef.current || !origin || !destination) return;
     try {
       const result = await dirServiceRef.current.route({
         origin,
         destination,
-        travelMode: window.google.maps.TravelMode.DRIVING,
+        travelMode:               window.google.maps.TravelMode.DRIVING,
         provideRouteAlternatives: false,
       });
       if (result.status === 'OK') {
         setDirections(result);
-        setNavSteps(parseDirectionSteps(result.routes?.[0]?.legs));
-        setCurrentStepIndex(0);
+        const steps = parseDirectionSteps(result.routes?.[0]?.legs);
+        setNavSteps(steps);
+        setCurrentStepIdx(0);
       }
     } catch (e) {
       console.error('[Route calc]', e);
+    } finally {
+      setIsRerouting(false);
     }
   }, []);
 
+  // ── Initial route when map + position ready ──────────────────
   useEffect(() => {
     if (!mapLoaded || !currentPosition || !targetCoords) return;
     calculateRoute(
@@ -798,51 +644,51 @@ export default function RideLiveTracking() {
       targetCoords,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapLoaded, navTargetType, targetCoords]);
+  }, [mapLoaded, navTargetType]);
 
-  // ── Socket navigation target → reroute ─────────────────────
+  // ── Socket navigation target → reroute ──────────────────────
   useEffect(() => {
-    if (!navigationTarget || !mapLoaded) return;
+    if (!navigationTarget || !mapLoaded || !currentPosition) return;
     announceRerouting();
     setIsRerouting(true);
+
     const dest = navigationTarget.coords
       ? { lat: navigationTarget.coords[1], lng: navigationTarget.coords[0] }
-      : navTargetType === 'dropoff' ? dropoffCoords : pickupCoords;
+      : (navTargetType === 'dropoff' ? dropoffCoords : pickupCoords);
 
-    if (dest && currentPosition) {
-      calculateRoute(
-        { lat: currentPosition.lat, lng: currentPosition.lng },
-        dest,
-      ).finally(() => setIsRerouting(false));
-    } else {
-      setIsRerouting(false);
-    }
+    if (dest) calculateRoute({ lat: currentPosition.lat, lng: currentPosition.lng }, dest);
+    else      setIsRerouting(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigationTarget]);
 
-  // ── Turn-by-turn step advance ───────────────────────────────
+  // ── Turn-by-turn advancement + voice ────────────────────────
+  const navStepsRef   = useRef([]);
+  const stepIdxRef    = useRef(0);
+  navStepsRef.current = navSteps;
+  stepIdxRef.current  = currentStepIdx;
+
   useEffect(() => {
-    if (!currentPosition || !navSteps.length) return;
-    const step = navSteps[currentStepIndex];
-    if (!step) return;
+    if (!currentPosition || !navStepsRef.current.length) return;
+    const { lat, lng } = currentPosition;
+    const steps        = navStepsRef.current;
+    const idx          = stepIdxRef.current;
+    const step         = steps[idx];
 
-    const distToStepEnd = distanceKm(
-      currentPosition.lat, currentPosition.lng,
-      step.endLat, step.endLng,
-    );
+    if (!step?.endLat || !step?.endLng) return;
 
-    if (distToStepEnd < 0.3) {
-      announceManeuver(step.instruction, Math.round(distToStepEnd * 1000));
+    const distToEnd = distanceKm(lat, lng, step.endLat, step.endLng);
+    announceManeuver(step.instruction, distToEnd * 1000, idx);
+
+    if (distToEnd < STEP_ARRIVAL_THRESHOLD && idx < steps.length - 1) {
+      setCurrentStepIdx(prev => prev + 1);
     }
-    if (distToStepEnd < STEP_COMPLETE_THRESHOLD_KM && currentStepIndex < navSteps.length - 1) {
-      setCurrentStepIndex(prev => prev + 1);
-    }
-    if (targetCoords) {
-      const distToTarget = distanceKm(
-        currentPosition.lat, currentPosition.lng,
-        targetCoords.lat, targetCoords.lng,
-      );
-      if (distToTarget < 0.05) announceArrival(navTargetType);
+
+    if (targetCoords && !arrivedSpoken) {
+      const distToTarget = distanceKm(lat, lng, targetCoords.lat, targetCoords.lng);
+      if (distToTarget < ARRIVAL_THRESHOLD_KM) {
+        announceArrival(navTargetType);
+        setArrivedSpoken(true);
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPosition]);
@@ -853,11 +699,9 @@ export default function RideLiveTracking() {
     setOtpError(null);
     try {
       const result = await verifyOtp(otp);
-      if (result?.payload?.success || result?.success) {
-        setShowOtpModal(false);
-      } else {
-        setOtpError('Invalid OTP. Ask customer to check again.');
-      }
+      const ok = result?.payload?.status === 'otp_verified' || result?.meta?.requestStatus === 'fulfilled';
+      if (ok) setShowOtpModal(false);
+      else    setOtpError('Invalid OTP. Ask customer to check again.');
     } catch (e) {
       setOtpError(e.message || 'OTP verification failed');
     } finally {
@@ -865,301 +709,336 @@ export default function RideLiveTracking() {
     }
   }, [verifyOtp]);
 
-  // ── Recenter ────────────────────────────────────────────────
+  // ── Recenter ─────────────────────────────────────────────────
   const handleRecenter = useCallback(() => {
     setFollowMode(true);
     if (currentPosition && mapRef.current) {
       mapRef.current.moveCamera({
-        center: { lat: currentPosition.lat, lng: currentPosition.lng },
+        center:  { lat: currentPosition.lat, lng: currentPosition.lng },
         heading: smoothHeadingRef.current,
-        tilt: mapTilt,
-        zoom: 17,
+        tilt:    45,
+        zoom:    17,
       });
     }
-  }, [currentPosition, mapTilt]);
+  }, [currentPosition]);
 
-  // ── Action button ───────────────────────────────────────────
+  // ── Go back ──────────────────────────────────────────────────
+  const handleBack = useCallback(() => {
+    if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+    else router.push('/driver/bookings');
+  }, [router]);
+
+  // ── Action button config per status ─────────────────────────
   const actionButton = useMemo(() => {
     switch (rideStatus) {
       case 'driver_assigned':
-        return { label: 'Accept Ride', icon: <CheckCircle size={18} />, action: () => sendStatusUpdate(DRIVER_STATUS.ACCEPTED), color: 'btn-success' };
+        return {
+          label: 'Accept Ride', icon: <CheckCircle size={18} />,
+          color: '#22c55e', shadow: 'rgba(34,197,94,0.4)',
+          action: () => sendStatusUpdate(DRIVER_STATUS.ACCEPTED),
+        };
       case 'driver_accepted':
-        return { label: 'Navigate To Pickup', icon: <Navigation size={18} />, action: () => sendStatusUpdate(DRIVER_STATUS.EN_ROUTE), color: 'btn-primary' };
+        return {
+          label: 'Navigate To Pickup', icon: <Navigation size={18} />,
+          color: 'var(--primary)', shadow: 'rgba(59,130,246,0.4)',
+          action: () => sendStatusUpdate(DRIVER_STATUS.EN_ROUTE),
+        };
       case 'driver_en_route':
-        return { label: 'I Have Arrived', icon: <MapPin size={18} />, action: () => sendStatusUpdate(DRIVER_STATUS.ARRIVED), color: 'btn-accent' };
+        return {
+          label: 'I Have Arrived', icon: <MapPin size={18} />,
+          color: '#8b5cf6', shadow: 'rgba(139,92,246,0.4)',
+          action: () => sendStatusUpdate(DRIVER_STATUS.ARRIVED),
+        };
       case 'driver_arrived':
-        return { label: 'Verify OTP', icon: <CheckSquare size={18} />, action: () => setShowOtpModal(true), color: 'btn-warning' };
+        return {
+          label: 'Verify OTP', icon: <CheckSquare size={18} />,
+          color: '#f59e0b', shadow: 'rgba(245,158,11,0.4)',
+          action: () => setShowOtpModal(true),
+        };
       case 'otp_verified':
-        return { label: 'Start Ride', icon: <Play size={18} />, action: () => sendStatusUpdate(DRIVER_STATUS.RIDE_STARTED), color: 'btn-success' };
+        return {
+          label: 'Start Ride', icon: <Play size={18} />,
+          color: '#22c55e', shadow: 'rgba(34,197,94,0.4)',
+          action: () => sendStatusUpdate(DRIVER_STATUS.RIDE_STARTED),
+        };
       case 'in_progress':
-        return { label: 'Complete Ride', icon: <Square size={18} />, action: () => sendStatusUpdate(DRIVER_STATUS.COMPLETED), color: 'btn-primary' };
+        return {
+          label: 'Complete Ride', icon: <Square size={18} />,
+          color: 'var(--primary)', shadow: 'rgba(59,130,246,0.4)',
+          action: () => sendStatusUpdate(DRIVER_STATUS.COMPLETED),
+        };
       case 'at_stop':
-        return { label: 'Resume Ride', icon: <Play size={18} />, action: () => sendStatusUpdate('stop_departed'), color: 'btn-accent' };
+        return {
+          label: 'Resume Ride', icon: <Play size={18} />,
+          color: '#06b6d4', shadow: 'rgba(6,182,212,0.4)',
+          action: () => sendStatusUpdate('stop_departed'),
+        };
       default:
         return null;
     }
   }, [rideStatus, sendStatusUpdate, DRIVER_STATUS]);
 
-  const currentStep = navSteps[currentStepIndex] || null;
-  const etaMinutes = etaUpdate?.etaMinutes ?? socketLive?.etaMinutes ?? rd?.currentEtaMinutes;
+  const currentStep = navSteps[currentStepIdx] || null;
+  const etaMinutes  = etaUpdate?.etaMinutes ?? socketLive?.etaMinutes ?? rd?.currentEtaMinutes;
   const remainingKm = etaUpdate?.distanceRemainingKm;
 
+  // ── Render guards ────────────────────────────────────────────
   if (isLoadingRide || !isLoaded) return <LoadingSkeleton />;
-  if (showCompleted) return <RideCompletedScreen ride={rd} />;
+  if (showCompleted)              return <RideCompletedScreen ride={rd} onBack={handleBack} />;
 
+  // ── Main render ──────────────────────────────────────────────
   return (
-    <div className="fixed inset-0 overflow-hidden" data-theme="driver">
+    <>
+      <style>{`
+        @keyframes spin    { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+        @keyframes gPulse  { 0%{transform:scale(0.8);opacity:0.8} 100%{transform:scale(2.4);opacity:0} }
+      `}</style>
 
-      {/* ── MAP ─────────────────────────────────────────────── */}
-      <div className="absolute inset-0">
-        <GoogleMap
-          mapContainerStyle={{ width: '100%', height: '100%' }}
-          center={currentPosition || pickupCoords || { lat: 16.506, lng: 80.648 }}
-          zoom={15}
-          options={{
-            mapId: MAP_ID,
-            disableDefaultUI: true,
-            clickableIcons: false,
-            gestureHandling: 'greedy',
-            mapTypeId: 'roadmap',
-            tilt: mapTilt,
-          }}
-          onLoad={onMapLoad}
-          onDragStart={() => setFollowMode(false)}
-        >
-          {directions && (
-            <DirectionsRenderer
-              directions={directions}
-              options={{
-                suppressMarkers: true,
-                polylineOptions: {
-                  strokeColor: '#6366f1',
-                  strokeWeight: 6,
-                  strokeOpacity: 0.9,
-                },
-              }}
+      <div className="fixed inset-0 overflow-hidden font-poppins">
+
+        {/* ── MAP ─────────────────────────────────────────── */}
+        <div className="absolute inset-0">
+          <GoogleMap
+            mapContainerStyle={{ width: '100%', height: '100%' }}
+            center={currentPosition || pickupCoords || { lat: 16.506, lng: 80.648 }}
+            zoom={15}
+            options={{
+              mapId:            MAP_ID,
+              disableDefaultUI: true,
+              clickableIcons:   false,
+              gestureHandling:  'greedy',
+              mapTypeId:        'roadmap',
+              tilt:             45,
+            }}
+            onLoad={onMapLoad}
+            onDragStart={() => setFollowMode(false)}
+          >
+            {directions && (
+              <DirectionsRenderer
+                directions={directions}
+                options={{
+                  suppressMarkers: true,
+                  polylineOptions: {
+                    strokeColor:   '#6366f1',
+                    strokeWeight:  6,
+                    strokeOpacity: 0.9,
+                  },
+                }}
+              />
+            )}
+          </GoogleMap>
+        </div>
+
+        {/* ── OFFLINE BANNER ─────────────────────────────── */}
+        <AnimatePresence>
+          {isOffline && (
+            <motion.div
+              initial={{ y: -48 }} animate={{ y: 0 }} exit={{ y: -48 }}
+              className="absolute top-0 left-0 right-0 z-[60] bg-error text-error-content flex items-center justify-center gap-2 py-2.5 text-xs font-bold"
+            >
+              <WifiOff size={14} />
+              No internet — navigation paused
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ── TOP BAR ────────────────────────────────────── */}
+        <div className="absolute top-0 left-0 right-0 z-20">
+          <div className="  mt-1 flex flex-col  ">
+
+            {/* Status + back + ETA row */}
+            <motion.div
+              initial={{ opacity: 0, y: -16 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex items-center gap-2 px-3.5 py-2.5   bg-base-200/95 border border-base-300  "
+            >
+              {/* Back button */}
+              <motion.button
+                whileTap={{ scale: 0.9 }}
+                onClick={handleBack}
+                className="w-8 h-8 rounded-xl flex-shrink-0 flex items-center justify-center cursor-pointer text-base-content/60 bg-base-300 border border-base-300 hover:text-base-content transition-colors"
+              >
+                <ChevronLeft size={18} />
+              </motion.button>
+
+              {/* Socket status dot */}
+              <div
+                className="w-2 h-2 rounded-full flex-shrink-0"
+                style={{
+                  background:  connected ? 'var(--success)' : 'var(--error)',
+                  boxShadow:   connected ? '0 0 6px var(--success)' : 'none',
+                  animation:   connected ? 'gPulse 2s infinite' : 'none',
+                }}
+              />
+
+              {/* Status badge */}
+              {rideStatus && (() => {
+                const cfg = STATUS_CONFIG[rideStatus] || {};
+                return (
+                  <span
+                    className="inline-flex items-center px-2.5 py-0.5 rounded-full flex-shrink-0 text-[10px] font-bold uppercase tracking-widest border"
+                    style={{ background: cfg.bg, borderColor: cfg.border, color: cfg.color }}
+                  >
+                    {cfg.label}
+                  </span>
+                );
+              })()}
+
+              {/* ETA */}
+              {etaMinutes != null && (
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <Clock size={11} className="text-base-content/40" />
+                  <span className="text-xs font-bold text-base-content">{formatEta(etaMinutes)}</span>
+                </div>
+              )}
+
+              {/* Distance */}
+              {remainingKm != null && (
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <Navigation size={11} className="text-primary" />
+                  <span className="text-xs font-semibold text-base-content">{formatDistance(remainingKm)}</span>
+                </div>
+              )}
+
+              {/* Speed */}
+              {currentPosition?.speed > 2 && (
+                <div className="flex items-center gap-1 ml-auto flex-shrink-0">
+                  <Zap size={11} className="text-warning" />
+                  <span className="text-[11px] font-semibold text-base-content/60">{formatSpeed(currentPosition.speed)}</span>
+                </div>
+              )}
+            </motion.div>
+
+            {/* Nav instruction card */}
+            <AnimatePresence mode="wait">
+              {currentStep && <NavInstructionCard key={currentStepIdx} step={currentStep} />}
+            </AnimatePresence>
+
+            {/* Rerouting banner */}
+            <AnimatePresence>
+              {isRerouting && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className="flex items-center gap-2 px-3 py-2 rounded-xl bg-warning/10 border border-warning/30 text-xs font-semibold text-warning"
+                >
+                  <RotateCcw size={13} className="animate-spin" />
+                  Recalculating route...
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+
+        {/* ── GPS ERROR ──────────────────────────────────── */}
+        <AnimatePresence>
+          {gpsError && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute top-[120px] left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-3.5 py-2 rounded-xl bg-error/10 border border-error/30 text-xs text-error font-semibold whitespace-nowrap"
+            >
+              <MapPinOff size={13} />
+              {gpsError}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ── LEFT FABs (recenter + compass) ─────────────── */}
+        <div className="absolute top-36 left-3 z-20 flex flex-col gap-2">
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={handleRecenter}
+            className={`w-11 h-11 rounded-[13px] flex items-center justify-center cursor-pointer border border-base-300 shadow-[0_4px_16px_rgba(0,0,0,0.4)] transition-colors ${followMode ? 'bg-primary text-primary-content' : 'bg-base-200/90 text-base-content/60'}`}
+          >
+            <Maximize2 size={16} />
+          </motion.button>
+
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={() => {
+              if (mapRef.current) { mapRef.current.moveCamera({ heading: 0, tilt: 0 }); setFollowMode(false); }
+            }}
+            className="w-11 h-11 rounded-[13px] bg-base-200/90 border border-base-300 flex items-center justify-center cursor-pointer text-base-content/60 shadow-[0_4px_16px_rgba(0,0,0,0.4)] hover:text-base-content transition-colors"
+          >
+            <Compass size={16} />
+          </motion.button>
+        </div>
+
+        {/* ── RIGHT FABs (voice + SOS) ────────────────────── */}
+        <div className="absolute top-36 right-3 z-20 flex flex-col gap-2">
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={toggleVoice}
+            className={`w-11 h-11 rounded-[13px] flex items-center justify-center cursor-pointer border shadow-[0_4px_16px_rgba(0,0,0,0.4)] transition-colors ${voiceEnabled ? 'bg-success/10 border-success/30 text-success' : 'bg-base-200/90 border-base-300 text-base-content/40'}`}
+          >
+            {voiceEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+          </motion.button>
+
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={() => {
+              setSosActive(true);
+              triggerSosAlert('safety');
+              setTimeout(() => setSosActive(false), 5000);
+            }}
+            className={`w-11 h-11 rounded-[13px] flex items-center justify-center cursor-pointer border shadow-[0_4px_16px_rgba(0,0,0,0.4)] transition-colors ${sosActive ? 'bg-error border-error text-error-content' : 'bg-error/10 border-error/30 text-error'}`}
+            style={{ animation: sosActive ? 'gPulse 1s infinite' : 'none' }}
+          >
+            {sosActive ? <ShieldAlert size={16} /> : <Shield size={16} />}
+          </motion.button>
+        </div>
+
+        {/* ── PRIMARY ACTION BUTTON ───────────────────────── */}
+        <AnimatePresence>
+          {actionButton && rideStatus !== 'completed' && rideStatus !== 'cancelled' && (
+            <motion.div
+              initial={{ y: 100, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 100, opacity: 0 }}
+              transition={{ type: 'spring', damping: 24, stiffness: 300 }}
+              className="absolute bottom-[88px] left-4 right-4 z-30"
+            >
+              <motion.button
+                whileTap={{ scale: 0.97 }}
+                onClick={actionButton.action}
+                className="w-fit px-4  mx-auto py-2 rounded-full border-none text-white cursor-pointer text-[15px] font-extrabold flex items-center justify-center gap-2.5 font-poppins tracking-wide"
+                style={{
+                  background:  actionButton.color,
+                  boxShadow:   `0 6px 24px ${actionButton.shadow}`,
+                  fontFamily:  'inherit',
+                }}
+              >
+                {actionButton.icon}
+                <span className='text-xs'>{actionButton.label}</span>
+              </motion.button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ── BOTTOM SHEET ───────────────────────────────── */}
+        <BottomSheet
+          ride={tracking}
+          booking={bk}
+          open={sheetOpen}
+          onToggle={() => setSheetOpen(p => !p)}
+        />
+
+        {/* ── OTP MODAL ──────────────────────────────────── */}
+        <AnimatePresence>
+          {showOtpModal && (
+            <OtpModal
+              onVerify={handleOtpVerify}
+              onClose={() => setShowOtpModal(false)}
+              loading={otpLoading}
+              error={otpError}
             />
           )}
-        </GoogleMap>
+        </AnimatePresence>
+
       </div>
-
-      {/* ── OFFLINE BANNER ────────────────────────────────── */}
-      <AnimatePresence>
-        {isOffline && (
-          <motion.div
-            initial={{ y: -50, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: -50, opacity: 0 }}
-            className="absolute top-0 left-0 right-0 z-50 bg-error text-error-content text-center py-2 text-xs font-bold flex items-center justify-center gap-2"
-          >
-            <WifiOff size={12} />
-            No internet connection — navigation paused
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ── TOP HEADER ─────────────────────────────────────── */}
-      <div className="absolute top-0 left-0 right-0 z-20 pt-safe-top">
-        <div className="mx-3 mt-3 space-y-2">
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex items-center gap-2 px-3 py-2 rounded-2xl bg-base-100/95 border border-base-300/60 shadow-xl"
-          >
-            <div className={`w-2 h-2 rounded-full flex-shrink-0 ${connected ? 'bg-success animate-pulse' : 'bg-error'}`} />
-
-            {rideStatus && (() => {
-              const cfg = STATUS_CONFIG[rideStatus] || {};
-              return (
-                <span className={`badge badge-sm ${cfg.bg} ${cfg.color} border ${cfg.border} flex-shrink-0`}>
-                  {cfg.label}
-                </span>
-              );
-            })()}
-
-            {etaMinutes != null && (
-              <div className="flex items-center gap-1 flex-shrink-0">
-                <Clock size={12} className="text-base-content/50" />
-                <span className="text-xs font-bold text-base-content">{formatEta(etaMinutes)}</span>
-              </div>
-            )}
-
-            {remainingKm != null && (
-              <div className="flex items-center gap-1 flex-shrink-0">
-                <Navigation size={12} className="text-primary" />
-                <span className="text-xs font-semibold text-base-content">{formatDistance(remainingKm)}</span>
-              </div>
-            )}
-
-            {currentPosition?.speed > 0 && (
-              <div className="flex items-center gap-1 flex-shrink-0">
-                <Zap size={12} className="text-warning" />
-                <span className="text-xs font-semibold text-base-content">{formatSpeed(currentPosition.speed)} km/h</span>
-              </div>
-            )}
-
-            {currentPosition?.accuracy && (
-              <span className="text-xs ml-auto flex-shrink-0 text-base-content/40">
-                ±{Math.round(currentPosition.accuracy)}m
-              </span>
-            )}
-          </motion.div>
-
-          <AnimatePresence mode="wait">
-            {currentStep && (
-              <NavInstructionCard key={currentStepIndex} step={currentStep} />
-            )}
-          </AnimatePresence>
-
-          <AnimatePresence>
-            {isRerouting && (
-              <motion.div
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="flex items-center gap-2 bg-warning/20 border border-warning/40 rounded-xl px-3 py-2"
-              >
-                <RotateCcw size={14} className="text-warning animate-spin" />
-                <span className="text-warning text-xs font-semibold">Recalculating route...</span>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-      </div>
-
-      {/* ── GPS ERROR ──────────────────────────────────────── */}
-      <AnimatePresence>
-        {gpsError && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute top-32 left-1/2 -translate-x-1/2 z-40 bg-error/20 border border-error/40 rounded-xl px-4 py-2 flex items-center gap-2"
-          >
-            <MapPinOff size={14} className="text-error" />
-            <span className="text-error text-xs font-semibold">{gpsError}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ── LEFT FABs (recenter + compass) ─────────────────── */}
-      <div className="absolute top-36 left-3 z-20 flex flex-col gap-2">
-        {/* Recenter — LEFT side */}
-        <motion.button
-          whileTap={{ scale: 0.9 }}
-          onClick={handleRecenter}
-          className={`
-            w-11 h-11 rounded-2xl flex items-center justify-center shadow-lg
-            border backdrop-blur-sm
-            ${followMode
-              ? 'bg-primary text-white border-primary'
-              : 'bg-base-100/95 text-base-content border-base-300'}
-          `}
-        >
-          <Maximize2 size={16} />
-        </motion.button>
-
-        {/* Compass / north-up */}
-        <motion.button
-          whileTap={{ scale: 0.9 }}
-          onClick={() => {
-            if (mapRef.current) {
-              mapRef.current.moveCamera({ heading: 0, tilt: 0 });
-              setFollowMode(false);
-            }
-          }}
-          className="w-11 h-11 rounded-2xl flex items-center justify-center shadow-lg border backdrop-blur-sm bg-base-100/95 text-base-content border-base-300"
-        >
-          <Compass size={16} />
-        </motion.button>
-      </div>
-
-      {/* ── RIGHT FABs (voice + SOS) ────────────────────────── */}
-      <div className="absolute top-36 right-3 z-20 flex flex-col gap-2">
-        {/* Voice toggle */}
-        <motion.button
-          whileTap={{ scale: 0.9 }}
-          onClick={toggleVoice}
-          className={`
-            w-11 h-11 rounded-2xl flex items-center justify-center shadow-lg border backdrop-blur-sm
-            ${voiceEnabled
-              ? 'bg-success/20 text-success border-success/40'
-              : 'bg-base-100/95 text-base-content/40 border-base-300'}
-          `}
-        >
-          {voiceEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-        </motion.button>
-
-        {/* SOS */}
-        <motion.button
-          whileTap={{ scale: 0.9 }}
-          onClick={() => {
-            setSosActive(true);
-            triggerSosAlert('safety');
-            setTimeout(() => setSosActive(false), 5000);
-          }}
-          className={`
-            w-11 h-11 rounded-2xl flex items-center justify-center shadow-lg border
-            ${sosActive
-              ? 'bg-error text-white border-error animate-pulse'
-              : 'bg-error/20 text-error border-error/40'}
-          `}
-        >
-          {sosActive ? <ShieldAlert size={16} /> : <Shield size={16} />}
-        </motion.button>
-      </div>
-
-      {/* ── ACTION BUTTON ──────────────────────────────────── */}
-      <AnimatePresence>
-        {actionButton && rideStatus !== 'completed' && (
-          <motion.div
-            initial={{ y: 100, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 100, opacity: 0 }}
-            className="absolute bottom-24 left-4 right-4 z-30"
-          >
-            <button
-              onClick={actionButton.action}
-              className={`btn ${actionButton.color} w-full rounded-2xl py-4 font-bold text-base shadow-xl flex items-center justify-center gap-2`}
-            >
-              {actionButton.icon}
-              {actionButton.label}
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ── BOTTOM SHEET ───────────────────────────────────── */}
-      <BottomSheet
-        ride={tracking}
-        booking={bk}
-        open={sheetOpen}
-        onToggle={() => setSheetOpen(p => !p)}
-      />
-
-      {/* ── OTP MODAL ──────────────────────────────────────── */}
-      <AnimatePresence>
-        {showOtpModal && (
-          <OtpModal
-            onVerify={handleOtpVerify}
-            onClose={() => setShowOtpModal(false)}
-            loading={otpLoading}
-            error={otpError}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* ── PULSE CSS ──────────────────────────────────────── */}
-      <style jsx>{`
-        @keyframes markerPulse {
-          0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
-          50%       { box-shadow: 0 0 0 12px rgba(16, 185, 129, 0); }
-        }
-        @keyframes pulse {
-          0%, 100% { opacity: 1; transform: translateX(-50%) scale(1); }
-          50%       { opacity: 0.4; transform: translateX(-50%) scale(2); }
-        }
-      `}</style>
-    </div>
+    </>
   );
 }

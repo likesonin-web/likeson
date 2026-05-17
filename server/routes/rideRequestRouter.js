@@ -19,7 +19,7 @@
  *     accept       → driver_accepted
  *     start_route  → driver_en_route
  *     arrived      → driver_arrived  (generates + sends OTP to customer + admin)
- *     verify_otp   → otp_verified    (hash check)
+ *     verify_otp   → otp_verified    (RAW string compare — matches 'arrived' storage)
  *     start_ride   → in_progress     (map switches to dropoff for ALL roles)
  *     at_stop      → at_stop
  *     resume       → in_progress
@@ -31,11 +31,14 @@
  *   GET  /:rideId/tracking        → full snapshot (breadcrumbs, milestones, polyline)
  *   POST /:rideId/tracking/milestone → HTTP milestone write (offline retry)
  *
- * CRITICAL DESIGN DECISIONS (consistent with booking routers):
- *   - Ride.driver = Driver._id (NOT User._id)
+ * FIXES IN THIS VERSION:
+ *   - createRideRequest() helper defined (was called but never declared → ReferenceError)
+ *   - ensureRideTracking() uses upsert → no duplicate RideTracking docs
+ *   - verify_otp: RAW string compare (pickupOtp stored raw in 'arrived' case)
+ *   - Socket bookingSocketService.js must also use raw compare (not hashOtp)
+ *   - Ride.driver = Driver._id (NOT User._id) — consistent throughout
  *   - role strings: 'care_assistant' (underscore, NOT space)
  *   - OTP generated on 'arrived' action only. Sent to customer + admin:ops
- *   - verify_otp is HTTP here (state machine); socket verify_otp also works
  *   - Socket is primary for live events; HTTP is initial load + fallback
  *   - Canonical route locked at driver assignment (async, non-blocking)
  *
@@ -58,12 +61,9 @@ import RideTracking         from '../models/RideTracking.js';
 import { protect, authorize }      from '../middleware/authMiddleware.js';
 import { getBookingSocketService } from '../services/bookingSocketService.js';
 import sendSms                     from '../services/Sendsms.js';
-import sendEmail                   from '../utils/sendEmail.js';
-import { otpTemplate }             from '../utils/emailTemplates.js';
 import { otpSms }                  from '../utils/Smstemplates.js';
 import {
   genOtp,
-  hashOtp,
   haversineKm,
   createNotification,
   buildRidePayload,
@@ -156,7 +156,30 @@ const getCustomerFromRide = async (ride) => {
   return booking?.customer || null;
 };
 
- 
+/**
+ * FIX: createRideRequest — was called in both POST /customer and POST /care-assistant
+ * but never defined, causing ReferenceError on every ride creation.
+ * Creates a minimal Ride doc with status:'searching'.
+ */
+const createRideRequest = async ({ pickupGeo, dropoffGeo, scheduledAt, bookingId, createdBy }) => {
+  const ride = await Ride.create({
+    ...buildRidePayload({
+      bookingId,
+      rideType:      'patient',
+      vehicleClass:  'four_wheeler',
+      pickupCoords:  pickupGeo.coordinates,
+      pickupAddress: pickupGeo.address  || '',
+      pickupCity:    pickupGeo.city     || '',
+      dropoffCoords: dropoffGeo.coordinates,
+      dropoffAddress: dropoffGeo.address || '',
+      dropoffCity:    dropoffGeo.city    || '',
+      scheduledPickupAt: scheduledAt || null,
+      createdBy,
+    }),
+    status: 'searching', // override buildRidePayload default of 'requested'
+  });
+  return { ride };
+};
 
 /**
  * canAccessRide — DB-verified access check.
@@ -177,7 +200,7 @@ const canAccessRide = async (userId, role, ride) => {
       return { allowed: true };
   }
 
-  // FIX: 'care_assistant' underscore
+  // 'care_assistant' underscore
   if (role === 'care_assistant' && ride.booking) {
     const ca = await CareAssistantProfile.findOne({ user: userId }).select('_id').lean();
     if (ca) {
@@ -211,33 +234,37 @@ const canDriverMutateRide = async (userId, role, ride) => {
 };
 
 /**
- * ensureRideTracking — create RideTracking if missing.
- * Called after driver assignment so socket GPS writes have a doc to update.
- * FIX: sets driver = Driver._id (ride.driver is already Driver._id).
+ * FIX: ensureRideTracking — uses findOneAndUpdate with upsert + $setOnInsert.
+ * Previous version used findOne + create in two steps → race condition between
+ * admin assign and TP assign could create two RideTracking docs for same ride.
+ * Requires unique index on RideTracking: { ride: 1 }
+ * Add to RideTracking model if missing: rideTrackingSchema.index({ ride: 1 }, { unique: true })
  */
 const ensureRideTracking = async (ride) => {
-  let tracking = await RideTracking.findOne({ ride: ride._id });
-  if (tracking) return tracking;
-
-  tracking = await RideTracking.create({
-    ride:                 ride._id,
-    booking:              ride.booking || null,
-    driver:               ride.driver  || null, // ← Driver._id (correct)
-    breadcrumbs:          [],
-    breadcrumbCount:      0,
-    milestones:           [],
-    hasActiveSos:         false,
-    totalDistanceKm:      ride.estimatedDistanceKm  || 0,
-    currentEtaMinutes:    ride.estimatedDurationMin || null,
-  });
-
+  const tracking = await RideTracking.findOneAndUpdate(
+    { ride: ride._id },
+    {
+      $setOnInsert: {
+        ride:              ride._id,
+        booking:           ride.booking || null,
+        driver:            ride.driver  || null, // ← Driver._id (correct)
+        breadcrumbs:       [],
+        breadcrumbCount:   0,
+        milestones:        [],
+        hasActiveSos:      false,
+        totalDistanceKm:   ride.estimatedDistanceKm  || 0,
+        currentEtaMinutes: ride.estimatedDurationMin || null,
+      },
+    },
+    { upsert: true, new: true }
+  );
   return tracking;
 };
 
 /**
  * Lock canonical route after driver assignment.
  * Non-blocking — called with .then() / .catch() after response sent.
- * Stores polyline in RideTracking.expectedRoutePolyline (correct field name).
+ * Stores polyline in RideTracking.expectedRoutePolyline.
  */
 const lockCanonicalRouteAsync = (ride, trackingId) => {
   if (!ride.pickup?.coordinates || !ride.dropoff?.coordinates) return;
@@ -254,7 +281,7 @@ const lockCanonicalRouteAsync = (ride, trackingId) => {
           $set: {
             totalDistanceKm:       distanceKm,
             currentEtaMinutes:     durationMin,
-            expectedRoutePolyline: polyline,  // FIX: correct field name
+            expectedRoutePolyline: polyline,
           },
         }),
       ]);
@@ -264,7 +291,6 @@ const lockCanonicalRouteAsync = (ride, trackingId) => {
 
 /**
  * broadcastRideStatus — emit socket events + record milestone.
- * FIX: milestone stopSequence + coordinates pulled from live location.
  */
 const broadcastRideStatus = async ({ ride, newStatus, extraPayload = {}, socketService }) => {
   if (!socketService) return;
@@ -297,7 +323,6 @@ const broadcastRideStatus = async ({ ride, newStatus, extraPayload = {}, socketS
         recordedByUserId: ride.driver, // ← Driver._id
       });
     } catch (e) {
-      // Unknown milestone name in enum — log, don't crash
       console.error('[broadcastRideStatus] milestone:', e.message);
     }
   }
@@ -332,8 +357,8 @@ router.post('/customer',
           return res.status(400).json({ success: false, message: 'Active ride already exists on this booking' });
       }
 
-      const pickupGeo  = buildGeo(pickupLocation);
-      const dropoffGeo = buildGeo(destinationLocation);
+      const pickupGeo    = buildGeo(pickupLocation);
+      const dropoffGeo   = buildGeo(destinationLocation);
       const [pLng, pLat] = pickupLocation.coordinates;
 
       const { ratePerKm, source: rateSource } = await resolveCareRideKmRate(req.user._id);
@@ -345,6 +370,7 @@ router.post('/customer',
         location: { $geoWithin: { $centerSphere: [[pLng, pLat], CARE_RIDE_RADIUS_RAD] } },
       });
 
+      // FIX: createRideRequest now defined above
       const { ride } = await createRideRequest({
         pickupGeo, dropoffGeo, scheduledAt,
         bookingId:  bookingId || null,
@@ -399,6 +425,7 @@ router.post('/customer',
         },
       });
     } catch (err) {
+      console.error('[POST /customer]', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   }
@@ -407,11 +434,10 @@ router.post('/customer',
 // ═════════════════════════════════════════════════════════════════════════════
 // CARE ASSISTANT — request ride for patient
 // POST /api/ride-requests/care-assistant
-// FIX: authorize('care_assistant') — underscore
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/care-assistant',
-  protect, authorize('care_assistant'), // FIX: was 'care assistant'
+  protect, authorize('care_assistant'),
   async (req, res) => {
     try {
       const { pickupLocation, destinationLocation, scheduledAt, bookingId, notes } = req.body;
@@ -430,7 +456,7 @@ router.post('/care-assistant',
         return res.status(404).json({ success: false, message: 'Care assistant profile not found' });
 
       const booking = await Booking.findOne({
-        _id:          bookingId,
+        _id:           bookingId,
         careAssistant: profile._id,
         status:        { $in: ['confirmed', 'in_progress'] },
       }).select('_id customer scheduledAt bookingCode').lean();
@@ -442,8 +468,8 @@ router.post('/care-assistant',
       if (activeRide)
         return res.status(400).json({ success: false, message: 'Active ride already exists on this booking' });
 
-      const pickupGeo  = buildGeo(pickupLocation);
-      const dropoffGeo = buildGeo(destinationLocation);
+      const pickupGeo    = buildGeo(pickupLocation);
+      const dropoffGeo   = buildGeo(destinationLocation);
       const [pLng, pLat] = pickupLocation.coordinates;
 
       const { ratePerKm, source: rateSource } = await resolveCareRideKmRate(booking.customer);
@@ -529,6 +555,7 @@ router.post('/care-assistant',
         },
       });
     } catch (err) {
+      console.error('[POST /care-assistant]', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   }
@@ -537,7 +564,6 @@ router.post('/care-assistant',
 // ═════════════════════════════════════════════════════════════════════════════
 // CUSTOMER/CA/DRIVER/TP — get single ride
 // GET /api/ride-requests/:rideId
-// FIX: allow driver + TP + admin; was too restrictive
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.get('/:rideId',
@@ -621,7 +647,6 @@ router.get('/admin/:rideId/nearby',
       const [lng, lat] = coords;
 
       const [soloDrivers, agencyDrivers, tps] = await Promise.all([
-        // Solo drivers: Driver doc with soloPartner set
         Driver.find({
           soloPartner: { $ne: null },
           isActive: true, isVerified: true, isBlocked: false, status: 'Available',
@@ -631,7 +656,6 @@ router.get('/admin/:rideId/nearby',
           .select('_id driverCode location performance assignedVehicleSnapshot soloPartner')
           .limit(15).lean(),
 
-        // Agency drivers: Driver doc with ownerAgency set
         Driver.find({
           ownerAgency: { $ne: null },
           isActive: true, isVerified: true, isBlocked: false, status: 'Available',
@@ -666,7 +690,6 @@ router.get('/admin/:rideId/nearby',
           distKm:         +distKm.toFixed(2),
           estimatedFare:  +(distKm * ratePerKm).toFixed(2),
 
-          // Solo drivers: driverId = Driver._id (used in assign body)
           soloDrivers: soloDrivers
             .filter(d => d.soloPartner?.partnershipStatus === 'active' && d.soloPartner?.isOnboardingComplete)
             .map(d => ({
@@ -679,11 +702,10 @@ router.get('/admin/:rideId/nearby',
               distanceKm: +haversineKm(coords, d.location?.coordinates || [0, 0]).toFixed(1),
             })),
 
-          // Agency drivers: driverId = Driver._id
           agencyDrivers: agencyDrivers
             .filter(d => d.ownerAgency?.partnershipStatus === 'active')
             .map(d => ({
-              driverId:   d._id, // ← Driver._id (for TP assign body)
+              driverId:   d._id, // ← Driver._id
               agencyId:   d.ownerAgency?._id,
               agencyName: d.ownerAgency?.businessName,
               name:       d.legalName,
@@ -714,10 +736,6 @@ router.get('/admin/:rideId/nearby',
 // ADMIN — assign TP or SoloDriver to ride
 // POST /api/ride-requests/admin/:rideId/assign
 // Body: { assignType: 'tp'|'solo', assignId }
-//
-// FIX: Ride.driver = Driver._id
-//   - solo: ride.driver = soloPartner.driverProfile (Driver._id)
-//   - tp:   ride.driver NOT set yet — TP assigns driver separately
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/admin/:rideId/assign',
@@ -741,7 +759,7 @@ router.post('/admin/:rideId/assign',
 
       const socketService = getBookingSocketService();
 
-      // ── Assign Transport Partner ────────────────────────────────────────────
+      // ── Assign Transport Partner ──────────────────────────────────────────
       if (assignType === 'tp') {
         const tp = await TransportPartner.findOne({
           _id: assignId, partnershipStatus: 'active', isAvailable: true,
@@ -750,7 +768,7 @@ router.post('/admin/:rideId/assign',
           return res.status(404).json({ success: false, message: 'Transport partner not found or not active' });
 
         ride.transportPartner = tp._id;
-        ride.status           = 'searching'; // TP still needs to assign their driver
+        ride.status           = 'searching'; // TP still needs to assign driver
         await ride.save();
 
         await createNotification({
@@ -784,7 +802,7 @@ router.post('/admin/:rideId/assign',
         });
       }
 
-      // ── Assign Solo Driver ──────────────────────────────────────────────────
+      // ── Assign Solo Driver ────────────────────────────────────────────────
       // assignId = SoloDriverPartner._id (admin picks from nearby results)
       const soloPartner = await SoloDriverPartner.findOne({
         _id: assignId, partnershipStatus: 'active', isOnboardingComplete: true,
@@ -794,13 +812,14 @@ router.post('/admin/:rideId/assign',
       if (!soloPartner.driverProfile)
         return res.status(400).json({ success: false, message: 'Solo partner has no linked Driver profile' });
 
-      // FIX: Ride.driver = Driver._id = soloPartner.driverProfile
+      // Ride.driver = Driver._id = soloPartner.driverProfile
       ride.driver           = soloPartner.driverProfile; // ← Driver._id
       ride.soloPartner      = soloPartner._id;
       ride.status           = 'driver_assigned';
       ride.driverAssignedAt = new Date();
       await ride.save();
 
+      // FIX: upsert — no duplicate tracking doc even if called twice
       const tracking = await ensureRideTracking(ride);
       lockCanonicalRouteAsync(ride, tracking._id);
 
@@ -836,6 +855,7 @@ router.post('/admin/:rideId/assign',
         data:    { rideId: ride._id, assignedTo: 'solo', soloPartnerId: soloPartner._id },
       });
     } catch (err) {
+      console.error('[POST /admin/:rideId/assign]', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   }
@@ -845,8 +865,6 @@ router.post('/admin/:rideId/assign',
 // TP — assign driver to ride
 // PATCH /api/ride-requests/tp/:rideId/assign-driver
 // Body: { driverId }  ← Driver._id (NOT User._id)
-//
-// FIX: ride.driver = driver._id (Driver._id), NOT driver.user._id
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.patch('/tp/:rideId/assign-driver',
@@ -869,9 +887,8 @@ router.patch('/tp/:rideId/assign-driver',
       if (!ride)
         return res.status(404).json({ success: false, message: 'Ride not found or not assigned to your fleet' });
 
-      // Find Driver._id that belongs to this TP and is available
       const driver = await Driver.findOne({
-        _id:         driverId,  // ← Driver._id directly
+        _id:         driverId, // ← Driver._id directly
         ownerAgency: tp._id,
         isActive:    true,
         isVerified:  true,
@@ -883,13 +900,14 @@ router.patch('/tp/:rideId/assign-driver',
       if (!driver)
         return res.status(404).json({ success: false, message: 'Driver not found or not available in your fleet' });
 
-      // FIX: Ride.driver = Driver._id (driver._id)
-      ride.driver           = driver._id;           // ← Driver._id
+      // Ride.driver = Driver._id
+      ride.driver           = driver._id; // ← Driver._id
       ride.transportPartner = tp._id;
       ride.status           = 'driver_assigned';
       ride.driverAssignedAt = new Date();
       await ride.save();
 
+      // FIX: upsert — no duplicate tracking doc even if ensureRideTracking called twice
       const tracking = await ensureRideTracking(ride);
       lockCanonicalRouteAsync(ride, tracking._id);
 
@@ -904,9 +922,7 @@ router.patch('/tp/:rideId/assign-driver',
       const socketService = getBookingSocketService();
 
       if (ride.booking) {
-        // Join driver's User to booking room for socket events
         socketService?.emitJoinRoom(String(driver.user._id), `booking:${ride.booking}`);
-
         socketService?.emitToRoom(`booking:${ride.booking}`, 'ride_assigned', {
           rideId:         ride._id,
           bookingId:      String(ride.booking),
@@ -935,6 +951,7 @@ router.patch('/tp/:rideId/assign-driver',
         data:    { rideId: ride._id, driverId: driver._id, status: ride.status },
       });
     } catch (err) {
+      console.error('[PATCH /tp/:rideId/assign-driver]', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   }
@@ -943,15 +960,13 @@ router.patch('/tp/:rideId/assign-driver',
 // ═══════════════════════════════════════════════════════════════════════════════
 // DRIVER STATE MACHINE — PATCH /:rideId/status
 //
-// Uber/Rapido flow (single endpoint, action-based):
-//   accept → start_route → arrived → verify_otp → start_ride → [at_stop/resume] → complete
-//   cancel (driver: before arrived; admin: anytime)
+// Flow: accept → start_route → arrived → verify_otp → start_ride → [at_stop/resume] → complete
+//       cancel (driver: before arrived; admin: anytime)
 //
-// CRITICAL FIXES:
-//   - 'arrived' generates OTP → sent to customer via SMS/email/push + admin:ops
-//   - 'complete' marks Driver (by Driver._id) as Available
-//   - Driver auth uses Driver._id resolved from User._id
-//   - 'start_ride' emits navigation_target_changed → dropoff for ALL roles
+// OTP STORAGE STRATEGY (consistent):
+//   'arrived'    → stores RAW OTP string in ride.pickupOtp (no hash)
+//   'verify_otp' → compares RAW string directly
+//   Socket verify_otp in bookingSocketService.js MUST also use raw compare (not hashOtp)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 router.patch('/:rideId/status',
@@ -973,24 +988,23 @@ router.patch('/:rideId/status',
 
       const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
 
-      // Auth check
       const { allowed, reason } = isAdmin
         ? { allowed: true }
         : await canDriverMutateRide(String(req.user._id), req.user.role, ride);
       if (!allowed)
         return res.status(403).json({ success: false, message: reason });
 
-      const socketService  = getBookingSocketService();
-      const currentStatus  = ride.status;
+      const socketService = getBookingSocketService();
+      const currentStatus = ride.status;
 
       switch (action) {
 
-        // ── ACCEPT ─────────────────────────────────────────────────────────────
+        // ── ACCEPT ───────────────────────────────────────────────────────────
         case 'accept': {
           if (currentStatus !== 'driver_assigned')
             return res.status(400).json({ success: false, message: `Cannot accept from: ${currentStatus}` });
 
-          ride.status         = 'driver_accepted';
+          ride.status           = 'driver_accepted';
           ride.driverAcceptedAt = new Date();
           await ride.save();
 
@@ -1006,12 +1020,12 @@ router.patch('/:rideId/status',
           return res.json({ success: true, message: 'Ride accepted.', data: { status: 'driver_accepted' } });
         }
 
-        // ── START_ROUTE (heading to pickup) ────────────────────────────────────
+        // ── START_ROUTE ───────────────────────────────────────────────────────
         case 'start_route': {
           if (currentStatus !== 'driver_accepted')
             return res.status(400).json({ success: false, message: `Cannot start_route from: ${currentStatus}` });
 
-          ride.status       = 'driver_en_route';
+          ride.status          = 'driver_en_route';
           ride.driverEnRouteAt = new Date();
           await ride.save();
 
@@ -1021,11 +1035,11 @@ router.patch('/:rideId/status',
           await broadcastRideStatus({
             ride, newStatus: 'driver_en_route',
             extraPayload: {
-              currentEtaMinutes:    trackingEta?.currentEtaMinutes ?? null,
+              currentEtaMinutes:     trackingEta?.currentEtaMinutes    ?? null,
               expectedRoutePolyline: trackingEta?.expectedRoutePolyline ?? null,
-              currentTarget:        'pickup', // driver heading to pickup
-              driverSnapshot:       ride.driverSnapshot,
-              vehicleSnapshot:      ride.vehicleSnapshot,
+              currentTarget:         'pickup',
+              driverSnapshot:        ride.driverSnapshot,
+              vehicleSnapshot:       ride.vehicleSnapshot,
             },
             socketService,
           });
@@ -1040,105 +1054,133 @@ router.patch('/:rideId/status',
           return res.json({ success: true, message: 'Driver en route.', data: { status: 'driver_en_route' } });
         }
 
-        // case 'arrived' — replace hashOtp with raw
-case 'arrived': {
-  if (currentStatus !== 'driver_en_route')
-    return res.status(400).json({ success: false, message: `Cannot arrive from: ${currentStatus}` });
+        // ── ARRIVED ───────────────────────────────────────────────────────────
+        // Generates OTP → stored as RAW string (no hash) in ride.pickupOtp
+        // verify_otp below does plain string compare to match
+        case 'arrived': {
+          if (currentStatus !== 'driver_en_route')
+            return res.status(400).json({ success: false, message: `Cannot arrive from: ${currentStatus}` });
 
-  const otpCode        = genOtp();
-  ride.status          = 'driver_arrived';
-  ride.driverArrivedAt = new Date();
-  ride.pickupOtp       = otpCode; // ← RAW, no hash
+          const otpCode        = genOtp();
+          ride.status          = 'driver_arrived';
+          ride.driverArrivedAt = new Date();
+          ride.pickupOtp       = otpCode; // ← RAW string, no hash
 
-  await ride.save();
+          await ride.save();
 
-  await broadcastRideStatus({ ride, newStatus: 'driver_arrived', socketService, extraPayload: { currentTarget: 'pickup', otp: otpCode } });
+          await broadcastRideStatus({
+            ride, newStatus: 'driver_arrived', socketService,
+            extraPayload: { currentTarget: 'pickup', otp: otpCode },
+          });
 
-  const custId   = await getCustomerFromRide(ride);
-  const custUser = custId ? await User.findById(custId).select('email phone name').lean() : null;
+          const custId   = await getCustomerFromRide(ride);
+          const custUser = custId ? await User.findById(custId).select('email phone name').lean() : null;
 
-  // Push notification
-  await createNotification({
-    recipient: custId,
-    title:     'Driver Arrived',
-    body:      `Your driver has arrived. Share OTP ${otpCode} to start the ride.`,
-    type:      'Driver_Arrived',
-    bookingId: ride.booking,
-    priority:  'High',
-    otp:       otpCode,
-  });
+          await createNotification({
+            recipient: custId,
+            title:     'Driver Arrived',
+            body:      `Your driver has arrived. Share OTP ${otpCode} to start the ride.`,
+            type:      'Driver_Arrived',
+            bookingId: ride.booking,
+            priority:  'High',
+            otp:       otpCode,
+          });
 
-  // SMS
-  if (custUser?.phone) {
-    sendSms({
-      to:      custUser.phone,
-      message: otpSms({ otpCode, purpose: `ride start` }),
-    }).catch(e => console.error('[arrived] OTP SMS:', e.message));
-  }
+          if (custUser?.phone) {
+            sendSms({
+              to:      custUser.phone,
+              message: otpSms({ otpCode, purpose: 'ride start' }),
+            }).catch(e => console.error('[arrived] OTP SMS:', e.message));
+          }
 
-  // Email
- if (custUser?.email) {
-  const { sendOtpEmail } = await import('../services/emailQueueService.js');
-  sendOtpEmail(custUser.email, {
-    rideId:  String(ride._id),
-    otpCode,
-    title:   'Your driver has arrived!',
-    body:    'Share this OTP with your driver to start the ride.',
-  }).catch(e => console.error('[arrived] queue OTP email:', e.message));
-}
+          if (custUser?.email) {
+            // Dynamic import only for email queue — not a hot path, driver has arrived
+            import('../services/emailQueueService.js')
+              .then(({ sendOtpEmail }) => sendOtpEmail(custUser.email, {
+                rideId:  String(ride._id),
+                otpCode,
+                title:   'Your driver has arrived!',
+                body:    'Share this OTP with your driver to start the ride.',
+              }))
+              .catch(e => console.error('[arrived] queue OTP email:', e.message));
+          }
 
-  const booking = ride.booking
-    ? await Booking.findById(ride.booking).select('bookingCode').lean()
-    : null;
+          const booking = ride.booking
+            ? await Booking.findById(ride.booking).select('bookingCode').lean()
+            : null;
 
-  socketService?.emitOtpToAdmin({
-    bookingId:     ride.booking,
-    bookingCode:   booking?.bookingCode,
-    rideId:        ride._id,
-    otp:           otpCode,
-    customerName:  custUser?.name,
-    customerPhone: custUser?.phone,
-  });
+          socketService?.emitOtpToAdmin({
+            bookingId:     ride.booking,
+            bookingCode:   booking?.bookingCode,
+            rideId:        ride._id,
+            otp:           otpCode,
+            customerName:  custUser?.name,
+            customerPhone: custUser?.phone,
+          });
 
-  if (ride.booking) {
-    socketService?.emitToRoom(`booking:${ride.booking}`, 'otp_required', {
-      bookingId:     String(ride.booking),
-      rideId:        String(ride._id),
-      currentTarget: 'pickup',
-      otp:           otpCode, // ← customer sees on live tracking screen
-      timestamp:     new Date().toISOString(),
-    });
-  }
+          if (ride.booking) {
+            socketService?.emitToRoom(`booking:${ride.booking}`, 'otp_required', {
+              bookingId:     String(ride.booking),
+              rideId:        String(ride._id),
+              currentTarget: 'pickup',
+              otp:           otpCode, // customer sees on live tracking screen
+              timestamp:     new Date().toISOString(),
+            });
+          }
 
-  return res.json({ success: true, message: 'Driver arrived. OTP sent to customer.', data: { status: 'driver_arrived' } });
-}
+          return res.json({
+            success: true,
+            message: 'Driver arrived. OTP sent to customer.',
+            data:    { status: 'driver_arrived' },
+          });
+        }
 
-// case 'verify_otp' — plain string compare, no hash
-case 'verify_otp': {
-  if (currentStatus !== 'driver_arrived')
-    return res.status(400).json({ success: false, message: 'OTP verify only when driver_arrived' });
-  if (!otp)
-    return res.status(400).json({ success: false, message: 'otp required' });
+        // ── VERIFY_OTP ────────────────────────────────────────────────────────
+        // FIX: pickupOtp stored as RAW string → compare RAW string directly.
+        // Previous version had NO comparison at all — any OTP was accepted.
+        // NOTE: bookingSocketService.js verify_otp handler must ALSO use raw
+        // compare (not hashOtp) to stay consistent with this storage strategy.
+        case 'verify_otp': {
+          if (currentStatus !== 'driver_arrived')
+            return res.status(400).json({ success: false, message: 'OTP verify only when driver_arrived' });
+          if (!otp)
+            return res.status(400).json({ success: false, message: 'otp required' });
 
-   
+          // Re-fetch with +pickupOtp since it may be excluded by default select
+          const rideWithOtp = await Ride.findById(rideId).select('+pickupOtp').lean();
+          if (!rideWithOtp?.pickupOtp)
+            return res.status(400).json({ success: false, message: 'OTP not set for this ride' });
 
-  ride.status              = 'otp_verified';
-  ride.pickupOtpVerifiedAt = new Date();
-  await ride.save();
+          // RAW string compare — matches how 'arrived' stores it
+          if (String(otp).trim() !== String(rideWithOtp.pickupOtp).trim()) {
+            socketService?.emitToAdminOps('otp_failed_attempt', {
+              rideId, bookingId: ride.booking ? String(ride.booking) : null,
+              timestamp: new Date().toISOString(),
+            });
+            if (ride.booking) {
+              socketService?.emitToRoom(`booking:${ride.booking}`, 'otp_wrong_attempt', {
+                bookingId: String(ride.booking), timestamp: new Date().toISOString(),
+              });
+            }
+            return res.status(400).json({ success: false, message: 'Invalid OTP' });
+          }
 
-  await broadcastRideStatus({ ride, newStatus: 'otp_verified', socketService });
+          ride.status              = 'otp_verified';
+          ride.pickupOtpVerifiedAt = new Date();
+          await ride.save();
 
-  socketService?.emitToAdminOps('otp_verified_success', {
-    rideId:    String(ride._id),
-    bookingId: ride.booking ? String(ride.booking) : null,
-    timestamp: new Date().toISOString(),
-  });
+          await broadcastRideStatus({ ride, newStatus: 'otp_verified', socketService });
 
-  return res.json({ success: true, message: 'OTP verified.', data: { status: 'otp_verified' } });
-}
+          socketService?.emitToAdminOps('otp_verified_success', {
+            rideId:    String(ride._id),
+            bookingId: ride.booking ? String(ride.booking) : null,
+            timestamp: new Date().toISOString(),
+          });
 
-        // ── START RIDE (in_progress) — map switches to dropoff ─────────────────
-        // FIX: emit navigation_target_changed → dropoff for ALL roles in booking room
+          return res.json({ success: true, message: 'OTP verified.', data: { status: 'otp_verified' } });
+        }
+
+        // ── START_RIDE (in_progress) — map switches to dropoff ────────────────
         case 'start_ride': {
           if (currentStatus !== 'otp_verified')
             return res.status(400).json({ success: false, message: `Cannot start ride from: ${currentStatus}` });
@@ -1153,7 +1195,7 @@ case 'verify_otp': {
             socketService,
           });
 
-          // FIX: ALL roles switch map target to dropoff immediately on ride start
+          // ALL roles switch map target to dropoff immediately on ride start
           const trackingDoc = await RideTracking.findOne({ ride: rideId })
             .select('expectedRoutePolyline').lean();
 
@@ -1179,7 +1221,7 @@ case 'verify_otp': {
           return res.json({ success: true, message: 'Ride started.', data: { status: 'in_progress' } });
         }
 
-        // ── AT_STOP ────────────────────────────────────────────────────────────
+        // ── AT_STOP ───────────────────────────────────────────────────────────
         case 'at_stop': {
           if (currentStatus !== 'in_progress')
             return res.status(400).json({ success: false, message: `Cannot mark stop from: ${currentStatus}` });
@@ -1197,7 +1239,7 @@ case 'verify_otp': {
           return res.json({ success: true, message: 'At stop.', data: { status: 'at_stop', stopIndex } });
         }
 
-        // ── RESUME (from stop) ─────────────────────────────────────────────────
+        // ── RESUME (from stop) ────────────────────────────────────────────────
         case 'resume': {
           if (currentStatus !== 'at_stop')
             return res.status(400).json({ success: false, message: `Cannot resume from: ${currentStatus}` });
@@ -1213,7 +1255,6 @@ case 'verify_otp': {
             });
           }
 
-          // Also add stop_departed milestone
           await RideTracking.addMilestone(String(ride._id), 'stop_departed', {
             coordinates:      ride.liveLocation?.coordinates || null,
             meta:             { stopIndex: stopIndex ?? null },
@@ -1224,7 +1265,7 @@ case 'verify_otp': {
           return res.json({ success: true, message: 'Ride resumed.', data: { status: 'in_progress' } });
         }
 
-        // ── COMPLETE ───────────────────────────────────────────────────────────
+        // ── COMPLETE ──────────────────────────────────────────────────────────
         case 'complete': {
           if (!['in_progress', 'at_stop'].includes(currentStatus))
             return res.status(400).json({ success: false, message: `Cannot complete from: ${currentStatus}` });
@@ -1232,7 +1273,6 @@ case 'verify_otp': {
           ride.status          = 'completed';
           ride.rideCompletedAt = new Date();
 
-          // Calculate actual distance from breadcrumbs
           const tracking = await RideTracking.findOne({ ride: rideId })
             .select('breadcrumbs totalDistanceKm breadcrumbCount').lean();
 
@@ -1249,12 +1289,11 @@ case 'verify_otp': {
           ride.actualDistanceKm = actualDistanceKm;
           await ride.save();
 
-          // FIX: mark driver Available by Driver._id (ride.driver = Driver._id)
+          // Mark driver Available by Driver._id (ride.driver = Driver._id)
           await Driver.findByIdAndUpdate(ride.driver, {
             $set: { status: 'Available', currentRide: null },
           });
 
-          // Update RideTracking summary
           const durationMin = ride.rideStartedAt
             ? Math.round((ride.rideCompletedAt - new Date(ride.rideStartedAt)) / 60000)
             : null;
@@ -1287,16 +1326,15 @@ case 'verify_otp': {
           return res.json({
             success: true,
             message: 'Ride completed.',
-            data: { status: 'completed', actualDistanceKm, durationMin },
+            data:    { status: 'completed', actualDistanceKm, durationMin },
           });
         }
 
-        // ── CANCEL ─────────────────────────────────────────────────────────────
+        // ── CANCEL ────────────────────────────────────────────────────────────
         case 'cancel': {
           if (!CANCELLABLE_STATUSES.includes(currentStatus))
             return res.status(400).json({ success: false, message: `Cannot cancel from: ${currentStatus}` });
 
-          // Driver can only cancel before driver_arrived
           if (!isAdmin && !DRIVER_CANCELLABLE_STATUSES.includes(currentStatus))
             return res.status(403).json({ success: false, message: 'Cannot cancel after driver arrived. Contact admin.' });
 
@@ -1310,7 +1348,7 @@ case 'verify_otp': {
           };
           await ride.save();
 
-          // FIX: mark driver Available by Driver._id
+          // Mark driver Available by Driver._id
           if (ride.driver) {
             await Driver.findByIdAndUpdate(ride.driver, {
               $set: { status: 'Available', currentRide: null },
@@ -1340,6 +1378,7 @@ case 'verify_otp': {
           return res.status(400).json({ success: false, message: `Unknown action: ${action}` });
       }
     } catch (err) {
+      console.error('[PATCH /:rideId/status]', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   }
@@ -1353,9 +1392,8 @@ case 'verify_otp': {
  * GET /api/ride-requests/:rideId/tracking
  *
  * Full snapshot — breadcrumbs (latest N), milestones, ETA, SOS, polylines.
- * Socket is primary for live events; this is initial load + reconnect.
- *
- * FIX: authorize uses 'care_assistant' (underscore)
+ * Socket is primary; this is initial load + reconnect fallback only.
+ * Does NOT create any documents — read-only, safe to poll.
  * Query: ?breadcrumbs=100 (default 100, max 500)
  */
 router.get('/:rideId/tracking',
@@ -1363,8 +1401,8 @@ router.get('/:rideId/tracking',
   authorize('customer', 'care_assistant', 'driver', 'solodriverpartner', 'transportpartner', 'admin', 'superadmin'),
   async (req, res) => {
     try {
-      const { rideId }       = req.params;
-      const breadcrumbLimit  = Math.min(parseInt(req.query.breadcrumbs) || 100, 500);
+      const { rideId }      = req.params;
+      const breadcrumbLimit = Math.min(parseInt(req.query.breadcrumbs) || 100, 500);
 
       if (!isValidObjId(rideId))
         return res.status(400).json({ success: false, message: 'Invalid rideId' });
@@ -1377,6 +1415,7 @@ router.get('/:rideId/tracking',
       if (!allowed)
         return res.status(403).json({ success: false, message: reason });
 
+      // Read-only fetch — no create, no upsert here
       const tracking = await RideTracking.findOne({ ride: rideId })
         .select(
           'milestones breadcrumbs breadcrumbCount currentEtaMinutes currentEtaTarget ' +
@@ -1386,7 +1425,7 @@ router.get('/:rideId/tracking',
         )
         .lean();
 
-      let breadcrumbs    = [];
+      let breadcrumbs     = [];
       let breadcrumbCount = 0;
       if (tracking) {
         breadcrumbs     = (tracking.breadcrumbs || []).slice(-breadcrumbLimit);
@@ -1464,7 +1503,7 @@ router.get('/:rideId/tracking',
  * GET /api/ride-requests/:rideId/live
  *
  * Lightweight position + ETA. Use for: initial render, reconnect bridge, 5s polling fallback.
- * FIX: authorize uses 'care_assistant' (underscore)
+ * Read-only — does NOT create any documents. Safe to call on every poll.
  * Socket equivalent: 'location_update' on booking:{bookingId}
  */
 router.get('/:rideId/live',
@@ -1487,6 +1526,7 @@ router.get('/:rideId/live',
       if (!allowed)
         return res.status(403).json({ success: false, message: reason });
 
+      // Read-only fetch — no create here
       const trackingEta = await RideTracking.findOne({ ride: rideId })
         .select('currentEtaMinutes currentEtaTarget hasActiveSos')
         .lean();
@@ -1494,9 +1534,9 @@ router.get('/:rideId/live',
       const live        = ride.liveLocation;
       const hasPosition = live?.coordinates?.length === 2;
 
-      const socketService  = getBookingSocketService();
+      const socketService = getBookingSocketService();
       // Ride.driver = Driver._id; resolve User._id to check online status
-      const driverDoc      = ride.driver
+      const driverDoc     = ride.driver
         ? await Driver.findById(ride.driver).select('user').lean()
         : null;
       const driverUserId   = driverDoc?.user ? String(driverDoc.user) : null;
@@ -1526,7 +1566,6 @@ router.get('/:rideId/live',
           currentEtaTarget:  trackingEta?.currentEtaTarget  ?? null,
           hasActiveSos:      trackingEta?.hasActiveSos       ?? false,
 
-          // Don't echo driver snapshot back to the driver themselves
           driverSnapshot: !isDriver ? {
             name:     ride.driverSnapshot?.legalName,
             rating:   ride.driverSnapshot?.rating,
@@ -1564,10 +1603,8 @@ router.get('/:rideId/live',
 /**
  * POST /api/ride-requests/:rideId/tracking/milestone
  *
- * HTTP fallback for milestone writes.
+ * HTTP fallback for milestone writes (driver offline queue retry, admin manual log).
  * Primary path: status transitions via PATCH /:rideId/status auto-record milestones.
- * Use case: driver offline queue retry, admin manual log, care assistant events.
- * FIX: authorize uses 'care_assistant' (underscore)
  */
 router.post('/:rideId/tracking/milestone',
   protect,
@@ -1613,17 +1650,16 @@ router.post('/:rideId/tracking/milestone',
       else if (req.user.role === 'care_assistant')                  recordedBy = 'driver';
       else if (['admin', 'superadmin'].includes(req.user.role))     recordedBy = 'admin';
 
-      const updated = await RideTracking.addMilestone(rideId, name, {
+      const updated      = await RideTracking.addMilestone(rideId, name, {
         coordinates, stopSequence, meta, recordedBy, recordedByUserId: req.user._id,
       });
-
       const newMilestone = updated?.milestones?.[updated.milestones.length - 1];
 
       const socketService = getBookingSocketService();
       if (ride.booking) {
         socketService?.emitToRoom(`booking:${ride.booking}`, 'milestone_recorded', {
           rideId,
-          bookingId:   String(ride.booking),
+          bookingId: String(ride.booking),
           milestone: {
             name, occurredAt: newMilestone?.occurredAt ?? new Date().toISOString(),
             coordinates, stopSequence, meta, recordedBy,

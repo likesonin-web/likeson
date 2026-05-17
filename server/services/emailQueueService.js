@@ -1,4 +1,4 @@
-import { queueEmail } from '../queues/email.queue.js';
+import { queueEmail } from '../config/queues/email.queue.js';
 
 // Routers call these — NEVER call sendEmail() directly from a route
 export const sendOtpEmail       = (recipient, payload) => queueEmail({ type: 'OTP',            recipient, payload });

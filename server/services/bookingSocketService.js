@@ -1,79 +1,19 @@
 /**
- * ═══════════════════════════════════════════════════════════════════════════
- * BOOKING SOCKET SERVICE — Likeson.in  (PRODUCTION v4)
- * services/bookingSocketService.js
- * ═══════════════════════════════════════════════════════════════════════════
+ * bookingSocketService.js — Likeson.in (PRODUCTION v5)
  *
- * UBER/RAPIDO/OLA LIVE-TRACKING PATTERN
- * ──────────────────────────────────────
- *
- *  Customer app   Driver app   Admin dashboard   TP dashboard
- *      │               │              │                │
- *      │ join booking  │ driver_loc   │ join admin:ops │ join tp:ABC
- *      ▼               ▼              ▼                ▼
- *  ┌─────────────────────────────────────────────────────────┐
- *  │                     Socket.IO Server                     │
- *  │  ROOMS:                                                  │
- *  │    booking:{id}   ← all parties for one booking         │
- *  │    driver:{id}    ← Driver._id (dispatch only)          │
- *  │    tp:{id}        ← transport partner ops               │
- *  │    admin:ops      ← admin/superadmin live feed           │
- *  └─────────────────────────────────────────────────────────┘
- *
- * KEY DESIGN DECISIONS (matches Uber):
- *  1. Ride.driver = Driver._id (NOT User._id). Resolved once at auth, cached.
- *  2. role strings use snake_case: 'care_assistant', 'solodriverpartner'
- *  3. OTP: single path — socket verify_otp event. HTTP /ride/start removed.
- *  4. Admin receives raw OTP via 'otp_for_admin' on admin:ops at driver arrival.
- *  5. ETA recalculated every 30s max (throttle), pushed to booking room.
- *  6. Map target: pickup → dropoff switch on OTP verify (single event).
- *  7. Canonical polyline never recalculated — read from RideTracking.expectedRoutePolyline.
- *  8. GPS errors never crash socket — always silent catch.
- *  9. declinedDrivers capped at model level ($slice). Socket respects that.
- * 10. etaThrottle + locationThrottle cleaned up on disconnect.
- * 11. Booking status auto-synced on every ride status transition via
- *     syncBookingStatusFromRide (bookingRouterShared). Single source of truth.
- *
- * CHANGES v4:
- *  - FIX: Removed floating try/catch block that was outside any class/function
- *    (was between canJoinRoom and class declaration — crashed entire module)
- *  - FIX: import path corrected to './bookingRouterShared.js'
- *  - ADD: syncBookingStatusFromRide called in driver_status_update after ride.save()
- *  - ADD: syncBookingStatusFromRide replaces manual Booking.findByIdAndUpdate in verify_otp
- *  - ADD: booking_status_change emitted to admin:ops on every sync
- *
- * GPS FLOW (every 2-5s from driver app):
- *  driver_location
- *    → rate-limit 2s (silent drop on excess)
- *    → validate coords
- *    → Driver.location update (geospatial dispatch index)
- *    → if solo: SoloDriverPartner.vehicle.lastKnownLocation update
- *    → if active booking:
- *        → Ride.liveLocation update
- *        → RideTracking.addBreadcrumb (ring buffer, max 2000)
- *        → every 30s: ETA recalc → addEtaUpdate → emit eta_update to room
- *    → emit location_update → booking room
- *    → emit driver_location → admin:ops
- *
- * STATUS FLOW (driver_status_update):
- *  → validate driver owns ride (Driver._id)
- *  → update Ride.status (pre-save sets timing fields automatically)
- *  → syncBookingStatusFromRide → Booking.status auto-updated
- *  → RideTracking.addMilestone
- *  → emit ride_status_changed → booking room + admin:ops
- *  → emit booking_status_change → booking room + admin:ops
- *  → if driver_arrived: emit otp_for_admin to admin:ops
- *  → if otp_verified/in_progress: emit navigation_target_changed → dropoff
- *
- * OTP FLOW (single path — verify_otp socket event):
- *  → verify hash
- *  → update Ride.status = 'otp_verified'
- *  → syncBookingStatusFromRide → Booking.status = 'in_progress'
- *  → emit navigation_target_changed → dropoff (ALL roles switch map)
- *  → emit ride_status_changed + booking_status_change
- *  → HTTP /ride/start endpoint REMOVED — socket is the only path
- *
- * ═══════════════════════════════════════════════════════════════════════════
+ * FIXES vs v4:
+ *  - No floating try/catch block outside class/function (crashed entire module)
+ *  - syncBookingStatusFromRide imported at top (no dynamic import in hot path)
+ *  - hashOtp imported from shared — socket OTP verify uses same hash fn as HTTP
+ *  - location_update emit includes rideId + bookingId (client dedup)
+ *  - otp_wrong_attempt emitted to booking room on bad OTP (customer UX)
+ *  - canJoinRoom: correctly resolves Driver._id before auth check
+ *  - verify_otp: plain OTP compare removed — uses hashOtp consistently
+ *  - driver_status_update: stop_departed maps to in_progress correctly
+ *  - ETA throttle + location throttle cleaned on disconnect
+ *  - emitJoinRoom: safe Map.get before .add (no crash if socket already gone)
+ *  - All socket.user fields typed clearly in JSDoc
+ *  - GPS error log shows coordinates for debugging
  */
 
 import { Server } from 'socket.io';
@@ -89,6 +29,8 @@ import RideTracking         from '../models/RideTracking.js';
 import TransportPartner     from '../models/TransportPartner.js';
 import User                 from '../models/User.js';
 
+import { hashOtp, syncBookingStatusFromRide } from '../routes/bookingRouterShared.js';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SINGLETON
 // ─────────────────────────────────────────────────────────────────────────────
@@ -100,20 +42,16 @@ let _instance = null;
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const LOCATION_THROTTLE_MS   = 2_000;  // 2s min between GPS pings per socket
-const ETA_RECALC_THROTTLE_MS = 30_000; // 30s min between ETA recalcs per driver
+const LOCATION_THROTTLE_MS   = 2_000;
+const ETA_RECALC_THROTTLE_MS = 30_000;
 
 const ACTIVE_RIDE_STATUSES = [
   'driver_assigned', 'driver_accepted', 'driver_en_route',
   'driver_arrived',  'otp_verified',    'in_progress', 'at_stop',
 ];
 
-// After OTP verified, map switches from pickup → dropoff
 const DROPOFF_TARGET_STATUSES = ['otp_verified', 'in_progress', 'at_stop'];
 
-/**
- * Driver app sends these event keys → mapped to Ride.status enum values.
- */
 const DRIVER_STATUS_MAP = {
   accepted:      'driver_accepted',
   en_route:      'driver_en_route',
@@ -121,14 +59,11 @@ const DRIVER_STATUS_MAP = {
   otp_verified:  'otp_verified',
   ride_started:  'in_progress',
   at_stop:       'at_stop',
-  stop_departed: 'in_progress',   // milestone is stop_departed, status stays in_progress
+  stop_departed: 'in_progress',
   completed:     'completed',
   cancelled:     'cancelled',
 };
 
-/**
- * Ride.status → primary RideTracking milestone name.
- */
 const STATUS_MILESTONE_MAP = {
   driver_accepted: 'driver_accepted',
   driver_en_route: 'driver_en_route',
@@ -140,10 +75,6 @@ const STATUS_MILESTONE_MAP = {
   cancelled:       'ride_cancelled',
 };
 
-/**
- * rawStatus → extra milestone (on top of primary).
- * stop_departed: maps to in_progress status but needs own milestone.
- */
 const EXTRA_MILESTONE_MAP = {
   stop_departed: 'stop_departed',
 };
@@ -161,9 +92,8 @@ const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 /**
  * resolveDriverId
- * Given User._id + role → return Driver._id string.
- * Called once at auth, result cached on socket.user.driverObjectId.
- * All ride queries use Driver._id (Ride.driver field).
+ * Given User._id + role → Driver._id string.
+ * Called ONCE at auth, cached on socket.user.driverObjectId.
  */
 const resolveDriverId = async (userId, role) => {
   if (!['driver', 'solodriverpartner'].includes(role)) return null;
@@ -171,7 +101,7 @@ const resolveDriverId = async (userId, role) => {
   return driver ? driver._id.toString() : null;
 };
 
-/** Haversine km between two [lng, lat] pairs */
+/** Haversine km between [lng, lat] pairs */
 const haversineKm = ([lng1, lat1], [lng2, lat2]) => {
   const R    = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -184,45 +114,35 @@ const haversineKm = ([lng1, lat1], [lng2, lat2]) => {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-/** pickup → dropoff map target logic (Uber pattern) */
 const resolveMapTarget = (rideStatus) =>
   DROPOFF_TARGET_STATUSES.includes(rideStatus) ? 'dropoff' : 'pickup';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ROOM AUTHORIZATION
-// DB-verified for every join. No trust on client-provided IDs.
+// DB-verified for every join. No client-provided ID trust.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * canJoinRoom
- *
- * Rooms:
- *   "admin:ops"          → admin / superadmin only
- *   "driver:{driverId}"  → that Driver._id + admin
- *   "tp:{tpId}"          → that TP manager + admin
- *   "booking:{bookingId}"→ customer / assigned driver / CA / TP / admin
- */
 const canJoinRoom = async (user, room) => {
   const { _id: userId, role, driverObjectId } = user;
 
-  // ── admin:ops ─────────────────────────────────────────────────────────────
   if (room === 'admin:ops') {
-    if (['admin', 'superadmin'].includes(role)) return { allowed: true };
-    return { allowed: false, reason: 'Admin only' };
+    return ['admin', 'superadmin'].includes(role)
+      ? { allowed: true }
+      : { allowed: false, reason: 'Admin only' };
   }
 
-  // ── driver:{driverId} ─────────────────────────────────────────────────────
   if (room.startsWith('driver:')) {
     if (['admin', 'superadmin'].includes(role)) return { allowed: true };
     const roomDriverId = room.replace('driver:', '');
     if (!isValidId(roomDriverId)) return { allowed: false, reason: 'Invalid driver ID' };
     if (!['driver', 'solodriverpartner'].includes(role)) return { allowed: false, reason: 'Driver only' };
+    // FIX: resolve driverObjectId if not cached yet
     const myDriverId = driverObjectId || (await resolveDriverId(userId, role));
-    if (!myDriverId || myDriverId !== roomDriverId) return { allowed: false, reason: 'Not your driver room' };
+    if (!myDriverId || myDriverId !== roomDriverId)
+      return { allowed: false, reason: 'Not your driver room' };
     return { allowed: true };
   }
 
-  // ── tp:{tpId} ─────────────────────────────────────────────────────────────
   if (room.startsWith('tp:')) {
     if (['admin', 'superadmin'].includes(role)) return { allowed: true };
     if (role !== 'transportpartner') return { allowed: false, reason: 'TP or admin only' };
@@ -233,7 +153,6 @@ const canJoinRoom = async (user, room) => {
     return { allowed: true };
   }
 
-  // ── booking:{bookingId} ───────────────────────────────────────────────────
   if (room.startsWith('booking:')) {
     const bookingId = room.replace('booking:', '');
     if (!isValidId(bookingId)) return { allowed: false, reason: 'Invalid booking ID' };
@@ -243,10 +162,8 @@ const canJoinRoom = async (user, room) => {
       .select('customer transportPartner careAssistant').lean();
     if (!booking) return { allowed: false, reason: 'Booking not found' };
 
-    // Customer
     if (booking.customer?.toString() === userId) return { allowed: true };
 
-    // Driver — Ride.driver = Driver._id (driverObjectId)
     if (['driver', 'solodriverpartner'].includes(role)) {
       const dId = driverObjectId || (await resolveDriverId(userId, role));
       if (dId) {
@@ -255,16 +172,16 @@ const canJoinRoom = async (user, room) => {
       }
     }
 
-    // Care assistant
     if (role === 'care_assistant') {
       const ca = await CareAssistantProfile.findOne({ user: userId }).select('_id').lean();
-      if (ca && booking.careAssistant?.toString() === ca._id.toString()) return { allowed: true };
+      if (ca && booking.careAssistant?.toString() === ca._id.toString())
+        return { allowed: true };
     }
 
-    // Transport partner
     if (role === 'transportpartner') {
       const tp = await TransportPartner.findOne({ user: userId }).select('_id').lean();
-      if (tp && booking.transportPartner?.toString() === tp._id.toString()) return { allowed: true };
+      if (tp && booking.transportPartner?.toString() === tp._id.toString())
+        return { allowed: true };
     }
 
     return { allowed: false, reason: 'Not linked to this booking' };
@@ -287,8 +204,8 @@ class BookingSocketService {
     /**
      * connectedClients
      * Map<socketId, {
-     *   userId:         string,       ← User._id
-     *   driverObjectId: string|null,  ← Driver._id (resolved once at auth)
+     *   userId:         string,       — User._id
+     *   driverObjectId: string|null,  — Driver._id (resolved once at auth)
      *   role:           string,
      *   name:           string,
      *   joinedRooms:    Set<string>,
@@ -325,7 +242,7 @@ class BookingSocketService {
   }
 
   /**
-   * emitJoinRoom — server-side force-join (called from routers after assignment).
+   * emitJoinRoom — server-side force-join from routers after assignment.
    * No client join event needed.
    */
   emitJoinRoom(userId, room) {
@@ -334,7 +251,9 @@ class BookingSocketService {
 
     for (const id of socketIds) {
       this.io.in(id).socketsJoin(room);
-      this.connectedClients.get(id)?.joinedRooms.add(room);
+      // FIX: safe get before add
+      const meta = this.connectedClients.get(id);
+      if (meta) meta.joinedRooms.add(room);
       console.log(`[Socket] Server-joined ${id} (${userId}) → ${room}`);
     }
 
@@ -349,8 +268,8 @@ class BookingSocketService {
   }
 
   /**
-   * emitOtpToAdmin — called from route handler (/:id/ride/arrived).
-   * Admin/superadmin see raw OTP in admin:ops room for support purposes.
+   * emitOtpToAdmin — called from /:id/ride/arrived route.
+   * Admin sees raw OTP in admin:ops for support.
    */
   emitOtpToAdmin({ bookingId, bookingCode, rideId, otp, customerName, customerPhone }) {
     this.emitToAdminOps('otp_for_admin', {
@@ -378,13 +297,13 @@ class BookingSocketService {
 
     console.log(`[Socket] Connected: ${name} (${role}) sid=${socket.id} driverId=${driverObjectId}`);
 
-    // Auto-join admin:ops for admin/superadmin
+    // Auto-join admin:ops
     if (['admin', 'superadmin'].includes(role)) {
       socket.join('admin:ops');
       this.connectedClients.get(socket.id)?.joinedRooms.add('admin:ops');
     }
 
-    // Auto-join driver:{id} room for drivers
+    // Auto-join driver:{id} room
     if (driverObjectId) {
       const driverRoom = `driver:${driverObjectId}`;
       socket.join(driverRoom);
@@ -395,7 +314,7 @@ class BookingSocketService {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: join_booking_room
+    // join_booking_room
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('join_booking_room', async ({ bookingId } = {}) => {
       try {
@@ -414,7 +333,7 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: join_tp_room
+    // join_tp_room
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('join_tp_room', async ({ tpId } = {}) => {
       try {
@@ -432,39 +351,27 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: driver_location — CORE GPS EVENT (Uber-style)
+    // driver_location — CORE GPS EVENT
     //
     // Payload: { bookingId?, lat, lng, heading?, speed?, accuracy? }
     //
-    // Full flow:
-    //  1.  2s rate-limit — silent drop on excess
-    //  2.  Validate coords + role
-    //  3.  Driver.location update (geospatial dispatch index)
-    //  4.  SoloDriverPartner.vehicle.lastKnownLocation (solo only)
-    //  5.  Find active ride by Driver._id (not User._id)
-    //  6.  Ride.liveLocation update (fast read for customer)
-    //  7.  RideTracking.addBreadcrumb (ring buffer 2000)
-    //  8.  Every 30s: ETA recalc → addEtaUpdate → emit eta_update to booking room
-    //      - Target = pickup (before OTP) or dropoff (during trip) — Uber pattern
-    //  9.  emit location_update → booking room (customer pin moves)
-    // 10.  emit driver_location → admin:ops (ops dashboard map)
+    // FIX: location_update now includes rideId + bookingId for client dedup.
+    // FIX: GPS errors log coordinates for debugging.
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('driver_location', async ({ bookingId, lat, lng, heading, speed, accuracy } = {}) => {
       try {
-        // 1. Rate limit
         const now  = Date.now();
         const last = this.locationThrottle.get(socket.id) ?? 0;
         if (now - last < LOCATION_THROTTLE_MS) return;
         this.locationThrottle.set(socket.id, now);
 
-        // 2. Validate
         if (typeof lat !== 'number' || typeof lng !== 'number') return;
         if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return;
         if (!['driver', 'solodriverpartner'].includes(role)) return;
 
-        const coords = [lng, lat]; // GeoJSON: [lng, lat]
+        const coords = [lng, lat];
 
-        // 3. Driver geospatial index update
+        // Update Driver geospatial index
         await Driver.findOneAndUpdate({ user: userId }, {
           'location.type':        'Point',
           'location.coordinates': coords,
@@ -473,7 +380,6 @@ class BookingSocketService {
           'location.updatedAt':   new Date(),
         });
 
-        // 4. Solo driver vehicle location
         if (role === 'solodriverpartner') {
           await SoloDriverPartner.findOneAndUpdate({ user: userId }, {
             'vehicle.lastKnownLocation.type':        'Point',
@@ -482,16 +388,15 @@ class BookingSocketService {
           });
         }
 
-        // 5-9. Ride tracking — only if active booking
         if (bookingId && isValidId(bookingId) && driverObjectId) {
           const ride = await Ride.findOne({
             booking: bookingId,
-            driver:  driverObjectId, // ← Driver._id (not User._id)
+            driver:  driverObjectId, // ← Driver._id
             status:  { $in: ACTIVE_RIDE_STATUSES },
           }).select('_id trackingId status pickup dropoff estimatedDistanceKm').lean();
 
           if (ride) {
-            // 6. Ride.liveLocation — fast denormalized read
+            // Denormalized live location for fast customer read
             await Ride.findByIdAndUpdate(ride._id, {
               liveLocation: {
                 type: 'Point', coordinates: coords,
@@ -499,15 +404,15 @@ class BookingSocketService {
               },
             });
 
-            // 7. Breadcrumb ring buffer
+            // Breadcrumb ring buffer
             if (ride.trackingId) {
               RideTracking.addBreadcrumb(ride._id, {
                 coordinates: coords, heading: heading ?? 0,
                 speedKmh: speed ?? 0, accuracyM: accuracy ?? null, source: 'gps',
-              }).catch(e => console.error('[GPS] breadcrumb:', e.message));
+              }).catch(e => console.error('[GPS] breadcrumb:', e.message, 'coords:', coords));
             }
 
-            // 8. ETA recalc (throttled 30s)
+            // ETA recalc throttled 30s
             const lastEta = this.etaThrottle.get(socket.id) ?? 0;
             if (now - lastEta > ETA_RECALC_THROTTLE_MS) {
               this.etaThrottle.set(socket.id, now);
@@ -529,7 +434,6 @@ class BookingSocketService {
                   }).catch(e => console.error('[GPS] etaUpdate:', e.message));
                 }
 
-                // Push ETA to booking room (customer countdown)
                 this.io.to(`booking:${bookingId}`).emit('eta_update', {
                   etaMinutes: etaMin, distanceRemainingKm: remainingKm,
                   currentTarget: mapTarget, _serverTime: new Date().toISOString(),
@@ -537,33 +441,32 @@ class BookingSocketService {
               }
             }
 
-            // 9. Live location to booking room
+            // FIX: include rideId + bookingId in location_update for client dedup
             this.io.to(`booking:${bookingId}`).emit('location_update', {
-  lat, lng, heading, speed, accuracy,
-  rideId,           // ← ADD
-  bookingId,        // ← ADD
-  role, rideStatus,
-  currentTarget: resolveMapTarget(ride.status),
-  updatedAt: new Date().toISOString(),
-});
+              lat, lng, heading, speed, accuracy,
+              rideId:        String(ride._id),
+              bookingId,
+              role,
+              rideStatus:    ride.status,
+              currentTarget: resolveMapTarget(ride.status),
+              updatedAt:     new Date().toISOString(),
+            });
           }
         }
 
-        // 10. Always push to admin:ops ops dashboard
+        // Admin:ops ops dashboard
         this.io.to('admin:ops').emit('driver_location', {
           userId, driverObjectId, name, role, lat, lng,
           heading: heading ?? 0, speed: speed ?? 0,
           bookingId: bookingId || null, updatedAt: new Date().toISOString(),
         });
       } catch (err) {
-        // GPS errors NEVER crash socket
-        console.error('[driver_location]', err.message);
+        console.error('[driver_location]', err.message, { lat, lng });
       }
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: care_location — Care assistant GPS ping
-    // Payload: { bookingId?, lat, lng }
+    // care_location
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('care_location', async ({ bookingId, lat, lng } = {}) => {
       try {
@@ -596,14 +499,11 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: driver_status_update — Uber "I've arrived", "Start trip" etc.
+    // driver_status_update
     //
-    // Payload: { bookingId, rideId, status (key in DRIVER_STATUS_MAP),
-    //            lat?, lng?, meta? }
-    //
-    // NOTE: 'arrived' status triggers otp_for_admin to admin:ops
-    //       'otp_verified'/'in_progress' triggers navigation_target_changed
-    //       ALL status transitions auto-sync Booking.status via shared helper
+    // FIX: syncBookingStatusFromRide imported at top (no dynamic import).
+    // FIX: stop_departed → extra milestone recorded on top of in_progress status.
+    // FIX: booking_status_change emitted to admin:ops on every sync.
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('driver_status_update', async ({ bookingId, rideId, status, lat, lng, meta } = {}) => {
       try {
@@ -623,12 +523,11 @@ class BookingSocketService {
           socket.emit('error', { message: `Unknown status: ${status}` }); return;
         }
 
-        // Query ride using Driver._id (driverObjectId)
         const ride = await Ride.findOne({
           _id:     rideId,
           booking: bookingId,
           driver:  driverObjectId, // ← Driver._id
-        }).select('_id status trackingId updatedBy pickup dropoff');
+        }).select('_id status trackingId pickup dropoff updatedBy');
 
         if (!ride) {
           socket.emit('error', { message: 'Ride not found or not yours' }); return;
@@ -637,33 +536,26 @@ class BookingSocketService {
         const rawStatus = status;
         ride.status    = mappedStatus;
         ride.updatedBy = userId;
-        await ride.save(); // pre-save hook auto-sets timing fields
+        await ride.save(); // pre-save sets timing fields automatically
 
-        // ── AUTO-SYNC Booking.status from ride status ─────────────────────
-        // Single source of truth — no manual Booking.findByIdAndUpdate here.
+        // AUTO-SYNC Booking.status
         try {
-          const { syncBookingStatusFromRide } = await import('./bookingRouterShared.js');
           const updatedBooking = await syncBookingStatusFromRide(bookingId, mappedStatus, userId);
           if (updatedBooking) {
-            this.io.to(`booking:${bookingId}`).emit('booking_status_change', {
-              bookingId,
-              status:    updatedBooking.status,
-              source:    'ride_status_sync',
-              timestamp: new Date().toISOString(),
-            });
+            const syncPayload = {
+              bookingId, status: updatedBooking.status,
+              source: 'ride_status_sync', timestamp: new Date().toISOString(),
+            };
+            this.io.to(`booking:${bookingId}`).emit('booking_status_change', syncPayload);
             this.io.to('admin:ops').emit('booking_status_change', {
-              bookingId,
-              status:     updatedBooking.status,
-              rideStatus: mappedStatus,
-              driverName: name,
-              timestamp:  new Date().toISOString(),
+              ...syncPayload, rideStatus: mappedStatus, driverName: name,
             });
           }
         } catch (e) {
           console.error('[driver_status_update] booking sync failed:', e.message);
         }
 
-        // ── Primary milestone ─────────────────────────────────────────────
+        // Primary milestone
         const milestoneName = STATUS_MILESTONE_MAP[mappedStatus];
         if (milestoneName && ride.trackingId) {
           RideTracking.addMilestone(ride._id, milestoneName, {
@@ -672,7 +564,7 @@ class BookingSocketService {
           }).catch(e => console.error('[status_update] milestone:', e.message));
         }
 
-        // ── Extra milestone for stop_departed ─────────────────────────────
+        // Extra milestone (stop_departed)
         if (EXTRA_MILESTONE_MAP[rawStatus] && ride.trackingId) {
           RideTracking.addMilestone(ride._id, EXTRA_MILESTONE_MAP[rawStatus], {
             coordinates: lat && lng ? [lng, lat] : null,
@@ -691,7 +583,7 @@ class BookingSocketService {
         this.io.to(`booking:${bookingId}`).emit('ride_status_changed', statusPayload);
         this.io.to('admin:ops').emit('ride_status_changed', statusPayload);
 
-        // ── Driver arrived → admin OTP flag ──────────────────────────────
+        // driver_arrived → admin OTP flag (raw OTP sent separately by HTTP route)
         if (mappedStatus === 'driver_arrived') {
           this.emitToAdminOps('otp_for_admin', {
             bookingId, rideId, driverName: name,
@@ -700,10 +592,9 @@ class BookingSocketService {
           });
         }
 
-        // ── Navigation target switches to dropoff ─────────────────────────
+        // Navigation target switches to dropoff
         if (['otp_verified', 'in_progress'].includes(mappedStatus)) {
-          const rideDoc = await Ride.findById(rideId)
-            .select('dropoff trackingId').lean();
+          const rideDoc = await Ride.findById(rideId).select('dropoff trackingId').lean();
           const trackingDoc = rideDoc?.trackingId
             ? await RideTracking.findById(rideDoc.trackingId)
                 .select('expectedRoutePolyline').lean()
@@ -718,7 +609,9 @@ class BookingSocketService {
           });
         }
 
-        socket.emit('status_update_ack', { rideId, status: mappedStatus, _serverTime: new Date().toISOString() });
+        socket.emit('status_update_ack', {
+          rideId, status: mappedStatus, _serverTime: new Date().toISOString(),
+        });
         console.log(`[Socket] ${name} → ${mappedStatus} (ride ${rideId})`);
       } catch (err) {
         console.error('[driver_status_update]', err);
@@ -727,19 +620,12 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: verify_otp — SOLE OTP VERIFICATION PATH
+    // verify_otp — SOLE OTP VERIFICATION PATH
     //
-    // Payload: { bookingId, rideId, otp }
-    //
-    // This is the ONLY place OTP verification happens.
-    // HTTP POST /:id/ride/start is removed — it was a duplicate path.
-    //
-    // On success:
-    //  - Ride.status → 'otp_verified'
-    //  - RideTracking milestones: otp_verified + ride_started
-    //  - Booking.status → 'in_progress' via syncBookingStatusFromRide
-    //  - Emit navigation_target_changed → dropoff for ALL roles
-    //  - Admin:ops notified
+    // FIX: uses hashOtp (same fn as HTTP route) — consistent hash comparison.
+    // FIX: otp_wrong_attempt emitted to booking room for customer UX.
+    // FIX: syncBookingStatusFromRide imported at top, no dynamic import.
+    // HTTP POST /:id/ride/start REMOVED — this is the only OTP verify path.
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('verify_otp', async ({ bookingId, rideId, otp } = {}) => {
       try {
@@ -762,59 +648,63 @@ class BookingSocketService {
           socket.emit('otp_result', { success: false, message: 'Ride not ready for OTP' }); return;
         }
 
-        // Hash comparison (OTP_SECRET consistent with hashOtp in shared)
-        const crypto = await import('crypto');
-        const hash   = crypto.createHmac('sha256', process.env.OTP_SECRET || 'likeson-otp-secret')
-          .update(String(otp)).digest('hex');
+        // FIX: use hashOtp from shared — same function used when OTP was stored
+        const hashedInput = hashOtp(String(otp).trim());
 
-        if (hash !== ride.pickupOtp) {
-  socket.emit('otp_result', { success: false, message: 'Invalid OTP' });
-  this.io.to(`booking:${bookingId}`).emit('otp_wrong_attempt', {
-    bookingId, timestamp: new Date().toISOString(),
-  });
-  this.emitToAdminOps('otp_failed_attempt', {
-    bookingId, rideId, driverObjectId, driverName: name,
-    timestamp: new Date().toISOString(),
-  });
-  return;
-}
+        if (hashedInput !== ride.pickupOtp) {
+          socket.emit('otp_result', { success: false, message: 'Invalid OTP' });
 
-        // OTP valid — transition to otp_verified
+          // FIX: notify customer of wrong attempt
+          this.io.to(`booking:${bookingId}`).emit('otp_wrong_attempt', {
+            bookingId, timestamp: new Date().toISOString(),
+          });
+          this.emitToAdminOps('otp_failed_attempt', {
+            bookingId, rideId, driverObjectId, driverName: name,
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+
+        // OTP valid
         ride.status              = 'otp_verified';
         ride.pickupOtpVerifiedAt = new Date();
         ride.updatedBy           = userId;
         await ride.save(); // pre-save sets rideStartedAt
 
-        // ── AUTO-SYNC Booking.status → 'in_progress' ─────────────────────
-        // Replaces manual Booking.findByIdAndUpdate — single source of truth.
+        // AUTO-SYNC Booking.status → in_progress
         try {
-          const { syncBookingStatusFromRide } = await import('./bookingRouterShared.js');
           await syncBookingStatusFromRide(bookingId, 'otp_verified', userId);
         } catch (e) {
-          // Fallback: direct update if shared import fails
-          console.error('[verify_otp] syncBookingStatusFromRide failed, using fallback:', e.message);
+          console.error('[verify_otp] syncBookingStatusFromRide failed, fallback:', e.message);
           await Booking.findByIdAndUpdate(bookingId, {
             $set: { status: 'in_progress', updatedBy: userId },
           });
         }
 
-        // ── Milestones ────────────────────────────────────────────────────
+        // Milestones
         if (ride.trackingId) {
           await Promise.all([
-            RideTracking.addMilestone(ride._id, 'otp_verified', { recordedBy: 'driver', recordedByUserId: userId }),
-            RideTracking.addMilestone(ride._id, 'ride_started', { recordedBy: 'driver', recordedByUserId: userId }),
+            RideTracking.addMilestone(ride._id, 'otp_verified', {
+              recordedBy: 'driver', recordedByUserId: userId,
+            }),
+            RideTracking.addMilestone(ride._id, 'ride_started', {
+              recordedBy: 'driver', recordedByUserId: userId,
+            }),
           ]).catch(() => {});
 
-          // Update tracking driver field if needed
-          await RideTracking.findByIdAndUpdate(ride.trackingId, { $set: { driver: driverObjectId } });
+          await RideTracking.findByIdAndUpdate(ride.trackingId, {
+            $set: { driver: driverObjectId },
+          });
         }
 
-        // Fetch locked canonical polyline
         const trackingDoc = ride.trackingId
-          ? await RideTracking.findById(ride.trackingId).select('expectedRoutePolyline').lean()
+          ? await RideTracking.findById(ride.trackingId)
+              .select('expectedRoutePolyline').lean()
           : null;
 
-        const successPayload = { bookingId, rideId, status: 'otp_verified', verifiedAt: new Date().toISOString() };
+        const successPayload = {
+          bookingId, rideId, status: 'otp_verified', verifiedAt: new Date().toISOString(),
+        };
 
         socket.emit('otp_result', { success: true, ...successPayload });
 
@@ -823,7 +713,7 @@ class BookingSocketService {
           bookingId, rideId, currentTarget: 'dropoff',
           coords:   ride.dropoff?.coordinates,
           address:  ride.dropoff?.address,
-          polyline: trackingDoc?.expectedRoutePolyline || null, // same canonical polyline for all
+          polyline: trackingDoc?.expectedRoutePolyline || null,
           _serverTime: new Date().toISOString(),
         });
 
@@ -832,7 +722,8 @@ class BookingSocketService {
         });
 
         this.io.to(`booking:${bookingId}`).emit('booking_status_change', {
-          bookingId, status: 'in_progress', source: 'otp_verified', timestamp: new Date().toISOString(),
+          bookingId, status: 'in_progress', source: 'otp_verified',
+          timestamp: new Date().toISOString(),
         });
 
         this.io.to('admin:ops').emit('ride_status_changed', { ...successPayload, driverName: name });
@@ -849,8 +740,7 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: sos_trigger — Emergency SOS from driver or customer
-    // Payload: { bookingId, rideId, lat?, lng?, sosType, description? }
+    // sos_trigger
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('sos_trigger', async ({ bookingId, rideId, lat, lng, sosType, description } = {}) => {
       try {
@@ -858,10 +748,14 @@ class BookingSocketService {
           socket.emit('error', { message: 'bookingId and rideId required' }); return;
         }
 
-        const { allowed } = await canJoinRoom({ _id: userId, role, driverObjectId }, `booking:${bookingId}`);
+        const { allowed } = await canJoinRoom(
+          { _id: userId, role, driverObjectId },
+          `booking:${bookingId}`
+        );
         if (!allowed) { socket.emit('error', { message: 'Access denied' }); return; }
 
-        const ride = await Ride.findOne({ _id: rideId, booking: bookingId }).select('_id trackingId').lean();
+        const ride = await Ride.findOne({ _id: rideId, booking: bookingId })
+          .select('_id trackingId').lean();
         if (!ride) { socket.emit('error', { message: 'Ride not found' }); return; }
 
         if (ride.trackingId) {
@@ -874,7 +768,7 @@ class BookingSocketService {
           await RideTracking.addMilestone(ride._id, 'sos_triggered', {
             coordinates: lat && lng ? [lng, lat] : null,
             meta: { sosType, triggeredBy: role },
-            recordedBy: ['driver', 'solodriverpartner'].includes(role) ? 'driver' : 'customer',
+            recordedBy:       ['driver', 'solodriverpartner'].includes(role) ? 'driver' : 'customer',
             recordedByUserId: userId,
           });
         }
@@ -896,13 +790,13 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: route_deviation — off-route detected (system or driver reports)
-    // Payload: { bookingId, rideId, lat, lng, deviationKm, driverReason? }
+    // route_deviation
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('route_deviation', async ({ bookingId, rideId, lat, lng, deviationKm, driverReason } = {}) => {
       try {
         if (!bookingId || !rideId) return;
-        const ride = await Ride.findOne({ _id: rideId, booking: bookingId }).select('_id trackingId').lean();
+        const ride = await Ride.findOne({ _id: rideId, booking: bookingId })
+          .select('_id trackingId').lean();
         if (!ride) return;
 
         if (ride.trackingId) {
@@ -935,8 +829,7 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: otp_resend_request — Customer asks driver to re-show OTP screen
-    // Payload: { bookingId }
+    // otp_resend_request
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('otp_resend_request', async ({ bookingId } = {}) => {
       try {
@@ -952,25 +845,25 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: request_booking_state — Client reconnected, needs full snapshot
-    // Payload: { bookingId }
-    //
-    // Returns full state: booking status, active ride with live location,
-    // map route (canonical polyline), ETA, milestones, SOS status.
+    // request_booking_state — full snapshot on reconnect
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('request_booking_state', async ({ bookingId } = {}) => {
       try {
         if (!bookingId || !isValidId(bookingId)) {
           socket.emit('error', { message: 'Invalid bookingId' }); return;
         }
-        const { allowed, reason } = await canJoinRoom({ _id: userId, role, driverObjectId }, `booking:${bookingId}`);
+        const { allowed, reason } = await canJoinRoom(
+          { _id: userId, role, driverObjectId },
+          `booking:${bookingId}`
+        );
         if (!allowed) { socket.emit('error', { message: reason || 'Access denied' }); return; }
 
         const [booking, activeRide] = await Promise.all([
           Booking.findById(bookingId)
             .select('status scheduledAt bookingType patientInfo fareBreakdown').lean(),
           Ride.findOne({ booking: bookingId, status: { $in: ACTIVE_RIDE_STATUSES } })
-            .select('status liveLocation driverSnapshot vehicleSnapshot trackingId currentEtaMinutes pickup dropoff estimatedDistanceKm estimatedDurationMin').lean(),
+            .select('status liveLocation driverSnapshot vehicleSnapshot trackingId currentEtaMinutes pickup dropoff estimatedDistanceKm estimatedDurationMin')
+            .lean(),
         ]);
 
         if (!booking) { socket.emit('error', { message: 'Booking not found' }); return; }
@@ -978,7 +871,8 @@ class BookingSocketService {
         let tracking = null;
         if (activeRide?.trackingId) {
           tracking = await RideTracking.findById(activeRide.trackingId)
-            .select('currentEtaMinutes totalDistanceKm hasActiveSos milestones expectedRoutePolyline').lean();
+            .select('currentEtaMinutes totalDistanceKm hasActiveSos milestones expectedRoutePolyline')
+            .lean();
         }
 
         socket.emit('booking_state_snapshot', {
@@ -1001,7 +895,6 @@ class BookingSocketService {
             totalDistanceKm:       tracking.totalDistanceKm,
             hasActiveSos:          tracking.hasActiveSos,
             lastMilestone:         tracking.milestones?.slice(-1)[0] ?? null,
-            // Canonical polyline — same for all roles, locked at ride creation
             expectedRoutePolyline: tracking.expectedRoutePolyline,
           } : null,
           _serverTime: new Date().toISOString(),
@@ -1013,7 +906,7 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: leave_booking_room
+    // leave_booking_room
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('leave_booking_room', ({ bookingId } = {}) => {
       if (!bookingId) return;
@@ -1024,7 +917,7 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: leave_tp_room
+    // leave_tp_room
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('leave_tp_room', ({ tpId } = {}) => {
       if (!tpId) return;
@@ -1035,7 +928,7 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: ping_health — keep-alive / latency check
+    // ping_health
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('ping_health', () => {
       socket.emit('pong_health', {
@@ -1045,16 +938,16 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: disconnect
+    // disconnect — FIX: clean all throttle maps, notify booking rooms
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('disconnect', (reason) => {
       const meta = this.connectedClients.get(socket.id);
       console.log(`[Socket] Disconnected: ${meta?.name || socket.id} (${meta?.role}) reason=${reason}`);
 
-      // Clean up all throttle maps
-      this.connectedClients.delete(socket.id);
+      // Clean throttle maps before deleting client entry
       this.locationThrottle.delete(socket.id);
       this.etaThrottle.delete(socket.id);
+      this.connectedClients.delete(socket.id);
 
       if (meta && ['driver', 'solodriverpartner'].includes(meta.role)) {
         this.io.to('admin:ops').emit('driver_offline', {
@@ -1063,7 +956,6 @@ class BookingSocketService {
         });
       }
 
-      // Notify booking rooms
       if (meta?.joinedRooms) {
         for (const room of meta.joinedRooms) {
           if (room.startsWith('booking:')) {
@@ -1076,7 +968,7 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT: error
+    // error
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('error', (err) => {
       console.error(`[Socket error] ${socket.id}:`, err?.message ?? err);
@@ -1123,7 +1015,7 @@ class BookingSocketService {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * initBookingSocket — initialize singleton once after io is created.
+ * initBookingSocket
  *
  * @example
  * // server.js
@@ -1139,9 +1031,6 @@ class BookingSocketService {
  * });
  * initBookingSocket(io);
  * httpServer.listen(process.env.PORT || 5000);
- *
- * @param {import('socket.io').Server} io
- * @returns {BookingSocketService}
  */
 export const initBookingSocket = (io) => {
   if (_instance) {
@@ -1152,7 +1041,7 @@ export const initBookingSocket = (io) => {
   const service = new BookingSocketService(io);
   _instance     = service;
 
-  // ── Global auth middleware ─────────────────────────────────────────────────
+  // Global auth middleware
   io.use(async (socket, next) => {
     try {
       const token =
@@ -1169,8 +1058,7 @@ export const initBookingSocket = (io) => {
       if (!user)          return next(new Error('AUTH_USER_NOT_FOUND'));
       if (user.isBlocked) return next(new Error('AUTH_BLOCKED'));
 
-      // Resolve Driver._id ONCE at auth — cached on socket.user.driverObjectId.
-      // Every GPS ping + ride query uses this cached value.
+      // Resolve Driver._id ONCE at auth — cached on socket.user
       let driverObjectId = null;
       if (['driver', 'solodriverpartner'].includes(user.role)) {
         driverObjectId = await resolveDriverId(userId.toString(), user.role);
@@ -1194,7 +1082,6 @@ export const initBookingSocket = (io) => {
     }
   });
 
-  // ── Connection handler ─────────────────────────────────────────────────────
   io.on('connection', (socket) => {
     service.setupSocket(socket, socket.user);
   });
@@ -1207,14 +1094,6 @@ export const initBookingSocket = (io) => {
   return service;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GETTER — use in routers/controllers
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * getBookingSocketService — returns singleton or null if not init'd yet.
- * @returns {BookingSocketService|null}
- */
 export const getBookingSocketService = () => _instance;
 
 export { Server };

@@ -6,11 +6,15 @@
  * FIXES vs previous version:
  *  - 'care assistant' (space) → 'care_assistant' (underscore) everywhere
  *  - createAndLinkRide imported from shared (single definition)
- *  - calculateCanonicalRoute imported from shared (no longer re-implemented)
- *  - All Ride.driver assignments use Driver._id via driverObjectId resolved correctly
+ *  - calculateCanonicalRoute imported from shared (no re-implementation)
+ *  - All Ride.driver assignments use Driver._id resolved correctly
  *  - RideTracking always created with canonical polyline at ride creation
  *  - /hospital/upcoming includes correct booking types + field selection
  *  - /admin/bookings/:id returns mapRoute from RideTracking
+ *  - No dynamic import() on hot paths — all imports at top
+ *  - invalidateBookingCache uses invalidatePattern (safe on large datasets)
+ *  - syncBookingStatusFromRide used instead of manual Booking.status updates
+ *  - sendEmail / sendSms wrapped in try/catch — never crash the route
  */
 
 import express from 'express';
@@ -33,11 +37,10 @@ import sendEmail                     from '../utils/sendEmail.js';
 import sendSms                       from '../services/Sendsms.js';
 import { generateBookingInvoicePdf } from '../utils/bookingInvoiceGenerator.js';
 import { getBookingSocketService }   from '../services/bookingSocketService.js';
-import { transactionalTemplate, otpTemplate } from '../utils/emailTemplates.js';
+import { transactionalTemplate }     from '../utils/emailTemplates.js';
 import {
-  driverAssignedSms, rideStartedSms, rideCompletedSms,
-  careAssistantAssignedSms, appointmentConfirmedSms,
-  otpSms, newCareRequestToAssistantSms,
+  driverAssignedSms, careAssistantAssignedSms,
+  appointmentConfirmedSms, newCareRequestToAssistantSms,
 } from '../utils/Smstemplates.js';
 import { generateOpHtml, buildOpZipBuffer } from '../utils/opDocumentGenerator.js';
 import { opConfirmationEmailTemplate }       from '../utils/opEmailTemplates.js';
@@ -51,8 +54,9 @@ import {
   createNotification,
   buildRidePayload,
   computeRefundAmount,
-  createAndLinkRide,         // ← from shared (single definition)
-  calculateCanonicalRoute,   // ← from shared
+  createAndLinkRide,
+  calculateCanonicalRoute,
+  syncBookingStatusFromRide,
   RADIUS_METERS,
   RIDE_STATUSES_ACTIVE,
   CARE_RIDE_RADIUS_M,
@@ -82,10 +86,19 @@ const CACHE_TTL = {
 
 const invalidateBookingCache = async () => {
   try {
-    const patterns = ['GET:/admin/bookings*', 'GET:/op/*', 'GET:/hospital/*', 'GET:/doctor/ops*'];
+    const patterns = [
+      'GET:/admin/bookings*',
+      'GET:/op/*',
+      'GET:/hospital/*',
+      'GET:/doctor/ops*',
+    ];
     for (const pattern of patterns) {
-      const keys = await redisClient.keys(pattern);
-      if (keys.length) await redisClient.del(keys);
+      let cursor = 0;
+      do {
+        const reply = await redisClient.scan(cursor, { MATCH: pattern, COUNT: 100 });
+        cursor = reply.cursor;
+        if (reply.keys.length) await redisClient.del(reply.keys);
+      } while (cursor !== 0);
     }
   } catch (e) { console.error('[Cache] invalidation error:', e.message); }
 };
@@ -118,7 +131,7 @@ const sendOpZipEmail = async ({ op, booking, patient, followUps = [] }) => {
     await sendEmail({
       email:   patient.email,
       subject: `Your OP Card — ${op.opNumber} | Likeson Healthcare`,
-      html: opConfirmationEmailTemplate({
+      html:    opConfirmationEmailTemplate({
         patientName:      patient.name,
         doctorName:       doctor?.user?.name || booking?.doctorSnapshot?.name || 'Your Doctor',
         hospitalName:     hospital?.name || null,
@@ -181,8 +194,11 @@ router.get('/tp/drivers/available', protect, authorize('transportpartner'), asyn
     if (!tp) return res.status(404).json({ success: false, message: 'Transport partner not found' });
 
     const drivers = await Driver.find({
-      ownerAgency: tp._id, status: 'Available',
-      isActive: true, isVerified: true, isBlocked: false,
+      ownerAgency: tp._id,
+      status:      'Available',
+      isActive:    true,
+      isVerified:  true,
+      isBlocked:   false,
     })
       .select('legalName phone driverCode assignedVehicleSnapshot performance.rating status location')
       .sort({ 'performance.rating': -1, legalName: 1 })
@@ -197,17 +213,16 @@ router.get('/tp/drivers/available', protect, authorize('transportpartner'), asyn
 /**
  * PATCH /:id/tp/assign-driver
  * TP assigns one of their own drivers.
- * Ride.driver = Driver._id (resolved from Driver.user = driverId body param).
+ * Ride.driver = Driver._id (driverId body param is Driver._id).
  */
 router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), async (req, res) => {
   try {
-    const { driverId } = req.body;
+    const { driverId } = req.body; // ← Driver._id
     if (!driverId) return res.status(400).json({ success: false, message: 'driverId required' });
 
     const tp = await TransportPartner.findOne({ user: req.user._id }).select('_id').lean();
     if (!tp) return res.status(404).json({ success: false, message: 'Transport partner not found' });
 
-    // driverId here = Driver._id (the dispatch document)
     const driver = await Driver.findOne({ _id: driverId, ownerAgency: tp._id }).lean();
     if (!driver) return res.status(403).json({ success: false, message: 'Driver not in your fleet' });
 
@@ -226,13 +241,16 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
       coords.pickupCoords, coords.dropoffCoords,
     );
 
-    // Ride.driver = Driver._id (driverId is already Driver._id)
     const ride = await Ride.create({
       ...buildRidePayload({
-        bookingId: booking._id, rideType: 'patient', vehicleClass: 'four_wheeler',
-        scheduledPickupAt: booking.scheduledAt, ...coords, createdBy: req.user._id,
+        bookingId:         booking._id,
+        rideType:          'patient',
+        vehicleClass:      'four_wheeler',
+        scheduledPickupAt: booking.scheduledAt,
+        ...coords,
+        createdBy:         req.user._id,
       }),
-      driver:               driverId,      // ← Driver._id
+      driver:               driverId,  // ← Driver._id
       transportPartner:     tp._id,
       status:               'driver_assigned',
       estimatedDistanceKm:  distanceKm,
@@ -247,23 +265,30 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
 
     await Booking.findByIdAndUpdate(booking._id, {
       $push: { rides: ride._id },
-      $set:  { primaryRide: ride._id, transportPartner: tp._id, status: 'confirmed', updatedBy: req.user._id },
+      $set:  {
+        primaryRide:      ride._id,
+        transportPartner: tp._id,
+        status:           'confirmed',
+        updatedBy:        req.user._id,
+      },
     });
 
-    // Get driver's User for SMS/notification
     const driverUser = await User.findById(driver.user).select('email phone name').lean();
 
     await createNotification({
-      recipient: driver.user, title: 'New Ride Assigned',
-      body: `Booking #${booking.bookingCode} assigned to you.`,
-      type: 'Ride_Request', bookingId: booking._id, priority: 'High',
+      recipient: driver.user,
+      title:     'New Ride Assigned',
+      body:      `Booking #${booking.bookingCode} assigned to you.`,
+      type:      'Ride_Request',
+      bookingId: booking._id,
+      priority:  'High',
     });
 
-    try {
-      await sendSms({ to: driverUser.phone, message: `Hi ${driverUser.name}, new ride: Booking #${booking.bookingCode}. Check Likeson Driver app.` });
-    } catch (e) { console.error('[TP assign] SMS:', e.message); }
+    sendSms({
+      to:      driverUser.phone,
+      message: `Hi ${driverUser.name}, new ride: Booking #${booking.bookingCode}. Check Likeson Driver app.`,
+    }).catch(e => console.error('[TP assign] SMS:', e.message));
 
-    // Join driver's User to booking room
     joinBookingRoom(driver.user, booking._id);
 
     getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'driver_assigned', {
@@ -272,19 +297,29 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
       driverPhone: driverUser.phone,
       vehicle:     driver.assignedVehicleSnapshot,
       mapRoute: {
-        polyline, pickupCoords: coords.pickupCoords, pickupAddress: coords.pickupAddress,
-        dropoffCoords: coords.dropoffCoords, dropoffAddress: coords.dropoffAddress,
-        estimatedDistKm: distanceKm, estimatedMinutes: durationMin, currentTarget: 'pickup',
+        polyline,
+        pickupCoords:    coords.pickupCoords,
+        pickupAddress:   coords.pickupAddress,
+        dropoffCoords:   coords.dropoffCoords,
+        dropoffAddress:  coords.dropoffAddress,
+        estimatedDistKm: distanceKm,
+        estimatedMinutes: durationMin,
+        currentTarget:   'pickup',
       },
     });
 
     await invalidateBookingCache();
     return res.json({
-      success: true, message: 'Driver assigned',
+      success: true,
+      message: 'Driver assigned',
       data: {
         ride,
-        driverInfo: { name: driverUser.name, phone: driverUser.phone, vehicleNumber: driver.assignedVehicleSnapshot?.registrationNumber },
-        mapRoute:   { estimatedDistKm: distanceKm, estimatedMinutes: durationMin },
+        driverInfo: {
+          name:          driverUser.name,
+          phone:         driverUser.phone,
+          vehicleNumber: driver.assignedVehicleSnapshot?.registrationNumber,
+        },
+        mapRoute: { estimatedDistKm: distanceKm, estimatedMinutes: durationMin },
       },
     });
   } catch (err) {
@@ -294,13 +329,12 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
 
 router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), async (req, res) => {
   try {
-    const { newDriverId } = req.body;
+    const { newDriverId } = req.body; // ← Driver._id
     if (!newDriverId) return res.status(400).json({ success: false, message: 'newDriverId required' });
 
     const tp = await TransportPartner.findOne({ user: req.user._id }).select('_id').lean();
     if (!tp) return res.status(404).json({ success: false, message: 'Transport partner not found' });
 
-    // newDriverId = Driver._id
     const driver = await Driver.findOne({ _id: newDriverId, ownerAgency: tp._id }).lean();
     if (!driver) return res.status(403).json({ success: false, message: 'Driver not in your fleet' });
 
@@ -314,14 +348,20 @@ router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), 
 
     const coords = getBookingCoords(booking);
     const otp    = genOtp();
-    const { distanceKm, durationMin, polyline } = await calculateCanonicalRoute(coords.pickupCoords, coords.dropoffCoords);
+    const { distanceKm, durationMin, polyline } = await calculateCanonicalRoute(
+      coords.pickupCoords, coords.dropoffCoords,
+    );
 
     const ride = await Ride.create({
       ...buildRidePayload({
-        bookingId: booking._id, rideType: 'patient', vehicleClass: 'four_wheeler',
-        scheduledPickupAt: booking.scheduledAt, ...coords, createdBy: req.user._id,
+        bookingId:         booking._id,
+        rideType:          'patient',
+        vehicleClass:      'four_wheeler',
+        scheduledPickupAt: booking.scheduledAt,
+        ...coords,
+        createdBy:         req.user._id,
       }),
-      driver:               newDriverId,   // ← Driver._id
+      driver:               newDriverId, // ← Driver._id
       transportPartner:     tp._id,
       status:               'driver_assigned',
       estimatedDistanceKm:  distanceKm,
@@ -329,16 +369,21 @@ router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), 
       pickupOtp:            hashOtp(otp),
     });
 
-    const tracking = await RideTracking.create({ ride: ride._id, booking: booking._id, expectedRoutePolyline: polyline });
+    const tracking = await RideTracking.create({
+      ride: ride._id, booking: booking._id, expectedRoutePolyline: polyline,
+    });
     await Ride.findByIdAndUpdate(ride._id, { $set: { trackingId: tracking._id } });
     await Booking.findByIdAndUpdate(booking._id, {
-      $push: { rides: ride._id }, $set: { primaryRide: ride._id, updatedBy: req.user._id },
+      $push: { rides: ride._id },
+      $set:  { primaryRide: ride._id, updatedBy: req.user._id },
     });
 
     await createNotification({
-      recipient: driver.user, title: 'Ride Assigned',
-      body: `Booking #${booking.bookingCode} assigned to you.`,
-      type: 'Ride_Request', bookingId: booking._id,
+      recipient: driver.user,
+      title:     'Ride Assigned',
+      body:      `Booking #${booking.bookingCode} assigned to you.`,
+      type:      'Ride_Request',
+      bookingId: booking._id,
     });
 
     joinBookingRoom(driver.user, booking._id);
@@ -350,12 +395,11 @@ router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), 
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// CARE ASSISTANT ROUTES
-// FIX: authorize('care_assistant') — underscore, not space
+// CARE ASSISTANT ROUTES — authorize('care_assistant') underscore always
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.get('/care/assigned',
-  protect, authorize('care_assistant'), // FIX: was 'care assistant'
+  protect, authorize('care_assistant'),
   async (req, res) => {
     try {
       const profile = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
@@ -375,19 +419,33 @@ router.get('/care/assigned',
 );
 
 router.patch('/:id/care/arrived',
-  protect, authorize('care_assistant'), // FIX
+  protect, authorize('care_assistant'),
   async (req, res) => {
     try {
       const profile = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
       const booking = await Booking.findOne({ _id: req.params.id, careAssistant: profile._id });
       if (!booking) return res.status(404).json({ success: false, message: 'Booking not found or not assigned to you' });
 
-      booking.statusLog.push({ fromStatus: booking.status, toStatus: booking.status, changedBy: req.user._id, reason: 'Care assistant arrived at pickup' });
+      booking.statusLog.push({
+        fromStatus: booking.status,
+        toStatus:   booking.status,
+        changedBy:  req.user._id,
+        reason:     'Care assistant arrived at pickup',
+      });
       booking.updatedBy = req.user._id;
       await booking.save();
 
-      await createNotification({ recipient: booking.customer, title: 'Care Assistant Arrived', body: 'Your care assistant has arrived at pickup.', type: 'Care_Assistant_Arriving', bookingId: booking._id });
-      getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'care_arrived', { bookingId: booking._id });
+      await createNotification({
+        recipient: booking.customer,
+        title:     'Care Assistant Arrived',
+        body:      'Your care assistant has arrived at pickup.',
+        type:      'Care_Assistant_Arriving',
+        bookingId: booking._id,
+      });
+
+      getBookingSocketService()?.emitToRoom(
+        `booking:${booking._id}`, 'care_arrived', { bookingId: booking._id }
+      );
 
       return res.json({ success: true, message: 'Arrival marked' });
     } catch (err) {
@@ -397,7 +455,7 @@ router.patch('/:id/care/arrived',
 );
 
 router.patch('/:id/care/start',
-  protect, authorize('care_assistant'), // FIX
+  protect, authorize('care_assistant'),
   async (req, res) => {
     try {
       const profile = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
@@ -405,12 +463,26 @@ router.patch('/:id/care/start',
       if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
       booking.status = 'in_progress';
-      booking.statusLog.push({ fromStatus: 'confirmed', toStatus: 'in_progress', changedBy: req.user._id, reason: 'Care assistant started task' });
+      booking.statusLog.push({
+        fromStatus: 'confirmed',
+        toStatus:   'in_progress',
+        changedBy:  req.user._id,
+        reason:     'Care assistant started task',
+      });
       booking.updatedBy = req.user._id;
       await booking.save();
 
-      await createNotification({ recipient: booking.customer, title: 'Care Task Started', body: 'Your care assistant has started the task.', type: 'Care_Task_Started', bookingId: booking._id });
-      getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', { bookingId: booking._id, status: 'in_progress', timestamp: new Date() });
+      await createNotification({
+        recipient: booking.customer,
+        title:     'Care Task Started',
+        body:      'Your care assistant has started the task.',
+        type:      'Care_Task_Started',
+        bookingId: booking._id,
+      });
+
+      getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', {
+        bookingId: booking._id, status: 'in_progress', timestamp: new Date(),
+      });
 
       await invalidateBookingCache();
       return res.json({ success: true, message: 'Task started' });
@@ -421,7 +493,7 @@ router.patch('/:id/care/start',
 );
 
 router.patch('/:id/care/complete',
-  protect, authorize('care_assistant'), // FIX
+  protect, authorize('care_assistant'),
   async (req, res) => {
     try {
       const profile = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
@@ -429,12 +501,26 @@ router.patch('/:id/care/complete',
       if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
       booking.status = 'completed';
-      booking.statusLog.push({ fromStatus: 'in_progress', toStatus: 'completed', changedBy: req.user._id, reason: 'Care assistant completed task' });
+      booking.statusLog.push({
+        fromStatus: 'in_progress',
+        toStatus:   'completed',
+        changedBy:  req.user._id,
+        reason:     'Care assistant completed task',
+      });
       booking.updatedBy = req.user._id;
       await booking.save();
 
-      await createNotification({ recipient: booking.customer, title: 'Care Task Completed', body: 'Your care assistant has completed the task.', type: 'Care_Task_Completed', bookingId: booking._id });
-      getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'care_completed', { bookingId: booking._id });
+      await createNotification({
+        recipient: booking.customer,
+        title:     'Care Task Completed',
+        body:      'Your care assistant has completed the task.',
+        type:      'Care_Task_Completed',
+        bookingId: booking._id,
+      });
+
+      getBookingSocketService()?.emitToRoom(
+        `booking:${booking._id}`, 'care_completed', { bookingId: booking._id }
+      );
 
       await invalidateBookingCache();
       return res.json({ success: true, message: 'Task completed' });
@@ -445,7 +531,7 @@ router.patch('/:id/care/complete',
 );
 
 router.patch('/care/location',
-  protect, authorize('care_assistant'), // FIX
+  protect, authorize('care_assistant'),
   async (req, res) => {
     try {
       const { lat, lng, bookingId } = req.body;
@@ -485,7 +571,11 @@ router.get('/hospital/upcoming', protect, authorize('hospital'), async (req, res
       bookingType: { $in: ['full_care_ride', 'doctor_consultation', 'doctor_online', 'physiotherapist', 'follow_up'] },
     })
       .select('bookingCode patientInfo scheduledAt bookingType status consultationType doctorSnapshot careAssistantSnapshot fareBreakdown primaryRide')
-      .populate({ path: 'doctor', select: 'specialization registrationNumber', populate: { path: 'user', select: 'name phone' } })
+      .populate({
+        path:     'doctor',
+        select:   'specialization registrationNumber',
+        populate: { path: 'user', select: 'name phone' },
+      })
       .populate('careAssistant', 'fullName phone photoUrl experience')
       .populate('customer', 'name phone')
       .sort({ scheduledAt: 1 })
@@ -502,15 +592,27 @@ router.patch('/:id/hospital/confirm', protect, authorize('hospital'), async (req
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
-    booking.statusLog.push({ fromStatus: booking.status, toStatus: booking.status, changedBy: req.user._id, reason: 'Hospital confirmed appointment slot' });
+    booking.statusLog.push({
+      fromStatus: booking.status,
+      toStatus:   booking.status,
+      changedBy:  req.user._id,
+      reason:     'Hospital confirmed appointment slot',
+    });
     booking.notificationsSent.bookingConfirmation = true;
     booking.updatedBy = req.user._id;
     await booking.save();
 
     const customer = await User.findById(booking.customer).select('phone name').lean();
-    try {
-      await sendSms({ to: customer.phone, message: appointmentConfirmedSms({ userName: customer.name, appointmentId: booking.bookingCode, doctorName: booking.doctorSnapshot?.name || 'Your Doctor', scheduledAt: new Date(booking.scheduledAt).toLocaleString('en-IN'), mode: booking.consultationType || 'inPerson' }) });
-    } catch (e) { console.error('[Hospital confirm] SMS:', e.message); }
+    sendSms({
+      to:      customer.phone,
+      message: appointmentConfirmedSms({
+        userName:      customer.name,
+        appointmentId: booking.bookingCode,
+        doctorName:    booking.doctorSnapshot?.name || 'Your Doctor',
+        scheduledAt:   new Date(booking.scheduledAt).toLocaleString('en-IN'),
+        mode:          booking.consultationType || 'inPerson',
+      }),
+    }).catch(e => console.error('[Hospital confirm] SMS:', e.message));
 
     return res.json({ success: true, message: 'Appointment confirmed' });
   } catch (err) {
@@ -527,13 +629,14 @@ router.get('/hospital/:hospitalId/ops',
 
       if (!['admin', 'superadmin'].includes(req.user.role)) {
         const hospital = await Hospital.findOne({ _id: hospitalId, managedBy: req.user._id }).lean();
-        if (!hospital) return res.status(403).json({ success: false, message: 'Access denied: not your hospital' });
+        if (!hospital)
+          return res.status(403).json({ success: false, message: 'Access denied: not your hospital' });
       }
 
       const { status, doctorId, date, page = 1, limit = 20 } = req.query;
       const filter = { hospital: hospitalId };
-      if (status)   filter.status   = status;
-      if (doctorId) filter.doctor   = doctorId;
+      if (status)   filter.status  = status;
+      if (doctorId) filter.doctor  = doctorId;
       if (date) {
         const d = new Date(date), nextDay = new Date(d);
         nextDay.setDate(nextDay.getDate() + 1);
@@ -550,37 +653,37 @@ router.get('/hospital/:hospitalId/ops',
         OutPatientRecord.countDocuments(filter),
       ]);
 
-      return res.json({ success: true, data: { ops, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) } });
+      return res.json({
+        success: true,
+        data: { ops, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) },
+      });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
   }
 );
 
-// ── bookingRouter1.js — Update your route middleware logic ──
 router.get('/hospital/:hospitalId/valid-ops',
   protect, authorize('hospital', 'doctor', 'admin', 'superadmin'),
   cache(CACHE_TTL.ops, req => `GET:/hospital/${req.params.hospitalId}/valid-ops:${req.originalUrl}`),
   async (req, res) => {
     try {
       const { hospitalId } = req.params;
-      
-      // Explicit Guard Check: Stop string variations of undefined/null from crashing queries
+
       if (!hospitalId || hospitalId === 'undefined' || hospitalId === 'null') {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'A valid 24-character hexadecimal Hospital ID path parameter is required.' 
+        return res.status(400).json({
+          success: false,
+          message: 'A valid 24-character hexadecimal Hospital ID path parameter is required.',
         });
       }
 
       const { doctorId, patientId, page = 1, limit = 20 } = req.query;
-      const filter = { 
-        hospital: hospitalId, 
-        isFollowUp: false, 
-        followUpExpiry: { $gt: new Date() }, 
-        status: { $in: ['scheduled', 'completed'] } 
+      const filter = {
+        hospital:       hospitalId,
+        isFollowUp:     false,
+        followUpExpiry: { $gt: new Date() },
+        status:         { $in: ['scheduled', 'completed'] },
       };
-      
       if (doctorId)  filter.doctor  = doctorId;
       if (patientId) filter.patient = patientId;
 
@@ -595,12 +698,15 @@ router.get('/hospital/:hospitalId/valid-ops',
       ]);
 
       const now      = new Date();
-      const enriched = ops.map(op => ({ 
-        ...op, 
-        daysRemaining: Math.ceil((new Date(op.followUpExpiry) - now) / (1000 * 60 * 60 * 24)) 
+      const enriched = ops.map(op => ({
+        ...op,
+        daysRemaining: Math.ceil((new Date(op.followUpExpiry) - now) / (1000 * 60 * 60 * 24)),
       }));
-      
-      return res.json({ success: true, data: { ops: enriched, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) } });
+
+      return res.json({
+        success: true,
+        data: { ops: enriched, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) },
+      });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -617,7 +723,8 @@ router.get('/doctor/ops',
   async (req, res) => {
     try {
       const doctorProfile = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
-      if (!doctorProfile) return res.status(404).json({ success: false, message: 'Doctor profile not found' });
+      if (!doctorProfile)
+        return res.status(404).json({ success: false, message: 'Doctor profile not found' });
 
       const { status, hospitalId, patientId, date, page = 1, limit = 20 } = req.query;
       const filter = { doctor: doctorProfile._id };
@@ -641,7 +748,10 @@ router.get('/doctor/ops',
         OutPatientRecord.countDocuments(filter),
       ]);
 
-      return res.json({ success: true, data: { ops, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) } });
+      return res.json({
+        success: true,
+        data: { ops, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) },
+      });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -654,9 +764,13 @@ router.get('/doctor/ops/:opNumber',
   async (req, res) => {
     try {
       const doctorProfile = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
-      if (!doctorProfile) return res.status(404).json({ success: false, message: 'Doctor profile not found' });
+      if (!doctorProfile)
+        return res.status(404).json({ success: false, message: 'Doctor profile not found' });
 
-      const op = await OutPatientRecord.findOne({ opNumber: req.params.opNumber, doctor: doctorProfile._id })
+      const op = await OutPatientRecord.findOne({
+        opNumber: req.params.opNumber,
+        doctor:   doctorProfile._id,
+      })
         .populate('patient',  'name phone email avatar')
         .populate('hospital', 'name address contact consultationPricing')
         .populate('booking',  'bookingCode bookingType fareBreakdown patientInfo status documents')
@@ -664,9 +778,12 @@ router.get('/doctor/ops/:opNumber',
         .lean();
       if (!op) return res.status(404).json({ success: false, message: 'OP record not found' });
 
-      const followUps = await OutPatientRecord.find({ parentOp: op._id }).sort({ scheduledAt: -1 }).populate('patient', 'name phone').lean();
+      const followUps          = await OutPatientRecord.find({ parentOp: op._id })
+        .sort({ scheduledAt: -1 }).populate('patient', 'name phone').lean();
       const isFollowUpEligible = op.followUpExpiry && new Date() < new Date(op.followUpExpiry);
-      const daysRemaining      = isFollowUpEligible ? Math.ceil((new Date(op.followUpExpiry) - new Date()) / (1000 * 60 * 60 * 24)) : 0;
+      const daysRemaining      = isFollowUpEligible
+        ? Math.ceil((new Date(op.followUpExpiry) - new Date()) / (1000 * 60 * 60 * 24))
+        : 0;
 
       return res.json({ success: true, data: { op, followUps, isFollowUpEligible, daysRemaining } });
     } catch (err) {
@@ -678,12 +795,13 @@ router.get('/doctor/ops/:opNumber',
 router.patch('/:id/op/complete', protect, authorize('doctor'), async (req, res) => {
   try {
     const doctorProfile = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
-    if (!doctorProfile) return res.status(404).json({ success: false, message: 'Doctor profile not found' });
+    if (!doctorProfile)
+      return res.status(404).json({ success: false, message: 'Doctor profile not found' });
 
     const { doctorNotes, prescriptionUrl, diagnosisCode, reasonForVisit } = req.body;
     const op = await OutPatientRecord.findOne({ booking: req.params.id, doctor: doctorProfile._id });
-    if (!op)                        return res.status(404).json({ success: false, message: 'OP record not found for this booking' });
-    if (op.status === 'completed')  return res.status(400).json({ success: false, message: 'OP already completed' });
+    if (!op)                       return res.status(404).json({ success: false, message: 'OP record not found for this booking' });
+    if (op.status === 'completed') return res.status(400).json({ success: false, message: 'OP already completed' });
 
     op.status      = 'completed';
     op.completedAt = new Date();
@@ -698,8 +816,15 @@ router.patch('/:id/op/complete', protect, authorize('doctor'), async (req, res) 
     const customer  = await User.findById(booking.customer).select('email phone name').lean();
     const followUps = await OutPatientRecord.find({ parentOp: op._id }).sort({ scheduledAt: -1 }).lean();
 
-    await createNotification({ recipient: booking.customer, title: 'Consultation Complete', body: `Your consultation OP ${op.opNumber} has been completed.`, type: 'Ride_Update', bookingId: booking._id });
-    await sendOpZipEmail({ op: op.toObject ? op.toObject() : op, booking, patient: customer, followUps });
+    await createNotification({
+      recipient: booking.customer,
+      title:     'Consultation Complete',
+      body:      `Your consultation OP ${op.opNumber} has been completed.`,
+      type:      'Ride_Update',
+      bookingId: booking._id,
+    });
+
+    sendOpZipEmail({ op: op.toObject ? op.toObject() : op, booking, patient: customer, followUps });
 
     await invalidateBookingCache();
     return res.json({ success: true, message: 'OP completed and sent to patient', data: { op } });
@@ -735,9 +860,12 @@ router.get('/op/:opNumber',
         .lean();
       if (!op) return res.status(404).json({ success: false, message: 'OP record not found' });
 
-      const followUps          = await OutPatientRecord.find({ parentOp: op._id }).sort({ scheduledAt: -1 }).populate('doctor', 'user specialization').lean();
+      const followUps          = await OutPatientRecord.find({ parentOp: op._id })
+        .sort({ scheduledAt: -1 }).populate('doctor', 'user specialization').lean();
       const isFollowUpEligible = op.followUpExpiry && new Date() < new Date(op.followUpExpiry);
-      const daysRemaining      = isFollowUpEligible ? Math.ceil((new Date(op.followUpExpiry) - new Date()) / (1000 * 60 * 60 * 24)) : 0;
+      const daysRemaining      = isFollowUpEligible
+        ? Math.ceil((new Date(op.followUpExpiry) - new Date()) / (1000 * 60 * 60 * 24))
+        : 0;
 
       return res.json({ success: true, data: { op, followUps, isFollowUpEligible, daysRemaining } });
     } catch (err) {
@@ -804,9 +932,9 @@ router.get('/admin/bookings',
     try {
       const { status, bookingType, city, date, page = 1, limit = 20, search, from, to } = req.query;
       const filter = {};
-      if (status)      filter.status                       = status;
-      if (bookingType) filter.bookingType                  = bookingType;
-      if (city)        filter['patientLocation.city']      = { $regex: city, $options: 'i' };
+      if (status)      filter.status                  = status;
+      if (bookingType) filter.bookingType              = bookingType;
+      if (city)        filter['patientLocation.city']  = { $regex: city, $options: 'i' };
       if (from || to) {
         filter.scheduledAt = {};
         if (from) filter.scheduledAt.$gte = new Date(from);
@@ -826,11 +954,16 @@ router.get('/admin/bookings',
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
       const [bookings, total] = await Promise.all([
-        Booking.find(filter).sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit)).populate('customer', 'name phone email').lean(),
+        Booking.find(filter)
+          .sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit))
+          .populate('customer', 'name phone email').lean(),
         Booking.countDocuments(filter),
       ]);
 
-      return res.json({ success: true, data: { bookings, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) } });
+      return res.json({
+        success: true,
+        data: { bookings, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) },
+      });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -876,7 +1009,7 @@ router.get('/admin/bookings/export', protect, authorize('admin', 'superadmin'), 
     const { from, to, status, bookingType } = req.query;
     const filter = {};
     if (status)      filter.status      = status;
-    if (bookingType) filter.bookingType = bookingType;
+    if (bookingType) filter.bookingType  = bookingType;
     if (from || to) {
       filter.scheduledAt = {};
       if (from) filter.scheduledAt.$gte = new Date(from);
@@ -923,7 +1056,6 @@ router.get('/admin/bookings/:id',
         .lean();
       if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
-      // Return canonical polyline from RideTracking for admin map view
       let mapRoute = null;
       if (booking.primaryRide?.trackingId) {
         const trackingDoc = await RideTracking.findById(booking.primaryRide.trackingId)
@@ -963,13 +1095,18 @@ router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadm
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
-    const prevStatus = booking.status;
-    booking.status = status;
-    booking.statusLog.push({ fromStatus: prevStatus, toStatus: status, changedBy: req.user._id, reason: note || 'Admin status update' });
+    const prevStatus  = booking.status;
+    booking.status    = status;
+    booking.statusLog.push({
+      fromStatus: prevStatus, toStatus: status,
+      changedBy: req.user._id, reason: note || 'Admin status update',
+    });
     booking.updatedBy = req.user._id;
     await booking.save();
 
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', { bookingId: booking._id, status, timestamp: new Date() });
+    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', {
+      bookingId: booking._id, status, timestamp: new Date(),
+    });
 
     await invalidateBookingCache();
     return res.json({ success: true, message: 'Status updated', data: { booking } });
@@ -993,8 +1130,11 @@ router.get('/admin/bookings/:id/nearby/care-assistants',
       const [lng, lat] = coords;
 
       const careAssistants = await CareAssistantProfile.find({
-        isActive: true, isBlocked: false, status: 'Available',
-        'kyc.verificationStatus': 'Verified', 'verification.isVerified': true,
+        isActive:                  true,
+        isBlocked:                 false,
+        status:                    'Available',
+        'kyc.verificationStatus':  'Verified',
+        'verification.isVerified': true,
         location: { $geoWithin: { $centerSphere: [[lng, lat], careRideRadiusRad] } },
       })
         .select('fullName phone specializations performance maxServiceRadiusKm availability location workType user')
@@ -1037,7 +1177,8 @@ router.get('/admin/bookings/:id/nearby/solo-drivers',
       const zoneOrClauses = [];
       if (city)    zoneOrClauses.push({ 'serviceZones.city':     { $regex: `^${city}$`, $options: 'i' } });
       if (pincode) zoneOrClauses.push({ 'serviceZones.pinCodes': pincode });
-      if (!zoneOrClauses.length) return res.status(400).json({ success: false, message: 'No city or pincode for zone matching' });
+      if (!zoneOrClauses.length)
+        return res.status(400).json({ success: false, message: 'No city or pincode for zone matching' });
 
       const soloPartners = await SoloDriverPartner.find({
         partnershipStatus: 'active', isAvailable: true, isOnboardingComplete: true,
@@ -1060,7 +1201,7 @@ router.get('/admin/bookings/:id/nearby/solo-drivers',
         }).select('driverCode location performance legalName').lean();
 
         if (!driver) return null;
-        const vehicle        = sp.vehicle ?? null;
+        const vehicle          = sp.vehicle ?? null;
         const hasActiveVehicle = vehicle?.verificationStatus === 'verified' && vehicle?.isActive === true;
         if (!hasActiveVehicle) return null;
 
@@ -1071,7 +1212,8 @@ router.get('/admin/bookings/:id/nearby/solo-drivers',
             vehicleCode: vehicle.vehicleCode, registrationNumber: vehicle.registrationNumber,
             make: vehicle.make, model: vehicle.model, color: vehicle.color,
             vehicleType: vehicle.vehicleType, seatingCapacity: vehicle.seatingCapacity,
-            isWheelchairAccessible: vehicle.isWheelchairAccessible, hasStretcherSupport: vehicle.hasStretcherSupport,
+            isWheelchairAccessible: vehicle.isWheelchairAccessible,
+            hasStretcherSupport: vehicle.hasStretcherSupport,
             hasOxygenSupport: vehicle.hasOxygenSupport, hasAC: vehicle.hasAC,
           } : null,
           rating: sp.rating?.averageRating ?? 0, totalRides: sp.rating?.totalRides ?? 0,
@@ -1083,7 +1225,10 @@ router.get('/admin/bookings/:id/nearby/solo-drivers',
       }));
 
       const ready = results.filter(Boolean).sort((a, b) => a.distanceKm - b.distanceKm);
-      return res.json({ success: true, data: { pickupCity: city ?? null, pickupPincode: pincode ?? null, total: ready.length, results: ready } });
+      return res.json({
+        success: true,
+        data: { pickupCity: city ?? null, pickupPincode: pincode ?? null, total: ready.length, results: ready },
+      });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -1107,7 +1252,8 @@ router.get('/admin/bookings/:id/nearby/transport-partners',
       const zoneOrClauses = [];
       if (city)    zoneOrClauses.push({ 'serviceZones.city':     { $regex: `^${city}$`, $options: 'i' } });
       if (pincode) zoneOrClauses.push({ 'serviceZones.pinCodes': pincode });
-      if (!zoneOrClauses.length) return res.status(400).json({ success: false, message: 'No city or pincode for zone matching' });
+      if (!zoneOrClauses.length)
+        return res.status(400).json({ success: false, message: 'No city or pincode for zone matching' });
 
       const tps = await TransportPartner.find({
         partnershipStatus: 'active', isAvailable: true, isOnboardingComplete: true, $or: zoneOrClauses,
@@ -1127,7 +1273,7 @@ router.get('/admin/bookings/:id/nearby/transport-partners',
           location: { $geoWithin: { $centerSphere: [[lng, lat], radiusRad] } },
         });
 
-        const activeVehicles = (tp.vehicles ?? []).filter(v => v.isActive && v.verificationStatus === 'verified').length;
+        const activeVehicles  = (tp.vehicles ?? []).filter(v => v.isActive && v.verificationStatus === 'verified').length;
         const isDispatchReady = tp.isOnboardingComplete && availDriverCount > 0 && activeVehicles > 0;
 
         return {
@@ -1143,7 +1289,14 @@ router.get('/admin/bookings/:id/nearby/transport-partners',
 
       const ready    = results.filter(r => r.isDispatchReady);
       const notReady = results.filter(r => !r.isDispatchReady);
-      return res.json({ success: true, data: { pickupCity: city ?? null, pickupPincode: pincode ?? null, total: results.length, dispatchReady: ready.length, results: [...ready, ...notReady] } });
+      return res.json({
+        success: true,
+        data: {
+          pickupCity: city ?? null, pickupPincode: pincode ?? null,
+          total: results.length, dispatchReady: ready.length,
+          results: [...ready, ...notReady],
+        },
+      });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -1162,16 +1315,24 @@ router.get('/admin/bookings/:id/nearby/hospitals',
       const [lng, lat] = coords;
 
       const hospitals = await Hospital.find({
-        isActive: true, isVerified: true,
-        location: { $near: { $geometry: { type: 'Point', coordinates: [lng, lat] }, $maxDistance: RADIUS_METERS } },
+        isActive:   true,
+        isVerified: true,
+        location: {
+          $near: {
+            $geometry:    { type: 'Point', coordinates: [lng, lat] },
+            $maxDistance: RADIUS_METERS,
+          },
+        },
       })
         .select('name hospitalType managementModel address contact specialties is24x7 rating operatingHours isEmergencyReady location linkedDoctors')
         .limit(20).lean();
 
       const results = hospitals.map(h => ({
-        hospitalId: h._id, name: h.name, hospitalType: h.hospitalType, managementModel: h.managementModel,
-        address: `${h.address?.line1 || ''}, ${h.address?.city || ''}`, phone: h.contact?.phone,
-        specialties: h.specialties, is24x7: h.is24x7, isEmergencyReady: h.isEmergencyReady,
+        hospitalId: h._id, name: h.name, hospitalType: h.hospitalType,
+        managementModel: h.managementModel,
+        address: `${h.address?.line1 || ''}, ${h.address?.city || ''}`,
+        phone: h.contact?.phone, specialties: h.specialties,
+        is24x7: h.is24x7, isEmergencyReady: h.isEmergencyReady,
         linkedDoctors: h.linkedDoctors?.length || 0,
         distanceKm: +haversineKm(coords, h.location?.coordinates || [0, 0]).toFixed(1),
         averageRating: h.rating?.averageRating, isOperational: true,
@@ -1189,16 +1350,21 @@ router.get('/admin/bookings/:id/nearby/hospitals',
 router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { soloDriverPartnerId } = req.body;
-    if (!soloDriverPartnerId) return res.status(400).json({ success: false, message: 'soloDriverPartnerId required' });
+    if (!soloDriverPartnerId)
+      return res.status(400).json({ success: false, message: 'soloDriverPartnerId required' });
 
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
-    if (!['pending', 'confirmed'].includes(booking.status)) return res.status(400).json({ success: false, message: `Cannot assign in status: ${booking.status}` });
+    if (!['pending', 'confirmed'].includes(booking.status))
+      return res.status(400).json({ success: false, message: `Cannot assign in status: ${booking.status}` });
 
-    const soloPartner = await SoloDriverPartner.findById(soloDriverPartnerId).populate('user', 'name phone email').lean();
+    const soloPartner = await SoloDriverPartner.findById(soloDriverPartnerId)
+      .populate('user', 'name phone email').lean();
     if (!soloPartner) return res.status(404).json({ success: false, message: 'SoloDriverPartner not found' });
-    if (soloPartner.partnershipStatus !== 'active') return res.status(400).json({ success: false, message: 'Solo partner not active' });
-    if (!soloPartner.driverProfile) return res.status(400).json({ success: false, message: 'Solo partner has no linked Driver profile' });
+    if (soloPartner.partnershipStatus !== 'active')
+      return res.status(400).json({ success: false, message: 'Solo partner not active' });
+    if (!soloPartner.driverProfile)
+      return res.status(400).json({ success: false, message: 'Solo partner has no linked Driver profile' });
 
     await Ride.updateMany(
       { booking: booking._id, status: { $in: ['requested', 'searching'] } },
@@ -1207,13 +1373,18 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
 
     const coords = getBookingCoords(booking);
     const otp    = genOtp();
-    const { distanceKm, durationMin, polyline } = await calculateCanonicalRoute(coords.pickupCoords, coords.dropoffCoords);
+    const { distanceKm, durationMin, polyline } = await calculateCanonicalRoute(
+      coords.pickupCoords, coords.dropoffCoords,
+    );
 
-    // Ride.driver = soloPartner.driverProfile (Driver._id)
     const ride = await Ride.create({
       ...buildRidePayload({
-        bookingId: booking._id, rideType: 'patient', vehicleClass: 'four_wheeler',
-        scheduledPickupAt: booking.scheduledAt, ...coords, createdBy: req.user._id,
+        bookingId:         booking._id,
+        rideType:          'patient',
+        vehicleClass:      'four_wheeler',
+        scheduledPickupAt: booking.scheduledAt,
+        ...coords,
+        createdBy:         req.user._id,
       }),
       driver:               soloPartner.driverProfile, // ← Driver._id
       soloPartner:          soloPartner._id,
@@ -1223,27 +1394,55 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
       pickupOtp:            hashOtp(otp),
     });
 
-    const tracking = await RideTracking.create({ ride: ride._id, booking: booking._id, expectedRoutePolyline: polyline });
+    const tracking = await RideTracking.create({
+      ride: ride._id, booking: booking._id, expectedRoutePolyline: polyline,
+    });
     await Ride.findByIdAndUpdate(ride._id, { $set: { trackingId: tracking._id } });
     await Booking.findByIdAndUpdate(booking._id, {
       $push: { rides: ride._id },
       $set:  { primaryRide: ride._id, status: 'confirmed', updatedBy: req.user._id },
     });
 
-    await createNotification({ recipient: soloPartner.user._id, title: 'New Booking Assigned', body: `Admin assigned booking #${booking.bookingCode} to you.`, type: 'Ride_Request', bookingId: booking._id, priority: 'High' });
+    await createNotification({
+      recipient: soloPartner.user._id,
+      title:     'New Booking Assigned',
+      body:      `Admin assigned booking #${booking.bookingCode} to you.`,
+      type:      'Ride_Request',
+      bookingId: booking._id,
+      priority:  'High',
+    });
 
-    try { await sendSms({ to: soloPartner.user.phone, message: `Hi ${soloPartner.user.name}, booking #${booking.bookingCode} assigned by admin. Check Likeson app.` }); }
-    catch (e) { console.error('[Admin assign solo] SMS:', e.message); }
+    sendSms({
+      to:      soloPartner.user.phone,
+      message: `Hi ${soloPartner.user.name}, booking #${booking.bookingCode} assigned by admin. Check Likeson app.`,
+    }).catch(e => console.error('[Admin assign solo] SMS:', e.message));
 
     joinBookingRoom(soloPartner.user._id, booking._id);
 
     getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', {
-      bookingId: booking._id, status: 'confirmed', timestamp: new Date(),
+      bookingId:  booking._id,
+      status:     'confirmed',
+      timestamp:  new Date(),
       driverInfo: { name: soloPartner.user.name, phone: soloPartner.user.phone },
-      mapRoute: { polyline, pickupCoords: coords.pickupCoords, pickupAddress: coords.pickupAddress, dropoffCoords: coords.dropoffCoords, dropoffAddress: coords.dropoffAddress, estimatedDistKm: distanceKm, estimatedMinutes: durationMin, currentTarget: 'pickup' },
+      mapRoute: {
+        polyline,
+        pickupCoords:    coords.pickupCoords,
+        pickupAddress:   coords.pickupAddress,
+        dropoffCoords:   coords.dropoffCoords,
+        dropoffAddress:  coords.dropoffAddress,
+        estimatedDistKm: distanceKm,
+        estimatedMinutes: durationMin,
+        currentTarget:   'pickup',
+      },
     });
 
-    await SystemLog.createLog({ level: 'success', category: 'api', message: `Admin assigned solo driver to #${booking.bookingCode}`, actor: { userId: req.user._id, role: req.user.role }, relatedEntity: { model: 'Booking', entityId: booking._id }, metadata: { soloDriverPartnerId } });
+    await SystemLog.createLog({
+      level: 'success', category: 'api',
+      message: `Admin assigned solo driver to #${booking.bookingCode}`,
+      actor: { userId: req.user._id, role: req.user.role },
+      relatedEntity: { model: 'Booking', entityId: booking._id },
+      metadata: { soloDriverPartnerId },
+    });
     await invalidateBookingCache();
     return res.json({ success: true, message: 'Solo driver assigned', data: { booking, ride } });
   } catch (err) {
@@ -1254,34 +1453,71 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
 router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { transportPartnerId } = req.body;
-    if (!transportPartnerId) return res.status(400).json({ success: false, message: 'transportPartnerId required' });
+    if (!transportPartnerId)
+      return res.status(400).json({ success: false, message: 'transportPartnerId required' });
 
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
-    const tp = await TransportPartner.findById(transportPartnerId).populate('user', 'name email phone').lean();
+    const tp = await TransportPartner.findById(transportPartnerId)
+      .populate('user', 'name email phone').lean();
     if (!tp) return res.status(404).json({ success: false, message: 'TransportPartner not found' });
-    if (tp.partnershipStatus !== 'active') return res.status(400).json({ success: false, message: 'TP not active' });
+    if (tp.partnershipStatus !== 'active')
+      return res.status(400).json({ success: false, message: 'TP not active' });
 
-    await Booking.findByIdAndUpdate(booking._id, { $set: { transportPartner: transportPartnerId, status: 'confirmed', updatedBy: req.user._id } });
+    await Booking.findByIdAndUpdate(booking._id, {
+      $set: { transportPartner: transportPartnerId, status: 'confirmed', updatedBy: req.user._id },
+    });
 
-    await createNotification({ recipient: tp.user._id, title: 'New Booking Assigned to Fleet', body: `Booking #${booking.bookingCode} assigned. Please assign a driver.`, type: 'Ride_Request', bookingId: booking._id, priority: 'High' });
+    await createNotification({
+      recipient: tp.user._id,
+      title:     'New Booking Assigned to Fleet',
+      body:      `Booking #${booking.bookingCode} assigned. Please assign a driver.`,
+      type:      'Ride_Request',
+      bookingId: booking._id,
+      priority:  'High',
+    });
 
-    try {
-      await sendEmail({ email: tp.user.email, subject: `New Booking #${booking.bookingCode} — Assign Driver`, html: transactionalTemplate({ header: 'BOOKING ASSIGNED TO YOUR FLEET', title: `Booking #${booking.bookingCode} needs a driver`, body: `<b>Type:</b> ${booking.bookingType}<br/><b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}<br/><b>Patient:</b> ${booking.patientInfo?.name}`, buttonLink: `${process.env.FRONTEND_URL}/tp/bookings/${booking._id}`, buttonText: 'Assign Driver Now' }) });
-    } catch (e) { console.error('[Admin assign TP] Email:', e.message); }
+    sendEmail({
+      email:   tp.user.email,
+      subject: `New Booking #${booking.bookingCode} — Assign Driver`,
+      html:    transactionalTemplate({
+        header:     'BOOKING ASSIGNED TO YOUR FLEET',
+        title:      `Booking #${booking.bookingCode} needs a driver`,
+        body:       `<b>Type:</b> ${booking.bookingType}<br/><b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}<br/><b>Patient:</b> ${booking.patientInfo?.name}`,
+        buttonLink: `${process.env.FRONTEND_URL}/tp/bookings/${booking._id}`,
+        buttonText: 'Assign Driver Now',
+      }),
+    }).catch(e => console.error('[Admin assign TP] Email:', e.message));
 
-    try { await sendSms({ to: tp.user.phone, message: `Hi ${tp.user.name}, booking #${booking.bookingCode} assigned. Assign driver in Likeson dashboard.` }); }
-    catch (e) { console.error('[Admin assign TP] SMS:', e.message); }
+    sendSms({
+      to:      tp.user.phone,
+      message: `Hi ${tp.user.name}, booking #${booking.bookingCode} assigned. Assign driver in Likeson dashboard.`,
+    }).catch(e => console.error('[Admin assign TP] SMS:', e.message));
 
     joinTpRoom(tp.user._id, tp._id);
     joinBookingRoom(tp.user._id, booking._id);
 
-    getBookingSocketService()?.emitToRoom(`tp:${tp._id}`, 'booking_assigned', { bookingId: booking._id, bookingCode: booking.bookingCode, bookingType: booking.bookingType, scheduledAt: booking.scheduledAt });
+    getBookingSocketService()?.emitToRoom(`tp:${tp._id}`, 'booking_assigned', {
+      bookingId:   booking._id,
+      bookingCode: booking.bookingCode,
+      bookingType: booking.bookingType,
+      scheduledAt: booking.scheduledAt,
+    });
 
-    await SystemLog.createLog({ level: 'success', category: 'api', message: `Admin assigned TP to #${booking.bookingCode}`, actor: { userId: req.user._id, role: req.user.role }, relatedEntity: { model: 'Booking', entityId: booking._id }, metadata: { transportPartnerId } });
+    await SystemLog.createLog({
+      level: 'success', category: 'api',
+      message: `Admin assigned TP to #${booking.bookingCode}`,
+      actor: { userId: req.user._id, role: req.user.role },
+      relatedEntity: { model: 'Booking', entityId: booking._id },
+      metadata: { transportPartnerId },
+    });
     await invalidateBookingCache();
-    return res.json({ success: true, message: 'Transport partner assigned. Awaiting driver assignment.', data: { booking } });
+    return res.json({
+      success: true,
+      message: 'Transport partner assigned. Awaiting driver assignment.',
+      data: { booking },
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -1290,29 +1526,67 @@ router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('
 router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { careAssistantId } = req.body;
-    if (!careAssistantId) return res.status(400).json({ success: false, message: 'careAssistantId required' });
+    if (!careAssistantId)
+      return res.status(400).json({ success: false, message: 'careAssistantId required' });
 
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
-    const ca = await CareAssistantProfile.findById(careAssistantId).populate('user', 'name phone email').lean();
+    const ca = await CareAssistantProfile.findById(careAssistantId)
+      .populate('user', 'name phone email').lean();
     if (!ca) return res.status(404).json({ success: false, message: 'Care assistant not found' });
-    if (!ca.isActive || !ca.verification?.isVerified) return res.status(400).json({ success: false, message: 'Care assistant not available or not verified' });
+    if (!ca.isActive || !ca.verification?.isVerified)
+      return res.status(400).json({ success: false, message: 'Care assistant not available or not verified' });
 
-    await Booking.findByIdAndUpdate(booking._id, { $set: { careAssistant: careAssistantId, updatedBy: req.user._id } });
+    await Booking.findByIdAndUpdate(booking._id, {
+      $set: { careAssistant: careAssistantId, updatedBy: req.user._id },
+    });
 
-    await createNotification({ recipient: ca.user._id, title: 'New Care Request', body: `Assigned to booking #${booking.bookingCode}`, type: 'Care_Assistant_Assigned', bookingId: booking._id, priority: 'High' });
+    await createNotification({
+      recipient: ca.user._id,
+      title:     'New Care Request',
+      body:      `Assigned to booking #${booking.bookingCode}`,
+      type:      'Care_Assistant_Assigned',
+      bookingId: booking._id,
+      priority:  'High',
+    });
 
     const customer = await User.findById(booking.customer).select('phone name').lean();
-    try { await sendSms({ to: ca.user.phone, message: newCareRequestToAssistantSms({ assistantName: ca.fullName, requestId: booking.bookingCode, patientName: booking.patientInfo?.name, location: booking.patientLocation?.address || '', scheduledAt: new Date(booking.scheduledAt).toLocaleString('en-IN') }) }); }
-    catch (e) { console.error('[Admin assign CA] SMS:', e.message); }
-    try { await sendSms({ to: customer.phone, message: careAssistantAssignedSms({ userName: customer.name, requestId: booking.bookingCode, assistantName: ca.fullName, assistantPhone: ca.phone }) }); }
-    catch (e) { console.error('[Admin assign CA] Customer SMS:', e.message); }
+
+    sendSms({
+      to:      ca.user.phone,
+      message: newCareRequestToAssistantSms({
+        assistantName: ca.fullName,
+        requestId:     booking.bookingCode,
+        patientName:   booking.patientInfo?.name,
+        location:      booking.patientLocation?.address || '',
+        scheduledAt:   new Date(booking.scheduledAt).toLocaleString('en-IN'),
+      }),
+    }).catch(e => console.error('[Admin assign CA] SMS:', e.message));
+
+    sendSms({
+      to:      customer.phone,
+      message: careAssistantAssignedSms({
+        userName:       customer.name,
+        requestId:      booking.bookingCode,
+        assistantName:  ca.fullName,
+        assistantPhone: ca.phone,
+      }),
+    }).catch(e => console.error('[Admin assign CA] Customer SMS:', e.message));
 
     joinBookingRoom(ca.user._id, booking._id);
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_assigned', { bookingId: booking._id, careAssistantName: ca.fullName });
+    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_assigned', {
+      bookingId:        booking._id,
+      careAssistantName: ca.fullName,
+    });
 
-    await SystemLog.createLog({ level: 'success', category: 'api', message: `Admin assigned care assistant to #${booking.bookingCode}`, actor: { userId: req.user._id, role: req.user.role }, relatedEntity: { model: 'Booking', entityId: booking._id }, metadata: { careAssistantId } });
+    await SystemLog.createLog({
+      level: 'success', category: 'api',
+      message: `Admin assigned care assistant to #${booking.bookingCode}`,
+      actor: { userId: req.user._id, role: req.user.role },
+      relatedEntity: { model: 'Booking', entityId: booking._id },
+      metadata: { careAssistantId },
+    });
     await invalidateBookingCache();
     return res.json({ success: true, message: 'Care assistant assigned', data: { booking } });
   } catch (err) {
@@ -1329,9 +1603,12 @@ router.post('/admin/bookings/:id/assign/hospital', protect, authorize('admin', '
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
     const hospital = await Hospital.findById(hospitalId).select('name isActive isVerified').lean();
-    if (!hospital?.isActive || !hospital?.isVerified) return res.status(400).json({ success: false, message: 'Hospital not operational' });
+    if (!hospital?.isActive || !hospital?.isVerified)
+      return res.status(400).json({ success: false, message: 'Hospital not operational' });
 
-    await Booking.findByIdAndUpdate(booking._id, { $set: { hospital: hospitalId, updatedBy: req.user._id } });
+    await Booking.findByIdAndUpdate(booking._id, {
+      $set: { hospital: hospitalId, updatedBy: req.user._id },
+    });
     await invalidateBookingCache();
     return res.json({ success: true, message: 'Hospital linked', data: { booking } });
   } catch (err) {
@@ -1342,7 +1619,8 @@ router.post('/admin/bookings/:id/assign/hospital', protect, authorize('admin', '
 router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { newDriverId, reason } = req.body; // newDriverId = Driver._id
-    if (!newDriverId) return res.status(400).json({ success: false, message: 'newDriverId (Driver._id) required' });
+    if (!newDriverId)
+      return res.status(400).json({ success: false, message: 'newDriverId (Driver._id) required' });
 
     await Ride.updateMany(
       { booking: req.params.id, status: { $in: ['driver_assigned', 'driver_accepted', 'driver_en_route'] } },
@@ -1351,37 +1629,61 @@ router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 
 
     const booking   = await Booking.findById(req.params.id);
     if (!booking)   return res.status(404).json({ success: false, message: 'Booking not found' });
-
     const driverDoc = await Driver.findById(newDriverId).lean();
     if (!driverDoc) return res.status(404).json({ success: false, message: 'Driver not found' });
 
     const coords = getBookingCoords(booking);
     const otp    = genOtp();
-    const { distanceKm, durationMin, polyline } = await calculateCanonicalRoute(coords.pickupCoords, coords.dropoffCoords);
+    const { distanceKm, durationMin, polyline } = await calculateCanonicalRoute(
+      coords.pickupCoords, coords.dropoffCoords,
+    );
 
     const ride = await Ride.create({
-      ...buildRidePayload({ bookingId: booking._id, rideType: 'patient', vehicleClass: 'four_wheeler', scheduledPickupAt: booking.scheduledAt, ...coords, createdBy: req.user._id }),
-      driver:               newDriverId,           // ← Driver._id directly
+      ...buildRidePayload({
+        bookingId:         booking._id,
+        rideType:          'patient',
+        vehicleClass:      'four_wheeler',
+        scheduledPickupAt: booking.scheduledAt,
+        ...coords,
+        createdBy:         req.user._id,
+      }),
+      driver:               newDriverId,                        // ← Driver._id
       transportPartner:     driverDoc.ownerAgency  || undefined,
-      soloPartner:          driverDoc.soloPartner   || undefined,
+      soloPartner:          driverDoc.soloPartner  || undefined,
       status:               'driver_assigned',
       estimatedDistanceKm:  distanceKm,
       estimatedDurationMin: durationMin,
       pickupOtp:            hashOtp(otp),
     });
 
-    const tracking = await RideTracking.create({ ride: ride._id, booking: booking._id, expectedRoutePolyline: polyline });
+    const tracking = await RideTracking.create({
+      ride: ride._id, booking: booking._id, expectedRoutePolyline: polyline,
+    });
     await Ride.findByIdAndUpdate(ride._id, { $set: { trackingId: tracking._id } });
     await Booking.findByIdAndUpdate(booking._id, {
-      $push: { rides: ride._id }, $set: { primaryRide: ride._id, updatedBy: req.user._id },
+      $push: { rides: ride._id },
+      $set:  { primaryRide: ride._id, updatedBy: req.user._id },
     });
 
-    booking.statusLog.push({ fromStatus: booking.status, toStatus: booking.status, changedBy: req.user._id, reason: `Driver reassigned by admin. Reason: ${reason || 'N/A'}` });
+    booking.statusLog.push({
+      fromStatus: booking.status, toStatus: booking.status,
+      changedBy: req.user._id,
+      reason: `Driver reassigned by admin. Reason: ${reason || 'N/A'}`,
+    });
     await booking.save();
 
-    await createNotification({ recipient: driverDoc.user, title: 'Ride Assigned', body: `Booking #${booking.bookingCode} assigned by admin.`, type: 'Ride_Request', bookingId: booking._id });
+    await createNotification({
+      recipient: driverDoc.user,
+      title:     'Ride Assigned',
+      body:      `Booking #${booking.bookingCode} assigned by admin.`,
+      type:      'Ride_Request',
+      bookingId: booking._id,
+    });
+
     joinBookingRoom(driverDoc.user, booking._id);
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'driver_assigned', { bookingId: booking._id });
+    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'driver_assigned', {
+      bookingId: booking._id,
+    });
 
     await invalidateBookingCache();
     return res.json({ success: true, message: 'Driver reassigned', data: { ride } });
@@ -1393,16 +1695,26 @@ router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 
 router.patch('/admin/bookings/:id/reassign/care', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { newCareAssistantId } = req.body;
-    if (!newCareAssistantId) return res.status(400).json({ success: false, message: 'newCareAssistantId required' });
+    if (!newCareAssistantId)
+      return res.status(400).json({ success: false, message: 'newCareAssistantId required' });
 
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
-    await Booking.findByIdAndUpdate(booking._id, { $set: { careAssistant: newCareAssistantId, updatedBy: req.user._id } });
+    await Booking.findByIdAndUpdate(booking._id, {
+      $set: { careAssistant: newCareAssistantId, updatedBy: req.user._id },
+    });
 
-    const ca = await CareAssistantProfile.findById(newCareAssistantId).populate('user', 'phone name').lean();
+    const ca = await CareAssistantProfile.findById(newCareAssistantId)
+      .populate('user', 'phone name').lean();
     if (ca) {
-      await createNotification({ recipient: ca.user._id, title: 'Care Booking Reassigned', body: `Booking #${booking.bookingCode} reassigned to you by admin.`, type: 'Care_Assistant_Assigned', bookingId: booking._id });
+      await createNotification({
+        recipient: ca.user._id,
+        title:     'Care Booking Reassigned',
+        body:      `Booking #${booking.bookingCode} reassigned to you by admin.`,
+        type:      'Care_Assistant_Assigned',
+        bookingId: booking._id,
+      });
       joinBookingRoom(ca.user._id, booking._id);
     }
 
@@ -1419,14 +1731,18 @@ router.post('/admin/bookings/:id/refund', protect, authorize('admin', 'superadmi
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
-    const amount      = refundAmount ?? booking.fareBreakdown?.amountPaid ?? 0;
-    const prevStatus  = booking.status; // captured BEFORE mutation
+    const amount     = refundAmount ?? booking.fareBreakdown?.amountPaid ?? 0;
+    const prevStatus = booking.status;
 
     const rzpPayment = booking.payments?.find(p => p.gateway === 'Razorpay' && p.status === 'success');
     if (rzpPayment?.transactionId && amount > 0) {
       try {
-        await razorpay.payments.refund(rzpPayment.transactionId, { amount: Math.round(amount * 100), notes: { reason: reason || 'Admin initiated refund', bookingCode: booking.bookingCode } });
-        rzpPayment.status = 'refunded'; rzpPayment.refundedAt = new Date();
+        await razorpay.payments.refund(rzpPayment.transactionId, {
+          amount: Math.round(amount * 100),
+          notes:  { reason: reason || 'Admin initiated refund', bookingCode: booking.bookingCode },
+        });
+        rzpPayment.status    = 'refunded';
+        rzpPayment.refundedAt = new Date();
       } catch (rzpErr) { console.error('[Refund] Razorpay refund failed:', rzpErr.message); }
     }
 
@@ -1434,18 +1750,34 @@ router.post('/admin/bookings/:id/refund', protect, authorize('admin', 'superadmi
     if (walletPayment && amount > 0) {
       try {
         const wallet = await Wallet.findOne({ user: booking.customer });
-        if (wallet) await wallet.credit(amount, 'Refund', { referenceId: booking._id, onModel: 'Booking', description: `Refund for booking ${booking.bookingCode}`, initiatedBy: req.user._id });
+        if (wallet) {
+          await wallet.credit(amount, 'Refund', {
+            referenceId:  booking._id,
+            onModel:      'Booking',
+            description:  `Refund for booking ${booking.bookingCode}`,
+            initiatedBy:  req.user._id,
+          });
+        }
       } catch (wErr) { console.error('[Refund] Wallet refund failed:', wErr.message); }
     }
 
     booking.fareBreakdown.refundAmount = amount;
-    booking.paymentStatus = 'refunded';
-    booking.status        = 'refunded';
-    booking.statusLog.push({ fromStatus: prevStatus, toStatus: 'refunded', changedBy: req.user._id, reason: reason || 'Admin initiated refund' });
+    booking.paymentStatus              = 'refunded';
+    booking.status                     = 'refunded';
+    booking.statusLog.push({
+      fromStatus: prevStatus, toStatus: 'refunded',
+      changedBy: req.user._id, reason: reason || 'Admin initiated refund',
+    });
     booking.updatedBy = req.user._id;
     await booking.save();
 
-    await createNotification({ recipient: booking.customer, title: 'Refund Processed', body: `Refund of ₹${amount} for booking #${booking.bookingCode} has been processed.`, type: 'Refund_Processed', bookingId: booking._id });
+    await createNotification({
+      recipient: booking.customer,
+      title:     'Refund Processed',
+      body:      `Refund of ₹${amount} for booking #${booking.bookingCode} has been processed.`,
+      type:      'Refund_Processed',
+      bookingId: booking._id,
+    });
     await invalidateBookingCache();
     return res.json({ success: true, message: 'Refund initiated', data: { booking } });
   } catch (err) {
@@ -1476,12 +1808,16 @@ router.get('/admin/ops',
       const [ops, total] = await Promise.all([
         OutPatientRecord.find(filter)
           .sort({ scheduledAt: -1 }).skip(skip).limit(parseInt(limit))
-          .populate('doctor', 'user specialization').populate('hospital', 'name address')
-          .populate('patient', 'name phone email').lean(),
+          .populate('doctor',   'user specialization')
+          .populate('hospital', 'name address')
+          .populate('patient',  'name phone email').lean(),
         OutPatientRecord.countDocuments(filter),
       ]);
 
-      return res.json({ success: true, data: { ops, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) } });
+      return res.json({
+        success: true,
+        data: { ops, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) },
+      });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -1492,7 +1828,11 @@ router.patch('/admin/ops/:id/status', protect, authorize('admin', 'superadmin'),
   try {
     const { status, doctorNotes } = req.body;
     const validStatuses = ['scheduled', 'in_progress', 'completed', 'cancelled', 'no_show'];
-    if (!validStatuses.includes(status)) return res.status(400).json({ success: false, message: `Invalid status. Valid: ${validStatuses.join(', ')}` });
+    if (!validStatuses.includes(status))
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status. Valid: ${validStatuses.join(', ')}`,
+      });
 
     const op = await OutPatientRecord.findByIdAndUpdate(req.params.id, {
       status,
@@ -1505,7 +1845,7 @@ router.patch('/admin/ops/:id/status', protect, authorize('admin', 'superadmin'),
       const booking   = await Booking.findById(op.booking).lean();
       const patient   = await User.findById(op.patient).select('email name phone').lean();
       const followUps = await OutPatientRecord.find({ parentOp: op._id }).sort({ scheduledAt: -1 }).lean();
-      if (patient?.email) await sendOpZipEmail({ op, booking, patient, followUps });
+      if (patient?.email) sendOpZipEmail({ op, booking, patient, followUps });
     }
 
     await invalidateBookingCache();

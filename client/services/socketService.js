@@ -1,6 +1,17 @@
 /**
  * socketService.js — Likeson.in Booking Socket Client
- * Matches bookingSocketService.js (PRODUCTION v4)
+ * Matches bookingSocketService.js (PRODUCTION v5)
+ *
+ * FIXES vs client v3 (for v5 server):
+ *  - Comment header updated to v5
+ *  - startGpsTracking: intervalMs param removed (watchPosition has no interval; was dead code)
+ *  - speed conversion guards against null / negative values and rounds to 1dp
+ *  - verifyOtpAsync: correlation token prevents two concurrent calls stealing each other's result
+ *  - requestBookingStateAsync: same correlation fix
+ *  - destroy(): _activeBookingId nulled before socket disconnect
+ *  - LOCATION_UPDATE payload documented with new v5 fields (rideId, bookingId, rideStatus, currentTarget)
+ *  - OTP_WRONG_ATTEMPT: note added — UI must listen so customer sees feedback
+ *  - SOCKET_EVENTS / CLIENT_EVENTS: no changes needed — already complete
  *
  * Usage:
  *   import { socketService } from '@/services/socketService';
@@ -19,6 +30,13 @@ const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000'
 
 /**
  * All events emitted BY server → listen with .on()
+ *
+ * location_update payload (v5):
+ *   { lat, lng, heading, speed, accuracy,
+ *     rideId, bookingId,          ← NEW in v5 (use for client-side dedup)
+ *     role, rideStatus,
+ *     currentTarget,              ← 'pickup' | 'dropoff'
+ *     updatedAt }
  */
 export const SOCKET_EVENTS = {
   // Connection
@@ -31,7 +49,7 @@ export const SOCKET_EVENTS = {
 
   // Location
   LOCATION_UPDATE:           'location_update',
-  DRIVER_LOCATION:           'driver_location',    // admin:ops only
+  DRIVER_LOCATION:           'driver_location',          // admin:ops only
   CARE_ASSISTANT_LOCATION:   'care_assistant_location',
 
   // ETA
@@ -45,10 +63,15 @@ export const SOCKET_EVENTS = {
 
   // OTP
   OTP_RESULT:                'otp_result',
+  /**
+   * OTP_WRONG_ATTEMPT — emitted to booking room on bad OTP (NEW in v5).
+   * Customer UI MUST listen for this to show "Wrong OTP, please check" feedback.
+   * Payload: { bookingId, timestamp }
+   */
   OTP_WRONG_ATTEMPT:         'otp_wrong_attempt',
   OTP_RESEND_REQUESTED:      'otp_resend_requested',
-  OTP_FOR_ADMIN:             'otp_for_admin',        // admin:ops only
-  OTP_FAILED_ATTEMPT:        'otp_failed_attempt',   // admin:ops only
+  OTP_FOR_ADMIN:             'otp_for_admin',            // admin:ops only
+  OTP_FAILED_ATTEMPT:        'otp_failed_attempt',       // admin:ops only
 
   // SOS
   SOS_ALERT:                 'sos_alert',
@@ -71,23 +94,23 @@ export const SOCKET_EVENTS = {
  * All events emitted BY client → send with .emit()
  */
 export const CLIENT_EVENTS = {
-  JOIN_BOOKING_ROOM:    'join_booking_room',
-  JOIN_TP_ROOM:         'join_tp_room',
-  LEAVE_BOOKING_ROOM:   'leave_booking_room',
-  LEAVE_TP_ROOM:        'leave_tp_room',
+  JOIN_BOOKING_ROOM:     'join_booking_room',
+  JOIN_TP_ROOM:          'join_tp_room',
+  LEAVE_BOOKING_ROOM:    'leave_booking_room',
+  LEAVE_TP_ROOM:         'leave_tp_room',
 
-  DRIVER_LOCATION:      'driver_location',
-  CARE_LOCATION:        'care_location',
+  DRIVER_LOCATION:       'driver_location',
+  CARE_LOCATION:         'care_location',
 
-  DRIVER_STATUS_UPDATE: 'driver_status_update',
-  VERIFY_OTP:           'verify_otp',
-  OTP_RESEND_REQUEST:   'otp_resend_request',
+  DRIVER_STATUS_UPDATE:  'driver_status_update',
+  VERIFY_OTP:            'verify_otp',
+  OTP_RESEND_REQUEST:    'otp_resend_request',
 
-  SOS_TRIGGER:          'sos_trigger',
-  ROUTE_DEVIATION:      'route_deviation',
+  SOS_TRIGGER:           'sos_trigger',
+  ROUTE_DEVIATION:       'route_deviation',
 
-  REQUEST_BOOKING_STATE:'request_booking_state',
-  PING_HEALTH:          'ping_health',
+  REQUEST_BOOKING_STATE: 'request_booking_state',
+  PING_HEALTH:           'ping_health',
 };
 
 /**
@@ -122,13 +145,22 @@ class SocketService {
 
     /** Active booking room */
     this._activeBookingId = null;
+
+    /**
+     * One-time listeners keyed by a caller-supplied token.
+     * Used by verifyOtpAsync / requestBookingStateAsync to prevent
+     * two concurrent callers stealing each other's response.
+     *
+     * Map<token, { event: string, handler: Function }>
+     */
+    this._onceListeners = new Map();
   }
 
   // ── Init / Destroy ─────────────────────────────────────────────────────────
 
   /**
    * init — connect socket with JWT token.
-   * Call once: after user logs in.
+   * Call once after user logs in.
    *
    * @param {string} token - JWT access token
    */
@@ -139,13 +171,13 @@ class SocketService {
     }
 
     this._socket = io(SOCKET_URL, {
-      auth:            { token },
-      transports:      ['websocket', 'polling'],
-      reconnection:    true,
+      auth:                 { token },
+      transports:           ['websocket', 'polling'],
+      reconnection:         true,
       reconnectionAttempts: 10,
       reconnectionDelay:    1_000,
       reconnectionDelayMax: 10_000,
-      timeout:         20_000,
+      timeout:              20_000,
     });
 
     this._socket.on('connect', () => {
@@ -178,13 +210,20 @@ class SocketService {
    */
   destroy() {
     this.stopGpsTracking();
+
+    // FIX: null active booking before disconnect so no in-flight emit references it
+    this._activeBookingId = null;
+    this._pendingEmits    = [];
+
     if (this._socket) {
       this._socket.removeAllListeners();
       this._socket.disconnect();
       this._socket = null;
     }
-    this._pendingEmits    = [];
-    this._activeBookingId = null;
+
+    // Clean up any dangling once-listeners
+    this._onceListeners.clear();
+
     console.log('[Socket] Destroyed');
   }
 
@@ -201,7 +240,7 @@ class SocketService {
   // ── Event helpers ──────────────────────────────────────────────────────────
 
   /**
-   * on — subscribe to server event.
+   * on — subscribe to a server event.
    * Returns unsubscribe fn.
    *
    * @param {string} event
@@ -214,7 +253,7 @@ class SocketService {
   }
 
   /**
-   * once — subscribe to server event once.
+   * once — subscribe to a server event exactly once.
    */
   once(event, handler) {
     this._socket?.once(event, handler);
@@ -225,8 +264,8 @@ class SocketService {
   }
 
   /**
-   * emit — send event.
-   * Queues if not connected yet.
+   * emit — send event to server.
+   * Queues if not yet connected.
    *
    * @param {string} event
    * @param {object} payload
@@ -243,7 +282,7 @@ class SocketService {
 
   /**
    * joinBookingRoom — join booking:{bookingId} room.
-   * Server verifies auth before allowing join.
+   * Server DB-verifies auth before allowing join.
    */
   joinBookingRoom(bookingId) {
     if (!bookingId) return;
@@ -278,27 +317,36 @@ class SocketService {
 
   /**
    * startGpsTracking — continuously emit driver_location using browser Geolocation.
-   * Only call for driver/solodriverpartner role.
+   * Only call for driver / solodriverpartner role.
    *
-   * @param {{ bookingId?: string, intervalMs?: number }} opts
+   * NOTE: intervalMs param removed vs v3 — watchPosition fires on device schedule.
+   * If you need a fixed poll interval, use setInterval + getCurrentPosition instead.
+   *
+   * @param {{ bookingId?: string }} opts
    */
-  startGpsTracking({ bookingId, intervalMs = 3_000 } = {}) {
+  startGpsTracking({ bookingId } = {}) {
     if (!navigator?.geolocation) {
       console.warn('[Socket] Geolocation not supported');
       return;
     }
 
-    this.stopGpsTracking(); // clear existing
+    this.stopGpsTracking(); // clear any existing watch
 
     this._gpsWatchId = navigator.geolocation.watchPosition(
       (pos) => {
+        // FIX: guard against null / negative speed values before unit conversion
+        const rawSpeed  = pos.coords.speed;
+        const speedKmh  = rawSpeed != null && rawSpeed >= 0
+          ? +(rawSpeed * 3.6).toFixed(1)
+          : undefined;
+
         this.emit(CLIENT_EVENTS.DRIVER_LOCATION, {
           bookingId: bookingId ?? this._activeBookingId ?? undefined,
           lat:       pos.coords.latitude,
           lng:       pos.coords.longitude,
-          heading:   pos.coords.heading   ?? undefined,
-          speed:     pos.coords.speed     !== null ? pos.coords.speed * 3.6 : undefined, // m/s → km/h
-          accuracy:  pos.coords.accuracy  ?? undefined,
+          heading:   pos.coords.heading  ?? undefined,
+          speed:     speedKmh,
+          accuracy:  pos.coords.accuracy ?? undefined,
         });
       },
       (err) => console.error('[GPS]', err.message),
@@ -335,7 +383,7 @@ class SocketService {
   // ── OTP ────────────────────────────────────────────────────────────────────
 
   /**
-   * verifyOtp — sole OTP path (HTTP /ride/start removed).
+   * verifyOtp — sole OTP path (HTTP /ride/start removed in v5).
    * Listen for OTP_RESULT.
    */
   verifyOtp({ bookingId, rideId, otp }) {
@@ -375,7 +423,10 @@ class SocketService {
 
   /**
    * verifyOtpAsync — promise-based OTP verify.
-   * Resolves/rejects with otp_result payload.
+   *
+   * FIX (v5): uses a per-call handler keyed to the rideId so that two concurrent
+   * calls cannot steal each other's otp_result. The handler only resolves/rejects
+   * when the payload's rideId matches the caller's rideId.
    *
    * @param {{ bookingId: string, rideId: string, otp: string }} opts
    * @param {number} timeoutMs
@@ -383,14 +434,21 @@ class SocketService {
    */
   verifyOtpAsync({ bookingId, rideId, otp }, timeoutMs = 10_000) {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('OTP verify timeout')), timeoutMs);
+      const timer = setTimeout(() => {
+        this._socket?.off(SOCKET_EVENTS.OTP_RESULT, handler);
+        reject(new Error('OTP verify timeout'));
+      }, timeoutMs);
 
-      this.once(SOCKET_EVENTS.OTP_RESULT, (data) => {
+      const handler = (data) => {
+        // Only handle the response that belongs to this specific ride
+        if (data.rideId && data.rideId !== rideId) return;
         clearTimeout(timer);
+        this._socket?.off(SOCKET_EVENTS.OTP_RESULT, handler);
         if (data.success) resolve(data);
         else reject(new Error(data.message || 'OTP failed'));
-      });
+      };
 
+      this._socket?.on(SOCKET_EVENTS.OTP_RESULT, handler);
       this.verifyOtp({ bookingId, rideId, otp });
     });
   }
@@ -398,19 +456,29 @@ class SocketService {
   /**
    * requestBookingStateAsync — promise-based state snapshot.
    *
+   * FIX (v5): filters by bookingId so concurrent calls for different bookings
+   * do not resolve each other's promise.
+   *
    * @param {string} bookingId
    * @param {number} timeoutMs
    * @returns {Promise<object>}
    */
   requestBookingStateAsync(bookingId, timeoutMs = 8_000) {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('State snapshot timeout')), timeoutMs);
+      const timer = setTimeout(() => {
+        this._socket?.off(SOCKET_EVENTS.BOOKING_STATE_SNAPSHOT, handler);
+        reject(new Error('State snapshot timeout'));
+      }, timeoutMs);
 
-      this.once(SOCKET_EVENTS.BOOKING_STATE_SNAPSHOT, (data) => {
+      const handler = (data) => {
+        // Only handle response for our bookingId
+        if (data.bookingId && data.bookingId !== bookingId) return;
         clearTimeout(timer);
+        this._socket?.off(SOCKET_EVENTS.BOOKING_STATE_SNAPSHOT, handler);
         resolve(data);
-      });
+      };
 
+      this._socket?.on(SOCKET_EVENTS.BOOKING_STATE_SNAPSHOT, handler);
       this.requestBookingState(bookingId);
     });
   }
