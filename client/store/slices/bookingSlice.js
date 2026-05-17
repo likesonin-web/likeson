@@ -112,6 +112,7 @@ const initialState = {
   createBookingError:    null,
   createBookingStatus:   'idle',   // 'idle' | 'loading' | 'succeeded' | 'failed'
 platformPricing: null,
+consultationCoverage: null,
   // ── Loading / errors ──────────────────────────────────────────────────────
   loading:               {},
   errors:                {},
@@ -226,6 +227,15 @@ export const fetchPlatformPricing = mkThunk(
   async () => {
     const { data } = await API.get(`${BASE}/platform-pricing`);
     return data.data;
+  }
+);
+
+export const checkConsultationCoverage = mkThunk(
+  'booking/checkConsultationCoverage',
+  async () => {
+    const { data } = await API.get(`${BASE}/consultation-check`);
+    return data.data; 
+    // expects: { allowed, isFree, remaining, reason, careAssistantFree, careAssistantQuota }
   }
 );
 
@@ -714,6 +724,9 @@ const bookingSlice = createSlice({
       delete state.loading['fetchBookingOptions'];
       delete state.errors['fetchBookingOptions'];
     },
+    resetConsultationCoverage(state) {
+  state.consultationCoverage = null;
+}
   },
 
   extraReducers: (builder) => {
@@ -778,6 +791,11 @@ const bookingSlice = createSlice({
     wire(fetchPlatformPricing, (state, { payload }) => {
   state.platformPricing = payload ?? null;
 });
+
+wire(checkConsultationCoverage, (state, { payload }) => {
+  state.consultationCoverage = payload ?? null;
+});
+
     // ── Booking creation ──────────────────────────────────────────────────
     // All POST booking routes → store result in createdBooking.
     // Also drive dedicated createBookingLoading / createBookingError / createBookingStatus.
@@ -914,6 +932,8 @@ export const {
   resetTransportEstimate,
   resetFollowUpCheck,
   resetBookingOptions,
+  resetConsultationCoverage,
+
 } = bookingSlice.actions;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1021,6 +1041,8 @@ export const selectVerifyPaymentError   = (s) => s.booking.errors['verifyRazorpa
 export const selectPlatformPricing        = (s) => s.booking.platformPricing;
 export const selectPlatformPricingLoading = (s) => s.booking.loading['fetchPlatformPricing'] ?? false;
 export const selectPlatformPricingError   = (s) => s.booking.errors['fetchPlatformPricing']  ?? null;
+
+export const selectConsultationCoverage = (s) => s.booking.consultationCoverage;
 // ─────────────────────────────────────────────────────────────────────────────
 // RE-EXPORTS
 // ─────────────────────────────────────────────────────────────────────────────

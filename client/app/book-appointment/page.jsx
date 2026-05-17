@@ -39,7 +39,7 @@ import {
   selectCreateBookingError, selectCreateBookingStatus, verifyRazorpayPayment,
   selectVerifyPaymentLoading, fetchPlatformPricing,
   selectPlatformPricing,
-  selectPlatformPricingLoading,
+  selectPlatformPricingLoading,checkConsultationCoverage, selectConsultationCoverage
 } from '@/store/slices/bookingSlice';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -182,9 +182,9 @@ const resolveConsultFee = (form, followUpCheck) => {
   }
 
   const sub = form.subCoverage;
-
-  if (sub?.consultationFree) {
-    return { fee: 0, isFree: true, reason: sub.consultationQuota || 'Covered by subscription' };
+  const isCovered = sub?.isFree === true || sub?.consultationFree === true;
+  if (isCovered) {
+    return { fee: 0, isFree: true, reason: sub.reason || sub.consultationQuota || 'Covered by subscription' };
   }
 
   let fee = 0;
@@ -207,10 +207,11 @@ const resolveConsultFee = (form, followUpCheck) => {
  * Returns {fee, isFree, reason} for care assistant.
  */
 const resolveCaFee = (form, caTiers) => {
-  const sub = form.subCoverage;
-  if (sub?.careAssistantFree) {
-    return { fee: 0, isFree: true, reason: sub.careAssistantQuota || 'Covered by subscription' };
-  }
+ const sub = form.subCoverage;
+if (sub?.careAssistantFree) {
+  return { fee: 0, isFree: true, reason: sub.careAssistantQuota || sub.reason || 'Covered by subscription' };
+}
+
   const durHours = form.durationHours || (caTiers[0]?.hours ?? 4);
   const caTier = caTiers.find(t => t.hours === durHours) || caTiers[0];
   return { fee: caTier?.price || 0, isFree: false, reason: null };
@@ -2112,6 +2113,7 @@ export default function BookingSystem() {
   const dispatch     = useDispatch();
   const router       = useRouter();
   const searchParams = useSearchParams();
+  const consultationCoverage = useSelector(selectConsultationCoverage);
 
   const hospitals            = useSelector(selectHospitals);
   const hospitalsLoading     = useSelector(selectHospitalsLoading);
@@ -2161,6 +2163,30 @@ export default function BookingSystem() {
   useEffect(() => {
     dispatch(fetchPlatformPricing());
   }, [dispatch]);
+
+useEffect(() => {
+  dispatch(checkConsultationCoverage());
+}, [dispatch]);
+
+
+useEffect(() => {
+  if (!consultationCoverage) return;
+  setForm(p => ({
+    ...p,
+    subCoverage: {
+      ...(p.subCoverage || {}),
+      // keep both field names so resolveConsultFee + SubCoverageBanner both work
+      isFree:             consultationCoverage.isFree ?? false,
+      allowed:            consultationCoverage.allowed ?? false,
+      remaining:          consultationCoverage.remaining ?? 0,
+      reason:             consultationCoverage.reason ?? null,
+      consultationFree:   consultationCoverage.isFree ?? false,
+      consultationQuota:  consultationCoverage.reason ?? null,
+      careAssistantFree:  consultationCoverage.careAssistantFree ?? false,
+      careAssistantQuota: consultationCoverage.careAssistantQuota ?? null,
+    },
+  }));
+}, [consultationCoverage]);
 
   useEffect(() => {
     setCaTiersLoading(platformPricingLoading);

@@ -392,18 +392,18 @@ function RideCard({ ride, onAction, actionLoading }) {
             />
           ))}
 
-          {isActive && (
-            <Link href={`/driver/tracking/${booking._id}/${ride._id}`} passHref legacyBehavior>
-              <motion.a
-                whileHover={{ scale: 1.03 }}
-                whileTap={{ scale: 0.97 }}
-                className="btn btn-sm bg-info/10 border-info/30 text-info hover:bg-info hover:text-info-content gap-1.5"
-              >
-                <Radio size={13} className="animate-pulse" />
-                Live Tracking
-              </motion.a>
-            </Link>
-          )}
+          {isActive && booking?._id && (
+  <Link href={`/driver/tracking/${booking._id}/${ride._id}`} passHref legacyBehavior>
+    <motion.a
+      whileHover={{ scale: 1.03 }}
+      whileTap={{ scale: 0.97 }}
+      className="btn btn-sm bg-info/10 border-info/30 text-info hover:bg-info hover:text-info-content gap-1.5"
+    >
+      <Radio size={13} className="animate-pulse" />
+      Live Tracking
+    </motion.a>
+  </Link>
+)}
 
           {ride.status === 'completed' && (
             <Link href={`/tracking/${ride._id}`} passHref legacyBehavior>

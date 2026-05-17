@@ -88,6 +88,53 @@ export const CUSTOMER_BOOKING_TYPES = [
   'diagnostic_home', 'patient_transport', 'follow_up',
 ];
 
+
+
+export const sendBookingConfirmationEmail = async ({ user, booking, consultationFee, isCoveredBySubscription, opNumber, doctorName, hospitalName, scheduledAt }) => {
+  try {
+    const u = await User.findById(user).select('email name').lean();
+    if (!u?.email) return;
+
+    const fmtDate = (d) => new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+    const fmtRs   = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
+    const html = transactionalTemplate({
+      header: 'BOOKING CONFIRMED',
+      title:  `Appointment Confirmed — ${opNumber || booking.bookingCode}`,
+      body: `
+        <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;color:#374151;">
+          <tr><td style="padding:6px 0;color:#6b7280;">Booking Code</td>
+              <td style="text-align:right;font-weight:700;font-family:monospace;">#${booking.bookingCode}</td></tr>
+          ${opNumber ? `<tr><td style="padding:6px 0;color:#6b7280;">OP Number</td>
+              <td style="text-align:right;font-weight:700;font-family:monospace;">${opNumber}</td></tr>` : ''}
+          ${doctorName ? `<tr><td style="padding:6px 0;color:#6b7280;">Doctor</td>
+              <td style="text-align:right;font-weight:600;">${doctorName}</td></tr>` : ''}
+          ${hospitalName ? `<tr><td style="padding:6px 0;color:#6b7280;">Hospital</td>
+              <td style="text-align:right;font-weight:600;">${hospitalName}</td></tr>` : ''}
+          <tr><td style="padding:6px 0;color:#6b7280;">Scheduled At</td>
+              <td style="text-align:right;font-weight:600;">${fmtDate(scheduledAt)}</td></tr>
+          <tr><td style="padding:6px 0;border-top:1px solid #f1f5f9;color:#6b7280;">Consultation Fee</td>
+              <td style="text-align:right;font-weight:800;color:${isCoveredBySubscription ? '#15803d' : '#0f3460'};">
+                ${isCoveredBySubscription ? 'FREE (Subscription)' : fmtRs(consultationFee)}
+              </td></tr>
+        </table>
+        ${isCoveredBySubscription ? `
+        <div style="margin-top:12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;">
+          <p style="margin:0;font-size:12px;color:#15803d;font-weight:600;">
+            ✓ This consultation is covered by your subscription plan.
+          </p>
+        </div>` : ''}
+      `,
+      buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/my-bookings/${booking._id}`,
+      buttonText: 'View Booking',
+    });
+
+    await sendEmail({ email: u.email, subject: `Booking Confirmed — ${booking.bookingCode}`, html });
+  } catch (err) {
+    console.error('[sendBookingConfirmationEmail]', err.message);
+  }
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BASIC HELPERS
 // ─────────────────────────────────────────────────────────────────────────────

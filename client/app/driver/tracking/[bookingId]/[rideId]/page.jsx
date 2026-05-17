@@ -50,21 +50,82 @@ const STATUS_CONFIG = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MARKER HTML  (unchanged — rendered into a raw DOM div, not React)
+// MARKER HTML
+//
+// FIX 1: Wrapper uses position:absolute + translate(-50%,-50%) so the marker's
+//         visual CENTER is pinned to the GPS coordinate, not top-left corner.
+//
+// FIX 2: Only the inner navigation arrow div rotates (transform:rotate).
+//         The outer pulse ring stays unrotated so it pulses as a circle.
+//
+// FIX 3: The heading passed in is already map-relative (GPS heading minus map
+//         bearing) so marker always points in the direction of travel ON SCREEN.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const createDriverMarkerHtml = (heading = 0) => `
-  <div style="position:relative;width:64px;height:64px;display:flex;align-items:center;justify-content:center;">
-    <div style="position:absolute;width:48px;height:48px;border-radius:50%;background:rgba(66,133,244,0.35);animation:gPulse 2s infinite ease-out;"></div>
-    <div style="position:relative;width:44px;height:44px;background:#4285F4;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(66,133,244,0.55);transform:rotate(${heading}deg);transition:transform 0.25s ease-out;z-index:2;">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="white"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
+  <div style="
+    position: absolute;
+    width: 64px;
+    height: 64px;
+    left: -32px;
+    top: -32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  ">
+    <!-- Pulse ring — no rotation, stays circular -->
+    <div style="
+      position: absolute;
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: rgba(66,133,244,0.28);
+      animation: gPulse 2s infinite ease-out;
+      pointer-events: none;
+    "></div>
+
+    <!-- Arrow bubble — rotates with heading -->
+    <div style="
+      position: relative;
+      width: 44px;
+      height: 44px;
+      background: #4285F4;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 14px rgba(66,133,244,0.6);
+      transform: rotate(${heading}deg);
+      transition: transform 0.3s ease-out;
+      z-index: 2;
+      flex-shrink: 0;
+    ">
+      <!-- Navigation arrow pointing UP (north) — rotation above handles direction -->
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
+        <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/>
+      </svg>
     </div>
   </div>
-  <style>@keyframes gPulse{0%{transform:scale(0.8);opacity:0.8}100%{transform:scale(2.4);opacity:0}}</style>
+  <style>
+    @keyframes gPulse {
+      0%   { transform: scale(0.8); opacity: 0.8; }
+      100% { transform: scale(2.2); opacity: 0; }
+    }
+  </style>
 `;
 
+// Pickup marker — centered same way
 const createPickupMarkerHtml = () => `
-  <div style="display:flex;flex-direction:column;align-items:center;">
+  <div style="
+    position: absolute;
+    left: -21px;
+    top: -58px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: none;
+  ">
     <div style="width:42px;height:42px;background:linear-gradient(135deg,#10b981,#059669);border-radius:50%;border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(16,185,129,0.55);">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
     </div>
@@ -73,8 +134,17 @@ const createPickupMarkerHtml = () => `
   </div>
 `;
 
+// Dropoff marker — centered same way
 const createDropoffMarkerHtml = () => `
-  <div style="display:flex;flex-direction:column;align-items:center;">
+  <div style="
+    position: absolute;
+    left: -21px;
+    top: -58px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: none;
+  ">
     <div style="width:42px;height:42px;background:linear-gradient(135deg,#ef4444,#f97316);border-radius:50%;border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(239,68,68,0.55);">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
     </div>
@@ -128,7 +198,6 @@ const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
         transition={{ type: 'spring', damping: 22, stiffness: 320 }}
         className="w-full max-w-sm rounded-3xl p-7 bg-base-200 border border-base-300 shadow-[0_24px_60px_rgba(0,0,0,0.6)]"
       >
-        {/* Header */}
         <div className="flex items-start justify-between mb-5">
           <div>
             <h3 className="text-lg font-black text-base-content m-0">Verify OTP</h3>
@@ -142,7 +211,6 @@ const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
           </button>
         </div>
 
-        {/* Digits */}
         <div className="flex gap-3 justify-center my-6">
           {digits.map((d, i) => (
             <input
@@ -167,13 +235,11 @@ const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
                 outline: 'none',
                 transition: 'border-color 0.2s, color 0.2s',
                 fontFamily: 'inherit',
-                opacity: 0.9,
               }}
             />
           ))}
         </div>
 
-        {/* Error */}
         <AnimatePresence>
           {error && (
             <motion.div
@@ -205,14 +271,15 @@ const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NAV INSTRUCTION CARD  — success / green theming via global CSS tokens
+// NAV INSTRUCTION CARD
+// FIX: keyed by stepIndex so AnimatePresence re-mounts on step change,
+//      ensuring the card always shows the CURRENT step instruction.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const NavInstructionCard = memo(function NavInstructionCard({ step }) {
+const NavInstructionCard = memo(function NavInstructionCard({ step, stepIndex }) {
   if (!step) return null;
   const type = getManeuverIcon(step.maneuver || step.instruction || '');
 
-  // Icon and tint — all three branches resolve to success-green
   const IconEl =
     type === 'turn-left'  ? <ArrowLeft  size={22} className="text-base-100" />
     : type === 'turn-right' ? <ArrowRight size={22} className="text-base-100" />
@@ -220,18 +287,16 @@ const NavInstructionCard = memo(function NavInstructionCard({ step }) {
 
   return (
     <motion.div
-      key={step.instruction}
+      // KEY on stepIndex — forces re-mount (and re-animation) when step changes
+      key={stepIndex}
       initial={{ opacity: 0, y: -12 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -12 }}
-      className="flex   gap-3 px-4 py-2 rounded-md border border-success bg-success shadow-[0_8px_24px_rgba(0,0,0,0.4)]"
+      className="flex gap-3 px-4 py-2 rounded-md border border-success bg-success shadow-[0_8px_24px_rgba(0,0,0,0.4)]"
     >
-      {/* Icon bubble */}
-      <div className="      border border-success/30">
+      <div className="border border-success/30">
         {IconEl}
       </div>
-
-      {/* Text */}
       <div className="flex-1 min-w-0">
         <p className="text-sm font-bold text-base-100 truncate m-0">
           {step.instruction}
@@ -271,7 +336,6 @@ const BottomSheet = memo(function BottomSheet({ ride, booking, open, onToggle })
       className="fixed bottom-0 left-0 right-0 z-30 rounded-t-3xl bg-base-200 border border-base-300 border-b-0 shadow-[0_-8px_40px_rgba(0,0,0,0.4)]"
       style={{ maxHeight: '82vh', overflow: 'hidden' }}
     >
-      {/* Handle + summary row */}
       <button
         onClick={onToggle}
         className="w-full bg-transparent border-none cursor-pointer px-4 pt-3 pb-2 flex flex-col items-center"
@@ -293,10 +357,7 @@ const BottomSheet = memo(function BottomSheet({ ride, booking, open, onToggle })
         </div>
       </button>
 
-      {/* Scrollable content */}
       <div className="overflow-y-auto px-4 pb-6" style={{ maxHeight: 'calc(82vh - 76px)' }}>
-
-        {/* Customer card */}
         {(bk?.customer || bk?.patientInfo) && (
           <div className="flex items-center gap-3 p-3 rounded-2xl mb-3 bg-base-300/60 border border-base-300">
             <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center"
@@ -322,7 +383,6 @@ const BottomSheet = memo(function BottomSheet({ ride, booking, open, onToggle })
           </div>
         )}
 
-        {/* Route */}
         <div className="p-3 rounded-2xl mb-3 bg-base-300/60 border border-base-300">
           <p className="text-[10px] text-base-content/40 font-bold uppercase tracking-widest m-0 mb-2.5">Route</p>
           <div className="flex gap-3">
@@ -348,7 +408,6 @@ const BottomSheet = memo(function BottomSheet({ ride, booking, open, onToggle })
           </div>
         </div>
 
-        {/* Booking info */}
         <div className="p-3 rounded-2xl bg-base-300/60 border border-base-300">
           <p className="text-[10px] text-base-content/40 font-bold uppercase tracking-widest m-0 mb-2">Booking</p>
           <InfoRow label="Booking Code" value={bk?.bookingCode} mono />
@@ -472,7 +531,8 @@ export default function RideLiveTracking() {
   const pickupMarkerRef  = useRef(null);
   const dropoffMarkerRef = useRef(null);
   const markersInitRef   = useRef(false);
-  const smoothHeadingRef = useRef(0);
+  const smoothHeadingRef = useRef(0);   // absolute GPS heading (smoothed)
+  const mapBearingRef    = useRef(0);   // current map camera bearing
 
   // ── State ───────────────────────────────────────────────────
   const [mapLoaded,      setMapLoaded]      = useState(false);
@@ -542,10 +602,21 @@ export default function RideLiveTracking() {
 
   // ── Google Map load ──────────────────────────────────────────
   const onMapLoad = useCallback((map) => {
-    mapRef.current       = map;
+    mapRef.current        = map;
     dirServiceRef.current = new window.google.maps.DirectionsService();
     setMapLoaded(true);
   }, []);
+
+  // ── Track map bearing changes (when user rotates or follow mode rotates map) ──
+  // We need current map bearing so we can subtract it from GPS heading
+  // to compute the screen-relative heading for the marker arrow.
+  useEffect(() => {
+    if (!mapLoaded || !mapRef.current) return;
+    const listener = mapRef.current.addListener('heading_changed', () => {
+      mapBearingRef.current = mapRef.current.getHeading() || 0;
+    });
+    return () => window.google?.maps?.event?.removeListener(listener);
+  }, [mapLoaded]);
 
   // ── Marker cleanup on unmount ────────────────────────────────
   useEffect(() => {
@@ -558,17 +629,37 @@ export default function RideLiveTracking() {
   }, []);
 
   // ── Driver marker — update position + heading each GPS tick ──
+  //
+  // FIX: heading passed to createDriverMarkerHtml is GPS-heading MINUS map-bearing.
+  // This makes the arrow point in the actual direction of travel on screen,
+  // regardless of how the map is rotated in follow mode.
+  //
+  // AdvancedMarkerElement position pins to the GPS coordinate.
+  // The HTML wrapper uses position:absolute + left:-32px top:-32px to center the
+  // 64×64 div — so the VISUAL CENTER of the marker sits exactly on the coordinate.
+  // ─────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!mapLoaded || !mapRef.current || !currentPosition) return;
     if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
 
     const { lat, lng, heading = 0 } = currentPosition;
+
+    // Smooth absolute GPS heading
     smoothHeadingRef.current = smoothHeading(smoothHeadingRef.current, heading, 0.2);
-    const h = smoothHeadingRef.current;
+
+    // Screen-relative heading = GPS heading minus current map rotation
+    // This keeps the arrow pointing the right way as the map rotates in follow mode
+    const mapBearing       = mapBearingRef.current;
+    const screenHeading    = (smoothHeadingRef.current - mapBearing + 360) % 360;
 
     if (!driverMarkerRef.current) {
-      const el = document.createElement('div');
-      el.innerHTML = createDriverMarkerHtml(h);
+      // Create container div — position:relative so the absolute child positions correctly
+      const el           = document.createElement('div');
+      el.style.position  = 'relative';
+      el.style.width     = '0';   // zero-size anchor — visual content is absolutely positioned
+      el.style.height    = '0';
+      el.innerHTML       = createDriverMarkerHtml(screenHeading);
+
       driverMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
         map:      mapRef.current,
         content:  el,
@@ -576,14 +667,22 @@ export default function RideLiveTracking() {
         zIndex:   10,
       });
     } else {
+      // Update position
       driverMarkerRef.current.position = { lat, lng };
+      // Update heading by re-rendering HTML
       if (driverMarkerRef.current.content) {
-        driverMarkerRef.current.content.innerHTML = createDriverMarkerHtml(h);
+        driverMarkerRef.current.content.innerHTML = createDriverMarkerHtml(screenHeading);
       }
     }
 
     if (followMode) {
-      mapRef.current.moveCamera({ center: { lat, lng }, heading: h, tilt: 45, zoom: 17 });
+      mapRef.current.moveCamera({
+        center:  { lat, lng },
+        heading: smoothHeadingRef.current,   // rotate MAP to match GPS heading
+        tilt:    45,
+        zoom:    17,
+      });
+      // mapBearingRef updated by heading_changed listener above
     }
   }, [currentPosition, mapLoaded, followMode]);
 
@@ -595,21 +694,29 @@ export default function RideLiveTracking() {
     let created = false;
 
     if (pickupCoords && !pickupMarkerRef.current) {
-      const el = document.createElement('div');
-      el.innerHTML = createPickupMarkerHtml();
+      const el          = document.createElement('div');
+      el.style.position = 'relative';
+      el.style.width    = '0';
+      el.style.height   = '0';
+      el.innerHTML      = createPickupMarkerHtml();
       pickupMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
         map: mapRef.current, content: el, position: pickupCoords, zIndex: 5,
       });
       created = true;
     }
+
     if (dropoffCoords && !dropoffMarkerRef.current) {
-      const el = document.createElement('div');
-      el.innerHTML = createDropoffMarkerHtml();
+      const el          = document.createElement('div');
+      el.style.position = 'relative';
+      el.style.width    = '0';
+      el.style.height   = '0';
+      el.innerHTML      = createDropoffMarkerHtml();
       dropoffMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
         map: mapRef.current, content: el, position: dropoffCoords, zIndex: 5,
       });
       created = true;
     }
+
     if (created) markersInitRef.current = true;
   }, [mapLoaded, pickupCoords, dropoffCoords]);
 
@@ -677,12 +784,16 @@ export default function RideLiveTracking() {
     if (!step?.endLat || !step?.endLng) return;
 
     const distToEnd = distanceKm(lat, lng, step.endLat, step.endLng);
+
+    // FIX: pass stepIndex so each step gets its own band slots
     announceManeuver(step.instruction, distToEnd * 1000, idx);
 
+    // Advance step when within 40m of step end point
     if (distToEnd < STEP_ARRIVAL_THRESHOLD && idx < steps.length - 1) {
       setCurrentStepIdx(prev => prev + 1);
     }
 
+    // Arrival announcement
     if (targetCoords && !arrivedSpoken) {
       const distToTarget = distanceKm(lat, lng, targetCoords.lat, targetCoords.lng);
       if (distToTarget < ARRIVAL_THRESHOLD_KM) {
@@ -729,24 +840,33 @@ export default function RideLiveTracking() {
   }, [router]);
 
   // ── Action button config per status ─────────────────────────
+  //
+  // FIX: DRIVER_STATUS.ARRIVED → sendStatusUpdate correctly maps to markDriverArrived.
+  //      DRIVER_STATUS.RIDE_STARTED → mapped from 'start_ride' in useRideTracking.
+  //      DRIVER_STATUS.COMPLETED → mapped from 'complete'.
+  //      All confirmed against driverStatusToAction map in useRideTracking.
+  // ─────────────────────────────────────────────────────────────────────────────
   const actionButton = useMemo(() => {
     switch (rideStatus) {
       case 'driver_assigned':
         return {
           label: 'Accept Ride', icon: <CheckCircle size={18} />,
           color: '#22c55e', shadow: 'rgba(34,197,94,0.4)',
+          // DRIVER_STATUS.ACCEPTED → HTTP accept + socket accepted
           action: () => sendStatusUpdate(DRIVER_STATUS.ACCEPTED),
         };
       case 'driver_accepted':
         return {
           label: 'Navigate To Pickup', icon: <Navigation size={18} />,
           color: 'var(--primary)', shadow: 'rgba(59,130,246,0.4)',
+          // DRIVER_STATUS.EN_ROUTE → HTTP start_route + socket en_route
           action: () => sendStatusUpdate(DRIVER_STATUS.EN_ROUTE),
         };
       case 'driver_en_route':
         return {
           label: 'I Have Arrived', icon: <MapPin size={18} />,
           color: '#8b5cf6', shadow: 'rgba(139,92,246,0.4)',
+          // DRIVER_STATUS.ARRIVED → HTTP markDriverArrived (/:id/ride/arrived) + socket arrived
           action: () => sendStatusUpdate(DRIVER_STATUS.ARRIVED),
         };
       case 'driver_arrived':
@@ -759,19 +879,22 @@ export default function RideLiveTracking() {
         return {
           label: 'Start Ride', icon: <Play size={18} />,
           color: '#22c55e', shadow: 'rgba(34,197,94,0.4)',
+          // DRIVER_STATUS.RIDE_STARTED → HTTP start_ride + socket ride_started
           action: () => sendStatusUpdate(DRIVER_STATUS.RIDE_STARTED),
         };
       case 'in_progress':
         return {
           label: 'Complete Ride', icon: <Square size={18} />,
           color: 'var(--primary)', shadow: 'rgba(59,130,246,0.4)',
+          // DRIVER_STATUS.COMPLETED → HTTP complete + socket completed
           action: () => sendStatusUpdate(DRIVER_STATUS.COMPLETED),
         };
       case 'at_stop':
         return {
           label: 'Resume Ride', icon: <Play size={18} />,
           color: '#06b6d4', shadow: 'rgba(6,182,212,0.4)',
-          action: () => sendStatusUpdate('stop_departed'),
+          // DRIVER_STATUS.STOP_DEPARTED → HTTP resume + socket stop_departed
+          action: () => sendStatusUpdate(DRIVER_STATUS.STOP_DEPARTED),
         };
       default:
         return null;
@@ -791,7 +914,7 @@ export default function RideLiveTracking() {
     <>
       <style>{`
         @keyframes spin    { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
-        @keyframes gPulse  { 0%{transform:scale(0.8);opacity:0.8} 100%{transform:scale(2.4);opacity:0} }
+        @keyframes gPulse  { 0%{transform:scale(0.8);opacity:0.8} 100%{transform:scale(2.2);opacity:0} }
       `}</style>
 
       <div className="fixed inset-0 overflow-hidden font-poppins">
@@ -844,15 +967,14 @@ export default function RideLiveTracking() {
 
         {/* ── TOP BAR ────────────────────────────────────── */}
         <div className="absolute top-0 left-0 right-0 z-20">
-          <div className="  mt-1 flex flex-col  ">
+          <div className="mt-1 flex flex-col">
 
             {/* Status + back + ETA row */}
             <motion.div
               initial={{ opacity: 0, y: -16 }}
               animate={{ opacity: 1, y: 0 }}
-              className="flex items-center gap-2 px-3.5 py-2.5   bg-base-200/95 border border-base-300  "
+              className="flex items-center gap-2 px-3.5 py-2.5 bg-base-200/95 border border-base-300"
             >
-              {/* Back button */}
               <motion.button
                 whileTap={{ scale: 0.9 }}
                 onClick={handleBack}
@@ -861,7 +983,6 @@ export default function RideLiveTracking() {
                 <ChevronLeft size={18} />
               </motion.button>
 
-              {/* Socket status dot */}
               <div
                 className="w-2 h-2 rounded-full flex-shrink-0"
                 style={{
@@ -871,7 +992,6 @@ export default function RideLiveTracking() {
                 }}
               />
 
-              {/* Status badge */}
               {rideStatus && (() => {
                 const cfg = STATUS_CONFIG[rideStatus] || {};
                 return (
@@ -884,7 +1004,6 @@ export default function RideLiveTracking() {
                 );
               })()}
 
-              {/* ETA */}
               {etaMinutes != null && (
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <Clock size={11} className="text-base-content/40" />
@@ -892,7 +1011,6 @@ export default function RideLiveTracking() {
                 </div>
               )}
 
-              {/* Distance */}
               {remainingKm != null && (
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <Navigation size={11} className="text-primary" />
@@ -900,7 +1018,6 @@ export default function RideLiveTracking() {
                 </div>
               )}
 
-              {/* Speed */}
               {currentPosition?.speed > 2 && (
                 <div className="flex items-center gap-1 ml-auto flex-shrink-0">
                   <Zap size={11} className="text-warning" />
@@ -909,9 +1026,15 @@ export default function RideLiveTracking() {
               )}
             </motion.div>
 
-            {/* Nav instruction card */}
+            {/* Nav instruction card — keyed by step index so it updates on step change */}
             <AnimatePresence mode="wait">
-              {currentStep && <NavInstructionCard key={currentStepIdx} step={currentStep} />}
+              {currentStep && (
+                <NavInstructionCard
+                  key={currentStepIdx}
+                  step={currentStep}
+                  stepIndex={currentStepIdx}
+                />
+              )}
             </AnimatePresence>
 
             {/* Rerouting banner */}
@@ -959,7 +1082,11 @@ export default function RideLiveTracking() {
           <motion.button
             whileTap={{ scale: 0.9 }}
             onClick={() => {
-              if (mapRef.current) { mapRef.current.moveCamera({ heading: 0, tilt: 0 }); setFollowMode(false); }
+              if (mapRef.current) {
+                mapRef.current.moveCamera({ heading: 0, tilt: 0 });
+                mapBearingRef.current = 0;
+                setFollowMode(false);
+              }
             }}
             className="w-11 h-11 rounded-[13px] bg-base-200/90 border border-base-300 flex items-center justify-center cursor-pointer text-base-content/60 shadow-[0_4px_16px_rgba(0,0,0,0.4)] hover:text-base-content transition-colors"
           >
@@ -1004,11 +1131,11 @@ export default function RideLiveTracking() {
               <motion.button
                 whileTap={{ scale: 0.97 }}
                 onClick={actionButton.action}
-                className="w-fit px-4  mx-auto py-2 rounded-full border-none text-white cursor-pointer text-[15px] font-extrabold flex items-center justify-center gap-2.5 font-poppins tracking-wide"
+                className="w-fit px-4 mx-auto py-2 rounded-full border-none text-white cursor-pointer text-[15px] font-extrabold flex items-center justify-center gap-2.5 font-poppins tracking-wide"
                 style={{
-                  background:  actionButton.color,
-                  boxShadow:   `0 6px 24px ${actionButton.shadow}`,
-                  fontFamily:  'inherit',
+                  background: actionButton.color,
+                  boxShadow:  `0 6px 24px ${actionButton.shadow}`,
+                  fontFamily: 'inherit',
                 }}
               >
                 {actionButton.icon}

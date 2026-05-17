@@ -1,21 +1,6 @@
 'use client';
 
-/**
- * BookingDetailsPage.jsx — Likeson.in
- *
- * FIXES:
- *  1. useJsApiLoader moved to page level — can only be called once per app with
- *     the same options. RouteMap now receives `isLoaded` as a prop.
- *  2. MAPS_LIBRARIES defined as a module-level constant (outside any component)
- *     so the array reference never changes between renders, preventing the
- *     "Loader must not be called again with different options" crash.
- *  3. RouteMap useEffect dependencies stabilised — uses primitive lat/lng
- *     values instead of object references that recreate each render.
- *  4. onMapLoad useCallback deps use primitive coords, not object refs.
- *  5. dispatch(fetchMyBookingById({ bookingId: id })) — thunk expects object.
- *  6. Guard: only dispatch when id is truthy.
- *  7. handleRefresh uses same { bookingId: id } shape.
- */
+ 
 
 import {
   useEffect, useState, useRef, useCallback, memo,

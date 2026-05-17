@@ -76,13 +76,7 @@ const customPlanOptionSchema = new Schema(
      */
     careAssistantTierIndex: { type: Number, default: 0, min: 0 },
 
-    /**
-     * consultations only.
-     * Number of doctors the customer selected to activate the tier-bonus pricing.
-     * Must be ≤ quantity (consult count) AND ≤ maxDoctorsAllowed.
-     * 0 = no tier bonus selected (only base price applied).
-     */
-    doctorTierCount: { type: Number, default: 0, min: 0 },
+   
   },
   { _id: false }
 );
@@ -200,24 +194,16 @@ const subscriptionPlanSchema = new Schema(
     },
 
     // ── Doctor Consultations ──────────────────────────────────────────────────
-    consultations: {
-      /**
-       * Free consultations/month included.
-       * Basic=2 | Standard=3 | Premium=5 | Family=8 | Pregnant=20 | NRI=3
-       * Custom = customer-chosen quantity (from customOptions).
-       * -1 = Unlimited.
-       */
-      freePerMonth:     { type: Number, default: 0 },
-      doctorRangeLabel: { type: String }, // e.g. "1-3 Doctors"
-
-      modes: {
-        inPerson: { type: Boolean, default: true },
-        video:    { type: Boolean, default: false },
-        home:     { type: Boolean, default: false },
-      },
-
-      specialNote: { type: String },
-    },
+  consultations: {
+  freePerMonth:  { type: Number, default: 0 },
+  modes: {
+    inPerson: { type: Boolean, default: true },
+    video:    { type: Boolean, default: false },
+    home:     { type: Boolean, default: false },
+  },
+  specialNote: { type: String },
+},
+  
 
     // ── Pharmacy ──────────────────────────────────────────────────────────────
     pharmacy: {

@@ -1,42 +1,3 @@
-/**
- * bookingRouterCustomer.js — Likeson.in
- *
- * Customer-facing routes: discovery, booking creation, management.
- *
- * FIXES IN THIS VERSION:
- * ─────────────────────────────────────────────────────────────────────────────
- * BUG #3 FIX (all routes):
- *   incrementSubscriptionUsage() REMOVED from all booking creation routes.
- *   Replaced with queueSubscriptionUsage() which pushes to
- *   Booking.subscriptionUsagePending. Actual increment happens in
- *   POST /verify-payment → calls /subscriptions/flush-pending-usage.
- *   Wallet payments flush immediately after processWalletPayment succeeds.
- *   Free (₹0) bookings flush immediately since no payment step exists.
- *
- * BUG #4 FIX (all consultation routes):
- *   checkConsultationModeAllowed() called before creating booking.
- *   Returns 403 if subscription plan does not support chosen consultation mode.
- *   Affected routes: full-care-ride, doctor-consultation, doctor-online,
- *                    patient-transport (addConsultation), physiotherapist.
- *   follow_up and care_assistant exempt (no standard mode check).
- *
- * BUG #5 FIX:
- *   Care assistant usage no longer decrements before payment.
- *   Same as BUG #3 — usage queued, flushed post-payment.
- *
- * Other fixes retained from previous version:
- *  - calculateCanonicalRoute imported correctly from shared
- *  - RideTracking imported from shared
- *  - GET /my-bookings/:bookingId returns mapRoute from RideTracking
- *  - POST /full-care-ride: outbound + return canonical routes locked at creation
- *  - POST /patient-transport: same canonical route locking + return ride
- *  - POST /diagnostic-home: lab→patient canonical route locked in RideTracking
- *  - POST /follow-up: followUpParentBooking set correctly
- *  - driver field NOT set at creation — assigned later by admin/TP
- *  - Transport NEVER free — always charged at plan km rate
- *  - Diagnostics/pharmacy = % discount only, not free quota
- */
-
 import express from 'express';
 import axios   from 'axios';
 
@@ -47,6 +8,8 @@ import {
   RideTracking,
   OutPatientRecord,
   UserSubscription,
+  DoctorProfile,
+  Hospital,
 
   // Auth
   protect,
@@ -69,15 +32,14 @@ import {
   checkSubscriptionConsultation,
   resolveConsultationFee,
 
-  // BUG #4 FIX: new mode check helper
+  // Mode check
   checkConsultationModeAllowed,
 
-  // BUG #3 + #5 FIX: queueSubscriptionUsage replaces incrementSubscriptionUsage in routes
-  // incrementSubscriptionUsage kept for verify-payment flush path
+  // Subscription usage
   incrementSubscriptionUsage,
   queueSubscriptionUsage,
 
-  // Care assistant subscription + fee resolver
+  // Care assistant
   checkSubscriptionCareAssistant,
   resolveCareAssistantFee,
 
@@ -102,9 +64,13 @@ import {
   CUSTOMER_BOOKING_TYPES,
   verifyRazorpaySignature,
 
-  // Canonical route — locked at ride creation
+  // Canonical route
   calculateCanonicalRoute,
+
+  // Email
+  sendBookingConfirmationEmail,
 } from './bookingRouterShared.js';
+
 import PlatformPricingConfig from '../models/PlatformPricingConfig.js';
 
 const router = express.Router();
@@ -351,6 +317,38 @@ router.get('/transport/estimate', protect, async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /consultation-check
+// FIX: URL corrected in bookingSlice thunk to /bookings/consultation-check
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /subscriptions/consultation-check
+router.get('/consultation-check', protect, authorize('customer'), async (req, res) => {
+  try {
+    const { checkSubscriptionConsultation, checkSubscriptionCareAssistant } = 
+      await import('./bookingRouterShared.js');
+
+    const [consultResult, caResult] = await Promise.all([
+      checkSubscriptionConsultation(req.user._id),
+      checkSubscriptionCareAssistant(req.user._id),
+    ]);
+
+    return res.json({
+      success: true,
+      data: {
+        allowed:            consultResult.allowed,
+        isFree:             consultResult.isFree,
+        remaining:          consultResult.remaining,
+        reason:             consultResult.reason,
+        careAssistantFree:  caResult.isFree,
+        careAssistantQuota: caResult.reason,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 router.get('/follow-up/check', protect, async (req, res) => {
   try {
     const { doctorId, hospitalId } = req.query;
@@ -367,12 +365,6 @@ router.get('/follow-up/check', protect, async (req, res) => {
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BOOKING — FULL CARE RIDE
-//
-// BUG #3 FIX: queueSubscriptionUsage replaces incrementSubscriptionUsage.
-//   Usage incremented after payment verified, not at booking creation.
-// BUG #4 FIX: checkConsultationModeAllowed called before booking created.
-//   Returns 403 if plan blocks chosen consultation mode.
-// BUG #5 FIX: Care assistant usage queued, not incremented at creation.
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/full-care-ride', protect, authorize('customer'), async (req, res) => {
@@ -403,13 +395,11 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
     if (!avail.available)
       return res.status(400).json({ success: false, message: avail.reason });
 
-    // BUG #4 FIX: check if subscription allows chosen consultation mode
     const modeCheck = await checkConsultationModeAllowed(req.user._id, consultationType);
     if (!modeCheck.allowed) {
       return res.status(403).json({ success: false, message: modeCheck.reason });
     }
 
-    const { default: Hospital } = await import('../models/Hospital.js');
     const hospital = await Hospital.findById(hospitalId)
       .select('location address name managementModel consultationPricing')
       .lean();
@@ -430,7 +420,7 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
       isCoveredBySubscription, doctorId, hospitalId, consultationType,
     });
 
-    // ── Transport (always charged at plan rate) ───────────────────────────────
+    // ── Transport ─────────────────────────────────────────────────────────────
     const { ratePerKm, source: kmRateSource } = await resolveKmRate(req.user._id);
     const pickupCoords  = patientLocation.coordinates;
     const dropoffCoords = hospCoords;
@@ -441,7 +431,7 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
       includeReturn: includeReturnHome,
     });
 
-    // ── Care assistant lookup ─────────────────────────────────────────────────
+    // ── Care assistant ────────────────────────────────────────────────────────
     const careAssistant = await autoAssignCareAssistant({
       patientCoords: pickupCoords,
       city: patientLocation.city || hospital.address?.city || 'Vijayawada',
@@ -450,7 +440,6 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
       return res.status(503).json({ success: false, message: 'No care assistant available at this time. Please try again shortly.' });
     }
 
-    // ── Care assistant fee (free if subscription quota remaining) ─────────────
     const config = await PlatformPricingConfig.getGlobal();
 
     const DEFAULT_CARE_DURATION = 4;
@@ -495,7 +484,6 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
       coinsRedeemed:  coinsToRedeem,
       status:         'pending',
       createdBy:      req.user._id,
-      // BUG #3 + #5 FIX: subscriptionUsagePending initialized empty — filled below via queueSubscriptionUsage
       subscriptionUsagePending: [],
       careAssistantSnapshot: {
         name:     careAssistant.fullName,
@@ -504,8 +492,6 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
       },
     });
 
-    // BUG #3 FIX: Queue usage increments instead of applying immediately.
-    // Will be flushed by /subscriptions/flush-pending-usage after payment verified.
     if (isCoveredBySubscription && subCheck.sub) {
       await queueSubscriptionUsage(booking._id, subCheck.sub._id, 'consultationsUsed');
     }
@@ -524,7 +510,6 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
       booking.fareBreakdown.amountPaid     = 0;
       await booking.save();
 
-      // BUG #3 FIX: Wallet paid immediately — flush pending usage now
       const pending = booking.subscriptionUsagePending || [];
       const now2    = new Date();
       for (const { subId, field } of pending) {
@@ -542,12 +527,10 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
       await Booking.findByIdAndUpdate(booking._id, { $set: { subscriptionUsagePending: [] } });
     }
 
-    // ── Also flush for free bookings (₹0 total, no Razorpay) ─────────────────
     if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
       booking.paymentStatus = 'paid';
       await booking.save();
       const pending = booking.subscriptionUsagePending || [];
-      const now2    = new Date();
       for (const { subId, field } of pending) {
         if (!subId || !field) continue;
         await incrementSubscriptionUsage(subId, field);
@@ -664,6 +647,23 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
       type:      'BOOKING', bookingId: booking._id,
     });
 
+    // FIX: email block moved BEFORE return, uses top-level Hospital/DoctorProfile imports
+    const [doctorUser, hospitalDoc] = await Promise.all([
+      doctorId   ? DoctorProfile.findById(doctorId).populate('user', 'name').select('user').lean() : null,
+      hospitalId ? Hospital.findById(hospitalId).select('name').lean() : null,
+    ]).catch(() => [null, null]);
+
+    sendBookingConfirmationEmail({
+      user:                   req.user._id,
+      booking,
+      consultationFee,
+      isCoveredBySubscription,
+      opNumber,
+      doctorName:   doctorUser?.user?.name || null,
+      hospitalName: hospitalDoc?.name      || null,
+      scheduledAt:  scheduledDate,
+    }).catch(() => {});
+
     return res.status(201).json({
       success: true,
       message: 'Full care ride booked successfully',
@@ -721,9 +721,6 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BOOKING — DOCTOR CONSULTATION (in-person)
-//
-// BUG #3 FIX: queueSubscriptionUsage replaces incrementSubscriptionUsage.
-// BUG #4 FIX: checkConsultationModeAllowed blocks unsupported modes.
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/doctor-consultation', protect, authorize('customer'), async (req, res) => {
@@ -743,7 +740,6 @@ router.post('/doctor-consultation', protect, authorize('customer'), async (req, 
     const avail = await checkHospitalOrDoctorAvailability({ hospitalId, doctorId, scheduledAt: scheduledDate });
     if (!avail.available) return res.status(400).json({ success: false, message: avail.reason });
 
-    // BUG #4 FIX: block unsupported consultation mode per subscription plan
     const modeCheck = await checkConsultationModeAllowed(req.user._id, consultationType);
     if (!modeCheck.allowed) {
       return res.status(403).json({ success: false, message: modeCheck.reason });
@@ -784,7 +780,6 @@ router.post('/doctor-consultation', protect, authorize('customer'), async (req, 
       subscriptionUsagePending: [],
     });
 
-    // BUG #3 FIX: Queue usage — flush after payment
     if (isCoveredBySubscription && subCheck.sub) {
       await queueSubscriptionUsage(booking._id, subCheck.sub._id, 'consultationsUsed');
     }
@@ -796,7 +791,6 @@ router.post('/doctor-consultation', protect, authorize('customer'), async (req, 
       });
       booking.paymentStatus = 'paid'; booking.payments = [wp];
       await booking.save();
-      // Flush pending usage immediately for wallet payments
       const pending = booking.subscriptionUsagePending || [];
       for (const { subId, field } of pending) {
         if (subId && field) await incrementSubscriptionUsage(subId, field);
@@ -804,7 +798,6 @@ router.post('/doctor-consultation', protect, authorize('customer'), async (req, 
       await Booking.findByIdAndUpdate(booking._id, { $set: { subscriptionUsagePending: [] } });
     }
 
-    // Free booking flush
     if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
       booking.paymentStatus = 'paid';
       await booking.save();
@@ -838,6 +831,23 @@ router.post('/doctor-consultation', protect, authorize('customer'), async (req, 
       type: 'BOOKING', bookingId: booking._id,
     });
 
+    // FIX: email sent after booking, before return
+    const [doctorUser, hospitalDoc] = await Promise.all([
+      doctorId   ? DoctorProfile.findById(doctorId).populate('user', 'name').select('user').lean() : null,
+      hospitalId ? Hospital.findById(hospitalId).select('name').lean() : null,
+    ]).catch(() => [null, null]);
+
+    sendBookingConfirmationEmail({
+      user:                   req.user._id,
+      booking,
+      consultationFee,
+      isCoveredBySubscription,
+      opNumber,
+      doctorName:   doctorUser?.user?.name || null,
+      hospitalName: hospitalDoc?.name      || null,
+      scheduledAt:  scheduledDate,
+    }).catch(() => {});
+
     return res.status(201).json({
       success: true,
       data: {
@@ -858,9 +868,6 @@ router.post('/doctor-consultation', protect, authorize('customer'), async (req, 
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BOOKING — DOCTOR ONLINE (video)
-//
-// BUG #3 FIX: queueSubscriptionUsage replaces incrementSubscriptionUsage.
-// BUG #4 FIX: checkConsultationModeAllowed — checks 'video' mode allowed.
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/doctor-online', protect, authorize('customer'), async (req, res) => {
@@ -877,7 +884,6 @@ router.post('/doctor-online', protect, authorize('customer'), async (req, res) =
     const avail = await checkHospitalOrDoctorAvailability({ doctorId, scheduledAt: scheduledDate });
     if (!avail.available) return res.status(400).json({ success: false, message: avail.reason });
 
-    // BUG #4 FIX: video mode must be allowed by subscription plan
     const modeCheck = await checkConsultationModeAllowed(req.user._id, 'video');
     if (!modeCheck.allowed) {
       return res.status(403).json({ success: false, message: modeCheck.reason });
@@ -915,7 +921,6 @@ router.post('/doctor-online', protect, authorize('customer'), async (req, res) =
       subscriptionUsagePending: [],
     });
 
-    // BUG #3 FIX: Queue usage
     if (isCoveredBySubscription && subCheck.sub) {
       await queueSubscriptionUsage(booking._id, subCheck.sub._id, 'consultationsUsed');
     }
@@ -934,7 +939,6 @@ router.post('/doctor-online', protect, authorize('customer'), async (req, res) =
       await Booking.findByIdAndUpdate(booking._id, { $set: { subscriptionUsagePending: [] } });
     }
 
-    // Free booking flush
     if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
       booking.paymentStatus = 'paid';
       await booking.save();
@@ -949,6 +953,21 @@ router.post('/doctor-online', protect, authorize('customer'), async (req, res) =
     if (paymentMethod === 'Razorpay' && fareBreakdown.totalAmount > 0) {
       razorpayOrder = await createRazorpayOrder(fareBreakdown.totalAmount, booking.bookingCode);
     }
+
+    // FIX: email sent before return
+    const doctorUser = await DoctorProfile.findById(doctorId)
+      .populate('user', 'name').select('user').lean().catch(() => null);
+
+    sendBookingConfirmationEmail({
+      user:                   req.user._id,
+      booking,
+      consultationFee,
+      isCoveredBySubscription,
+      opNumber:     null,
+      doctorName:   doctorUser?.user?.name || null,
+      hospitalName: null,
+      scheduledAt:  scheduledDate,
+    }).catch(() => {});
 
     return res.status(201).json({
       success: true,
@@ -972,9 +991,6 @@ router.post('/doctor-online', protect, authorize('customer'), async (req, res) =
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BOOKING — PATIENT TRANSPORT
-//
-// BUG #3 FIX: queueSubscriptionUsage for optional consultation.
-// BUG #4 FIX: checkConsultationModeAllowed for addConsultation path.
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/patient-transport', protect, authorize('customer'), async (req, res) => {
@@ -1003,7 +1019,6 @@ router.post('/patient-transport', protect, authorize('customer'), async (req, re
     const dropoffCoords        = destinationLocation.coordinates;
     const parsedWaitingMinutes = parseInt(waitingMinutes, 10) || 0;
 
-    // ── Transport — always charged at plan rate ───────────────────────────────
     const { ratePerKm, source: kmRateSource } = await resolveKmRate(req.user._id);
 
     const config             = await PlatformPricingConfig.getGlobal();
@@ -1017,7 +1032,6 @@ router.post('/patient-transport', protect, authorize('customer'), async (req, re
       freeWaitingMinutes, waitingRatePerMin,
     });
 
-    // ── Optional consultation ─────────────────────────────────────────────────
     let consultationFee    = 0, consultationSource = null, opNumber = null;
     let isCoveredBySub     = false, subRef = null;
 
@@ -1029,7 +1043,6 @@ router.post('/patient-transport', protect, authorize('customer'), async (req, re
       if (!consultationAvail.available)
         return res.status(400).json({ success: false, message: consultationAvail.reason });
 
-      // BUG #4 FIX: check mode allowed by subscription
       const modeCheck = await checkConsultationModeAllowed(req.user._id, consultationType);
       if (!modeCheck.allowed) {
         return res.status(403).json({ success: false, message: modeCheck.reason });
@@ -1081,7 +1094,6 @@ router.post('/patient-transport', protect, authorize('customer'), async (req, re
       subscriptionUsagePending: [],
     });
 
-    // BUG #3 FIX: Queue usage if consultation covered
     if (addConsultation && isCoveredBySub && subRef && consultationFee === 0) {
       await queueSubscriptionUsage(booking._id, subRef._id, 'consultationsUsed');
     }
@@ -1100,7 +1112,6 @@ router.post('/patient-transport', protect, authorize('customer'), async (req, re
       await Booking.findByIdAndUpdate(booking._id, { $set: { subscriptionUsagePending: [] } });
     }
 
-    // Free booking flush
     if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
       booking.paymentStatus = 'paid';
       await booking.save();
@@ -1111,7 +1122,6 @@ router.post('/patient-transport', protect, authorize('customer'), async (req, re
       await Booking.findByIdAndUpdate(booking._id, { $set: { subscriptionUsagePending: [] } });
     }
 
-    // Lock canonical outbound route
     const { distanceKm: outDistKm, durationMin: outDurMin, polyline: outPolyline } =
       await calculateCanonicalRoute(pickupCoords, dropoffCoords);
 
@@ -1229,9 +1239,7 @@ router.post('/patient-transport', protect, authorize('customer'), async (req, re
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BOOKING — PHYSIOTHERAPIST
-// NOTE: Physiotherapy does NOT consume subscription consultation quota.
-//       It is a separate service type priced at doctor fees only.
-// BUG #4 FIX: checkConsultationModeAllowed for homeVisit mode.
+// NOTE: Does NOT consume subscription consultation quota.
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/physiotherapist', protect, authorize('customer'), async (req, res) => {
@@ -1249,15 +1257,12 @@ router.post('/physiotherapist', protect, authorize('customer'), async (req, res)
     const avail = await checkHospitalOrDoctorAvailability({ doctorId, scheduledAt: scheduledDate });
     if (!avail.available) return res.status(400).json({ success: false, message: avail.reason });
 
-    // BUG #4 FIX: check mode allowed (homeVisit physio may be blocked by plan)
-    // Map visitType to consultationType for mode check
     const consultTypeForModeCheck = visitType === 'homeVisit' ? 'homeVisit' : 'inPerson';
     const modeCheck = await checkConsultationModeAllowed(req.user._id, consultTypeForModeCheck);
     if (!modeCheck.allowed) {
       return res.status(403).json({ success: false, message: modeCheck.reason });
     }
 
-    // Physiotherapy: no subscription quota — always priced at doctor fees
     const { fee: consultationFee, source: pricingSource } = await resolveConsultationFee({
       isFollowUp: false, followUpFee: 0, isCoveredBySubscription: false,
       doctorId, hospitalId: null,
@@ -1319,11 +1324,8 @@ router.post('/physiotherapist', protect, authorize('customer'), async (req, res)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BOOKING — FOLLOW-UP
-//
-// NOTE: Follow-up DOES NOT consume subscription consultation quota.
-//       followUpFee comes from original OP record (may be ₹0).
-//       No mode check needed — follow_up is independent of subscription modes.
-//       No queueSubscriptionUsage needed — quota not consumed.
+// NOTE: Does NOT consume subscription consultation quota.
+//       followUpFee independent of subscription.
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/follow-up', protect, authorize('customer'), async (req, res) => {
@@ -1345,7 +1347,6 @@ router.post('/follow-up', protect, authorize('customer'), async (req, res) => {
     const avail = await checkHospitalOrDoctorAvailability({ hospitalId, doctorId, scheduledAt: scheduledDate });
     if (!avail.available) return res.status(400).json({ success: false, message: avail.reason });
 
-    // Follow-up fee from original OP — NOT affected by subscription quota or mode check
     const { fee: consultationFee } = await resolveConsultationFee({
       isFollowUp: true, followUpFee: followUpCheck.followUpFee,
       isCoveredBySubscription: false, doctorId, hospitalId, consultationType,
@@ -1398,8 +1399,6 @@ router.post('/follow-up', protect, authorize('customer'), async (req, res) => {
       createdBy: req.user._id,
     });
 
-    // NOTE: subscription consultationsUsed NOT incremented for follow-ups
-
     let razorpayOrder = null;
     if (paymentMethod === 'Razorpay' && fareBreakdown.totalAmount > 0) {
       razorpayOrder = await createRazorpayOrder(fareBreakdown.totalAmount, booking.bookingCode);
@@ -1431,7 +1430,6 @@ router.post('/follow-up', protect, authorize('customer'), async (req, res) => {
 // ═════════════════════════════════════════════════════════════════════════════
 // BOOKING — DIAGNOSTIC CENTER
 // Subscription diagnostic discount (%) applied to diagnosticFee.
-// No usage quota for diagnostics — discount only.
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/diagnostic-center', protect, authorize('customer'), async (req, res) => {
@@ -1463,7 +1461,6 @@ router.post('/diagnostic-center', protect, authorize('customer'), async (req, re
       if (p) { diagnosticFee += p.mrpPrice; packageNames.push(p.packageName); }
     }
 
-    // Subscription diagnostic discount (percentage, not free quota)
     const sub = await UserSubscription.findOne({
       user: req.user._id, status: { $in: ['Active', 'Trial'] }, expiryDate: { $gt: new Date() },
     }).lean();
@@ -1522,7 +1519,6 @@ router.post('/diagnostic-center', protect, authorize('customer'), async (req, re
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BOOKING — DIAGNOSTIC HOME
-// Subscription diagnostic discount (%) applied + homeSampleCollection waiver.
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/diagnostic-home', protect, authorize('customer'), async (req, res) => {
@@ -1604,7 +1600,6 @@ router.post('/diagnostic-home', protect, authorize('customer'), async (req, res)
       await booking.save();
     }
 
-    // Lock canonical route: lab → patient address
     const labCoords = lab.registeredAddress?.location?.coordinates || [80.648, 16.506];
     const { distanceKm: techDistKm, durationMin: techDurMin, polyline: techPolyline } =
       await calculateCanonicalRoute(labCoords, patientLocation.coordinates);
@@ -1669,10 +1664,6 @@ router.post('/diagnostic-home', protect, authorize('customer'), async (req, res)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BOOKING — CARE ASSISTANT ONLY
-//
-// BUG #3 + #5 FIX: queueSubscriptionUsage replaces incrementSubscriptionUsage.
-//   Usage queued at creation, flushed after payment verified.
-//   Care assistant quota no longer decrements on failed/cancelled bookings.
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/care-assistant', protect, authorize('customer'), async (req, res) => {
@@ -1694,8 +1685,6 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
 
     const config = await PlatformPricingConfig.getGlobal();
 
-    // BUG #5 FIX: resolveCareAssistantFee returns fee but does NOT increment.
-    // Increment is queued below via queueSubscriptionUsage.
     const careResult = await resolveCareAssistantFee({
       userId:        req.user._id,
       durationHours: parseInt(durationHours, 10) || 4,
@@ -1731,8 +1720,6 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
       },
     });
 
-    // BUG #3 + #5 FIX: Queue care assistant usage — flush after payment only.
-    // This prevents quota decrement on failed/cancelled bookings.
     if (careResult.isCoveredBySubscription && careResult.sub) {
       await queueSubscriptionUsage(booking._id, careResult.sub._id, 'careAssistantVisitsUsed');
     }
@@ -1745,11 +1732,9 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
         });
         booking.paymentStatus = 'paid'; booking.payments = [wp];
       } else {
-        // Free via subscription — mark as paid with ₹0
         booking.paymentStatus = 'paid';
       }
       await booking.save();
-      // Flush pending usage immediately for wallet payments
       const pending = booking.subscriptionUsagePending || [];
       for (const { subId, field } of pending) {
         if (subId && field) await incrementSubscriptionUsage(subId, field);
@@ -1757,7 +1742,6 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
       await Booking.findByIdAndUpdate(booking._id, { $set: { subscriptionUsagePending: [] } });
     }
 
-    // Free booking (₹0) — no Razorpay needed, flush usage now
     if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
       booking.paymentStatus = 'paid';
       await booking.save();
@@ -1801,9 +1785,6 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /verify-payment
-//
-// BUG #3 + #5 FIX: After signature verified, call /subscriptions/flush-pending-usage
-// to safely increment subscription usage counters that were deferred at booking creation.
 // ─────────────────────────────────────────────────────────────────────────────
 
 router.post('/verify-payment', protect, async (req, res) => {
@@ -1832,9 +1813,6 @@ router.post('/verify-payment', protect, async (req, res) => {
     booking.updatedBy = req.user._id;
     await booking.save();
 
-    // BUG #3 + #5 FIX: Flush deferred subscription usage increments now that payment confirmed.
-    // Call /subscriptions/flush-pending-usage internally via direct DB operation
-    // (avoids HTTP round-trip; reuses same logic as the route).
     const pending = booking.subscriptionUsagePending || [];
     if (pending.length > 0) {
       const now2 = new Date();
@@ -1853,7 +1831,6 @@ router.post('/verify-payment', protect, async (req, res) => {
         }
       }
 
-      // Clear pending list
       await Booking.findByIdAndUpdate(bookingId, {
         $set: { subscriptionUsagePending: [] },
       });
@@ -1913,7 +1890,6 @@ router.get('/my-bookings/:bookingId', protect, authorize('customer'), async (req
 
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
-    // Return canonical polyline from RideTracking for customer map display
     let mapRoute = null;
     if (booking.primaryRide?.trackingId) {
       const trackingDoc = await RideTracking.findById(booking.primaryRide.trackingId)
@@ -1961,10 +1937,6 @@ router.post('/my-bookings/:bookingId/cancel', protect, authorize('customer'), as
     };
     booking.fareBreakdown.refundAmount = refundAmount;
     booking.updatedBy = req.user._id;
-
-    // BUG #3 + #5 FIX: Cancel before payment — clear pending usage so it never flushes.
-    // If payment was never completed, subscriptionUsagePending was never flushed,
-    // so no quota was consumed. Just clear it safely.
     booking.subscriptionUsagePending = [];
 
     await booking.save();
@@ -2054,8 +2026,6 @@ router.get('/my-bookings/:bookingId/op-download',
         return res.status(404).json({ success: false, message: 'No OP record for booking' });
 
       const { generateOpHtml, buildOpZipBuffer } = await import('../utils/opDocumentGenerator.js');
-      const { default: DoctorProfile }            = await import('../models/DoctorProfile.js');
-      const { default: Hospital }                 = await import('../models/Hospital.js');
       const { default: User }                     = await import('../models/User.js');
 
       const [patient, doctor, hospital, followUps] = await Promise.all([
@@ -2079,27 +2049,30 @@ router.get('/my-bookings/:bookingId/op-download',
   }
 );
 
+// GET /platform-pricing
 router.get('/platform-pricing', async (req, res) => {
   try {
     const config = await PlatformPricingConfig.findOne({
       configName: 'global',
-      isActive: true
+      isActive: true,
     }).select('careAssistant.pricingTiers');
 
     if (!config) {
       return res.status(404).json({
         success: false,
-        message: 'Platform pricing configuration not found.'
+        message: 'Platform pricing configuration not found.',
       });
     }
 
     res.json({
       success: true,
-      data: config.careAssistant.pricingTiers
+      data: config.careAssistant.pricingTiers,
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
+
+ 
 
 export default router;
