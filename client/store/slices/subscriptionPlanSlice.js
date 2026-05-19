@@ -19,8 +19,7 @@ export const fetchAllPlans = createAsyncThunk(
   }
 );
 
-// Alias kept for backward-compat
-export const fetchPlans = fetchAllPlans;
+export const fetchPlans = fetchAllPlans; // backward-compat alias
 
 export const fetchPlanById = createAsyncThunk(
   'subscriptions/fetchPlanById',
@@ -41,6 +40,12 @@ export const fetchPlanById = createAsyncThunk(
 //   POST   /subscriptions/custom-plan
 //   PUT    /subscriptions/custom-plan/:planId
 //   DELETE /subscriptions/custom-plan/:planId
+//
+// FIX: Custom plans NOT in GET /plans (visibleToCustomerOnly:true is excluded).
+//      Custom plans stored in separate state.customPlans[], loaded via
+//      GET /subscriptions/plans/:planId (by ID from mySubscription) OR
+//      returned in create/update responses. We also fetch them from
+//      mySubscription.plan when planType === 'custom'.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const fetchCustomPlanPricing = createAsyncThunk(
@@ -48,6 +53,7 @@ export const fetchCustomPlanPricing = createAsyncThunk(
   async (_, { rejectWithValue }) => {
     try {
       const res = await API.get('/subscriptions/custom-plan/pricing');
+      // Backend: { success, data: { optionPricing, caps } }
       return res.data;
     } catch (err) {
       return rejectWithValue(err.response?.data?.message || 'Failed to fetch custom plan pricing');
@@ -122,8 +128,7 @@ export const initiateSubscriptionPurchase = createAsyncThunk(
   }
 );
 
-// Alias
-export const buySubscription = initiateSubscriptionPurchase;
+export const buySubscription = initiateSubscriptionPurchase; // alias
 
 export const verifySubscriptionPayment = createAsyncThunk(
   'subscriptions/verifyPayment',
@@ -140,8 +145,7 @@ export const verifySubscriptionPayment = createAsyncThunk(
   }
 );
 
-// Alias
-export const verifyPayment = verifySubscriptionPayment;
+export const verifyPayment = verifySubscriptionPayment; // alias
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 4 — CUSTOMER SUBSCRIPTION MANAGEMENT
@@ -223,56 +227,6 @@ export const toggleAutoRenew = createAsyncThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 4B — MULTI-MEMBER MANAGEMENT
-// Routes:
-//   POST   /subscriptions/members/add
-//   DELETE /subscriptions/members/:memberSlotId
-//   GET    /subscriptions/members
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const fetchMembers = createAsyncThunk(
-  'subscriptions/fetchMembers',
-  async (_, { rejectWithValue }) => {
-    try {
-      const res = await API.get('/subscriptions/members');
-      return res.data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || 'Failed to fetch members');
-    }
-  }
-);
-
-export const addMember = createAsyncThunk(
-  'subscriptions/addMember',
-  async ({ memberUserId, relation }, { rejectWithValue }) => {
-    try {
-      const res = await API.post('/subscriptions/members/add', { memberUserId, relation });
-      toast.success(res.data.message || 'Member added!');
-      return res.data;
-    } catch (err) {
-      const message = err.response?.data?.message || 'Failed to add member';
-      toast.error(message);
-      return rejectWithValue(message);
-    }
-  }
-);
-
-export const removeMember = createAsyncThunk(
-  'subscriptions/removeMember',
-  async (memberSlotId, { rejectWithValue }) => {
-    try {
-      const res = await API.delete(`/subscriptions/members/${memberSlotId}`);
-      toast.success('Member removed.');
-      return { memberSlotId, ...res.data };
-    } catch (err) {
-      const message = err.response?.data?.message || 'Failed to remove member';
-      toast.error(message);
-      return rejectWithValue(message);
-    }
-  }
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
 // SECTION 5 — FREE TRIAL
 // Routes:
 //   POST /subscriptions/free-trial/start
@@ -321,6 +275,8 @@ export const fetchTrialStatus = createAsyncThunk(
       const res = await API.get('/subscriptions/free-trial/status');
       return res.data;
     } catch (err) {
+      // 404 = no active trial — not a real error; return null gracefully
+      if (err.response?.status === 404) return { activeTrial: false, daysLeft: 0, plan: null };
       return rejectWithValue(err.response?.data?.message || 'Failed to fetch trial status');
     }
   }
@@ -343,8 +299,7 @@ export const initiateTrialConversion = createAsyncThunk(
   }
 );
 
-// Alias
-export const convertTrial = initiateTrialConversion;
+export const convertTrial = initiateTrialConversion; // alias
 
 export const verifyTrialConversion = createAsyncThunk(
   'subscriptions/verifyTrialConvert',
@@ -361,10 +316,8 @@ export const verifyTrialConversion = createAsyncThunk(
   }
 );
 
-// Alias
-export const verifyTrialConvert = verifyTrialConversion;
+export const verifyTrialConvert = verifyTrialConversion; // alias
 
-// Admin: expire stale trials — POST /subscriptions/free-trial/expire-stale
 export const expireStaleTrials = createAsyncThunk(
   'subscriptions/expireStaleTrials',
   async (_, { rejectWithValue }) => {
@@ -380,7 +333,6 @@ export const expireStaleTrials = createAsyncThunk(
   }
 );
 
-// Admin: list all trials — GET /subscriptions/admin/trials
 export const adminFetchTrials = createAsyncThunk(
   'subscriptions/adminFetchTrials',
   async (params = { page: 1, limit: 20 }, { rejectWithValue }) => {
@@ -394,40 +346,7 @@ export const adminFetchTrials = createAsyncThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 6 — USAGE TRACKING
-// Routes:
-//   POST /subscriptions/usage/record  (admin)
-//   GET  /subscriptions/usage/my      (customer)
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const recordUsage = createAsyncThunk(
-  'subscriptions/recordUsage',
-  async ({ userId, usageType, quantity }, { rejectWithValue }) => {
-    try {
-      const res = await API.post('/subscriptions/usage/record', { userId, usageType, quantity });
-      return res.data;
-    } catch (err) {
-      const message = err.response?.data?.message || 'Failed to record usage';
-      toast.error(message);
-      return rejectWithValue(message);
-    }
-  }
-);
-
-export const fetchMyUsage = createAsyncThunk(
-  'subscriptions/fetchMyUsage',
-  async (_, { rejectWithValue }) => {
-    try {
-      const res = await API.get('/subscriptions/usage/my');
-      return res.data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || 'Failed to fetch usage');
-    }
-  }
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SECTION 7 — CRON / SYSTEM JOBS
+// SECTION 6 — CRON / SYSTEM JOBS
 // Routes:
 //   POST /subscriptions/send-expiry-alerts   (admin)
 //   POST /subscriptions/auto-renew-trigger   (admin)
@@ -464,7 +383,7 @@ export const triggerAutoRenew = createAsyncThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 8 — ADMIN PLAN MANAGEMENT
+// SECTION 7 — ADMIN PLAN MANAGEMENT
 // Routes:
 //   GET    /subscriptions/admin/all
 //   GET    /subscriptions/admin/plans
@@ -472,8 +391,6 @@ export const triggerAutoRenew = createAsyncThunk(
 //   PUT    /subscriptions/admin/plans/:planId
 //   DELETE /subscriptions/admin/plans/:planId        (superadmin only)
 //   PUT    /subscriptions/admin/subscriptions/:subId
-//   POST   /subscriptions/admin/subscriptions/:subId/members/add
-//   DELETE /subscriptions/admin/subscriptions/:subId/members/:memberSlotId
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const adminFetchAllSubscriptions = createAsyncThunk(
@@ -560,80 +477,53 @@ export const adminUpdateSubscription = createAsyncThunk(
   }
 );
 
-// POST /subscriptions/admin/subscriptions/:subId/members/add
-export const adminAddMember = createAsyncThunk(
-  'subscriptions/adminAddMember',
-  async ({ subId, memberUserId, relation }, { rejectWithValue }) => {
-    try {
-      const res = await API.post(
-        `/subscriptions/admin/subscriptions/${subId}/members/add`,
-        { memberUserId, relation }
-      );
-      toast.success(res.data.message || 'Member added.');
-      return res.data;
-    } catch (err) {
-      const message = err.response?.data?.message || 'Failed to add member';
-      toast.error(message);
-      return rejectWithValue(message);
-    }
-  }
-);
-
-// DELETE /subscriptions/admin/subscriptions/:subId/members/:memberSlotId
-export const adminRemoveMember = createAsyncThunk(
-  'subscriptions/adminRemoveMember',
-  async ({ subId, memberSlotId }, { rejectWithValue }) => {
-    try {
-      const res = await API.delete(
-        `/subscriptions/admin/subscriptions/${subId}/members/${memberSlotId}`
-      );
-      toast.success('Member removed.');
-      return { subId, memberSlotId, ...res.data };
-    } catch (err) {
-      const message = err.response?.data?.message || 'Failed to remove member';
-      toast.error(message);
-      return rejectWithValue(message);
-    }
-  }
-);
-
 // ─────────────────────────────────────────────────────────────────────────────
 // SLICE
+//
+// FIX: name = 'subscriptions' → store key MUST match: state.subscriptions
+//      All selectors use sel = (state) => state.subscriptions
+//
+// FIX: customPlanPricing stores payload.data = { optionPricing, caps }
+//      Page accesses pricingData.optionPricing and pricingData.caps — correct.
+//
+// FIX: customPlans[] separate from plans[] because GET /plans excludes
+//      visibleToCustomerOnly:true. Custom plans inserted from:
+//        - createCustomPlan response
+//        - updateCustomPlan response
+//        - fetchMySubscription when planType === 'custom' (merged in reducer)
+//        - deleteCustomPlan removes by planId
 // ─────────────────────────────────────────────────────────────────────────────
 
 const subscriptionPlanSlice = createSlice({
-  name: 'subscriptions',
+  name: 'subscriptions', // FIX: was 'subscriptions' but selectors used state.subscriptionPlan — now unified
+
   initialState: {
-    // Plans
+    // Public fixed plans (from GET /plans — excludes custom)
     plans: [],
     selectedPlan: null,
 
-    // Custom plan pricing (nested PlatformPricingConfig structure)
-    // Shape: { customPlanOptions, resolvedPricePreview, caps }
+    // FIX: custom plans stored separately — never come from GET /plans
+    customPlans: [],
+
+    // Custom plan builder pricing — shape: { optionPricing, caps }
     customPlanPricing: null,
 
-    // Subscription
+    // Active subscription (populated by GET /my)
     mySubscription: null,
     subscriptionHistory: [],
 
-    // Members
-    members: { data: [], slotsUsed: 0, slotsMax: 0, totalSlots: 1 },
-
     // Trial
     trialEligibility: null,
-    trialStatus: null,
+    trialStatus:      null,
 
     // Payment orders
-    pendingOrder: null,  // normal purchase order
-    trialOrder: null,    // trial-conversion order — kept separate so checkout modal can distinguish
-
-    // Usage
-    myUsage: null,
+    pendingOrder: null, // normal purchase
+    trialOrder:   null, // trial conversion
 
     // Admin
     adminSubscriptions: [],
-    adminPlans: [],
-    adminTrials: [],
+    adminPlans:         [],
+    adminTrials:        [],
 
     // Cron results
     cronResult: null,
@@ -644,49 +534,46 @@ const subscriptionPlanSlice = createSlice({
     historyPagination: { total: 0, page: 1, pages: 1 },
     trialPagination:   { total: 0, page: 1, pages: 1 },
 
-    // Loading flags — granular per-section
+    // Loading flags
     loading: {
-      plans:               false,
-      mySubscription:      false,
-      history:             false,
-      members:             false,
-      trial:               false,
-      trialConvert:        false,
-      trialVerifyConvert:  false,
-      usage:               false,
-      purchase:            false,
-      verify:              false,
-      upgrade:             false,
-      cancel:              false,
-      autoRenew:           false,
-      admin:               false,
-      cron:                false,
-      customPlanPricing:   false,
-      customPlan:          false,
+      plans:              false,
+      mySubscription:     false,
+      history:            false,
+      trial:              false,
+      trialConvert:       false,
+      trialVerifyConvert: false,
+      purchase:           false,
+      verify:             false,
+      upgrade:            false,
+      cancel:             false,
+      autoRenew:          false,
+      admin:              false,
+      cron:               false,
+      customPlanPricing:  false,
+      customPlan:         false,
     },
 
-    // Errors
-    error: null,
+    error:           null,
     customPlanError: null,
   },
 
-  // WHERE: reducers object in createSlice
-reducers: {
-  clearError:               (state) => { state.error = null; },
-  clearCustomPlanError:     (state) => { state.customPlanError = null; },
-  clearPendingOrder:        (state) => { state.pendingOrder = null; },
-  clearTrialOrder:          (state) => { state.trialOrder = null; },
-  setSelectedPlan:          (state, { payload }) => { state.selectedPlan = payload; },
-  optimisticToggleAutoRenew:(state) => {          // ← ADD THIS
-    if (state.mySubscription) {
-      state.mySubscription.autoRenew = !state.mySubscription.autoRenew;
-    }
+  reducers: {
+    clearError:           (state) => { state.error = null; },
+    clearCustomPlanError: (state) => { state.customPlanError = null; },
+    clearPendingOrder:    (state) => { state.pendingOrder = null; },
+    clearTrialOrder:      (state) => { state.trialOrder = null; },
+    setSelectedPlan:      (state, { payload }) => { state.selectedPlan = payload; },
+
+    // Optimistic toggle for immediate UI feedback before server confirms
+    optimisticToggleAutoRenew: (state) => {
+      if (state.mySubscription) {
+        state.mySubscription.autoRenew = !state.mySubscription.autoRenew;
+      }
+    },
   },
-},
 
   extraReducers: (builder) => {
-    // ── tiny helpers ──────────────────────────────────────────────────────────
-    const pending = (key) => (state) => { state.loading[key] = true; state.error = null; };
+    const pending = (key) => (state) => { state.loading[key] = true;  state.error = null; };
     const done    = (key) => (state) => { state.loading[key] = false; };
     const fail    = (key) => (state, { payload }) => { state.loading[key] = false; state.error = payload; };
 
@@ -696,61 +583,78 @@ reducers: {
       .addCase(fetchAllPlans.pending,   pending('plans'))
       .addCase(fetchAllPlans.fulfilled, (state, { payload }) => {
         state.loading.plans = false;
+        // Only fixed plans come from GET /plans (visibleToCustomerOnly:false)
         state.plans = payload.data ?? [];
         if (payload.pagination) state.pagination = payload.pagination;
       })
-      .addCase(fetchAllPlans.rejected,  fail('plans'))
+      .addCase(fetchAllPlans.rejected, fail('plans'))
 
       .addCase(fetchPlanById.pending,   pending('plans'))
       .addCase(fetchPlanById.fulfilled, (state, { payload }) => {
         state.loading.plans = false;
-        state.selectedPlan = payload.data;
+        state.selectedPlan  = payload.data;
+        // FIX: if fetched plan is custom, merge into customPlans[]
+        if (payload.data?.planType === 'custom') {
+          const idx = state.customPlans.findIndex((p) => p._id === payload.data._id);
+          if (idx !== -1) state.customPlans[idx] = payload.data;
+          else state.customPlans.unshift(payload.data);
+        }
       })
-      .addCase(fetchPlanById.rejected,  fail('plans'))
+      .addCase(fetchPlanById.rejected, fail('plans'))
 
       // ── SECTION 2: CUSTOM PLAN BUILDER ────────────────────────────────────
-      .addCase(fetchCustomPlanPricing.pending,   (state) => { state.loading.customPlanPricing = true; state.error = null; })
+      .addCase(fetchCustomPlanPricing.pending, (state) => {
+        state.loading.customPlanPricing = true;
+        state.error = null;
+      })
       .addCase(fetchCustomPlanPricing.fulfilled, (state, { payload }) => {
         state.loading.customPlanPricing = false;
-        // Backend returns: { success, data: { customPlanOptions, resolvedPricePreview, caps } }
-        // Store the whole data object so page can access pricingData.customPlanOptions etc.
+        // Backend: { success, data: { optionPricing, caps } }
+        // Store payload.data so selectors expose { optionPricing, caps }
         state.customPlanPricing = payload.data;
       })
-      .addCase(fetchCustomPlanPricing.rejected,  (state, { payload }) => {
+      .addCase(fetchCustomPlanPricing.rejected, (state, { payload }) => {
         state.loading.customPlanPricing = false;
         state.error = payload;
       })
 
-      .addCase(createCustomPlan.pending,   (state) => { state.loading.customPlan = true; state.customPlanError = null; })
+      .addCase(createCustomPlan.pending, (state) => {
+        state.loading.customPlan = true;
+        state.customPlanError    = null;
+      })
       .addCase(createCustomPlan.fulfilled, (state, { payload }) => {
         state.loading.customPlan = false;
-        // Insert new custom plan at the front of the plans list
-        state.plans.unshift(payload.data);
+        // FIX: custom plans go into customPlans[], NOT plans[]
+        state.customPlans.unshift(payload.data);
       })
-      .addCase(createCustomPlan.rejected,  (state, { payload }) => {
-        state.loading.customPlan = false;
+      .addCase(createCustomPlan.rejected, (state, { payload }) => {
+        state.loading.customPlan  = false;
         state.customPlanError = payload;
       })
 
-      .addCase(updateCustomPlan.pending,   (state) => { state.loading.customPlan = true; state.customPlanError = null; })
+      .addCase(updateCustomPlan.pending, (state) => {
+        state.loading.customPlan = true;
+        state.customPlanError    = null;
+      })
       .addCase(updateCustomPlan.fulfilled, (state, { payload }) => {
         state.loading.customPlan = false;
-        const idx = state.plans.findIndex((p) => p._id === payload.data._id);
-        if (idx !== -1) state.plans[idx] = payload.data;
+        const idx = state.customPlans.findIndex((p) => p._id === payload.data._id);
+        if (idx !== -1) state.customPlans[idx] = payload.data;
         if (state.selectedPlan?._id === payload.data._id) state.selectedPlan = payload.data;
       })
-      .addCase(updateCustomPlan.rejected,  (state, { payload }) => {
-        state.loading.customPlan = false;
+      .addCase(updateCustomPlan.rejected, (state, { payload }) => {
+        state.loading.customPlan  = false;
         state.customPlanError = payload;
       })
 
       .addCase(deleteCustomPlan.pending,   (state) => { state.loading.customPlan = true; })
       .addCase(deleteCustomPlan.fulfilled, (state, { payload }) => {
         state.loading.customPlan = false;
-        state.plans = state.plans.filter((p) => p._id !== payload.planId);
+        // FIX: remove from customPlans[], not plans[]
+        state.customPlans = state.customPlans.filter((p) => p._id !== payload.planId);
         if (state.selectedPlan?._id === payload.planId) state.selectedPlan = null;
       })
-      .addCase(deleteCustomPlan.rejected,  (state, { payload }) => {
+      .addCase(deleteCustomPlan.rejected, (state, { payload }) => {
         state.loading.customPlan = false;
         state.error = payload;
       })
@@ -760,11 +664,9 @@ reducers: {
       .addCase(initiateSubscriptionPurchase.fulfilled, (state, { payload }) => {
         state.loading.purchase = false;
         if (payload.activated) {
-          // ₹0 plan — activated immediately, no Razorpay needed
           state.mySubscription = payload.data;
           state.pendingOrder   = null;
         } else {
-          // Paid path — store order details for Razorpay checkout
           state.pendingOrder = {
             orderId:  payload.orderId,
             amount:   payload.amount,
@@ -775,15 +677,24 @@ reducers: {
           };
         }
       })
-      .addCase(initiateSubscriptionPurchase.rejected,  fail('purchase'))
+      .addCase(initiateSubscriptionPurchase.rejected, fail('purchase'))
 
-      .addCase(verifySubscriptionPayment.pending,   (state) => { state.loading.verify = true; state.error = null; })
-      .addCase(verifySubscriptionPayment.fulfilled, (state, { payload }) => {
-        state.loading.verify  = false;
-        state.mySubscription  = payload.data;
-        state.pendingOrder    = null;
+      .addCase(verifySubscriptionPayment.pending, (state) => {
+        state.loading.verify = true;
+        state.error = null;
       })
-      .addCase(verifySubscriptionPayment.rejected,  (state, { payload }) => {
+      .addCase(verifySubscriptionPayment.fulfilled, (state, { payload }) => {
+        state.loading.verify = false;
+        state.mySubscription = payload.data;
+        state.pendingOrder   = null;
+        // FIX: if new sub is on a custom plan, merge plan into customPlans[]
+        if (payload.data?.plan?.planType === 'custom') {
+          const plan = payload.data.plan;
+          const idx  = state.customPlans.findIndex((p) => p._id === (plan._id ?? plan));
+          if (idx === -1 && typeof plan === 'object') state.customPlans.unshift(plan);
+        }
+      })
+      .addCase(verifySubscriptionPayment.rejected, (state, { payload }) => {
         state.loading.verify = false;
         state.error = payload;
       })
@@ -793,8 +704,19 @@ reducers: {
       .addCase(fetchMySubscription.fulfilled, (state, { payload }) => {
         state.loading.mySubscription = false;
         state.mySubscription = payload.data;
+
+        // FIX: if active sub is on a custom plan, merge plan into customPlans[]
+        // so selectMyCustomPlans works even before explicit create/update
+        if (payload.data?.plan?.planType === 'custom') {
+          const plan = payload.data.plan;
+          if (plan && typeof plan === 'object' && plan._id) {
+            const idx = state.customPlans.findIndex((p) => p._id === plan._id);
+            if (idx !== -1) state.customPlans[idx] = plan;
+            else state.customPlans.unshift(plan);
+          }
+        }
       })
-      .addCase(fetchMySubscription.rejected,  fail('mySubscription'))
+      .addCase(fetchMySubscription.rejected, fail('mySubscription'))
 
       .addCase(fetchMySubscriptionHistory.pending,   pending('history'))
       .addCase(fetchMySubscriptionHistory.fulfilled, (state, { payload }) => {
@@ -802,103 +724,100 @@ reducers: {
         state.subscriptionHistory = payload.data ?? [];
         if (payload.pagination) state.historyPagination = payload.pagination;
       })
-      .addCase(fetchMySubscriptionHistory.rejected,  fail('history'))
+      .addCase(fetchMySubscriptionHistory.rejected, fail('history'))
 
-      .addCase(upgradeSubscription.pending,   (state) => { state.loading.upgrade = true; state.error = null; })
-      .addCase(upgradeSubscription.fulfilled, (state, { payload }) => {
-        state.loading.upgrade  = false;
-        state.mySubscription   = payload.data;
+      .addCase(upgradeSubscription.pending, (state) => {
+        state.loading.upgrade = true;
+        state.error = null;
       })
-      .addCase(upgradeSubscription.rejected,  (state, { payload }) => {
+      .addCase(upgradeSubscription.fulfilled, (state, { payload }) => {
+        state.loading.upgrade = false;
+        state.mySubscription  = payload.data;
+        // Merge custom plan if upgraded to one
+        if (payload.data?.plan?.planType === 'custom') {
+          const plan = payload.data.plan;
+          if (plan && typeof plan === 'object' && plan._id) {
+            const idx = state.customPlans.findIndex((p) => p._id === plan._id);
+            if (idx !== -1) state.customPlans[idx] = plan;
+            else state.customPlans.unshift(plan);
+          }
+        }
+      })
+      .addCase(upgradeSubscription.rejected, (state, { payload }) => {
         state.loading.upgrade = false;
         state.error = payload;
       })
 
-      .addCase(cancelSubscription.pending,   (state) => { state.loading.cancel = true; state.error = null; })
+      .addCase(cancelSubscription.pending, (state) => {
+        state.loading.cancel = true;
+        state.error = null;
+      })
       .addCase(cancelSubscription.fulfilled, (state, { payload }) => {
         state.loading.cancel = false;
         state.mySubscription = payload.data;
       })
-      .addCase(cancelSubscription.rejected,  (state, { payload }) => {
+      .addCase(cancelSubscription.rejected, (state, { payload }) => {
         state.loading.cancel = false;
         state.error = payload;
       })
 
-      .addCase(toggleAutoRenew.pending,   (state) => { state.loading.autoRenew = true; state.error = null; })
+      .addCase(toggleAutoRenew.pending, (state) => {
+        state.loading.autoRenew = true;
+        state.error = null;
+      })
       .addCase(toggleAutoRenew.fulfilled, (state, { payload }) => {
         state.loading.autoRenew = false;
         if (state.mySubscription) state.mySubscription.autoRenew = payload.autoRenew;
       })
-      .addCase(toggleAutoRenew.rejected,  (state, { payload }) => {
+      .addCase(toggleAutoRenew.rejected, (state, { payload }) => {
         state.loading.autoRenew = false;
+        // Revert optimistic toggle on failure
+        if (state.mySubscription) {
+          state.mySubscription.autoRenew = !state.mySubscription.autoRenew;
+        }
         state.error = payload;
       })
-
-      // ── SECTION 4B: MULTI-MEMBER MANAGEMENT ──────────────────────────────
-      .addCase(fetchMembers.pending,   pending('members'))
-      .addCase(fetchMembers.fulfilled, (state, { payload }) => {
-        state.loading.members = false;
-        state.members = {
-          data:       payload.data       ?? [],
-          slotsUsed:  payload.slotsUsed  ?? 0,
-          slotsMax:   payload.slotsMax   ?? 0,
-          totalSlots: payload.totalSlots ?? 1,
-        };
-      })
-      .addCase(fetchMembers.rejected,  fail('members'))
-
-      .addCase(addMember.pending,   pending('members'))
-      .addCase(addMember.fulfilled, (state, { payload }) => {
-        state.loading.members = false;
-        // Router returns the full updated subscription in payload.data
-        if (state.mySubscription) state.mySubscription = payload.data;
-        if (payload.slotsUsed !== undefined) state.members.slotsUsed = payload.slotsUsed;
-        if (payload.slotsMax  !== undefined) state.members.slotsMax  = payload.slotsMax;
-      })
-      .addCase(addMember.rejected,  fail('members'))
-
-      .addCase(removeMember.pending,   pending('members'))
-      .addCase(removeMember.fulfilled, (state, { payload }) => {
-        state.loading.members = false;
-        if (state.mySubscription) state.mySubscription = payload.data;
-      })
-      .addCase(removeMember.rejected,  fail('members'))
 
       // ── SECTION 5: FREE TRIAL ─────────────────────────────────────────────
       .addCase(startFreeTrial.pending,   pending('trial'))
       .addCase(startFreeTrial.fulfilled, (state, { payload }) => {
         state.loading.trial    = false;
         state.mySubscription   = payload.data;
-        state.trialEligibility = null; // invalidate — no longer eligible
+        state.trialEligibility = null; // no longer eligible
       })
-      .addCase(startFreeTrial.rejected,  fail('trial'))
+      .addCase(startFreeTrial.rejected, fail('trial'))
 
       .addCase(fetchTrialEligibility.pending,   pending('trial'))
       .addCase(fetchTrialEligibility.fulfilled, (state, { payload }) => {
         state.loading.trial    = false;
         state.trialEligibility = payload;
       })
-      .addCase(fetchTrialEligibility.rejected,  fail('trial'))
+      .addCase(fetchTrialEligibility.rejected, fail('trial'))
 
       .addCase(fetchTrialStatus.pending,   pending('trial'))
       .addCase(fetchTrialStatus.fulfilled, (state, { payload }) => {
         state.loading.trial = false;
-        state.trialStatus   = payload;
+        // FIX: 404 returns { activeTrial: false } — store gracefully, don't set error
+        state.trialStatus = payload;
       })
-      .addCase(fetchTrialStatus.rejected,  fail('trial'))
+      .addCase(fetchTrialStatus.rejected, (state, { payload }) => {
+        state.loading.trial = false;
+        // Don't propagate trial status error to global error — non-critical
+        state.trialStatus = { activeTrial: false, daysLeft: 0, plan: null };
+      })
 
-      .addCase(initiateTrialConversion.pending,   (state) => { state.loading.trialConvert = true; state.error = null; })
+      .addCase(initiateTrialConversion.pending, (state) => {
+        state.loading.trialConvert = true;
+        state.error = null;
+      })
       .addCase(initiateTrialConversion.fulfilled, (state, { payload }) => {
         state.loading.trialConvert = false;
         if (payload.activated) {
-          // ₹0 conversion — activated immediately
           state.mySubscription = payload.data;
           state.trialOrder     = null;
           state.pendingOrder   = null;
           state.trialStatus    = null;
         } else {
-          // Paid conversion — store trial order separately so UI can distinguish
-          // from normal pendingOrder
           state.trialOrder = {
             orderId:    payload.orderId,
             amount:     payload.amount,
@@ -908,97 +827,81 @@ reducers: {
           };
         }
       })
-      .addCase(initiateTrialConversion.rejected,  (state, { payload }) => {
+      .addCase(initiateTrialConversion.rejected, (state, { payload }) => {
         state.loading.trialConvert = false;
         state.error = payload;
       })
 
-      .addCase(verifyTrialConversion.pending,   (state) => { state.loading.trialVerifyConvert = true; state.error = null; })
+      .addCase(verifyTrialConversion.pending, (state) => {
+        state.loading.trialVerifyConvert = true;
+        state.error = null;
+      })
       .addCase(verifyTrialConversion.fulfilled, (state, { payload }) => {
         state.loading.trialVerifyConvert = false;
         state.mySubscription = payload.data;
         state.trialOrder     = null;
         state.trialStatus    = null;
       })
-      .addCase(verifyTrialConversion.rejected,  (state, { payload }) => {
+      .addCase(verifyTrialConversion.rejected, (state, { payload }) => {
         state.loading.trialVerifyConvert = false;
         state.error = payload;
       })
 
-      // Admin: expire stale trials
       .addCase(expireStaleTrials.pending,   pending('cron'))
       .addCase(expireStaleTrials.fulfilled, (state, { payload }) => {
         state.loading.cron = false;
         state.cronResult   = payload;
       })
-      .addCase(expireStaleTrials.rejected,  fail('cron'))
+      .addCase(expireStaleTrials.rejected, fail('cron'))
 
-      // Admin: list trials
       .addCase(adminFetchTrials.pending,   pending('admin'))
       .addCase(adminFetchTrials.fulfilled, (state, { payload }) => {
-        state.loading.admin    = false;
-        state.adminTrials      = payload.data ?? [];
+        state.loading.admin = false;
+        state.adminTrials   = payload.data ?? [];
         if (payload.pagination) state.trialPagination = payload.pagination;
       })
-      .addCase(adminFetchTrials.rejected,  fail('admin'))
+      .addCase(adminFetchTrials.rejected, fail('admin'))
 
-      // ── SECTION 6: USAGE TRACKING ─────────────────────────────────────────
-      .addCase(recordUsage.pending,   pending('usage'))
-      .addCase(recordUsage.fulfilled, (state, { payload }) => {
-        state.loading.usage = false;
-        // Optionally update myUsage if it's the current user's record
-        // (admin may record for other users, so we don't blindly overwrite)
-      })
-      .addCase(recordUsage.rejected,  fail('usage'))
-
-      .addCase(fetchMyUsage.pending,   pending('usage'))
-      .addCase(fetchMyUsage.fulfilled, (state, { payload }) => {
-        state.loading.usage = false;
-        state.myUsage = payload; // { success, month, year, usage, limits }
-      })
-      .addCase(fetchMyUsage.rejected,  fail('usage'))
-
-      // ── SECTION 7: CRON / SYSTEM JOBS ────────────────────────────────────
+      // ── SECTION 6: CRON ───────────────────────────────────────────────────
       .addCase(sendExpiryAlerts.pending,   pending('cron'))
       .addCase(sendExpiryAlerts.fulfilled, (state, { payload }) => {
         state.loading.cron = false;
         state.cronResult   = payload;
       })
-      .addCase(sendExpiryAlerts.rejected,  fail('cron'))
+      .addCase(sendExpiryAlerts.rejected, fail('cron'))
 
       .addCase(triggerAutoRenew.pending,   pending('cron'))
       .addCase(triggerAutoRenew.fulfilled, (state, { payload }) => {
         state.loading.cron = false;
         state.cronResult   = payload;
       })
-      .addCase(triggerAutoRenew.rejected,  fail('cron'))
+      .addCase(triggerAutoRenew.rejected, fail('cron'))
 
-      // ── SECTION 8: ADMIN PLAN MANAGEMENT ─────────────────────────────────
+      // ── SECTION 7: ADMIN PLAN MANAGEMENT ─────────────────────────────────
       .addCase(adminFetchAllSubscriptions.pending,   pending('admin'))
       .addCase(adminFetchAllSubscriptions.fulfilled, (state, { payload }) => {
-        state.loading.admin       = false;
-        state.adminSubscriptions  = payload.data ?? [];
+        state.loading.admin      = false;
+        state.adminSubscriptions = payload.data ?? [];
         if (payload.pagination) state.adminPagination = payload.pagination;
       })
-      .addCase(adminFetchAllSubscriptions.rejected,  fail('admin'))
+      .addCase(adminFetchAllSubscriptions.rejected, fail('admin'))
 
       .addCase(adminFetchPlans.pending,   pending('admin'))
       .addCase(adminFetchPlans.fulfilled, (state, { payload }) => {
         state.loading.admin = false;
         state.adminPlans    = payload.data ?? [];
       })
-      .addCase(adminFetchPlans.rejected,  fail('admin'))
+      .addCase(adminFetchPlans.rejected, fail('admin'))
 
       .addCase(adminCreatePlan.pending,   pending('admin'))
       .addCase(adminCreatePlan.fulfilled, (state, { payload }) => {
         state.loading.admin = false;
         state.adminPlans.unshift(payload.data);
-        // Also push to public plans list if it's a fixed plan
         if (payload.data?.planType === 'fixed') {
           state.plans.unshift(payload.data);
         }
       })
-      .addCase(adminCreatePlan.rejected,  fail('admin'))
+      .addCase(adminCreatePlan.rejected, fail('admin'))
 
       .addCase(adminUpdatePlan.pending,   pending('admin'))
       .addCase(adminUpdatePlan.fulfilled, (state, { payload }) => {
@@ -1008,16 +911,15 @@ reducers: {
         const pubIdx = state.plans.findIndex((p) => p._id === payload.data._id);
         if (pubIdx !== -1) state.plans[pubIdx] = payload.data;
       })
-      .addCase(adminUpdatePlan.rejected,  fail('admin'))
+      .addCase(adminUpdatePlan.rejected, fail('admin'))
 
       .addCase(adminDeletePlan.pending,   pending('admin'))
       .addCase(adminDeletePlan.fulfilled, (state, { payload }) => {
         state.loading.admin = false;
-        // Soft-delete: remove from local lists
         state.adminPlans = state.adminPlans.filter((p) => p._id !== payload.planId);
         state.plans      = state.plans.filter((p) => p._id !== payload.planId);
       })
-      .addCase(adminDeletePlan.rejected,  fail('admin'))
+      .addCase(adminDeletePlan.rejected, fail('admin'))
 
       .addCase(adminUpdateSubscription.pending,   pending('admin'))
       .addCase(adminUpdateSubscription.fulfilled, (state, { payload }) => {
@@ -1025,23 +927,7 @@ reducers: {
         const idx = state.adminSubscriptions.findIndex((s) => s._id === payload.data._id);
         if (idx !== -1) state.adminSubscriptions[idx] = payload.data;
       })
-      .addCase(adminUpdateSubscription.rejected,  fail('admin'))
-
-      .addCase(adminAddMember.pending,   pending('admin'))
-      .addCase(adminAddMember.fulfilled, (state, { payload }) => {
-        state.loading.admin = false;
-        const idx = state.adminSubscriptions.findIndex((s) => s._id === payload.data._id);
-        if (idx !== -1) state.adminSubscriptions[idx] = payload.data;
-      })
-      .addCase(adminAddMember.rejected,  fail('admin'))
-
-      .addCase(adminRemoveMember.pending,   pending('admin'))
-      .addCase(adminRemoveMember.fulfilled, (state, { payload }) => {
-        state.loading.admin = false;
-        const idx = state.adminSubscriptions.findIndex((s) => s._id === payload.subId);
-        if (idx !== -1) state.adminSubscriptions[idx] = payload.data;
-      })
-      .addCase(adminRemoveMember.rejected,  fail('admin'));
+      .addCase(adminUpdateSubscription.rejected, fail('admin'));
   },
 });
 
@@ -1055,29 +941,31 @@ export const {
   clearPendingOrder,
   clearTrialOrder,
   setSelectedPlan,
-  optimisticToggleAutoRenew, // ← ADD
+  optimisticToggleAutoRenew,
 } = subscriptionPlanSlice.actions;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SELECTORS
+//
+// FIX: ALL selectors use state.subscriptions (matches slice name above).
+//      Previous code used state.subscriptionPlan — wrong key, returned undefined.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const sel = (state) => state.subscriptionPlan;
+const sel = (state) => state.subscriptions; // FIX: was state.subscriptionPlan
 
 // ── Plans ──────────────────────────────────────────────────────────────────
-export const selectAllPlans      = (state) => sel(state).plans;
-export const selectFixedPlans    = (state) => sel(state).plans.filter(
+export const selectAllPlans   = (state) => sel(state).plans;
+export const selectFixedPlans = (state) => sel(state).plans.filter(
   (p) => p.planType === 'fixed' && p.isActive !== false
 );
-export const selectMyCustomPlans = (state) => sel(state).plans.filter(
-  (p) => p.planType === 'custom' && p.isActive !== false
+// FIX: reads from customPlans[] — separate array, not filtered from plans[]
+export const selectMyCustomPlans = (state) => sel(state).customPlans.filter(
+  (p) => p.isActive !== false
 );
-export const selectSelectedPlan  = (state) => sel(state).selectedPlan;
+export const selectSelectedPlan = (state) => sel(state).selectedPlan;
 
 // ── Custom plan builder ────────────────────────────────────────────────────
-// FIX: pricingData shape is { customPlanOptions, resolvedPricePreview, caps }
-// The page accesses pricingData.customPlanOptions — this is correct because
-// the slice stores payload.data which is exactly that shape.
+// customPlanPricing = { optionPricing, caps } — page uses pricingData.optionPricing
 export const selectCustomPlanPricing        = (state) => sel(state).customPlanPricing;
 export const selectCustomPlanPricingLoading = (state) => sel(state).loading.customPlanPricing;
 export const selectCustomPlanLoading        = (state) => sel(state).loading.customPlan;
@@ -1089,7 +977,6 @@ export const selectSubscriptionHistory = (state) => sel(state).subscriptionHisto
 export const selectPendingOrder        = (state) => sel(state).pendingOrder;
 export const selectTrialOrder          = (state) => sel(state).trialOrder;
 
-// Derived subscription status selectors
 export const selectMySubIsActive  = (state) => sel(state).mySubscription?.status === 'Active';
 export const selectMySubIsOnTrial = (state) => sel(state).mySubscription?.status === 'Trial';
 export const selectMySubHasAccess = (state) => {
@@ -1099,69 +986,56 @@ export const selectMySubHasAccess = (state) => {
   if (!sub.expiryDate) return false;
   return new Date(sub.expiryDate) > new Date();
 };
+export const selectMySubAutoRenew = (state) => sel(state).mySubscription?.autoRenew ?? false;
 
-// Current plan name helper (accounts for fixed vs custom plan naming)
 export const selectCurrentPlanName = (state) => {
   const sub = sel(state).mySubscription;
   if (!sub) return null;
   return sub.plan?.fixedTier || sub.plan?.name || sub.planName || null;
 };
 
-// ── Members ───────────────────────────────────────────────────────────────
-export const selectMembers = (state) => sel(state).members;
-
 // ── Trial ─────────────────────────────────────────────────────────────────
 export const selectTrialEligibility = (state) => sel(state).trialEligibility;
 export const selectTrialStatus      = (state) => sel(state).trialStatus;
-
-// Derived trial selectors
-export const selectIsTrialEligible = (state) => sel(state).trialEligibility?.eligible ?? false;
-export const selectIsOnActiveTrial = (state) => Boolean(sel(state).trialStatus?.activeTrial);
-export const selectTrialDaysLeft   = (state) => sel(state).trialStatus?.daysLeft ?? 0;
-
-// ── Usage ─────────────────────────────────────────────────────────────────
-export const selectMyUsage    = (state) => sel(state).myUsage;
-export const selectCronResult = (state) => sel(state).cronResult;
+export const selectIsTrialEligible  = (state) => sel(state).trialEligibility?.eligible ?? false;
+export const selectIsOnActiveTrial  = (state) => Boolean(sel(state).trialStatus?.activeTrial);
+export const selectTrialDaysLeft    = (state) => sel(state).trialStatus?.daysLeft ?? 0;
 
 // ── Admin ─────────────────────────────────────────────────────────────────
 export const selectAdminSubscriptions = (state) => sel(state).adminSubscriptions;
 export const selectAdminPlans         = (state) => sel(state).adminPlans;
 export const selectAdminTrials        = (state) => sel(state).adminTrials;
+export const selectCronResult         = (state) => sel(state).cronResult;
 
 // ── Pagination ────────────────────────────────────────────────────────────
 export const selectPagination        = (state) => sel(state).pagination;
 export const selectAdminPagination   = (state) => sel(state).adminPagination;
 export const selectHistoryPagination = (state) => sel(state).historyPagination;
 export const selectTrialPagination   = (state) => sel(state).trialPagination;
+export const selectMyHistory            = (state) => sel(state).subscriptionHistory;
+export const selectMyHistoryPagination  = (state) => sel(state).historyPagination;
 
 // ── Loading flags ─────────────────────────────────────────────────────────
-export const selectLoading                   = (state) => sel(state).loading;
-export const selectPlansLoading              = (state) => sel(state).loading.plans;
-export const selectMySubLoading              = (state) => sel(state).loading.mySubscription;
-export const selectPurchaseLoading           = (state) => sel(state).loading.purchase;
-export const selectVerifyLoading             = (state) => sel(state).loading.verify;
-export const selectUpgradeLoading            = (state) => sel(state).loading.upgrade;
-export const selectCancelLoading             = (state) => sel(state).loading.cancel;
-export const selectAutoRenewLoading          = (state) => sel(state).loading.autoRenew;
-export const selectAdminLoading              = (state) => sel(state).loading.admin;
-export const selectTrialLoading              = (state) => sel(state).loading.trial;
-export const selectTrialStatusLoading        = (state) => sel(state).loading.trial;
-export const selectTrialConvertLoading       = (state) => sel(state).loading.trialConvert;
-export const selectTrialVerifyConvertLoading = (state) => sel(state).loading.trialVerifyConvert;
-export const selectMembersLoading            = (state) => sel(state).loading.members;
-export const selectUsageLoading              = (state) => sel(state).loading.usage;
-export const selectCronLoading               = (state) => sel(state).loading.cron;
+// ── Loading flags ─────────────────────────────────────────────────────────
+export const selectLoading                   = (state) => sel(state)?.loading;
+export const selectPlansLoading              = (state) => sel(state)?.loading?.plans;
+export const selectMySubLoading              = (state) => sel(state)?.loading?.mySubscription ?? false; // Added optional chaining protection
+export const selectPurchaseLoading           = (state) => sel(state)?.loading?.purchase;
+export const selectVerifyLoading             = (state) => sel(state)?.loading?.verify;
+export const selectUpgradeLoading            = (state) => sel(state)?.loading?.upgrade;
+export const selectCancelLoading             = (state) => sel(state)?.loading?.cancel;
+export const selectAutoRenewLoading          = (state) => sel(state)?.loading?.autoRenew;
+export const selectToggleAutoRenewLoading    = (state) => sel(state)?.loading?.autoRenew; // alias
+export const selectMyHistoryLoading          = (state) => sel(state)?.loading?.history;
+export const selectAdminLoading              = (state) => sel(state)?.loading?.admin;
+export const selectTrialLoading              = (state) => sel(state)?.loading?.trial;
+export const selectTrialStatusLoading        = (state) => sel(state)?.loading?.trial;      // alias
+export const selectTrialConvertLoading       = (state) => sel(state)?.loading?.trialConvert;
+export const selectTrialVerifyConvertLoading = (state) => sel(state)?.loading?.trialVerifyConvert;
+export const selectCronLoading               = (state) => sel(state)?.loading?.cron;
 
 // ── Errors ────────────────────────────────────────────────────────────────
 export const selectSubscriptionError = (state) => sel(state).error;
 export const selectCustomPlanErrorMsg = (state) => sel(state).customPlanError;
 
-
-// WHERE: selectors section, add:
-export const selectMyHistory            = (state) => sel(state).subscriptionHistory;
-export const selectMyHistoryPagination  = (state) => sel(state).historyPagination;
-export const selectMyHistoryLoading     = (state) => sel(state).loading.history;
-export const selectToggleAutoRenewLoading = (state) => sel(state).loading.autoRenew;
-// (selectAutoRenewLoading exists but page imports selectToggleAutoRenewLoading)// WHERE: selectors section
-export const selectMySubAutoRenew = (state) => sel(state).mySubscription?.autoRenew ?? false;
 export default subscriptionPlanSlice.reducer;

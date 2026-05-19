@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -9,7 +9,7 @@ import {
   BadgeCheck, RefreshCw, X, Clock, ChevronDown,
   Gift, CreditCard, AlertCircle, ArrowRight,
   Zap, Activity, Calendar, TrendingUp, Info,
-  BarChart3,
+  BarChart3, Sparkles, HelpCircle, CheckCircle2, ShoppingBag
 } from "lucide-react";
 
 import {
@@ -42,67 +42,64 @@ import {
 } from "@/store/slices/subscriptionSlice";
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  DESIGN TOKENS
+// DESIGN THEME MAPPER
 // ─────────────────────────────────────────────────────────────────────────────
-const TIER = {
+const TIER_THEMES = {
   "Basic Care": {
-    gradient:  "linear-gradient(135deg,#3b82f6 0%,#1d4ed8 100%)",
-    accent:    "#3b82f6",
-    glow:      "rgba(59,130,246,0.35)",
-    icon:      Shield,
-    patternId: "zigzag",
+    gradient: "linear-gradient(135deg, oklch(54% 0.19 242) 0%, oklch(48% 0.18 228) 100%)",
+    patternId: "grid",
+    tagline: "Essential protection covering fundamental wellness checks."
   },
   "Standard Care": {
-    gradient:  "linear-gradient(135deg,#06b6d4 0%,#0284c7 100%)",
-    accent:    "#06b6d4",
-    glow:      "rgba(6,182,212,0.35)",
-    icon:      Activity,
-    patternId: "grid",
+    gradient: "linear-gradient(135deg, oklch(48% 0.18 228) 0%, oklch(40% 0.20 245) 100%)",
+    patternId: "zigzag",
+    tagline: "Balanced everyday healthcare protection for individuals."
   },
   "Premium Care": {
-    gradient:  "linear-gradient(135deg,#8b5cf6 0%,#6d28d9 100%)",
-    accent:    "#8b5cf6",
-    glow:      "rgba(139,92,246,0.4)",
-    icon:      Crown,
+    gradient: "linear-gradient(135deg, oklch(46% 0.26 272) 0%, oklch(55% 0.24 285) 100%)",
     patternId: "diamonds",
+    tagline: "Elite unrestricted direct clinical care access package."
   },
   "Family Care": {
-    gradient:  "linear-gradient(135deg,#10b981 0%,#059669 100%)",
-    accent:    "#10b981",
-    glow:      "rgba(16,185,129,0.35)",
-    icon:      Users,
+    gradient: "linear-gradient(135deg, oklch(50% 0.22 158) 0%, oklch(40% 0.18 156) 100%)",
     patternId: "circles",
+    tagline: "Multi-member combined dashboard clinical group mapping."
   },
   "Pregnant Women Care": {
-    gradient:  "linear-gradient(135deg,#f59e0b 0%,#d97706 100%)",
-    accent:    "#f59e0b",
-    glow:      "rgba(245,158,11,0.35)",
-    icon:      HeartPulse,
+    gradient: "linear-gradient(135deg, oklch(58% 0.20 12) 0%, oklch(62% 0.16 345) 100%)",
     patternId: "hearts",
+    tagline: "Specialized critical monitoring path tracking down to delivery."
   },
   "NRI's Care": {
-    gradient:  "linear-gradient(135deg,#ef4444 0%,#b91c1c 100%)",
-    accent:    "#ef4444",
-    glow:      "rgba(239,68,68,0.35)",
-    icon:      Globe,
+    gradient: "linear-gradient(135deg, oklch(48% 0.24 18) 0%, oklch(58% 0.18 30) 100%)",
     patternId: "grid",
+    tagline: "International priority remote relative clinical mapping."
   },
 };
 
-const CUSTOM_TIER = {
-  gradient:  "linear-gradient(135deg,#0ea5e9 0%,#7c3aed 100%)",
-  accent:    "#0ea5e9",
-  glow:      "rgba(14,165,233,0.35)",
-  icon:      Layers,
-  patternId: "waves",
+// Icon map separate — used by getTierTheme callers
+const TIER_ICONS = {
+  "Basic Care": Shield,
+  "Standard Care": Activity,
+  "Premium Care": Crown,
+  "Family Care": Users,
+  "Pregnant Women Care": HeartPulse,
+  "NRI's Care": Globe,
 };
 
-const getTier = (name) => TIER[name] || CUSTOM_TIER;
+const CUSTOM_PLAN_THEME = {
+  gradient: "linear-gradient(135deg, oklch(56% 0.18 215) 0%, oklch(55% 0.24 285) 100%)",
+  patternId: "waves",
+  tagline: "Tailored modular health block blueprint created by you."
+};
+
+const getTierTheme = (name) => TIER_THEMES[name] || CUSTOM_PLAN_THEME;
+const getTierIcon  = (name) => TIER_ICONS[name]  || Layers;
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SVG PATTERNS
+// VECTOR BACKGROUND PATTERNS
 // ─────────────────────────────────────────────────────────────────────────────
-const PATTERNS = {
+const SVG_BACKGROUND_PATTERNS = {
   zigzag:   (id) => <pattern id={id} x="0" y="0" width="24" height="12" patternUnits="userSpaceOnUse"><polyline points="0,12 6,0 12,12 18,0 24,12" fill="none" stroke="white" strokeWidth="1.2" strokeLinecap="round" /></pattern>,
   diamonds: (id) => <pattern id={id} x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse"><polygon points="10,1 19,10 10,19 1,10" fill="none" stroke="white" strokeWidth="1" /></pattern>,
   circles:  (id) => <pattern id={id} x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="10" cy="10" r="7" fill="none" stroke="white" strokeWidth="0.9" /></pattern>,
@@ -111,73 +108,61 @@ const PATTERNS = {
   waves:    (id) => <pattern id={id} x="0" y="0" width="32" height="16" patternUnits="userSpaceOnUse"><path d="M0,8 Q8,0 16,8 Q24,16 32,8" fill="none" stroke="white" strokeWidth="1" strokeLinecap="round" /></pattern>,
 };
 
-function PlanPattern({ patternId, planName }) {
-  const uid = `mysub-pat-${patternId}-${(planName || "").replace(/[\s']/g, "")}`;
-  const PatternFn = PATTERNS[patternId] || PATTERNS.grid;
+function StructuralPattern({ id, name }) {
+  const uniqueId = useMemo(() => `pattern-render-${id}-${(name || "").replace(/[\s']/g, "-").toLowerCase()}`, [id, name]);
+  const RenderEngine = SVG_BACKGROUND_PATTERNS[id] || SVG_BACKGROUND_PATTERNS.grid;
   return (
-    <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ opacity: 0.1 }}>
+    <div className="absolute inset-0 opacity-[0.06] pointer-events-none select-none mix-blend-overlay">
       <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
-        <defs>{PatternFn(uid)}</defs>
-        <rect width="100%" height="100%" fill={`url(#${uid})`} />
+        <defs>{RenderEngine(uniqueId)}</defs>
+        <rect width="100%" height="100%" fill={`url(#${uniqueId})`} />
       </svg>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  RAZORPAY LOADER
+// UTILITY: RAZORPAY GATEWAY LOADER
 // ─────────────────────────────────────────────────────────────────────────────
-function loadRazorpay() {
+function callRazorpayGateway() {
   return new Promise((resolve) => {
     if (typeof window === "undefined") { resolve(false); return; }
     if (window.Razorpay) { resolve(true); return; }
-    const script = document.createElement("script");
-    script.src = "https://checkout.razorpay.com/v1/checkout.js";
-    script.onload  = () => resolve(true);
-    script.onerror = () => resolve(false);
-    document.body.appendChild(script);
+    const paymentScript = document.createElement("script");
+    paymentScript.src = "https://checkout.razorpay.com/v1/checkout.js";
+    paymentScript.onload = () => resolve(true);
+    paymentScript.onerror = () => resolve(false);
+    document.body.appendChild(paymentScript);
   });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  CONFIRM DIALOG  (replaces window.confirm)
+// CONFIRMATION DIALOG MODAL
 // ─────────────────────────────────────────────────────────────────────────────
-function ConfirmDialog({ open, title, message, confirmLabel = "Confirm", cancelLabel = "Cancel", onConfirm, onCancel, accent = "#ef4444" }) {
-  if (!open) return null;
+function PremiumConfirmModal({ isOpen, title, text, actionText = "Confirm", cancelText = "Dismiss", onProceed, onDismiss, variant = "primary" }) {
+  if (!isOpen) return null;
+
+  // variant: "primary" | "error" | "warning"
+  const iconBg    = variant === "error" ? "bg-error/10"   : variant === "warning" ? "bg-warning/10"   : "bg-primary/10";
+  const iconColor = variant === "error" ? "text-error"    : variant === "warning" ? "text-warning"    : "text-primary";
+  const btnClass  = variant === "error" ? "btn btn-error" : variant === "warning" ? "btn btn-warning" : "btn btn-primary";
+
   return (
-    <div
-      className="fixed inset-0 z-[500] flex items-center justify-center p-4"
-      role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-msg"
-    >
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onCancel} aria-hidden="true" />
-      <div className="relative bg-base-100 border border-base-300 rounded-2xl p-6 w-full max-w-sm shadow-2xl space-y-4">
-        <div className="flex items-start gap-3">
-          <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: `${accent}18` }}
-            aria-hidden="true"
-          >
-            <AlertCircle size={18} style={{ color: accent }} />
+    <div className="fixed inset-0 z-[600] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-base-content/40 backdrop-blur-md" onClick={onDismiss} />
+      <div className="relative   bg-base-200 border border-base-300 w-full max-w-md rounded-xl p-6 shadow-depth-lg space-y-5 animate-in fade-in zoom-in-95 duration-200">
+        <div className="flex items-start gap-4">
+          <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${iconBg}`}>
+            <AlertCircle size={22} className={iconColor} />
           </div>
-          <div>
-            <p id="confirm-title" className="text-sm font-black text-base-content">{title}</p>
-            <p id="confirm-msg"   className="text-xs mt-0.5 text-base-content/55">{message}</p>
+          <div className="space-y-1 flex-1 min-w-0">
+            <h3 className="text-lg font-black tracking-tight text-base-content">{title}</h3>
+            <p className="text-sm text-base-content/60 leading-relaxed font-normal">{text}</p>
           </div>
         </div>
-        <div className="flex gap-2 pt-1">
-          <button
-            onClick={onCancel}
-            className="flex-1 py-2.5 rounded-xl text-xs font-black bg-base-300 text-base-content"
-          >
-            {cancelLabel}
-          </button>
-          <button
-            onClick={onConfirm}
-            className="flex-1 py-2.5 rounded-xl text-xs font-black text-white"
-            style={{ background: `linear-gradient(135deg, ${accent}, color-mix(in srgb, ${accent}, #000 20%))` }}
-          >
-            {confirmLabel}
-          </button>
+        <div className="flex gap-3 justify-end pt-2">
+          <button onClick={onDismiss} className="btn btn-ghost px-4 py-2.5 rounded-lg text-sm font-semibold">{cancelText}</button>
+          <button onClick={onProceed} className={`${btnClass} px-5 py-2.5 rounded-lg text-sm font-bold`}>{actionText}</button>
         </div>
       </div>
     </div>
@@ -185,286 +170,167 @@ function ConfirmDialog({ open, title, message, confirmLabel = "Confirm", cancelL
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  STAT CHIP
+// METRIC FIELD
 // ─────────────────────────────────────────────────────────────────────────────
-function StatChip({ icon: Icon, label, value, accent, warn = false }) {
+function StructuralMetricField({ icon: MetricIcon, value, caption, detail, isAlert = false }) {
   return (
-    <div className="flex flex-col items-center py-4 px-2 gap-1">
-      <Icon size={14} style={{ color: warn ? "#ef4444" : accent }} aria-hidden="true" />
-      <span
-        className="text-base font-black leading-none"
-        style={{ color: warn ? "#ef4444" : "var(--base-content)" }}
-      >
-        {value}
-      </span>
-      <span className="text-[9px] font-bold uppercase tracking-wider" style={{ opacity: 0.4 }}>
-        {label}
-      </span>
+    <div className="flex flex-col p-4 justify-between bg-base-100 border border-base-300 rounded-xl space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-bold uppercase tracking-wider text-base-content/40">{caption}</span>
+        <MetricIcon size={16} className={isAlert ? "text-error" : "text-primary"} />
+      </div>
+      <div className="space-y-0.5">
+        <div className="text-2xl font-black tracking-tight text-base-content">{value}</div>
+        <p className="text-[11px] font-medium text-base-content/50">{detail}</p>
+      </div>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ACTIVE PLAN HERO CARD
+// ACTIVE PLAN HERO CARD
 // ─────────────────────────────────────────────────────────────────────────────
-function ActivePlanHeroCard({ sub, t, TIcon, daysLeft, isExpiring, progress, expiry }) {
-  const name    = sub.plan?.fixedTier || sub.plan?.name || "Unknown Plan";
-  const monthly = sub.plan?.pricing?.monthly ?? 0;
-  const isCustom = sub.planType === "custom";
+function LiveSubscriptionHeroCard({ activeSub, theme, IconEngine, residualDays, thresholdReached, progressRate, formattedExpiry }) {
+  const canonicalName        = activeSub.plan?.fixedTier || activeSub.plan?.name || "Active Blueprint";
+  const structuralMonthlyFee = activeSub.plan?.pricing?.monthly ?? 0;
+  const architectureMode     = activeSub.planType === "custom";
 
   return (
-    <div
-      className="relative overflow-hidden rounded-2xl"
-      style={{
-        background:  "var(--base-100)",
-        border:      `2px solid ${t.accent}`,
-        boxShadow:   `0 12px 48px ${t.glow}`,
-      }}
-    >
-      {/* Gradient Header */}
-      <div className="relative overflow-hidden" style={{ background: t.gradient, minHeight: 160 }}>
-        <PlanPattern patternId={t.patternId} planName={name} />
+    <div className="card overflow-hidden border border-base-300 shadow-depth   relative">
+      {/* Banner — gradient is dynamic/theme-based, unavoidable inline */}
+      <div className="relative p-6 text-white overflow-hidden" style={{ background: theme.gradient }}>
+        <StructuralPattern id={theme.patternId} name={canonicalName} />
 
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ duration: 50, repeat: Infinity, ease: "linear" }}
-          className="absolute -right-12 -top-12 w-44 h-44 rounded-full pointer-events-none"
-          style={{ border: "28px solid rgba(255,255,255,0.07)" }}
-        />
-        <motion.div
-          animate={{ rotate: -360 }}
-          transition={{ duration: 32, repeat: Infinity, ease: "linear" }}
-          className="absolute -right-4 top-8 w-20 h-20 rounded-full pointer-events-none"
-          style={{ border: "12px solid rgba(255,255,255,0.06)" }}
-        />
-        <div
-          className="absolute bottom-0 left-0 right-0 h-16 pointer-events-none"
-          style={{ background: "linear-gradient(to top, rgba(0,0,0,0.15), transparent)" }}
-        />
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div className="space-y-3 flex-1">
+            <div className="flex flex-wrap gap-2 items-center">
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider  /20 backdrop-blur-md text-white border border-white/10">
+                {activeSub.status === "Trial" ? <Gift size={11} /> : <BadgeCheck size={11} />}
+                {activeSub.status === "Trial" ? "Evaluation Cycle" : "Authorized Coverage"}
+              </span>
 
-        <div className="relative z-10 p-6">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex-1 min-w-0">
-              {/* Status badges */}
-              <div className="flex items-center gap-2 mb-3 flex-wrap">
-                <span
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-black"
-                  style={{
-                    background:    sub.status === "Trial" ? "rgba(245,158,11,.3)" : "rgba(255,255,255,0.2)",
-                    color:         "white",
-                    backdropFilter:"blur(4px)",
-                  }}
-                >
-                  {sub.status === "Trial" ? <Gift size={10} aria-hidden="true" /> : <BadgeCheck size={10} aria-hidden="true" />}
-                  {sub.status === "Trial" ? "Free Trial Active" : "Active Subscription"}
+              {architectureMode && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-black/10 backdrop-blur-md text-white border border-white/5">
+                  <Layers size={11} /> Dynamic Custom
                 </span>
+              )}
 
-                {isCustom && (
-                  <span
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black"
-                    style={{ background: "rgba(255,255,255,0.15)", color: "white" }}
-                  >
-                    <Layers size={9} aria-hidden="true" /> Custom Plan
-                  </span>
-                )}
-
-                {sub.autoRenew && (
-                  <span
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black"
-                    style={{ background: "rgba(255,255,255,0.15)", color: "white" }}
-                  >
-                    <RefreshCw size={9} aria-hidden="true" /> Auto-renew On
-                  </span>
-                )}
-              </div>
-
-              {/* Plan name */}
-              <div className="flex items-center gap-3 mb-1">
-                <div
-                  className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-                  style={{ background: "rgba(255,255,255,0.2)", backdropFilter: "blur(4px)" }}
-                  aria-hidden="true"
-                >
-                  <TIcon size={18} className="text-white" />
-                </div>
-                <div>
-                  <h2 className="text-2xl font-black text-white leading-tight">{name}</h2>
-                  <p className="text-white/55 text-xs mt-0.5">
-                    {sub.plan?.membership?.maxMembers === 1
-                      ? "Individual plan"
-                      : `Up to ${sub.plan?.membership?.maxMembers} members`}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Pricing */}
-            <div className="text-right flex-shrink-0">
-              <p className="text-[9px] text-white/40 uppercase font-bold mb-0.5">Monthly</p>
-              <p className="text-3xl font-black text-white leading-none">₹{monthly}</p>
-              {sub.status === "Trial" && (
-                <p className="text-[10px] text-white/60 mt-1 font-bold">Free for now</p>
+              {activeSub.autoRenew && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider  /10 text-white">
+                  <RefreshCw size={10} /> Auto-Renew Enabled
+                </span>
               )}
             </div>
-          </div>
-        </div>
-      </div>
 
-      {/* Stats row */}
-      <div className="grid grid-cols-3 divide-x" style={{ borderBottom: "1px solid var(--base-300)" }}>
-        <StatChip
-          icon={Clock}
-          label="Days Left"
-          value={daysLeft}
-          accent={t.accent}
-          warn={isExpiring}
-        />
-        <StatChip
-          icon={Users}
-          label="Members"
-          value={sub.plan?.membership?.maxMembers ?? 1}
-          accent={t.accent}
-        />
-        <StatChip
-          icon={Calendar}
-          label="Renews"
-          value={
-            expiry
-              ? expiry.toLocaleDateString("en-IN", { month: "short", day: "numeric" })
-              : "—"
-          }
-          accent={t.accent}
-        />
-      </div>
-
-      {/* Progress bar */}
-      <div className="px-6 pt-5 pb-2">
-        <div
-          className="flex items-center justify-between text-[10px] font-bold mb-2"
-          style={{ opacity: 0.5 }}
-        >
-          <span className="flex items-center gap-1">
-            <TrendingUp size={10} aria-hidden="true" /> Billing period
-          </span>
-          <span>{expiry ? expiry.toLocaleDateString("en-IN") : "—"}</span>
-        </div>
-        <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--base-300)" }}>
-          <motion.div
-            initial={{ width: 0 }}
-            animate={{ width: `${progress}%` }}
-            transition={{ duration: 1.4, ease: "easeOut" }}
-            className="h-full rounded-full"
-            style={{ background: isExpiring ? "#ef4444" : t.gradient }}
-          />
-        </div>
-        {isExpiring && (
-          <motion.p
-            animate={{ opacity: [1, 0.5, 1] }}
-            transition={{ duration: 1.5, repeat: Infinity }}
-            className="text-[10px] font-bold mt-2 flex items-center gap-1"
-            style={{ color: "#ef4444" }}
-            role="alert"
-            aria-live="polite"
-          >
-            <AlertCircle size={10} aria-hidden="true" /> Expiring soon — renew to avoid interruption
-          </motion.p>
-        )}
-      </div>
-
-      {/* Benefits preview — fixed vs custom */}
-      <div className="px-6 py-4">
-        <p className="text-[10px] font-black uppercase tracking-widest mb-3" style={{ opacity: 0.4 }}>
-          Your Benefits
-        </p>
-
-        {isCustom && sub.plan?.customOptions?.length > 0 ? (
-          /* Custom plan: show option blocks */
-          <div className="space-y-2">
-            {sub.plan.customOptions
-              .filter((o) => o.optionKey === "transport" ? o.quantity >= 0 : o.quantity > 0)
-              .map((opt, i) => (
-                <motion.div
-                  key={i}
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.1 + i * 0.05 }}
-                  className="flex items-center justify-between p-2.5 rounded-xl"
-                  style={{ background: `${t.accent}08`, border: `1px solid ${t.accent}18` }}
-                >
-                  <span className="text-xs font-semibold text-base-content/70">{opt.label}</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-base-content/50">×{opt.quantity}</span>
-                    <span className="text-xs font-black" style={{ color: t.accent }}>
-                      ₹{opt.lineTotal?.toFixed(0) ?? 0}
-                    </span>
-                  </div>
-                </motion.div>
-              ))}
-            <div
-              className="flex items-center justify-between pt-2 mt-1"
-              style={{ borderTop: `1px solid ${t.accent}25` }}
-            >
-              <span className="text-xs font-black text-base-content/60">Monthly total</span>
-              <span className="text-sm font-black" style={{ color: t.accent }}>
-                ₹{sub.plan?.pricing?.monthly ?? 0}/mo
-              </span>
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl  /15 backdrop-blur-md border border-white/10 flex items-center justify-center flex-shrink-0">
+                <IconEngine size={24} className="text-white" />
+              </div>
+              <div className="space-y-0.5">
+                <h2 className="text-2xl font-black tracking-tight text-white leading-none">{canonicalName}</h2>
+                <p className="text-white/70 text-xs font-medium">{theme.tagline}</p>
+              </div>
             </div>
           </div>
-        ) : (
-          /* Fixed plan: standard benefits grid */
-          <div className="grid grid-cols-2 gap-2">
-            {[
-              {
-                icon:  Stethoscope,
-                label: "Consultations",
-                value: sub.plan?.consultations?.freePerMonth === -1
-                  ? "Unlimited"
-                  : `${sub.plan?.consultations?.freePerMonth ?? 0}/mo`,
-              },
-              {
-                icon:  Pill,
-                label: "Pharmacy",
-                value: `Up to ${sub.plan?.pharmacy?.discountMax ?? 0}% off`,
-              },
-              {
-                icon:  Microscope,
-                label: "Diagnostics",
-                value: `${sub.plan?.diagnostics?.discountPercent ?? 0}% off`,
-              },
-              {
-                icon:  Truck,
-                label: "Transport",
-                value: sub.plan?.transport?.isApplicable
-                  ? `₹${sub.plan?.transport?.ratePerKm ?? 0}/km`
-                  : "N/A",
-              },
-              {
-                icon:  UserCheck,
-                label: "Care Assistant",
-                value: sub.plan?.careAssistant?.included ? "Included" : "Not included",
-              },
-              {
-                icon:  Home,
-                label: "Home Lab",
-                value: sub.plan?.diagnostics?.homeSampleCollection ? "Available" : "N/A",
-              },
-            ].map((b, i) => (
-              <motion.div
-                key={i}
-                initial={{ opacity: 0, x: -8 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.1 + i * 0.05 }}
-                className="flex items-center gap-2 p-2.5 rounded-xl"
-                style={{ background: `${t.accent}08`, border: `1px solid ${t.accent}18` }}
-              >
-                <b.icon size={12} style={{ color: t.accent, flexShrink: 0 }} aria-hidden="true" />
-                <div className="min-w-0">
-                  <p className="text-[9px] font-bold uppercase tracking-wide" style={{ opacity: 0.45 }}>
-                    {b.label}
-                  </p>
-                  <p className="text-[11px] font-black truncate">{b.value}</p>
+
+          <div className="bg-black/10 backdrop-blur-md border border-white/10 rounded-xl p-4 text-left md:text-right md:self-center min-w-[120px]">
+            <span className="text-[10px] text-white/50 uppercase font-bold block tracking-widest">Rate Volume</span>
+            <div className="text-3xl font-black tracking-tight text-white leading-none mt-1">₹{structuralMonthlyFee}</div>
+            <span className="text-[10px] text-white/60 block mt-1 font-medium">
+              {activeSub.status === "Trial" ? "Zero Cost Stage" : "Per Billing Period"}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Metrics */}
+      <div className="p-6 space-y-6 bg-base-100">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <StructuralMetricField
+            icon={Clock}
+            caption="Access Window"
+            value={`${residualDays} Days`}
+            detail={thresholdReached ? "Action Recommended" : "Authorized Coverage"}
+            isAlert={thresholdReached}
+          />
+          <StructuralMetricField
+            icon={Users}
+            caption="Account Allocation"
+            value={activeSub.plan?.membership?.maxMembers ?? 1}
+            detail={`Primary + ${Math.max(0, (activeSub.plan?.membership?.maxMembers ?? 1) - 1)} Multi-Slots`}
+          />
+          <StructuralMetricField
+            icon={Calendar}
+            caption="Termination Axis"
+            value={formattedExpiry}
+            detail="Automated Evaluation Point"
+          />
+        </div>
+
+        {/* Progress bar */}
+        <div className="space-y-2">
+          <div className="flex justify-between items-center text-xs">
+            <span className="text-base-content/50 font-medium flex items-center gap-1">
+              <TrendingUp size={12} /> Temporal Consumption Path
+            </span>
+            <span className="font-bold text-base-content">{formattedExpiry} Deadline</span>
+          </div>
+          <div className="progress-bar">
+            <motion.div
+              initial={{ width: 0 }}
+              animate={{ width: `${progressRate}%` }}
+              transition={{ duration: 1.2, ease: "easeOut" }}
+              className={`progress-bar-fill ${thresholdReached ? "bg-error" : ""}`}
+              /* gradient fill only when not alert — gradient is theme-dynamic */
+              style={thresholdReached ? {} : { background: theme.gradient }}
+            />
+          </div>
+          {thresholdReached && (
+            <div className="alert alert-error p-3 mt-2 flex items-center gap-2">
+              <AlertCircle size={14} className="text-error" />
+              <p className="text-xs font-semibold text-error">Warning: Expiry sequence threshold active. Verify renewal channels.</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Benefits */}
+      <div className="p-6 border-t border-base-300   bg-base-200">
+        <h4 className="text-xs font-black tracking-widest text-base-content/40 uppercase mb-4">Contractual Care Benefits Blueprint</h4>
+
+        {architectureMode && activeSub.plan?.customOptions?.length > 0 ? (
+          <div className="space-y-2">
+            {activeSub.plan.customOptions
+              .filter((opt) => opt.optionKey === "transport" ? opt.quantity >= 0 : opt.quantity > 0)
+              .map((block, index) => (
+                <div key={index} className="flex items-center justify-between p-3 rounded-lg bg-base-200 border border-base-300">
+                  <div className="space-y-0.5">
+                    <span className="text-xs font-bold text-base-content">{block.label}</span>
+                    <p className="text-[10px] text-base-content/40 font-medium">Provision Unit Volume: ×{block.quantity}</p>
+                  </div>
+                  <span className="text-xs font-black text-primary">₹{block.lineTotal?.toFixed(0) ?? 0}</span>
                 </div>
-              </motion.div>
+              ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {[
+              { icon: Stethoscope, tag: "Clinical Consultation",          text: activeSub.plan?.consultations?.freePerMonth === -1 ? "Unlimited Free Access" : `${activeSub.plan?.consultations?.freePerMonth ?? 0} Allocations / mo` },
+              { icon: Pill,        tag: "Pharmacy Compound Hub",          text: `Up to ${activeSub.plan?.pharmacy?.discountMax ?? 0}% Flat Pricing Cap` },
+              { icon: Microscope,  tag: "Diagnostics Diagnostics",        text: `${activeSub.plan?.diagnostics?.discountPercent ?? 0}% Network Discount Rate` },
+              { icon: Truck,       tag: "Logistics Transport",            text: activeSub.plan?.transport?.isApplicable ? `Allocated Base Rate ₹${activeSub.plan?.transport?.ratePerKm ?? 0}/km` : "Direct Charge Protocol" },
+              { icon: UserCheck,   tag: "Assigned Care Executive",        text: activeSub.plan?.careAssistant?.included ? "Dedicated Personnel Mapped" : "Standard Variable Request" },
+              { icon: Home,        tag: "Domiciliary Diagnostic Collection", text: activeSub.plan?.diagnostics?.homeSampleCollection ? "Home Access Vector Active" : "Clinical Site Operations Only" },
+            ].map((benefit, idx) => (
+              <div key={idx} className="flex items-start gap-3 p-3 rounded-lg bg-base-200 border border-base-300">
+                <div className="p-1.5 rounded-md   bg-base-200 border border-base-300 flex-shrink-0 text-primary">
+                  <benefit.icon size={14} />
+                </div>
+                <div className="space-y-0.5 min-w-0">
+                  <span className="text-[11px] font-bold block text-base-content/40 uppercase tracking-wide">{benefit.tag}</span>
+                  <p className="text-xs font-black text-base-content truncate">{benefit.text}</p>
+                </div>
+              </div>
             ))}
           </div>
         )}
@@ -474,311 +340,60 @@ function ActivePlanHeroCard({ sub, t, TIcon, daysLeft, isExpiring, progress, exp
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ACTION BUTTONS PANEL
+// USAGE TRACKER
 // ─────────────────────────────────────────────────────────────────────────────
-function ActionPanel({
-  sub, t,
-  onToggleAutoRenew, onCancel, onConvertTrial,
-  cancelLoading, toggleLoading, trialConvertLoading,
-}) {
-  return (
-    <div className="space-y-3">
-      {/* Convert trial CTA */}
-      {sub.status === "Trial" && (
-        <motion.button
-          whileHover={{ scale: 1.02 }}
-          whileTap={{ scale: 0.98 }}
-          onClick={onConvertTrial}
-          disabled={trialConvertLoading}
-          className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl text-sm font-black text-white relative overflow-hidden"
-          style={{ background: t.gradient, boxShadow: `0 6px 24px ${t.glow}` }}
-          aria-label={`Convert trial to paid — ₹${sub.plan?.pricing?.monthly ?? 0}/month`}
-          aria-busy={trialConvertLoading}
-        >
-          <motion.div
-            animate={{ x: ["-100%", "200%"] }}
-            transition={{ duration: 2, repeat: Infinity, repeatDelay: 1.5 }}
-            className="absolute inset-y-0 w-1/3 pointer-events-none"
-            style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent)" }}
-            aria-hidden="true"
-          />
-          {trialConvertLoading
-            ? <RefreshCw size={15} className="animate-spin" aria-hidden="true" />
-            : <CreditCard size={15} aria-hidden="true" />
-          }
-          Convert to Paid — ₹{sub.plan?.pricing?.monthly ?? 0}/month
-        </motion.button>
-      )}
+function LiveConsumptionTracker({ subscriptionState }) {
+  const currentUsageMatrix   = subscriptionState.currentMonthUsage;
+  const dynamicLimits        = subscriptionState.limits;
+  if (!dynamicLimits) return null;
 
-      {/* Auto-renew toggle */}
-      <button
-        onClick={onToggleAutoRenew}
-        disabled={toggleLoading}
-        className="w-full flex items-center justify-between gap-3 px-5 py-4 rounded-2xl text-sm font-bold transition-all"
-        style={{
-          background: sub.autoRenew ? `${t.accent}10` : "var(--base-200)",
-          border:     sub.autoRenew ? `1.5px solid ${t.accent}35` : "1.5px solid var(--base-300)",
-          color:      sub.autoRenew ? t.accent : "var(--base-content)",
-        }}
-        aria-pressed={sub.autoRenew}
-        aria-label={`Auto-renew is ${sub.autoRenew ? "on" : "off"}. Click to toggle.`}
-        aria-busy={toggleLoading}
-      >
-        <div className="flex items-center gap-3">
-          {toggleLoading
-            ? <RefreshCw size={16} className="animate-spin" aria-hidden="true" />
-            : <RefreshCw size={16} style={{ color: sub.autoRenew ? t.accent : "inherit" }} aria-hidden="true" />
-          }
-          <div className="text-left">
-            <p className="text-sm font-black">Auto-Renew</p>
-            <p className="text-[10px] font-semibold" style={{ opacity: 0.5 }}>
-              {sub.autoRenew
-                ? "Your plan renews automatically"
-                : "Your plan won't auto-renew"}
-            </p>
-          </div>
-        </div>
-        {/* Toggle pill */}
-        <div
-          className="relative rounded-full flex-shrink-0 transition-colors duration-300"
-          style={{ width: 48, height: 26, background: sub.autoRenew ? t.accent : "var(--base-300)" }}
-          role="presentation"
-          aria-hidden="true"
-        >
-          <motion.div
-            animate={{ x: sub.autoRenew ? 24 : 2 }}
-            transition={{ duration: 0.25, type: "spring", stiffness: 400, damping: 25 }}
-            className="absolute top-[3px] w-5 h-5 rounded-full shadow-md"
-            style={{ background: "white" }}
-          />
-        </div>
-      </button>
+  const operationalUsageVector = [
+    { label: "Clinical Consultations",       consumed: currentUsageMatrix?.consultationsUsed ?? 0,    ceiling: dynamicLimits.consultationsPerMonth ?? 0,       icon: Stethoscope },
+    { label: "Laboratory Diagnostic Tests",  consumed: currentUsageMatrix?.labTestsUsed ?? 0,          ceiling: dynamicLimits.labTestsPerMonth ?? 0,             icon: Microscope },
+    { label: "Emergency Logistics Transports",consumed: currentUsageMatrix?.transportRidesUsed ?? 0,   ceiling: dynamicLimits.transportRidesPerMonth ?? null,    icon: Truck },
+    { label: "Assigned Home Care Visits",    consumed: currentUsageMatrix?.careAssistantVisitsUsed ?? 0,ceiling: dynamicLimits.careAssistantVisitsPerMonth ?? null,icon: UserCheck },
+  ].filter((item) => item.ceiling !== null && item.ceiling > 0);
 
-      {/* Cancel */}
-      <button
-        onClick={onCancel}
-        disabled={cancelLoading}
-        className="w-full flex items-center justify-center gap-2 px-5 py-3.5 rounded-2xl text-sm font-bold transition-all disabled:opacity-60"
-        style={{
-          background: "rgba(239,68,68,.06)",
-          color:      "#ef4444",
-          border:     "1.5px solid rgba(239,68,68,.2)",
-        }}
-        aria-label="Cancel subscription"
-        aria-busy={cancelLoading}
-      >
-        {cancelLoading
-          ? <RefreshCw size={14} className="animate-spin" aria-hidden="true" />
-          : <X size={14} aria-hidden="true" />
-        }
-        Cancel Subscription
-      </button>
-
-      <p className="text-[10px] font-semibold text-center" style={{ opacity: 0.35 }}>
-        <Info size={9} className="inline mr-1" aria-hidden="true" />
-        You&apos;ll retain access until{" "}
-        {sub.expiryDate
-          ? new Date(sub.expiryDate).toLocaleDateString("en-IN")
-          : "—"}
-      </p>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  SUBSCRIPTION HISTORY LIST
-// ─────────────────────────────────────────────────────────────────────────────
-function SubscriptionHistory({ history, pagination, loading, onPageChange }) {
-  if (loading && history.length === 0) {
-    return (
-      <div className="flex justify-center py-8" role="status" aria-label="Loading history">
-        <RefreshCw size={18} className="animate-spin" style={{ opacity: 0.35 }} aria-hidden="true" />
-      </div>
-    );
-  }
-
-  if (history.length === 0) {
-    return (
-      <p className="text-center text-xs font-semibold py-6" style={{ opacity: 0.4 }}>
-        No history yet
-      </p>
-    );
-  }
-
-  const STATUS_COLORS = {
-    Active:    "#10b981",
-    Trial:     "#f59e0b",
-    Cancelled: "#6b7280",
-    Expired:   "#ef4444",
-    Paused:    "#8b5cf6",
-  };
+  if (!operationalUsageVector.length) return null;
 
   return (
-    <div className="space-y-2">
-      {history.map((h, i) => {
-        const name        = h.plan?.fixedTier || h.plan?.name || "Plan";
-        const t           = getTier(name);
-        const statusColor = STATUS_COLORS[h.status] || "#6b7280";
-        const isCustom    = h.planType === "custom";
-        return (
-          <motion.div
-            key={h._id || i}
-            initial={{ opacity: 0, x: -12 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: i * 0.05 }}
-            className="flex items-center gap-3 p-3.5 rounded-xl"
-            style={{ background: "var(--base-200)", border: "1px solid var(--base-300)" }}
-          >
-            <div
-              className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
-              style={{ background: t.gradient }}
-              aria-hidden="true"
-            >
-              <t.icon size={14} className="text-white" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5">
-                <p className="text-xs font-black truncate">{name}</p>
-                {isCustom && (
-                  <span
-                    className="text-[9px] font-black px-1.5 py-0.5 rounded-full flex-shrink-0"
-                    style={{ background: `${CUSTOM_TIER.accent}18`, color: CUSTOM_TIER.accent }}
-                  >
-                    Custom
-                  </span>
-                )}
-              </div>
-              <p className="text-[10px] font-semibold" style={{ opacity: 0.4 }}>
-                {h.createdAt  ? new Date(h.createdAt).toLocaleDateString("en-IN")  : "—"}
-                {" → "}
-                {h.expiryDate ? new Date(h.expiryDate).toLocaleDateString("en-IN") : "—"}
-              </p>
-            </div>
-            <div className="text-right flex-shrink-0">
-              <span
-                className="text-[10px] font-black px-2 py-1 rounded-full"
-                style={{ background: `${statusColor}15`, color: statusColor }}
-              >
-                {h.status}
-              </span>
-              {h.plan?.pricing?.monthly != null && (
-                <p className="text-[10px] font-bold mt-0.5" style={{ opacity: 0.4 }}>
-                  ₹{h.plan.pricing.monthly}/mo
-                </p>
-              )}
-            </div>
-          </motion.div>
-        );
-      })}
-
-      {/* Pagination */}
-      {pagination.pages > 1 && (
-        <div className="flex justify-center gap-2 pt-2" role="navigation" aria-label="History pagination">
-          <button
-            onClick={() => onPageChange(Math.max(1, pagination.page - 1))}
-            disabled={pagination.page === 1}
-            className="px-3 py-1.5 rounded-lg text-xs font-bold transition-opacity disabled:opacity-40"
-            style={{ background: "var(--base-200)" }}
-            aria-label="Previous page"
-          >
-            ‹ Prev
-          </button>
-          <span className="px-3 py-1.5 text-xs font-black" style={{ opacity: 0.5 }}>
-            {pagination.page} / {pagination.pages}
-          </span>
-          <button
-            onClick={() => onPageChange(Math.min(pagination.pages, pagination.page + 1))}
-            disabled={pagination.page === pagination.pages}
-            className="px-3 py-1.5 rounded-lg text-xs font-bold transition-opacity disabled:opacity-40"
-            style={{ background: "var(--base-200)" }}
-            aria-label="Next page"
-          >
-            Next ›
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  USAGE SUMMARY CARD  (current month)
-// ─────────────────────────────────────────────────────────────────────────────
-function UsageSummaryCard({ sub, t }) {
-  const usage  = sub.currentMonthUsage;
-  const limits = sub.limits;
-  if (!limits) return null;
-
-  const items = [
-    {
-      label: "Consultations",
-      used:  usage?.consultationsUsed       ?? 0,
-      max:   limits.consultationsPerMonth   ?? 0,
-      icon:  Stethoscope,
-    },
-    {
-      label: "Lab Tests",
-      used:  usage?.labTestsUsed            ?? 0,
-      max:   limits.labTestsPerMonth        ?? 0,
-      icon:  Microscope,
-    },
-    {
-      label: "Transport Rides",
-      used:  usage?.transportRidesUsed      ?? 0,
-      max:   limits.transportRidesPerMonth  ?? null,
-      icon:  Truck,
-    },
-    {
-      label: "Care Visits",
-      used:  usage?.careAssistantVisitsUsed ?? 0,
-      max:   limits.careAssistantVisitsPerMonth ?? null,
-      icon:  UserCheck,
-    },
-  ].filter((item) => item.max !== null && item.max > 0);
-
-  if (!items.length) return null;
-
-  return (
-    <div
-      className="rounded-2xl p-4 space-y-3"
-      style={{ background: `${t.accent}08`, border: `1px solid ${t.accent}20` }}
-      aria-label="Monthly usage summary"
-    >
+    <div className="p-5 rounded-xl border border-base-300   bg-base-200 space-y-4 shadow-sm">
       <div className="flex items-center gap-2">
-        <BarChart3 size={13} style={{ color: t.accent }} aria-hidden="true" />
-        <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: t.accent }}>
-          This Month&apos;s Usage
-        </p>
+        <BarChart3 size={16} className="text-primary" />
+        <h4 className="text-xs font-black uppercase tracking-widest text-base-content/40">Current Quota Ledger Balance</h4>
       </div>
-      <div className="space-y-2.5">
-        {items.map((item, i) => {
-          const pct     = item.max === -1 ? 0 : Math.min(100, (item.used / item.max) * 100);
-          const isLimit = item.max !== -1 && item.used >= item.max;
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {operationalUsageVector.map((metric, idx) => {
+          const allocationInfinite = metric.ceiling === -1;
+          const completionRatio    = allocationInfinite ? 0 : Math.min(100, (metric.consumed / metric.ceiling) * 100);
+          const limitBreached      = !allocationInfinite && metric.consumed >= metric.ceiling;
+
           return (
-            <div key={i}>
-              <div className="flex items-center justify-between mb-1">
-                <div className="flex items-center gap-1.5">
-                  <item.icon size={10} style={{ color: t.accent }} aria-hidden="true" />
-                  <span className="text-[11px] font-semibold text-base-content/70">{item.label}</span>
+            <div key={idx} className="p-3 rounded-lg bg-base-200 border border-base-300 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0">
+                  <metric.icon size={14} className="text-base-content/50" />
+                  <span className="text-xs font-bold text-base-content/70 truncate">{metric.label}</span>
                 </div>
-                <span
-                  className="text-[11px] font-black"
-                  style={{ color: isLimit ? "#ef4444" : t.accent }}
-                >
-                  {item.used} / {item.max === -1 ? "∞" : item.max}
+                <span className={`text-xs font-black ${limitBreached ? "text-error" : "text-primary"}`}>
+                  {metric.consumed} / {allocationInfinite ? "∞" : metric.ceiling}
                 </span>
               </div>
-              {item.max !== -1 && (
-                <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--base-300)" }}>
-                  <motion.div
-                    initial={{ width: 0 }}
-                    animate={{ width: `${pct}%` }}
-                    transition={{ duration: 1, ease: "easeOut", delay: i * 0.1 }}
-                    className="h-full rounded-full"
-                    style={{ background: isLimit ? "#ef4444" : t.gradient }}
+
+              {!allocationInfinite && (
+                <div className="progress-bar">
+                  <div
+                    className={`progress-bar-fill ${limitBreached ? "bg-error" : "bg-primary"}`}
+                    style={{ width: `${completionRatio}%` }}
                   />
                 </div>
               )}
+              <p className="text-[10px] font-medium text-base-content/40">
+                {allocationInfinite
+                  ? "Unrestricted transactional clearance active."
+                  : `${metric.ceiling - metric.consumed} clean contractual units left.`}
+              </p>
             </div>
           );
         })}
@@ -788,391 +403,519 @@ function UsageSummaryCard({ sub, t }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  EMPTY STATE
+// ACTION PANEL
 // ─────────────────────────────────────────────────────────────────────────────
-function EmptyState() {
+function InteractiveActionPanel({ activeSub, executeRenewalToggle, executeCancellation, executeTrialConversion, cancellationLoading, toggleLoading, conversionLoading }) {
   return (
-    <div className="flex flex-col items-center justify-center py-20 gap-5 text-center">
-      <motion.div
-        animate={{ y: [0, -10, 0] }}
-        transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-        className="w-20 h-20 rounded-3xl flex items-center justify-center"
-        style={{
-          background:  "linear-gradient(135deg,#3b82f6,#8b5cf6)",
-          boxShadow:   "0 16px 40px rgba(139,92,246,0.3)",
-        }}
-        aria-hidden="true"
-      >
-        <HeartPulse size={32} className="text-white" />
-      </motion.div>
-      <div>
-        <h2 className="text-xl font-black mb-1">No Active Subscription</h2>
-        <p className="text-sm" style={{ opacity: 0.45 }}>
-          You don&apos;t have an active health plan yet.
+    <div className="bg-base-200 border border-base-300 rounded-xl p-5 space-y-4">
+      <div className="space-y-1">
+        <h4 className="text-sm font-black tracking-tight text-base-content">Subscription Administration Control Panel</h4>
+        <p className="text-xs text-base-content/50">Manage dynamic authorization pipelines, billing status adjustments, and live clinical protection parameters.</p>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {/* Trial conversion */}
+        {activeSub.status === "Trial" && (
+          <button
+            onClick={executeTrialConversion}
+            disabled={conversionLoading}
+            className="sm:col-span-2 w-full btn btn-primary h-12 rounded-lg flex items-center justify-center gap-2 shadow-primary"
+          >
+            {conversionLoading ? <RefreshCw size={16} className="animate-spin" /> : <Zap size={16} />}
+            Activate Structural Plan Coverage — ₹{activeSub.plan?.pricing?.monthly ?? 0}/mo
+          </button>
+        )}
+
+        {/* Auto-renew toggle */}
+        <button
+          onClick={executeRenewalToggle}
+          disabled={toggleLoading}
+          className={`p-4 rounded-lg border text-left flex items-start justify-between gap-4 transition-all ${
+            activeSub.autoRenew
+              ? "  bg-base-200 border-primary/30 shadow-sm"
+              : "bg-base-100 border-base-300 opacity-70"
+          }`}
+        >
+          <div className="flex gap-3 items-start min-w-0">
+            <div className={`p-2 rounded-md mt-0.5 ${activeSub.autoRenew ? "bg-primary/10 text-primary" : "bg-base-300 text-base-content/40"}`}>
+              {toggleLoading ? <RefreshCw size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+            </div>
+            <div className="space-y-0.5 min-w-0">
+              <span className="text-xs font-black block text-base-content">Automatic Billing Loop</span>
+              <p className="text-[11px] text-base-content/50 font-normal leading-normal">
+                {activeSub.autoRenew
+                  ? "System will generate transaction tokens at expiry."
+                  : "Coverage deactivates safely at window termination."}
+              </p>
+            </div>
+          </div>
+          <div className={`w-8 h-5 rounded-full relative flex-shrink-0 p-0.5 transition-colors duration-200 ${activeSub.autoRenew ? "bg-primary" : "bg-base-300"}`}>
+            <div className={`w-4 h-4   rounded-full shadow-sm transition-transform duration-200 ${activeSub.autoRenew ? "transform bg-white translate-x-3" : "bg-gray-500"}`} />
+          </div>
+        </button>
+
+        {/* Cancellation */}
+        <button
+          onClick={executeCancellation}
+          disabled={cancellationLoading}
+          className="p-4 rounded-lg border border-error/20   bg-base-200 hover:bg-error/5 text-left flex items-start gap-3 transition-all group"
+        >
+          <div className="p-2 rounded-md bg-error/10 text-error mt-0.5 group-hover:bg-error group-hover:text-white transition-colors">
+            {cancellationLoading ? <RefreshCw size={15} className="animate-spin" /> : <X size={15} />}
+          </div>
+          <div className="space-y-0.5 min-w-0">
+            <span className="text-xs font-black block text-error">Terminate Coverage</span>
+            <p className="text-[11px] text-base-content/40 font-normal leading-normal">Revoke systematic platform assignment safely. Access retained until expiry timestamp.</p>
+          </div>
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2 justify-center pt-2 text-[11px] text-base-content/40 font-medium">
+        <Info size={12} />
+        <span>Authorization protection active under global identifier: {activeSub._id}</span>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HISTORY LEDGER
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Status → status-dot modifier class
+const STATUS_DOT_CLASS = {
+  Active:    "status-dot-success",
+  Trial:     "status-dot-warning",
+  Cancelled: "status-dot",          // neutral — no color modifier
+  Expired:   "status-dot-error",
+  Paused:    "status-dot-info",
+};
+
+// Status → badge modifier class
+const STATUS_BADGE_CLASS = {
+  Active:    "badge badge-success",
+  Trial:     "badge badge-warning",
+  Cancelled: "badge",
+  Expired:   "badge badge-error",
+  Paused:    "badge badge-info",
+};
+
+function HistoricLedgerPipeline({ dataset, pagination, activeLoading, triggerPageChange }) {
+  if (activeLoading && dataset.length === 0) {
+    return (
+      <div className="flex items-center justify-center p-8 border border-base-300 rounded-xl bg-base-100">
+        <RefreshCw size={20} className="animate-spin text-primary/40" />
+      </div>
+    );
+  }
+
+  if (dataset.length === 0) {
+    return (
+      <div className="p-8 text-center border border-dashed border-base-300 rounded-xl bg-base-100 space-y-1">
+        <p className="text-xs font-bold text-base-content/40 uppercase tracking-wider">Archive Registry Clear</p>
+        <p className="text-xs text-base-content/50 font-normal">No legacy transaction tokens exist under this identification sequence.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="overflow-x-auto border border-base-300 rounded-xl   bg-base-200">
+        <table className="table w-full text-left border-collapse">
+          <thead>
+            <tr>
+              <th>Care Level Blueprint</th>
+              <th>Structural Allocation Period</th>
+              <th>System Status State</th>
+              <th>Rate Charge</th>
+            </tr>
+          </thead>
+          <tbody>
+            {dataset.map((entry, index) => {
+              const coreTitle       = entry.plan?.fixedTier || entry.plan?.name || "Standard Level Asset";
+              const SystemIcon      = getTierIcon(coreTitle);
+              const architectureCustom = entry.planType === "custom";
+              const dotClass        = STATUS_DOT_CLASS[entry.status]  || "status-dot";
+              const badgeClass      = STATUS_BADGE_CLASS[entry.status] || "badge";
+
+              return (
+                <tr key={entry._id || index}>
+                  <td>
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg border border-base-300 bg-base-200 flex items-center justify-center flex-shrink-0 text-primary">
+                        <SystemIcon size={14} />
+                      </div>
+                      <div className="min-w-0 space-y-0.5">
+                        <span className="text-xs font-black text-base-content truncate block">{coreTitle}</span>
+                        {architectureCustom && (
+                          <span className="inline-block text-[9px] font-bold px-1 rounded bg-primary/10 text-primary uppercase">Custom Build</span>
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <span className="text-xs text-base-content/70 block font-medium">
+                      {entry.createdAt ? new Date(entry.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "—"}
+                    </span>
+                    <span className="text-[10px] text-base-content/40 block font-medium">
+                      Expires: {entry.expiryDate ? new Date(entry.expiryDate).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—"}
+                    </span>
+                  </td>
+                  <td>
+                    <span className={`${badgeClass} inline-flex items-center gap-1`}>
+                      <span className={`status-dot ${dotClass}`} />
+                      {entry.status}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="text-xs font-black text-base-content block">₹{entry.plan?.pricing?.monthly ?? 0}</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {pagination.pages > 1 && (
+        <div className="flex items-center justify-between p-2.5 border border-base-300 bg-base-200 rounded-xl">
+          <button
+            onClick={() => triggerPageChange(Math.max(1, pagination.page - 1))}
+            disabled={pagination.page === 1}
+            className="btn btn-sm   bg-base-200 border-base-300 text-xs font-bold px-3 py-1.5 rounded-lg disabled:opacity-40 shadow-sm"
+          >
+            Previous Channel
+          </button>
+          <span className="text-xs font-bold text-base-content/50">Ledger Block {pagination.page} of {pagination.pages}</span>
+          <button
+            onClick={() => triggerPageChange(Math.min(pagination.pages, pagination.page + 1))}
+            disabled={pagination.page === pagination.pages}
+            className="btn btn-sm   bg-base-200 border-base-300 text-xs font-bold px-3 py-1.5 rounded-lg disabled:opacity-40 shadow-sm"
+          >
+            Next Channel
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMPTY STATE
+// ─────────────────────────────────────────────────────────────────────────────
+function DefaultEmptyViewport() {
+  return (
+    <div className="border border-base-300 rounded-2xl   bg-base-200 p-12 text-center max-w-xl mx-auto space-y-6 shadow-sm">
+      <div className="w-16 h-16 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mx-auto shadow-sm">
+        <HeartPulse size={32} />
+      </div>
+      <div className="space-y-2 max-w-sm mx-auto">
+        <h3 className="text-xl font-black tracking-tight text-base-content">No Active Blueprint Discovered</h3>
+        <p className="text-sm text-base-content/50 leading-relaxed font-normal">
+          Your identity token is currently not bound to an active system subscription layout structure. Protect your health security metrics today.
         </p>
       </div>
-      <motion.a
-        href="/subscriptions"
-        whileHover={{ scale: 1.03 }}
-        whileTap={{ scale: 0.97 }}
-        className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl text-sm font-black text-white"
-        style={{
-          background:  "linear-gradient(135deg,#3b82f6,#8b5cf6)",
-          boxShadow:   "0 6px 24px rgba(139,92,246,0.35)",
-        }}
-      >
-        <Zap size={15} aria-hidden="true" /> Browse Plans
-      </motion.a>
+      <div className="pt-2">
+        <motion.a
+          href="/subscriptions"
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          className="btn btn-primary px-6 py-3 rounded-lg text-sm inline-flex items-center gap-2 shadow-primary"
+        >
+          <Zap size={14} /> Initialize Platform Coverage
+        </motion.a>
+      </div>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  PAGE SKELETON
+// SKELETON LOADER
 // ─────────────────────────────────────────────────────────────────────────────
-function PageSkeleton() {
+function UIArchitectureSkeleton() {
   return (
-    <div className="max-w-2xl mx-auto px-4 py-12 space-y-6" role="status" aria-label="Loading">
-      <div className="skeleton h-10 w-48 rounded-xl" />
-      <div className="skeleton h-64 rounded-2xl" />
-      <div className="skeleton h-40 rounded-2xl" />
+    <div className="max-w-4xl mx-auto px-4 py-12 space-y-8">
+      <div className="space-y-2">
+        <div className="skeleton h-4 w-24 rounded" />
+        <div className="skeleton h-8 w-48 rounded-md" />
+      </div>
+      <div className="skeleton h-80 w-full rounded-xl" />
+      <div className="skeleton h-40 w-full rounded-xl" />
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  MAIN PAGE
+// MAIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 export default function MySubscriptionPage() {
   const dispatch = useDispatch();
 
-  // ── Selectors ──────────────────────────────────────────────────────────────
-  const mySub         = useSelector(selectMySubscription);
-  const isActive      = useSelector(selectMySubIsActive);
-  const isOnTrial     = useSelector(selectMySubIsOnTrial);
-  const autoRenew     = useSelector(selectMySubAutoRenew);
-  const subLoading    = useSelector(selectMySubLoading);
-  const cancelLoading = useSelector(selectCancelLoading);
-  const toggleLoading = useSelector(selectToggleAutoRenewLoading);
+  const dataCore              = useSelector(selectMySubscription);
+  const statusActive          = useSelector(selectMySubIsActive);
+  const evaluationState       = useSelector(selectMySubIsOnTrial);
+  const autoRenewalLoop       = useSelector(selectMySubAutoRenew);
+  const pipelineLoading       = useSelector(selectMySubLoading);
+  const processingCancellation= useSelector(selectCancelLoading);
+  const processingRenewalToggle= useSelector(selectToggleAutoRenewLoading);
+  const archiveDataset        = useSelector(selectMyHistory);
+  const archivePagination     = useSelector(selectMyHistoryPagination);
+  const archiveLoading        = useSelector(selectMyHistoryLoading);
+  const checkoutToken         = useSelector(selectTrialOrder);
+  const executingConversion   = useSelector(selectTrialConvertLoading);
+  const executingVerification = useSelector(selectTrialVerifyConvertLoading);
 
-  const history        = useSelector(selectMyHistory);
-  const historyPag     = useSelector(selectMyHistoryPagination);
-  const historyLoading = useSelector(selectMyHistoryLoading);
+  const [expandArchive, setExpandArchive] = useState(false);
+  const [archivePage,   setArchivePage]   = useState(1);
+  const [modalState, setModalState] = useState({
+    visible: false, title: "", text: "", actionText: "", variant: "primary", onProceed: () => {}
+  });
 
-  const trialStatus         = useSelector(selectTrialStatus);
-  const isOnActiveTrial     = useSelector(selectIsOnActiveTrial);
-  const trialDaysLeft       = useSelector(selectTrialDaysLeft);
-  const trialOrder          = useSelector(selectTrialOrder);
-  const trialConvertLoading = useSelector(selectTrialConvertLoading);
-  const trialVerifyLoading  = useSelector(selectTrialVerifyConvertLoading);
+  const GATEWAY_KEY_ID = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
 
-  // ── Local state ────────────────────────────────────────────────────────────
-  const [showHistory,  setShowHistory]  = useState(false);
-  const [historyPage,  setHistoryPage]  = useState(1);
-  const [confirmState, setConfirmState] = useState(null); // { title, message, onConfirm }
-
-  const RZP_KEY = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
-
-  // ── Initial fetches ────────────────────────────────────────────────────────
   useEffect(() => {
     dispatch(fetchMySubscription());
     dispatch(fetchTrialStatus());
   }, [dispatch]);
 
-  // ── History fetch on expand / page change ──────────────────────────────────
   useEffect(() => {
-    if (showHistory) dispatch(fetchMySubscriptionHistory({ page: historyPage, limit: 6 }));
-  }, [showHistory, historyPage, dispatch]);
+    if (expandArchive) dispatch(fetchMySubscriptionHistory({ page: archivePage, limit: 5 }));
+  }, [expandArchive, archivePage, dispatch]);
 
-  // ── Trial Razorpay conversion ──────────────────────────────────────────────
+  // Razorpay gateway
   useEffect(() => {
-    if (!trialOrder?.orderId) return;
-
+    if (!checkoutToken?.orderId) return;
     (async () => {
-      if (!RZP_KEY) {
-        alert("Payment gateway not configured. Contact support.");
-        dispatch(clearTrialOrder());
-        return;
+      if (!GATEWAY_KEY_ID) {
+        alert("CRITICAL PAYMENT GATEWAY MISCONFIGURATION. ABORTING TRANSACTION.");
+        dispatch(clearTrialOrder()); return;
       }
-      const loaded = await loadRazorpay();
+      const loaded = await callRazorpayGateway();
       if (!loaded) {
-        alert("Failed to load Razorpay. Check your connection.");
-        dispatch(clearTrialOrder());
-        return;
+        alert("EXTERNAL GATEWAY DEPENDENCY INTEGRITY FAILURE. VERIFY INTERNET CONNECTION.");
+        dispatch(clearTrialOrder()); return;
       }
 
-      const planName = mySub?.plan?.fixedTier || mySub?.plan?.name || "";
-      const t        = getTier(planName);
+      const activePlanTitle  = dataCore?.plan?.fixedTier || dataCore?.plan?.name || "System Base";
+      const layoutTheme      = getTierTheme(activePlanTitle);
+      const structuralPaise  = checkoutToken.amount < 100000 ? Math.round(checkoutToken.amount * 100) : Math.round(checkoutToken.amount);
 
-      // FIX: guard against double-paise (if backend returns paise already)
-      const amountInPaise =
-        trialOrder.amount < 100_000
-          ? Math.round(trialOrder.amount * 100)
-          : Math.round(trialOrder.amount);
-
-      const rzp = new window.Razorpay({
-        key:         RZP_KEY,
-        amount:      amountInPaise,
-        currency:    trialOrder.currency || "INR",
-        name:        "Likeson Health",
-        description: `Convert trial — ${planName}`,
-        order_id:    trialOrder.orderId,
-        image:       "/logo.png",
-        handler: async (response) => {
+      const transactionalParams = {
+        key: GATEWAY_KEY_ID,
+        amount: structuralPaise,
+        currency: checkoutToken.currency || "INR",
+        name: "Likeson Unified Care Platform",
+        description: `Authorization Stage Conversion — ${activePlanTitle}`,
+        order_id: checkoutToken.orderId,
+        image: "/logo.png",
+        handler: async (paymentResponse) => {
           try {
             await dispatch(verifyTrialConversion({
-              razorpay_order_id:   response.razorpay_order_id,
-              razorpay_payment_id: response.razorpay_payment_id,
-              razorpay_signature:  response.razorpay_signature,
-              amount:              trialOrder.amount,
+              razorpay_order_id:   paymentResponse.razorpay_order_id,
+              razorpay_payment_id: paymentResponse.razorpay_payment_id,
+              razorpay_signature:  paymentResponse.razorpay_signature,
+              amount: checkoutToken.amount,
             }));
             dispatch(clearTrialOrder());
             dispatch(fetchMySubscription());
           } catch {
-            alert("Payment verification failed. Contact support.");
+            alert("TRANSACTION VERIFICATION INTEGRITY REJECTED. CONTACT SYSTEMS TEAM.");
             dispatch(clearTrialOrder());
           }
         },
         prefill: { name: "", email: "", contact: "" },
-        theme:   { color: t.accent || "#8b5cf6" },
-        modal:   { ondismiss: () => dispatch(clearTrialOrder()) },
-      });
+        theme: { color: layoutTheme.gradient },   // Razorpay API requires hex/color string — keep
+        modal: { ondismiss: () => dispatch(clearTrialOrder()) },
+      };
 
-      rzp.on("payment.failed", (r) => {
-        alert(`Payment failed: ${r.error?.description || "Unknown error"}`);
+      const nativeInstance = new window.Razorpay(transactionalParams);
+      nativeInstance.on("payment.failed", (errorObject) => {
+        alert(`TRANSACTION FAILURE EVENT: ${errorObject.error?.description || "UNKNOWN PIPELINE REJECTION"}`);
         dispatch(clearTrialOrder());
       });
-      rzp.open();
+      nativeInstance.open();
     })();
-  }, [trialOrder?.orderId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [checkoutToken?.orderId]); 
 
-  // ── Handlers ───────────────────────────────────────────────────────────────
-
-  // FIX: use ConfirmDialog instead of window.confirm
-  const handleCancel = useCallback(() => {
-    setConfirmState({
-      title:        "Cancel subscription?",
-      message:      "You'll retain access until the current billing period ends. This cannot be undone.",
-      confirmLabel: "Yes, Cancel",
-      accent:       "#ef4444",
-      onConfirm:    async () => {
-        setConfirmState(null);
+  // Actions
+  const triggerRevocationWorkflow = useCallback(() => {
+    setModalState({
+      visible: true,
+      title: "Confirm Care Plan Revocation?",
+      text: "This operation will disconnect your automatic healthcare access parameters. You will maintain valid systematic data availability through the end of your current paid allocation window.",
+      actionText: "Revoke Authorization",
+      variant: "error",
+      onProceed: async () => {
+        setModalState((prev) => ({ ...prev, visible: false }));
         await dispatch(cancelSubscription());
         dispatch(fetchMySubscription());
-      },
+      }
     });
   }, [dispatch]);
 
-  // FIX: optimistic toggle + async confirm
-  const handleToggleAutoRenew = useCallback(() => {
-    const turningOff = autoRenew;
-    if (turningOff) {
-      setConfirmState({
-        title:        "Disable auto-renew?",
-        message:      "Your plan won't renew automatically when it expires.",
-        confirmLabel: "Disable",
-        accent:       "#f59e0b",
-        onConfirm: () => {
-          setConfirmState(null);
+  const triggerRenewalToggleWorkflow = useCallback(() => {
+    if (autoRenewalLoop) {
+      setModalState({
+        visible: true,
+        title: "Deactivate Automated Billing Cycle?",
+        text: "The payment engine will no longer generate transactional requests automatically at term expiration. Your active clinic protection plan will conclude at the specified deadline date.",
+        actionText: "Deactivate Cycle",
+        variant: "warning",
+        onProceed: () => {
+          setModalState((prev) => ({ ...prev, visible: false }));
           dispatch(optimisticToggleAutoRenew());
           dispatch(toggleAutoRenew());
-        },
+        }
       });
     } else {
       dispatch(optimisticToggleAutoRenew());
       dispatch(toggleAutoRenew());
     }
-  }, [dispatch, autoRenew]);
+  }, [dispatch, autoRenewalLoop]);
 
-  const handleConvertTrial = useCallback(() => {
+  const triggerEvaluationConversion = useCallback(() => {
     dispatch(initiateTrialConversion({}));
   }, [dispatch]);
 
-  const closeConfirm = useCallback(() => setConfirmState(null), []);
+  const closeModal = useCallback(() => setModalState((prev) => ({ ...prev, visible: false })), []);
 
-  // ── Derived values ─────────────────────────────────────────────────────────
-  const planName  = mySub?.plan?.fixedTier || mySub?.plan?.name || "";
-  const t         = getTier(planName);
-  const TIcon     = t.icon;
-  const expiry    = mySub?.expiryDate ? new Date(mySub.expiryDate) : null;
-  const daysLeft  = expiry ? Math.max(0, Math.ceil((expiry - Date.now()) / 86_400_000)) : 0;
-  const isExpiring = daysLeft <= 7 && daysLeft > 0;
-  // Progress = how much of billing period has elapsed (0% = just started, 100% = expired)
-  const progress  = expiry ? Math.min(100, Math.max(0, (1 - daysLeft / 30) * 100)) : 0;
+  // Derived values
+  const targetTitle        = dataCore?.plan?.fixedTier || dataCore?.plan?.name || "";
+  const planTheme          = getTierTheme(targetTitle);
+  const AssociatedIcon     = getTierIcon(targetTitle);
+  const structuralExpiry   = dataCore?.expiryDate ? new Date(dataCore.expiryDate) : null;
+  const daysRemaining      = structuralExpiry ? Math.max(0, Math.ceil((structuralExpiry - Date.now()) / 86400000)) : 0;
+  const expiryThreshold    = daysRemaining <= 7 && daysRemaining > 0;
+  const progressRatio      = structuralExpiry ? Math.min(100, Math.max(0, (1 - daysRemaining / 30) * 100)) : 0;
+  const validSubActive     = dataCore && (statusActive || evaluationState);
+  const formattedExpiry    = structuralExpiry ? structuralExpiry.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" }) : "—";
 
-  const hasActiveSub = mySub && (isActive || isOnTrial);
-
-  // ── Loading state ──────────────────────────────────────────────────────────
-  if (subLoading && !mySub) return <PageSkeleton />;
+  if (pipelineLoading && !dataCore) return <UIArchitectureSkeleton />;
 
   return (
     <>
-      <div className="min-h-screen" style={{ background: "var(--base-100)" }}>
-        <div className="max-w-2xl mx-auto px-4 py-10 space-y-8">
+      <div className="min-h-screen bg-base-100 font-sans antialiased text-base-content selection:bg-primary/10">
+        <div className="max-w-4xl mx-auto px-4 py-12 space-y-8">
 
-          {/* Page Header */}
-          <motion.div initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }}>
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div>
-                <p
-                  className="text-[10px] font-black uppercase tracking-widest mb-0.5"
-                  style={{ opacity: 0.4 }}
-                >
-                  Account
-                </p>
-                <h1 className="text-2xl font-black">My Subscription</h1>
-              </div>
-
-              {hasActiveSub && (
-                <motion.div
-                  animate={{ opacity: [0.6, 1, 0.6] }}
-                  transition={{ duration: 2, repeat: Infinity }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-black"
-                  style={{
-                    background: `${t.accent}15`,
-                    color:      t.accent,
-                    border:     `1.5px solid ${t.accent}30`,
-                  }}
-                  aria-label={isOnTrial ? "Trial active" : "Subscription active"}
-                >
-                  <Activity size={11} aria-hidden="true" />
-                  {isOnTrial ? "Trial Active" : "Subscription Active"}
-                </motion.div>
-              )}
+          {/* Page header */}
+          <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-base-300 pb-6">
+            <div className="space-y-1">
+              <span className="text-[10px] font-black uppercase tracking-widest text-base-content/40 block">Likeson Accounts Infrastructure</span>
+              <h1 className="text-3xl font-black tracking-tight text-base-content font-display">System Health Plan Registry</h1>
             </div>
+
+            {validSubActive && (
+              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-wider   bg-base-200 border border-base-300 shadow-sm">
+                <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
+                <span className="text-base-content/70">{evaluationState ? "Evaluation Phase" : "Operational Allocation Continuous"}</span>
+              </div>
+            )}
           </motion.div>
 
-          {/* No subscription */}
-          {!hasActiveSub && !subLoading && <EmptyState />}
+          {/* Content router */}
+          {!validSubActive && !pipelineLoading ? (
+            <DefaultEmptyViewport />
+          ) : (
+            <AnimatePresence mode="wait">
+              {validSubActive && (
+                <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }} className="space-y-6">
 
-          {/* Active subscription */}
-          <AnimatePresence>
-            {hasActiveSub && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="space-y-5"
-              >
-                {/* Hero card */}
-                <ActivePlanHeroCard
-                  sub={mySub}
-                  t={t}
-                  TIcon={TIcon}
-                  daysLeft={daysLeft}
-                  isExpiring={isExpiring}
-                  progress={progress}
-                  expiry={expiry}
-                />
+                  <LiveSubscriptionHeroCard
+                    activeSub={dataCore}
+                    theme={planTheme}
+                    IconEngine={AssociatedIcon}
+                    residualDays={daysRemaining}
+                    thresholdReached={expiryThreshold}
+                    progressRate={progressRatio}
+                    formattedExpiry={formattedExpiry}
+                  />
 
-                {/* Usage summary */}
-                <UsageSummaryCard sub={mySub} t={t} />
+                  <LiveConsumptionTracker subscriptionState={dataCore} />
 
-                {/* Action panel */}
-                <ActionPanel
-                  sub={mySub}
-                  t={t}
-                  onToggleAutoRenew={handleToggleAutoRenew}
-                  onCancel={handleCancel}
-                  onConvertTrial={handleConvertTrial}
-                  cancelLoading={cancelLoading}
-                  toggleLoading={toggleLoading}
-                  trialConvertLoading={trialConvertLoading || trialVerifyLoading}
-                />
+                  <InteractiveActionPanel
+                    activeSub={dataCore}
+                    executeRenewalToggle={triggerRenewalToggleWorkflow}
+                    executeCancellation={triggerRevocationWorkflow}
+                    executeTrialConversion={triggerEvaluationConversion}
+                    cancellationLoading={processingCancellation}
+                    toggleLoading={processingRenewalToggle}
+                    conversionLoading={executingConversion || executingVerification}
+                  />
 
-                {/* History toggle */}
-                <div>
-                  <button
-                    onClick={() => setShowHistory((v) => !v)}
-                    className="flex items-center gap-2 w-full px-5 py-4 rounded-2xl text-sm font-bold transition-all"
-                    style={{ background: "var(--base-200)", border: "1.5px solid var(--base-300)" }}
-                    aria-expanded={showHistory}
-                    aria-controls="subscription-history"
-                  >
-                    <motion.div animate={{ rotate: showHistory ? 180 : 0 }} transition={{ duration: 0.3 }}>
-                      <ChevronDown size={15} aria-hidden="true" />
-                    </motion.div>
-                    <span className="flex-1 text-left">Subscription History</span>
-                    {historyPag.total > 0 && (
-                      <span
-                        className="text-[10px] font-black px-2 py-0.5 rounded-full"
-                        style={{ background: "var(--base-300)", opacity: 0.7 }}
-                        aria-label={`${historyPag.total} records`}
-                      >
-                        {historyPag.total}
-                      </span>
-                    )}
-                  </button>
-
-                  <AnimatePresence>
-                    {showHistory && (
-                      <motion.div
-                        id="subscription-history"
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: "auto" }}
-                        exit={{ opacity: 0, height: 0 }}
-                        transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-                        className="overflow-hidden"
-                      >
-                        <div className="pt-3">
-                          <SubscriptionHistory
-                            history={history}
-                            pagination={historyPag}
-                            loading={historyLoading}
-                            onPageChange={(p) => setHistoryPage(p)}
-                          />
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-
-                {/* Browse more plans CTA */}
-                <motion.a
-                  href="/subscriptions"
-                  whileHover={{ y: -2 }}
-                  className="flex items-center justify-between gap-3 px-5 py-4 rounded-2xl text-sm font-bold transition-all group"
-                  style={{ background: "var(--base-200)", border: "1.5px solid var(--base-300)" }}
-                  aria-label="Explore other subscription plans"
-                >
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="w-9 h-9 rounded-xl flex items-center justify-center"
-                      style={{ background: "color-mix(in srgb, var(--primary), transparent 88%)" }}
-                      aria-hidden="true"
+                  {/* History accordion */}
+                  <div className="border border-base-300 rounded-xl overflow-hidden   bg-base-200 shadow-sm">
+                    <button
+                      onClick={() => setExpandArchive((prev) => !prev)}
+                      aria-expanded={expandArchive}
+                      className="w-full p-5 flex items-center justify-between transition-colors bg-base-200 hover:bg-base-300/60"
                     >
-                      <Zap size={15} style={{ color: "var(--primary)" }} />
-                    </div>
-                    <div>
-                      <p className="font-black text-sm">Explore Other Plans</p>
-                      <p className="text-[10px] font-semibold" style={{ opacity: 0.45 }}>
-                        Upgrade or switch your healthcare plan
-                      </p>
-                    </div>
-                  </div>
-                  <motion.div
-                    animate={{ x: [0, 4, 0] }}
-                    transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
-                    aria-hidden="true"
-                  >
-                    <ArrowRight size={16} style={{ color: "var(--primary)" }} />
-                  </motion.div>
-                </motion.a>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                      <div className="flex items-center gap-3">
+                        <motion.div animate={{ rotate: expandArchive ? 180 : 0 }} transition={{ duration: 0.25 }}>
+                          <ChevronDown size={18} className="text-base-content/50" />
+                        </motion.div>
+                        <span className="text-sm font-black text-base-content">System Historic Transaction Record Registry</span>
+                      </div>
+                      {archivePagination.total > 0 && (
+                        <span className="text-[10px] font-black px-2.5 py-1   border border-base-300 text-base-content/60 rounded-md">
+                          {archivePagination.total} Logs Verified
+                        </span>
+                      )}
+                    </button>
 
+                    <AnimatePresence initial={false}>
+                      {expandArchive && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: "auto", opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.3, ease: "easeInOut" }}
+                        >
+                          <div className="p-5 border-t border-base-300 bg-base-100/50">
+                            <HistoricLedgerPipeline
+                              dataset={archiveDataset}
+                              pagination={archivePagination}
+                              activeLoading={archiveLoading}
+                              triggerPageChange={(targetPage) => setArchivePage(targetPage)}
+                            />
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+
+                  {/* Upgrade anchor */}
+                  <motion.a
+                    href="/subscriptions"
+                    whileHover={{ y: -2 }}
+                    className="flex items-center justify-between p-5 rounded-xl border border-base-300  hover:border-primary/40 transition-all group shadow-sm"
+                  >
+                    <div className="flex items-start gap-4">
+                      <div className="w-10 h-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center flex-shrink-0 group-hover:bg-primary group-hover:text-white transition-colors">
+                        <Sparkles size={18} />
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-sm font-black block text-base-content">Modify Operational Authorization Architecture</span>
+                        <p className="text-xs text-base-content/50 font-medium">Upgrade, restructure slots, or scale clinical protection bounds parameters smoothly.</p>
+                      </div>
+                    </div>
+                    <ArrowRight size={18} className="text-base-content/30 group-hover:text-primary group-hover:translate-x-1 transition-all" />
+                  </motion.a>
+
+                </motion.div>
+              )}
+            </AnimatePresence>
+          )}
         </div>
       </div>
 
-      {/* Confirm dialog (replaces window.confirm) */}
-      <ConfirmDialog
-        open={Boolean(confirmState)}
-        title={confirmState?.title}
-        message={confirmState?.message}
-        confirmLabel={confirmState?.confirmLabel}
-        accent={confirmState?.accent}
-        onConfirm={confirmState?.onConfirm}
-        onCancel={closeConfirm}
+      <PremiumConfirmModal
+        isOpen={modalState.visible}
+        title={modalState.title}
+        text={modalState.text}
+        actionText={modalState.actionText}
+        variant={modalState.variant}
+        onProceed={modalState.onProceed}
+        onDismiss={closeModal}
       />
     </>
   );

@@ -331,24 +331,88 @@ subscriptionPlanSchema.virtual('priceLabel').get(function () {
 
 // ─── Pre-save: recompute custom plan total from option lineTotals ─────────────
 subscriptionPlanSchema.pre('save', async function () {
+
   if (
     this.planType === 'custom' &&
     Array.isArray(this.customOptions) &&
     this.customOptions.length > 0
   ) {
-    // Recompute each lineTotal from stored unitPrice × quantity
+
     this.customOptions.forEach((opt) => {
-      opt.lineTotal = +(opt.quantity * opt.unitPrice).toFixed(2);
+
+      const packageBasedOptions = [
+        'transport',
+        'diagnostics',
+        'pharmacy',
+      ];
+
+      // ─────────────────────────────────────
+      // PACKAGE-BASED OPTIONS
+      // DO NOT MULTIPLY
+      // ─────────────────────────────────────
+
+      if (
+        packageBasedOptions.includes(opt.optionKey)
+      ) {
+
+        opt.lineTotal = +Number(
+          opt.unitPrice || 0
+        ).toFixed(2);
+
+        return;
+      }
+
+      // ─────────────────────────────────────
+      // BOOLEAN ADDONS
+      // ─────────────────────────────────────
+
+      if (
+        [
+          'homeSampleCollection',
+          'prioritySupport',
+        ].includes(opt.optionKey)
+      ) {
+
+        opt.lineTotal =
+          Number(opt.quantity) > 0
+            ? +Number(opt.unitPrice || 0).toFixed(2)
+            : 0;
+
+        return;
+      }
+
+      // ─────────────────────────────────────
+      // NORMAL MULTIPLICATIVE OPTIONS
+      // consultations
+      // careAssistant
+      // ─────────────────────────────────────
+
+      opt.lineTotal = +(
+        Number(opt.quantity || 0) *
+        Number(opt.unitPrice || 0)
+      ).toFixed(2);
+
     });
 
-    // Sum all lineTotals → pricing.monthly
-    const total = this.customOptions.reduce((sum, opt) => sum + opt.lineTotal, 0);
-    this.pricing.monthly      = +total.toFixed(2);
+    // ─────────────────────────────────────
+    // TOTAL MONTHLY
+    // ─────────────────────────────────────
+
+    const total = this.customOptions.reduce(
+      (sum, opt) => {
+        return sum + Number(opt.lineTotal || 0);
+      },
+      0
+    );
+
+    this.pricing.monthly = +total.toFixed(2);
+
     this.pricing.billingCycle = 'custom';
+
     this.pricing.billingLabel = '/month';
-    this.visibleToCustomerOnly = true; // always private
+
+    this.visibleToCustomerOnly = true;
   }
- 
 });
 
 // ─── Indexes ──────────────────────────────────────────────────────────────────

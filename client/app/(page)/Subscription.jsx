@@ -11,6 +11,7 @@ import {
   Users, HeartPulse, Zap, ArrowRight, Gift, RefreshCw, Tag,
   AlertCircle, BadgeCheck, Layers, Info, Globe, Flame, Award,
   CreditCard, Minus, BarChart3, Activity, Clock, UserPlus,
+  Star, Package, Hash,
 } from "lucide-react";
 
 import {
@@ -29,7 +30,7 @@ import {
   selectIsOnActiveTrial, selectTrialDaysLeft, selectTrialStatusLoading,
   selectTrialOrder, selectTrialConvertLoading,
 } from "@/store/slices/subscriptionSlice";
-import {motion} from "framer-motion";
+import { motion } from "framer-motion";
 
 // ─── Razorpay loader ──────────────────────────────────────────────────────────
 export function preconnectRazorpay() {
@@ -59,129 +60,339 @@ function loadRazorpay() {
   return _rzpLoadPromise;
 }
 
-// ─── Pricing Engine ───────────────────────────────────────────────────────────
+function toRazorpayPaise(amountInRupees) {
+  const n = Number(amountInRupees);
+  return n > 99999 ? Math.round(n) : Math.round(n * 100);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  CENTRALIZED PRICING ENGINE
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Keys that use qty × unitPrice */
+const UNIT_BASED_KEYS = new Set(["consultations", "careAssistant"]);
+
+/** Keys that are flat/package — NEVER multiply */
+const FLAT_KEYS = new Set([
+  "transport",
+  "diagnostics",
+  "pharmacy",
+  "homeSampleCollection",
+  "prioritySupport",
+]);
+
+// ─── Type-safe formatters ─────────────────────────────────────────────────────
+
+/** Format rupee amount */
+function formatCurrency(amount) {
+  return `₹${Number(amount).toFixed(0)}`;
+}
+
+/** Format percent with % symbol — ALWAYS appends % */
+function formatPercent(value) {
+  return `${value}%`;
+}
+
+/** Format flat package price display */
+function formatPackagePrice(lineTotal) {
+  return `${formatCurrency(lineTotal)}/month`;
+}
+
+/** Format consultation summary line */
+function formatConsultationSummary(qty, unitPrice, lineTotal) {
+  return `${qty} consult${qty !== 1 ? "s" : ""} × ${formatCurrency(unitPrice)} = ${formatCurrency(lineTotal)}/mo`;
+}
+
+/** Format transport summary line — NEVER shows qty × price */
+function formatTransportSummary(pricePerKm, packagePrice) {
+  return `${formatCurrency(pricePerKm)}/km bundle = ${formatCurrency(packagePrice)}/mo`;
+}
+
+/** Format discount summary line (diagnostics/pharmacy) — shows % symbol */
+function formatDiscountSummary(percent, lineTotal) {
+  return `${formatPercent(percent)} package = ${formatPackagePrice(lineTotal)}`;
+}
+
+/** Format care assistant summary line */
+function formatCareAssistantSummary(qty, unitPrice, lineTotal, tierLabel) {
+  return `${qty} visit${qty !== 1 ? "s" : ""} × ${formatCurrency(unitPrice)} = ${formatCurrency(lineTotal)}/mo`;
+}
+
+// ─── Pricing mode helpers ─────────────────────────────────────────────────────
+
+function isUnitBasedOption(optionKey) {
+  return UNIT_BASED_KEYS.has(optionKey);
+}
+
+function isFlatPackageOption(optionKey) {
+  return FLAT_KEYS.has(optionKey);
+}
+
 /**
- * resolveOptionPrice
- *
- * FIX: transport — when qty === 0 (slab index "not selected"), return zero.
- *      Previously, slab[0] was returned even for qty=0, causing transport
- *      to always add its price to the total even when not selected.
- *
- * transport: qty = slab INDEX chosen in dropdown (0-based).
- *            Dropdown value starts at 0 for first real slab.
- *            We use a sentinel: the dropdown emits qty=0 for "not included"
- *            BUT the real slabs start at index 0 too — so we use the
- *            convention that qty stored is (slabIndex + 1), and 0 = none.
- *
- * WAIT — looking at getSlabOptions: value: idx (0-based index).
- * And handleSetQty stores that. So qty=0 = first slab selected.
- * "Not included" = qty stored as special sentinel.
- *
- * The dropdown has:
- *   <option value={0}>— Not included —</option>
- *   {slabOpts.map(s => <option key={s.value} value={s.value}>...)}
- *
- * slabOpts[0].value = 0 (first slab index).
- * So value=0 is AMBIGUOUS between "not included" and "first slab".
- *
- * ROOT FIX: change "not included" sentinel to -1.
- * getSlabOptions unchanged (returns 0-based idx).
- * Dropdown "not included" option value = -1.
- * handleSetQty stores -1 for none.
- * resolveOptionPrice: qty < 0 → return zero.
- * initial quantity for transport = -1 (not selected).
- *
- * This is the correct, unambiguous fix.
+ * getPricingModeBadge — returns badge config for given optionKey
+ */
+function getPricingModeBadge(optionKey) {
+  if (isUnitBasedOption(optionKey)) {
+    return { label: "PER UNIT", bg: "rgba(16,185,129,0.12)", color: "#10b981" };
+  }
+  return { label: "FLAT PACKAGE", bg: "rgba(245,158,11,0.12)", color: "#f59e0b" };
+}
+
+/**
+ * getOptionDisplayLabel — formats the display label for a saved custom plan option.
+ * Correctly handles % for diagnostics/pharmacy and bundle for transport.
+ */
+function getOptionDisplayLabel(opt) {
+  const { optionKey, quantity, unitPrice, lineTotal } = opt;
+
+  switch (optionKey) {
+    case "diagnostics":
+      return `${formatPercent(quantity)} Diagnostic Discount = ${formatCurrency(lineTotal)}`;
+    case "pharmacy":
+      return `${formatPercent(quantity)} Pharmacy Discount = ${formatCurrency(lineTotal)}`;
+    case "transport":
+      return `${formatCurrency(unitPrice)}/km bundle = ${formatCurrency(lineTotal)}/mo`;
+    case "consultations":
+      return `${quantity} consult${quantity !== 1 ? "s" : ""} × ${formatCurrency(unitPrice)} = ${formatCurrency(lineTotal)}`;
+    case "careAssistant":
+      return `${quantity} visit${quantity !== 1 ? "s" : ""} × ${formatCurrency(unitPrice)} = ${formatCurrency(lineTotal)}`;
+    case "homeSampleCollection":
+      return `Home Sample = ${formatCurrency(lineTotal)}/mo`;
+    case "prioritySupport":
+      return `Priority Support = ${formatCurrency(lineTotal)}/mo`;
+    default:
+      return `${opt.label}: ${formatCurrency(lineTotal)}`;
+  }
+}
+
+/**
+ * getOptionSummary — short chip label for saved plan cards
+ * Shows % for discount services, bundle for transport, qty × for unit
+ */
+function getOptionSummary(opt) {
+  const { optionKey, quantity, lineTotal } = opt;
+  switch (optionKey) {
+    case "diagnostics":
+      return { prefix: opt.label, qty: formatPercent(quantity), price: lineTotal };
+    case "pharmacy":
+      return { prefix: opt.label, qty: formatPercent(quantity), price: lineTotal };
+    case "transport":
+      return { prefix: opt.label, qty: "Bundle", price: lineTotal };
+    default:
+      return { prefix: opt.label, qty: String(quantity), price: lineTotal };
+  }
+}
+
+/**
+ * formatCustomPlanOption — full breakdown row text for cost breakdown section
+ */
+/**
+ * formatCustomPlanOption — full breakdown row text for cost breakdown section
+ * FIXED: Safely reads from both 'key' (OPTION_CONFIG) and 'optionKey' (Saved Plans)
+ */
+function formatCustomPlanOption(opt, quantities, priceBreakdown) {
+  const optionKey = opt.optionKey || opt.key;
+  const b = priceBreakdown[optionKey];
+  if (!b) return { label: opt.label, detail: "", amount: 0 };
+
+  switch (optionKey) {
+    case "diagnostics": {
+      const qty = quantities[optionKey] ?? 0;
+      return {
+        label: "Diagnostic Discount",
+        detail: `${formatPercent(qty)} package`,
+        amount: b.lineTotal,
+      };
+    }
+    case "pharmacy": {
+      const qty = quantities[optionKey] ?? 0;
+      return {
+        label: "Pharmacy Discount",
+        detail: `${formatPercent(qty)} package`,
+        amount: b.lineTotal,
+      };
+    }
+    case "transport": {
+      return {
+        label: "Medical Transport",
+        detail: b.slabLabel || "bundle",
+        amount: b.lineTotal,
+      };
+    }
+    case "consultations": {
+      const qty = quantities[optionKey] ?? 0;
+      return {
+        label: "Doctor Consultations",
+        detail: `${qty} consult${qty !== 1 ? "s" : ""} × ${formatCurrency(b.unitPrice)}`,
+        amount: b.lineTotal,
+      };
+    }
+    case "careAssistant": {
+      const qty = quantities[optionKey] ?? 0;
+      return {
+        label: "Care Assistant Visits",
+        detail: `${qty} visit${qty !== 1 ? "s" : ""} × ${formatCurrency(b.unitPrice)}`,
+        amount: b.lineTotal,
+      };
+    }
+    case "homeSampleCollection":
+      return { label: "Home Sample Collection", detail: "Flat add-on", amount: b.lineTotal };
+    case "prioritySupport":
+      return { label: "Priority Support", detail: "Flat add-on", amount: b.lineTotal };
+    default:
+      return { label: opt.label, detail: b.slabLabel || "", amount: b.lineTotal };
+  }
+}
+
+// ─── Cost Breakdown Row ───────────────────────────────────────────────────────
+// FIXED: Target opt.key safely for pricing badge evaluation
+const BreakdownRow = memo(function BreakdownRow({ opt, quantities, priceBreakdown }) {
+  const { label, detail, amount } = formatCustomPlanOption(opt, quantities, priceBreakdown);
+  const targetKey = opt.optionKey || opt.key;
+  
+  return (
+    <div className="flex items-start justify-between gap-2">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <opt.icon size={10} aria-hidden="true" className="flex-shrink-0 text-base-content/50" />
+          <span className="text-xs font-semibold text-base-content/70 truncate">{label}</span>
+          <PricingModeBadge optionKey={targetKey} />
+        </div>
+        {detail && (
+          <p className="text-[10px] text-base-content/40 mt-0.5 ml-4">{detail}</p>
+        )}
+      </div>
+      <span className="text-xs font-black flex-shrink-0 mt-0.5" style={{ color: CUSTOM_META.accent }}>
+        {formatCurrency(amount)}
+      </span>
+    </div>
+  );
+});
+
+/**
+ * calculateCustomOptionPricing — single source of truth for lineTotal.
+ */
+function calculateCustomOptionPricing(optionKey, unitPrice, quantity) {
+  if (UNIT_BASED_KEYS.has(optionKey)) {
+    return +(quantity * unitPrice).toFixed(2);
+  }
+  return +unitPrice.toFixed(2);
+}
+
+/**
+ * resolveOptionPrice — full pricing resolution from raw PlatformPricingConfig data.
  */
 function resolveOptionPrice(optionPricing, optionKey, quantity, extras = {}) {
-  if (!optionPricing) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
+  if (!optionPricing) {
+    return { unitPrice: 0, lineTotal: 0, slabLabel: "", pricingMode: "flat" };
+  }
 
   const qty = Number(quantity);
 
-  // Universal guard: quantity < 0 means "not selected" (sentinel -1)
-  if (qty < 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
-
-  let unitPrice = 0;
-  let slabLabel = "";
+  if (qty < 0) {
+    return { unitPrice: 0, lineTotal: 0, slabLabel: "", pricingMode: "flat" };
+  }
 
   switch (optionKey) {
+
     case "consultations": {
-      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
-      unitPrice = optionPricing?.consultation?.pricePerConsultation ?? 0;
-      slabLabel = `₹${unitPrice}/consult`;
-      return { unitPrice, lineTotal: +(qty * unitPrice).toFixed(2), slabLabel };
-    }
-
-    case "transport": {
-      // qty = slab index (0-based). qty === -1 means not selected (handled above).
-      const slabs = optionPricing?.transport?.kmSlabs ?? [];
-      if (slabs.length > 0) {
-        const idx  = Math.min(qty, slabs.length - 1);
-        const slab = slabs[idx];
-        if (slab) {
-          slabLabel = `₹${slab.pricePerKm}/km · ₹${slab.packagePrice} bundle`;
-          return { unitPrice: slab.packagePrice, lineTotal: slab.packagePrice, slabLabel };
-        }
-      }
-      return { unitPrice: 0, lineTotal: 0, slabLabel: "No matching slab" };
-    }
-
-    case "diagnostics": {
-      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
-      const slabs = optionPricing?.diagnosticsDiscount?.slabs ?? [];
-      if (slabs.length > 0) {
-        const exact = slabs.find((s) => s.percent === qty);
-        const picked = exact ?? [...slabs].sort((a, b) => b.percent - a.percent).find((s) => s.percent <= qty);
-        if (picked) {
-          slabLabel = `${picked.percent}% discount @ ₹${picked.price}/mo`;
-          return { unitPrice: picked.price, lineTotal: picked.price, slabLabel };
-        }
-      }
-      return { unitPrice: 0, lineTotal: 0, slabLabel: "No matching slab" };
-    }
-
-    case "pharmacy": {
-      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
-      const slabs = optionPricing?.pharmacyDiscount?.slabs ?? [];
-      if (slabs.length > 0) {
-        const exact = slabs.find((s) => s.percent === qty);
-        const picked = exact ?? [...slabs].sort((a, b) => b.percent - a.percent).find((s) => s.percent <= qty);
-        if (picked) {
-          slabLabel = `${picked.percent}% discount @ ₹${picked.price}/mo`;
-          return { unitPrice: picked.price, lineTotal: picked.price, slabLabel };
-        }
-      }
-      return { unitPrice: 0, lineTotal: 0, slabLabel: "No matching slab" };
+      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "", pricingMode: "unit" };
+      const unitPrice = optionPricing?.consultation?.pricePerConsultation ?? 0;
+      return {
+        unitPrice,
+        lineTotal:   calculateCustomOptionPricing("consultations", unitPrice, qty),
+        slabLabel:   `${formatCurrency(unitPrice)}/consult`,
+        pricingMode: "unit",
+      };
     }
 
     case "careAssistant": {
-      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
-      const caTiers = optionPricing?.careAssistant?.pricingTiers ?? [];
-      const tierIdx = extras.careAssistantTierIndex ?? 0;
-      if (caTiers.length > 0) {
-        const tier = caTiers[tierIdx] ?? caTiers[0];
-        unitPrice = tier.chargeToUser ?? 0;
-        slabLabel = `${tier.label}: ₹${unitPrice}/visit × ${qty} visits`;
-      }
-      return { unitPrice, lineTotal: +(qty * unitPrice).toFixed(2), slabLabel };
+      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "", pricingMode: "unit" };
+      const tiers     = optionPricing?.careAssistant?.pricingTiers ?? [];
+      const tierIndex = extras?.careAssistantTierIndex ?? 0;
+      const tier      = tiers[tierIndex];
+      if (!tier) return { unitPrice: 0, lineTotal: 0, slabLabel: "", pricingMode: "unit" };
+      const unitPrice = tier.chargeToUser;
+      return {
+        unitPrice,
+        lineTotal:   calculateCustomOptionPricing("careAssistant", unitPrice, qty),
+        slabLabel:   `${tier.label}: ${formatCurrency(unitPrice)}/visit × ${qty}`,
+        pricingMode: "unit",
+      };
+    }
+
+    case "transport": {
+      const slabs = optionPricing?.transport?.kmSlabs ?? [];
+      if (!slabs.length) return { unitPrice: 0, lineTotal: 0, slabLabel: "", pricingMode: "flat" };
+      const slab = slabs[qty];
+      if (!slab) return { unitPrice: 0, lineTotal: 0, slabLabel: "", pricingMode: "flat" };
+      const unitPrice = slab.packagePrice;
+      return {
+        unitPrice,
+        lineTotal:   calculateCustomOptionPricing("transport", unitPrice, qty),
+        slabLabel:   `${formatCurrency(slab.pricePerKm)}/km · ${formatCurrency(slab.packagePrice)} bundle`,
+        pricingMode: "flat",
+        pricePerKm:  slab.pricePerKm,
+        packagePrice: slab.packagePrice,
+      };
+    }
+
+    case "diagnostics": {
+      // qty = discount % — NOT a multiplier
+      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "", pricingMode: "flat" };
+      const slabs = optionPricing?.diagnosticsDiscount?.slabs ?? [];
+      const slab  = slabs.find((s) => s.percent === qty)
+        ?? [...slabs].sort((a, b) => b.percent - a.percent).find((s) => s.percent <= qty);
+      if (!slab) return { unitPrice: 0, lineTotal: 0, slabLabel: "", pricingMode: "flat" };
+      const unitPrice = slab.price;
+      return {
+        unitPrice,
+        lineTotal:   calculateCustomOptionPricing("diagnostics", unitPrice, qty),
+        slabLabel:   `${formatPercent(slab.percent)} discount @ ${formatCurrency(slab.price)}/mo`,
+        pricingMode: "flat",
+        discountPercent: slab.percent,
+      };
+    }
+
+    case "pharmacy": {
+      // qty = discount % — NOT a multiplier
+      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "", pricingMode: "flat" };
+      const slabs = optionPricing?.pharmacyDiscount?.slabs ?? [];
+      const slab  = slabs.find((s) => s.percent === qty)
+        ?? [...slabs].sort((a, b) => b.percent - a.percent).find((s) => s.percent <= qty);
+      if (!slab) return { unitPrice: 0, lineTotal: 0, slabLabel: "", pricingMode: "flat" };
+      const unitPrice = slab.price;
+      return {
+        unitPrice,
+        lineTotal:   calculateCustomOptionPricing("pharmacy", unitPrice, qty),
+        slabLabel:   `${formatPercent(slab.percent)} discount @ ${formatCurrency(slab.price)}/mo`,
+        pricingMode: "flat",
+        discountPercent: slab.percent,
+      };
     }
 
     case "homeSampleCollection": {
-      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
       const price = optionPricing?.addOns?.homeSampleCollection ?? 199;
-      slabLabel = `Flat ₹${price}`;
-      return { unitPrice: price, lineTotal: price, slabLabel };
+      return {
+        unitPrice:   price,
+        lineTotal:   qty > 0 ? calculateCustomOptionPricing("homeSampleCollection", price, qty) : 0,
+        slabLabel:   `Flat ${formatCurrency(price)}`,
+        pricingMode: "flat",
+      };
     }
 
     case "prioritySupport": {
-      if (qty <= 0) return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
       const price = optionPricing?.addOns?.prioritySupport ?? 99;
-      slabLabel = `Flat ₹${price}`;
-      return { unitPrice: price, lineTotal: price, slabLabel };
+      return {
+        unitPrice:   price,
+        lineTotal:   qty > 0 ? calculateCustomOptionPricing("prioritySupport", price, qty) : 0,
+        slabLabel:   `Flat ${formatCurrency(price)}`,
+        pricingMode: "flat",
+      };
     }
 
     default:
-      return { unitPrice: 0, lineTotal: 0, slabLabel: "" };
+      return { unitPrice: 0, lineTotal: 0, slabLabel: "", pricingMode: "flat" };
   }
 }
 
@@ -194,6 +405,14 @@ const TIER_META = {
     icon: Shield, tag: "Starter", popular: false,
     tagline: "Essential individual coverage",
     patternId: "zigzag", ring: "ring-blue-500/30",
+  },
+  "Standard Care": {
+    gradient: "from-teal-500 to-teal-700",
+    gradientCSS: "linear-gradient(135deg,#14b8a6,#0f766e)",
+    accent: "#14b8a6", glow: "rgba(20,184,166,0.35)",
+    icon: Star, tag: "Popular", popular: false,
+    tagline: "Balanced everyday healthcare",
+    patternId: "grid", ring: "ring-teal-500/30",
   },
   "Premium Care": {
     gradient: "from-violet-500 to-violet-700",
@@ -242,14 +461,75 @@ const getMeta = (name) => TIER_META[name] || CUSTOM_META;
 
 // ─── Option config ────────────────────────────────────────────────────────────
 const OPTION_CONFIG = [
-  { key: "consultations", icon: Stethoscope, label: "Doctor Consultations", unit: "consults/mo", isToggle: false, hint: "Price = base per consult" },
-  { key: "transport", icon: Truck, label: "Medical Transport Rides", unit: "slab", isToggle: false, hint: "Select a km-slab bundle for flat monthly price" },
-  { key: "diagnostics", icon: Microscope, label: "Diagnostic Discount", unit: "% off", isToggle: false, hint: "Flat monthly price for chosen % off" },
-  { key: "pharmacy", icon: Pill, label: "Pharmacy Discount", unit: "% off", isToggle: false, hint: "Flat monthly price for chosen % off (max 25%)" },
-  { key: "careAssistant", icon: UserCheck, label: "Care Assistant Visits", unit: "visits/mo", isToggle: false, hint: "Select visit duration tier then set visits/month" },
-  { key: "homeSampleCollection", icon: Home, label: "Home Sample Collection", unit: "add-on", isToggle: true, hint: "One-time monthly flat charge", inputMax: 1 },
-  { key: "prioritySupport", icon: Zap, label: "Priority Support", unit: "add-on", isToggle: true, hint: "One-time monthly flat charge", inputMax: 1 },
+  {
+    key: "consultations",
+    icon: Stethoscope,
+    label: "Doctor Consultations",
+    unit: "consults/mo",
+    isToggle: false,
+    hint: "Price = base per consult × quantity",
+    pricingMode: "unit",
+  },
+  {
+    key: "transport",
+    icon: Truck,
+    label: "Medical Transport Rides",
+    unit: "slab",
+    isToggle: false,
+    hint: "Select a km-slab bundle — flat monthly price",
+    pricingMode: "flat",
+  },
+  {
+    key: "diagnostics",
+    icon: Microscope,
+    label: "Diagnostic Discount",
+    unit: "% off",
+    isToggle: false,
+    hint: "Flat monthly package for chosen % off (not multiplied)",
+    pricingMode: "flat",
+  },
+  {
+    key: "pharmacy",
+    icon: Pill,
+    label: "Pharmacy Discount",
+    unit: "% off",
+    isToggle: false,
+    hint: "Flat monthly package for chosen % off (max 25%)",
+    pricingMode: "flat",
+  },
+  {
+    key: "careAssistant",
+    icon: UserCheck,
+    label: "Care Assistant Visits",
+    unit: "visits/mo",
+    isToggle: false,
+    hint: "Select duration tier, then set visits/month",
+    pricingMode: "unit",
+  },
+  {
+    key: "homeSampleCollection",
+    icon: Home,
+    label: "Home Sample Collection",
+    unit: "add-on",
+    isToggle: true,
+    hint: "Flat monthly add-on",
+    inputMax: 1,
+    pricingMode: "flat",
+  },
+  {
+    key: "prioritySupport",
+    icon: Zap,
+    label: "Priority Support",
+    unit: "add-on",
+    isToggle: true,
+    hint: "Flat monthly add-on",
+    inputMax: 1,
+    pricingMode: "flat",
+  },
 ];
+
+const PRIMARY_PLANS   = ["Basic Care", "Standard Care", "Premium Care"];
+const EXTENDED_PLANS  = ["Family Care", "Pregnant Women Care", "NRI's Care"];
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
 const Toast = memo(function Toast({ message, type = "error", onClose }) {
@@ -343,7 +623,7 @@ const BenefitRow = memo(function BenefitRow({ icon: Icon, label, value, active, 
         style={{ background: active ? `${accent}18` : undefined }}
         aria-hidden="true">
         {!active && <Icon size={11} className="text-base-content/40" />}
-        {active && <Icon size={11} style={{ color: accent }} />}
+        {active  && <Icon size={11} style={{ color: accent }} />}
       </div>
       <span className="text-xs font-semibold flex-1 text-base-content">{label}</span>
       <span className="text-[11px] font-black" style={{ color: active ? accent : undefined }}>
@@ -358,30 +638,30 @@ const PlanCard = memo(function PlanCard({
   plan, hasAccess, isCurrent, onSubscribe, onTrial, onUpgrade,
   trialEligible, purchaseLoading, trialLoading,
 }) {
-  const name      = plan.fixedTier || plan.name;
-  const meta      = getMeta(name);
-  const TIcon     = meta.icon;
-  const monthly   = plan.pricing?.monthly ?? 0;
-  const billing   = plan.pricing?.billingLabel || "/month";
-  const consults  = plan.consultations?.freePerMonth ?? 0;
-  const pharmMax  = plan.pharmacy?.isFlat ? plan.pharmacy?.discountMax : (plan.pharmacy?.discountMax ?? 0);
-  const pharmMin  = plan.pharmacy?.discountMin ?? 0;
-  const diagDisc  = plan.diagnostics?.discountPercent ?? 0;
-  const maxMem    = plan.membership?.maxMembers ?? 1;
-  const careInc   = plan.careAssistant?.included ?? false;
-  const homeLab   = plan.diagnostics?.homeSampleCollection ?? false;
+  const name     = plan.fixedTier || plan.name;
+  const meta     = getMeta(name);
+  const TIcon    = meta.icon;
+  const monthly  = plan.pricing?.monthly ?? 0;
+  const billing  = plan.pricing?.billingLabel || "/month";
+  const consults = plan.consultations?.freePerMonth ?? 0;
+  const pharmMax = plan.pharmacy?.isFlat ? plan.pharmacy?.discountMax : (plan.pharmacy?.discountMax ?? 0);
+  const pharmMin = plan.pharmacy?.discountMin ?? 0;
+  const diagDisc = plan.diagnostics?.discountPercent ?? 0;
+  const maxMem   = plan.membership?.maxMembers ?? 1;
+  const careInc  = plan.careAssistant?.included ?? false;
+  const homeLab  = plan.diagnostics?.homeSampleCollection ?? false;
   const transport = plan.transport?.isApplicable ?? true;
   const trialDays = plan.freeTrial?.enabled ? (plan.freeTrial.durationDays ?? 7) : 0;
-  const uid       = `pat-${meta.patternId}-${name.replace(/[\s']/g, "")}`;
+  const uid = `pat-${meta.patternId}-${name.replace(/[\s']/g, "")}`;
 
   const benefits = [
-    { icon: Stethoscope, label: "Consultations",     value: consults === -1 ? "Unlimited" : `${consults}/mo`,   active: consults !== 0 },
-    { icon: Pill,        label: "Pharmacy Discount", value: plan.pharmacy?.isFlat ? `${pharmMax}%` : `${pharmMin}–${pharmMax}%`, active: pharmMax > 0 },
-    { icon: Microscope,  label: "Diagnostics",       value: `${diagDisc}% off`,                                  active: diagDisc > 0 },
-    { icon: Truck,       label: "Transport",         value: transport ? `₹${plan.transport?.ratePerKm ?? 0}/km` : "N/A", active: transport },
-    { icon: UserCheck,   label: "Care Assistant",    value: careInc ? (plan.careAssistant?.serviceType || "Standard") : "—", active: careInc },
-    { icon: Home,        label: "Home Sample",       value: homeLab ? "Included" : "—",                          active: homeLab },
-    { icon: Users,       label: "Members",           value: maxMem === 1 ? "Individual" : `Up to ${maxMem}`,     active: true },
+    { icon: Stethoscope, label: "Consultations",      value: consults === -1 ? "Unlimited" : `${consults}/mo`, active: consults !== 0 },
+    { icon: Pill,        label: "Pharmacy Discount",   value: plan.pharmacy?.isFlat ? `${pharmMax}%` : `${pharmMin}–${pharmMax}%`, active: pharmMax > 0 },
+    { icon: Microscope,  label: "Diagnostics",         value: `${diagDisc}% off`, active: diagDisc > 0 },
+    { icon: Truck,       label: "Transport",            value: transport ? `₹${plan.transport?.ratePerKm ?? 0}/km` : "N/A", active: transport },
+    { icon: UserCheck,   label: "Care Assistant",       value: careInc ? (plan.careAssistant?.serviceType || "Standard") : "—", active: careInc },
+    { icon: Home,        label: "Home Sample",          value: homeLab ? "Included" : "—", active: homeLab },
+    { icon: Users,       label: "Members",              value: maxMem === 1 ? "Individual" : `Up to ${maxMem}`, active: true },
   ];
 
   return (
@@ -412,8 +692,8 @@ const PlanCard = memo(function PlanCard({
           boxShadow: meta.popular
             ? `0 0 0 1px ${meta.accent}22, 0 8px 32px ${meta.accent}33`
             : isCurrent
-            ? `0 4px 24px ${meta.accent}25`
-            : "0 2px 8px rgba(0,0,0,0.04)",
+              ? `0 4px 24px ${meta.accent}25`
+              : "0 2px 8px rgba(0,0,0,0.04)",
         }}
       >
         {/* Header */}
@@ -554,44 +834,42 @@ const CheckoutModal = memo(function CheckoutModal({
 }) {
   const [coupon, setCoupon] = useState("");
   const [paying, setPaying] = useState(false);
-  const meta = getMeta(plan?.fixedTier || plan?.name || "");
+  const meta    = getMeta(plan?.fixedTier || plan?.name || "");
   const RZP_KEY = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
-  const uid = `modal-pat-${Date.now()}`;
+  const uid     = `modal-pat-${Date.now()}`;
 
   const openRazorpay = useCallback(async (order) => {
     if (!RZP_KEY) { onToast("Payment gateway not configured. Contact support.", "error"); return; }
     const loaded = await loadRazorpay().catch(() => false);
     if (!loaded) { onToast("Failed to load payment gateway. Check your connection.", "error"); return; }
 
-    const amountInPaise = order.amount < 100000
-      ? Math.round(order.amount * 100)
-      : Math.round(order.amount);
+    const amountInPaise = toRazorpayPaise(order.amount);
 
     const rzp = new window.Razorpay({
-      key: RZP_KEY,
-      amount: amountInPaise,
-      currency: order.currency || "INR",
-      name: "Likeson Health",
+      key:         RZP_KEY,
+      amount:      amountInPaise,
+      currency:    order.currency || "INR",
+      name:        "Likeson Health",
       description: `${plan.fixedTier || plan.name} Subscription`,
-      order_id: order.orderId || order.id,
-      image: "/logo.png",
+      order_id:    order.orderId || order.id,
+      image:       "/logo.png",
       handler: async (response) => {
         setPaying(true);
         try {
           const res = await onVerifyPay({
-            razorpay_order_id: response.razorpay_order_id,
+            razorpay_order_id:   response.razorpay_order_id,
             razorpay_payment_id: response.razorpay_payment_id,
-            razorpay_signature: response.razorpay_signature,
-            planId: order.planId,
-            amount: order.amount,
+            razorpay_signature:  response.razorpay_signature,
+            planId:  order.planId,
+            amount:  order.amount,
           });
           if (res?.error) onToast(res.error.message || "Payment verification failed.", "error");
           else onClose();
         } finally { setPaying(false); }
       },
       prefill: { name: "", email: "", contact: "" },
-      theme: { color: meta.accent },
-      modal: { ondismiss: () => setPaying(false) },
+      theme:   { color: meta.accent },
+      modal:   { ondismiss: () => setPaying(false) },
     });
     rzp.on("payment.failed", (resp) => {
       onToast(`Payment failed: ${resp.error?.description || "Unknown error"}`, "error");
@@ -603,8 +881,8 @@ const CheckoutModal = memo(function CheckoutModal({
   const handlePay = useCallback(async () => {
     try {
       const result = await onInitiatePay({
-        planId: plan._id,
-        amount: plan.pricing?.monthly ?? 0,
+        planId:     plan._id,
+        amount:     plan.pricing?.monthly ?? 0,
         couponCode: coupon || undefined,
       });
       if (result?.error) { onToast(result.error.message || "Failed to create order.", "error"); return; }
@@ -619,7 +897,7 @@ const CheckoutModal = memo(function CheckoutModal({
   }, [plan, coupon, onInitiatePay, openRazorpay, onClose, onToast]);
 
   if (!plan) return null;
-  const isLoading = purchaseLoading || verifyLoading || paying;
+  const isLoading     = purchaseLoading || verifyLoading || paying;
   const displayAmount = pendingOrder?.amount ?? plan.pricing?.monthly ?? 0;
 
   return (
@@ -683,8 +961,8 @@ const CheckoutModal = memo(function CheckoutModal({
             {purchaseLoading
               ? <><RefreshCw size={14} className="animate-spin" aria-hidden="true" /> Creating order…</>
               : (verifyLoading || paying)
-              ? <><RefreshCw size={14} className="animate-spin" aria-hidden="true" /> Verifying…</>
-              : <><CreditCard size={14} aria-hidden="true" /> Pay ₹{displayAmount}</>
+                ? <><RefreshCw size={14} className="animate-spin" aria-hidden="true" /> Verifying…</>
+                : <><CreditCard size={14} aria-hidden="true" /> Pay ₹{displayAmount}</>
             }
           </button>
           <p className="text-center text-[10px] text-base-content/40">
@@ -696,6 +974,21 @@ const CheckoutModal = memo(function CheckoutModal({
   );
 });
 
+// ─── Pricing Mode Badge Component ─────────────────────────────────────────────
+const PricingModeBadge = memo(function PricingModeBadge({ optionKey }) {
+  const badge = getPricingModeBadge(optionKey);
+  return (
+    <span
+      className="text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-wider flex-shrink-0"
+      style={{ background: badge.bg, color: badge.color }}
+    >
+      {badge.label}
+    </span>
+  );
+});
+
+ 
+
 // ─── Custom Plan Builder ──────────────────────────────────────────────────────
 const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCustomPlan, onToast }) {
   const dispatch    = useDispatch();
@@ -706,30 +999,28 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
 
   const [planName, setPlanName] = useState(existingCustomPlan?.name || "My Custom Plan");
 
-  /**
-   * FIX: transport initial quantity = -1 (sentinel for "not selected").
-   * All other non-toggle options = 0.
-   * Toggle options = 0.
-   *
-   * When restoring existing plan, transport qty stored is slab index (0+),
-   * which is fine — it means "first slab selected", -1 only used for fresh state.
-   */
+  // ── Initial quantities ──────────────────────────────────────────────────────
+  // transport: -1 = not selected, ≥0 = slabIndex
+  // diagnostics/pharmacy: value = discount% (NOT unit count)
   const [quantities, setQty] = useState(() => {
     if (existingCustomPlan?.customOptions) {
-      const base = Object.fromEntries(existingCustomPlan.customOptions.map((o) => [o.optionKey, o.quantity]));
-      // Ensure transport has -1 if not present in existing
+      const base = Object.fromEntries(
+        existingCustomPlan.customOptions.map((o) => [o.optionKey, o.quantity])
+      );
+      // Restore transport slabIndex correctly
       if (base.transport === undefined) base.transport = -1;
       return base;
     }
     return {
       ...Object.fromEntries(OPTION_CONFIG.map((o) => [o.key, 0])),
-      transport: -1, // sentinel: not selected
+      transport: -1,
     };
   });
 
   const [careAssistantTierIndex, setCareAssistantTierIndex] = useState(() => {
     if (existingCustomPlan?.customOptions) {
       const caOpt = existingCustomPlan.customOptions.find((o) => o.optionKey === "careAssistant");
+      // Restore saved tier index
       return caOpt?.careAssistantTierIndex ?? 0;
     }
     return 0;
@@ -738,48 +1029,42 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
   useEffect(() => { dispatch(fetchCustomPlanPricing()); }, [dispatch]);
 
   const optionPricing = pricingData?.optionPricing ?? null;
-  const caps = pricingData?.caps ?? {};
+  const caps          = pricingData?.caps ?? {};
 
   const CAP_MAP = useMemo(() => ({
-    consultations:        caps.consultationsMaxPerMonth       ?? 30,
-    // transport cap = number of slabs - 1 (index-based), handled by getSlabOptions length
-    transport:            (optionPricing?.transport?.kmSlabs?.length ?? 1) - 1,
-    diagnostics:          caps.diagnosticsDiscountMax         ?? 25,
-    pharmacy:             caps.pharmacyDiscountMax            ?? 25,
-    careAssistant:        caps.careAssistantMaxVisitsPerMonth ?? 30,
+    consultations:       caps.consultationsMaxPerMonth ?? 30,
+    transport:           (optionPricing?.transport?.kmSlabs?.length ?? 1) - 1,
+    diagnostics:         caps.diagnosticsDiscountMax ?? 25,
+    pharmacy:            caps.pharmacyDiscountMax ?? 25,
+    careAssistant:       caps.careAssistantMaxVisitsPerMonth ?? 30,
     homeSampleCollection: 1,
-    prioritySupport:      1,
+    prioritySupport:     1,
   }), [caps, optionPricing]);
 
   const caTiers = optionPricing?.careAssistant?.pricingTiers ?? [];
 
+  // ── Price breakdown — uses resolveOptionPrice (single source of truth) ──────
   const priceBreakdown = useMemo(() => {
     if (!optionPricing) return {};
     return Object.fromEntries(
       OPTION_CONFIG.map((opt) => {
-        const qty = quantities[opt.key] ?? (opt.key === "transport" ? -1 : 0);
-        const extras = {
-          careAssistantTierIndex: opt.key === "careAssistant" ? careAssistantTierIndex : undefined,
-        };
+        const qty    = quantities[opt.key] ?? (opt.key === "transport" ? -1 : 0);
+        const extras = { careAssistantTierIndex: opt.key === "careAssistant" ? careAssistantTierIndex : undefined };
         const result = resolveOptionPrice(optionPricing, opt.key, qty, extras);
         return [opt.key, result];
       })
     );
   }, [optionPricing, quantities, careAssistantTierIndex]);
 
+  // ── Grand total — sum of lineTotal ONLY ────
   const total = useMemo(
     () => Object.values(priceBreakdown).reduce((s, v) => s + (v?.lineTotal ?? 0), 0),
     [priceBreakdown]
   );
 
-  /**
-   * FIX: handleSetQty for transport uses -1 as "not selected" sentinel.
-   * Clamp min to -1 for transport, 0 for others.
-   */
   const handleSetQty = useCallback((key, val) => {
     const numVal = Number(val);
     if (key === "transport") {
-      // -1 = not selected, 0+ = slab index
       setQty((q) => ({ ...q, [key]: numVal }));
       return;
     }
@@ -787,19 +1072,33 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
     setQty((q) => ({ ...q, [key]: Math.max(0, Math.min(max, numVal)) }));
   }, [CAP_MAP]);
 
+  // ── Save payload — preserves lineTotal from priceBreakdown ─
   const handleSave = useCallback(async () => {
     const options = OPTION_CONFIG
       .filter((o) => {
         const qty = quantities[o.key] ?? (o.key === "transport" ? -1 : 0);
-        return qty > (o.key === "transport" ? -1 : 0); // transport: qty >= 0 means selected
+        return o.key === "transport" ? qty >= 0 : qty > 0;
       })
       .map((o) => {
-        const extras = {};
+        const qty       = quantities[o.key];
+        const breakdown = priceBreakdown[o.key];
+        const extras    = {};
         if (o.key === "careAssistant") extras.careAssistantTierIndex = careAssistantTierIndex;
-        return { optionKey: o.key, label: o.label, quantity: quantities[o.key], ...extras };
+        if (o.key === "transport")     extras.slabIndex = qty;
+
+        return {
+          optionKey:   o.key,
+          label:       o.label,
+          quantity:    qty,
+          unitPrice:   breakdown?.unitPrice  ?? 0,
+          lineTotal:   breakdown?.lineTotal  ?? 0,
+          pricingMode: breakdown?.pricingMode ?? (FLAT_KEYS.has(o.key) ? "flat" : "unit"),
+          ...extras,
+        };
       });
 
     if (!options.length) { onToast("Add at least one option to your plan.", "error"); return; }
+
     try {
       const res = await dispatch(
         existingCustomPlan
@@ -808,18 +1107,25 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
       );
       if (!res.error) onClose();
     } catch { /* handled by slice */ }
-  }, [quantities, planName, existingCustomPlan, dispatch, onClose, onToast, careAssistantTierIndex]);
+  }, [quantities, planName, existingCustomPlan, dispatch, onClose, onToast, careAssistantTierIndex, priceBreakdown]);
 
   const getSlabOptions = useCallback((optionKey) => {
     if (!optionPricing) return [];
-    if (optionKey === "transport") return (optionPricing.transport?.kmSlabs ?? [])
-      .map((s, idx) => ({ value: idx, label: `₹${s.pricePerKm}/km · Bundle ₹${s.packagePrice}` }));
-    if (optionKey === "diagnostics") return (optionPricing.diagnosticsDiscount?.slabs ?? []).map((s) => ({ value: s.percent, label: `${s.percent}% off — ₹${s.price}/mo` }));
-    if (optionKey === "pharmacy")    return (optionPricing.pharmacyDiscount?.slabs ?? []).map((s) => ({ value: s.percent, label: `${s.percent}% off — ₹${s.price}/mo` }));
+    if (optionKey === "transport")   return (optionPricing.transport?.kmSlabs ?? [])
+      .map((s, idx) => ({ value: idx, label: `${formatCurrency(s.pricePerKm)}/km · Bundle ${formatCurrency(s.packagePrice)}` }));
+    if (optionKey === "diagnostics") return (optionPricing.diagnosticsDiscount?.slabs ?? [])
+      .map((s) => ({ value: s.percent, label: `${formatPercent(s.percent)} off — ${formatCurrency(s.price)}/mo` }));
+    if (optionKey === "pharmacy")    return (optionPricing.pharmacyDiscount?.slabs ?? [])
+      .map((s) => ({ value: s.percent, label: `${formatPercent(s.percent)} off — ${formatCurrency(s.price)}/mo` }));
     return [];
   }, [optionPricing]);
 
   const useDropdown = (key) => ["transport", "diagnostics", "pharmacy"].includes(key);
+
+  const activeOptions = OPTION_CONFIG.filter((o) => {
+    const qty = quantities[o.key] ?? (o.key === "transport" ? -1 : 0);
+    return o.key === "transport" ? qty >= 0 : qty > 0;
+  });
 
   return (
     <section
@@ -827,17 +1133,15 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
       style={{ borderColor: CUSTOM_META.accent, boxShadow: `0 20px 60px ${CUSTOM_META.glow}` }}
       aria-label="Custom plan builder"
     >
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="relative overflow-hidden px-4 py-4 sm:px-6 sm:py-5" style={{ background: CUSTOM_META.gradientCSS }}>
         <PlanPattern patternId="waves" uid="custom-builder-pat" />
-
         <div className="relative z-10 flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-4">
           <div className="flex-1 min-w-0">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full
               text-[10px] font-black uppercase tracking-wider bg-white/20 text-white mb-2">
               <Sparkles size={9} aria-hidden="true" /> Build Your Plan
             </span>
-
             <label htmlFor="custom-plan-name" className="sr-only">Plan name</label>
             <input
               id="custom-plan-name"
@@ -849,18 +1153,17 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
             />
             <p className="text-white/50 text-[11px] mt-1">Select services and quantities below</p>
           </div>
-
           <div className="flex items-baseline gap-2 sm:block sm:text-right flex-shrink-0">
             <p className="text-[9px] text-white/45 uppercase font-bold sm:mb-0.5 hidden sm:block">Monthly Total</p>
             <p className="text-3xl sm:text-4xl font-black text-white" aria-label={`₹${total} per month`}>
-              ₹{total.toFixed(0)}
+              {formatCurrency(total)}
             </p>
             <p className="text-white/45 text-[11px]">/mo</p>
           </div>
         </div>
       </div>
 
-      {/* ── Body ── */}
+      {/* Body */}
       <div className="p-3 sm:p-5 space-y-3 bg-base-100">
         {priceLoad ? (
           <div className="flex justify-center py-8" role="status" aria-label="Loading pricing">
@@ -869,28 +1172,28 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
         ) : (
           <>
             {OPTION_CONFIG.map((opt) => {
-              // FIX: transport uses -1 sentinel for "not selected"
               const rawQty    = quantities[opt.key] ?? (opt.key === "transport" ? -1 : 0);
               const active    = opt.key === "transport" ? rawQty >= 0 : rawQty > 0;
-              const qty       = rawQty; // pass raw to resolveOptionPrice (handles -1 guard)
-              const breakdown = priceBreakdown[opt.key] ?? { unitPrice: 0, lineTotal: 0, slabLabel: "" };
+              const qty       = rawQty;
+              const breakdown = priceBreakdown[opt.key] ?? { unitPrice: 0, lineTotal: 0, slabLabel: "", pricingMode: "flat" };
               const max       = CAP_MAP[opt.key] ?? 1;
               const slabOpts  = getSlabOptions(opt.key);
+              const badge     = getPricingModeBadge(opt.key);
 
               return (
                 <div
                   key={opt.key}
                   className="relative rounded-2xl p-3 sm:p-4 transition-all border"
                   style={{
-                    background:   active ? `${CUSTOM_META.accent}08` : undefined,
-                    borderColor:  active ? `${CUSTOM_META.accent}35` : undefined,
+                    background:  active ? `${CUSTOM_META.accent}08` : undefined,
+                    borderColor: active ? `${CUSTOM_META.accent}35` : undefined,
                   }}
                 >
                   {!active && (
                     <div className="absolute inset-0 rounded-2xl bg-base-200 border border-base-300 -z-10" />
                   )}
 
-                  {/* ── Row 1: icon + label + toggle ── */}
+                  {/* Row 1: icon + label + toggle */}
                   <div className="flex items-start gap-2.5">
                     <div
                       className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
@@ -904,7 +1207,16 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                     </div>
 
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-black text-base-content leading-tight">{opt.label}</p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="text-sm font-black text-base-content leading-tight">{opt.label}</p>
+                        {/* Pricing mode badge — FLAT PACKAGE vs PER UNIT */}
+                        <span
+                          className="text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-wider flex-shrink-0"
+                          style={{ background: badge.bg, color: badge.color }}
+                        >
+                          {badge.label}
+                        </span>
+                      </div>
                       <p className="text-[11px] font-semibold text-base-content/40 mt-0.5 leading-snug">{opt.hint}</p>
                       {active && breakdown.slabLabel && (
                         <p className="text-[11px] font-bold mt-1" style={{ color: CUSTOM_META.accent }}>
@@ -934,27 +1246,26 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                           <div
                             className="text-[11px] font-black px-2 py-0.5 rounded-full"
                             style={{ background: `${CUSTOM_META.accent}18`, color: CUSTOM_META.accent }}
-                            aria-label={`₹${breakdown.lineTotal} for ${opt.label}`}
+                            aria-label={`${formatCurrency(breakdown.lineTotal)} for ${opt.label}`}
                           >
-                            ₹{breakdown.lineTotal.toFixed(0)}
+                            {formatCurrency(breakdown.lineTotal)}
                           </div>
                         )}
                       </div>
                     )}
                   </div>
 
-                  {/* ── Row 2: stepper / dropdown + price badge (non-toggle) ── */}
+                  {/* Row 2: stepper / dropdown + price badge (non-toggle) */}
                   {!opt.isToggle && (
                     <div className="flex items-center justify-between mt-3 ml-[42px] sm:ml-[46px] gap-2">
                       <div className="flex-1 min-w-0">
                         {useDropdown(opt.key) && slabOpts.length > 0 ? (
                           <select
-                            value={opt.key === "transport" ? qty : qty}
+                            value={qty}
                             onChange={(e) => handleSetQty(opt.key, Number(e.target.value))}
                             className="input-field text-sm py-2 px-3 pr-7 rounded-xl w-full"
-                            aria-label={`Select ${opt.label} slab`}
+                            aria-label={`Select ${opt.label} option`}
                           >
-                            {/* FIX: transport uses -1 sentinel for "not included" */}
                             <option value={opt.key === "transport" ? -1 : 0}>— Not included —</option>
                             {slabOpts.map((s) => (
                               <option key={s.value} value={s.value}>{s.label}</option>
@@ -975,14 +1286,12 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                             >
                               <Minus size={13} aria-hidden="true" />
                             </button>
-
                             <span
                               className="w-12 sm:w-10 text-center text-base sm:text-sm font-black bg-base-100 select-none"
                               aria-label={`${qty} ${opt.unit}`}
                             >
                               {qty}
                             </span>
-
                             <button
                               onClick={() => handleSetQty(opt.key, qty + 1)}
                               className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center
@@ -1000,15 +1309,15 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                         <div
                           className="flex-shrink-0 text-xs font-black px-2.5 py-1 rounded-full whitespace-nowrap"
                           style={{ background: `${CUSTOM_META.accent}18`, color: CUSTOM_META.accent }}
-                          aria-label={`₹${breakdown.lineTotal} for ${opt.label}`}
+                          aria-label={`${formatCurrency(breakdown.lineTotal)} for ${opt.label}`}
                         >
-                          ₹{breakdown.lineTotal.toFixed(0)}
+                          {formatCurrency(breakdown.lineTotal)}
                         </div>
                       )}
                     </div>
                   )}
 
-                  {/* ── Consultations sub-section ── */}
+                  {/* ── Consultations breakdown: unit-based, shows qty × price ── */}
                   {opt.key === "consultations" && qty > 0 && optionPricing?.consultation && (
                     <div className="mt-3">
                       <div
@@ -1017,34 +1326,94 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                       >
                         <p className="font-black text-xs text-base-content/70">Pricing breakdown:</p>
                         <p className="font-semibold text-xs text-base-content/55">
-                          {qty} consults × ₹{optionPricing.consultation.pricePerConsultation ?? 0} each
+                          {qty} consult{qty !== 1 ? "s" : ""} × {formatCurrency(optionPricing.consultation.pricePerConsultation ?? 0)} each
                         </p>
                         <p className="font-black text-sm" style={{ color: CUSTOM_META.accent }}>
-                          = ₹{breakdown.lineTotal.toFixed(0)}/month total
+                          = {formatCurrency(breakdown.lineTotal)}/month total
                         </p>
                       </div>
                     </div>
                   )}
 
-                  {/* ── Transport sub-section ── */}
+                  {/* ── Transport breakdown: FLAT PACKAGE — NO qty × price ever ── */}
                   {opt.key === "transport" && active && (
                     <div className="mt-3">
                       <div
                         className="p-3 rounded-xl space-y-1"
                         style={{ background: `${CUSTOM_META.accent}0a`, border: `1px dashed ${CUSTOM_META.accent}30` }}
                       >
-                        <p className="font-black text-xs text-base-content/70">Bundle details:</p>
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <Package size={11} style={{ color: CUSTOM_META.accent }} aria-hidden="true" />
+                          <p className="font-black text-xs text-base-content/70">Flat Bundle Package</p>
+                        </div>
+                        {/* CORRECT: show pricePerKm/km rate + flat bundle price — NEVER qty × price */}
                         <p className="font-semibold text-xs text-base-content/55">
-                          {breakdown.slabLabel}
+                          {formatTransportSummary(
+                            breakdown.pricePerKm ?? breakdown.unitPrice,
+                            breakdown.lineTotal
+                          )}
                         </p>
                         <p className="font-black text-sm" style={{ color: CUSTOM_META.accent }}>
-                          = ₹{breakdown.lineTotal.toFixed(0)}/month flat
+                          = {formatCurrency(breakdown.lineTotal)}/month flat
+                        </p>
+                        <p className="text-[10px] text-base-content/40">
+                          Ride charges billed at per-km rate shown above
                         </p>
                       </div>
                     </div>
                   )}
 
-                  {/* ── Care Assistant sub-section ── */}
+                  {/* ── Diagnostics breakdown: FLAT PACKAGE — qty = discount %, NEVER unit count ── */}
+                  {opt.key === "diagnostics" && qty > 0 && (
+                    <div className="mt-3">
+                      <div
+                        className="p-3 rounded-xl space-y-1"
+                        style={{ background: `${CUSTOM_META.accent}0a`, border: `1px dashed ${CUSTOM_META.accent}30` }}
+                      >
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <Package size={11} style={{ color: CUSTOM_META.accent }} aria-hidden="true" />
+                          <p className="font-black text-xs text-base-content/70">Discount Package</p>
+                        </div>
+                        {/* CORRECT: qty% off — shows % symbol */}
+                        <p className="font-semibold text-xs text-base-content/55">
+                          {formatPercent(qty)} off all diagnostics — flat monthly package
+                        </p>
+                        <p className="font-black text-sm" style={{ color: CUSTOM_META.accent }}>
+                          = {formatCurrency(breakdown.lineTotal)}/month
+                        </p>
+                        <p className="text-[10px] text-amber-500 font-semibold">
+                          ℹ {formatPercent(qty)} = discount percentage, not unit quantity
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Pharmacy breakdown: FLAT PACKAGE — qty = discount %, NEVER unit count ── */}
+                  {opt.key === "pharmacy" && qty > 0 && (
+                    <div className="mt-3">
+                      <div
+                        className="p-3 rounded-xl space-y-1"
+                        style={{ background: `${CUSTOM_META.accent}0a`, border: `1px dashed ${CUSTOM_META.accent}30` }}
+                      >
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <Package size={11} style={{ color: CUSTOM_META.accent }} aria-hidden="true" />
+                          <p className="font-black text-xs text-base-content/70">Discount Package</p>
+                        </div>
+                        {/* CORRECT: qty% off — shows % symbol */}
+                        <p className="font-semibold text-xs text-base-content/55">
+                          {formatPercent(qty)} off pharmacy orders — flat monthly package
+                        </p>
+                        <p className="font-black text-sm" style={{ color: CUSTOM_META.accent }}>
+                          = {formatCurrency(breakdown.lineTotal)}/month
+                        </p>
+                        <p className="text-[10px] text-amber-500 font-semibold">
+                          ℹ {formatPercent(qty)} = discount percentage, not unit quantity
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Care Assistant breakdown: unit-based, shows qty × price ── */}
                   {opt.key === "careAssistant" && qty > 0 && caTiers.length > 0 && (
                     <div className="mt-3 space-y-2">
                       <div
@@ -1063,12 +1432,11 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                         >
                           {caTiers.map((tier, idx) => (
                             <option key={idx} value={idx}>
-                              {tier.label} — ₹{tier.chargeToUser}
+                              {tier.label} — {formatCurrency(tier.chargeToUser)}/visit
                             </option>
                           ))}
                         </select>
                       </div>
-
                       <div
                         className="p-3 rounded-xl space-y-1"
                         style={{ background: `${CUSTOM_META.accent}0a`, border: `1px dashed ${CUSTOM_META.accent}30` }}
@@ -1082,7 +1450,7 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                                 Duration: {selectedTier.label}
                               </p>
                               <p className="font-semibold text-xs" style={{ color: CUSTOM_META.accent }}>
-                                {qty} visits × ₹{selectedTier.chargeToUser} = ₹{breakdown.lineTotal.toFixed(0)}/month
+                                {qty} visit{qty !== 1 ? "s" : ""} × {formatCurrency(selectedTier.chargeToUser)} = {formatCurrency(breakdown.lineTotal)}/month
                               </p>
                             </>
                           );
@@ -1094,70 +1462,56 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
               );
             })}
 
-            {/* ── Grand total ── */}
-            <div
-              className="rounded-2xl p-3 sm:p-4 border-2"
-              style={{ background: `${CUSTOM_META.accent}08`, borderColor: `${CUSTOM_META.accent}35` }}
-              aria-label="Custom plan total cost breakdown"
-            >
-              <p className="text-[11px] font-black text-base-content/60 uppercase tracking-widest mb-3">
-                Cost Breakdown
-              </p>
-              <div className="space-y-2">
-                {OPTION_CONFIG.filter((o) => {
-                  const qty = quantities[o.key] ?? (o.key === "transport" ? -1 : 0);
-                  return o.key === "transport" ? qty >= 0 : qty > 0;
-                }).map((opt) => {
-                  const b = priceBreakdown[opt.key];
-                  return (
-                    <div key={opt.key} className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-semibold text-base-content/70 flex items-center gap-1.5 min-w-0">
-                        <opt.icon size={10} aria-hidden="true" className="flex-shrink-0" />
-                        <span className="truncate">{opt.label}</span>
-                        {b?.slabLabel && (
-                          <span className="text-[10px] text-base-content/40 font-normal hidden sm:inline flex-shrink-0">
-                            ({b.slabLabel})
-                          </span>
-                        )}
-                      </span>
-                      <span className="text-xs font-black flex-shrink-0" style={{ color: CUSTOM_META.accent }}>
-                        ₹{b?.lineTotal?.toFixed(0) ?? 0}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-
+            {/* ── Grand total cost breakdown ──────────────────────────────────── */}
+            {activeOptions.length > 0 && (
               <div
-                className="mt-3 pt-3 flex items-center justify-between"
-                style={{ borderTop: `1.5px solid ${CUSTOM_META.accent}30` }}
+                className="rounded-2xl p-3 sm:p-4 border-2"
+                style={{ background: `${CUSTOM_META.accent}08`, borderColor: `${CUSTOM_META.accent}35` }}
+                aria-label="Custom plan total cost breakdown"
               >
-                <span className="text-sm font-black text-base-content">Monthly Total</span>
-                <span className="text-2xl font-black" style={{ color: CUSTOM_META.accent }}>
-                  ₹{total.toFixed(0)}
-                  <span className="text-xs font-bold text-base-content/40">/mo</span>
-                </span>
-              </div>
-            </div>
+                <p className="text-[11px] font-black text-base-content/60 uppercase tracking-widest mb-3">
+                  Cost Breakdown
+                </p>
+                <div className="space-y-2.5">
+                  {activeOptions.map((opt) => (
+                    <BreakdownRow
+                      key={opt.key}
+                      opt={opt}
+                      quantities={quantities}
+                      priceBreakdown={priceBreakdown}
+                    />
+                  ))}
+                </div>
 
-            {/* ── Error ── */}
+                <div
+                  className="mt-3 pt-3 flex items-center justify-between"
+                  style={{ borderTop: `1.5px solid ${CUSTOM_META.accent}30` }}
+                >
+                  <span className="text-sm font-black text-base-content">Monthly Total</span>
+                  <span className="text-2xl font-black" style={{ color: CUSTOM_META.accent }}>
+                    {formatCurrency(total)}
+                    <span className="text-xs font-bold text-base-content/40">/mo</span>
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Error */}
             {saveErr && (
               <div
                 className="flex items-center gap-2 p-3 rounded-xl text-xs font-semibold bg-red-500/10 text-red-500"
-                role="alert"
-                aria-live="polite"
+                role="alert" aria-live="polite"
               >
                 <AlertCircle size={13} aria-hidden="true" /> {saveErr}
               </div>
             )}
 
-            {/* ── Action buttons ── */}
+            {/* Actions */}
             <div className="flex flex-col md:flex-row gap-2 pt-1">
               <button
                 onClick={onClose}
                 className="flex-1 py-4 sm:py-3 rounded-xl text-sm sm:text-xs font-black uppercase
-                  tracking-wider bg-base-300 text-base-content hover:bg-base-300/80 transition-colors
-                  active:scale-95"
+                  tracking-wider bg-base-300 text-base-content hover:bg-base-300/80 transition-colors active:scale-95"
               >
                 Cancel
               </button>
@@ -1168,17 +1522,14 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                   text-sm sm:text-xs font-black text-white disabled:opacity-65 transition-all
                   hover:brightness-110 active:scale-95"
                 style={{ background: CUSTOM_META.gradientCSS, boxShadow: `0 4px 20px ${CUSTOM_META.glow}` }}
-                aria-label={`${existingCustomPlan ? "Update" : "Create"} plan — ₹${total.toFixed(0)}/month`}
+                aria-label={`${existingCustomPlan ? "Update" : "Create"} plan — ${formatCurrency(total)}/month`}
                 aria-busy={saveLoad}
               >
                 {saveLoad ? (
-                  <>
-                    <RefreshCw size={13} className="animate-spin" aria-hidden="true" /> Saving…
-                  </>
+                  <><RefreshCw size={13} className="animate-spin" aria-hidden="true" /> Saving…</>
                 ) : (
-                  <>
-                    <CheckCircle2 size={13} aria-hidden="true" />
-                    {existingCustomPlan ? "Update" : "Create"} — ₹{total.toFixed(0)}/mo
+                  <><CheckCircle2 size={13} aria-hidden="true" />
+                    {existingCustomPlan ? "Update" : "Create"} — {formatCurrency(total)}/mo
                   </>
                 )}
               </button>
@@ -1187,6 +1538,76 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
         )}
       </div>
     </section>
+  );
+});
+
+// ─── Saved Custom Plan Option Chip ─────────────────────────────────────────────
+// Shows correct display: % for discounts, bundle for transport, qty for unit
+const CustomPlanOptionChip = memo(function CustomPlanOptionChip({ opt }) {
+  const { label, prefix, qty, price } = getOptionSummary(opt);
+  const badge = getPricingModeBadge(opt.optionKey);
+
+  // Build chip label based on type
+  let chipContent;
+  if (opt.optionKey === "diagnostics") {
+    // CORRECT: show "20% Diagnostic Discount = ₹349"
+    chipContent = (
+      <>
+        <span className="text-base-content/60">{opt.label}:</span>
+        <span className="font-bold text-base-content">{formatPercent(opt.quantity)}</span>
+        <span style={{ color: CUSTOM_META.accent }}>= {formatCurrency(opt.lineTotal)}</span>
+      </>
+    );
+  } else if (opt.optionKey === "pharmacy") {
+    // CORRECT: show "20% Pharmacy Discount = ₹299"
+    chipContent = (
+      <>
+        <span className="text-base-content/60">{opt.label}:</span>
+        <span className="font-bold text-base-content">{formatPercent(opt.quantity)}</span>
+        <span style={{ color: CUSTOM_META.accent }}>= {formatCurrency(opt.lineTotal)}</span>
+      </>
+    );
+  } else if (opt.optionKey === "transport") {
+    // CORRECT: show "Transport: ₹25/km Bundle = ₹200/mo" — NEVER qty × price
+    chipContent = (
+      <>
+        <span className="text-base-content/60">{opt.label}:</span>
+        <span className="font-bold text-base-content">Bundle</span>
+        <span style={{ color: CUSTOM_META.accent }}>= {formatCurrency(opt.lineTotal)}/mo</span>
+      </>
+    );
+  } else if (opt.optionKey === "consultations") {
+    // CORRECT: unit-based qty × price
+    chipContent = (
+      <>
+        <span className="text-base-content/60">{opt.label}:</span>
+        <span className="font-bold text-base-content">{opt.quantity} consult{opt.quantity !== 1 ? "s" : ""}</span>
+        <span style={{ color: CUSTOM_META.accent }}>= {formatCurrency(opt.lineTotal)}</span>
+      </>
+    );
+  } else if (opt.optionKey === "careAssistant") {
+    // CORRECT: unit-based qty × price
+    chipContent = (
+      <>
+        <span className="text-base-content/60">{opt.label}:</span>
+        <span className="font-bold text-base-content">{opt.quantity} visit{opt.quantity !== 1 ? "s" : ""}</span>
+        <span style={{ color: CUSTOM_META.accent }}>= {formatCurrency(opt.lineTotal)}</span>
+      </>
+    );
+  } else {
+    // flat add-ons
+    chipContent = (
+      <>
+        <span className="text-base-content/60">{opt.label}:</span>
+        <span style={{ color: CUSTOM_META.accent }}>{formatCurrency(opt.lineTotal)}/mo</span>
+      </>
+    );
+  }
+
+  return (
+    <div className="text-[10px] font-bold px-2 py-1 rounded-lg flex items-center gap-1 bg-base-200 flex-wrap">
+      {chipContent}
+    </div>
   );
 });
 
@@ -1200,45 +1621,47 @@ const InlineComparisonTable = memo(function InlineComparisonTable({
   if (!allFixedPlans?.length) return null;
 
   const ROWS = [
-    { key: "price",         label: "Monthly Price",          icon: CreditCard,   getValue: (p) => p ? `₹${p.pricing?.monthly}${p.pricing?.billingLabel || "/mo"}` : "Pay-per-use" },
-    { key: "trial",         label: "Free Trial",             icon: Gift,         getValue: (p) => p?.freeTrial?.enabled ? `${p.freeTrial.durationDays}d free` : "—" },
-    { key: "consultations", label: "Doctor Consultations",   icon: Stethoscope,  getValue: (p) => p ? (p.consultations?.freePerMonth === -1 ? "Unlimited" : `${p.consultations?.freePerMonth ?? 0}/mo`) : "Charged separately" },
-    { key: "pharmacy",      label: "Pharmacy Discount",      icon: Pill,         getValue: (p) => p ? (p.pharmacy?.isFlat ? `Flat ${p.pharmacy?.discountMax}%` : `${p.pharmacy?.discountMin ?? 0}–${p.pharmacy?.discountMax ?? 0}%`) : "0%" },
-    { key: "diagnostics",   label: "Diagnostic Discount",    icon: Microscope,   getValue: (p) => p ? `${p.diagnostics?.discountPercent ?? 0}%` : "0%" },
-    { key: "transport",     label: "Transport Rate",         icon: Truck,        getValue: (p) => p ? (p.transport?.isApplicable ? `₹${p.transport?.ratePerKm ?? 0}/km` : "N/A") : "Market rate" },
-    { key: "careAssistant", label: "Care Assistant",         icon: UserCheck,    getValue: (p) => p ? (p.careAssistant?.included ? (p.careAssistant?.serviceType || "Standard") : "—") : "Charged separately" },
-    { key: "homeSample",    label: "Home Sample Collection", icon: Home,         getValue: (p) => p ? (p.diagnostics?.homeSampleCollection ? "Included" : "—") : "Extra charge" },
-    { key: "members",       label: "Max Members",            icon: Users,        getValue: (p) => p ? `${p.membership?.maxMembers ?? 1}` : "1" },
-    { key: "support",       label: "Support Tier",           icon: Zap,          getValue: (p) => p?.support?.tier || "Standard" },
-    { key: "billing",       label: "Billing Cycle",          icon: Clock,        getValue: (p) => p?.pricing?.billingCycle === "till_delivery" ? "Till Delivery" : "Monthly" },
-    { key: "hidden",        label: "Hidden Charges",         icon: Shield,       getValue: (p) => p?.features?.noHiddenCharges ? "None" : "May apply" },
-    { key: "summary",       label: "Monthly Health Summary", icon: BarChart3,    getValue: (p) => p?.features?.monthlyHealthSummary ? "Yes" : "—" },
-    { key: "cancel",        label: "No Cancel Charges",      icon: CheckCircle2, getValue: (p) => p?.features?.noCancellationCharges ? "Yes" : "—" },
-    { key: "digital",       label: "Digital Reports",        icon: Activity,     getValue: (p) => p?.features?.digitalReportAccess ? "Yes" : "—" },
+    { key: "price",        label: "Monthly Price",          icon: CreditCard,   getValue: (p) => p ? `₹${p.pricing?.monthly}${p.pricing?.billingLabel || "/mo"}` : "Pay-per-use" },
+    { key: "trial",        label: "Free Trial",             icon: Gift,         getValue: (p) => p?.freeTrial?.enabled ? `${p.freeTrial.durationDays}d free` : "—" },
+    { key: "consultations",label: "Doctor Consultations",   icon: Stethoscope,  getValue: (p) => p ? (p.consultations?.freePerMonth === -1 ? "Unlimited" : `${p.consultations?.freePerMonth ?? 0}/mo`) : "Charged separately" },
+    { key: "pharmacy",     label: "Pharmacy Discount",      icon: Pill,         getValue: (p) => p ? (p.pharmacy?.isFlat ? `Flat ${p.pharmacy?.discountMax}%` : `${p.pharmacy?.discountMin ?? 0}–${p.pharmacy?.discountMax ?? 0}%`) : "0%" },
+    { key: "diagnostics",  label: "Diagnostic Discount",    icon: Microscope,   getValue: (p) => p ? `${p.diagnostics?.discountPercent ?? 0}%` : "0%" },
+    { key: "transport",    label: "Transport Rate",          icon: Truck,        getValue: (p) => p ? (p.transport?.isApplicable ? `₹${p.transport?.ratePerKm ?? 0}/km` : "N/A") : "Market rate" },
+    { key: "careAssistant",label: "Care Assistant",         icon: UserCheck,    getValue: (p) => p ? (p.careAssistant?.included ? (p.careAssistant?.serviceType || "Standard") : "—") : "Charged separately" },
+    { key: "homeSample",   label: "Home Sample Collection", icon: Home,         getValue: (p) => p ? (p.diagnostics?.homeSampleCollection ? "Included" : "—") : "Extra charge" },
+    { key: "members",      label: "Max Members",            icon: Users,        getValue: (p) => p ? `${p.membership?.maxMembers ?? 1}` : "1" },
+    { key: "support",      label: "Support Tier",           icon: Zap,          getValue: (p) => p?.support?.tier || "Standard" },
+    { key: "billing",      label: "Billing Cycle",          icon: Clock,        getValue: (p) => p?.pricing?.billingCycle === "till_delivery" ? "Till Delivery" : "Monthly" },
+    { key: "hidden",       label: "Hidden Charges",         icon: Shield,       getValue: (p) => p?.features?.noHiddenCharges ? "None" : "May apply" },
+    { key: "summary",      label: "Monthly Health Summary", icon: BarChart3,    getValue: (p) => p?.features?.monthlyHealthSummary ? "Yes" : "—" },
+    { key: "cancel",       label: "No Cancel Charges",      icon: CheckCircle2, getValue: (p) => p?.features?.noCancellationCharges ? "Yes" : "—" },
+    { key: "digital",      label: "Digital Reports",        icon: Activity,     getValue: (p) => p?.features?.digitalReportAccess ? "Yes" : "—" },
   ];
 
-  // Custom plan row builder — shows each active option + total
   const getCustomPlanValue = (plan, rowKey) => {
     if (!plan) return "—";
     const opts = plan.customOptions || [];
     switch (rowKey) {
-      case "price": return `₹${plan.pricing?.monthly ?? 0}/mo`;
-      case "trial": return "—";
+      case "price":         return `₹${plan.pricing?.monthly ?? 0}/mo`;
+      case "trial":         return "—";
       case "consultations": {
         const o = opts.find(o => o.optionKey === "consultations");
         return o?.quantity > 0 ? `${o.quantity}/mo` : "—";
       }
+      // CORRECT: show % symbol for pharmacy
       case "pharmacy": {
         const o = opts.find(o => o.optionKey === "pharmacy");
-        return o?.quantity > 0 ? `${o.quantity}% off` : "—";
+        return o?.quantity > 0 ? formatPercent(o.quantity) : "—";
       }
+      // CORRECT: show % symbol for diagnostics
       case "diagnostics": {
         const o = opts.find(o => o.optionKey === "diagnostics");
-        return o?.quantity > 0 ? `${o.quantity}% off` : "—";
+        return o?.quantity > 0 ? formatPercent(o.quantity) : "—";
       }
+      // CORRECT: show saved lineTotal (flat bundle price), NOT qty*unitPrice
       case "transport": {
         const o = opts.find(o => o.optionKey === "transport");
-        return o?.quantity >= 0 ? `Bundle ₹${o.lineTotal?.toFixed(0) ?? 0}` : "—";
+        return o?.quantity >= 0 ? `Bundle ${formatCurrency(o.lineTotal ?? 0)}` : "—";
       }
       case "careAssistant": {
         const o = opts.find(o => o.optionKey === "careAssistant");
@@ -1248,37 +1671,29 @@ const InlineComparisonTable = memo(function InlineComparisonTable({
         const o = opts.find(o => o.optionKey === "homeSampleCollection");
         return o?.quantity > 0 ? "Included" : "—";
       }
-      case "members": return "1";
-      case "support": return "Standard";
-      default: return "Custom";
+      case "members":  return "1";
+      case "support":  return "Standard";
+      default:         return "Custom";
     }
   };
 
   const noPlan = null;
-
-  // Build columns based on mode
   let columns;
   if (mode === "overview") {
     columns = [noPlan, ...allFixedPlans, ...myCustomPlans];
   } else {
-    // "vs My Plan" — show all fixed + custom, highlight current
     columns = [...allFixedPlans, ...myCustomPlans];
   }
 
-  const isCustomPlan = (plan) => plan && !plan.fixedTier && !!plan.customOptions;
-
-  // Inside InlineComparisonTable, replace isHighlighted:
-const isHighlighted = (plan) => {
-  if (!plan) return false;
-  const planIdentifier = plan.fixedTier || plan.name;
-  if (mode === "overview") {
-    return isCustomPlan(plan)
-      ? planIdentifier === currentPlanName  // highlight active custom in overview too
-      : TIER_META[planIdentifier]?.popular ?? false;
-  }
-  // "vs My Plan" mode — highlight current plan
-  return planIdentifier === currentPlanName;
-};
+  const isCustomPlan  = (plan) => plan && !plan.fixedTier && !!plan.customOptions;
+  const isHighlighted = (plan) => {
+    if (!plan) return false;
+    const planIdentifier = plan.fixedTier || plan.name;
+    if (mode === "overview") {
+      return isCustomPlan(plan) ? planIdentifier === currentPlanName : TIER_META[planIdentifier]?.popular ?? false;
+    }
+    return planIdentifier === currentPlanName;
+  };
 
   return (
     <section aria-labelledby="compare-heading" className="space-y-4">
@@ -1291,18 +1706,14 @@ const isHighlighted = (plan) => {
           role="group" aria-label="Comparison view selector">
           <button
             onClick={() => setMode("overview")}
-            className={`px-4 py-2 transition-colors ${mode === "overview"
-              ? "bg-primary text-primary-content"
-              : "bg-base-200 text-base-content hover:bg-base-300"}`}
+            className={`px-4 py-2 transition-colors ${mode === "overview" ? "bg-primary text-primary-content" : "bg-base-200 text-base-content hover:bg-base-300"}`}
             aria-pressed={mode === "overview"}>
             All Plans
           </button>
           {currentPlanName && (
             <button
               onClick={() => setMode("current")}
-              className={`px-4 py-2 transition-colors ${mode === "current"
-                ? "bg-primary text-primary-content"
-                : "bg-base-200 text-base-content hover:bg-base-300"}`}
+              className={`px-4 py-2 transition-colors ${mode === "current" ? "bg-primary text-primary-content" : "bg-base-200 text-base-content hover:bg-base-300"}`}
               aria-pressed={mode === "current"}>
               vs My Plan
             </button>
@@ -1330,8 +1741,8 @@ const isHighlighted = (plan) => {
                   <th key={ci} className="px-4 py-3 text-center font-black border-b border-base-300"
                     scope="col"
                     style={{
-                      minWidth: 130,
-                      background: highlighted && meta ? `${meta.accent}12` : undefined,
+                      minWidth:     130,
+                      background:   highlighted && meta ? `${meta.accent}12` : undefined,
                       borderBottom: highlighted && meta ? `2px solid ${meta.accent}` : undefined,
                     }}>
                     {plan ? (
@@ -1391,12 +1802,12 @@ const isHighlighted = (plan) => {
                   </div>
                 </td>
                 {columns.map((plan, ci) => {
-                  const isCustom    = isCustomPlan(plan);
-                  const val         = isCustom ? getCustomPlanValue(plan, row.key) : row.getValue(plan);
+                  const isCustom  = isCustomPlan(plan);
+                  const val       = isCustom ? getCustomPlanValue(plan, row.key) : row.getValue(plan);
                   const highlighted = isHighlighted(plan);
-                  const meta        = plan && !isCustom ? getMeta(plan.fixedTier || plan.name) : CUSTOM_META;
-                  const isBetter    = plan !== null && val !== "—" && val !== "0%" && val !== "0";
-                  const isNoPlan    = plan === null;
+                  const meta      = plan && !isCustom ? getMeta(plan.fixedTier || plan.name) : CUSTOM_META;
+                  const isBetter  = plan !== null && val !== "—" && val !== "0%" && val !== "0";
+                  const isNoPlan  = plan === null;
                   return (
                     <td key={ci} className="px-4 py-3 text-center text-xs"
                       style={{ background: highlighted && meta ? `${meta.accent}06` : undefined }}>
@@ -1416,7 +1827,7 @@ const isHighlighted = (plan) => {
               </tr>
             ))}
 
-            {/* Custom plan cost breakdown rows — only when custom plans present */}
+            {/* Custom plan option breakdown row */}
             {columns.some(isCustomPlan) && (
               <tr className="bg-base-100">
                 <td className="sticky left-0 z-10 px-4 py-3 border-r border-base-300
@@ -1429,24 +1840,44 @@ const isHighlighted = (plan) => {
                 {columns.map((plan, ci) => {
                   const isCustom = isCustomPlan(plan);
                   if (!isCustom) return <td key={ci} className="px-4 py-3 text-center text-base-content/25 text-xs">—</td>;
-                  const opts = (plan.customOptions || []).filter(o => (o.optionKey === "transport" ? o.quantity >= 0 : o.quantity > 0));
+                  const opts  = (plan.customOptions || []).filter(o => (o.optionKey === "transport" ? o.quantity >= 0 : o.quantity > 0));
                   const total = plan.pricing?.monthly ?? 0;
                   return (
                     <td key={ci} className="px-3 py-3 text-left"
                       style={{ background: `${CUSTOM_META.accent}06` }}>
-                      <div className="space-y-1">
-                        {opts.map((o, oi) => (
-                          <div key={oi} className="flex items-center justify-between gap-2 text-[10px]">
-                            <span className="text-base-content/60 truncate">{o.label}</span>
-                            <span className="font-black flex-shrink-0" style={{ color: CUSTOM_META.accent }}>
-                              ₹{o.lineTotal?.toFixed(0) ?? 0}
-                            </span>
-                          </div>
-                        ))}
+                      <div className="space-y-1.5">
+                        {opts.map((o, oi) => {
+                          // CORRECT: show display label with % for discounts, bundle for transport
+                          let displayQty;
+                          if (o.optionKey === "diagnostics" || o.optionKey === "pharmacy") {
+                            displayQty = formatPercent(o.quantity);
+                          } else if (o.optionKey === "transport") {
+                            displayQty = "Bundle";
+                          } else {
+                            displayQty = String(o.quantity);
+                          }
+                          return (
+                            <div key={oi} className="flex items-center justify-between gap-2 text-[10px]">
+                              <span className="text-base-content/60 truncate">
+                                {o.label}
+                                {(o.optionKey === "diagnostics" || o.optionKey === "pharmacy") && (
+                                  <span className="ml-1 font-bold">{formatPercent(o.quantity)}</span>
+                                )}
+                                {o.optionKey === "transport" && (
+                                  <span className="ml-1 font-bold text-base-content/40">bundle</span>
+                                )}
+                              </span>
+                              {/* CORRECT: use saved lineTotal — flat for pkg services */}
+                              <span className="font-black flex-shrink-0" style={{ color: CUSTOM_META.accent }}>
+                                {formatCurrency(o.lineTotal ?? 0)}
+                              </span>
+                            </div>
+                          );
+                        })}
                         <div className="flex items-center justify-between gap-2 pt-1 mt-1"
                           style={{ borderTop: `1px solid ${CUSTOM_META.accent}30` }}>
                           <span className="text-[10px] font-black text-base-content">Total</span>
-                          <span className="text-xs font-black" style={{ color: CUSTOM_META.accent }}>₹{total}/mo</span>
+                          <span className="text-xs font-black" style={{ color: CUSTOM_META.accent }}>{formatCurrency(total)}/mo</span>
                         </div>
                       </div>
                     </td>
@@ -1469,9 +1900,9 @@ const isHighlighted = (plan) => {
                     </td>
                   );
                 }
-                const isCustom  = isCustomPlan(plan);
-                const name      = plan.fixedTier || plan.name;
-                const meta      = isCustom ? CUSTOM_META : getMeta(name);
+                const isCustom = isCustomPlan(plan);
+                const name     = plan.fixedTier || plan.name;
+                const meta     = isCustom ? CUSTOM_META : getMeta(name);
                 const isCurrent = name === currentPlanName;
                 return (
                   <td key={ci} className="px-3 py-3 text-center">
@@ -1522,10 +1953,6 @@ function PageSkeleton() {
   );
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const PRIMARY_PLANS  = ["Basic Care", "Premium Care", "Family Care"];
-const EXTENDED_PLANS = ["Pregnant Women Care", "NRI's Care"];
-
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function SubscriptionPage() {
   const dispatch = useDispatch();
@@ -1535,30 +1962,30 @@ export default function SubscriptionPage() {
   const myCustomPlans = useSelector(selectMyCustomPlans);
   const plansLoading  = useSelector(selectPlansLoading);
 
-  const mySub          = useSelector(selectMySubscription);
-  const hasAccess      = useSelector(selectMySubHasAccess);
+  const mySub         = useSelector(selectMySubscription);
+  const hasAccess     = useSelector(selectMySubHasAccess);
   const upgradeLoading = useSelector(selectUpgradeLoading);
 
-  const pendingOrder    = useSelector(selectPendingOrder);
+  const pendingOrder   = useSelector(selectPendingOrder);
   const purchaseLoading = useSelector(selectPurchaseLoading);
-  const verifyLoading   = useSelector(selectVerifyLoading);
+  const verifyLoading  = useSelector(selectVerifyLoading);
 
-  const isTrialEligible     = useSelector(selectIsTrialEligible);
-  const isOnActiveTrial     = useSelector(selectIsOnActiveTrial);
-  const trialDaysLeft       = useSelector(selectTrialDaysLeft);
-  const trialStatus         = useSelector(selectTrialStatus);
-  const trialStatusLoading  = useSelector(selectTrialStatusLoading);
-  const trialOrder          = useSelector(selectTrialOrder);
+  const isTrialEligible   = useSelector(selectIsTrialEligible);
+  const isOnActiveTrial   = useSelector(selectIsOnActiveTrial);
+  const trialDaysLeft     = useSelector(selectTrialDaysLeft);
+  const trialStatus       = useSelector(selectTrialStatus);
+  const trialStatusLoading = useSelector(selectTrialStatusLoading);
+  const trialOrder        = useSelector(selectTrialOrder);
   const trialConvertLoading = useSelector(selectTrialConvertLoading);
 
-  const [showExtended,      setShowExtended]      = useState(false);
+  const [showExtended,     setShowExtended]     = useState(false);
   const [showCustomBuilder, setShowCustomBuilder] = useState(false);
   const [editingCustomPlan, setEditingCustomPlan] = useState(null);
-  const [checkoutPlan,      setCheckoutPlan]      = useState(null);
-  const [toast,             setToast]             = useState(null);
-  const [confirmDialog,     setConfirmDialog]     = useState(null);
+  const [checkoutPlan,     setCheckoutPlan]     = useState(null);
+  const [toast,            setToast]            = useState(null);
+  const [confirmDialog,    setConfirmDialog]    = useState(null);
 
-  const showToast    = useCallback((message, type = "error") => setToast({ message, type }), []);
+  const showToast   = useCallback((message, type = "error") => setToast({ message, type }), []);
   const dismissToast = useCallback(() => setToast(null), []);
   const openConfirm  = useCallback((opts) => setConfirmDialog(opts), []);
   const closeConfirm = useCallback(() => setConfirmDialog(null), []);
@@ -1567,9 +1994,9 @@ export default function SubscriptionPage() {
 
   useEffect(() => {
     dispatch(fetchAllPlans());
-    dispatch(fetchMySubscription());
-    dispatch(fetchTrialEligibility());
-    dispatch(fetchTrialStatus());
+    dispatch(fetchMySubscription()).catch(() => null);
+    dispatch(fetchTrialEligibility()).catch(() => null);
+    dispatch(fetchTrialStatus()).catch(() => null);
   }, [dispatch]);
 
   useEffect(() => {
@@ -1590,6 +2017,7 @@ export default function SubscriptionPage() {
     prevMySubRef.current = mySub;
   }, [mySub, pendingOrder, checkoutPlan]);
 
+  // Trial conversion Razorpay flow
   useEffect(() => {
     if (!trialOrder?.orderId) return;
     (async () => {
@@ -1598,34 +2026,32 @@ export default function SubscriptionPage() {
       if (!loaded) { showToast("Failed to load payment gateway.", "error"); dispatch(clearTrialOrder()); return; }
 
       const planName = trialStatus?.plan?.name || trialOrder.planName || "";
-      const meta = getMeta(planName);
-      const amountInPaise = trialOrder.amount < 100000
-        ? Math.round(trialOrder.amount * 100)
-        : Math.round(trialOrder.amount);
+      const meta     = getMeta(planName);
+      const amountInPaise = toRazorpayPaise(trialOrder.amount);
 
       const rzp = new window.Razorpay({
-        key: RZP_KEY,
-        amount: amountInPaise,
-        currency: trialOrder.currency || "INR",
-        name: "Likeson Health",
+        key:         RZP_KEY,
+        amount:      amountInPaise,
+        currency:    trialOrder.currency || "INR",
+        name:        "Likeson Health",
         description: `Convert trial — ${planName}`,
-        order_id: trialOrder.orderId,
-        image: "/logo.png",
+        order_id:    trialOrder.orderId,
+        image:       "/logo.png",
         handler: async (response) => {
           try {
             await dispatch(verifyTrialConversion({
-              razorpay_order_id: response.razorpay_order_id,
+              razorpay_order_id:   response.razorpay_order_id,
               razorpay_payment_id: response.razorpay_payment_id,
-              razorpay_signature: response.razorpay_signature,
-              amount: trialOrder.amount,
+              razorpay_signature:  response.razorpay_signature,
+              amount:              trialOrder.amount,
             }));
             dispatch(clearTrialOrder());
             showToast("Trial converted successfully!", "success");
           } catch { showToast("Payment verification failed.", "error"); }
         },
         prefill: { name: "", email: "", contact: "" },
-        theme: { color: meta.accent || "#8b5cf6" },
-        modal: { ondismiss: () => dispatch(clearTrialOrder()) },
+        theme:   { color: meta.accent || "#8b5cf6" },
+        modal:   { ondismiss: () => dispatch(clearTrialOrder()) },
       });
       rzp.on("payment.failed", (resp) => {
         showToast(`Payment failed: ${resp.error?.description || "Unknown error"}`, "error");
@@ -1643,16 +2069,27 @@ export default function SubscriptionPage() {
     () => EXTENDED_PLANS.map((n) => fixedPlans.find((p) => (p.fixedTier || p.name) === n)).filter(Boolean),
     [fixedPlans]
   );
+
   const currentPlanName = mySub?.plan?.fixedTier || mySub?.plan?.name || null;
+
+  const comparisonCustomPlans = useMemo(() => {
+    if (mySub?.plan?.planType === "custom" && mySub?.plan) {
+      const alreadyIn = myCustomPlans.some(
+        (p) => p._id === mySub.plan._id || p.id === mySub.plan.id
+      );
+      return alreadyIn ? myCustomPlans : [mySub.plan, ...myCustomPlans];
+    }
+    return myCustomPlans;
+  }, [myCustomPlans, mySub]);
 
   const handleSubscribe = useCallback((plan) => setCheckoutPlan(plan), []);
 
   const handleUpgrade = useCallback((plan) => {
     openConfirm({
-      title: `Upgrade to ${plan.name}?`,
-      message: "Billing period resets to 30 days from today.",
+      title:        `Upgrade to ${plan.name}?`,
+      message:      "Billing period resets to 30 days from today.",
       confirmLabel: "Upgrade Now",
-      accent: getMeta(plan.fixedTier || plan.name).accent,
+      accent:       getMeta(plan.fixedTier || plan.name).accent,
       onConfirm: async () => {
         closeConfirm();
         try {
@@ -1676,10 +2113,10 @@ export default function SubscriptionPage() {
   const handleTrial = useCallback((plan) => {
     const days = plan.freeTrial?.durationDays ?? 7;
     openConfirm({
-      title: `Start ${days}-day free trial?`,
-      message: `Try ${plan.name} free for ${days} days. No payment required.`,
+      title:        `Start ${days}-day free trial?`,
+      message:      `Try ${plan.name} free for ${days} days. No payment required.`,
       confirmLabel: "Start Free Trial",
-      accent: getMeta(plan.fixedTier || plan.name).accent,
+      accent:       getMeta(plan.fixedTier || plan.name).accent,
       onConfirm: async () => {
         closeConfirm();
         try {
@@ -1691,16 +2128,26 @@ export default function SubscriptionPage() {
     });
   }, [dispatch, openConfirm, closeConfirm, showToast]);
 
-  const handleCloseCheckout      = useCallback(() => { setCheckoutPlan(null); dispatch(clearPendingOrder()); }, [dispatch]);
-  const handleCloseCustomBuilder = useCallback(() => { setShowCustomBuilder(false); setEditingCustomPlan(null); }, []);
-  const handleConvertTrial       = useCallback(() => { dispatch(initiateTrialConversion({})); }, [dispatch]);
+  const handleCloseCheckout = useCallback(() => {
+    setCheckoutPlan(null);
+    dispatch(clearPendingOrder());
+  }, [dispatch]);
+
+  const handleCloseCustomBuilder = useCallback(() => {
+    setShowCustomBuilder(false);
+    setEditingCustomPlan(null);
+  }, []);
+
+  const handleConvertTrial = useCallback(() => {
+    dispatch(initiateTrialConversion({}));
+  }, [dispatch]);
 
   const handleDeleteCustomPlan = useCallback((planId, planName) => {
     openConfirm({
-      title: "Delete custom plan?",
-      message: `"${planName}" will be permanently deleted.`,
+      title:        "Delete custom plan?",
+      message:      `"${planName}" will be permanently deleted.`,
       confirmLabel: "Delete",
-      accent: "#ef4444",
+      accent:       "#ef4444",
       onConfirm: async () => {
         closeConfirm();
         try { await dispatch(deleteCustomPlan(planId)); }
@@ -1724,13 +2171,13 @@ export default function SubscriptionPage() {
         dangerouslySetInnerHTML={{
           __html: JSON.stringify({
             "@context": "https://schema.org",
-            "@type": "Service",
-            "name": "Likeson Health Subscription Plans",
+            "@type":    "Service",
+            "name":     "Likeson Health Subscription Plans",
             "provider": { "@type": "Organization", "name": "Likeson Health" },
             "offers": primaryPlans.map((p) => ({
-              "@type": "Offer",
-              "name": p.fixedTier || p.name,
-              "price": p.pricing?.monthly ?? 0,
+              "@type":        "Offer",
+              "name":         p.fixedTier || p.name,
+              "price":        p.pricing?.monthly ?? 0,
               "priceCurrency": "INR",
               "availability": "https://schema.org/InStock",
             })),
@@ -1749,7 +2196,7 @@ export default function SubscriptionPage() {
               className="inline-flex items-center gap-2 px-4 py-2 rounded-full mb-1"
               style={{
                 background: "color-mix(in srgb, var(--primary), transparent 88%)",
-                border: "1px solid color-mix(in srgb, var(--primary), transparent 70%)",
+                border:     "1px solid color-mix(in srgb, var(--primary), transparent 70%)",
               }}
             >
               <HeartPulse size={14} style={{ color: "var(--primary)" }} />
@@ -1783,7 +2230,7 @@ export default function SubscriptionPage() {
             <div className="flex items-center justify-between gap-4 px-5 py-4 rounded-2xl flex-wrap"
               style={{
                 background: "linear-gradient(90deg,#f59e0b,#8b5cf6,#3b82f6,#10b981)",
-                boxShadow: "0 8px 32px rgba(245,158,11,0.3)",
+                boxShadow:  "0 8px 32px rgba(245,158,11,0.3)",
               }}
               role="status" aria-live="polite"
               aria-label={`Free trial active: ${trialDaysLeft} days remaining`}>
@@ -1865,13 +2312,13 @@ export default function SubscriptionPage() {
                 hover:bg-base-300 text-base-content"
               aria-expanded={showExtended}
               aria-controls="extended-plans"
-              aria-label={showExtended ? "Show fewer plans" : "Show Maternity and NRI plans"}>
+              aria-label={showExtended ? "Show fewer plans" : "Show Family, Maternity and NRI plans"}>
               <ChevronDown size={16} aria-hidden="true"
                 className={`transition-transform duration-300 ${showExtended ? "rotate-180" : ""}`} />
               {showExtended ? "Show fewer plans" : (
                 <>
                   <Sparkles size={15} className="text-amber-500" aria-hidden="true" />
-                  Explore Maternity &amp; NRI Plans
+                  Explore Family, Maternity &amp; NRI Plans
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500/15 text-amber-500">
                     {extendedPlans.length} more
                   </span>
@@ -1891,21 +2338,20 @@ export default function SubscriptionPage() {
                   Tailored For Your Life Stage
                 </h2>
               </div>
-              <div className="flex flex-col md:flex-row gap-6 justify-center items-stretch">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
                 {extendedPlans.map((plan) => (
-                  <div key={plan._id} className="w-full md:max-w-md">
-                    <PlanCard
-                      plan={plan}
-                      hasAccess={hasAccess}
-                      isCurrent={hasAccess && currentPlanName === (plan.fixedTier || plan.name)}
-                      onSubscribe={handleSubscribe}
-                      onTrial={handleTrial}
-                      onUpgrade={handleUpgrade}
-                      trialEligible={isTrialEligible ?? true}
-                      purchaseLoading={purchaseLoading || upgradeLoading}
-                      trialLoading={trialStatusLoading}
-                    />
-                  </div>
+                  <PlanCard
+                    key={plan._id}
+                    plan={plan}
+                    hasAccess={hasAccess}
+                    isCurrent={hasAccess && currentPlanName === (plan.fixedTier || plan.name)}
+                    onSubscribe={handleSubscribe}
+                    onTrial={handleTrial}
+                    onUpgrade={handleUpgrade}
+                    trialEligible={isTrialEligible ?? true}
+                    purchaseLoading={purchaseLoading || upgradeLoading}
+                    trialLoading={trialStatusLoading}
+                  />
                 ))}
               </div>
             </section>
@@ -1913,24 +2359,19 @@ export default function SubscriptionPage() {
 
           {/* Comparison table */}
           {fixedPlans.length > 0 && (
-  <InlineComparisonTable
-    allFixedPlans={fixedPlans}
-    currentPlanName={currentPlanName}
-    onSubscribe={handleSubscribe}
-    onUpgrade={handleUpgrade}
-    hasAccess={hasAccess}
-    myCustomPlans={(() => {
-      // Ensure active custom plan always appears even if myCustomPlans not loaded
-      if (mySub?.plan?.planType === "custom") {
-        const alreadyIn = myCustomPlans.some(p => p._id === mySub.plan._id || p.id === mySub.plan.id);
-        return alreadyIn ? myCustomPlans : [...myCustomPlans, mySub.plan];
-      }
-      return myCustomPlans;
-    })()}
-  />
-)}
+            <InlineComparisonTable
+              allFixedPlans={fixedPlans}
+              currentPlanName={currentPlanName}
+              onSubscribe={handleSubscribe}
+              onUpgrade={handleUpgrade}
+              hasAccess={hasAccess}
+              myCustomPlans={comparisonCustomPlans}
+            />
+          )}
 
-          {/* Custom plan section */}
+          {/* ══════════════════════════════════════════════════════════════════
+              CUSTOM PLAN SECTION — All pricing display bugs fixed here
+          ══════════════════════════════════════════════════════════════════ */}
           <section aria-labelledby="custom-heading" className="space-y-5">
             <div className="flex items-center justify-between flex-wrap gap-3">
               <div>
@@ -1964,14 +2405,21 @@ export default function SubscriptionPage() {
               />
             )}
 
-            {/* Existing custom plans */}
+            {/* ── Existing custom plans ─────────────────────────────────────── */}
             {myCustomPlans.length > 0 && !showCustomBuilder && (
               <div className="space-y-3">
                 <p className="text-[10px] font-black uppercase tracking-widest text-base-content/40">
                   Your Custom Plans
                 </p>
                 {myCustomPlans.map((plan) => {
-                  const planTotal = plan.pricing?.monthly ?? 0;
+                  // CORRECT: sum saved lineTotal per option
+                  // flat services (diagnostics/pharmacy/transport) use their flat unitPrice stored in lineTotal
+                  // unit services (consultations/careAssistant) use qty × unitPrice stored in lineTotal
+                  // NEVER recompute qty × unitPrice here
+                  const planTotal = (plan.customOptions || [])
+                    .filter((o) => o.optionKey === "transport" ? o.quantity >= 0 : o.quantity > 0)
+                    .reduce((sum, o) => sum + (o.lineTotal ?? 0), 0);
+
                   const isCurrent = currentPlanName === plan.name;
                   return (
                     <article key={plan._id}
@@ -1979,9 +2427,9 @@ export default function SubscriptionPage() {
                       style={{
                         borderColor: isCurrent ? CUSTOM_META.accent : undefined,
                         borderWidth: isCurrent ? 2 : 1,
-                        boxShadow: isCurrent ? `0 8px 32px ${CUSTOM_META.glow}` : undefined,
+                        boxShadow:   isCurrent ? `0 8px 32px ${CUSTOM_META.glow}` : undefined,
                       }}
-                      aria-label={`${plan.name} custom plan, ₹${planTotal}/month${isCurrent ? ", active" : ""}`}>
+                      aria-label={`${plan.name} custom plan, ${formatCurrency(planTotal)}/month${isCurrent ? ", active" : ""}`}>
                       {!isCurrent && <div className="absolute inset-0 border border-base-300 rounded-2xl pointer-events-none" />}
                       <div className="h-1.5 w-full" style={{ background: CUSTOM_META.gradientCSS }} aria-hidden="true" />
                       <div className="p-4 flex items-start gap-4 bg-base-100">
@@ -1999,25 +2447,81 @@ export default function SubscriptionPage() {
                               </span>
                             )}
                           </div>
+                          {/* ── Option chips — FIXED display ── */}
                           <div className="flex flex-wrap gap-1.5">
-                            {(plan.customOptions || []).filter((o) => o.quantity > 0).map((opt, oi) => (
-                              <div key={oi}
-                                className="text-[10px] font-bold px-2 py-1 rounded-lg flex items-center gap-1 bg-base-200">
-                                <span className="text-base-content/60">{opt.label}:</span>
-                                <span className="text-base-content">{opt.quantity}</span>
-                                <span style={{ color: CUSTOM_META.accent }}>= ₹{opt.lineTotal?.toFixed(0)}</span>
-                              </div>
-                            ))}
+                            {(plan.customOptions || [])
+                              .filter((o) => o.optionKey === "transport" ? o.quantity >= 0 : o.quantity > 0)
+                              .map((opt, oi) => (
+                                <CustomPlanOptionChip key={oi} opt={opt} />
+                              ))}
                           </div>
                         </div>
                         <div className="text-right flex-shrink-0">
                           <p className="text-xl font-black" style={{ color: CUSTOM_META.accent }}
-                            aria-label={`₹${planTotal}/month`}>
-                            ₹{planTotal}
+                            aria-label={`${formatCurrency(planTotal)}/month`}>
+                            {formatCurrency(planTotal)}
                           </p>
                           <p className="text-[10px] font-bold text-base-content/40">/month</p>
                         </div>
                       </div>
+
+                      {/* ── My Custom Plan cost summary — FIXED ── */}
+                      <div className="mx-4 mb-3 p-3 rounded-xl space-y-1.5"
+                        style={{ background: `${CUSTOM_META.accent}06`, border: `1px solid ${CUSTOM_META.accent}18` }}>
+                        <p className="text-[10px] font-black text-base-content/50 uppercase tracking-wider mb-2">
+                          Cost Summary
+                        </p>
+                        {(plan.customOptions || [])
+                          .filter((o) => o.optionKey === "transport" ? o.quantity >= 0 : o.quantity > 0)
+                          .map((opt, oi) => {
+                            // CORRECT display for each service type
+                            let summaryLine;
+                            if (opt.optionKey === "diagnostics") {
+                              // CORRECT: "20% Diagnostic Discount = ₹349/month"
+                              summaryLine = formatDiscountSummary(opt.quantity, opt.lineTotal);
+                            } else if (opt.optionKey === "pharmacy") {
+                              // CORRECT: "20% Pharmacy Discount = ₹299/month"
+                              summaryLine = formatDiscountSummary(opt.quantity, opt.lineTotal);
+                            } else if (opt.optionKey === "transport") {
+                              // CORRECT: "₹25/km bundle = ₹200/month" — NEVER qty × price
+                              summaryLine = formatTransportSummary(opt.unitPrice, opt.lineTotal);
+                            } else if (opt.optionKey === "consultations") {
+                              // CORRECT: unit-based "3 × ₹499 = ₹1497"
+                              summaryLine = formatConsultationSummary(opt.quantity, opt.unitPrice, opt.lineTotal);
+                            } else if (opt.optionKey === "careAssistant") {
+                              // CORRECT: unit-based "4 × ₹300 = ₹1200"
+                              summaryLine = formatCareAssistantSummary(opt.quantity, opt.unitPrice, opt.lineTotal);
+                            } else {
+                              summaryLine = `${opt.label} = ${formatCurrency(opt.lineTotal)}/mo`;
+                            }
+
+                            const badge = getPricingModeBadge(opt.optionKey);
+                            return (
+                              <div key={oi} className="flex items-start justify-between gap-2">
+                                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                  <span
+                                    className="text-[8px] font-black px-1 py-0.5 rounded uppercase tracking-wider flex-shrink-0"
+                                    style={{ background: badge.bg, color: badge.color }}
+                                  >
+                                    {badge.label === "FLAT PACKAGE" ? "PKG" : "UNIT"}
+                                  </span>
+                                  <span className="text-[11px] text-base-content/60 truncate">{opt.label}</span>
+                                </div>
+                                <span className="text-[11px] font-bold flex-shrink-0" style={{ color: CUSTOM_META.accent }}>
+                                  {summaryLine.split("=").pop()?.trim() ?? formatCurrency(opt.lineTotal)}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        <div className="flex items-center justify-between pt-1.5 mt-0.5"
+                          style={{ borderTop: `1px solid ${CUSTOM_META.accent}25` }}>
+                          <span className="text-xs font-black text-base-content">Total</span>
+                          <span className="text-sm font-black" style={{ color: CUSTOM_META.accent }}>
+                            {formatCurrency(planTotal)}/mo
+                          </span>
+                        </div>
+                      </div>
+
                       <div className="flex gap-2 px-4 pb-4 bg-base-100">
                         {!isCurrent && (
                           <button onClick={() => handleSubscribe(plan)}
@@ -2054,9 +2558,9 @@ export default function SubscriptionPage() {
                 className="relative overflow-hidden rounded-2xl w-full text-left p-0 border-0
                   transition-transform duration-200 hover:-translate-y-1"
                 style={{
-                  background: `${CUSTOM_META.accent}08`,
-                  outline: `2px dashed color-mix(in srgb, ${CUSTOM_META.accent}, transparent 55%)`,
-                  minHeight: 120,
+                  background:  `${CUSTOM_META.accent}08`,
+                  outline:     `2px dashed color-mix(in srgb, ${CUSTOM_META.accent}, transparent 55%)`,
+                  minHeight:   120,
                 }}
                 aria-label="Create your first custom healthcare plan">
                 <PlanPattern patternId="waves" uid="empty-custom" />
@@ -2082,10 +2586,10 @@ export default function SubscriptionPage() {
           <section aria-label="Why choose Likeson Health">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {[
-                { icon: Shield,     label: "No Hidden Charges", desc: "Transparent pricing always" },
-                { icon: RefreshCw,  label: "Cancel Anytime",    desc: "No lock-in contracts" },
-                { icon: Award,      label: "Quality Assured",   desc: "Verified doctors & labs" },
-                { icon: HeartPulse, label: "24/7 Support",      desc: "Always here when needed" },
+                { icon: Shield,    label: "No Hidden Charges", desc: "Transparent pricing always" },
+                { icon: RefreshCw, label: "Cancel Anytime",    desc: "No lock-in contracts" },
+                { icon: Award,     label: "Quality Assured",   desc: "Verified doctors & labs" },
+                { icon: HeartPulse,label: "24/7 Support",      desc: "Always here when needed" },
               ].map((item, i) => (
                 <div key={i}
                   className="flex flex-col items-center text-center gap-2 p-4 rounded-2xl

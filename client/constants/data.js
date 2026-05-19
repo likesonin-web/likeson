@@ -60,7 +60,6 @@ export const SUPER_ADMIN_DASHBOARD_LINKS = [
     links: [
       { name: "Overview",         href: "/super-admin/dashboard",   icon: <LayoutDashboard size={15} />      },
       { name: "Analytics",        href: "/super-admin/analytics",   icon: <AreaChart size={15} />            },
-      { name: "Organisations",    href: "/super-admin/organizations",icon: <Building2 size={15} />           },
       { name: "Referral Program", href: "/super-admin/referral",    icon: <FcInvite size={15} />             },
       { name: "Platform Pricing", href: "/super-admin/pricing",     icon: <CircleDollarSign size={15} />     },
       { name: "Wallet Management",href: "/super-admin/wallet",      icon: <WalletCards size={15} />          },

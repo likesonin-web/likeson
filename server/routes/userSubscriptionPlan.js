@@ -1,22 +1,3 @@
-/**
- * subscriptionRouter.js — Likeson.in
- *
- * FIXES IN THIS VERSION:
- *  BUG #1 FIXED: resolveCustomOptionUnitPrice transport case — dead b.km replaced with slab index lookup
- *  BUG #2 FIXED: snapshotLimits now reads customOptions for custom plans (consultations, careAssistant, transport)
- *  BUG #3 FIXED: incrementSubscriptionUsage moved to post-payment via subscriptionUsagePending on Booking
- *                (this router exposes POST /flush-pending-usage called by verify-payment route)
- *
- * Other corrections retained from previous version:
- *  1. customPlanOptions unit-price resolution fixed to match actual
- *     PlatformPricingConfig.customPlanOptions schema fields
- *  2. SystemLog imported and wired to every mutating/sensitive route
- *  3. UserSubscription.create now snapshots planName, planType,
- *     fixedTier, and limits from the plan at purchase time
- *  4. Admin controls pricing — customer READ-ONLY access to pricing enforced
- *  5. /upgrade also snapshots limits on plan change
- */
-
 import express                         from 'express';
 import { body, param, validationResult } from 'express-validator';
 import Razorpay                        from 'razorpay';
@@ -51,11 +32,9 @@ const razorpay = new Razorpay({
     key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-/** Wrap async route handlers — no unhandled rejections */
 const asyncHandler = (fn) => (req, res, next) =>
     Promise.resolve(fn(req, res, next)).catch(next);
 
-/** Centralised express-validator result check */
 const validate = (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty())
@@ -63,18 +42,12 @@ const validate = (req, res, next) => {
     next();
 };
 
-/**
- * resolveClientIp — works behind reverse proxies (trust proxy enabled on app).
- */
 const resolveClientIp = (req) =>
     (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown')
         .toString()
         .split(',')[0]
         .trim();
 
-/**
- * buildActor — standard actor block for SystemLog from an authenticated request.
- */
 const buildActor = (req) => ({
     userId:    req.user?._id   ?? null,
     name:      req.user?.name  ?? 'system',
@@ -94,27 +67,12 @@ const detectPlatform = (req) => {
     return 'web';
 };
 
-/**
- * log — fire-and-forget SystemLog wrapper.
- * Never throws; never blocks the request.
- */
 const log = (payload) => SystemLog.createLog(payload).catch(() => null);
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  PRICING HELPERS  (customPlanOptions — admin-controlled)
+//  PRICING HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * resolveCustomOptionUnitPrice
- *
- * BUG #1 FIX: transport case previously used b.km / s.km which do not exist
- * in the schema (schema only has pricePerKm + packagePrice).
- * Fixed: use slab index directly. qty for transport = slabIndex (0-based).
- * lineTotal = slab.packagePrice (flat bundle price for that slab).
- *
- * extras.careAssistantTierIndex — index into customPlanOptions.careAssistant.pricingTiers
- * extras.slabIndex              — index into transport.kmSlabs (for transport option)
- */
 const resolveCustomOptionUnitPrice = (optionPrices, optionKey, quantity, extras = {}) => {
     let unitPrice = 0;
 
@@ -125,15 +83,11 @@ const resolveCustomOptionUnitPrice = (optionPrices, optionKey, quantity, extras 
         }
 
         case 'transport': {
-            // BUG #1 FIX: use slabIndex not s.km / b.km (those fields don't exist)
             const slabs = optionPrices?.transport?.kmSlabs ?? [];
             if (slabs.length > 0) {
-                // qty/slabIndex is the 0-based index the customer selected
                 const idx  = Math.max(0, Math.min(Math.floor(Number(extras.slabIndex ?? quantity ?? 0)), slabs.length - 1));
                 const slab = slabs[idx];
                 if (slab) {
-                    // unitPrice = packagePrice (flat monthly bundle price for this slab)
-                    // lineTotal = packagePrice (not qty × unitPrice — flat bundle)
                     unitPrice = slab.packagePrice ?? 0;
                 }
             }
@@ -173,14 +127,12 @@ const resolveCustomOptionUnitPrice = (optionPrices, optionKey, quantity, extras 
         }
 
         case 'careAssistant': {
-            // Use the tier index the customer selected, not always tiers[0]
             const caTiers = optionPrices?.careAssistant?.pricingTiers ?? [];
             if (caTiers.length > 0) {
                 const tierIdx = Number(extras.careAssistantTierIndex ?? 0);
                 const tier    = caTiers[tierIdx] ?? caTiers[0];
                 unitPrice     = tier?.chargeToUser ?? 0;
             }
-            // lineTotal = qty (visits) × unitPrice (chargeToUser per visit)
             break;
         }
 
@@ -201,19 +153,11 @@ const resolveCustomOptionUnitPrice = (optionPrices, optionKey, quantity, extras 
     return unitPrice;
 };
 
-
-/**
- * snapshotLimits
- *
- * BUG #2 FIX: previously always read fixed plan fields, returning 0
- * for custom plan consultation/careAssistant quotas even when customer
- * paid for them via customOptions. Now reads customOptions for custom plans.
- *
- * Pull the plan's benefit limits into a flat object for storage on
- * UserSubscription.limits at purchase time.
- */
+// ─────────────────────────────────────────────────────────────────────────────
+//  FIX #1 + #2: snapshotLimits — reads customOptions for custom plans
+//               + snapshots careAssistant tier fields
+// ─────────────────────────────────────────────────────────────────────────────
 const snapshotLimits = (plan) => {
-    // Start with fixed plan defaults
     let consultationsPerMonth       = plan.consultations?.freePerMonth        ?? 0;
     let careAssistantVisitsPerMonth = plan.careAssistant?.visitsPerMonth      ?? null;
     let transportRatePerKm          = plan.transport?.ratePerKm               ?? null;
@@ -222,9 +166,11 @@ const snapshotLimits = (plan) => {
     let diagnosticsDiscountPercent  = plan.diagnostics?.discountPercent       ?? 0;
     let homeSampleCollection        = plan.diagnostics?.homeSampleCollection  ?? false;
 
-    // BUG #2 FIX: for custom plans, override with values from customOptions
-    // because fixed plan fields are null/0 for custom plans — the real values
-    // live in customOptions[].quantity
+    // FIX #1: careAssistant tier snapshot vars
+    let careAssistantTierIndex      = null;
+    let careAssistantTierLabel      = null;
+    let careAssistantChargePerVisit = null;
+
     if (plan.planType === 'custom' && Array.isArray(plan.customOptions)) {
         const consultOpt = plan.customOptions.find(o => o.optionKey === 'consultations');
         if (consultOpt?.quantity > 0) {
@@ -234,27 +180,22 @@ const snapshotLimits = (plan) => {
         const caOpt = plan.customOptions.find(o => o.optionKey === 'careAssistant');
         if (caOpt?.quantity > 0) {
             careAssistantVisitsPerMonth = caOpt.quantity;
+
+            // FIX #1: snapshot tier index, label, charge from snapshotted option
+            const tierIdx               = caOpt.careAssistantTierIndex ?? 0;
+            careAssistantTierIndex      = tierIdx;
+            careAssistantTierLabel      = caOpt.label ?? `Tier ${tierIdx}`;
+            careAssistantChargePerVisit = caOpt.unitPrice ?? null;
         }
 
-        // Transport: unitPrice stored on option = pricePerKm for this slab
-        // We snapshot it as transportRatePerKm so resolveKmRate can read it
         const tOpt = plan.customOptions.find(o => o.optionKey === 'transport');
         if (tOpt?.unitPrice > 0) {
-            // For transport option, unitPrice = packagePrice (flat bundle),
-            // but sub.limits.transportRatePerKm is used by resolveKmRate.
-            // We store the pricePerKm from the slab — need to resolve from plan
-            // At snapshot time we don't have full slab data, so use unitPrice as rate.
-            // resolveKmRate in shared will read sub.limits.transportRatePerKm.
-            // NOTE: unitPrice for transport = packagePrice not pricePerKm.
-            // The actual pricePerKm must be pulled from the slab at booking time.
-            // We flag transportRatePerKm = -1 to signal "custom transport option active"
-            // and resolveKmRate will look up the actual rate from the plan's customOptions.
-            transportRatePerKm = -1; // sentinel: custom transport active, look up from plan
+            transportRatePerKm = -1; // sentinel: custom transport active, resolve at booking time
         }
 
         const diagOpt = plan.customOptions.find(o => o.optionKey === 'diagnostics');
         if (diagOpt?.quantity > 0) {
-            diagnosticsDiscountPercent = diagOpt.quantity; // quantity = discount %
+            diagnosticsDiscountPercent = diagOpt.quantity;
         }
 
         const pharmOpt = plan.customOptions.find(o => o.optionKey === 'pharmacy');
@@ -272,6 +213,9 @@ const snapshotLimits = (plan) => {
         consultationsPerMonth,
         transportRidesPerMonth,
         careAssistantVisitsPerMonth,
+        careAssistantTierIndex,       // FIX #1
+        careAssistantTierLabel,       // FIX #1
+        careAssistantChargePerVisit,  // FIX #1
         labTestsPerMonth:            0,
         pharmacyDiscountPercent,
         diagnosticsDiscountPercent,
@@ -281,7 +225,7 @@ const snapshotLimits = (plan) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SECTION 1 — PLAN CATALOGUE  (read-only, customer-facing)
+//  SECTION 1 — PLAN CATALOGUE
 // ─────────────────────────────────────────────────────────────────────────────
 
 router.get(
@@ -298,10 +242,6 @@ router.get(
     })
 );
 
-/**
- * GET /api/v1/subscriptions/plans/:planId
- * Single plan by ID.
- */
 router.get(
     '/plans/:planId',
     protect,
@@ -331,16 +271,9 @@ router.get(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SECTION 2 — CUSTOM PLAN BUILDER  (customer self-service)
+//  SECTION 2 — CUSTOM PLAN BUILDER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * GET /api/v1/subscriptions/custom-plan/pricing
- *
- * Returns admin-controlled pricing for custom plan option blocks.
- * Customers READ pricing — they CANNOT set it.
- * Admin sets pricing via PlatformPricingConfig.customPlanOptions.
- */
 router.get(
     '/custom-plan/pricing',
     protect,
@@ -358,161 +291,409 @@ router.get(
     })
 );
 
-/**
- * POST /api/v1/subscriptions/custom-plan
- * Customer builds a custom plan.
- * Unit prices resolved server-side from PlatformPricingConfig.
- * Supports careAssistantTierIndex + slabIndex extras.
- */
 router.post(
     '/custom-plan',
     protect,
     authorize('customer'),
     [
-        body('name').trim().notEmpty().withMessage('Plan name is required'),
+        body('name')
+            .trim()
+            .notEmpty()
+            .withMessage('Plan name is required'),
+
+        body('options')
+            .isArray({ min: 1 })
+            .withMessage('At least one option must be selected'),
+
+        body('options.*.optionKey')
+            .isIn([
+                'consultations',
+                'transport',
+                'diagnostics',
+                'pharmacy',
+                'careAssistant',
+                'homeSampleCollection',
+                'prioritySupport',
+            ])
+            .withMessage('Invalid optionKey'),
+
+        body('options.*.quantity')
+            .isFloat({ min: 0 })
+            .withMessage('Quantity must be ≥ 0'),
+
         body('options.*.slabIndex')
             .optional()
             .isInt({ min: 0 })
             .withMessage('slabIndex must be a non-negative integer'),
-        body('options')
-            .isArray({ min: 1 })
-            .withMessage('At least one option must be selected'),
-        body('options.*.optionKey')
-            .isIn([
-                'consultations', 'transport', 'diagnostics', 'pharmacy',
-                'careAssistant', 'homeSampleCollection', 'prioritySupport',
-            ])
-            .withMessage('Invalid optionKey'),
-        body('options.*.quantity')
-            .isFloat({ min: 0 })
-            .withMessage('Quantity must be ≥ 0'),
+
         body('options.*.careAssistantTierIndex')
             .optional()
             .isInt({ min: 0 })
             .withMessage('careAssistantTierIndex must be a non-negative integer'),
     ],
     validate,
+
     asyncHandler(async (req, res) => {
+
         const { name, options } = req.body;
 
-        const config       = await PlatformPricingConfig.getGlobal();
-        const optionPrices = config.customPlanOptions;
-        const caps         = config.caps;
+        const config = await PlatformPricingConfig.getGlobal();
 
-        const caTiers = optionPrices?.careAssistant?.pricingTiers ?? [];
+        const optionPrices = config.customPlanOptions;
+
+        const caps = config.caps;
+
+        const caTiers =
+            optionPrices?.careAssistant?.pricingTiers ?? [];
 
         const builtOptions = [];
 
         for (const opt of options) {
-            const { optionKey, label = '' } = opt;
-            let qty = Number(opt.quantity);
 
-            // ── Cap enforcement ───────────────────────────────────────────────
-            if (optionKey === 'pharmacy' && qty > caps.pharmacyDiscountMax)
-                return res.status(400).json({ success: false, message: `Pharmacy discount cannot exceed ${caps.pharmacyDiscountMax}%.` });
-            if (optionKey === 'diagnostics' && qty > caps.diagnosticsDiscountMax)
-                return res.status(400).json({ success: false, message: `Diagnostics discount cannot exceed ${caps.diagnosticsDiscountMax}%.` });
-            if (optionKey === 'consultations' && qty > caps.consultationsMaxPerMonth)
-                return res.status(400).json({ success: false, message: `Consultations cannot exceed ${caps.consultationsMaxPerMonth}/month.` });
-            if (optionKey === 'careAssistant' && qty > caps.careAssistantMaxVisitsPerMonth)
-                return res.status(400).json({ success: false, message: `Care-assistant visits cannot exceed ${caps.careAssistantMaxVisitsPerMonth}/month.` });
-            if (optionKey === 'transport' && qty > caps.transportMaxRidesPerMonth)
-                return res.status(400).json({ success: false, message: `Transport rides cannot exceed ${caps.transportMaxRidesPerMonth}/month.` });
+            const {
+                optionKey,
+                label = '',
+            } = opt;
 
-            // Boolean add-ons: clamp to 0 or 1
-            if (['homeSampleCollection', 'prioritySupport'].includes(optionKey))
+            let qty = Number(opt.quantity || 0);
+
+            // ─────────────────────────────────────────────
+            // CAPS VALIDATION
+            // ─────────────────────────────────────────────
+
+            if (
+                optionKey === 'pharmacy' &&
+                qty > caps.pharmacyDiscountMax
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Pharmacy discount cannot exceed ${caps.pharmacyDiscountMax}%.`,
+                });
+            }
+
+            if (
+                optionKey === 'diagnostics' &&
+                qty > caps.diagnosticsDiscountMax
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Diagnostics discount cannot exceed ${caps.diagnosticsDiscountMax}%.`,
+                });
+            }
+
+            if (
+                optionKey === 'consultations' &&
+                qty > caps.consultationsMaxPerMonth
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Consultations cannot exceed ${caps.consultationsMaxPerMonth}/month.`,
+                });
+            }
+
+            if (
+                optionKey === 'careAssistant' &&
+                qty > caps.careAssistantMaxVisitsPerMonth
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Care-assistant visits cannot exceed ${caps.careAssistantMaxVisitsPerMonth}/month.`,
+                });
+            }
+
+            if (
+                optionKey === 'transport' &&
+                qty > caps.transportMaxRidesPerMonth
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Transport rides cannot exceed ${caps.transportMaxRidesPerMonth}/month.`,
+                });
+            }
+
+            // ─────────────────────────────────────────────
+            // BOOLEAN OPTIONS
+            // ─────────────────────────────────────────────
+
+            if (
+                ['homeSampleCollection', 'prioritySupport']
+                    .includes(optionKey)
+            ) {
                 qty = qty > 0 ? 1 : 0;
+            }
 
-            // ── Resolve extras ────────────────────────────────────────────────
+            // ─────────────────────────────────────────────
+            // CARE ASSISTANT
+            // ─────────────────────────────────────────────
 
-            // careAssistant: validate tier index against actual tiers array
             let careAssistantTierIndex = 0;
+
             if (optionKey === 'careAssistant') {
-                const requestedIdx = Number(opt.careAssistantTierIndex ?? 0);
-                if (caTiers.length === 0)
-                    return res.status(400).json({ success: false, message: 'Care assistant pricing tiers not configured. Contact admin.' });
-                if (requestedIdx < 0 || requestedIdx >= caTiers.length)
-                    return res.status(400).json({ success: false, message: `careAssistantTierIndex must be between 0 and ${caTiers.length - 1}.` });
+
+                const requestedIdx = Number(
+                    opt.careAssistantTierIndex ?? 0
+                );
+
+                if (caTiers.length === 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message:
+                            'Care assistant pricing tiers not configured. Contact admin.',
+                    });
+                }
+
+                if (
+                    requestedIdx < 0 ||
+                    requestedIdx >= caTiers.length
+                ) {
+                    return res.status(400).json({
+                        success: false,
+                        message:
+                            `careAssistantTierIndex must be between 0 and ${caTiers.length - 1}.`,
+                    });
+                }
+
                 careAssistantTierIndex = requestedIdx;
             }
 
-            // BUG #1 FIX: transport uses slabIndex not qty as km distance band
+            // ─────────────────────────────────────────────
+            // TRANSPORT
+            // IMPORTANT:
+            // quantity = rides per month
+            // slabIndex = selected pricing slab
+            // NEVER overwrite quantity using slabIndex
+            // ─────────────────────────────────────────────
+
             let slabIndex = 0;
+
             if (optionKey === 'transport') {
-                const totalSlabs       = (optionPrices?.transport?.kmSlabs ?? []).length;
-                const requestedSlabIdx = Number(opt.slabIndex ?? 0);
-                if (totalSlabs === 0)
-                    return res.status(400).json({ success: false, message: 'Transport slabs not configured. Contact admin.' });
-                if (requestedSlabIdx < 0 || requestedSlabIdx >= totalSlabs)
-                    return res.status(400).json({ success: false, message: `slabIndex must be between 0 and ${totalSlabs - 1}.` });
+
+                const totalSlabs =
+                    (
+                        optionPrices?.transport?.kmSlabs ?? []
+                    ).length;
+
+                const requestedSlabIdx = Number(
+                    opt.slabIndex ?? 0
+                );
+
+                if (totalSlabs === 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message:
+                            'Transport slabs not configured. Contact admin.',
+                    });
+                }
+
+                if (
+                    requestedSlabIdx < 0 ||
+                    requestedSlabIdx >= totalSlabs
+                ) {
+                    return res.status(400).json({
+                        success: false,
+                        message:
+                            `slabIndex must be between 0 and ${totalSlabs - 1}.`,
+                    });
+                }
+
                 slabIndex = requestedSlabIdx;
-                qty       = slabIndex; // qty for transport = slab index (used as index in resolveCustomOptionUnitPrice)
             }
 
-            const extras    = { careAssistantTierIndex, slabIndex };
-            const unitPrice = resolveCustomOptionUnitPrice(optionPrices, optionKey, qty, extras);
+            // ─────────────────────────────────────────────
+            // RESOLVE UNIT PRICE
+            // ─────────────────────────────────────────────
 
-            // BUG #1 FIX: transport lineTotal = packagePrice (flat), not qty × unitPrice
-            const lineTotal = optionKey === 'transport'
-                ? unitPrice   // unitPrice = packagePrice = flat bundle price
-                : +(qty * unitPrice).toFixed(2);
+            const extras = {
+                careAssistantTierIndex,
+                slabIndex,
+            };
+
+            const unitPrice =
+                resolveCustomOptionUnitPrice(
+                    optionPrices,
+                    optionKey,
+                    qty,
+                    extras
+                );
+
+            // ─────────────────────────────────────────────
+            // PACKAGE-BASED OPTIONS
+            // DO NOT multiply qty × unitPrice
+            //
+            // diagnostics:
+            // quantity = selected discount %
+            //
+            // pharmacy:
+            // quantity = selected discount %
+            //
+            // transport:
+            // quantity = rides count
+            // price already represents package/slab price
+            // ─────────────────────────────────────────────
+
+            const packageBasedOptions = [
+                'transport',
+                'diagnostics',
+                'pharmacy',
+            ];
+
+            let lineTotal = 0;
+
+            if (
+                packageBasedOptions.includes(optionKey)
+            ) {
+
+                lineTotal =
+                    +Number(unitPrice).toFixed(2);
+
+            } else if (
+                ['homeSampleCollection', 'prioritySupport']
+                    .includes(optionKey)
+            ) {
+
+                lineTotal =
+                    qty > 0
+                        ? +Number(unitPrice).toFixed(2)
+                        : 0;
+
+            } else {
+
+                // consultations
+                // careAssistant
+
+                lineTotal = +(
+                    Number(qty) * Number(unitPrice)
+                ).toFixed(2);
+            }
 
             builtOptions.push({
+
                 optionKey,
-                label:    label || optionKey,
+
+                label:
+                    label || optionKey,
+
                 quantity: qty,
+
                 unitPrice,
+
                 lineTotal,
-                ...(optionKey === 'careAssistant' && { careAssistantTierIndex }),
-                ...(optionKey === 'transport'     && { slabIndex }),
+
+                ...(optionKey === 'careAssistant' && {
+                    careAssistantTierIndex,
+                }),
+
+                ...(optionKey === 'transport' && {
+                    slabIndex,
+                }),
             });
         }
 
-        const totalMonthly = +builtOptions.reduce((s, o) => s + o.lineTotal, 0).toFixed(2);
-        const slug         = `custom-${req.user._id}-${Date.now()}`;
+        // ─────────────────────────────────────────────
+        // TOTAL
+        // ─────────────────────────────────────────────
 
-        // Deactivate previous custom plans for this user
+        const totalMonthly = +builtOptions
+            .reduce(
+                (sum, item) =>
+                    sum + Number(item.lineTotal || 0),
+                0
+            )
+            .toFixed(2);
+
+        const slug =
+            `custom-${req.user._id}-${Date.now()}`;
+
+        // ─────────────────────────────────────────────
+        // DEACTIVATE OLD CUSTOM PLANS
+        // ─────────────────────────────────────────────
+
         await SubscriptionPlan.updateMany(
-            { planType: 'custom', createdByCustomer: req.user._id, isActive: true },
-            { $set: { isActive: false } }
+            {
+                planType: 'custom',
+                createdByCustomer: req.user._id,
+                isActive: true,
+            },
+            {
+                $set: {
+                    isActive: false,
+                },
+            }
         );
 
+        // ─────────────────────────────────────────────
+        // CREATE PLAN
+        // ─────────────────────────────────────────────
+
         const plan = await SubscriptionPlan.create({
+
             name,
+
             slug,
-            planType:              'custom',
-            fixedTier:             null,
+
+            planType: 'custom',
+
+            fixedTier: null,
+
             visibleToCustomerOnly: true,
-            createdByCustomer:     req.user._id,
-            isActive:              true,
+
+            createdByCustomer: req.user._id,
+
+            isActive: true,
+
             pricing: {
-                monthly:      totalMonthly,
+                monthly: totalMonthly,
                 billingCycle: 'custom',
                 billingLabel: '/month',
-                currency:     'INR',
+                currency: 'INR',
             },
+
             customOptions: builtOptions,
-            createdBy:     req.user._id,
+
+            createdBy: req.user._id,
         });
+
+        // ─────────────────────────────────────────────
+        // LOG
+        // ─────────────────────────────────────────────
 
         await log({
-            level:    'success',
+
+            level: 'success',
+
             category: 'user',
-            message:  `Custom plan created by customer: ${plan.name}`,
-            actor:    buildActor(req),
-            relatedEntity: { model: 'SubscriptionPlan', entityId: plan._id, label: plan.name },
-            request:  { method: 'POST', path: req.originalUrl, statusCode: 201 },
-            metadata: { planId: plan._id, totalMonthly, optionCount: builtOptions.length },
+
+            message:
+                `Custom plan created by customer: ${plan.name}`,
+
+            actor: buildActor(req),
+
+            relatedEntity: {
+                model: 'SubscriptionPlan',
+                entityId: plan._id,
+                label: plan.name,
+            },
+
+            request: {
+                method: 'POST',
+                path: req.originalUrl,
+                statusCode: 201,
+            },
+
+            metadata: {
+                planId: plan._id,
+                totalMonthly,
+                optionCount: builtOptions.length,
+            },
         });
 
-        res.status(201).json({ success: true, data: plan });
+        return res.status(201).json({
+            success: true,
+            data: plan,
+        });
     })
 );
 
-/**
- * PUT /api/v1/subscriptions/custom-plan/:planId
- * Update an existing custom plan (owning customer only).
- */
 router.put(
     '/custom-plan/:planId',
     protect,
@@ -564,8 +745,7 @@ router.put(
         const config       = await PlatformPricingConfig.getGlobal();
         const optionPrices = config.customPlanOptions;
         const caps         = config.caps;
-
-        const caTiers = optionPrices?.careAssistant?.pricingTiers ?? [];
+        const caTiers      = optionPrices?.careAssistant?.pricingTiers ?? [];
 
         const builtOptions = [];
 
@@ -573,7 +753,6 @@ router.put(
             const { optionKey, label = '' } = opt;
             let qty = Number(opt.quantity);
 
-            // ── Cap enforcement ───────────────────────────────────────────────
             if (optionKey === 'pharmacy' && qty > caps.pharmacyDiscountMax)
                 return res.status(400).json({ success: false, message: `Pharmacy discount cannot exceed ${caps.pharmacyDiscountMax}%.` });
             if (optionKey === 'diagnostics' && qty > caps.diagnosticsDiscountMax)
@@ -585,11 +764,9 @@ router.put(
             if (optionKey === 'transport' && qty > caps.transportMaxRidesPerMonth)
                 return res.status(400).json({ success: false, message: `Transport rides cannot exceed ${caps.transportMaxRidesPerMonth}/month.` });
 
-            // Boolean add-ons: clamp to 0 or 1
             if (['homeSampleCollection', 'prioritySupport'].includes(optionKey))
                 qty = qty > 0 ? 1 : 0;
 
-            // ── Resolve extras ────────────────────────────────────────────────
             let careAssistantTierIndex = 0;
             if (optionKey === 'careAssistant') {
                 const requestedIdx = Number(opt.careAssistantTierIndex ?? 0);
@@ -600,7 +777,6 @@ router.put(
                 careAssistantTierIndex = requestedIdx;
             }
 
-            // BUG #1 FIX: transport slabIndex
             let slabIndex = 0;
             if (optionKey === 'transport') {
                 const totalSlabs       = (optionPrices?.transport?.kmSlabs ?? []).length;
@@ -616,7 +792,6 @@ router.put(
             const extras    = { careAssistantTierIndex, slabIndex };
             const unitPrice = resolveCustomOptionUnitPrice(optionPrices, optionKey, qty, extras);
 
-            // BUG #1 FIX: transport lineTotal = packagePrice (flat)
             const lineTotal = optionKey === 'transport'
                 ? unitPrice
                 : +(qty * unitPrice).toFixed(2);
@@ -635,7 +810,7 @@ router.put(
         if (name) plan.name = name;
         plan.customOptions = builtOptions;
         plan.updatedBy     = req.user._id;
-        await plan.save(); // pre-save recomputes pricing.monthly from lineTotal sum
+        await plan.save();
 
         await log({
             level:    'info',
@@ -651,10 +826,6 @@ router.put(
     })
 );
 
-/**
- * DELETE /api/v1/subscriptions/custom-plan/:planId
- * Soft-delete custom plan (owning customer only).
- */
 router.delete(
     '/custom-plan/:planId',
     protect,
@@ -694,15 +865,9 @@ router.delete(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SECTION 3 — PURCHASE FLOW  (Razorpay + ₹0 free plans)
+//  SECTION 3 — PURCHASE FLOW
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * POST /api/v1/subscriptions/buy
- *
- * PATH A: amount > 0  → Razorpay order; return orderId
- * PATH B: amount === 0 → activate immediately
- */
 router.post(
     '/buy',
     protect,
@@ -715,7 +880,6 @@ router.post(
     asyncHandler(async (req, res) => {
         const { planId, amount, couponCode } = req.body;
 
-        // Guard: no existing active/trial sub
         const existingSub = await UserSubscription.findOne({
             user:       req.user._id,
             status:     { $in: ['Active', 'Trial'] },
@@ -731,7 +895,6 @@ router.post(
         if (plan.planType === 'custom' && String(plan.createdByCustomer) !== String(req.user._id))
             return res.status(403).json({ success: false, message: 'You do not have access to this custom plan.' });
 
-        // Coupon discount
         let discount = 0;
         if (couponCode) {
             const coupon = await PromotionCoupon.findOne({
@@ -771,12 +934,13 @@ router.post(
             });
 
             await Notification.create({
-                recipient: req.user._id,
-                title:     'Subscription Activated 🎉',
-                body:      `Your ${plan.name} plan is now active until ${expiry.toLocaleDateString()}.`,
-                type:      'Account_Status',
-                priority:  'Normal',
-            });
+    recipient: req.user._id,
+    title:     'Subscription Activated 🎉',
+    body:      `Your ${plan.name} plan is now active until ${expiry.toLocaleDateString()}.`,
+    type:      'Account_Status',
+    priority:  'Normal',
+    dedupeKey: `sub_activate_${req.user._id}_${Date.now()}` // <-- Add this line
+});
 
             await log({
                 level:    'success',
@@ -826,11 +990,6 @@ router.post(
     })
 );
 
-/**
- * POST /api/v1/subscriptions/verify
- * Verify Razorpay payment and activate subscription.
- * planId and amount optional — resolved from order notes when absent.
- */
 router.post(
     '/verify',
     protect,
@@ -882,6 +1041,15 @@ router.post(
         if (plan.planType === 'custom' && String(plan.createdByCustomer) !== String(req.user._id))
             return res.status(403).json({ success: false, message: 'Access denied to this custom plan.' });
 
+        // FIX #3: duplicate sub guard — prevent race condition double-activate
+        const dupeSub = await UserSubscription.findOne({
+            user:       req.user._id,
+            status:     { $in: ['Active', 'Trial'] },
+            expiryDate: { $gt: new Date() },
+        });
+        if (dupeSub)
+            return res.status(400).json({ success: false, message: 'Subscription already active. Possible duplicate payment — contact support if amount was deducted.' });
+
         const expiry = new Date();
         if (plan.pricing.billingCycle === 'till_delivery') {
             expiry.setDate(expiry.getDate() + 280);
@@ -907,12 +1075,13 @@ router.post(
         });
 
         await Notification.create({
-            recipient: req.user._id,
-            title:     'Subscription Activated 🎉',
-            body:      `Your ${plan.name} plan is now active until ${expiry.toLocaleDateString()}.`,
-            type:      'Account_Status',
-            priority:  'Normal',
-        });
+    recipient: req.user._id,
+    title:     'Subscription Activated 🎉',
+    body:      `Your ${plan.name} plan is now active until ${expiry.toLocaleDateString()}.`,
+    type:      'Account_Status',
+    priority:  'Normal',
+    dedupeKey: `sub_verify_${razorpay_payment_id}` // <-- Add this line
+});
 
         await log({
             level:    'success',
@@ -929,25 +1098,9 @@ router.post(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SECTION 3B — BUG #3 FIX: POST-PAYMENT USAGE FLUSH
-//
-//  Called by bookingRouterCustomer.js /verify-payment route after Razorpay
-//  signature is verified. Executes subscriptionUsagePending increments that
-//  were deferred at booking creation time to prevent premature decrement.
+//  SECTION 3B — POST-PAYMENT USAGE FLUSH
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * POST /api/v1/subscriptions/flush-pending-usage
- *
- * Body: { bookingId }
- *
- * Finds all pending subscription usage increments stored on the booking
- * (Booking.subscriptionUsagePending), executes them, then clears the pending list.
- *
- * This route is called internally by /bookings/verify-payment after signature
- * verification succeeds. It can also be called by admin to manually flush
- * for bookings where payment was confirmed externally (Cash/Wallet).
- */
 router.post(
     '/flush-pending-usage',
     protect,
@@ -961,7 +1114,6 @@ router.post(
         if (!booking)
             return res.status(404).json({ success: false, message: 'Booking not found.' });
 
-        // Only the booking's customer or admin can flush
         const isAdmin = ['admin', 'superadmin'].includes(req.user?.role);
         if (!isAdmin && String(booking.customer) !== String(req.user._id))
             return res.status(403).json({ success: false, message: 'Not authorised.' });
@@ -978,19 +1130,17 @@ router.post(
         for (const { subId, field } of pending) {
             if (!subId || !field) continue;
 
-            // Try to increment in existing usageHistory entry for this month
             const updated = await UserSubscription.findOneAndUpdate(
                 { _id: subId, 'usageHistory.month': now.getMonth() + 1, 'usageHistory.year': now.getFullYear() },
                 { $inc: { [`usageHistory.$.${field}`]: 1 } }
             );
 
             if (!updated) {
-                // No entry for this month yet — create one
                 await UserSubscription.findByIdAndUpdate(subId, {
                     $push: {
                         usageHistory: {
-                            month:  now.getMonth() + 1,
-                            year:   now.getFullYear(),
+                            month:   now.getMonth() + 1,
+                            year:    now.getFullYear(),
                             [field]: 1,
                         },
                     },
@@ -1000,7 +1150,6 @@ router.post(
             flushed++;
         }
 
-        // Clear pending list on booking
         await Booking.findByIdAndUpdate(bookingId, {
             $set: { subscriptionUsagePending: [] },
         });
@@ -1022,10 +1171,6 @@ router.post(
 //  SECTION 4 — CUSTOMER SUBSCRIPTION MANAGEMENT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * GET /api/v1/subscriptions/my
- * Current user's most recent subscription with plan populated.
- */
 router.get(
     '/my',
     protect,
@@ -1042,10 +1187,6 @@ router.get(
     })
 );
 
-/**
- * GET /api/v1/subscriptions/my/history
- * Paginated subscription history for the logged-in customer.
- */
 router.get(
     '/my/history',
     protect,
@@ -1071,11 +1212,6 @@ router.get(
     })
 );
 
-/**
- * PUT /api/v1/subscriptions/upgrade
- * Upgrade/switch plan for active or trial subscription.
- * Snapshots new plan limits on upgrade.
- */
 router.put(
     '/upgrade',
     protect,
@@ -1105,7 +1241,7 @@ router.put(
         sub.planType  = newPlan.planType;
         sub.fixedTier = newPlan.fixedTier ?? null;
         sub.status    = 'Active';
-        sub.limits    = snapshotLimits(newPlan); // BUG #2 FIX: uses updated snapshotLimits
+        sub.limits    = snapshotLimits(newPlan);
 
         const newExpiry = new Date();
         newExpiry.setDate(newExpiry.getDate() + 30);
@@ -1137,10 +1273,6 @@ router.put(
     })
 );
 
-/**
- * PUT /api/v1/subscriptions/cancel
- * Customer cancels active or trial subscription.
- */
 router.put(
     '/cancel',
     protect,
@@ -1181,10 +1313,6 @@ router.put(
     })
 );
 
-/**
- * PUT /api/v1/subscriptions/toggle-auto-renew
- * Toggle autoRenew flag on active subscription.
- */
 router.put(
     '/toggle-auto-renew',
     protect,
@@ -1218,10 +1346,6 @@ router.put(
 //  SECTION 5 — FREE TRIAL
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * POST /api/v1/subscriptions/free-trial/start
- * Customer starts a free trial (one lifetime trial per account).
- */
 router.post(
     '/free-trial/start',
     protect,
@@ -1242,12 +1366,10 @@ router.post(
         if (plan.planType === 'custom' && String(plan.createdByCustomer) !== String(req.user._id))
             return res.status(403).json({ success: false, message: 'You do not have access to this custom plan.' });
 
-        // Lifetime trial check
         const previousTrial = await UserSubscription.findOne({ user: req.user._id, trialUsed: true });
         if (previousTrial)
             return res.status(400).json({ success: false, message: 'You have already used your free trial. Each account is eligible for one trial only.' });
 
-        // No active/trial subscription
         const activeSub = await UserSubscription.findOne({
             user:       req.user._id,
             status:     { $in: ['Active', 'Trial'] },
@@ -1273,18 +1395,19 @@ router.post(
             expiryDate: trialExpiry,
             autoRenew:  false,
             trialUsed:  true,
-            limits:     snapshotLimits(plan), // BUG #2 FIX: reads customOptions for custom plans
+            limits:     snapshotLimits(plan),
             ...(razorpay_payment_method_id && { savedPaymentMethodId: razorpay_payment_method_id }),
             paymentHistory: [],
         });
 
         await Notification.create({
-            recipient: req.user._id,
-            title:     `Your ${trialDays}-Day Free Trial Has Started!`,
-            body:      `Enjoy full access to ${plan.name} until ${trialExpiry.toLocaleDateString()}. Subscribe before your trial ends to continue uninterrupted.`,
-            type:      'Account_Status',
-            priority:  'Normal',
-        });
+    recipient: req.user._id,
+    title:     `Your ${trialDays}-Day Free Trial Has Started!`,
+    body:      `Enjoy full access to ${plan.name} until ${trialExpiry.toLocaleDateString()}. Subscribe before your trial ends to continue uninterrupted.`,
+    type:      'Account_Status',
+    priority:  'Normal',
+    dedupeKey: `trial_start_${req.user._id}_${Date.now()}` // <-- Add this line
+});
 
         await log({
             level:    'success',
@@ -1316,10 +1439,6 @@ router.post(
     })
 );
 
-/**
- * GET /api/v1/subscriptions/free-trial/eligibility
- * Check if requesting customer is eligible for a free trial.
- */
 router.get(
     '/free-trial/eligibility',
     protect,
@@ -1363,10 +1482,6 @@ router.get(
     })
 );
 
-/**
- * GET /api/v1/subscriptions/free-trial/status
- * Current trial status for logged-in customer.
- */
 router.get(
     '/free-trial/status',
     protect,
@@ -1394,10 +1509,6 @@ router.get(
     })
 );
 
-/**
- * POST /api/v1/subscriptions/free-trial/convert
- * Convert active trial to paid subscription via Razorpay (or free if ₹0).
- */
 router.post(
     '/free-trial/convert',
     protect,
@@ -1485,10 +1596,6 @@ router.post(
     })
 );
 
-/**
- * POST /api/v1/subscriptions/free-trial/verify-convert
- * Verify Razorpay payment for trial-to-paid conversion.
- */
 router.post(
     '/free-trial/verify-convert',
     protect,
@@ -1573,10 +1680,6 @@ router.post(
     })
 );
 
-/**
- * POST /api/v1/subscriptions/free-trial/expire-stale
- * Cron: expire all Trial subscriptions past their expiryDate.
- */
 router.post(
     '/free-trial/expire-stale',
     protect,
@@ -1636,10 +1739,6 @@ router.post(
     })
 );
 
-/**
- * GET /api/v1/subscriptions/admin/trials
- * Admin: paginated list of all Trial subscriptions.
- */
 router.get(
     '/admin/trials',
     protect,
@@ -1674,10 +1773,6 @@ router.get(
 //  SECTION 6 — CRON / SYSTEM JOBS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * POST /api/v1/subscriptions/send-expiry-alerts
- * Cron: email + in-app notification for subscriptions expiring within 7 days.
- */
 router.post(
     '/send-expiry-alerts',
     protect,
@@ -1737,10 +1832,6 @@ router.post(
     })
 );
 
-/**
- * POST /api/v1/subscriptions/auto-renew-trigger
- * Cron: auto-renew subscriptions expiring within 24h using wallet balance.
- */
 router.post(
     '/auto-renew-trigger',
     protect,
@@ -1828,10 +1919,6 @@ router.post(
 //  SECTION 7 — ADMIN PLAN MANAGEMENT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * GET /api/v1/subscriptions/admin/all
- * Paginated list of ALL UserSubscription records.
- */
 router.get(
     '/admin/all',
     protect,
@@ -1841,9 +1928,9 @@ router.get(
         const limit  = Math.min(parseInt(req.query.limit) || 20, 100);
         const filter = {};
 
-        if (req.query.status)   filter.status    = req.query.status;
-        if (req.query.userId)   filter.user      = req.query.userId;
-        if (req.query.planType) filter.planType  = req.query.planType;
+        if (req.query.status)   filter.status   = req.query.status;
+        if (req.query.userId)   filter.user     = req.query.userId;
+        if (req.query.planType) filter.planType = req.query.planType;
 
         const [total, subs] = await Promise.all([
             UserSubscription.countDocuments(filter),
@@ -1863,10 +1950,6 @@ router.get(
     })
 );
 
-/**
- * GET /api/v1/subscriptions/admin/plans
- * Admin: list all SubscriptionPlan documents.
- */
 router.get(
     '/admin/plans',
     protect,
@@ -1884,10 +1967,6 @@ router.get(
     })
 );
 
-/**
- * POST /api/v1/subscriptions/admin/plans
- * Admin: create a fixed subscription plan.
- */
 router.post(
     '/admin/plans',
     protect,
@@ -1928,10 +2007,6 @@ router.post(
     })
 );
 
-/**
- * PUT /api/v1/subscriptions/admin/plans/:planId
- * Admin: update any plan.
- */
 router.put(
     '/admin/plans/:planId',
     protect,
@@ -1965,10 +2040,6 @@ router.put(
     })
 );
 
-/**
- * DELETE /api/v1/subscriptions/admin/plans/:planId
- * Superadmin: soft-delete any plan.
- */
 router.delete(
     '/admin/plans/:planId',
     protect,
@@ -1998,10 +2069,6 @@ router.delete(
     })
 );
 
-/**
- * PUT /api/v1/subscriptions/admin/subscriptions/:subId
- * Admin: manually override a UserSubscription.
- */
 router.put(
     '/admin/subscriptions/:subId',
     protect,
@@ -2037,7 +2104,7 @@ router.put(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  GLOBAL ERROR HANDLER  (must be last)
+//  GLOBAL ERROR HANDLER
 // ─────────────────────────────────────────────────────────────────────────────
 router.use((err, req, res, _next) => {
     console.error('[SubscriptionRouter Error]', err);

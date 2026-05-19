@@ -49,6 +49,7 @@ export const PAYMENT_STATUSES = [
   'partially_paid',
   'failed',
   'refunded',
+  "pending_cash",
   'partially_refunded',
   'waived',
 ];
@@ -377,6 +378,21 @@ const bookingSchema = new Schema(
       max:     100,
     },
 
+    subscriptionUsagePending: {
+  type:    [subscriptionUsagePendingSchema],
+  default: [],
+},
+
+// CRITICAL FIX: Explicit definition array property for finalized usage items
+confirmedSubscriptionUsage: {
+  type: [
+    {
+      subId: { type: String, required: true },
+      field: { type: String, required: true } // e.g., 'consultationsUsed'
+    }
+  ],
+  default: []
+},
     // ── Ride Linkage ──────────────────────────────────────────────────────────
     rides: [
       {

@@ -1,22 +1,4 @@
-/**
- * bookingRouter1.js — Likeson.in
- *
- * Routes: TP, Care Assistant, Hospital, Doctor, OP card, Admin
- *
- * FIXES vs previous version:
- *  - 'care assistant' (space) → 'care_assistant' (underscore) everywhere
- *  - createAndLinkRide imported from shared (single definition)
- *  - calculateCanonicalRoute imported from shared (no re-implementation)
- *  - All Ride.driver assignments use Driver._id resolved correctly
- *  - RideTracking always created with canonical polyline at ride creation
- *  - /hospital/upcoming includes correct booking types + field selection
- *  - /admin/bookings/:id returns mapRoute from RideTracking
- *  - No dynamic import() on hot paths — all imports at top
- *  - invalidateBookingCache uses invalidatePattern (safe on large datasets)
- *  - syncBookingStatusFromRide used instead of manual Booking.status updates
- *  - sendEmail / sendSms wrapped in try/catch — never crash the route
- */
-
+ 
 import express from 'express';
 
 import Booking              from '../models/Booking.js';
@@ -53,12 +35,8 @@ import {
   haversineKm,
   createNotification,
   buildRidePayload,
-  computeRefundAmount,
-  createAndLinkRide,
   calculateCanonicalRoute,
-  syncBookingStatusFromRide,
   RADIUS_METERS,
-  RIDE_STATUSES_ACTIVE,
   CARE_RIDE_RADIUS_M,
   TRANSPORT_RADIUS_M,
 } from './bookingRouterShared.js';

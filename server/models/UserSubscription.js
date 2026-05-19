@@ -4,15 +4,22 @@ const { Schema } = mongoose;
 /**
  * UserSubscription Model — Likeson.in
  *
- * FIXES IN THIS VERSION:
- *  BUG #2 FIX: fixedTier enum now includes 'Standard Care' (was missing,
- *              causing validation errors when admin created Standard Care plan).
+ * CHANGES IN THIS VERSION:
+ *  FEATURE: careAssistantTierSnapshot — limits now stores tier label, charge,
+ *           and index snapshotted from PlatformPricingConfig at subscribe time.
  *
- *  BUG #3 + #5 FIX: subscriptionUsagePending field lives on Booking model
- *              (see Booking.js). This model only stores the actual confirmed
- *              usage in usageHistory. No changes needed here for that fix.
+ *  FEATURE: consultationSummary virtual — exposes perMonth / used / remaining
+ *           / unlimited flag + plan modes (after populate).
  *
- *  All other fields unchanged from previous version.
+ *  FEATURE: careAssistantSummary virtual — exposes tier info + visits
+ *           used / remaining in one object.
+ *
+ *  FEATURE: transportRidesRemaining virtual — parallel to consultations.
+ *
+ *  BUG #2 FIX: fixedTier enum includes 'Standard Care'.
+ *
+ *  BUG #3 + #5 FIX: usageHistory incremented only after payment verified.
+ *           Pending increments live on Booking.subscriptionUsagePending.
  *
  * Tracks an individual user's active subscription:
  *   - Which plan (fixed or custom) they are on
@@ -23,12 +30,12 @@ const { Schema } = mongoose;
  *   - Payment history array (Razorpay transaction records)
  *   - Cancellation details
  *
- * One user can have ONE active subscription at a time.
- * Past subscriptions are kept with status 'Expired' / 'Cancelled' for history.
+ * One user → ONE active subscription at a time.
+ * Past subscriptions kept with status 'Expired' / 'Cancelled' for history.
  *
- * SYNC NOTE: Status enum, field names, and paymentHistory structure are
- * kept in sync with subscriptionRouter.js (PascalCase status values,
- * expiryDate, trialUsed, savedPaymentMethodId, paymentHistory[]).
+ * SYNC NOTE: Status enum, field names, and paymentHistory structure kept in
+ * sync with subscriptionRouter.js (PascalCase status values, expiryDate,
+ * trialUsed, savedPaymentMethodId, paymentHistory[]).
  */
 
 // ─── Sub-schema: single payment record ───────────────────────────────────────
@@ -112,11 +119,11 @@ const userSubscriptionSchema = new Schema(
     // ── Status ────────────────────────────────────────────────────────────────
     /**
      * PascalCase to match all router comparisons:
-     *   status: 'Active'    — paid & within expiry window
-     *   status: 'Trial'     — within the free-trial window
-     *   status: 'Paused'    — paused by admin / customer
-     *   status: 'Cancelled' — cancelled; access until expiryDate
-     *   status: 'Expired'   — past expiryDate or delivery date
+     *   'Active'    — paid & within expiry window
+     *   'Trial'     — within the free-trial window
+     *   'Paused'    — paused by admin / customer
+     *   'Cancelled' — cancelled; access until expiryDate
+     *   'Expired'   — past expiryDate or delivery date
      */
     status: {
       type:    String,
@@ -127,24 +134,23 @@ const userSubscriptionSchema = new Schema(
 
     // ── Free Trial ────────────────────────────────────────────────────────────
     /**
-     * trialUsed — lifetime flag; set to true when a Trial subscription is
-     * created and never cleared. The router checks this field to enforce
-     * the "one free trial per account" rule.
+     * trialUsed — lifetime flag; set true when Trial subscription created,
+     * never cleared. Router checks to enforce "one free trial per account".
      */
     trialUsed: { type: Boolean, default: false, index: true },
 
     /**
      * Stored for plans where freeTrial.requiresPaymentMethod === true.
-     * Used to auto-charge when the trial ends.
+     * Used to auto-charge when trial ends.
      */
     savedPaymentMethodId: { type: String, default: null },
 
     // ── Expiry / Billing Dates ────────────────────────────────────────────────
     /**
      * Single source-of-truth for when access ends.
-     *   - Paid plans:         today + 30 days
-     *   - Pregnant Women Care: today + 280 days  (till_delivery)
-     *   - Free trial:         today + plan.freeTrial.durationDays
+     *   Paid plans:            today + 30 days
+     *   Pregnant Women Care:   today + 280 days  (till_delivery)
+     *   Free trial:            today + plan.freeTrial.durationDays
      */
     expiryDate: { type: Date, required: true, index: true },
 
@@ -155,7 +161,7 @@ const userSubscriptionSchema = new Schema(
 
     /**
      * For Pregnant Women Care ("Till Delivery").
-     * When the delivery date is reached the pre-save hook sets status to Expired.
+     * When delivery date reached pre-save hook sets status to Expired.
      */
     expectedDeliveryDate: { type: Date, default: null },
 
@@ -169,48 +175,94 @@ const userSubscriptionSchema = new Schema(
 
     // ── Benefit Limits (snapshotted from plan at subscription time) ───────────
     /**
-     * BUG #2 FIX: snapshotLimits in subscriptionRouter.js now correctly
-     * reads customOptions for custom plans, so these fields are properly
-     * populated for custom plan subscribers too.
+     * Snapshotting means the customer keeps contracted limits even if
+     * admin later changes plan defaults.
      *
-     * Snapshotting means the customer keeps their contracted limits even if
-     * the admin later changes the plan defaults.
+     * transportRatePerKm special values:
+     *   null  = not applicable (NRI plan) or no transport in custom plan
+     *   > 0   = fixed plan per-km rate
+     *   -1    = sentinel: custom plan transport active; actual pricePerKm
+     *           resolved from plan.customOptions at booking time via resolveKmRate()
      *
-     * Special value for transportRatePerKm:
-     *   null   = not applicable (NRI plan) or no transport in custom plan
-     *   > 0    = fixed plan rate
-     *   -1     = sentinel: custom plan transport active, actual pricePerKm
-     *            resolved from plan.customOptions at booking time by resolveKmRate()
+     * consultationsPerMonth special value:
+     *   -1    = unlimited (e.g. Premium Care or future unlimited tier)
+     *    0    = none included
+     *   > 0   = fixed monthly quota
+     *
+     * careAssistantVisitsPerMonth:
+     *   null  = care assistant not included in plan
+     *   -1    = unlimited / dedicated (Pregnant Women Care)
+     *   > 0   = monthly visit quota
+     *
+     * careAssistantTierIndex / careAssistantTierLabel / careAssistantChargePerVisit:
+     *   Snapshotted from PlatformPricingConfig.customPlanOptions.careAssistant
+     *   .pricingTiers[careAssistantTierIndex] at subscription creation time.
+     *   null for fixed plans where care assistant is standard-priced service
+     *   (not tier-selected by customer).
      */
     limits: {
-      consultationsPerMonth:       { type: Number, default: 0 },
-      transportRidesPerMonth:      { type: Number, default: null },
+      // ── Consultations ──────────────────────────────────────────────────────
+      consultationsPerMonth: { type: Number, default: 0 },
+      // -1 = unlimited, 0 = none, >0 = monthly quota
+
+      // ── Transport ─────────────────────────────────────────────────────────
+      transportRidesPerMonth: { type: Number, default: null },
+      transportRatePerKm:     { type: Number, default: null },
+      // null = N/A, -1 = resolve from customOptions at booking time
+
+      // ── Care Assistant ─────────────────────────────────────────────────────
       careAssistantVisitsPerMonth: { type: Number, default: null },
-      labTestsPerMonth:            { type: Number, default: 0 },
-      pharmacyDiscountPercent:     { type: Number, default: 0 },
-      diagnosticsDiscountPercent:  { type: Number, default: 0 },
-      transportRatePerKm:          { type: Number, default: null },
-      homeSampleCollection:        { type: Boolean, default: false },
+      // null = not included, -1 = unlimited/dedicated, >0 = monthly quota
+
+      /**
+       * NEW — snapshotted from PlatformPricingConfig.careAssistant.pricingTiers
+       * (or customPlanOptions.careAssistant.pricingTiers) at subscribe time.
+       *
+       * careAssistantTierIndex:
+       *   Index into the pricingTiers array that the customer chose (custom plan)
+       *   or that the fixed plan maps to. null for fixed plans with standard
+       *   service (charge resolved at booking time by care assistant service).
+       *
+       * careAssistantTierLabel:
+       *   Human-readable label snapshotted from the tier, e.g. "2–4 Hours".
+       *   For fixed plans with dedicated assistant: 'Dedicated'.
+       *   null if care assistant not included.
+       *
+       * careAssistantChargePerVisit:
+       *   ₹ charged to user per visit for this tier, snapshotted.
+       *   null for fixed plans where charge is resolved live at booking.
+       *   Used in careAssistantSummary virtual for display.
+       */
+      careAssistantTierIndex:      { type: Number, default: null },
+      careAssistantTierLabel:      { type: String, default: null },
+      careAssistantChargePerVisit: { type: Number, default: null },
+
+      // ── Lab / Diagnostics ──────────────────────────────────────────────────
+      labTestsPerMonth:           { type: Number, default: 0 },
+      diagnosticsDiscountPercent: { type: Number, default: 0 },
+      homeSampleCollection:       { type: Boolean, default: false },
+
+      // ── Pharmacy ──────────────────────────────────────────────────────────
+      pharmacyDiscountPercent: { type: Number, default: 0 },
     },
 
     // ── Monthly Usage Tracking ────────────────────────────────────────────────
     /**
-     * New entry appended each billing cycle by the usage-tracking service.
+     * New entry appended each billing cycle by usage-tracking service.
      *
-     * BUG #3 + #5 FIX: These fields are now only incremented AFTER payment
-     * is verified. Booking routes queue pending increments on the Booking
-     * document (Booking.subscriptionUsagePending) and flush here only after
-     * Razorpay signature verified or wallet payment confirmed.
-     * Cancelled bookings never flush — quota is never consumed.
+     * BUG #3 + #5 FIX: Fields incremented ONLY after payment verified.
+     * Booking routes queue pending increments on Booking.subscriptionUsagePending
+     * and flush here only after Razorpay signature verified or wallet payment
+     * confirmed. Cancelled bookings never flush — quota never consumed.
      */
     usageHistory: { type: [monthlyUsageSchema], default: [] },
 
     // ── Payment History ───────────────────────────────────────────────────────
     /**
-     * Array of all payment records for this subscription.
-     * The router appends a new entry on every successful Razorpay payment
-     * (initial purchase AND trial-to-paid conversion).
-     * Auto-renewal deductions (wallet) are also appended by the cron route.
+     * All payment records for this subscription.
+     * Router appends on every successful Razorpay payment (initial purchase
+     * AND trial-to-paid conversion). Auto-renewal wallet deductions appended
+     * by billing cron route.
      */
     paymentHistory: { type: [paymentHistorySchema], default: [] },
 
@@ -239,19 +291,96 @@ userSubscriptionSchema.virtual('currentMonthUsage').get(function () {
   );
 });
 
-// ─── Virtual: remaining consultations this month ──────────────────────────────
+// ─── Virtual: consultation summary ───────────────────────────────────────────
+/**
+ * Returns a single object with all consultation info needed for UI / API:
+ *   perMonth    — monthly quota (-1 = unlimited, 0 = none)
+ *   used        — consumed this month
+ *   remaining   — remaining this month (Infinity if unlimited)
+ *   unlimited   — boolean shorthand for perMonth === -1
+ *   percentUsed — 0–100 (null if unlimited)
+ *
+ * NOTE: `modes` (inPerson / video / home) live on SubscriptionPlan.consultations.modes.
+ * Populate `plan` first and access via sub.plan.consultations.modes if needed.
+ */
+userSubscriptionSchema.virtual('consultationSummary').get(function () {
+  const limit = this.limits.consultationsPerMonth;
+  const used  = this.currentMonthUsage?.consultationsUsed ?? 0;
+  const unlimited = limit === -1;
+
+  return {
+    perMonth:    limit,
+    used,
+    remaining:   unlimited ? Infinity : Math.max(0, limit - used),
+    unlimited,
+    percentUsed: unlimited ? null : limit === 0 ? 100 : Math.min(100, Math.round((used / limit) * 100)),
+  };
+});
+
+// ─── Virtual: remaining consultations this month (quick scalar) ──────────────
 userSubscriptionSchema.virtual('consultationsRemaining').get(function () {
-  if (this.limits.consultationsPerMonth === -1) return Infinity; // unlimited
+  if (this.limits.consultationsPerMonth === -1) return Infinity;
   const used = this.currentMonthUsage?.consultationsUsed ?? 0;
   return Math.max(0, this.limits.consultationsPerMonth - used);
 });
 
-// ─── Virtual: remaining care assistant visits this month ──────────────────────
+// ─── Virtual: transport rides remaining this month ───────────────────────────
+/**
+ * null  = transport not applicable (NRI plan or no transport in custom plan)
+ * >= 0  = rides remaining
+ */
+userSubscriptionSchema.virtual('transportRidesRemaining').get(function () {
+  if (this.limits.transportRidesPerMonth === null) return null;
+  const used = this.currentMonthUsage?.transportRidesUsed ?? 0;
+  return Math.max(0, this.limits.transportRidesPerMonth - used);
+});
+
+// ─── Virtual: care assistant summary ─────────────────────────────────────────
+/**
+ * null if care assistant not included in plan.
+ *
+ * Returns:
+ *   tierIndex       — index into pricingTiers[] snapshotted at subscribe time
+ *   tierLabel       — e.g. "2–4 Hours" or "Dedicated"
+ *   chargePerVisit  — ₹ per visit for this tier (null if fixed plan live-resolved)
+ *   visitsPerMonth  — monthly quota (-1 = unlimited/dedicated)
+ *   visitsUsed      — consumed this month
+ *   visitsRemaining — remaining this month (Infinity if unlimited)
+ *   unlimited       — boolean shorthand
+ *   percentUsed     — 0–100 (null if unlimited)
+ */
+userSubscriptionSchema.virtual('careAssistantSummary').get(function () {
+  const limit = this.limits.careAssistantVisitsPerMonth;
+  if (limit === null) return null; // not included
+
+  const used      = this.currentMonthUsage?.careAssistantVisitsUsed ?? 0;
+  const unlimited = limit === -1;
+
+  return {
+    tierIndex:      this.limits.careAssistantTierIndex,
+    tierLabel:      this.limits.careAssistantTierLabel,
+    chargePerVisit: this.limits.careAssistantChargePerVisit,
+    visitsPerMonth:  limit,
+    visitsUsed:      used,
+    visitsRemaining: unlimited ? Infinity : Math.max(0, limit - used),
+    unlimited,
+    percentUsed: unlimited ? null : limit === 0 ? 100 : Math.min(100, Math.round((used / limit) * 100)),
+  };
+});
+
+// ─── Virtual: remaining care assistant visits this month (quick scalar) ───────
 userSubscriptionSchema.virtual('careAssistantVisitsRemaining').get(function () {
   if (!this.limits.careAssistantVisitsPerMonth) return 0;
-  if (this.limits.careAssistantVisitsPerMonth === -1) return Infinity; // unlimited
+  if (this.limits.careAssistantVisitsPerMonth === -1) return Infinity;
   const used = this.currentMonthUsage?.careAssistantVisitsUsed ?? 0;
   return Math.max(0, this.limits.careAssistantVisitsPerMonth - used);
+});
+
+// ─── Virtual: lab tests remaining this month ─────────────────────────────────
+userSubscriptionSchema.virtual('labTestsRemaining').get(function () {
+  if (this.limits.labTestsPerMonth === -1) return Infinity;
+  const used = this.currentMonthUsage?.labTestsUsed ?? 0;
+  return Math.max(0, this.limits.labTestsPerMonth - used);
 });
 
 // ─── Virtual: days remaining until expiry ────────────────────────────────────
@@ -268,6 +397,38 @@ userSubscriptionSchema.virtual('isCurrentlyActive').get(function () {
   if (!['Active', 'Trial'].includes(this.status)) return false;
   if (!this.expiryDate) return false;
   return new Date(this.expiryDate) > new Date();
+});
+
+// ─── Virtual: full benefit snapshot for UI display ───────────────────────────
+/**
+ * Convenience object aggregating all benefit summaries.
+ * Suitable for a "My Plan" dashboard screen.
+ */
+userSubscriptionSchema.virtual('benefitSnapshot').get(function () {
+  return {
+    consultations:   this.consultationSummary,
+    careAssistant:   this.careAssistantSummary,
+    transportRides: {
+      perMonth:        this.limits.transportRidesPerMonth,
+      ratePerKm:       this.limits.transportRatePerKm,
+      used:            this.currentMonthUsage?.transportRidesUsed ?? 0,
+      remaining:       this.transportRidesRemaining,
+    },
+    labTests: {
+      perMonth:        this.limits.labTestsPerMonth,
+      used:            this.currentMonthUsage?.labTestsUsed ?? 0,
+      remaining:       this.labTestsRemaining,
+    },
+    pharmacy: {
+      discountPercent:   this.limits.pharmacyDiscountPercent,
+      ordersPlaced:      this.currentMonthUsage?.pharmacyOrdersPlaced ?? 0,
+    },
+    diagnostics: {
+      discountPercent:   this.limits.diagnosticsDiscountPercent,
+      homeSample:        this.limits.homeSampleCollection,
+      bookingsMade:      this.currentMonthUsage?.diagnosticBookingsMade ?? 0,
+    },
+  };
 });
 
 // ─── Pre-save: auto-expire Pregnant Women Care when delivery date passed ──────
@@ -290,3 +451,5 @@ userSubscriptionSchema.index({ trialUsed: 1, user: 1 });         // trial eligib
 
 const UserSubscription = mongoose.model('UserSubscription', userSubscriptionSchema);
 export default UserSubscription;
+
+ 

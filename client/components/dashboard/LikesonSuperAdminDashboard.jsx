@@ -19,7 +19,7 @@ import {
   ExternalLink, LogOut, UserRound, ChevronDown,
   AreaChart, Hospital, Terminal, History,
   ShieldCheck, Gem, Settings2, HeartPulse,
-  PanelLeftClose, Sun, Moon, Monitor,
+  PanelLeftClose, Sun, Moon,
 } from "lucide-react";
 
 // Local Imports
@@ -53,11 +53,11 @@ const bellRingingVariant = {
 
 // ── ThemeToggle ────────────────────────────────────────────────────────────
 /**
- * Cycles: system → light → dark → system
- * Uses next-themes. Renders nothing until mounted to avoid hydration flash.
+ * Safely handles theme flipping.
+ * Uses resolvedTheme to track system vs explicit choices cleanly.
  */
 const ThemeToggle = memo(function ThemeToggle() {
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, resolvedTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => setMounted(true), []);
@@ -65,21 +65,19 @@ const ThemeToggle = memo(function ThemeToggle() {
   if (!mounted) {
     return (
       <div
-        className="w-10 h-10 rounded-xl border border-base-300 skeleton"
+        className="w-10 h-10 rounded-xl border border-base-300 bg-base-200/50 animate-pulse"
         aria-hidden="true"
       />
     );
   }
 
-  // Simplified toggle logic: strictly between light and dark
+  const currentTheme = theme === "system" ? resolvedTheme : theme;
   const toggleTheme = () => {
-    setTheme(theme === "dark" ? "light" : "dark");
+    setTheme(currentTheme === "dark" ? "light" : "dark");
   };
 
-  // Determine Icon based on the current theme state
-  const Icon = theme === "dark" ? Moon : Sun;
-
-  const label = `Switch to ${theme === "dark" ? "light" : "dark"} mode`;
+  const Icon = currentTheme === "dark" ? Moon : Sun;
+  const label = `Switch to ${currentTheme === "dark" ? "light" : "dark"} mode`;
 
   return (
     <button
@@ -128,7 +126,6 @@ const SidebarSection = memo(function SidebarSection({
     [section.links, pathname]
   );
 
-  // Auto-expand if a child route is currently active
   useEffect(() => {
     if (isParentActive && !isOpen && isSidebarOpen) {
       onToggle(section.title);
@@ -202,6 +199,7 @@ const SuperAdminDashboard = ({ children }) => {
   const [openMenus,     setOpenMenus]     = useState({});
   const [searchQuery,   setSearchQuery]   = useState("");
   const [isSearchOpen,  setIsSearchOpen]  = useState(false);
+  const [isProfileOpen, setIsProfileOpen] = useState(false); // Mobile & Desktop explicit menu fix
 
   // Init: collapse sidebar on mobile + fetch notifications
   useEffect(() => {
@@ -266,7 +264,7 @@ const SuperAdminDashboard = ({ children }) => {
   return (
     <div className="min-h-screen bg-base-100 text-base-content selection:bg-primary/30">
 
-      {/* Mobile backdrop */}
+      {/* Mobile sidebar backdrop */}
       <AnimatePresence>
         {isSidebarOpen && (
           <motion.div
@@ -298,17 +296,14 @@ const SuperAdminDashboard = ({ children }) => {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                 >
-                 <Link
-  href="/super-admin/dashboard"
-  className="flex flex-col group"
->
-  <span className="font-black text-xl tracking-tighter hover:text-primary transition-colors">
-    LIKESON<span className="text-secondary">.in</span>
-  </span>
-  <span className="text-[10px] uppercase tracking-widest text-muted-foreground -mt-1 font-semibold">
-    Superadmin Dashboard
-  </span>
-</Link>
+                  <Link href="/super-admin/dashboard" className="flex flex-col group">
+                    <span className="font-black text-xl tracking-tighter hover:text-primary transition-colors">
+                      LIKESON<span className="text-secondary">.in</span>
+                    </span>
+                    <span className="text-[10px] uppercase tracking-widest text-muted-foreground -mt-1 font-semibold">
+                      Superadmin Dashboard
+                    </span>
+                  </Link>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -396,7 +391,7 @@ const SuperAdminDashboard = ({ children }) => {
               </span>
             </button>
 
-            {/* ── Theme Toggle (cycles system → light → dark) ── */}
+            {/* Theme Toggle Module */}
             <ThemeToggle />
 
             {/* Notifications */}
@@ -420,42 +415,68 @@ const SuperAdminDashboard = ({ children }) => {
               </motion.div>
             </Link>
 
-            {/* Profile dropdown */}
-            <div className="group relative">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-primary to-primary-focus p-[2px] cursor-pointer shadow-xl transition-transform hover:scale-105">
+            {/* State-Controlled Profile Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setIsProfileOpen((prev) => !prev)}
+                className="w-10 h-10 rounded-xl bg-gradient-to-tr from-primary to-primary-focus p-[2px] cursor-pointer shadow-xl transition-transform hover:scale-105 block focus:outline-none"
+                aria-label="Toggle profile menu"
+              >
                 <img
                   src={roleAvatar}
                   alt="Profile"
                   className="w-full h-full rounded-[10px] object-cover bg-base-300"
                 />
-              </div>
-              <div className="absolute right-0 top-full pt-4 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 z-50">
-                <div className="w-64 bg-base-200 border border-base-300 rounded-3xl shadow-2xl p-2 backdrop-blur-2xl">
-                  <div className="px-4 py-4 border-b border-base-300 mb-2 bg-primary/5 rounded-2xl">
-                    <p className="text-xs font-black uppercase tracking-tight truncate">
-                      {user?.name || "Administrator"}
-                    </p>
-                    <p className="text-[9px] text-primary font-black uppercase mt-1 tracking-[0.2em]">
-                      Super Admin Protocol
-                    </p>
-                  </div>
-                  {PROFILE_LINKS.map((pl, pi) => (
-                    <Link
-                      key={pi}
-                      href={pl.href}
-                      className="flex items-center gap-3 px-4 py-3 text-[11px] font-bold uppercase text-base-content/60 hover:bg-base-100 hover:text-primary rounded-xl transition-all"
-                    >
-                      {pl.icon} {pl.name}
-                    </Link>
-                  ))}
-                  <button
-                    onClick={handleLogout}
-                    className="w-full flex items-center gap-3 px-4 py-3 text-[11px] font-black text-error border-t border-base-300 mt-2 rounded-xl hover:bg-error/10 uppercase tracking-widest"
+              </button>
+
+              {/* Click outside backdrop container specifically designed for mobile closing */}
+              {isProfileOpen && (
+                <div 
+                  className="fixed inset-0 z-40" 
+                  onClick={() => setIsProfileOpen(false)} 
+                />
+              )}
+
+              <AnimatePresence>
+                {isProfileOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className="absolute right-0 top-full pt-4 z-50 origin-top-right"
                   >
-                    <LogOut size={14} /> Logout 
-                  </button>
-                </div>
-              </div>
+                    <div className="w-64 bg-base-200 border border-base-300 rounded-3xl shadow-2xl p-2 backdrop-blur-2xl">
+                      <div className="px-4 py-4 border-b border-base-300 mb-2 bg-primary/5 rounded-2xl">
+                        <p className="text-xs font-black uppercase tracking-tight truncate">
+                          {user?.name || "Administrator"}
+                        </p>
+                        <p className="text-[9px] text-primary font-black uppercase mt-1 tracking-[0.2em]">
+                          Super Admin Protocol
+                        </p>
+                      </div>
+                      {PROFILE_LINKS.map((pl, pi) => (
+                        <Link
+                          key={pi}
+                          href={pl.href}
+                          onClick={() => setIsProfileOpen(false)}
+                          className="flex items-center gap-3 px-4 py-3 text-[11px] font-bold uppercase text-base-content/60 hover:bg-base-100 hover:text-primary rounded-xl transition-all"
+                        >
+                          {pl.icon} {pl.name}
+                        </Link>
+                      ))}
+                      <button
+                        onClick={() => {
+                          setIsProfileOpen(false);
+                          handleLogout();
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-3 text-[11px] font-black text-error border-t border-base-300 mt-2 rounded-xl hover:bg-error/10 uppercase tracking-widest"
+                      >
+                        <LogOut size={14} /> Logout 
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
         </header>
@@ -476,9 +497,8 @@ const SuperAdminDashboard = ({ children }) => {
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            className="rounded-[0.5rem] pt-3 border border-base-300 bg-base-200/40 min-h-[75vh]  shadow-inner relative overflow-hidden backdrop-blur-sm"
+            className="rounded-[0.5rem] pt-3 border border-base-300 bg-base-200/40 min-h-[75vh] shadow-inner relative overflow-hidden backdrop-blur-sm"
           >
-            {/* Decorative glow */}
             <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-primary/5 blur-[150px] rounded-full pointer-events-none" />
             {children}
           </motion.div>
