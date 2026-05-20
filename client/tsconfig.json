@@ -29,6 +29,6 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     "**/*.mts"
-, "components/ui/Header.jsx", "components/ui/Hero.jsx", "app/(auth)/login/page.jsx", "constants/admin.js", "components/Banner.jsx", "provider/Socketprovider.tsx", "components/ui/Footer.jsx", "store/api.js", "store/StoreProvider.js", "app/SocketInitializer.tsx"  ],
+, "components/ui/Header.jsx", "components/ui/Hero.jsx", "app/(auth)/login/page.jsx", "constants/admin.js", "components/Banner.jsx", "provider/Socketprovider.tsx", "components/ui/Footer.jsx", "store/api.js", "store/StoreProvider.js", "app/SocketInitializer.tsx", "context/AuthSocketBridge.tsx"  ],
   "exclude": ["node_modules"]
 }

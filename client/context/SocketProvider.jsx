@@ -1,20 +1,7 @@
 'use client';
- // routes app/context/SocketProvider.jsx
+// routes app/context/SocketProvider.jsx
 /**
  * SocketProvider.jsx — Likeson.in Booking Socket Context
- *
- * Wraps app, connects socket on auth, exposes hooks.
- *
- * Usage:
- *   // layout.jsx or _app.jsx
- *   <SocketProvider token={userToken}>
- *     {children}
- *   </SocketProvider>
- *
- *   // any component
- *   const { socket, connected, joinBookingRoom, on } = useSocket();
- *   const { locationUpdate, etaUpdate } = useBookingRoom(bookingId);
- *   const { triggerSos } = useSos(bookingId, rideId);
  */
 
 import React, {
@@ -22,7 +9,6 @@ import React, {
   useCallback,
   useContext,
   useEffect,
-  useRef,
   useState,
 } from 'react';
 
@@ -55,9 +41,9 @@ const SocketContext = createContext(null);
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STATUS_CONFIG = {
-  connected:     { label: 'Live',         icon: Wifi,       cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
-  connecting:    { label: 'Connecting…',  icon: Loader2,    cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
-  disconnected:  { label: 'Offline',      icon: WifiOff,    cls: 'bg-red-500/10 text-red-400 border-red-500/30' },
+  connected:     { label: 'Live',         icon: Wifi,         cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
+  connecting:    { label: 'Connecting…',  icon: Loader2,      cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
+  disconnected:  { label: 'Offline',      icon: WifiOff,      cls: 'bg-red-500/10 text-red-400 border-red-500/30' },
   error:         { label: 'Error',        icon: AlertTriangle, cls: 'bg-red-500/10 text-red-500 border-red-500/30' },
 };
 
@@ -68,7 +54,7 @@ function ConnectionBadge({ status }) {
   return (
     <div
       className={`
-        fixed bottom-3 right-3 z-50
+        fixed bottom-3 right-3 z-50 font-inter
         flex items-center gap-1.5 px-2.5 py-1
         rounded-full border text-xs font-medium
         backdrop-blur-sm transition-all duration-300
@@ -88,17 +74,6 @@ function ConnectionBadge({ status }) {
 // PROVIDER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * SocketProvider
- *
- * @param {{
- *   token: string|null,
- *   children: React.ReactNode,
- *   showStatusBadge?: boolean,
- *   onConnect?: () => void,
- *   onDisconnect?: (reason: string) => void,
- * }} props
- */
 export function SocketProvider({
   token,
   children,
@@ -202,10 +177,6 @@ export function SocketProvider({
 // PRIMARY HOOK
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * useSocket — access context.
- * Must be inside <SocketProvider>.
- */
 export function useSocket() {
   const ctx = useContext(SocketContext);
   if (!ctx) throw new Error('useSocket must be inside <SocketProvider>');
@@ -216,22 +187,6 @@ export function useSocket() {
 // BOOKING ROOM HOOK
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * useBookingRoom — join room, track live state.
- *
- * @param {string|null} bookingId
- * @returns {{
- *   joined: boolean,
- *   locationUpdate: object|null,
- *   etaUpdate: object|null,
- *   rideStatus: object|null,
- *   bookingStatus: object|null,
- *   navigationTarget: object|null,
- *   sosAlert: object|null,
- *   routeDeviation: object|null,
- *   snapshot: object|null,
- * }}
- */
 export function useBookingRoom(bookingId) {
   const { on, connected, joinBookingRoom, leaveBookingRoom, requestBookingState, SOCKET_EVENTS: EV } = useSocket();
 
@@ -283,15 +238,10 @@ export function useBookingRoom(bookingId) {
 // DRIVER STATUS HOOK
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * useDriverStatus — send status transitions, listen for ack.
- *
- * @param {{ bookingId: string, rideId: string }} opts
- */
 export function useDriverStatus({ bookingId, rideId } = {}) {
   const { updateDriverStatus, on, SOCKET_EVENTS: EV, DRIVER_STATUS: DS } = useSocket();
-  const [ack,    setAck]    = useState(null);
-  const [error,  setError]  = useState(null);
+  const [ack,    setAck]   = useState(null);
+  const [error,  setError] = useState(null);
   const [loading,setLoading]= useState(false);
 
   useEffect(() => {
@@ -313,15 +263,10 @@ export function useDriverStatus({ bookingId, rideId } = {}) {
 // OTP HOOK
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * useOtp — verify OTP + listen for result.
- *
- * @param {{ bookingId: string, rideId: string }} opts
- */
 export function useOtp({ bookingId, rideId } = {}) {
   const { verifyOtpAsync, requestOtpResend, on, SOCKET_EVENTS: EV } = useSocket();
 
-  const [result,  setResult]  = useState(null);  // { success, status, verifiedAt, … }
+  const [result,  setResult]  = useState(null); 
   const [error,   setError]   = useState(null);
   const [loading, setLoading] = useState(false);
   const [wrongAttempts, setWrongAttempts] = useState(0);
@@ -355,12 +300,6 @@ export function useOtp({ bookingId, rideId } = {}) {
 // SOS HOOK
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * useSos — trigger SOS, track incoming alerts.
- *
- * @param {string} bookingId
- * @param {string} rideId
- */
 export function useSos(bookingId, rideId) {
   const { triggerSos, on, SOCKET_EVENTS: EV } = useSocket();
 
@@ -387,11 +326,6 @@ export function useSos(bookingId, rideId) {
 // GPS HOOK (driver)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * useGpsTracking — start/stop driver GPS broadcast.
- *
- * @param {{ bookingId?: string, autoStart?: boolean }} opts
- */
 export function useGpsTracking({ bookingId, autoStart = false } = {}) {
   const { startGpsTracking, stopGpsTracking } = useSocket();
   const [tracking, setTracking] = useState(false);
@@ -418,9 +352,6 @@ export function useGpsTracking({ bookingId, autoStart = false } = {}) {
 // CONNECTION STATUS HOOK
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * useConnectionStatus — track socket health.
- */
 export function useConnectionStatus() {
   const { connected, connStatus, lastError, pingHealth, on, SOCKET_EVENTS: EV } = useSocket();
   const [latencyMs, setLatencyMs] = useState(null);
@@ -441,12 +372,6 @@ export function useConnectionStatus() {
 // ADMIN OPS HOOK
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * useAdminOps — admin-only event feed.
- * Server only sends these to admin:ops room (auto-joined on connect for admin role).
- *
- * @param {{ maxFeed?: number }} opts
- */
 export function useAdminOps({ maxFeed = 50 } = {}) {
   const { on, SOCKET_EVENTS: EV } = useSocket();
   const [feed,          setFeed]          = useState([]);
@@ -475,21 +400,16 @@ export function useAdminOps({ maxFeed = 50 } = {}) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EXAMPLE COMPONENTS (reference UI — copy/adapt as needed)
+// EXAMPLE COMPONENTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * LiveEtaBadge — shows ETA countdown from useBookingRoom.
- *
- * @param {{ bookingId: string }} props
- */
 export function LiveEtaBadge({ bookingId }) {
   const { etaUpdate } = useBookingRoom(bookingId);
 
   if (!etaUpdate) return null;
 
   return (
-    <div className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-white">
+    <div className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-white font-inter">
       <Clock size={14} className="text-amber-400" />
       <span className="font-medium">{etaUpdate.etaMinutes} min</span>
       <span className="text-slate-400">·</span>
@@ -501,18 +421,13 @@ export function LiveEtaBadge({ bookingId }) {
   );
 }
 
-/**
- * SosButton — big SOS trigger.
- *
- * @param {{ bookingId: string, rideId: string }} props
- */
 export function SosButton({ bookingId, rideId }) {
   const { trigger, sosActive, dismiss } = useSos(bookingId, rideId);
 
   return sosActive ? (
     <button
       onClick={dismiss}
-      className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-white font-bold animate-pulse"
+      className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-white font-bold animate-pulse font-inter"
     >
       <ShieldAlert size={16} />
       SOS Active — Tap to dismiss
@@ -520,17 +435,13 @@ export function SosButton({ bookingId, rideId }) {
   ) : (
     <button
       onClick={() => trigger({ sosType: 'safety' })}
-      className="flex items-center gap-2 rounded-lg bg-red-500/10 border border-red-500/40 px-4 py-2 text-red-400 font-medium hover:bg-red-500/20 transition-colors"
+      className="flex items-center gap-2 rounded-lg bg-red-500/10 border border-red-500/40 px-4 py-2 text-red-400 font-medium hover:bg-red-500/20 transition-colors font-inter"
     >
       <Shield size={16} />
       SOS
     </button>
   );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// RE-EXPORTS
-// ─────────────────────────────────────────────────────────────────────────────
 
 export { SOCKET_EVENTS, CLIENT_EVENTS, DRIVER_STATUS };
 export default SocketProvider;

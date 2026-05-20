@@ -1,37 +1,30 @@
 'use client';
 
-/**
- * AuthSocketBridge
- * ────────────────
- * A thin client component that sits between the Server Component layout
- * and SocketProvider. Its only job is to read the JWT token from Redux
- * (userSlice) and forward it to SocketProvider.
- *
- * Why a separate component?
- *   • layout.tsx must stay a Server Component (no 'use client') to keep
- *     Next.js metadata exports working.
- *   • SocketProvider needs useSelector, which requires 'use client'.
- *   • This bridge is the minimal surface area that needs to be a client
- *     component — everything inside it can still be server-rendered.
- */
-
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useSelector } from 'react-redux';
-import { selectToken } from '@/store/slices/userSlice'; // adjust path if needed
-import SocketProvider  from '@/context/SocketProvider';
+import { selectToken } from '@/store/slices/userSlice';
+import SocketProvider from '@/context/SocketProvider';
 
-interface Props {
+interface AuthSocketBridgeProps {
   children: React.ReactNode;
+  token: string | null; // JWT token or null if not authenticated
+  showStatusBadge?: boolean; 
 }
 
-export default function AuthSocketBridge({ children }: Props) {
-  // selectToken returns the JWT string or null (from userSlice initialState)
-  const token = useSelector(selectToken);
+export default function AuthSocketBridge({ children, showStatusBadge = true }: AuthSocketBridgeProps) {
+  // selectToken returns the JWT string or null
+  const rawToken = useSelector(selectToken);
+
+  // Guard against undefined or empty strings that might slip through Redux initial states
+  const token = useMemo(() => {
+    return (rawToken && typeof rawToken === 'string' && rawToken.trim() !== '') 
+      ? rawToken 
+      : null;
+  }, [rawToken]);
 
   return (
-    // SocketProvider connects only when token is non-null (i.e. user is logged in).
-    // On logout (token → null) the provider cleans up the socket automatically.
-    <SocketProvider token={token}>
+  
+    <SocketProvider token={token} showStatusBadge={showStatusBadge}>
       {children}
     </SocketProvider>
   );

@@ -25,20 +25,21 @@ import customerProfileReducer from "./slices/customerProfileSlice";
 import heroPageReducer from "./slices/heroPageSlice";
 import referralReducer from "./slices/referralSlice";
 import pharmacyStoreReducer from "./slices/pharmacy/pharmacyStoreSlice";
- import platformPricingReducer from './slices/platformPricingSlice';
- import soloDriverReducer  from './slices/soloDriverSlice';
- import careAssistantReducer from './slices/careAssistantSlice';
-import labReducer from './slices/labSlice';
-import hospitalManagerReducer from './slices/hospitalManagerSlice';
-import driverReducer from './slices/driverSlice';
-import searchReducer from './slices/searchSlice';
-import bookingReducer from './slices/bookingSlice';
-import operationsReducer from './slices/operationsSlice';
-import availabilityReducer from './slices/availabilitySlice';
-import rideRequestReducer from './slices/rideRequestSlice';
-import clinicalReducer from './slices/clinicalSlice';
-import bloodbankReducer from './slices/bloodbankSlice';
-import adminAnalysticsReducer from './slices/adminAnalyticsSlice';
+import platformPricingReducer from "./slices/platformPricingSlice";
+import soloDriverReducer from "./slices/soloDriverSlice";
+import careAssistantReducer from "./slices/careAssistantSlice";
+import labReducer from "./slices/labSlice";
+import hospitalManagerReducer from "./slices/hospitalManagerSlice";
+import driverReducer from "./slices/driverSlice";
+import searchReducer from "./slices/searchSlice";
+import bookingReducer from "./slices/bookingSlice";
+import operationsReducer from "./slices/operationsSlice";
+import availabilityReducer from "./slices/availabilitySlice";
+import rideRequestReducer from "./slices/rideRequestSlice";
+import clinicalReducer from "./slices/clinicalSlice";
+import bloodbankReducer from "./slices/bloodbankSlice";
+import adminAnalysticsReducer from "./slices/adminAnalyticsSlice";
+import consulationReducer from "./slices/consultationSlice";
 export const store = configureStore({
   reducer: {
     user: userReducer,
@@ -65,10 +66,10 @@ export const store = configureStore({
     adminUsers: adminUserReducer,
     heroPage: heroPageReducer,
     referral: referralReducer,
- platformPricing: platformPricingReducer,
+    platformPricing: platformPricingReducer,
     customerProfile: customerProfileReducer,
-soloDriver: soloDriverReducer,
-driver: driverReducer,
+    soloDriver: soloDriverReducer,
+    driver: driverReducer,
     //  pharmacy slices
     pharmacyStore: pharmacyStoreReducer,
     careAssistant: careAssistantReducer,
@@ -77,11 +78,13 @@ driver: driverReducer,
     search: searchReducer,
     booking: bookingReducer,
     operations: operationsReducer,
-    availability:availabilityReducer,
-    rideRequest:rideRequestReducer,
+    availability: availabilityReducer,
+    rideRequest: rideRequestReducer,
     clinical: clinicalReducer,
     bloodBank: bloodbankReducer,
-    adminAnalytics:adminAnalysticsReducer,
+    adminAnalytics: adminAnalysticsReducer,
+
+    consultation: consulationReducer,
   },
   devTools: process.env.NODE_ENV !== "production",
 });

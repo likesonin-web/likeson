@@ -5,19 +5,8 @@ const { Schema } = mongoose;
 
 const generateBookingCode = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 8);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// BOOKING MODEL — Likeson.in
-//
-// FIXES IN THIS VERSION:
-//  BUG #3 + #5 FIX: Added subscriptionUsagePending array field.
-//    Booking routes push {subId, field} objects here instead of immediately
-//    calling incrementSubscriptionUsage(). Actual increment happens after
-//    payment is verified in /verify-payment route or
-//    POST /subscriptions/flush-pending-usage.
-//    On cancellation, this array is cleared so no quota is ever consumed
-//    for bookings where payment was not completed.
-// ─────────────────────────────────────────────────────────────────────────────
 
+ 
 export const BOOKING_TYPES = [
   'full_care_ride',
   'doctor_consultation',
@@ -49,7 +38,7 @@ export const PAYMENT_STATUSES = [
   'partially_paid',
   'failed',
   'refunded',
-  "pending_cash",
+  'pending_cash',
   'partially_refunded',
   'waived',
 ];
@@ -157,16 +146,343 @@ const diagnosticDetailsSchema = new Schema(
   { _id: false }
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ONLINE CONSULTATION SCHEMA — PRODUCTION GRADE VIDEOSDK ARCHITECTURE
+// ─────────────────────────────────────────────────────────────────────────────
 const onlineConsultationSchema = new Schema(
   {
-    platform:        { type: String, enum: ['Likeson Chat', 'Google Meet', 'Zoom', 'Jitsi', 'Other'], default: 'Likeson Chat' },
-    meetingLink:     { type: String },
-    meetingId:       { type: String },
-    meetingPass:     { type: String, select: false },
-    startedAt:       { type: Date },
-    endedAt:         { type: Date },
-    durationMinutes: { type: Number },
-    recordingUrl:    { type: String, select: false },
+    // Provider
+    provider: {
+      type: String,
+      enum: ['VideoSDK'],
+      default: 'VideoSDK',
+    },
+
+    // VideoSDK Room Details
+    roomId: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+
+    meetingId: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+
+    meetingLink: {
+      type: String,
+      trim: true,
+    },
+
+    videoSessionId: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+
+    // Secure Tokens (NEVER expose in API response)
+    hostToken: {
+      type: String,
+      select: false,
+    },
+
+    patientToken: {
+      type: String,
+      select: false,
+    },
+
+    // Consultation Lifecycle
+    consultationStatus: {
+      type: String,
+      enum: [
+        'created',
+        'waiting_for_doctor',
+        'waiting_for_patient',
+        'live',
+        'paused',
+        'completed',
+        'cancelled',
+        'expired',
+        'failed',
+      ],
+      default: 'created',
+      index: true,
+    },
+
+    roomStarted: {
+      type: Boolean,
+      default: false,
+    },
+
+    roomEnded: {
+      type: Boolean,
+      default: false,
+    },
+
+    // Doctor Participation
+    doctorJoined: {
+      type: Boolean,
+      default: false,
+    },
+
+    doctorJoinedAt: {
+      type: Date,
+    },
+
+    doctorLeftAt: {
+      type: Date,
+    },
+
+    // Patient Participation
+    patientJoined: {
+      type: Boolean,
+      default: false,
+    },
+
+    patientJoinedAt: {
+      type: Date,
+    },
+
+    patientLeftAt: {
+      type: Date,
+    },
+
+    // Timing
+    startedAt: {
+      type: Date,
+    },
+
+    endedAt: {
+      type: Date,
+    },
+
+    durationMinutes: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    allowedDurationMinutes: {
+      type: Number,
+      default: 30,
+      min: 1,
+    },
+
+    waitingDurationMinutes: {
+      type: Number,
+      default: 0,
+    },
+
+    // Waiting Room
+    waitingRoomEnabled: {
+      type: Boolean,
+      default: true,
+    },
+
+    waitingRoomApproved: {
+      type: Boolean,
+      default: false,
+    },
+
+    waitingRoomApprovedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+    },
+
+    waitingRoomApprovedAt: {
+      type: Date,
+    },
+
+    // Recording
+    recordingEnabled: {
+      type: Boolean,
+      default: false,
+    },
+
+    recordingStarted: {
+      type: Boolean,
+      default: false,
+    },
+
+    recordingStartedAt: {
+      type: Date,
+    },
+
+    recordingEndedAt: {
+      type: Date,
+    },
+
+    recordingUrl: {
+      type: String,
+      trim: true,
+      select: false,
+    },
+
+    recordingSizeMB: {
+      type: Number,
+      default: 0,
+    },
+
+    // Reconnect + Network Tracking
+    reconnectCount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    networkIssueDetected: {
+      type: Boolean,
+      default: false,
+    },
+
+    lastReconnectAt: {
+      type: Date,
+    },
+
+    networkQualityLogs: [
+      {
+        participant: {
+          type: String,
+          enum: ['doctor', 'patient'],
+        },
+
+        quality: {
+          type: String,
+          enum: ['excellent', 'good', 'poor', 'disconnected'],
+        },
+
+        timestamp: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+
+    // Telemedicine Consent
+    isTelemedicineConsentAccepted: {
+      type: Boolean,
+      default: false,
+    },
+
+    telemedicineConsentAcceptedAt: {
+      type: Date,
+    },
+
+    consentIpAddress: {
+      type: String,
+    },
+
+    // Consultation Notes
+    consultationSummary: {
+      type: String,
+      trim: true,
+      maxlength: 5000,
+    },
+
+    doctorNotes: {
+      type: String,
+      trim: true,
+      maxlength: 10000,
+      select: false,
+    },
+
+    followUpInstructions: {
+      type: String,
+      trim: true,
+    },
+
+    // Prescription
+    prescriptionUploaded: {
+      type: Boolean,
+      default: false,
+    },
+
+    prescriptionUrl: {
+      type: String,
+      trim: true,
+    },
+
+    prescriptionUploadedAt: {
+      type: Date,
+    },
+
+    // Consultation Ending
+    consultationEndedBy: {
+      type: String,
+      enum: ['doctor', 'patient', 'admin', 'system'],
+    },
+
+    endedReason: {
+      type: String,
+      trim: true,
+      maxlength: 1000,
+    },
+
+    autoEndedBySystem: {
+      type: Boolean,
+      default: false,
+    },
+
+    // Failure Tracking
+    failedReason: {
+      type: String,
+      trim: true,
+    },
+
+    failureCode: {
+      type: String,
+      trim: true,
+    },
+
+    // Event Logs (Audit + Analytics)
+    eventLogs: [
+      {
+        event: {
+          type: String,
+          required: true,
+        },
+
+        participant: {
+          type: String,
+          enum: ['doctor', 'patient', 'system', 'admin'],
+        },
+
+        timestamp: {
+          type: Date,
+          default: Date.now,
+        },
+
+        metadata: {
+          type: Schema.Types.Mixed,
+        },
+      },
+    ],
+
+    // Analytics
+    analytics: {
+      peakParticipants: {
+        type: Number,
+        default: 0,
+      },
+
+      averageNetworkQuality: {
+        type: String,
+        enum: ['excellent', 'good', 'poor'],
+      },
+
+      totalReconnects: {
+        type: Number,
+        default: 0,
+      },
+
+      consultationScore: {
+        type: Number,
+        min: 0,
+        max: 100,
+      },
+    },
   },
   { _id: false }
 );
@@ -212,29 +528,11 @@ const ratingSchema = new Schema(
   { _id: false }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// BUG #3 + #5 FIX: Sub-schema for deferred subscription usage increments.
-//
-// When a booking is created and a subscription benefit is applied (free
-// consultation or free care assistant visit), instead of immediately
-// incrementing the usage counter, the booking route pushes an entry here.
-//
-// The actual increment happens ONLY after:
-//   A) Razorpay payment is verified in POST /verify-payment
-//   B) Wallet payment succeeds in the booking creation route
-//   C) Booking total is ₹0 (fully covered) — flushed immediately
-//
-// On cancellation: this array is cleared — no quota consumed.
-// On booking failure: array is never flushed — no quota consumed.
-//
-// Fields:
-//   subId  — UserSubscription._id to increment
-//   field  — usageHistory field name (e.g. 'consultationsUsed', 'careAssistantVisitsUsed')
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Deferred subscription usage schema ───────────────────────────────────────
 const subscriptionUsagePendingSchema = new Schema(
   {
-    subId:  { type: String, required: true }, // stored as string to avoid populate overhead
-    field:  { type: String, required: true }, // e.g. 'consultationsUsed', 'careAssistantVisitsUsed'
+    subId:  { type: String, required: true },
+    field:  { type: String, required: true },
   },
   { _id: false }
 );
@@ -378,21 +676,17 @@ const bookingSchema = new Schema(
       max:     100,
     },
 
-    subscriptionUsagePending: {
-  type:    [subscriptionUsagePendingSchema],
-  default: [],
-},
+    // Finalized applied usage items
+    confirmedSubscriptionUsage: {
+      type: [
+        {
+          subId: { type: String, required: true },
+          field: { type: String, required: true }
+        }
+      ],
+      default: []
+    },
 
-// CRITICAL FIX: Explicit definition array property for finalized usage items
-confirmedSubscriptionUsage: {
-  type: [
-    {
-      subId: { type: String, required: true },
-      field: { type: String, required: true } // e.g., 'consultationsUsed'
-    }
-  ],
-  default: []
-},
     // ── Ride Linkage ──────────────────────────────────────────────────────────
     rides: [
       {
@@ -493,21 +787,6 @@ confirmedSubscriptionUsage: {
     },
 
     // ── BUG #3 + #5 FIX: Deferred subscription usage increments ──────────────
-    //
-    // Populated by booking creation routes when a subscription benefit is applied.
-    // Each entry = one pending usage increment that must be executed after payment.
-    //
-    // Lifecycle:
-    //   1. Booking created → routes push {subId, field} here via queueSubscriptionUsage()
-    //   2. Payment verified → /verify-payment flushes all entries here
-    //      OR Wallet payment → flushed immediately in booking route
-    //      OR ₹0 total → flushed immediately in booking route
-    //   3. Booking cancelled → array cleared, no increment ever happens
-    //   4. Payment fails → array stays but verify-payment never called, no increment
-    //
-    // This field is intentionally excluded from API responses (select: false not
-    // used because routes need to read it, but it is excluded in .select() queries).
-    // ─────────────────────────────────────────────────────────────────────────
     subscriptionUsagePending: {
       type:    [subscriptionUsagePendingSchema],
       default: [],
@@ -561,8 +840,6 @@ bookingSchema.virtual('amountDue').get(function () {
   return Math.max(0, total - paid);
 });
 
-// Virtual: has unresolved pending subscription usage
-// Useful for admin dashboards to flag bookings awaiting payment
 bookingSchema.virtual('hasSubscriptionUsagePending').get(function () {
   return Array.isArray(this.subscriptionUsagePending) && this.subscriptionUsagePending.length > 0;
 });
@@ -572,51 +849,42 @@ bookingSchema.virtual('hasSubscriptionUsagePending').get(function () {
 bookingSchema.pre('validate', function () {
   const t = this.bookingType;
 
-  // full_care_ride: needs doctor + careAssistant + patientLocation
   if (t === 'full_care_ride') {
     if (!this.doctor)          throw new Error('full_care_ride requires doctor');
     if (!this.careAssistant)   throw new Error('full_care_ride requires careAssistant');
     if (!this.patientLocation) throw new Error('full_care_ride requires patientLocation');
   }
 
-  // doctor_consultation requires doctor
   if (t === 'doctor_consultation' && !this.doctor) {
     throw new Error('doctor_consultation requires doctor');
   }
 
-  // doctor_online requires doctor
   if (t === 'doctor_online' && !this.doctor) {
     throw new Error('doctor_online requires doctor');
   }
 
-  // physiotherapist requires doctor (the physio is a doctor profile)
   if (t === 'physiotherapist' && !this.doctor) {
     throw new Error('physiotherapist requires doctor (physiotherapist profile)');
   }
 
-  // care_assistant booking requires careAssistant
   if (t === 'care_assistant' && !this.careAssistant) {
     throw new Error('care_assistant booking requires careAssistant');
   }
 
-  // follow_up requires both parentBooking and doctor
   if (t === 'follow_up') {
     if (!this.followUpParentBooking) throw new Error('follow_up requires followUpParentBooking');
     if (!this.doctor)                throw new Error('follow_up requires doctor');
   }
 
-  // diagnostic_home requires patientLocation
   if (t === 'diagnostic_home' && !this.patientLocation) {
     throw new Error('diagnostic_home requires patientLocation');
   }
 
-  // patient_transport requires both locations
   if (t === 'patient_transport') {
     if (!this.patientLocation)     throw new Error('patient_transport requires patientLocation (pickup)');
     if (!this.destinationLocation) throw new Error('patient_transport requires destinationLocation (dropoff)');
   }
 
-  // returnRide cannot exist without primaryRide
   if (this.returnRide && !this.primaryRide) {
     throw new Error('returnRide requires primaryRide to be set first');
   }
@@ -661,7 +929,6 @@ bookingSchema.pre('save', async function () {
   }
 
   // BUG #3 + #5 FIX: On cancellation, clear pending subscription usage
-  // so quota is never consumed for cancelled bookings.
   if (this.isModified('status') && this.status === 'cancelled') {
     if (this.subscriptionUsagePending?.length > 0) {
       this.subscriptionUsagePending = [];
@@ -717,7 +984,6 @@ bookingSchema.index({ rides: 1 });
 bookingSchema.index({ 'diagnosticDetails.labPartner': 1 });
 bookingSchema.index({ createdAt: -1 });
 bookingSchema.index({ bookingType: 1, status: 1, scheduledAt: 1 });
-// Index for admin dashboard: find bookings with pending subscription usage
 bookingSchema.index({ 'subscriptionUsagePending.0': 1, paymentStatus: 1 });
 
 const Booking = mongoose.model('Booking', bookingSchema);

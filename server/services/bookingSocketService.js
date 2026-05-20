@@ -1,19 +1,5 @@
 /**
- * bookingSocketService.js — Likeson.in (PRODUCTION v5)
- *
- * FIXES vs v4:
- *  - No floating try/catch block outside class/function (crashed entire module)
- *  - syncBookingStatusFromRide imported at top (no dynamic import in hot path)
- *  - hashOtp imported from shared — socket OTP verify uses same hash fn as HTTP
- *  - location_update emit includes rideId + bookingId (client dedup)
- *  - otp_wrong_attempt emitted to booking room on bad OTP (customer UX)
- *  - canJoinRoom: correctly resolves Driver._id before auth check
- *  - verify_otp: plain OTP compare removed — uses hashOtp consistently
- *  - driver_status_update: stop_departed maps to in_progress correctly
- *  - ETA throttle + location throttle cleaned on disconnect
- *  - emitJoinRoom: safe Map.get before .add (no crash if socket already gone)
- *  - All socket.user fields typed clearly in JSDoc
- *  - GPS error log shows coordinates for debugging
+ * bookingSocketService.js — Likeson.in (PRODUCTION v6)
  */
 
 import { Server } from 'socket.io';
@@ -23,6 +9,7 @@ import mongoose   from 'mongoose';
 import Driver               from '../models/Driver.js';
 import SoloDriverPartner    from '../models/SoloDriverPartner.js';
 import CareAssistantProfile from '../models/CareAssistantProfile.js';
+import DoctorProfile        from '../models/DoctorProfile.js';
 import Booking              from '../models/Booking.js';
 import Ride                 from '../models/Ride.js';
 import RideTracking         from '../models/RideTracking.js';
@@ -93,12 +80,21 @@ const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 /**
  * resolveDriverId
  * Given User._id + role → Driver._id string.
- * Called ONCE at auth, cached on socket.user.driverObjectId.
  */
 const resolveDriverId = async (userId, role) => {
   if (!['driver', 'solodriverpartner'].includes(role)) return null;
   const driver = await Driver.findOne({ user: userId }).select('_id').lean();
   return driver ? driver._id.toString() : null;
+};
+
+/**
+ * resolveDoctorObjectId
+ * Given User._id → DoctorProfile._id string.
+ * Called once at auth for doctor role, cached on socket.user.doctorObjectId.
+ */
+const resolveDoctorObjectId = async (userId) => {
+  const dp = await DoctorProfile.findOne({ user: userId }).select('_id').lean();
+  return dp ? dp._id.toString() : null;
 };
 
 /** Haversine km between [lng, lat] pairs */
@@ -119,30 +115,50 @@ const resolveMapTarget = (rideStatus) =>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ROOM AUTHORIZATION
-// DB-verified for every join. No client-provided ID trust.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const canJoinRoom = async (user, room) => {
-  const { _id: userId, role, driverObjectId } = user;
+  const { _id: userId, role, driverObjectId, doctorObjectId } = user;
 
-  if (room === 'admin:ops') {
+  // ── admin rooms ────────────────────────────────────────────────────────────
+  if (room === 'admin:ops' || room === 'admin:global') {
     return ['admin', 'superadmin'].includes(role)
       ? { allowed: true }
       : { allowed: false, reason: 'Admin only' };
   }
 
+  // ── driver:{Driver._id} ────────────────────────────────────────────────────
   if (room.startsWith('driver:')) {
     if (['admin', 'superadmin'].includes(role)) return { allowed: true };
     const roomDriverId = room.replace('driver:', '');
     if (!isValidId(roomDriverId)) return { allowed: false, reason: 'Invalid driver ID' };
     if (!['driver', 'solodriverpartner'].includes(role)) return { allowed: false, reason: 'Driver only' };
-    // FIX: resolve driverObjectId if not cached yet
     const myDriverId = driverObjectId || (await resolveDriverId(userId, role));
     if (!myDriverId || myDriverId !== roomDriverId)
       return { allowed: false, reason: 'Not your driver room' };
     return { allowed: true };
   }
 
+  // ── doctor:{User._id} — doctor's personal consultation room ───────────────
+  if (room.startsWith('doctor:')) {
+    if (['admin', 'superadmin'].includes(role)) return { allowed: true };
+    const roomUserId = room.replace('doctor:', '');
+    if (!isValidId(roomUserId)) return { allowed: false, reason: 'Invalid doctor user ID' };
+    if (role !== 'doctor') return { allowed: false, reason: 'Doctor only' };
+    if (userId !== roomUserId) return { allowed: false, reason: 'Not your doctor room' };
+    return { allowed: true };
+  }
+
+  // ── user:{User._id} — customer's personal room ────────────────────────────
+  if (room.startsWith('user:')) {
+    if (['admin', 'superadmin'].includes(role)) return { allowed: true };
+    const roomUserId = room.replace('user:', '');
+    if (!isValidId(roomUserId)) return { allowed: false, reason: 'Invalid user ID' };
+    if (userId !== roomUserId) return { allowed: false, reason: 'Not your user room' };
+    return { allowed: true };
+  }
+
+  // ── tp:{TransportPartner._id} ─────────────────────────────────────────────
   if (room.startsWith('tp:')) {
     if (['admin', 'superadmin'].includes(role)) return { allowed: true };
     if (role !== 'transportpartner') return { allowed: false, reason: 'TP or admin only' };
@@ -153,17 +169,26 @@ const canJoinRoom = async (user, room) => {
     return { allowed: true };
   }
 
+  // ── booking:{bookingId} ───────────────────────────────────────────────────
   if (room.startsWith('booking:')) {
     const bookingId = room.replace('booking:', '');
     if (!isValidId(bookingId)) return { allowed: false, reason: 'Invalid booking ID' };
     if (['admin', 'superadmin'].includes(role)) return { allowed: true };
 
     const booking = await Booking.findById(bookingId)
-      .select('customer transportPartner careAssistant').lean();
+      .select('customer doctor transportPartner careAssistant').lean();
     if (!booking) return { allowed: false, reason: 'Booking not found' };
 
+    // Customer
     if (booking.customer?.toString() === userId) return { allowed: true };
 
+    // Doctor — check via DoctorProfile._id stored in booking.doctor
+    if (role === 'doctor') {
+      const dpId = doctorObjectId || (await resolveDoctorObjectId(userId));
+      if (dpId && booking.doctor?.toString() === dpId) return { allowed: true };
+    }
+
+    // Driver
     if (['driver', 'solodriverpartner'].includes(role)) {
       const dId = driverObjectId || (await resolveDriverId(userId, role));
       if (dId) {
@@ -172,12 +197,14 @@ const canJoinRoom = async (user, room) => {
       }
     }
 
+    // Care assistant
     if (role === 'care_assistant') {
       const ca = await CareAssistantProfile.findOne({ user: userId }).select('_id').lean();
       if (ca && booking.careAssistant?.toString() === ca._id.toString())
         return { allowed: true };
     }
 
+    // Transport partner
     if (role === 'transportpartner') {
       const tp = await TransportPartner.findOne({ user: userId }).select('_id').lean();
       if (tp && booking.transportPartner?.toString() === tp._id.toString())
@@ -204,12 +231,13 @@ class BookingSocketService {
     /**
      * connectedClients
      * Map<socketId, {
-     *   userId:         string,       — User._id
-     *   driverObjectId: string|null,  — Driver._id (resolved once at auth)
-     *   role:           string,
-     *   name:           string,
-     *   joinedRooms:    Set<string>,
-     *   connectedAt:    Date
+     *   userId:            string,       — User._id
+     *   driverObjectId:    string|null,  — Driver._id
+     *   doctorObjectId:    string|null,  — DoctorProfile._id
+     *   role:              string,
+     *   name:              string,
+     *   joinedRooms:       Set<string>,
+     *   connectedAt:       Date
      * }>
      */
     this.connectedClients = new Map();
@@ -235,6 +263,12 @@ class BookingSocketService {
     this.emitToRoom('admin:ops', event, payload);
   }
 
+  /** Emit to all admin rooms (ops + global) */
+  emitToAdmins(event, payload) {
+    this.emitToRoom('admin:ops',    event, payload);
+    this.emitToRoom('admin:global', event, payload);
+  }
+
   emitToUser(userId, event, payload) {
     for (const id of this.getSocketIdsByUser(String(userId))) {
       this.emitToSocket(id, event, payload);
@@ -243,7 +277,6 @@ class BookingSocketService {
 
   /**
    * emitJoinRoom — server-side force-join from routers after assignment.
-   * No client join event needed.
    */
   emitJoinRoom(userId, room) {
     const socketIds = this.getSocketIdsByUser(String(userId));
@@ -251,7 +284,6 @@ class BookingSocketService {
 
     for (const id of socketIds) {
       this.io.in(id).socketsJoin(room);
-      // FIX: safe get before add
       const meta = this.connectedClients.get(id);
       if (meta) meta.joinedRooms.add(room);
       console.log(`[Socket] Server-joined ${id} (${userId}) → ${room}`);
@@ -269,7 +301,6 @@ class BookingSocketService {
 
   /**
    * emitOtpToAdmin — called from /:id/ride/arrived route.
-   * Admin sees raw OTP in admin:ops for support.
    */
   emitOtpToAdmin({ bookingId, bookingCode, rideId, otp, customerName, customerPhone }) {
     this.emitToAdminOps('otp_for_admin', {
@@ -280,30 +311,62 @@ class BookingSocketService {
     });
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // CONSULTATION HELPERS
+  // Called by consultation router via req.app.get('io') emitConsultationEvent.
+  // Also usable directly from other services.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  emitConsultationEvent(booking, event, payload = {}) {
+    const base = {
+      bookingId:   booking._id?.toString(),
+      bookingCode: booking.bookingCode,
+      bookingType: booking.bookingType,
+      status:      booking.status,
+      ...payload,
+      _serverTime: new Date().toISOString(),
+    };
+
+    this.io.to(`booking:${booking._id}`).emit(event, base);
+
+    if (booking.doctor) {
+      this.io.to(`doctor:${booking.doctor}`).emit(event, base);
+    }
+
+    if (booking.customer) {
+      this.io.to(`user:${booking.customer}`).emit(event, base);
+    }
+
+    this.io.to('admin:global').emit(event, { ...base, _internal: true });
+  }
+
   // ── Socket setup ───────────────────────────────────────────────────────────
 
-  /**
-   * @param {import('socket.io').Socket} socket
-   * @param {{ _id: string, role: string, name: string, driverObjectId: string|null }} user
-   */
   setupSocket(socket, user) {
-    const { _id: userId, role, name, driverObjectId } = user;
+    const { _id: userId, role, name, driverObjectId, doctorObjectId } = user;
 
     this.connectedClients.set(socket.id, {
-      userId, driverObjectId, role, name,
+      userId, driverObjectId, doctorObjectId, role, name,
       joinedRooms: new Set(),
       connectedAt: new Date(),
     });
 
-    console.log(`[Socket] Connected: ${name} (${role}) sid=${socket.id} driverId=${driverObjectId}`);
+    console.log(
+      `[Socket] Connected: ${name} (${role}) sid=${socket.id}` +
+      ` driverId=${driverObjectId} doctorId=${doctorObjectId}`
+    );
 
-    // Auto-join admin:ops
+    // ── Auto-join role rooms ──────────────────────────────────────────────────
+
+    // Admin rooms
     if (['admin', 'superadmin'].includes(role)) {
       socket.join('admin:ops');
+      socket.join('admin:global');
       this.connectedClients.get(socket.id)?.joinedRooms.add('admin:ops');
+      this.connectedClients.get(socket.id)?.joinedRooms.add('admin:global');
     }
 
-    // Auto-join driver:{id} room
+    // Driver personal room
     if (driverObjectId) {
       const driverRoom = `driver:${driverObjectId}`;
       socket.join(driverRoom);
@@ -313,14 +376,32 @@ class BookingSocketService {
       });
     }
 
+    // Doctor personal consultation room  — doctor:{User._id}
+    if (role === 'doctor') {
+      const doctorRoom = `doctor:${userId}`;
+      socket.join(doctorRoom);
+      this.connectedClients.get(socket.id)?.joinedRooms.add(doctorRoom);
+      console.log(`[Socket] Doctor auto-joined ${doctorRoom}`);
+    }
+
+    // Customer personal room — user:{User._id}
+    if (role === 'customer') {
+      const userRoom = `user:${userId}`;
+      socket.join(userRoom);
+      this.connectedClients.get(socket.id)?.joinedRooms.add(userRoom);
+      console.log(`[Socket] Customer auto-joined ${userRoom}`);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
-    // join_booking_room
+    // join_booking_room  (ride + consultation shared)
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('join_booking_room', async ({ bookingId } = {}) => {
       try {
         if (!bookingId) { socket.emit('error', { message: 'bookingId required' }); return; }
         const room = `booking:${bookingId}`;
-        const { allowed, reason } = await canJoinRoom({ _id: userId, role, driverObjectId }, room);
+        const { allowed, reason } = await canJoinRoom(
+          { _id: userId, role, driverObjectId, doctorObjectId }, room
+        );
         if (!allowed) { socket.emit('error', { message: reason || 'Cannot join room' }); return; }
         socket.join(room);
         this.connectedClients.get(socket.id)?.joinedRooms.add(room);
@@ -333,13 +414,193 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
+    // join_consultation_room
+    // ─────────────────────────────────────────────────────────────────────────
+    socket.on('join_consultation_room', async ({ bookingId } = {}) => {
+      try {
+        if (!bookingId || !isValidId(bookingId)) {
+          socket.emit('error', { message: 'bookingId required and must be valid' });
+          return;
+        }
+
+        const bookingRoom = `booking:${bookingId}`;
+        const { allowed, reason } = await canJoinRoom(
+          { _id: userId, role, driverObjectId, doctorObjectId }, bookingRoom
+        );
+        if (!allowed) {
+          socket.emit('error', { message: reason || 'Cannot join consultation room' });
+          return;
+        }
+
+        const roomsJoined = [bookingRoom];
+
+        // Join booking room
+        socket.join(bookingRoom);
+        this.connectedClients.get(socket.id)?.joinedRooms.add(bookingRoom);
+
+        // Doctor joins their personal room (already auto-joined but ensure)
+        if (role === 'doctor') {
+          const doctorRoom = `doctor:${userId}`;
+          socket.join(doctorRoom);
+          this.connectedClients.get(socket.id)?.joinedRooms.add(doctorRoom);
+          roomsJoined.push(doctorRoom);
+        }
+
+        // Customer joins their personal room (already auto-joined but ensure)
+        if (role === 'customer') {
+          const userRoom = `user:${userId}`;
+          socket.join(userRoom);
+          this.connectedClients.get(socket.id)?.joinedRooms.add(userRoom);
+          roomsJoined.push(userRoom);
+        }
+
+        socket.emit('consultation_room_joined', {
+          bookingId,
+          rooms:      roomsJoined,
+          role,
+          _serverTime: new Date().toISOString(),
+        });
+
+        // Notify other participants
+        socket.to(bookingRoom).emit('consultation_participant_joined', {
+          bookingId, role, name, timestamp: new Date().toISOString(),
+        });
+
+        console.log(`[Socket] ${name} (${role}) joined consultation rooms: ${roomsJoined.join(', ')}`);
+      } catch (err) {
+        console.error('[join_consultation_room]', err);
+        socket.emit('error', { message: 'Failed to join consultation room' });
+      }
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // leave_consultation_room
+    // ─────────────────────────────────────────────────────────────────────────
+    socket.on('leave_consultation_room', ({ bookingId } = {}) => {
+      if (!bookingId) return;
+
+      const bookingRoom = `booking:${bookingId}`;
+      socket.leave(bookingRoom);
+      this.connectedClients.get(socket.id)?.joinedRooms.delete(bookingRoom);
+
+      socket.to(bookingRoom).emit('consultation_participant_left', {
+        bookingId, role, name, timestamp: new Date().toISOString(),
+      });
+
+      socket.emit('left_room', { room: bookingRoom, _serverTime: new Date().toISOString() });
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // consultation_network_quality
+    // ─────────────────────────────────────────────────────────────────────────
+    socket.on('consultation_network_quality', async ({ bookingId, participant, quality } = {}) => {
+      try {
+        if (!bookingId || !participant || !quality) return;
+        if (!isValidId(bookingId)) return;
+        if (!['customer', 'doctor'].includes(role)) return;
+
+        const bookingRoom = `booking:${bookingId}`;
+        const payload = {
+          bookingId, participant, quality, reportedBy: role, timestamp:  new Date().toISOString(),
+        };
+
+        this.io.to(bookingRoom).emit('consultation:network_quality', payload);
+
+        if (['poor', 'disconnected'].includes(quality)) {
+          this.io.to('admin:global').emit('consultation:network_quality', {
+            ...payload, _alert: true, _internal: true,
+          });
+        }
+      } catch (err) {
+        console.error('[consultation_network_quality]', err.message);
+      }
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // consultation_status_request
+    // ─────────────────────────────────────────────────────────────────────────
+    socket.on('consultation_status_request', async ({ bookingId } = {}) => {
+      try {
+        if (!bookingId || !isValidId(bookingId)) {
+          socket.emit('error', { message: 'Invalid bookingId' });
+          return;
+        }
+
+        const { allowed, reason } = await canJoinRoom(
+          { _id: userId, role, driverObjectId, doctorObjectId },
+          `booking:${bookingId}`
+        );
+        if (!allowed) {
+          socket.emit('error', { message: reason || 'Access denied' });
+          return;
+        }
+
+        const booking = await Booking.findById(bookingId)
+          .select('status bookingType scheduledAt bookingCode onlineConsultation.consultationStatus onlineConsultation.roomId onlineConsultation.meetingId onlineConsultation.startedAt onlineConsultation.allowedDurationMinutes')
+          .lean();
+
+        if (!booking) {
+          socket.emit('error', { message: 'Booking not found' });
+          return;
+        }
+
+        socket.emit('consultation_state_snapshot', {
+          bookingId,
+          bookingCode:           booking.bookingCode,
+          bookingStatus:         booking.status,
+          bookingType:           booking.bookingType,
+          scheduledAt:           booking.scheduledAt,
+          consultationStatus:    booking.onlineConsultation?.consultationStatus ?? null,
+          roomId:                booking.onlineConsultation?.roomId ?? null,
+          meetingId:             booking.onlineConsultation?.meetingId ?? null,
+          startedAt:             booking.onlineConsultation?.startedAt ?? null,
+          allowedDurationMinutes: booking.onlineConsultation?.allowedDurationMinutes ?? null,
+          _serverTime:           new Date().toISOString(),
+        });
+      } catch (err) {
+        console.error('[consultation_status_request]', err);
+        socket.emit('error', { message: 'Failed to fetch consultation state' });
+      }
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // consultation_chat_message
+    // ─────────────────────────────────────────────────────────────────────────
+    socket.on('consultation_chat_message', async ({ bookingId, message } = {}) => {
+      try {
+        if (!bookingId || !message?.trim()) return;
+        if (!isValidId(bookingId)) return;
+        if (!['customer', 'doctor', 'admin', 'superadmin'].includes(role)) return;
+
+        const { allowed } = await canJoinRoom(
+          { _id: userId, role, driverObjectId, doctorObjectId },
+          `booking:${bookingId}`
+        );
+        if (!allowed) return;
+
+        this.io.to(`booking:${bookingId}`).emit('consultation:chat_message', {
+          bookingId,
+          senderId:   userId,
+          senderName: name,
+          senderRole: role,
+          message:    message.trim(),
+          timestamp:  new Date().toISOString(),
+        });
+      } catch (err) {
+        console.error('[consultation_chat_message]', err.message);
+      }
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
     // join_tp_room
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('join_tp_room', async ({ tpId } = {}) => {
       try {
         if (!tpId) { socket.emit('error', { message: 'tpId required' }); return; }
         const room = `tp:${tpId}`;
-        const { allowed, reason } = await canJoinRoom({ _id: userId, role, driverObjectId }, room);
+        const { allowed, reason } = await canJoinRoom(
+          { _id: userId, role, driverObjectId, doctorObjectId }, room
+        );
         if (!allowed) { socket.emit('error', { message: reason || 'Cannot join TP room' }); return; }
         socket.join(room);
         this.connectedClients.get(socket.id)?.joinedRooms.add(room);
@@ -352,11 +613,6 @@ class BookingSocketService {
 
     // ─────────────────────────────────────────────────────────────────────────
     // driver_location — CORE GPS EVENT
-    //
-    // Payload: { bookingId?, lat, lng, heading?, speed?, accuracy? }
-    //
-    // FIX: location_update now includes rideId + bookingId for client dedup.
-    // FIX: GPS errors log coordinates for debugging.
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('driver_location', async ({ bookingId, lat, lng, heading, speed, accuracy } = {}) => {
       try {
@@ -371,7 +627,6 @@ class BookingSocketService {
 
         const coords = [lng, lat];
 
-        // Update Driver geospatial index
         await Driver.findOneAndUpdate({ user: userId }, {
           'location.type':        'Point',
           'location.coordinates': coords,
@@ -391,12 +646,11 @@ class BookingSocketService {
         if (bookingId && isValidId(bookingId) && driverObjectId) {
           const ride = await Ride.findOne({
             booking: bookingId,
-            driver:  driverObjectId, // ← Driver._id
+            driver:  driverObjectId,
             status:  { $in: ACTIVE_RIDE_STATUSES },
           }).select('_id trackingId status pickup dropoff estimatedDistanceKm').lean();
 
           if (ride) {
-            // Denormalized live location for fast customer read
             await Ride.findByIdAndUpdate(ride._id, {
               liveLocation: {
                 type: 'Point', coordinates: coords,
@@ -404,7 +658,6 @@ class BookingSocketService {
               },
             });
 
-            // Breadcrumb ring buffer
             if (ride.trackingId) {
               RideTracking.addBreadcrumb(ride._id, {
                 coordinates: coords, heading: heading ?? 0,
@@ -412,7 +665,6 @@ class BookingSocketService {
               }).catch(e => console.error('[GPS] breadcrumb:', e.message, 'coords:', coords));
             }
 
-            // ETA recalc throttled 30s
             const lastEta = this.etaThrottle.get(socket.id) ?? 0;
             if (now - lastEta > ETA_RECALC_THROTTLE_MS) {
               this.etaThrottle.set(socket.id, now);
@@ -441,7 +693,6 @@ class BookingSocketService {
               }
             }
 
-            // FIX: include rideId + bookingId in location_update for client dedup
             this.io.to(`booking:${bookingId}`).emit('location_update', {
               lat, lng, heading, speed, accuracy,
               rideId:        String(ride._id),
@@ -454,7 +705,6 @@ class BookingSocketService {
           }
         }
 
-        // Admin:ops ops dashboard
         this.io.to('admin:ops').emit('driver_location', {
           userId, driverObjectId, name, role, lat, lng,
           heading: heading ?? 0, speed: speed ?? 0,
@@ -500,10 +750,6 @@ class BookingSocketService {
 
     // ─────────────────────────────────────────────────────────────────────────
     // driver_status_update
-    //
-    // FIX: syncBookingStatusFromRide imported at top (no dynamic import).
-    // FIX: stop_departed → extra milestone recorded on top of in_progress status.
-    // FIX: booking_status_change emitted to admin:ops on every sync.
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('driver_status_update', async ({ bookingId, rideId, status, lat, lng, meta } = {}) => {
       try {
@@ -526,7 +772,7 @@ class BookingSocketService {
         const ride = await Ride.findOne({
           _id:     rideId,
           booking: bookingId,
-          driver:  driverObjectId, // ← Driver._id
+          driver:  driverObjectId,
         }).select('_id status trackingId pickup dropoff updatedBy');
 
         if (!ride) {
@@ -536,9 +782,8 @@ class BookingSocketService {
         const rawStatus = status;
         ride.status    = mappedStatus;
         ride.updatedBy = userId;
-        await ride.save(); // pre-save sets timing fields automatically
+        await ride.save();
 
-        // AUTO-SYNC Booking.status
         try {
           const updatedBooking = await syncBookingStatusFromRide(bookingId, mappedStatus, userId);
           if (updatedBooking) {
@@ -555,7 +800,6 @@ class BookingSocketService {
           console.error('[driver_status_update] booking sync failed:', e.message);
         }
 
-        // Primary milestone
         const milestoneName = STATUS_MILESTONE_MAP[mappedStatus];
         if (milestoneName && ride.trackingId) {
           RideTracking.addMilestone(ride._id, milestoneName, {
@@ -564,7 +808,6 @@ class BookingSocketService {
           }).catch(e => console.error('[status_update] milestone:', e.message));
         }
 
-        // Extra milestone (stop_departed)
         if (EXTRA_MILESTONE_MAP[rawStatus] && ride.trackingId) {
           RideTracking.addMilestone(ride._id, EXTRA_MILESTONE_MAP[rawStatus], {
             coordinates: lat && lng ? [lng, lat] : null,
@@ -583,7 +826,6 @@ class BookingSocketService {
         this.io.to(`booking:${bookingId}`).emit('ride_status_changed', statusPayload);
         this.io.to('admin:ops').emit('ride_status_changed', statusPayload);
 
-        // driver_arrived → admin OTP flag (raw OTP sent separately by HTTP route)
         if (mappedStatus === 'driver_arrived') {
           this.emitToAdminOps('otp_for_admin', {
             bookingId, rideId, driverName: name,
@@ -592,7 +834,6 @@ class BookingSocketService {
           });
         }
 
-        // Navigation target switches to dropoff
         if (['otp_verified', 'in_progress'].includes(mappedStatus)) {
           const rideDoc = await Ride.findById(rideId).select('dropoff trackingId').lean();
           const trackingDoc = rideDoc?.trackingId
@@ -620,12 +861,7 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // verify_otp — SOLE OTP VERIFICATION PATH
-    //
-    // FIX: uses hashOtp (same fn as HTTP route) — consistent hash comparison.
-    // FIX: otp_wrong_attempt emitted to booking room for customer UX.
-    // FIX: syncBookingStatusFromRide imported at top, no dynamic import.
-    // HTTP POST /:id/ride/start REMOVED — this is the only OTP verify path.
+    // verify_otp
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('verify_otp', async ({ bookingId, rideId, otp } = {}) => {
       try {
@@ -640,7 +876,7 @@ class BookingSocketService {
         const ride = await Ride.findOne({
           _id:     rideId,
           booking: bookingId,
-          driver:  driverObjectId, // ← Driver._id
+          driver:  driverObjectId,
           status:  'driver_arrived',
         }).select('+pickupOtp trackingId dropoff');
 
@@ -648,13 +884,10 @@ class BookingSocketService {
           socket.emit('otp_result', { success: false, message: 'Ride not ready for OTP' }); return;
         }
 
-        // FIX: use hashOtp from shared — same function used when OTP was stored
         const hashedInput = hashOtp(String(otp).trim());
 
         if (hashedInput !== ride.pickupOtp) {
           socket.emit('otp_result', { success: false, message: 'Invalid OTP' });
-
-          // FIX: notify customer of wrong attempt
           this.io.to(`booking:${bookingId}`).emit('otp_wrong_attempt', {
             bookingId, timestamp: new Date().toISOString(),
           });
@@ -665,13 +898,11 @@ class BookingSocketService {
           return;
         }
 
-        // OTP valid
         ride.status              = 'otp_verified';
         ride.pickupOtpVerifiedAt = new Date();
         ride.updatedBy           = userId;
-        await ride.save(); // pre-save sets rideStartedAt
+        await ride.save();
 
-        // AUTO-SYNC Booking.status → in_progress
         try {
           await syncBookingStatusFromRide(bookingId, 'otp_verified', userId);
         } catch (e) {
@@ -681,7 +912,6 @@ class BookingSocketService {
           });
         }
 
-        // Milestones
         if (ride.trackingId) {
           await Promise.all([
             RideTracking.addMilestone(ride._id, 'otp_verified', {
@@ -708,7 +938,6 @@ class BookingSocketService {
 
         socket.emit('otp_result', { success: true, ...successPayload });
 
-        // ALL roles switch map to dropoff immediately
         this.io.to(`booking:${bookingId}`).emit('navigation_target_changed', {
           bookingId, rideId, currentTarget: 'dropoff',
           coords:   ride.dropoff?.coordinates,
@@ -749,7 +978,7 @@ class BookingSocketService {
         }
 
         const { allowed } = await canJoinRoom(
-          { _id: userId, role, driverObjectId },
+          { _id: userId, role, driverObjectId, doctorObjectId },
           `booking:${bookingId}`
         );
         if (!allowed) { socket.emit('error', { message: 'Access denied' }); return; }
@@ -834,7 +1063,10 @@ class BookingSocketService {
     socket.on('otp_resend_request', async ({ bookingId } = {}) => {
       try {
         if (!bookingId || role !== 'customer') return;
-        const { allowed } = await canJoinRoom({ _id: userId, role }, `booking:${bookingId}`);
+        const { allowed } = await canJoinRoom(
+          { _id: userId, role, driverObjectId, doctorObjectId },
+          `booking:${bookingId}`
+        );
         if (!allowed) return;
         socket.to(`booking:${bookingId}`).emit('otp_resend_requested', {
           bookingId, requestedBy: 'customer', timestamp: new Date().toISOString(),
@@ -853,7 +1085,7 @@ class BookingSocketService {
           socket.emit('error', { message: 'Invalid bookingId' }); return;
         }
         const { allowed, reason } = await canJoinRoom(
-          { _id: userId, role, driverObjectId },
+          { _id: userId, role, driverObjectId, doctorObjectId },
           `booking:${bookingId}`
         );
         if (!allowed) { socket.emit('error', { message: reason || 'Access denied' }); return; }
@@ -938,13 +1170,12 @@ class BookingSocketService {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // disconnect — FIX: clean all throttle maps, notify booking rooms
+    // disconnect
     // ─────────────────────────────────────────────────────────────────────────
     socket.on('disconnect', (reason) => {
       const meta = this.connectedClients.get(socket.id);
       console.log(`[Socket] Disconnected: ${meta?.name || socket.id} (${meta?.role}) reason=${reason}`);
 
-      // Clean throttle maps before deleting client entry
       this.locationThrottle.delete(socket.id);
       this.etaThrottle.delete(socket.id);
       this.connectedClients.delete(socket.id);
@@ -1011,27 +1242,9 @@ class BookingSocketService {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INIT — call once from server.js
+// INIT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * initBookingSocket
- *
- * @example
- * // server.js
- * import http from 'http';
- * import { Server } from 'socket.io';
- * import { initBookingSocket } from './services/bookingSocketService.js';
- *
- * const httpServer = http.createServer(app);
- * const io = new Server(httpServer, {
- *   cors:         { origin: process.env.FRONTEND_URL, methods: ['GET','POST'] },
- *   pingTimeout:  60000,
- *   pingInterval: 25000,
- * });
- * initBookingSocket(io);
- * httpServer.listen(process.env.PORT || 5000);
- */
 export const initBookingSocket = (io) => {
   if (_instance) {
     console.warn('[BookingSocket] Already initialized — skipping');
@@ -1058,7 +1271,7 @@ export const initBookingSocket = (io) => {
       if (!user)          return next(new Error('AUTH_USER_NOT_FOUND'));
       if (user.isBlocked) return next(new Error('AUTH_BLOCKED'));
 
-      // Resolve Driver._id ONCE at auth — cached on socket.user
+      // Resolve Driver._id once at auth
       let driverObjectId = null;
       if (['driver', 'solodriverpartner'].includes(user.role)) {
         driverObjectId = await resolveDriverId(userId.toString(), user.role);
@@ -1067,14 +1280,27 @@ export const initBookingSocket = (io) => {
         }
       }
 
+      // Resolve DoctorProfile._id once at auth
+      let doctorObjectId = null;
+      if (user.role === 'doctor') {
+        doctorObjectId = await resolveDoctorObjectId(userId.toString());
+        if (!doctorObjectId) {
+          console.warn(`[Socket Auth] No DoctorProfile doc for user ${userId}`);
+        }
+      }
+
       socket.user = {
         _id:            userId.toString(),
         role:           user.role,
         name:           user.name,
-        driverObjectId, // ← Driver._id; null for non-drivers
+        driverObjectId,
+        doctorObjectId,
       };
 
-      console.log(`[Socket Auth] OK: ${user.name} (${user.role}) driverId=${driverObjectId}`);
+      console.log(
+        `[Socket Auth] OK: ${user.name} (${user.role})` +
+        ` driverId=${driverObjectId} doctorId=${doctorObjectId}`
+      );
       next();
     } catch (err) {
       console.error('[Socket Auth]', err.message);
@@ -1095,5 +1321,3 @@ export const initBookingSocket = (io) => {
 };
 
 export const getBookingSocketService = () => _instance;
-
-export { Server };
