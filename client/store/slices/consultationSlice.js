@@ -1,5 +1,5 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import API from '../api';
+import API   from '../api';
 import toast from 'react-hot-toast';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -57,7 +57,9 @@ export const fetchConsultationPricing = createAsyncThunk(
 );
 
 /**
- * Fetch join details (Video SDK token, room details)
+ * Fetch join details (VideoSDK token + room details)
+ * GET /consultations/:bookingId/join
+ * Returns: { roomId, meetingId, meetingLink, token, role, allowedDurationMinutes }
  */
 export const fetchJoinDetails = createAsyncThunk(
   'consultation/fetchJoinDetails',
@@ -75,6 +77,7 @@ export const fetchJoinDetails = createAsyncThunk(
 
 /**
  * Accept Telemedicine Consent
+ * PATCH /consultations/:bookingId/consent
  */
 export const acceptTelemedicineConsent = createAsyncThunk(
   'consultation/acceptConsent',
@@ -96,6 +99,8 @@ export const acceptTelemedicineConsent = createAsyncThunk(
 
 /**
  * Start Consultation
+ * POST /consultations/:bookingId/start
+ * Returns: { status }
  */
 export const startConsultation = createAsyncThunk(
   'consultation/start',
@@ -114,6 +119,8 @@ export const startConsultation = createAsyncThunk(
 
 /**
  * End Consultation
+ * POST /consultations/:bookingId/end
+ * Returns: { status, completedAt, durationMinutes }
  */
 export const endConsultation = createAsyncThunk(
   'consultation/end',
@@ -125,7 +132,7 @@ export const endConsultation = createAsyncThunk(
         followUpInstructions,
       });
       toast.success('Consultation ended successfully');
-      return response.data.data; // { status, completedAt, durationMinutes }
+      return response.data.data;
     } catch (err) {
       const message = err.response?.data?.message || err.message || 'Failed to end consultation';
       toast.error(message);
@@ -136,6 +143,8 @@ export const endConsultation = createAsyncThunk(
 
 /**
  * Cancel Consultation
+ * POST /consultations/:bookingId/cancel
+ * Returns: { status, refundAmount }
  */
 export const cancelConsultation = createAsyncThunk(
   'consultation/cancel',
@@ -147,7 +156,7 @@ export const cancelConsultation = createAsyncThunk(
         refundPercent,
       });
       toast.success('Consultation cancelled');
-      return response.data.data; // { status, refundAmount }
+      return response.data.data;
     } catch (err) {
       const message = err.response?.data?.message || err.message || 'Failed to cancel consultation';
       toast.error(message);
@@ -158,6 +167,8 @@ export const cancelConsultation = createAsyncThunk(
 
 /**
  * Upload Prescription
+ * POST /consultations/:bookingId/prescription
+ * Returns: { prescriptionUrl }
  */
 export const uploadPrescription = createAsyncThunk(
   'consultation/uploadPrescription',
@@ -165,7 +176,7 @@ export const uploadPrescription = createAsyncThunk(
     try {
       const response = await API.post(`/consultations/${bookingId}/prescription`, { prescriptionUrl });
       toast.success('Prescription uploaded successfully');
-      return response.data.data; // { prescriptionUrl }
+      return response.data.data;
     } catch (err) {
       const message = err.response?.data?.message || err.message || 'Failed to upload prescription';
       toast.error(message);
@@ -176,6 +187,7 @@ export const uploadPrescription = createAsyncThunk(
 
 /**
  * Rate Consultation
+ * POST /consultations/:bookingId/rate
  */
 export const rateConsultation = createAsyncThunk(
   'consultation/rate',
@@ -199,6 +211,7 @@ export const rateConsultation = createAsyncThunk(
 
 /**
  * Check Follow-Up Eligibility
+ * GET /consultations/:bookingId/follow-up-eligibility
  */
 export const checkFollowUpEligibility = createAsyncThunk(
   'consultation/checkFollowUp',
@@ -214,7 +227,8 @@ export const checkFollowUpEligibility = createAsyncThunk(
 );
 
 /**
- * Log Network Quality (Silent background task)
+ * Log Network Quality — silent background task
+ * POST /consultations/:bookingId/network-quality
  */
 export const logNetworkQuality = createAsyncThunk(
   'consultation/logNetworkQuality',
@@ -228,8 +242,12 @@ export const logNetworkQuality = createAsyncThunk(
   }
 );
 
-// ── Admin Thunks ─────────────────────────────────────────────────────────────
+// ── Admin Thunks ──────────────────────────────────────────────────────────────
 
+/**
+ * Fetch Admin Notes
+ * GET /consultations/:bookingId/admin-notes
+ */
 export const fetchAdminNotes = createAsyncThunk(
   'consultation/fetchAdminNotes',
   async (bookingId, { rejectWithValue }) => {
@@ -243,6 +261,10 @@ export const fetchAdminNotes = createAsyncThunk(
   }
 );
 
+/**
+ * Add Admin Note
+ * POST /consultations/:bookingId/admin-notes
+ */
 export const addAdminNote = createAsyncThunk(
   'consultation/addAdminNote',
   async ({ bookingId, note, sendEmail, transactionId }, { rejectWithValue }) => {
@@ -263,172 +285,216 @@ export const addAdminNote = createAsyncThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SLICE
+// INITIAL STATE
 // ─────────────────────────────────────────────────────────────────────────────
 
 const initialState = {
   // Data
-  list: [],
-  pagination: { total: 0, page: 1, limit: 20, totalPages: 0 },
-  current: null,
-  pricing: null,
-  joinDetails: null,
+  list:                [],
+  pagination:          { total: 0, page: 1, limit: 20, totalPages: 0 },
+  current:             null,
+  pricing:             null,
+  joinDetails:         null,
   followUpEligibility: null,
-  adminNotesData: null,
+  adminNotesData:      null,
 
-  // Loading States
-  isFetchingList: false,
-  isFetchingCurrent: false,
-  isFetchingPricing: false,
-  isFetchingJoin: false,
-  isActionLoading: false, 
+  // Loading states
+  isFetchingList:      false,
+  isFetchingCurrent:   false,
+  isFetchingPricing:   false,
+  isFetchingJoin:      false,
+  isActionLoading:     false,
   isAdminActionLoading: false,
 
-  // Error States
-  listError: null,
-  currentError: null,
-  pricingError: null,
-  joinError: null,
-  actionError: null,
-  adminError: null,
+  // Error states
+  listError:     null,
+  currentError:  null,
+  pricingError:  null,
+  joinError:     null,
+  actionError:   null,
+  adminError:    null,
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SLICE
+// ─────────────────────────────────────────────────────────────────────────────
 
 const consultationSlice = createSlice({
   name: 'consultation',
   initialState,
+
   reducers: {
     clearCurrentConsultation: (state) => {
-      state.current = null;
-      state.currentError = null;
-      state.joinDetails = null;
+      state.current            = null;
+      state.currentError       = null;
+      state.joinDetails        = null;
       state.followUpEligibility = null;
-      state.adminNotesData = null;
+      state.adminNotesData     = null;
+    },
+    clearJoinDetails: (state) => {
+      state.joinDetails    = null;
+      state.joinError      = null;
+      state.isFetchingJoin = false;
     },
     clearPricing: (state) => {
-      state.pricing = null;
+      state.pricing      = null;
       state.pricingError = null;
     },
     clearErrors: (state) => {
-      state.listError = null;
+      state.listError    = null;
       state.currentError = null;
       state.pricingError = null;
-      state.joinError = null;
-      state.actionError = null;
-      state.adminError = null;
+      state.joinError    = null;
+      state.actionError  = null;
+      state.adminError   = null;
     },
     resetConsultationState: () => initialState,
   },
+
   extraReducers: (builder) => {
     builder
+
       // ── 1. Fetch List ──────────────────────────────────────────────────────
       .addCase(fetchConsultations.pending, (state) => {
         state.isFetchingList = true;
-        state.listError = null;
+        state.listError      = null;
       })
       .addCase(fetchConsultations.fulfilled, (state, action) => {
         state.isFetchingList = false;
-        state.list = action.payload.bookings;
-        state.pagination = action.payload.pagination;
+        state.list           = action.payload.bookings;
+        state.pagination     = action.payload.pagination;
       })
       .addCase(fetchConsultations.rejected, (state, action) => {
         state.isFetchingList = false;
-        state.listError = action.payload;
+        state.listError      = action.payload;
       })
 
       // ── 2. Fetch Current ───────────────────────────────────────────────────
       .addCase(fetchConsultationById.pending, (state) => {
         state.isFetchingCurrent = true;
-        state.currentError = null;
+        state.currentError      = null;
       })
       .addCase(fetchConsultationById.fulfilled, (state, action) => {
         state.isFetchingCurrent = false;
-        state.current = action.payload;
+        state.current           = action.payload;
       })
       .addCase(fetchConsultationById.rejected, (state, action) => {
         state.isFetchingCurrent = false;
-        state.currentError = action.payload;
+        state.currentError      = action.payload;
       })
 
       // ── 3. Fetch Pricing ───────────────────────────────────────────────────
       .addCase(fetchConsultationPricing.pending, (state) => {
         state.isFetchingPricing = true;
-        state.pricingError = null;
+        state.pricingError      = null;
       })
       .addCase(fetchConsultationPricing.fulfilled, (state, action) => {
         state.isFetchingPricing = false;
-        state.pricing = action.payload;
+        state.pricing           = action.payload;
       })
       .addCase(fetchConsultationPricing.rejected, (state, action) => {
         state.isFetchingPricing = false;
-        state.pricingError = action.payload;
+        state.pricingError      = action.payload;
       })
 
       // ── 4. Fetch Join Details ──────────────────────────────────────────────
       .addCase(fetchJoinDetails.pending, (state) => {
         state.isFetchingJoin = true;
-        state.joinError = null;
+        state.joinError      = null;
+        state.joinDetails    = null;
       })
       .addCase(fetchJoinDetails.fulfilled, (state, action) => {
         state.isFetchingJoin = false;
-        state.joinDetails = action.payload;
+        state.joinDetails    = action.payload;
       })
       .addCase(fetchJoinDetails.rejected, (state, action) => {
         state.isFetchingJoin = false;
-        state.joinError = action.payload;
+        state.joinError      = action.payload;
       })
 
       // ── 5. Follow-Up Eligibility ───────────────────────────────────────────
+      .addCase(checkFollowUpEligibility.pending, (state) => {
+        state.followUpEligibility = null;
+      })
       .addCase(checkFollowUpEligibility.fulfilled, (state, action) => {
         state.followUpEligibility = action.payload;
       })
+      .addCase(checkFollowUpEligibility.rejected, (state) => {
+        state.followUpEligibility = null;
+      })
 
-      // ── 6. Specific Mutation Fulfilled Logic ───────────────────────────────
+      // ── 6. Accept Consent (fulfilled only — pending/rejected via matcher) ──
       .addCase(acceptTelemedicineConsent.fulfilled, (state) => {
         state.isActionLoading = false;
-        if (state.current && state.current.onlineConsultation) {
+        if (state.current?.onlineConsultation) {
           state.current.onlineConsultation.isTelemedicineConsentAccepted = true;
         }
       })
+
+      // ── 7. Start Consultation ──────────────────────────────────────────────
       .addCase(startConsultation.fulfilled, (state, action) => {
         state.isActionLoading = false;
         if (state.current) {
-          state.current.status = action.payload.status;
+          state.current.status = action.payload?.status ?? 'in_progress';
           if (state.current.onlineConsultation) {
             state.current.onlineConsultation.consultationStatus = 'live';
           }
         }
       })
+
+      // ── 8. End Consultation ────────────────────────────────────────────────
       .addCase(endConsultation.fulfilled, (state, action) => {
         state.isActionLoading = false;
         if (state.current) {
-          state.current.status = action.payload.status;
-          state.current.completedAt = action.payload.completedAt;
+          state.current.status       = action.payload?.status      ?? 'completed';
+          state.current.completedAt  = action.payload?.completedAt ?? new Date().toISOString();
           if (state.current.onlineConsultation) {
             state.current.onlineConsultation.consultationStatus = 'completed';
+            state.current.onlineConsultation.durationMinutes    =
+              action.payload?.durationMinutes ?? 0;
           }
         }
       })
+
+      // ── 9. Cancel Consultation ─────────────────────────────────────────────
       .addCase(cancelConsultation.fulfilled, (state, action) => {
         state.isActionLoading = false;
         if (state.current) {
-          state.current.status = action.payload.status;
+          state.current.status = action.payload?.status ?? 'cancelled';
           if (state.current.fareBreakdown) {
-            state.current.fareBreakdown.refundAmount = action.payload.refundAmount;
+            state.current.fareBreakdown.refundAmount =
+              action.payload?.refundAmount ?? 0;
+          }
+          if (state.current.onlineConsultation) {
+            state.current.onlineConsultation.consultationStatus = 'cancelled';
           }
         }
+        // Also update in list if present
+        const idx = state.list.findIndex(
+          (b) => b._id === action.meta.arg.bookingId
+        );
+        if (idx !== -1) state.list[idx].status = action.payload?.status ?? 'cancelled';
       })
+
+      // ── 10. Upload Prescription ────────────────────────────────────────────
       .addCase(uploadPrescription.fulfilled, (state, action) => {
         state.isActionLoading = false;
         if (state.current) {
           if (state.current.onlineConsultation) {
-            state.current.onlineConsultation.prescriptionUploaded = true;
-            state.current.onlineConsultation.prescriptionUrl = action.payload.prescriptionUrl;
+            state.current.onlineConsultation.prescriptionUploaded   = true;
+            state.current.onlineConsultation.prescriptionUrl        =
+              action.payload?.prescriptionUrl;
+            state.current.onlineConsultation.prescriptionUploadedAt =
+              new Date().toISOString();
           }
           if (state.current.outPatientRecord) {
-            state.current.outPatientRecord.prescriptionUrl = action.payload.prescriptionUrl;
+            state.current.outPatientRecord.prescriptionUrl =
+              action.payload?.prescriptionUrl;
           }
         }
       })
+
+      // ── 11. Rate Consultation ──────────────────────────────────────────────
       .addCase(rateConsultation.fulfilled, (state) => {
         state.isActionLoading = false;
         if (state.current) {
@@ -436,110 +502,132 @@ const consultationSlice = createSlice({
         }
       })
 
-      // ── 7. Admin Notes ─────────────────────────────────────────────────────
+      // ── 12. Log Network Quality ────────────────────────────────────────────
+      // Silent — no state change needed, just clears loading
+      .addCase(logNetworkQuality.fulfilled, (state) => {
+        // no-op — background task
+      })
+
+      // ── 13. Admin Notes — Fetch ────────────────────────────────────────────
       .addCase(fetchAdminNotes.pending, (state) => {
         state.isAdminActionLoading = true;
-        state.adminError = null;
+        state.adminError           = null;
       })
       .addCase(fetchAdminNotes.fulfilled, (state, action) => {
         state.isAdminActionLoading = false;
-        state.adminNotesData = action.payload;
+        state.adminNotesData       = action.payload;
       })
       .addCase(fetchAdminNotes.rejected, (state, action) => {
         state.isAdminActionLoading = false;
-        state.adminError = action.payload;
+        state.adminError           = action.payload;
       })
+
+      // ── 14. Admin Notes — Add ──────────────────────────────────────────────
       .addCase(addAdminNote.pending, (state) => {
         state.isAdminActionLoading = true;
-        state.adminError = null;
+        state.adminError           = null;
       })
       .addCase(addAdminNote.fulfilled, (state, action) => {
         state.isAdminActionLoading = false;
-        if (state.adminNotesData && state.adminNotesData.notes) {
-          const timestamp = new Date().toISOString();
+        // FIX: removed hardcoded 'Current User' — server is source of truth.
+        // Optimistically push what we know from the request args; refetch
+        // fetchAdminNotes for accurate author/role data.
+        if (state.adminNotesData?.notes) {
           state.adminNotesData.notes.push({
-            timestamp,
-            role: 'Current User', 
-            author: 'You',
-            transactionId: action.meta.arg.transactionId || null,
-            note: action.meta.arg.note,
+            timestamp:     new Date().toISOString(),
+            role:          null,
+            author:        null,
+            transactionId: action.meta.arg.transactionId ?? null,
+            note:          action.meta.arg.note,
           });
         }
       })
       .addCase(addAdminNote.rejected, (state, action) => {
         state.isAdminActionLoading = false;
-        state.adminError = action.payload;
+        state.adminError           = action.payload;
       })
 
-      // ── 8. MATCHERS (Must be at the very end of extraReducers) ─────────────
+      // ── 15. MATCHERS — pending / rejected for mutation actions ─────────────
+      // FIX: use .type string (e.g. 'consultation/start/pending') NOT the
+      // action creator object itself. Previous code compared strings to
+      // objects which always returned false — matchers never fired.
       .addMatcher(
         (action) =>
           [
-            acceptTelemedicineConsent.pending,
-            startConsultation.pending,
-            endConsultation.pending,
-            cancelConsultation.pending,
-            uploadPrescription.pending,
-            rateConsultation.pending,
+            acceptTelemedicineConsent.pending.type,
+            startConsultation.pending.type,
+            endConsultation.pending.type,
+            cancelConsultation.pending.type,
+            uploadPrescription.pending.type,
+            rateConsultation.pending.type,
           ].includes(action.type),
         (state) => {
           state.isActionLoading = true;
-          state.actionError = null;
+          state.actionError     = null;
         }
       )
       .addMatcher(
         (action) =>
           [
-            acceptTelemedicineConsent.rejected,
-            startConsultation.rejected,
-            endConsultation.rejected,
-            cancelConsultation.rejected,
-            uploadPrescription.rejected,
-            rateConsultation.rejected,
+            acceptTelemedicineConsent.rejected.type,
+            startConsultation.rejected.type,
+            endConsultation.rejected.type,
+            cancelConsultation.rejected.type,
+            uploadPrescription.rejected.type,
+            rateConsultation.rejected.type,
           ].includes(action.type),
         (state, action) => {
           state.isActionLoading = false;
-          state.actionError = action.payload;
+          state.actionError     = action.payload;
         }
       );
   },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EXPORTS & SELECTORS
+// ACTIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const {
   clearCurrentConsultation,
+  clearJoinDetails,
   clearPricing,
   clearErrors,
   resetConsultationState,
 } = consultationSlice.actions;
 
-export const selectConsultationList = (state) => state.consultation.list;
+// ─────────────────────────────────────────────────────────────────────────────
+// SELECTORS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const selectConsultationList       = (state) => state.consultation.list;
 export const selectConsultationPagination = (state) => state.consultation.pagination;
-export const selectCurrentConsultation = (state) => state.consultation.current;
-export const selectConsultationPricing = (state) => state.consultation.pricing;
-export const selectJoinDetails = (state) => state.consultation.joinDetails;
-export const selectFollowUpEligibility = (state) => state.consultation.followUpEligibility;
-export const selectAdminNotesData = (state) => state.consultation.adminNotesData;
+export const selectCurrentConsultation    = (state) => state.consultation.current;
+export const selectConsultationPricing    = (state) => state.consultation.pricing;
+export const selectJoinDetails            = (state) => state.consultation.joinDetails;
+export const selectFollowUpEligibility    = (state) => state.consultation.followUpEligibility;
+export const selectAdminNotesData         = (state) => state.consultation.adminNotesData;
 
 export const selectConsultationLoaders = (state) => ({
-  isFetchingList: state.consultation.isFetchingList,
-  isFetchingCurrent: state.consultation.isFetchingCurrent,
-  isFetchingPricing: state.consultation.isFetchingPricing,
-  isFetchingJoin: state.consultation.isFetchingJoin,
-  isActionLoading: state.consultation.isActionLoading,
+  isFetchingList:      state.consultation.isFetchingList,
+  isFetchingCurrent:   state.consultation.isFetchingCurrent,
+  isFetchingPricing:   state.consultation.isFetchingPricing,
+  isFetchingJoin:      state.consultation.isFetchingJoin,
+  isActionLoading:     state.consultation.isActionLoading,
   isAdminActionLoading: state.consultation.isAdminActionLoading,
 });
 
 export const selectConsultationErrors = (state) => ({
-  listError: state.consultation.listError,
+  listError:    state.consultation.listError,
   currentError: state.consultation.currentError,
   pricingError: state.consultation.pricingError,
-  joinError: state.consultation.joinError,
-  actionError: state.consultation.actionError,
-  adminError: state.consultation.adminError,
+  joinError:    state.consultation.joinError,
+  actionError:  state.consultation.actionError,
+  adminError:   state.consultation.adminError,
 });
+
+export const selectJoinError    = (state) => state.consultation.joinError;
+export const selectActionError  = (state) => state.consultation.actionError;
+export const selectIsJoinLoading = (state) => state.consultation.isFetchingJoin;
 
 export default consultationSlice.reducer;

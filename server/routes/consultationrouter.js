@@ -9,7 +9,7 @@ import PlatformPricingConfig from '../models/PlatformPricingConfig.js';
 import Notification          from '../models/Notification.js';
 import User                  from '../models/User.js';
 import { protect, authorize } from '../middleware/authMiddleware.js';
-import { generateVideoSdkToken } from '../utils/videoSdk.js';
+import { generateVideoSdkToken, createVideoSdkRoom } from '../utils/videoSdk.js';
 import sendEmail             from '../utils/sendEmail.js';
 import { transactionalTemplate } from '../utils/emailTemplates.js';
 
@@ -248,10 +248,16 @@ router.get(
         return res.status(400).json({ success: false, message: 'Not an online consultation' });
 
       if (!['confirmed', 'in_progress'].includes(booking.status))
-        return res.status(400).json({ success: false, message: 'Booking not yet confirmed or already completed' });
+        return res.status(400).json({
+          success: false,
+          message: 'Booking not yet confirmed or already completed',
+        });
 
       if (booking.paymentStatus !== 'paid')
-        return res.status(402).json({ success: false, message: 'Payment required to join consultation' });
+        return res.status(402).json({
+          success: false,
+          message: 'Payment required to join consultation',
+        });
 
       const isDoctor   = req.user.role === 'doctor';
       const isCustomer = req.user.role === 'customer';
@@ -271,19 +277,102 @@ router.get(
           message: 'Telemedicine consent not accepted. Call PATCH /consultations/:id/consent first.',
         });
 
-      const token = generateVideoSdkToken();
+      // ── Ensure room exists — create lazily if missing ──────────────────────
+     let roomId      = booking.onlineConsultation?.roomId;
+      let meetingId   = booking.onlineConsultation?.meetingId;
+      let meetingLink = booking.onlineConsultation?.meetingLink
+
+      if (!roomId) {
+        // FIX: Removed the dynamic import here, passing booking._id
+        const room = await createVideoSdkRoom(booking.bookingCode, booking._id);
+
+        roomId      = room.roomId;
+        meetingId   = room.meetingId;
+        meetingLink = room.meetingLink;
+
+        await Booking.findByIdAndUpdate(booking._id, {
+          $set: {
+            'onlineConsultation.roomId':      roomId,
+            'onlineConsultation.meetingId':   meetingId,
+            'onlineConsultation.meetingLink': meetingLink,
+          },
+        });
+      }
+
+      // FIX: Override legacy fake links dynamically for older database records
+      if (!meetingLink || meetingLink.includes('meet.videosdk.live')) {
+        meetingLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/consultations/${booking._id}/room`;
+      }
+
+      // ── Send meeting link emails ───────────────────────────────────────────
+      const scheduledAtStr = new Date(booking.scheduledAt).toLocaleString('en-IN');
+      const durationMins   = booking.onlineConsultation?.allowedDurationMinutes ?? 30;
+
+      // Customer email
+      const customerUser = await User.findById(booking.customer).select('name email').lean();
+      if (customerUser?.email) {
+        await sendEmail({
+          email:   customerUser.email,
+          subject: `Your Consultation is Ready — ${booking.bookingCode}`,
+          html:    transactionalTemplate({
+            header:     'CONSULTATION READY',
+            title:      'Join Your Online Consultation',
+            body: `
+              <p>Dear <strong>${customerUser.name}</strong>,</p>
+              <p>Your consultation <strong>${booking.bookingCode}</strong> is scheduled for <strong>${scheduledAtStr}</strong>.</p>
+              <p>Click the button below to join. Session allows up to <strong>${durationMins} minutes</strong>.</p>
+              <p><strong>Meeting Room ID:</strong> ${roomId}</p>
+            `,
+            buttonText: 'Join Consultation',
+            buttonLink: meetingLink,
+          }),
+        }).catch((e) => console.warn('[join email customer]', e.message));
+      }
+
+      // Doctor email
+      const doctorProfileId  = booking.doctor._id || booking.doctor;
+      const doctorProfileDoc = await DoctorProfile.findById(doctorProfileId).select('user').lean();
+      if (doctorProfileDoc?.user) {
+        const doctorUser = await User.findById(doctorProfileDoc.user).select('name email').lean();
+        if (doctorUser?.email) {
+          await sendEmail({
+            email:   doctorUser.email,
+            subject: `Patient Ready — Consultation ${booking.bookingCode}`,
+            html:    transactionalTemplate({
+              header:     'CONSULTATION READY',
+              title:      'Your Patient is Waiting',
+              body: `
+                <p>Dear Dr. <strong>${doctorUser.name}</strong>,</p>
+                <p>Consultation <strong>${booking.bookingCode}</strong> is active. Your patient is ready.</p>
+                <p><strong>Scheduled:</strong> ${scheduledAtStr}</p>
+                <p><strong>Duration allowed:</strong> ${durationMins} minutes</p>
+                <p><strong>Meeting Room ID:</strong> ${roomId}</p>
+              `,
+              buttonText: 'Start Consultation',
+              buttonLink: meetingLink,
+            }),
+          }).catch((e) => console.warn('[join email doctor]', e.message));
+        }
+      }
+
+      // ── Generate scoped role-aware token ──────────────────────────────────
+      const token = generateVideoSdkToken(
+        roomId,
+        isDoctor ? 'host' : 'participant',
+        '2h'
+      );
 
       return res.json({
         success: true,
         data: {
-          roomId:      booking.onlineConsultation.roomId,
-          meetingId:   booking.onlineConsultation.meetingId,
-          meetingLink: booking.onlineConsultation.meetingLink,
+          roomId,
+          meetingId,
+          meetingLink,
           token,
           role:        isDoctor ? 'host' : 'participant',
           bookingCode: booking.bookingCode,
           scheduledAt: booking.scheduledAt,
-          allowedDurationMinutes: booking.onlineConsultation.allowedDurationMinutes,
+          allowedDurationMinutes: durationMins,
         },
       });
     } catch (err) {
@@ -316,8 +405,12 @@ router.patch(
       if (!booking)
         return res.status(404).json({ success: false, message: 'Booking not found' });
 
-      if (booking.bookingType !== 'doctor_online')
+     if (booking.bookingType !== 'doctor_online')
         return res.status(400).json({ success: false, message: 'Not an online consultation' });
+
+      // FIX: Initialize subdocument if null
+      if (!booking.onlineConsultation) booking.onlineConsultation = {};
+      if (!booking.onlineConsultation.eventLogs) booking.onlineConsultation.eventLogs = [];
 
       booking.onlineConsultation.isTelemedicineConsentAccepted  = true;
       booking.onlineConsultation.telemedicineConsentAcceptedAt  = new Date();
@@ -364,7 +457,11 @@ router.post(
 
       const now = new Date();
 
-      if (booking.bookingType === 'doctor_online') {
+   if (booking.bookingType === 'doctor_online') {
+        // FIX: Initialize subdocument if null
+        if (!booking.onlineConsultation) booking.onlineConsultation = {};
+        if (!booking.onlineConsultation.eventLogs) booking.onlineConsultation.eventLogs = [];
+
         booking.onlineConsultation.consultationStatus = 'live';
         booking.onlineConsultation.roomStarted        = true;
         booking.onlineConsultation.startedAt          = now;
@@ -439,8 +536,12 @@ router.post(
 
       const now = new Date();
 
-      if (booking.bookingType === 'doctor_online') {
-        const startedAt    = booking.onlineConsultation?.startedAt ?? now;
+    if (booking.bookingType === 'doctor_online') {
+        // FIX: Initialize subdocument if null
+        if (!booking.onlineConsultation) booking.onlineConsultation = {};
+        if (!booking.onlineConsultation.eventLogs) booking.onlineConsultation.eventLogs = [];
+
+        const startedAt    = booking.onlineConsultation.startedAt ?? now;
         const durationMins = Math.round((now - startedAt) / 60000);
 
         booking.onlineConsultation.consultationStatus     = 'completed';
@@ -630,7 +731,11 @@ router.post(
         uploadedAt:   new Date(),
       });
 
-      if (booking.bookingType === 'doctor_online') {
+if (booking.bookingType === 'doctor_online') {
+        // FIX: Initialize subdocument if null
+        if (!booking.onlineConsultation) booking.onlineConsultation = {};
+        if (!booking.onlineConsultation.eventLogs) booking.onlineConsultation.eventLogs = [];
+
         booking.onlineConsultation.prescriptionUploaded   = true;
         booking.onlineConsultation.prescriptionUrl        = prescriptionUrl;
         booking.onlineConsultation.prescriptionUploadedAt = new Date();

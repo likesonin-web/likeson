@@ -206,7 +206,7 @@ import adminAnalyticsRouter from './routes/super-admin/adminanalyticsRouter.js';
 app.use('/api/admin/analytics', adminAnalyticsRouter);
 
 import consultationRouter from './routes/consultationrouter.js';
-app.use('/api/consultation', consultationRouter);
+app.use('/api/consultations', consultationRouter);
 /* ---------------- Logs ---------------- */
 
 app.use(morgan(NODE_ENV === "development" ? "dev" : "combined"));
