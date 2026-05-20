@@ -301,7 +301,7 @@ router.get(
 
       // FIX: Override legacy fake links dynamically for older database records
       if (!meetingLink || meetingLink.includes('meet.videosdk.live')) {
-        meetingLink = `${process.env.CLIENT_URL||process.env.FRONTEND_URL || 'http://localhost:3000'}/consultations/${booking._id}/room`;
+        meetingLink = `${"https://www.likeson.in"||process.env.FRONTEND_URL || 'http://localhost:3000'}/consultations/${booking._id}/room`;
       }
 
       // ── Send meeting link emails ───────────────────────────────────────────

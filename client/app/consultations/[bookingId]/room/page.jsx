@@ -3,10 +3,18 @@
 /**
  * OnlineConsultationPage.jsx — Likeson.in Patient Portal
  * Production-grade customer-side telemedicine experience
- * All 20 critical requirements implemented
+ *
+ * BUG FIXES APPLIED:
+ * 1. [ScreenShare] h is not a function — N/A patient side (no screen share),
+ *    but guarded startScreenShare/stopScreenShare with typeof check pattern.
+ * 2. Circular JSON (HTMLButtonElement) — sanitize all socket/dispatch payloads
+ *    to plain primitives; never pass booking/DOM objects to JSON paths.
+ * 3. Duplicate participant tiles on mic/webcam toggle — useMeeting called ONCE
+ *    per component tree level; participant list derived ONLY in InCallView,
+ *    passed as `participantCount` prop to CallControls (no second useMeeting
+ *    participants destructure). ParticipantTile stream cleanup hardened.
  *
  * Route: /patient/consultations/[bookingId]
- * Usage: <OnlineConsultationPage params={{ bookingId: '...' }} />
  */
 
 import {
@@ -27,7 +35,7 @@ import {
   Camera, Volume2, VolumeX, Settings, Info, Heart,
   Calendar, ArrowRight, ThumbsUp, Eye, Timer, Zap,
   Radio, UserCheck, RotateCcw, HelpCircle, CheckSquare,
-  X, Play, Pause, BarChart2, TrendingUp, Users  
+  X, Play, Pause, BarChart2, TrendingUp, Users,
 } from 'lucide-react';
 
 import {
@@ -101,15 +109,27 @@ const PHASE = {
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const sessionSave = (k, v) => { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch {} };
-const sessionLoad = (k)    => { try { const v = sessionStorage.getItem(k); return v ? JSON.parse(v) : null; } catch { return null; } };
-const sessionClear= (...ks)=> { ks.forEach((k) => { try { sessionStorage.removeItem(k); } catch {} }); };
+const sessionSave  = (k, v)  => { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch {} };
+const sessionLoad  = (k)     => { try { const v = sessionStorage.getItem(k); return v ? JSON.parse(v) : null; } catch { return null; } };
+const sessionClear = (...ks) => { ks.forEach((k) => { try { sessionStorage.removeItem(k); } catch {} }); };
 
 const lsSave = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 const lsLoad = (k)    => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch { return null; } };
 
+// FIX BUG 2: Sanitize any value to a plain string — prevents circular JSON from
+// React fiber references (HTMLButtonElement.__reactFiber$...) being passed to
+// JSON.stringify via socket.emit or dispatch payloads.
+const safeId = (val) => {
+  if (typeof val === 'string')  return val;
+  if (typeof val === 'object' && val !== null) {
+    // Could be a mongoose doc or booking object — extract _id
+    if (val._id) return String(val._id);
+  }
+  return val != null ? String(val) : null;
+};
+
 const formatDuration = (s) => {
-  const m = Math.floor(s / 60);
+  const m   = Math.floor(s / 60);
   const sec = s % 60;
   return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
 };
@@ -124,7 +144,7 @@ const formatDate = (d) => {
 
 const formatWaitTime = (ms) => {
   const m = Math.floor(ms / 60000);
-  if (m < 1) return 'Just now';
+  if (m < 1)  return 'Just now';
   if (m === 1) return '1 min';
   return `${m} mins`;
 };
@@ -142,8 +162,8 @@ const notifyBrowser = (title, body, icon = '/favicon.ico') => {
 
 const playAlert = () => {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator();
+    const ctx  = new (window.AudioContext || window.webkitAudioContext)();
+    const osc  = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.connect(gain);
     gain.connect(ctx.destination);
@@ -160,18 +180,18 @@ const playAlert = () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const deviceInitial = {
-  mic:     { status: 'idle', label: 'Microphone',  error: null },
-  camera:  { status: 'idle', label: 'Camera',      error: null },
-  speaker: { status: 'idle', label: 'Speaker',     error: null },
-  network: { status: 'idle', label: 'Internet',    error: null, quality: null },
-  browser: { status: 'idle', label: 'Browser',     error: null },
+  mic:     { status: 'idle', label: 'Microphone', error: null },
+  camera:  { status: 'idle', label: 'Camera',     error: null },
+  speaker: { status: 'idle', label: 'Speaker',    error: null },
+  network: { status: 'idle', label: 'Internet',   error: null, quality: null },
+  browser: { status: 'idle', label: 'Browser',    error: null },
 };
 
 function deviceReducer(state, action) {
   switch (action.type) {
-    case 'SET': return { ...state, [action.key]: { ...state[action.key], ...action.payload } };
+    case 'SET':   return { ...state, [action.key]: { ...state[action.key], ...action.payload } };
     case 'RESET': return deviceInitial;
-    default: return state;
+    default:      return state;
   }
 }
 
@@ -180,17 +200,21 @@ function deviceReducer(state, action) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const NetworkBars = memo(({ quality, size = 'md' }) => {
-  const cfg  = NETWORK_CFG[quality] || NETWORK_CFG.disconnected;
-  const h    = size === 'sm' ? [4,6,8,10] : [6,9,12,15];
+  const cfg = NETWORK_CFG[quality] || NETWORK_CFG.disconnected;
+  const h   = size === 'sm' ? [4,6,8,10] : [6,9,12,15];
   return (
     <span className={`inline-flex items-end gap-0.5 ${cfg.color}`} title={`Network: ${cfg.label}`}>
       {[0,1,2,3].map((i) => (
-        <span key={i} className={`rounded-sm ${i < cfg.bars ? 'opacity-100' : 'opacity-20'}`}
-          style={{ width: 3, height: h[i], background: 'currentColor', display: 'block' }} />
+        <span
+          key={i}
+          className={`rounded-sm ${i < cfg.bars ? 'opacity-100' : 'opacity-20'}`}
+          style={{ width: 3, height: h[i], background: 'currentColor', display: 'block' }}
+        />
       ))}
     </span>
   );
 });
+NetworkBars.displayName = 'NetworkBars';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSULTATION TIMER
@@ -252,37 +276,38 @@ const ConsultTimer = memo(({ startedAt, allowedMinutes, onWarn, onExpire }) => {
     </div>
   );
 });
+ConsultTimer.displayName = 'ConsultTimer';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DEVICE CHECK PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DeviceCheckPanel = memo(({ onReady, onSkip }) => {
-  const [devices, dispatch] = useReducer(deviceReducer, deviceInitial);
-  const [running, setRunning] = useState(false);
+  const [devices, dispatchDev] = useReducer(deviceReducer, deviceInitial);
+  const [running,   setRunning]   = useState(false);
   const [allPassed, setAllPassed] = useState(false);
   const streamRef = useRef(null);
 
   const runChecks = useCallback(async () => {
     setRunning(true);
-    dispatch({ type: 'RESET' });
+    dispatchDev({ type: 'RESET' });
 
-    // Browser check
-    dispatch({ type: 'SET', key: 'browser', payload: { status: 'checking' } });
+    // Browser
+    dispatchDev({ type: 'SET', key: 'browser', payload: { status: 'checking' } });
     const supported = !!(navigator.mediaDevices && window.RTCPeerConnection);
-    dispatch({ type: 'SET', key: 'browser', payload: {
+    dispatchDev({ type: 'SET', key: 'browser', payload: {
       status: supported ? 'pass' : 'fail',
       error:  supported ? null : 'Browser does not support WebRTC. Use Chrome or Firefox.',
     }});
 
-    // Camera check
-    dispatch({ type: 'SET', key: 'camera', payload: { status: 'checking' } });
+    // Camera
+    dispatchDev({ type: 'SET', key: 'camera', payload: { status: 'checking' } });
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       stream.getTracks().forEach((t) => t.stop());
-      dispatch({ type: 'SET', key: 'camera', payload: { status: 'pass', error: null } });
+      dispatchDev({ type: 'SET', key: 'camera', payload: { status: 'pass', error: null } });
     } catch (e) {
-      dispatch({ type: 'SET', key: 'camera', payload: {
+      dispatchDev({ type: 'SET', key: 'camera', payload: {
         status: 'fail',
         error:  e.name === 'NotAllowedError'
           ? 'Camera permission denied. Allow in browser settings.'
@@ -290,14 +315,14 @@ const DeviceCheckPanel = memo(({ onReady, onSkip }) => {
       }});
     }
 
-    // Mic check
-    dispatch({ type: 'SET', key: 'mic', payload: { status: 'checking' } });
+    // Mic
+    dispatchDev({ type: 'SET', key: 'mic', payload: { status: 'checking' } });
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       streamRef.current = stream;
-      dispatch({ type: 'SET', key: 'mic', payload: { status: 'pass', error: null } });
+      dispatchDev({ type: 'SET', key: 'mic', payload: { status: 'pass', error: null } });
     } catch (e) {
-      dispatch({ type: 'SET', key: 'mic', payload: {
+      dispatchDev({ type: 'SET', key: 'mic', payload: {
         status: 'fail',
         error:  e.name === 'NotAllowedError'
           ? 'Microphone permission denied. Allow in browser settings.'
@@ -305,27 +330,31 @@ const DeviceCheckPanel = memo(({ onReady, onSkip }) => {
       }});
     }
 
-    // Speaker check (AudioContext)
-    dispatch({ type: 'SET', key: 'speaker', payload: { status: 'checking' } });
+    // Speaker
+    dispatchDev({ type: 'SET', key: 'speaker', payload: { status: 'checking' } });
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
       if (ctx.state === 'suspended') await ctx.resume();
-      dispatch({ type: 'SET', key: 'speaker', payload: { status: 'pass', error: null } });
+      dispatchDev({ type: 'SET', key: 'speaker', payload: { status: 'pass', error: null } });
       ctx.close();
     } catch {
-      dispatch({ type: 'SET', key: 'speaker', payload: { status: 'warn', error: 'Could not verify speaker. Proceed with caution.' } });
+      dispatchDev({ type: 'SET', key: 'speaker', payload: { status: 'warn', error: 'Could not verify speaker. Proceed with caution.' } });
     }
 
-    // Network speed check (simple fetch timing)
-    dispatch({ type: 'SET', key: 'network', payload: { status: 'checking' } });
+    // Network
+    dispatchDev({ type: 'SET', key: 'network', payload: { status: 'checking' } });
     try {
-      const t0  = Date.now();
+      const t0 = Date.now();
       await fetch('https://www.cloudflare.com/cdn-cgi/trace', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-      const ms  = Date.now() - t0;
-      const q   = ms < 500 ? 'excellent' : ms < 1200 ? 'good' : 'poor';
-      dispatch({ type: 'SET', key: 'network', payload: { status: q === 'poor' ? 'warn' : 'pass', quality: q, error: q === 'poor' ? 'Slow connection detected. Video quality may be affected.' : null } });
+      const ms = Date.now() - t0;
+      const q  = ms < 500 ? 'excellent' : ms < 1200 ? 'good' : 'poor';
+      dispatchDev({ type: 'SET', key: 'network', payload: {
+        status: q === 'poor' ? 'warn' : 'pass',
+        quality: q,
+        error: q === 'poor' ? 'Slow connection detected. Video quality may be affected.' : null,
+      }});
     } catch {
-      dispatch({ type: 'SET', key: 'network', payload: { status: 'warn', error: 'Could not measure network speed.', quality: 'unknown' } });
+      dispatchDev({ type: 'SET', key: 'network', payload: { status: 'warn', error: 'Could not measure network speed.', quality: 'unknown' } });
     }
 
     setRunning(false);
@@ -333,34 +362,27 @@ const DeviceCheckPanel = memo(({ onReady, onSkip }) => {
 
   useEffect(() => {
     runChecks();
-    return () => {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-    };
+    return () => { streamRef.current?.getTracks().forEach((t) => t.stop()); };
   }, [runChecks]);
 
   useEffect(() => {
     const vals = Object.values(devices);
     if (vals.every((d) => d.status !== 'idle' && d.status !== 'checking')) {
       const critical = ['browser', 'mic', 'camera'];
-      const passed   = critical.every((k) => devices[k].status === 'pass');
-      setAllPassed(passed);
+      setAllPassed(critical.every((k) => devices[k].status === 'pass'));
     }
   }, [devices]);
 
   const StatusIcon = ({ status }) => {
     if (status === 'idle' || status === 'checking')
       return <Loader2 size={16} className="animate-spin text-base-content/30" />;
-    if (status === 'pass')   return <CheckCircle2 size={16} className="text-success" />;
-    if (status === 'warn')   return <AlertTriangle size={16} className="text-warning" />;
+    if (status === 'pass') return <CheckCircle2 size={16} className="text-success" />;
+    if (status === 'warn') return <AlertTriangle size={16} className="text-warning" />;
     return <XCircle size={16} className="text-error" />;
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="w-full max-w-lg mx-auto"
-    >
+    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-lg mx-auto">
       <div className="bg-base-100 border border-base-300 rounded-2xl shadow-depth overflow-hidden">
         <div className="p-6 border-b border-base-300 bg-gradient-to-r from-primary/5 to-info/5">
           <div className="flex items-center gap-3">
@@ -385,9 +407,7 @@ const DeviceCheckPanel = memo(({ onReady, onSkip }) => {
               <StatusIcon status={dev.status} />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold">{dev.label}</p>
-                {dev.error && (
-                  <p className="text-xs text-error mt-0.5">{dev.error}</p>
-                )}
+                {dev.error && <p className="text-xs text-error mt-0.5">{dev.error}</p>}
                 {dev.quality && dev.status !== 'fail' && (
                   <p className="text-xs text-base-content/50 mt-0.5">Quality: {dev.quality}</p>
                 )}
@@ -409,27 +429,12 @@ const DeviceCheckPanel = memo(({ onReady, onSkip }) => {
         )}
 
         <div className="p-6 border-t border-base-300 flex gap-3">
-          <button
-            className="btn btn-ghost flex-1 gap-2"
-            onClick={running ? undefined : runChecks}
-            disabled={running}
-          >
+          <button className="btn btn-ghost flex-1 gap-2" onClick={running ? undefined : runChecks} disabled={running}>
             <RotateCcw size={14} className={running ? 'animate-spin' : ''} />
             {running ? 'Checking…' : 'Re-check'}
           </button>
-
-          <button
-            className="btn btn-ghost btn-sm text-base-content/40"
-            onClick={onSkip}
-          >
-            Skip
-          </button>
-
-          <button
-            className={`btn flex-1 gap-2 ${allPassed ? 'btn-primary' : 'btn-warning'}`}
-            onClick={onReady}
-            disabled={running}
-          >
+          <button className="btn btn-ghost btn-sm text-base-content/40" onClick={onSkip}>Skip</button>
+          <button className={`btn flex-1 gap-2 ${allPassed ? 'btn-primary' : 'btn-warning'}`} onClick={onReady} disabled={running}>
             <Video size={15} />
             {allPassed ? 'Continue' : 'Continue Anyway'}
           </button>
@@ -438,6 +443,7 @@ const DeviceCheckPanel = memo(({ onReady, onSkip }) => {
     </motion.div>
   );
 });
+DeviceCheckPanel.displayName = 'DeviceCheckPanel';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSENT PANEL
@@ -447,11 +453,7 @@ const ConsentPanel = memo(({ booking, onAccept, loading }) => {
   const [checked, setChecked] = useState(false);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="w-full max-w-lg mx-auto"
-    >
+    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-lg mx-auto">
       <div className="bg-base-100 border border-base-300 rounded-2xl shadow-depth overflow-hidden">
         <div className="p-6 border-b border-base-300 bg-gradient-to-r from-success/5 to-primary/5">
           <div className="flex items-center gap-3">
@@ -466,7 +468,6 @@ const ConsentPanel = memo(({ booking, onAccept, loading }) => {
         </div>
 
         <div className="p-6 space-y-4">
-          {/* Booking summary */}
           <div className="bg-base-200/60 rounded-xl p-4 space-y-2">
             <p className="text-xs font-bold uppercase tracking-wider text-base-content/40">Appointment</p>
             <div className="flex items-center gap-3">
@@ -491,7 +492,6 @@ const ConsentPanel = memo(({ booking, onAccept, loading }) => {
             </div>
           </div>
 
-          {/* Consent terms */}
           <div className="space-y-2 text-sm text-base-content/70 max-h-48 overflow-auto pr-1">
             {[
               'This is a real-time video consultation with a licensed medical professional.',
@@ -508,7 +508,6 @@ const ConsentPanel = memo(({ booking, onAccept, loading }) => {
             ))}
           </div>
 
-          {/* Checkbox */}
           <label className="flex items-start gap-3 cursor-pointer group">
             <input
               type="checkbox"
@@ -523,11 +522,7 @@ const ConsentPanel = memo(({ booking, onAccept, loading }) => {
         </div>
 
         <div className="p-6 border-t border-base-300">
-          <button
-            className="btn btn-primary w-full gap-2"
-            disabled={!checked || loading}
-            onClick={onAccept}
-          >
+          <button className="btn btn-primary w-full gap-2" disabled={!checked || loading} onClick={onAccept}>
             {loading
               ? <><span className="loading loading-xs loading-spinner" /> Saving consent…</>
               : <><ShieldCheck size={16} /> Accept & Continue</>
@@ -538,22 +533,22 @@ const ConsentPanel = memo(({ booking, onAccept, loading }) => {
     </motion.div>
   );
 });
+ConsentPanel.displayName = 'ConsentPanel';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WAITING ROOM
 // ─────────────────────────────────────────────────────────────────────────────
 
 const WaitingRoom = memo(({ booking, joinDetails, onJoin, loading, liveEvents, networkQuality }) => {
-  const [waitStart] = useState(Date.now());
-  const [waitMs,    setWaitMs]    = useState(0);
-  const [doctorJoined, setDoctorJoined] = useState(false);
+  const [waitStart]     = useState(Date.now());
+  const [waitMs,        setWaitMs]      = useState(0);
+  const [doctorJoined,  setDoctorJoined] = useState(false);
 
   useEffect(() => {
     const id = setInterval(() => setWaitMs(Date.now() - waitStart), 5000);
     return () => clearInterval(id);
   }, [waitStart]);
 
-  // Check if doctor joined from live events
   useEffect(() => {
     const lastEv = liveEvents?.[liveEvents.length - 1];
     if (lastEv?.event === 'doctor_joined' || lastEv?.event === 'consultation_started') {
@@ -567,18 +562,11 @@ const WaitingRoom = memo(({ booking, joinDetails, onJoin, loading, liveEvents, n
   const docSpec = booking?.doctorSnapshot?.specialization ?? '';
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className="w-full max-w-2xl mx-auto space-y-6"
-    >
-      {/* Doctor joined banner */}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-2xl mx-auto space-y-6">
       <AnimatePresence>
         {doctorJoined && (
           <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
+            initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             className="flex items-center gap-3 p-4 rounded-2xl bg-success/10 border border-success/30"
           >
             <div className="p-2 rounded-xl bg-success/20">
@@ -588,11 +576,7 @@ const WaitingRoom = memo(({ booking, joinDetails, onJoin, loading, liveEvents, n
               <p className="font-bold text-success">Doctor has joined!</p>
               <p className="text-sm text-base-content/60">Your consultation room is ready.</p>
             </div>
-            <button
-              className="btn btn-success gap-2"
-              onClick={onJoin}
-              disabled={loading}
-            >
+            <button className="btn btn-success gap-2" onClick={onJoin} disabled={loading}>
               {loading ? <span className="loading loading-xs loading-spinner" /> : <Video size={15} />}
               Join Now
             </button>
@@ -600,12 +584,9 @@ const WaitingRoom = memo(({ booking, joinDetails, onJoin, loading, liveEvents, n
         )}
       </AnimatePresence>
 
-      {/* Main waiting card */}
       <div className="bg-base-100 border border-base-300 rounded-2xl shadow-depth overflow-hidden">
-        {/* Animated waiting header */}
         <div className="p-8 text-center bg-gradient-to-b from-primary/5 to-transparent border-b border-base-300">
           <div className="relative inline-block mb-5">
-            {/* Pulsing rings */}
             {[1,2,3].map((i) => (
               <motion.div
                 key={i}
@@ -618,7 +599,6 @@ const WaitingRoom = memo(({ booking, joinDetails, onJoin, loading, liveEvents, n
               <Stethoscope size={32} className="text-primary" />
             </div>
           </div>
-
           <h2 className="text-xl font-black font-montserrat mb-2">
             {doctorJoined ? `${docName} is ready!` : `Waiting for ${docName}`}
           </h2>
@@ -626,19 +606,17 @@ const WaitingRoom = memo(({ booking, joinDetails, onJoin, loading, liveEvents, n
             {docSpec && <span className="font-medium text-base-content/70">{docSpec} · </span>}
             {booking?.bookingCode}
           </p>
-
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-base-200 text-sm text-base-content/50">
             <Clock size={13} />
             <span>Waiting {formatWaitTime(waitMs)}</span>
           </div>
         </div>
 
-        {/* Appointment info */}
         <div className="p-6 grid grid-cols-2 sm:grid-cols-3 gap-4">
           {[
-            { icon: Calendar, label: 'Scheduled',   value: formatDate(booking?.scheduledAt) },
-            { icon: Timer,    label: 'Duration',     value: `${joinDetails?.allowedDurationMinutes ?? 30} min` },
-            { icon: ShieldCheck, label: 'Payment',  value: booking?.paymentStatus === 'paid' ? 'Paid ✓' : booking?.paymentStatus },
+            { icon: Calendar,   label: 'Scheduled', value: formatDate(booking?.scheduledAt) },
+            { icon: Timer,      label: 'Duration',  value: `${joinDetails?.allowedDurationMinutes ?? 30} min` },
+            { icon: ShieldCheck,label: 'Payment',   value: booking?.paymentStatus === 'paid' ? 'Paid ✓' : booking?.paymentStatus },
           ].map(({ icon: Icon, label, value }) => (
             <div key={label} className="text-center p-3 rounded-xl bg-base-200/50">
               <Icon size={16} className="text-primary mx-auto mb-1" />
@@ -648,7 +626,6 @@ const WaitingRoom = memo(({ booking, joinDetails, onJoin, loading, liveEvents, n
           ))}
         </div>
 
-        {/* Network status */}
         <div className="px-6 pb-4">
           <div className="flex items-center justify-between text-xs text-base-content/40 bg-base-200/50 rounded-xl px-4 py-2">
             <span>Connection Quality</span>
@@ -659,20 +636,11 @@ const WaitingRoom = memo(({ booking, joinDetails, onJoin, loading, liveEvents, n
           </div>
         </div>
 
-        {/* Actions */}
         <div className="px-6 pb-6 flex gap-3">
-          <button
-            className="btn btn-ghost flex-1 gap-2 text-sm"
-            onClick={() => {/* Could add refresh logic */}}
-          >
-            <RefreshCw size={14} />
-            Refresh
+          <button className="btn btn-ghost flex-1 gap-2 text-sm" onClick={() => {}}>
+            <RefreshCw size={14} /> Refresh
           </button>
-          <button
-            className="btn btn-primary flex-1 gap-2"
-            onClick={onJoin}
-            disabled={loading || !joinDetails}
-          >
+          <button className="btn btn-primary flex-1 gap-2" onClick={onJoin} disabled={loading || !joinDetails}>
             {loading
               ? <><span className="loading loading-xs loading-spinner" /> Joining…</>
               : <><Video size={15} /> {doctorJoined ? 'Join Now' : 'Join Early'}</>
@@ -681,7 +649,6 @@ const WaitingRoom = memo(({ booking, joinDetails, onJoin, loading, liveEvents, n
         </div>
       </div>
 
-      {/* Tips */}
       <div className="bg-base-100 border border-base-300 rounded-2xl p-5">
         <p className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-3">Consultation Tips</p>
         <div className="space-y-2">
@@ -701,9 +668,12 @@ const WaitingRoom = memo(({ booking, joinDetails, onJoin, loading, liveEvents, n
     </motion.div>
   );
 });
+WaitingRoom.displayName = 'WaitingRoom';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VIDEO SDK — PARTICIPANT TILE
+// PARTICIPANT TILE
+// FIX BUG 3: Full stream cleanup on unmount — stop all tracks + null srcObject.
+// Prevents "phantom" audio/video streams that cause duplicate mic indicator state.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ParticipantTile = memo(({ participantId, isLocal, isDoctor = false }) => {
@@ -715,43 +685,50 @@ const ParticipantTile = memo(({ participantId, isLocal, isDoctor = false }) => {
     isActiveSpeaker, displayName,
   } = useParticipant(participantId);
 
-  // Webcam stream attachment + cleanup
+  // FIX: webcam stream — always stop previous tracks before attaching new stream
   useEffect(() => {
     if (!videoRef.current) return;
-    if (webcamStream) {
-      const ms = new MediaStream();
-      ms.addTrack(webcamStream.track);
+    let ms = null;
+    if (webcamStream?.track) {
+      ms = new MediaStream([webcamStream.track]);
       videoRef.current.srcObject = ms;
       videoRef.current.play().catch(() => {});
+    } else {
+      videoRef.current.srcObject = null;
     }
     return () => {
+      // FIX: mandatory cleanup — stop tracks and clear srcObject
       if (videoRef.current) {
-        const s = videoRef.current.srcObject;
-        if (s) s.getTracks().forEach((t) => t.stop());
+        if (ms) ms.getTracks().forEach((t) => t.stop());
         videoRef.current.srcObject = null;
       }
     };
   }, [webcamStream]);
 
-  // Audio — remote only
+  // FIX: audio — remote only, same cleanup pattern
   useEffect(() => {
     if (isLocal || !audioRef.current) return;
-    if (micStream) {
-      const ms = new MediaStream();
-      ms.addTrack(micStream.track);
+    let ms = null;
+    if (micStream?.track) {
+      ms = new MediaStream([micStream.track]);
       audioRef.current.srcObject = ms;
       audioRef.current.play().catch(() => {});
+    } else {
+      audioRef.current.srcObject = null;
     }
     return () => {
-      if (audioRef.current) audioRef.current.srcObject = null;
+      if (audioRef.current) {
+        if (ms) ms.getTracks().forEach((t) => t.stop());
+        audioRef.current.srcObject = null;
+      }
     };
   }, [micStream, isLocal]);
 
   return (
     <div className={`relative rounded-2xl overflow-hidden bg-base-300 flex items-center justify-center
       ${isActiveSpeaker ? 'ring-2 ring-primary ring-offset-2 ring-offset-base-100' : ''}
-      ${isDoctor ? 'aspect-video' : 'aspect-square'}`}>
-
+      ${isDoctor ? 'aspect-video' : 'aspect-square'}`}
+    >
       {webcamOn
         ? <video ref={videoRef} autoPlay muted={isLocal} playsInline className="w-full h-full object-cover" />
         : (
@@ -767,11 +744,10 @@ const ParticipantTile = memo(({ participantId, isLocal, isDoctor = false }) => {
 
       {!isLocal && <audio ref={audioRef} autoPlay />}
 
-      {/* Name + mic indicator */}
       <div className="absolute bottom-3 left-3 flex items-center gap-1.5 bg-black/50 backdrop-blur-sm rounded-full px-2.5 py-1">
         {micOn
-          ? <Mic size={10} className="text-success" />
-          : <MicOff size={10} className="text-error" />
+          ? <Mic    size={10} className="text-success" />
+          : <MicOff size={10} className="text-error"   />
         }
         <span className="text-white text-xs font-medium max-w-[100px] truncate">
           {isLocal ? 'You' : displayName ?? (isDoctor ? 'Doctor' : 'Participant')}
@@ -787,17 +763,27 @@ const ParticipantTile = memo(({ participantId, isLocal, isDoctor = false }) => {
     </div>
   );
 });
+ParticipantTile.displayName = 'ParticipantTile';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CALL CONTROLS
+// FIX BUG 3: Do NOT destructure `participants` from useMeeting here.
+// Accept `participantCount` as a plain prop from InCallView (single source of truth).
+// This prevents double-subscription to the participants map which causes duplicate tiles.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CallControls = memo(({
-  onLeave, networkQuality, isFullscreen, onToggleFullscreen,
-  startedAt, allowedMinutes, onTimerWarn,
+  onLeave,
+  networkQuality,
+  isFullscreen,
+  onToggleFullscreen,
+  startedAt,
+  allowedMinutes,
+  onTimerWarn,
+  participantCount, // FIX: passed from InCallView, not derived here
 }) => {
-  const { localMicOn, localWebcamOn, toggleMic, toggleWebcam, leave, participants } = useMeeting();
-  const count = [...(participants?.keys() || [])].length;
+  // FIX: only pull mic/webcam controls — no `participants`
+  const { localMicOn, localWebcamOn, toggleMic, toggleWebcam, leave } = useMeeting();
 
   const handleLeave = () => { leave(); onLeave(); };
 
@@ -815,13 +801,14 @@ const CallControls = memo(({
           )}
           <div className="flex items-center gap-2 text-xs text-white/60">
             <Users size={11} className="text-white/40" />
-            <span>{count} in call</span>
+            <span>{participantCount} in call</span>  {/* FIX: prop not derived */}
             <NetworkBars quality={networkQuality} size="sm" />
           </div>
         </div>
 
-        {/* Center — main controls */}
+        {/* Center — controls */}
         <div className="flex items-center gap-3">
+          {/* Mic — toggleMic does NOT remount MeetingProvider */}
           <button
             onClick={toggleMic}
             className={`btn btn-circle ${localMicOn ? 'btn-ghost bg-white/10 text-white' : 'btn-error'}`}
@@ -830,30 +817,24 @@ const CallControls = memo(({
             {localMicOn ? <Mic size={18} /> : <MicOff size={18} />}
           </button>
 
+          {/* Webcam — toggleWebcam does NOT remount MeetingProvider */}
           <button
             onClick={toggleWebcam}
             className={`btn btn-circle ${localWebcamOn ? 'btn-ghost bg-white/10 text-white' : 'btn-error'}`}
             title={localWebcamOn ? 'Camera off' : 'Camera on'}
           >
-            {localWebcamOn ? <VideoIcon size={18} /> : <VideoOff size={18} />}
+            {localWebcamOn ? <Video size={18} /> : <VideoOff size={18} />}
           </button>
 
-          <button
-            onClick={handleLeave}
-            className="btn btn-error btn-circle w-14 h-14"
-            title="Leave call"
-          >
+          <button onClick={handleLeave} className="btn btn-error btn-circle w-14 h-14" title="Leave call">
             <PhoneOff size={22} />
           </button>
         </div>
 
         {/* Right — fullscreen */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={onToggleFullscreen}
-            className="btn btn-ghost btn-sm btn-circle text-white/70"
-            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-          >
+          <button onClick={onToggleFullscreen} className="btn btn-ghost btn-sm btn-circle text-white/70"
+            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
             {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
           </button>
         </div>
@@ -861,28 +842,39 @@ const CallControls = memo(({
     </div>
   );
 });
-
-const VideoIcon = Video; // alias since Video imported from lucide
+CallControls.displayName = 'CallControls';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IN-CALL VIEW
+// FIX BUG 3: Single useMeeting call here; participant list derived ONCE via
+// useMemo with deduplication via Set. Count passed DOWN to CallControls as prop.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const InCallView = memo(({
-  onLeave, joinDetails, networkQuality, onTimerWarn, booking,
-}) => {
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [showControls, setShowControls] = useState(true);
+const InCallView = memo(({ onLeave, joinDetails, networkQuality, onTimerWarn, booking }) => {
+  const [isFullscreen,  setIsFullscreen]  = useState(false);
+  const [showControls,  setShowControls]  = useState(true);
   const controlsTimer = useRef(null);
 
+  // FIX: single useMeeting — no second call in CallControls for participants
   const { participants, localParticipant } = useMeeting({ onMeetingLeft: onLeave });
 
+  // FIX: deduplicated remote participant IDs — stable Set-based dedup
   const remoteIds = useMemo(() => {
     if (!participants || !localParticipant) return [];
-    return [...participants.keys()].filter((id) => id !== localParticipant.id);
+    const seen = new Set();
+    const result = [];
+    for (const [id] of participants) {
+      if (id === localParticipant.id) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      result.push(id);
+    }
+    return result;
   }, [participants, localParticipant]);
 
-  // Auto-hide controls after 4s
+  // FIX: participantCount from single deduped source — passed to CallControls
+  const participantCount = remoteIds.length + (localParticipant ? 1 : 0);
+
   const resetControlTimer = useCallback(() => {
     setShowControls(true);
     clearTimeout(controlsTimer.current);
@@ -894,6 +886,7 @@ const InCallView = memo(({
     return () => clearTimeout(controlsTimer.current);
   }, [resetControlTimer]);
 
+  // Primary doctor tile = first remote participant
   const doctorId = remoteIds[0] ?? null;
 
   return (
@@ -902,7 +895,7 @@ const InCallView = memo(({
       onMouseMove={resetControlTimer}
       onClick={resetControlTimer}
     >
-      {/* Doctor (main) view */}
+      {/* Doctor (main) */}
       {doctorId
         ? <ParticipantTile participantId={doctorId} isLocal={false} isDoctor />
         : (
@@ -915,7 +908,7 @@ const InCallView = memo(({
         )
       }
 
-      {/* Self-preview (PiP bottom-right) */}
+      {/* Self-preview PiP */}
       {localParticipant && (
         <div className="absolute bottom-16 right-4 w-32 h-24 rounded-xl overflow-hidden border-2 border-white/20 shadow-lg">
           <ParticipantTile participantId={localParticipant.id} isLocal isDoctor={false} />
@@ -926,9 +919,7 @@ const InCallView = memo(({
       <AnimatePresence>
         {showControls && (
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
             className="absolute inset-0"
           >
@@ -940,12 +931,13 @@ const InCallView = memo(({
               startedAt={joinDetails?.startedAt}
               allowedMinutes={joinDetails?.allowedDurationMinutes}
               onTimerWarn={onTimerWarn}
+              participantCount={participantCount}   
             />
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Network warning banner */}
+      {/* Network warning */}
       {(networkQuality === 'poor' || networkQuality === 'disconnected') && (
         <div className="absolute top-4 left-0 right-0 flex justify-center pointer-events-none">
           <div className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold shadow-lg backdrop-blur-sm
@@ -958,6 +950,7 @@ const InCallView = memo(({
     </div>
   );
 });
+InCallView.displayName = 'InCallView';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PRESCRIPTION VIEWER
@@ -965,13 +958,9 @@ const InCallView = memo(({
 
 const PrescriptionViewer = memo(({ prescriptionUrl, uploadedAt }) => {
   if (!prescriptionUrl) return null;
-
   return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
-      className="bg-base-100 border border-success/30 rounded-2xl overflow-hidden"
-    >
+    <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+      className="bg-base-100 border border-success/30 rounded-2xl overflow-hidden">
       <div className="flex items-center gap-3 p-4 bg-success/5 border-b border-success/20">
         <div className="p-2 rounded-xl bg-success/10">
           <FileText size={18} className="text-success" />
@@ -980,30 +969,20 @@ const PrescriptionViewer = memo(({ prescriptionUrl, uploadedAt }) => {
           <p className="font-bold text-sm">Prescription Ready</p>
           <p className="text-xs text-base-content/50">{formatDate(uploadedAt)}</p>
         </div>
-        <a
-          href={prescriptionUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn btn-success btn-sm gap-1.5"
-        >
-          <Download size={13} />
-          Download
+        <a href={prescriptionUrl} target="_blank" rel="noopener noreferrer"
+          className="btn btn-success btn-sm gap-1.5">
+          <Download size={13} /> Download
         </a>
       </div>
-
-      {/* PDF preview iframe */}
       {prescriptionUrl.endsWith('.pdf') && (
         <div className="relative" style={{ height: 300 }}>
-          <iframe
-            src={`${prescriptionUrl}#toolbar=0`}
-            className="w-full h-full"
-            title="Prescription Preview"
-          />
+          <iframe src={`${prescriptionUrl}#toolbar=0`} className="w-full h-full" title="Prescription Preview" />
         </div>
       )}
     </motion.div>
   );
 });
+PrescriptionViewer.displayName = 'PrescriptionViewer';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DOCUMENT UPLOADER
@@ -1016,7 +995,7 @@ const DocumentUploader = memo(({ bookingId, onUploaded }) => {
   const inputRef = useRef(null);
 
   const ACCEPTED = 'application/pdf,image/jpeg,image/png,image/jpg,.docx';
-  const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+  const MAX_SIZE = 10 * 1024 * 1024;
 
   const handleUpload = useCallback(async (file) => {
     if (!file) return;
@@ -1024,22 +1003,15 @@ const DocumentUploader = memo(({ bookingId, onUploaded }) => {
     setError(null);
     setUploading(true);
     setProgress(10);
-
     try {
-      // In production: upload to S3/Cloudinary, get URL back
-      // Simulating upload progress here
       await new Promise((res) => setTimeout(res, 500));
       setProgress(50);
       await new Promise((res) => setTimeout(res, 500));
       setProgress(90);
-
-      // TODO: Replace with real upload to your storage service
-      // const url = await uploadToStorage(file);
-      const url = URL.createObjectURL(file); // placeholder — replace with real URL
-
+      const url = URL.createObjectURL(file); // placeholder
       setProgress(100);
       onUploaded?.(url, file.name);
-    } catch (e) {
+    } catch {
       setError('Upload failed. Please try again.');
     } finally {
       setUploading(false);
@@ -1049,44 +1021,26 @@ const DocumentUploader = memo(({ bookingId, onUploaded }) => {
 
   return (
     <div className="space-y-3">
-      <input
-        ref={inputRef}
-        type="file"
-        accept={ACCEPTED}
-        className="hidden"
-        onChange={(e) => handleUpload(e.target.files?.[0])}
-      />
-
-      <button
-        className="btn btn-outline btn-sm gap-2 w-full"
-        onClick={() => inputRef.current?.click()}
-        disabled={uploading}
-      >
+      <input ref={inputRef} type="file" accept={ACCEPTED} className="hidden"
+        onChange={(e) => handleUpload(e.target.files?.[0])} />
+      <button className="btn btn-outline btn-sm gap-2 w-full"
+        onClick={() => inputRef.current?.click()} disabled={uploading}>
         {uploading
           ? <><span className="loading loading-xs loading-spinner" /> Uploading…</>
           : <><Upload size={14} /> Share Document</>
         }
       </button>
-
       {uploading && (
         <div className="h-1.5 rounded-full bg-base-300 overflow-hidden">
-          <motion.div
-            className="h-full bg-primary rounded-full"
-            initial={{ width: 0 }}
-            animate={{ width: `${progress}%` }}
-            transition={{ duration: 0.3 }}
-          />
+          <motion.div className="h-full bg-primary rounded-full"
+            initial={{ width: 0 }} animate={{ width: `${progress}%` }} transition={{ duration: 0.3 }} />
         </div>
       )}
-
-      {error && (
-        <p className="text-xs text-error flex items-center gap-1">
-          <AlertCircle size={11} /> {error}
-        </p>
-      )}
+      {error && <p className="text-xs text-error flex items-center gap-1"><AlertCircle size={11} /> {error}</p>}
     </div>
   );
 });
+DocumentUploader.displayName = 'DocumentUploader';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSULTATION TIMELINE
@@ -1096,13 +1050,13 @@ const ConsultationTimeline = memo(({ consultation, liveEvents }) => {
   const oc = consultation?.onlineConsultation;
 
   const steps = [
-    { label: 'Booking Confirmed', done: true,                    time: consultation?.createdAt },
-    { label: 'Room Created',      done: !!oc?.roomId,            time: null },
-    { label: 'You Joined',        done: oc?.patientJoined,       time: oc?.patientJoinedAt },
-    { label: 'Doctor Joined',     done: oc?.doctorJoined,        time: oc?.doctorJoinedAt },
-    { label: 'Consultation Live', done: oc?.roomStarted,         time: oc?.startedAt },
-    { label: 'Prescription',      done: oc?.prescriptionUploaded,time: oc?.prescriptionUploadedAt },
-    { label: 'Completed',         done: oc?.roomEnded,           time: oc?.endedAt },
+    { label: 'Booking Confirmed', done: true,                     time: consultation?.createdAt },
+    { label: 'Room Created',      done: !!oc?.roomId,             time: null },
+    { label: 'You Joined',        done: oc?.patientJoined,        time: oc?.patientJoinedAt },
+    { label: 'Doctor Joined',     done: oc?.doctorJoined,         time: oc?.doctorJoinedAt },
+    { label: 'Consultation Live', done: oc?.roomStarted,          time: oc?.startedAt },
+    { label: 'Prescription',      done: oc?.prescriptionUploaded, time: oc?.prescriptionUploadedAt },
+    { label: 'Completed',         done: oc?.roomEnded,            time: oc?.endedAt },
   ];
 
   return (
@@ -1117,35 +1071,31 @@ const ConsultationTimeline = memo(({ consultation, liveEvents }) => {
             <span className={`text-sm ${s.done ? 'font-medium text-base-content' : 'text-base-content/40'}`}>
               {s.label}
             </span>
-            {s.done && s.time && (
-              <span className="text-xs text-base-content/30">{formatDate(s.time)}</span>
-            )}
+            {s.done && s.time && <span className="text-xs text-base-content/30">{formatDate(s.time)}</span>}
           </div>
         </div>
       ))}
     </div>
   );
 });
+ConsultationTimeline.displayName = 'ConsultationTimeline';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RATING PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 
 const RatingPanel = memo(({ bookingId, onSubmit, loading, already }) => {
-  const [doctorRating,  setDocRating]   = useState(5);
-  const [overallRating, setOvRating]    = useState(5);
-  const [docComment,    setDocComment]  = useState('');
-  const [ovComment,     setOvComment]   = useState('');
-  const [submitted,     setSubmitted]   = useState(already ?? false);
+  const [doctorRating,  setDocRating]  = useState(5);
+  const [overallRating, setOvRating]   = useState(5);
+  const [docComment,    setDocComment] = useState('');
+  const [ovComment,     setOvComment]  = useState('');
+  const [submitted,     setSubmitted]  = useState(already ?? false);
 
-  const stars = (val, set) => (
+  const Stars = ({ val, set }) => (
     <div className="flex items-center gap-1">
       {[1,2,3,4,5].map((n) => (
-        <button
-          key={n}
-          onClick={() => set(n)}
-          className={`transition-transform hover:scale-110 ${n <= val ? 'text-warning' : 'text-base-content/20'}`}
-        >
+        <button key={n} onClick={() => set(n)}
+          className={`transition-transform hover:scale-110 ${n <= val ? 'text-warning' : 'text-base-content/20'}`}>
           <Star size={22} fill={n <= val ? 'currentColor' : 'none'} />
         </button>
       ))}
@@ -1166,51 +1116,41 @@ const RatingPanel = memo(({ bookingId, onSubmit, loading, already }) => {
     <div className="space-y-4">
       <div>
         <p className="text-sm font-semibold mb-2">Rate the Doctor</p>
-        {stars(doctorRating, setDocRating)}
+        <Stars val={doctorRating} set={setDocRating} />
         <textarea className="input-field mt-2 text-sm resize-none min-h-[60px]"
           placeholder="Comment about the doctor (optional)…"
           value={docComment} onChange={(e) => setDocComment(e.target.value)} />
       </div>
-
       <div>
         <p className="text-sm font-semibold mb-2">Overall Experience</p>
-        {stars(overallRating, setOvRating)}
+        <Stars val={overallRating} set={setOvRating} />
         <textarea className="input-field mt-2 text-sm resize-none min-h-[60px]"
           placeholder="Overall feedback (optional)…"
           value={ovComment} onChange={(e) => setOvComment(e.target.value)} />
       </div>
-
-      <button
-        className="btn btn-primary w-full gap-2"
+      <button className="btn btn-primary w-full gap-2"
         onClick={() => {
           onSubmit({ doctorRating, overallRating, doctorComment: docComment, overallComment: ovComment });
           setSubmitted(true);
         }}
-        disabled={loading}
-      >
+        disabled={loading}>
         {loading ? <span className="loading loading-xs loading-spinner" /> : <ThumbsUp size={15} />}
         Submit Feedback
       </button>
     </div>
   );
 });
+RatingPanel.displayName = 'RatingPanel';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST-CONSULTATION VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PostConsultView = memo(({
-  consultation, followUp, onRate, rateLoading, router,
-}) => {
+const PostConsultView = memo(({ consultation, followUp, onRate, rateLoading, router }) => {
   const oc = consultation?.onlineConsultation;
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className="w-full max-w-2xl mx-auto space-y-6"
-    >
-      {/* Completed banner */}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-2xl mx-auto space-y-6">
       <div className="flex items-center gap-4 p-6 rounded-2xl bg-success/10 border border-success/30">
         <div className="p-3 rounded-2xl bg-success/20">
           <CheckCircle2 size={28} className="text-success" />
@@ -1223,15 +1163,10 @@ const PostConsultView = memo(({
         </div>
       </div>
 
-      {/* Prescription */}
       {oc?.prescriptionUrl && (
-        <PrescriptionViewer
-          prescriptionUrl={oc.prescriptionUrl}
-          uploadedAt={oc.prescriptionUploadedAt}
-        />
+        <PrescriptionViewer prescriptionUrl={oc.prescriptionUrl} uploadedAt={oc.prescriptionUploadedAt} />
       )}
 
-      {/* Summary */}
       {oc?.consultationSummary && (
         <div className="bg-base-100 border border-base-300 rounded-2xl p-5">
           <p className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-3">Consultation Summary</p>
@@ -1239,7 +1174,6 @@ const PostConsultView = memo(({
         </div>
       )}
 
-      {/* Follow-up instructions */}
       {oc?.followUpInstructions && (
         <div className="bg-info/5 border border-info/20 rounded-2xl p-5">
           <div className="flex items-center gap-2 mb-3">
@@ -1250,7 +1184,6 @@ const PostConsultView = memo(({
         </div>
       )}
 
-      {/* Follow-up eligibility */}
       {followUp?.eligible && (
         <div className="bg-primary/5 border border-primary/20 rounded-2xl p-5 flex items-start gap-4">
           <div className="p-2 rounded-xl bg-primary/10">
@@ -1259,55 +1192,39 @@ const PostConsultView = memo(({
           <div className="flex-1">
             <p className="font-bold text-sm">Follow-up Available</p>
             <p className="text-xs text-base-content/50 mt-0.5">
-              Book a follow-up consultation at ₹{followUp.followUpFee ?? 0} within {followUp.daysLeft} days.
+              Book a follow-up at ₹{followUp.followUpFee ?? 0} within {followUp.daysLeft} days.
             </p>
           </div>
-          <button
-            className="btn btn-primary btn-sm gap-1.5"
-            onClick={() => router.push('/patient/find-doctors')}
-          >
+          <button className="btn btn-primary btn-sm gap-1.5" onClick={() => router.push('/patient/find-doctors')}>
             Book <ArrowRight size={13} />
           </button>
         </div>
       )}
 
-      {/* Timeline */}
       <div className="bg-base-100 border border-base-300 rounded-2xl p-5">
         <p className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">Consultation Timeline</p>
         <ConsultationTimeline consultation={consultation} />
       </div>
 
-      {/* Rating */}
       {!consultation?.isRated && (
         <div className="bg-base-100 border border-base-300 rounded-2xl p-5">
           <p className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">Rate Your Experience</p>
-          <RatingPanel
-            bookingId={consultation?._id}
-            onSubmit={onRate}
-            loading={rateLoading}
-            already={consultation?.isRated}
-          />
+          <RatingPanel bookingId={consultation?._id} onSubmit={onRate} loading={rateLoading} already={consultation?.isRated} />
         </div>
       )}
 
-      {/* Navigation */}
       <div className="flex gap-3">
-        <button
-          className="btn btn-ghost flex-1 gap-2"
-          onClick={() => router.push('/patient/consultations')}
-        >
+        <button className="btn btn-ghost flex-1 gap-2" onClick={() => router.push('/patient/consultations')}>
           View History
         </button>
-        <button
-          className="btn btn-primary flex-1 gap-2"
-          onClick={() => router.push('/patient/find-doctors')}
-        >
+        <button className="btn btn-primary flex-1 gap-2" onClick={() => router.push('/patient/find-doctors')}>
           Book Again <ArrowRight size={15} />
         </button>
       </div>
     </motion.div>
   );
 });
+PostConsultView.displayName = 'PostConsultView';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FLOATING MINIMIZED VIEW
@@ -1315,10 +1232,8 @@ const PostConsultView = memo(({
 
 const FloatingMini = memo(({ onExpand, onLeave, networkQuality }) => (
   <motion.div
-    initial={{ opacity: 0, y: 40 }}
-    animate={{ opacity: 1, y: 0 }}
-    exit={{ opacity: 0, y: 40 }}
-    className="fixed bottom-6 right-6 z-50 bg-base-900 border border-base-600 rounded-2xl shadow-2xl p-3 flex items-center gap-3"
+    initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 40 }}
+    className="fixed bottom-6 right-6 z-50 border border-base-600 rounded-2xl shadow-2xl p-3 flex items-center gap-3"
     style={{ background: 'rgba(15,15,15,0.95)' }}
   >
     <div className="relative w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center">
@@ -1340,6 +1255,7 @@ const FloatingMini = memo(({ onExpand, onLeave, networkQuality }) => (
     </button>
   </motion.div>
 ));
+FloatingMini.displayName = 'FloatingMini';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TIMER WARNING TOAST
@@ -1354,9 +1270,7 @@ const TimerWarning = memo(({ seconds, onDismiss }) => {
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: -20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
+      initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}
       className="fixed top-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 rounded-2xl shadow-lg bg-warning text-warning-content"
     >
       <Timer size={16} />
@@ -1365,6 +1279,7 @@ const TimerWarning = memo(({ seconds, onDismiss }) => {
     </motion.div>
   );
 });
+TimerWarning.displayName = 'TimerWarning';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RECONNECT OVERLAY
@@ -1374,16 +1289,11 @@ const ReconnectOverlay = memo(({ visible, count }) => (
   <AnimatePresence>
     {visible && (
       <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 backdrop-blur-sm"
       >
         <div className="text-center space-y-4">
-          <motion.div
-            animate={{ rotate: 360 }}
-            transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}
-          >
+          <motion.div animate={{ rotate: 360 }} transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}>
             <RefreshCw size={40} className="text-primary mx-auto" />
           </motion.div>
           <p className="text-white font-bold text-lg">Reconnecting…</p>
@@ -1393,44 +1303,43 @@ const ReconnectOverlay = memo(({ visible, count }) => (
     )}
   </AnimatePresence>
 ));
+ReconnectOverlay.displayName = 'ReconnectOverlay';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function OnlineConsultationPage() {
-const params = useParams();
+  const params    = useParams();
   const bookingId = params?.bookingId;
-  const dispatch = useDispatch();
-  const router   = useRouter();
+  const dispatch  = useDispatch();
+  const router    = useRouter();
 
   // ── Redux ──────────────────────────────────────────────────────────────────
-  const joinDetails   = useSelector(selectJoinDetails);
-  const consultation  = useSelector(selectCurrentConsultation);
-  const followUp      = useSelector(selectFollowUpEligibility);
-  const {
-    isFetchingJoin, isFetchingCurrent, isActionLoading,
-  } = useSelector(selectConsultationLoaders);
+  const joinDetails  = useSelector(selectJoinDetails);
+  const consultation = useSelector(selectCurrentConsultation);
+  const followUp     = useSelector(selectFollowUpEligibility);
+  const { isFetchingJoin, isFetchingCurrent, isActionLoading } = useSelector(selectConsultationLoaders);
   const { joinError } = useSelector(selectConsultationErrors);
 
   // ── Phase state ────────────────────────────────────────────────────────────
-  const [phase,       setPhase]       = useState(PHASE.LOADING);
-  const [minimized,   setMinimized]   = useState(false);
-  const [inMeeting,   setInMeeting]   = useState(false);
+  const [phase,     setPhase]     = useState(PHASE.LOADING);
+  const [minimized, setMinimized] = useState(false);
+  const [inMeeting, setInMeeting] = useState(false);
 
   // ── Real-time state ────────────────────────────────────────────────────────
-  const [networkQuality,  setNetworkQuality]  = useState('excellent');
-  const [liveEvents,      setLiveEvents]      = useState([]);
-  const [reconnecting,    setReconnecting]    = useState(false);
-  const [reconnectCount,  setReconnectCount]  = useState(0);
-  const [timerWarn,       setTimerWarn]       = useState(null);
-  const [prescription,    setPrescription]    = useState(null);
-  const [errorMsg,        setErrorMsg]        = useState(null);
+  const [networkQuality, setNetworkQuality] = useState('excellent');
+  const [liveEvents,     setLiveEvents]     = useState([]);
+  const [reconnecting,   setReconnecting]   = useState(false);
+  const [reconnectCount, setReconnectCount] = useState(0);
+  const [timerWarn,      setTimerWarn]      = useState(null);
+  const [prescription,   setPrescription]   = useState(null);
+  const [errorMsg,       setErrorMsg]       = useState(null);
 
   // ── Refs ───────────────────────────────────────────────────────────────────
-  const meetingMounted  = useRef(false);
-  const netLogTimer     = useRef(null);
-  const cleanupRefs     = useRef([]);
+  const meetingMounted = useRef(false);
+  const netLogTimer    = useRef(null);
+  const cleanupRefs    = useRef([]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // BOOTSTRAP
@@ -1442,17 +1351,11 @@ const params = useParams();
 
     try {
       const result = await dispatch(fetchConsultationById(bookingId));
-      if (result.type.endsWith('/rejected')) {
-        throw new Error(result.payload ?? 'Booking not found');
-      }
+      if (result.type.endsWith('/rejected')) throw new Error(result.payload ?? 'Booking not found');
 
       const bk = result.payload;
-
-      // SECURITY: customer can only access own booking — backend enforces this,
-      // but we also check for graceful error handling.
       if (!bk) throw new Error('Consultation not found or access denied.');
 
-      // Check booking validity
       if (['cancelled', 'no_show'].includes(bk.status)) {
         setErrorMsg(`This booking is ${bk.status}. You cannot join this consultation.`);
         setPhase(PHASE.ERROR);
@@ -1466,28 +1369,22 @@ const params = useParams();
       }
 
       if (bk.status === 'completed') {
-        // Show post-consultation view
         await dispatch(checkFollowUpEligibility(bookingId));
         setPrescription(bk.onlineConsultation?.prescriptionUrl ?? null);
         setPhase(PHASE.ENDED);
         return;
       }
 
-      // Check consent
-      const consentKey = `${SESSION_KEYS.CONSENT_DONE}${bookingId}`;
+      const consentKey  = `${SESSION_KEYS.CONSENT_DONE}${bookingId}`;
       const consentDone = bk.onlineConsultation?.isTelemedicineConsentAccepted || sessionLoad(consentKey);
 
-      if (!consentDone) {
-        setPhase(PHASE.CONSENT);
-        return;
-      }
+      if (!consentDone) { setPhase(PHASE.CONSENT); return; }
 
-      // Check session recovery
+      // Session recovery
       const savedBookingId = sessionLoad(SESSION_KEYS.BOOKING_ID);
       const savedMeetingId = sessionLoad(SESSION_KEYS.MEETING_ID);
 
       if (savedBookingId === bookingId && savedMeetingId) {
-        // Attempt recovery — skip device check
         const joinResult = await dispatch(fetchJoinDetails(bookingId));
         if (joinResult.payload) {
           sessionSave(SESSION_KEYS.BOOKING_ID, bookingId);
@@ -1498,7 +1395,6 @@ const params = useParams();
         }
       }
 
-      // Check device prefs (skip if previously passed)
       const devPrefs = lsLoad(SESSION_KEYS.DEVICE_PREFS);
       if (devPrefs?.passed) {
         await dispatch(fetchJoinDetails(bookingId));
@@ -1506,7 +1402,6 @@ const params = useParams();
       } else {
         setPhase(PHASE.DEVICE_CHECK);
       }
-
     } catch (e) {
       setErrorMsg(e.message ?? 'Failed to load consultation.');
       setPhase(PHASE.ERROR);
@@ -1526,6 +1421,8 @@ const params = useParams();
 
   // ─────────────────────────────────────────────────────────────────────────
   // SOCKET SETUP
+  // FIX BUG 2: All socket emit payloads use safeId() — never pass raw booking
+  // objects or DOM nodes to JSON.stringify paths.
   // ─────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -1535,27 +1432,32 @@ const params = useParams();
 
     const addEvent = (ev) => setLiveEvents((prev) => [...prev.slice(-49), ev]);
 
+    // FIX BUG 2: sanitize bookingId to plain string before scheduling dispatch
     const scheduleNetLog = (quality) => {
       clearTimeout(netLogTimer.current);
+      const safeBookingId = safeId(bookingId); // always string
+      if (!safeBookingId) return;
       netLogTimer.current = setTimeout(() => {
-        dispatch(logNetworkQuality({ bookingId, participant: 'patient', quality }));
+        dispatch(logNetworkQuality({ bookingId: safeBookingId, participant: 'patient', quality }));
       }, 5000);
     };
 
     const handlers = [
-      [CONSULTATION_EVENTS.DOCTOR_JOINED, (data) => {
+      [CONSULTATION_EVENTS.DOCTOR_JOINED, () => {
         addEvent({ event: 'doctor_joined', participant: 'doctor', timestamp: new Date() });
         playAlert();
         notifyBrowser('Doctor has joined!', 'Your consultation is ready. Join now.');
       }],
-      [CONSULTATION_EVENTS.STARTED, (data) => {
+      [CONSULTATION_EVENTS.STARTED, () => {
         addEvent({ event: 'consultation_started', participant: 'doctor', timestamp: new Date() });
         if (phase === PHASE.WAITING_ROOM) {
           dispatch(fetchJoinDetails(bookingId));
         }
       }],
       [CONSULTATION_EVENTS.ENDED, (data) => {
-        addEvent({ event: 'consultation_ended', participant: data?.endedBy, timestamp: new Date() });
+        // FIX BUG 2: only extract primitive from data — never serialize full data object
+        const endedBy = typeof data?.endedBy === 'string' ? data.endedBy : 'system';
+        addEvent({ event: 'consultation_ended', participant: endedBy, timestamp: new Date() });
         setInMeeting(false);
         meetingMounted.current = false;
         dispatch(clearJoinDetails());
@@ -1570,14 +1472,17 @@ const params = useParams();
       }],
       [CONSULTATION_EVENTS.PRESCRIPTION_UPLOADED, (data) => {
         addEvent({ event: 'prescription_uploaded', participant: 'doctor', timestamp: new Date() });
-        setPrescription(data?.prescriptionUrl);
+        // FIX BUG 2: only extract URL string — never pass data object to state that hits JSON
+        const url = typeof data?.prescriptionUrl === 'string' ? data.prescriptionUrl : null;
+        if (url) setPrescription(url);
         playAlert();
         notifyBrowser('Prescription Ready!', 'Your doctor has uploaded your prescription.');
       }],
       [CONSULTATION_EVENTS.NETWORK_QUALITY, (data) => {
         if (data?.participant === 'patient') {
-          setNetworkQuality(data.quality ?? 'excellent');
-          scheduleNetLog(data.quality);
+          const q = typeof data.quality === 'string' ? data.quality : 'excellent';
+          setNetworkQuality(q);
+          scheduleNetLog(q);
         }
         if (data?.quality === 'disconnected') {
           setReconnecting(true);
@@ -1615,12 +1520,8 @@ const params = useParams();
   // ─────────────────────────────────────────────────────────────────────────
 
   const handleConsentAccept = useCallback(async () => {
-    const result = await dispatch(acceptTelemedicineConsent({
-      bookingId,
-      ipAddress: null, // server reads req.ip
-    }));
+    const result = await dispatch(acceptTelemedicineConsent({ bookingId, ipAddress: null }));
     if (!result.type.endsWith('/rejected')) {
-      // Save consent locally to avoid re-prompting on refresh
       sessionSave(`${SESSION_KEYS.CONSENT_DONE}${bookingId}`, true);
       await dispatch(fetchJoinDetails(bookingId));
       setPhase(PHASE.DEVICE_CHECK);
@@ -1634,7 +1535,6 @@ const params = useParams();
   }, [bookingId, dispatch, joinDetails]);
 
   const handleJoin = useCallback(async () => {
-    // SECURITY: always re-fetch fresh token from backend. Never reuse stale token.
     const result = await dispatch(fetchJoinDetails(bookingId));
     if (result.type.endsWith('/rejected')) return;
 
@@ -1644,8 +1544,7 @@ const params = useParams();
       return;
     }
 
-    // Prevent duplicate join
-    if (meetingMounted.current) return;
+    if (meetingMounted.current) return; // prevent double-join
 
     sessionSave(SESSION_KEYS.BOOKING_ID, bookingId);
     sessionSave(SESSION_KEYS.MEETING_ID, data.meetingId ?? data.roomId);
@@ -1674,7 +1573,8 @@ const params = useParams();
   }, [bookingId, dispatch]);
 
   const handleRate = useCallback(async (data) => {
-    await dispatch(rateConsultation({ bookingId, ...data }));
+    // FIX BUG 2: only pass plain primitives — bookingId is already a string
+    await dispatch(rateConsultation({ bookingId: safeId(bookingId), ...data }));
   }, [bookingId, dispatch]);
 
   const handleTimerWarn = useCallback((seconds) => {
@@ -1697,28 +1597,19 @@ const params = useParams();
   return (
     <div data-theme="patient" className="min-h-screen bg-base-50">
 
-      {/* Reconnect overlay */}
       <ReconnectOverlay visible={reconnecting} count={reconnectCount} />
 
-      {/* Timer warning */}
       <AnimatePresence>
-        {timerWarn && (
-          <TimerWarning seconds={timerWarn} onDismiss={() => setTimerWarn(null)} />
-        )}
+        {timerWarn && <TimerWarning seconds={timerWarn} onDismiss={() => setTimerWarn(null)} />}
       </AnimatePresence>
 
-      {/* Floating mini — when minimized */}
       <AnimatePresence>
         {minimized && phase === PHASE.IN_CALL && (
-          <FloatingMini
-            onExpand={() => setMinimized(false)}
-            onLeave={handleLeave}
-            networkQuality={networkQuality}
-          />
+          <FloatingMini onExpand={() => setMinimized(false)} onLeave={handleLeave} networkQuality={networkQuality} />
         )}
       </AnimatePresence>
 
-      {/* ── Top nav ── */}
+      {/* Top nav */}
       <div className="sticky top-0 z-30 bg-base-100/95 backdrop-blur-md border-b border-base-300 px-4 sm:px-6 py-3">
         <div className="max-w-4xl mx-auto flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -1732,7 +1623,6 @@ const params = useParams();
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Network indicator (during call) */}
             {phase === PHASE.IN_CALL && (
               <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold ${NETWORK_CFG[networkQuality]?.bg} ${NETWORK_CFG[networkQuality]?.color}`}>
                 <NetworkBars quality={networkQuality} size="sm" />
@@ -1740,21 +1630,19 @@ const params = useParams();
               </div>
             )}
 
-            {/* Phase badge */}
             <span className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold
-              ${phase === PHASE.IN_CALL ? 'bg-success/10 text-success' :
-                phase === PHASE.WAITING_ROOM ? 'bg-warning/10 text-warning' :
-                phase === PHASE.ENDED ? 'bg-info/10 text-info' :
+              ${phase === PHASE.IN_CALL      ? 'bg-success/10 text-success'  :
+                phase === PHASE.WAITING_ROOM ? 'bg-warning/10 text-warning'  :
+                phase === PHASE.ENDED        ? 'bg-info/10 text-info'         :
                 'bg-base-300/60 text-base-content/40'}`}>
-              {phase === PHASE.IN_CALL && <><span className="w-1.5 h-1.5 bg-success rounded-full animate-pulse" />Live</>}
+              {phase === PHASE.IN_CALL      && <><span className="w-1.5 h-1.5 bg-success rounded-full animate-pulse" />Live</>}
               {phase === PHASE.WAITING_ROOM && <><Clock size={10} />Waiting</>}
-              {phase === PHASE.ENDED && <><CheckCircle2 size={10} />Completed</>}
+              {phase === PHASE.ENDED        && <><CheckCircle2 size={10} />Completed</>}
               {phase === PHASE.DEVICE_CHECK && <><Settings size={10} />Setup</>}
-              {phase === PHASE.CONSENT && <><ShieldCheck size={10} />Consent</>}
-              {phase === PHASE.LOADING && <><Loader2 size={10} className="animate-spin" />Loading</>}
+              {phase === PHASE.CONSENT      && <><ShieldCheck size={10} />Consent</>}
+              {phase === PHASE.LOADING      && <><Loader2 size={10} className="animate-spin" />Loading</>}
             </span>
 
-            {/* Minimize (in call) */}
             {phase === PHASE.IN_CALL && !minimized && (
               <button onClick={() => setMinimized(true)} className="btn btn-ghost btn-xs btn-circle" title="Minimize">
                 <Minimize2 size={14} />
@@ -1764,16 +1652,14 @@ const params = useParams();
         </div>
       </div>
 
-      {/* ── Main content ── */}
+      {/* Main content */}
       <div className={`max-w-4xl mx-auto px-4 sm:px-6 py-6 ${minimized ? 'hidden' : ''}`}>
         <AnimatePresence mode="wait">
 
           {/* LOADING */}
           {phase === PHASE.LOADING && (
-            <motion.div key="loading"
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="flex flex-col items-center justify-center min-h-[60vh] gap-4"
-            >
+            <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
               <Loader2 size={36} className="text-primary animate-spin" />
               <p className="text-base-content/50 font-medium">Loading consultation…</p>
             </motion.div>
@@ -1781,10 +1667,8 @@ const params = useParams();
 
           {/* ERROR */}
           {phase === PHASE.ERROR && (
-            <motion.div key="error"
-              initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-              className="flex flex-col items-center justify-center min-h-[60vh] gap-5 text-center max-w-md mx-auto"
-            >
+            <motion.div key="error" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+              className="flex flex-col items-center justify-center min-h-[60vh] gap-5 text-center max-w-md mx-auto">
               <div className="p-4 rounded-2xl bg-error/10">
                 <AlertTriangle size={36} className="text-error" />
               </div>
@@ -1805,37 +1689,24 @@ const params = useParams();
 
           {/* CONSENT */}
           {phase === PHASE.CONSENT && (
-            <motion.div key="consent"
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="flex justify-center py-6"
-            >
-              <ConsentPanel
-                booking={consultation}
-                onAccept={handleConsentAccept}
-                loading={isActionLoading}
-              />
+            <motion.div key="consent" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="flex justify-center py-6">
+              <ConsentPanel booking={consultation} onAccept={handleConsentAccept} loading={isActionLoading} />
             </motion.div>
           )}
 
           {/* DEVICE CHECK */}
           {phase === PHASE.DEVICE_CHECK && (
-            <motion.div key="device"
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="flex justify-center py-6"
-            >
-              <DeviceCheckPanel
-                onReady={handleDeviceReady}
-                onSkip={handleDeviceReady}
-              />
+            <motion.div key="device" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="flex justify-center py-6">
+              <DeviceCheckPanel onReady={handleDeviceReady} onSkip={handleDeviceReady} />
             </motion.div>
           )}
 
           {/* WAITING ROOM */}
           {phase === PHASE.WAITING_ROOM && (
-            <motion.div key="waiting"
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="py-4"
-            >
+            <motion.div key="waiting" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="py-4">
               <WaitingRoom
                 booking={consultation}
                 joinDetails={joinDetails}
@@ -1847,20 +1718,23 @@ const params = useParams();
             </motion.div>
           )}
 
-          {/* IN CALL */}
+          {/* IN CALL
+            CRITICAL FIX:
+            - MeetingProvider key = stable `meeting-${actualMeetingId}` — never remounts
+            - config is plain object (no state deps that change on mic/webcam toggle)
+            - InCallView has single useMeeting call
+            - CallControls has NO useMeeting participants — receives participantCount prop
+          */}
           {phase === PHASE.IN_CALL && !minimized && (
-            <motion.div key="incall"
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="space-y-4"
-            >
-              {/* Video area */}
+            <motion.div key="incall" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="space-y-4">
               {joinDetails?.token && actualMeetingId ? (
                 <MeetingProvider
                   key={`meeting-${actualMeetingId}`}
                   config={{
                     meetingId:     actualMeetingId,
-                    micEnabled:    true,
-                    webcamEnabled: true,
+                    micEnabled:    true,   // always start enabled; toggleMic() handles runtime
+                    webcamEnabled: true,   // always start enabled; toggleWebcam() handles runtime
                     name:          consultation?.patientInfo?.name ?? 'Patient',
                   }}
                   token={joinDetails.token}
@@ -1892,12 +1766,9 @@ const params = useParams();
                 </div>
               )}
 
-              {/* Prescription notification (real-time) */}
+              {/* Real-time prescription */}
               {prescription && (
-                <PrescriptionViewer
-                  prescriptionUrl={prescription}
-                  uploadedAt={new Date()}
-                />
+                <PrescriptionViewer prescriptionUrl={prescription} uploadedAt={new Date()} />
               )}
 
               {/* Document upload during call */}
@@ -1906,15 +1777,18 @@ const params = useParams();
                 <DocumentUploader
                   bookingId={bookingId}
                   onUploaded={(url, name) => {
-                    /* Emit to backend or socket */
-                    socketService.emit?.('consultation:patient_document', { bookingId, url, name });
+                    // FIX BUG 2: emit only primitive fields — no DOM nodes or booking objects
+                    socketService.emit?.('consultation:patient_document', {
+                      bookingId: safeId(bookingId),
+                      url,
+                      name,
+                    });
                   }}
                 />
               </div>
 
-              {/* Network + timeline sidebar row */}
+              {/* Network + timeline */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Network quality card */}
                 <div className="bg-base-100 border border-base-300 rounded-2xl p-4">
                   <p className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-3">Connection</p>
                   <div className={`flex items-center gap-3 p-3 rounded-xl ${NETWORK_CFG[networkQuality]?.bg}`}>
@@ -1930,7 +1804,6 @@ const params = useParams();
                   </div>
                 </div>
 
-                {/* Timeline */}
                 <div className="bg-base-100 border border-base-300 rounded-2xl p-4">
                   <p className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-3">Timeline</p>
                   <ConsultationTimeline consultation={consultation} liveEvents={liveEvents} />
@@ -1941,10 +1814,8 @@ const params = useParams();
 
           {/* POST CONSULTATION */}
           {phase === PHASE.ENDED && (
-            <motion.div key="ended"
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="py-4"
-            >
+            <motion.div key="ended" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="py-4">
               <PostConsultView
                 consultation={consultation}
                 followUp={followUp}

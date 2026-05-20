@@ -821,25 +821,25 @@ const MeetingControls = memo(({
   onLeave, onEndConsultation, allowedDuration,
   startedAt, networkQuality, isFullscreen, onToggleFullscreen,
   isScreenSharing, onToggleScreenShare,
+  participantCount,   
 }) => {
   const {
     localMicOn, localWebcamOn,
-    toggleMic, toggleWebcam, leave, participants,
+    toggleMic, toggleWebcam, leave,
+    // NO participants here
   } = useMeeting();
 
-  // FIX: deduplicate participant count
-  const participantCount = useMemo(() => {
-    if (!participants) return 0;
-    return new Set([...participants.keys()]).size;
-  }, [participants]);
+
+  
 
   return (
     <div className="flex items-center justify-between bg-base-200 border-t border-base-300 px-6 py-3 flex-wrap gap-3">
       <div className="flex items-center gap-4 text-sm text-base-content/50">
         <span className="flex items-center gap-1.5">
-          <Users size={14} />
-          {participantCount} joined
-        </span>
+  <Users size={14} />
+  {participantCount} joined
+</span>
+
         {networkQuality && (
           <span className="flex items-center gap-1.5">
             <NetworkQualityBars quality={networkQuality} />
@@ -926,7 +926,9 @@ const MeetingContent = memo(({
   const [isFullscreen,    setIsFullscreen]    = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
 
-  const { participants, localParticipant, startScreenShare, stopScreenShare } = useMeeting({
+const meetingRef = useRef(null);
+const { participants, localParticipant, ...meetingActions } = useMeeting({
+
     onMeetingLeft: onLeave,
     // FIX: handle screen share end events
     onPresenterChanged: (presenterId) => {
@@ -950,19 +952,25 @@ const MeetingContent = memo(({
   const toggleFullscreen = useCallback(() => setIsFullscreen((p) => !p), []);
 
   const handleToggleScreenShare = useCallback(async () => {
-    try {
-      if (isScreenSharing) {
-        await stopScreenShare();
-        setIsScreenSharing(false);
-      } else {
-        await startScreenShare();
-        setIsScreenSharing(true);
+  try {
+    if (isScreenSharing) {
+      if (typeof meetingActions.stopScreenShare === 'function') {
+        await meetingActions.stopScreenShare();
       }
-    } catch (err) {
-      console.error('[ScreenShare]', err.message);
       setIsScreenSharing(false);
+    } else {
+      if (typeof meetingActions.startScreenShare === 'function') {
+        await meetingActions.startScreenShare();
+        setIsScreenSharing(true);
+      } else {
+        console.warn('[ScreenShare] startScreenShare not available');
+      }
     }
-  }, [isScreenSharing, startScreenShare, stopScreenShare]);
+  } catch (err) {
+    console.error('[ScreenShare]', err.message);
+    setIsScreenSharing(false);
+  }
+}, [isScreenSharing, meetingActions]);
 
   const gridCols = uniqueRemoteParticipants.length > 0 ? 'repeat(2, 1fr)' : '1fr';
 
@@ -1013,17 +1021,19 @@ const MeetingContent = memo(({
         )}
       </div>
 
-      <MeetingControls
-        onLeave={onLeave}
-        onEndConsultation={onEndConsultation}
-        allowedDuration={allowedDuration}
-        startedAt={startedAt}
-        networkQuality={networkQuality}
-        isFullscreen={isFullscreen}
-        onToggleFullscreen={toggleFullscreen}
-        isScreenSharing={isScreenSharing}
-        onToggleScreenShare={handleToggleScreenShare}
-      />
+     <MeetingControls
+  onLeave={onLeave}
+  onEndConsultation={onEndConsultation}
+  allowedDuration={allowedDuration}
+  startedAt={startedAt}
+  networkQuality={networkQuality}
+  isFullscreen={isFullscreen}
+  onToggleFullscreen={toggleFullscreen}
+  isScreenSharing={isScreenSharing}
+  onToggleScreenShare={handleToggleScreenShare}
+  participantCount={uniqueRemoteParticipants.length + 1}  // +1 for local
+/>
+
     </div>
   );
 });
@@ -1499,11 +1509,15 @@ export default function AppointmentsManagement() {
     const addEvent = (ev) => setLiveEvents((prev) => [...prev.slice(-49), ev]);
 
     const scheduleNetworkLog = (bookingId, quality) => {
-      clearTimeout(networkLogTimer.current);
-      networkLogTimer.current = setTimeout(() => {
-        dispatch(logNetworkQuality({ bookingId, participant: 'doctor', quality }));
-      }, 5000);
-    };
+  clearTimeout(networkLogTimer.current);
+  // Extract only primitive string — never pass full booking object
+  const safeId = typeof bookingId === 'string' ? bookingId : bookingId?._id?.toString?.() ?? null;
+  if (!safeId) return;
+  networkLogTimer.current = setTimeout(() => {
+    dispatch(logNetworkQuality({ bookingId: safeId, participant: 'doctor', quality }));
+  }, 5000);
+};
+
 
     // FIX: all handlers defined once, no re-registration on videoBooking change
     const handlers = [
