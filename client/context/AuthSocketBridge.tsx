@@ -5,13 +5,15 @@ import { useSelector } from 'react-redux';
 import { selectToken } from '@/store/slices/userSlice';
 import SocketProvider from '@/context/SocketProvider';
 
-interface AuthSocketBridgeProps {
-  children: React.ReactNode;
-  token: string | null; // JWT token or null if not authenticated
-  showStatusBadge?: boolean; 
+interface SocketProviderProps {
+  token: any;
+  children: any;
+  showStatusBadge?: boolean;
+  onConnect?: () => void;    // Add the '?' here
+  onDisconnect?: () => void; // Add the '?' here
 }
 
-export default function AuthSocketBridge({ children, showStatusBadge = true }: AuthSocketBridgeProps) {
+export default function AuthSocketBridge({ children, showStatusBadge = true }: { children: React.ReactNode; showStatusBadge?: boolean }) {
   // selectToken returns the JWT string or null
   const rawToken = useSelector(selectToken);
 
@@ -22,9 +24,13 @@ export default function AuthSocketBridge({ children, showStatusBadge = true }: A
       : null;
   }, [rawToken]);
 
-  return (
-  
-    <SocketProvider token={token} showStatusBadge={showStatusBadge}>
+ return (
+    <SocketProvider 
+      token={token} 
+      showStatusBadge={showStatusBadge}
+      onConnect={() => console.log('Connected')}       // Added required prop
+      onDisconnect={() => console.log('Disconnected')} // Added required prop
+    >
       {children}
     </SocketProvider>
   );

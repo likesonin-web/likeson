@@ -37,15 +37,11 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      // Added font variables here so they map seamlessly into your CSS/Tailwind runtime
       className={`${poppins.variable} ${montserrat.variable} scroll-smooth`}
       suppressHydrationWarning
     >
-      {/* 
-        Ensured both font families are declared on the body variable list 
-        to guarantee the preloaded resources are actively consumed on boot.
-      */}
-      <body className="font-poppins antialiased var(--font-montserrat)" suppressHydrationWarning>
+      {/* Removed the invalid var(--font-montserrat) from the className string */}
+      <body className="font-poppins antialiased" suppressHydrationWarning>
         <StoreProvider>
           <ThemeProvider attribute="class" defaultTheme="light">
             <AuthSocketBridge>
