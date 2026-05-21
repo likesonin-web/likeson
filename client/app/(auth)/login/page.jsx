@@ -95,7 +95,7 @@ const ErrorBanner = memo(function ErrorBanner({ message }) {
           role="alert"
           aria-live="assertive"
         >
-          <div className="p-4 bg-error/10 border border-error/20 rounded-2xl flex items-center gap-3 text-error text-[11px] font-bold">
+          <div className="p-4 bg-error/10 border border-error/20 rounded-2xl flex items-center gap-3 text-error text-[11px] font-poppins font-bold">
             <ShieldAlert size={18} aria-hidden="true" />
             <span>{message}</span>
           </div>
@@ -122,7 +122,7 @@ const AuthTabBar = memo(function AuthTabBar({ authMode, onSelect }) {
           role="tab"
           aria-selected={authMode === tab.id}
           onClick={() => onSelect(tab.id)}
-          className={`flex-1 py-3 text-xs font-black uppercase tracking-widest rounded-xl transition-all duration-200 ${
+          className={`flex-1 py-3 text-xs font-poppins font-black uppercase tracking-widest rounded-xl transition-all duration-200 ${
             authMode === tab.id
               ? 'bg-base-100 text-primary shadow-lg'
               : 'text-base-content/40 hover:text-base-content/70'
@@ -141,7 +141,7 @@ const GoogleLoginButton = memo(function GoogleLoginButton({ onClick }) {
       type="button"
       onClick={onClick}
       aria-label="Sign in with Google"
-      className="w-full h-14 border-2 border-base-300 rounded-2xl flex items-center justify-center gap-4 text-xs font-black uppercase tracking-widest hover:bg-base-200 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      className="w-full  btn btn-ghost py-3  border-2 border-base-300 rounded-md flex items-center justify-center gap-4 text-xs font-poppins font-black uppercase tracking-widest  transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
@@ -187,7 +187,7 @@ const PasswordForm = memo(function PasswordForm({
       <div className="space-y-1">
         <label
           htmlFor="identifier-pw"
-          className="block text-[10px] font-black uppercase tracking-widest text-base-content/40 ml-1"
+          className="block text-[10px] font-poppins font-black uppercase tracking-widest text-base-content/40 ml-1"
         >
           Email, Phone, or Name
         </label>
@@ -207,7 +207,7 @@ const PasswordForm = memo(function PasswordForm({
             onChange={onChange}
             placeholder={placeholder}
             aria-label="Email, phone number, or full name"
-            className="input-field w-full pl-12 h-14 font-bold border-2"
+            className="input-field input w-full pl-12 h-12 font-poppins font-bold border-2"
           />
         </div>
       </div>
@@ -217,14 +217,14 @@ const PasswordForm = memo(function PasswordForm({
         <div className="flex justify-between items-center ml-1">
           <label
             htmlFor="password-pw"
-            className="text-[10px] font-black uppercase tracking-widest text-base-content/40"
+            className="text-[10px] font-poppins font-black uppercase tracking-widest text-base-content/40"
           >
             Password
           </label>
           <button
             type="button"
             onClick={onForgot}
-            className="text-[10px] font-black text-accent hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent rounded"
+            className="text-[10px] font-poppins font-black text-accent hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent rounded"
           >
             Forgot password?
           </button>
@@ -245,7 +245,7 @@ const PasswordForm = memo(function PasswordForm({
             onChange={onChange}
             placeholder="••••••••"
             aria-label="Password"
-            className="input-field w-full pl-12 pr-12 h-14 font-bold border-2"
+            className="input-field w-full pl-12 pr-12 h-12 font-poppins font-bold border-2"
           />
           <button
             type="button"
@@ -262,7 +262,7 @@ const PasswordForm = memo(function PasswordForm({
         type="submit"
         disabled={loading}
         aria-busy={loading}
-        className="btn-primary-cta w-full h-16 rounded-2xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-3 disabled:opacity-60 disabled:cursor-not-allowed transition-opacity"
+        className="btn-primary-cta btn w-full   rounded-md text-xs font-poppins font-black uppercase tracking-widest flex items-center justify-center gap-3 disabled:opacity-60 disabled:cursor-not-allowed transition-opacity"
       >
         {loading
           ? <Loader2 className="animate-spin" size={20} aria-label="Signing in…" />
@@ -307,7 +307,7 @@ const OtpForm = memo(function OtpForm({
       <div className="space-y-1">
         <label
           htmlFor="identifier-otp"
-          className="block text-[10px] font-black uppercase tracking-widest text-base-content/40 ml-1"
+          className="block text-[10px] font-poppins font-black uppercase tracking-widest text-base-content/40 ml-1"
         >
           Email, Phone, or Name
         </label>
@@ -328,7 +328,7 @@ const OtpForm = memo(function OtpForm({
               onChange={onChange}
               placeholder={placeholder}
               aria-label="Email, phone number, or full name"
-              className="input-field w-full pl-12 h-14 font-bold"
+              className="input-field w-full pl-12 h-12 font-poppins font-bold"
             />
           </div>
           <button
@@ -336,7 +336,7 @@ const OtpForm = memo(function OtpForm({
             onClick={onSendOtp}
             disabled={loadingSend}
             aria-busy={loadingSend}
-            className="px-5 rounded-2xl border-2 border-primary text-[10px] font-black uppercase tracking-widest text-primary hover:bg-primary hover:text-white transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="px-5 rounded-2xl border-2 border-primary text-[10px] font-poppins font-black uppercase tracking-widest text-primary hover:bg-primary hover:text-white transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {loadingSend ? <Loader2 className="animate-spin" size={14} /> : 'Send Code'}
           </button>
@@ -347,7 +347,7 @@ const OtpForm = memo(function OtpForm({
       <div className="space-y-1">
         <label
           htmlFor="otp-code"
-          className="block text-[10px] font-black uppercase tracking-widest text-base-content/40 ml-1"
+          className="block text-[10px] font-poppins font-black uppercase tracking-widest text-base-content/40 ml-1"
         >
           6-Digit Code
         </label>
@@ -370,7 +370,7 @@ const OtpForm = memo(function OtpForm({
             onChange={onChange}
             placeholder="0 0 0 0 0 0"
             aria-label="One-time passcode"
-            className="input-field w-full pl-12 h-14 text-center text-2xl font-black tracking-[0.5em]"
+            className="input-field w-full pl-12 h-12 text-center text-2xl font-poppins font-black tracking-[0.5em]"
           />
         </div>
       </div>
@@ -379,7 +379,7 @@ const OtpForm = memo(function OtpForm({
         type="submit"
         disabled={loadingVerify}
         aria-busy={loadingVerify}
-        className="btn-primary-cta w-full h-16 rounded-2xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-3 disabled:opacity-60 disabled:cursor-not-allowed"
+        className="btn-primary-cta w-full h-16 rounded-2xl text-xs font-poppins font-black uppercase tracking-widest flex items-center justify-center gap-3 disabled:opacity-60 disabled:cursor-not-allowed"
       >
         {loadingVerify
           ? <Loader2 className="animate-spin" size={20} aria-label="Verifying…" />
@@ -467,17 +467,17 @@ const ForgotPasswordFlow = memo(function ForgotPasswordFlow({
       <button
         type="button"
         onClick={onBack}
-        className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-base-content/40 hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary rounded"
+        className="flex items-center gap-2 text-[10px] font-poppins font-black uppercase tracking-widest text-base-content/40 hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary rounded"
         aria-label="Return to sign in"
       >
         <ArrowLeft size={14} aria-hidden="true" /> Back to Sign In
       </button>
 
       <div>
-        <h3 className="text-xl font-black tracking-tight text-base-content">
+        <h3 className="text-xl font-poppins font-black tracking-tight text-base-content">
           {step === 1 ? 'Reset Your Password' : 'Create New Password'}
         </h3>
-        <p className="text-xs text-base-content/50 mt-1 font-medium">
+        <p className="text-xs text-base-content/50 mt-1 font-poppins font-medium">
           {step === 1
             ? "Enter your email, phone, or name. We'll send a reset code via email, SMS & WhatsApp."
             : 'Enter the code you received and your new password.'}
@@ -502,14 +502,14 @@ const ForgotPasswordFlow = memo(function ForgotPasswordFlow({
               onChange={onChange}
               placeholder={placeholder || 'Email, phone, or name'}
               aria-label="Email, phone number, or full name"
-              className="input-field w-full pl-12 h-14 font-bold"
+              className="input-field w-full pl-12 h-12 font-poppins font-bold"
             />
           </div>
           <button
             type="submit"
             disabled={loadingForgot}
             aria-busy={loadingForgot}
-            className="w-full h-16 rounded-2xl bg-accent text-white font-black uppercase tracking-widest text-xs flex items-center justify-center gap-3 disabled:opacity-60 hover:opacity-90 transition-opacity"
+            className="w-full h-16 rounded-2xl bg-accent text-white font-poppins font-black uppercase tracking-widest text-xs flex items-center justify-center gap-3 disabled:opacity-60 hover:opacity-90 transition-opacity"
           >
             {loadingForgot
               ? <Loader2 className="animate-spin" size={20} />
@@ -521,7 +521,7 @@ const ForgotPasswordFlow = memo(function ForgotPasswordFlow({
       {/* ── Step 2 ── */}
       {step === 2 && (
         <form onSubmit={handleConfirmReset} className="space-y-5" noValidate>
-          <div className="p-4 bg-success/10 border border-success/20 rounded-2xl flex items-center gap-3 text-[11px] font-bold text-success">
+          <div className="p-4 bg-success/10 border border-success/20 rounded-2xl flex items-center gap-3 text-[11px] font-poppins font-bold text-success">
             <CheckCircle2 size={18} aria-hidden="true" />
             Reset code sent via email, SMS &amp; WhatsApp
           </div>
@@ -529,7 +529,7 @@ const ForgotPasswordFlow = memo(function ForgotPasswordFlow({
           <div className="space-y-1">
             <label
               htmlFor="reset-otp"
-              className="block text-[10px] font-black uppercase tracking-widest text-base-content/40 ml-1"
+              className="block text-[10px] font-poppins font-black uppercase tracking-widest text-base-content/40 ml-1"
             >
               Reset Code (6 digits)
             </label>
@@ -546,14 +546,14 @@ const ForgotPasswordFlow = memo(function ForgotPasswordFlow({
               onChange={onChange}
               placeholder="0 0 0 0 0 0"
               aria-label="Password reset code"
-              className="input-field w-full h-14 text-center tracking-[0.5em] font-black text-xl"
+              className="input-field w-full h-12 text-center tracking-[0.5em] font-poppins font-black text-xl"
             />
           </div>
 
           <div className="space-y-1">
             <label
               htmlFor="new-password"
-              className="block text-[10px] font-black uppercase tracking-widest text-base-content/40 ml-1"
+              className="block text-[10px] font-poppins font-black uppercase tracking-widest text-base-content/40 ml-1"
             >
               New Password
             </label>
@@ -573,7 +573,7 @@ const ForgotPasswordFlow = memo(function ForgotPasswordFlow({
                 onChange={onChange}
                 placeholder="Minimum 8 characters"
                 aria-label="New password"
-                className="input-field w-full pl-12 pr-12 h-14 font-bold"
+                className="input-field w-full pl-12 pr-12 h-12 font-poppins font-bold"
               />
               <button
                 type="button"
@@ -590,7 +590,7 @@ const ForgotPasswordFlow = memo(function ForgotPasswordFlow({
             type="submit"
             disabled={loadingReset}
             aria-busy={loadingReset}
-            className="btn-primary-cta w-full h-16 rounded-2xl font-black uppercase tracking-widest text-xs flex items-center justify-center gap-3 disabled:opacity-60"
+            className="btn-primary-cta w-full h-16 rounded-2xl font-poppins font-black uppercase tracking-widest text-xs flex items-center justify-center gap-3 disabled:opacity-60"
           >
             {loadingReset
               ? <Loader2 className="animate-spin" size={20} />
@@ -717,14 +717,14 @@ const handleGoogleLogin = useCallback(() => {
 
   return (
     <main
-      className="min-h-screen bg-base-200 flex items-center justify-center p-4 sm:p-10 selection:bg-primary selection:text-white"
+      className="min-h-screen bg-base-200 flex items-center font-poppins  justify-center p-4   selection:bg-primary selection:text-white"
       aria-label="Sign in page"
     >
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, ease: 'easeOut' }}
-        className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-2 bg-base-100 rounded-[2.5rem] overflow-hidden shadow border border-base-300 min-h-[700px]"
+        className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-2 bg-base-100 rounded-md overflow-hidden shadow border border-base-300 min-h-[700px]"
       >
         {/* ── LEFT: BRAND PANEL ─────────────────────────────────────────── */}
         <aside className="hidden lg:block relative overflow-hidden group" aria-hidden="true">
@@ -742,22 +742,22 @@ const handleGoogleLogin = useCallback(() => {
               <div className="inline-flex p-3 bg-white/20 backdrop-blur-md rounded-2xl mb-6">
                 <Heart className="w-8 h-8 fill-white" />
               </div>
-              <h1 className="text-5xl font-black tracking-tighter leading-none mb-4">
+              <h1 className="text-5xl font-poppins font-black tracking-tighter leading-none mb-4">
                 Likeson <br /> Healthcare
               </h1>
-              <p className="text-white/80 font-medium max-w-xs text-lg">
+              <p className="text-white/80 font-poppins font-medium max-w-xs text-md">
                 Trusted partner for medical transport, home care, and clinical support.
               </p>
             </div>
             <div className="space-y-4">
               <div className="flex items-center gap-3">
                 <div className="w-12 h-1 bg-white rounded-full" />
-                <p className="text-[10px] font-black uppercase tracking-[0.3em] opacity-60">
+                <p className="text-[10px] font-poppins font-black uppercase tracking-[0.3em] opacity-60">
                   System Operational
                 </p>
               </div>
               <blockquote className="bg-white/10 backdrop-blur-md p-6 rounded-3xl border border-white/10">
-                <p className="text-sm font-bold italic">
+                <p className="text-sm font-poppins font-bold italic">
                   &ldquo;Empowering lives through accessible and rapid medical response systems.&rdquo;
                 </p>
               </blockquote>
@@ -769,8 +769,8 @@ const handleGoogleLogin = useCallback(() => {
         <section className="p-8 sm:p-16 flex flex-col justify-center bg-base-100">
           <header className="mb-10">
             
-            <h2 className="text-4xl font-black text-base-content tracking-tighter">Sign In</h2>
-            <p className="text-base-content/50 font-medium mt-1">
+            <h2 className="text-4xl font-poppins font-black font-poppins font-poppins text-base-content tracking-tighter">Sign In</h2>
+            <p className="text-base-content/50 font-poppins font-poppins   text-sm font-medium mt-2">
               Use email, phone number, or your full name
             </p>
           </header>
@@ -825,7 +825,7 @@ const handleGoogleLogin = useCallback(() => {
             <div className="mt-8 space-y-6">
               <div className="relative flex items-center" aria-hidden="true">
                 <div className="flex-grow border-t border-base-300" />
-                <span className="flex-shrink mx-4 text-[8px] font-black uppercase tracking-[0.4em] text-base-content/20">
+                <span className="flex-shrink mx-4 text-[8px] font-poppins font-black uppercase tracking-[0.4em] text-base-content/20">
                   or continue with
                 </span>
                 <div className="flex-grow border-t border-base-300" />
@@ -833,11 +833,11 @@ const handleGoogleLogin = useCallback(() => {
 
               <GoogleLoginButton onClick={handleGoogleLogin} />
 
-              <p className="text-center text-xs font-medium text-base-content/40 pt-2">
+              <p className="text-center text-xs font-poppins font-medium text-base-content/40 pt-2">
                 Don&apos;t have an account?{' '}
                 <Link
                   href="/signup"
-                  className="text-primary font-black hover:underline ml-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary rounded"
+                  className="text-primary font-poppins font-black hover:underline ml-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary rounded"
                 >
                   Create Account
                 </Link>

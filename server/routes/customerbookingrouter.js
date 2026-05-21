@@ -38,14 +38,14 @@ import {
   // Subscription usage
   incrementSubscriptionUsage,
   queueSubscriptionUsage,
-  flushAndRecord,                     // FIX D: replaces raw flushSubscriptionUsage calls
-  recoverSubscriptionUsageOnCancel,   // FIX E: cancel recovery
+  flushAndRecord,
+  recoverSubscriptionUsageOnCancel,
 
   // Care assistant
   checkSubscriptionCareAssistant,
   resolveCareAssistantFee,
 
-  // Diagnostics helper (FIX C)
+  // Diagnostics helper
   checkSubscriptionDiagnostics,
 
   // Fare
@@ -71,12 +71,308 @@ import {
 
   // Canonical route
   calculateCanonicalRoute,
-SubscriptionPlan,
-  // Email
+  SubscriptionPlan,
+
+  // Email (existing helper kept for backward-compat)
   sendBookingConfirmationEmail,
 } from './bookingRouterShared.js';
 
 import PlatformPricingConfig from '../models/PlatformPricingConfig.js';
+
+// ✉️ EMAIL — sendEmail util + all templates
+import sendEmail from '../utils/sendEmail.js';
+import {
+  otpTemplate,
+  welcomeTemplate,
+  transactionalTemplate,
+  buildOrderEmailHtml,
+  buildStatusUpdateEmail,
+  buildDeliveryOtpEmail,
+  buildRefundEmail,
+  buildInvoiceHtml,
+} from '../utils/emailTemplates.js';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ✉️ HELPER: resolve recipient email(s) for a booking
+//   Returns { customerEmail, doctorEmail, hospitalEmail }
+//   Each is null when not available — callers guard before sending.
+// ─────────────────────────────────────────────────────────────────────────────
+import User from '../models/User.js';
+
+const resolveBookingEmails = async (booking) => {
+  try {
+    const [customerDoc, doctorDoc, hospitalDoc] = await Promise.all([
+      booking.customer
+        ? User.findById(booking.customer).select('email name').lean()
+        : null,
+      booking.doctor
+        ? DoctorProfile.findById(booking.doctor)
+            .populate('user', 'email name')
+            .select('user')
+            .lean()
+        : null,
+      booking.hospital
+        ? Hospital.findById(booking.hospital).select('contact name').lean()
+        : null,
+    ]);
+
+    return {
+      customerEmail:  customerDoc?.email      ?? null,
+      customerName:   customerDoc?.name       ?? 'Valued Customer',
+      doctorEmail:    doctorDoc?.user?.email  ?? null,
+      doctorName:     doctorDoc?.user?.name   ?? 'Doctor',
+      hospitalEmail:  hospitalDoc?.contact?.email ?? null,
+      hospitalName:   hospitalDoc?.name       ?? 'Hospital',
+    };
+  } catch (e) {
+    console.error('[resolveBookingEmails]', e.message);
+    return { customerEmail: null, doctorEmail: null, hospitalEmail: null };
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ✉️ HELPER: send booking-created email to customer + doctor + hospital
+// ─────────────────────────────────────────────────────────────────────────────
+const sendBookingCreatedEmails = async ({ booking, orderItems = [], billing, storeName, actionLink }) => {
+  try {
+    const { customerEmail, customerName, doctorEmail, doctorName, hospitalEmail, hospitalName } =
+      await resolveBookingEmails(booking);
+
+    const sharedPayload = {
+      userName:    customerName,
+      order:       { orderId: booking.bookingCode },
+      orderItems,
+      billing,
+      storeName,
+      actionLink:  actionLink || `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
+      statusLabel: 'Booking Confirmed!',
+      statusIcon:  '✅',
+      statusColor: '#15803d',
+      statusBg:    '#f0fdf4',
+      statusBorder:'#bbf7d0',
+      headerNote:  `Booking #${booking.bookingCode} confirmed. Scheduled: ${new Date(booking.scheduledAt).toLocaleString('en-IN')}`,
+    };
+
+    // Customer
+    if (customerEmail) {
+      sendEmail({
+        email:   customerEmail,
+        subject: `Booking Confirmed — #${booking.bookingCode} | Likeson Healthcare`,
+        html:    buildOrderEmailHtml(sharedPayload),
+      }).catch(e => console.error('[email] customer booking-created:', e.message));
+    }
+
+    // Doctor
+    if (doctorEmail) {
+      sendEmail({
+        email:   doctorEmail,
+        subject: `New Appointment — #${booking.bookingCode} | Likeson Healthcare`,
+        html:    transactionalTemplate({
+          header: 'NEW APPOINTMENT',
+          title:  `New booking from ${customerName}`,
+          body:   `Booking <strong>#${booking.bookingCode}</strong> scheduled for <strong>${new Date(booking.scheduledAt).toLocaleString('en-IN')}</strong>. Patient: ${booking.patientInfo?.name ?? customerName}.`,
+          buttonText: 'View Appointment',
+          buttonLink: `${process.env.FRONTEND_URL}/doctor/bookings/${booking._id}`,
+        }),
+      }).catch(e => console.error('[email] doctor booking-created:', e.message));
+    }
+
+    // Hospital
+    if (hospitalEmail) {
+      sendEmail({
+        email:   hospitalEmail,
+        subject: `New Patient Booking — #${booking.bookingCode} | Likeson Healthcare`,
+        html:    transactionalTemplate({
+          header: 'NEW PATIENT BOOKING',
+          title:  `Booking #${booking.bookingCode} received`,
+          body:   `A new booking has been placed by <strong>${customerName}</strong> scheduled for <strong>${new Date(booking.scheduledAt).toLocaleString('en-IN')}</strong>. Doctor: ${doctorName}.`,
+          buttonText: 'View Booking',
+          buttonLink: `${process.env.FRONTEND_URL}/hospital/bookings/${booking._id}`,
+        }),
+      }).catch(e => console.error('[email] hospital booking-created:', e.message));
+    }
+  } catch (e) {
+    console.error('[sendBookingCreatedEmails]', e.message);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ✉️ HELPER: send payment confirmed email
+// ─────────────────────────────────────────────────────────────────────────────
+const sendPaymentConfirmedEmails = async ({ booking, paymentMethod = 'Razorpay' }) => {
+  try {
+    const { customerEmail, customerName, doctorEmail, hospitalEmail, hospitalName } =
+      await resolveBookingEmails(booking);
+
+    const body = `
+      Payment of <strong>₹${booking.fareBreakdown?.totalAmount?.toFixed(2) ?? '0.00'}</strong>
+      received via <strong>${paymentMethod}</strong> for booking
+      <strong>#${booking.bookingCode}</strong>.
+      Your booking is confirmed and all details remain unchanged.
+    `;
+
+    if (customerEmail) {
+      sendEmail({
+        email:   customerEmail,
+        subject: `Payment Confirmed — #${booking.bookingCode} | Likeson Healthcare`,
+        html:    transactionalTemplate({
+          header: 'PAYMENT CONFIRMED',
+          title:  'Your payment was received!',
+          body,
+          buttonText: 'View Booking',
+          buttonLink: `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
+        }),
+      }).catch(e => console.error('[email] customer payment-confirmed:', e.message));
+    }
+
+    if (hospitalEmail) {
+      sendEmail({
+        email:   hospitalEmail,
+        subject: `Payment Received — #${booking.bookingCode} | Likeson Healthcare`,
+        html:    transactionalTemplate({
+          header: 'PAYMENT RECEIVED',
+          title:  `Payment for Booking #${booking.bookingCode}`,
+          body,
+          buttonText: 'View Booking',
+          buttonLink: `${process.env.FRONTEND_URL}/hospital/bookings/${booking._id}`,
+        }),
+      }).catch(e => console.error('[email] hospital payment-confirmed:', e.message));
+    }
+  } catch (e) {
+    console.error('[sendPaymentConfirmedEmails]', e.message);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ✉️ HELPER: send status update email
+// ─────────────────────────────────────────────────────────────────────────────
+const sendStatusUpdateEmails = async ({ booking, newStatus, orderItems = [], billing, storeName }) => {
+  try {
+    const { customerEmail, customerName, doctorEmail, hospitalEmail, hospitalName } =
+      await resolveBookingEmails(booking);
+
+    const html = buildStatusUpdateEmail({
+      userName:   customerName,
+      order:      { orderId: booking.bookingCode },
+      orderItems,
+      billing,
+      storeName,
+      actionLink: `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
+      newStatus,
+    });
+
+    if (customerEmail) {
+      sendEmail({
+        email:   customerEmail,
+        subject: `Booking Update — ${newStatus} | #${booking.bookingCode} | Likeson Healthcare`,
+        html,
+      }).catch(e => console.error('[email] customer status-update:', e.message));
+    }
+
+    // Notify doctor on key statuses
+    if (doctorEmail && ['Confirmed', 'Cancelled'].includes(newStatus)) {
+      sendEmail({
+        email:   doctorEmail,
+        subject: `Booking ${newStatus} — #${booking.bookingCode} | Likeson Healthcare`,
+        html:    transactionalTemplate({
+          header: `BOOKING ${newStatus.toUpperCase()}`,
+          title:  `Booking #${booking.bookingCode} is now ${newStatus}`,
+          body:   `Status changed to <strong>${newStatus}</strong>. Patient: ${booking.patientInfo?.name ?? customerName}.`,
+          buttonText: 'View Details',
+          buttonLink: `${process.env.FRONTEND_URL}/doctor/bookings/${booking._id}`,
+        }),
+      }).catch(e => console.error('[email] doctor status-update:', e.message));
+    }
+
+    // Notify hospital on key statuses
+    if (hospitalEmail && ['Confirmed', 'Cancelled', 'Delivered'].includes(newStatus)) {
+      sendEmail({
+        email:   hospitalEmail,
+        subject: `Booking ${newStatus} — #${booking.bookingCode} | Likeson Healthcare`,
+        html:    transactionalTemplate({
+          header: `BOOKING ${newStatus.toUpperCase()}`,
+          title:  `Booking #${booking.bookingCode} is now ${newStatus}`,
+          body:   `Status updated to <strong>${newStatus}</strong> for booking <strong>#${booking.bookingCode}</strong>.`,
+          buttonText: 'View Details',
+          buttonLink: `${process.env.FRONTEND_URL}/hospital/bookings/${booking._id}`,
+        }),
+      }).catch(e => console.error('[email] hospital status-update:', e.message));
+    }
+  } catch (e) {
+    console.error('[sendStatusUpdateEmails]', e.message);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ✉️ HELPER: send cancellation + refund emails
+// ─────────────────────────────────────────────────────────────────────────────
+const sendCancellationEmails = async ({ booking, refundAmount, refundPercent }) => {
+  try {
+    const { customerEmail, customerName, doctorEmail, hospitalEmail } =
+      await resolveBookingEmails(booking);
+
+    // Status email to customer
+    if (customerEmail) {
+      sendEmail({
+        email:   customerEmail,
+        subject: `Booking Cancelled — #${booking.bookingCode} | Likeson Healthcare`,
+        html:    buildStatusUpdateEmail({
+          userName:   customerName,
+          order:      { orderId: booking.bookingCode },
+          actionLink: `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
+          newStatus:  'Cancelled',
+        }),
+      }).catch(e => console.error('[email] customer cancel:', e.message));
+
+      // Separate refund email if applicable
+      if (refundAmount > 0) {
+        sendEmail({
+          email:   customerEmail,
+          subject: `Refund Initiated — #${booking.bookingCode} | Likeson Healthcare`,
+          html:    buildRefundEmail({
+            userName:     customerName,
+            order:        { orderId: booking.bookingCode },
+            refundAmount,
+            refundMethod: booking.payments?.[0]?.gateway === 'Wallet' ? 'Wallet' : 'Original_Source',
+            actionLink:   `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
+          }),
+        }).catch(e => console.error('[email] customer refund:', e.message));
+      }
+    }
+
+    // Notify doctor
+    if (doctorEmail) {
+      sendEmail({
+        email:   doctorEmail,
+        subject: `Booking Cancelled — #${booking.bookingCode} | Likeson Healthcare`,
+        html:    transactionalTemplate({
+          header: 'BOOKING CANCELLED',
+          title:  `Booking #${booking.bookingCode} has been cancelled`,
+          body:   `The patient has cancelled booking <strong>#${booking.bookingCode}</strong>. No further action needed.`,
+          buttonText: 'View Schedule',
+          buttonLink: `${process.env.FRONTEND_URL}/doctor/schedule`,
+        }),
+      }).catch(e => console.error('[email] doctor cancel:', e.message));
+    }
+
+    // Notify hospital
+    if (hospitalEmail) {
+      sendEmail({
+        email:   hospitalEmail,
+        subject: `Booking Cancelled — #${booking.bookingCode} | Likeson Healthcare`,
+        html:    transactionalTemplate({
+          header: 'BOOKING CANCELLED',
+          title:  `Booking #${booking.bookingCode} cancelled`,
+          body:   `Booking <strong>#${booking.bookingCode}</strong> was cancelled by the patient.${refundAmount > 0 ? ` Refund of <strong>₹${refundAmount}</strong> initiated.` : ''}`,
+          buttonText: 'View Bookings',
+          buttonLink: `${process.env.FRONTEND_URL}/hospital/bookings`,
+        }),
+      }).catch(e => console.error('[email] hospital cancel:', e.message));
+    }
+  } catch (e) {
+    console.error('[sendCancellationEmails]', e.message);
+  }
+};
 
 const router = express.Router();
 
@@ -212,7 +508,6 @@ router.get('/transport/estimate', protect, async (req, res) => {
 // GET /consultation-check
 // ─────────────────────────────────────────────────────────────────────────────
 
-// GET /consultation-check
 router.get('/consultation-check', protect, authorize('customer'), async (req, res) => {
   try {
     const { consultationType = 'inPerson' } = req.query;
@@ -222,7 +517,6 @@ router.get('/consultation-check', protect, authorize('customer'), async (req, re
       checkSubscriptionDiagnostics(req.user._id),
     ]);
 
-    // Resolve custom plan care assistant fee
     const config = await PlatformPricingConfig.getGlobal();
     let careAssistantCustomFee = null;
     if (caResult.allowed && caResult.planType === 'custom' && caResult.sub?.plan) {
@@ -242,25 +536,20 @@ router.get('/consultation-check', protect, authorize('customer'), async (req, re
     return res.json({
       success: true,
       data: {
-        // Consultation
         allowed:           consultResult.allowed,
         isFree:            consultResult.isFree,
         remaining:         consultResult.remaining,
         reason:            consultResult.reason,
         consultationFree:  consultResult.isFree,
         consultationQuota: consultResult.reason,
-        // Care assistant
         careAssistantFree:      caResult.isFree,
         careAssistantQuota:     caResult.reason,
         careAssistantAllowed:   caResult.allowed,
         careAssistantRemaining: caResult.remaining,
-        // Custom plan flags
         isCustomPlan:           caResult.planType === 'custom',
-        careAssistantCustomFee,     // ← tier price for custom plan (e.g. ₹300)
-        // Diagnostics
+        careAssistantCustomFee,
         diagnosticsDiscountPercent: diagResult.discountPercent  ?? 0,
         homeSampleCollectionFree:   diagResult.homeSampleCollection ?? false,
-        // Transport rate from sub (resolved at estimate time — not here)
         kmRateSource: null,
         ratePerKm:    null,
       },
@@ -330,7 +619,6 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
     if (!hospCoords?.length)
       return res.status(400).json({ success: false, message: 'Hospital location unavailable. Provide destinationLocation.' });
 
-    // FIX A: pass consultationType — homeVisit returns isFree:false
     const subCheck                = await checkSubscriptionConsultation(req.user._id, consultationType);
     const isCoveredBySubscription = subCheck.allowed && subCheck.isFree;
 
@@ -358,7 +646,6 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
 
     const config = await PlatformPricingConfig.getGlobal();
 
-    // FIX B: custom plan users get customPlanOptions.careAssistant.pricingTiers[tierIndex]
     const careResult = await resolveCareAssistantFee({
       userId:        req.user._id,
       durationHours: 4,
@@ -409,13 +696,12 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
       },
     });
 
-    // Queue subscription usage — will flush after payment confirmed
     if (isCoveredBySubscription && subCheck.sub) {
       await queueSubscriptionUsage(booking._id, subCheck.sub._id, 'consultationsUsed');
     }
- if ((careResult.isCoveredBySubscription || careResult.quotaTracked) && careResult.sub) {
-  await queueSubscriptionUsage(booking._id, careResult.sub._id, 'careAssistantVisitsUsed');
-}
+    if ((careResult.isCoveredBySubscription || careResult.quotaTracked) && careResult.sub) {
+      await queueSubscriptionUsage(booking._id, careResult.sub._id, 'careAssistantVisitsUsed');
+    }
 
     // ── Payment handling ───────────────────────────────────────────────────
     if (paymentMethod === 'Wallet') {
@@ -428,21 +714,21 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
       booking.fareBreakdown.walletApplied = fareBreakdown.totalAmount;
       booking.fareBreakdown.amountPaid    = 0;
       await booking.save();
-      await flushAndRecord(booking); // ✅ Wallet — flush + record for cancel recovery
+      await flushAndRecord(booking);
+      // ✉️ Payment confirmed via Wallet
+      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' });
     }
 
     if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
       booking.paymentStatus = 'paid';
       await booking.save();
-      await flushAndRecord(booking); // ✅ Zero amount — flush + record
+      await flushAndRecord(booking);
+      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Free (₹0)' });
     }
 
-    // FIX D: Cash — do NOT flush. Mark pending_cash. Usage flushed only after
-    //          admin confirms cash collected via POST /confirm-cash-payment.
     if (paymentMethod === 'Cash') {
       booking.paymentStatus = 'pending_cash';
       await booking.save();
-      // subscriptionUsagePending stays — will flush when cash confirmed
     }
 
     // Build rides
@@ -542,6 +828,13 @@ router.post('/full-care-ride', protect, authorize('customer'), async (req, res) 
       type: 'BOOKING', bookingId: booking._id,
     });
 
+    // ✉️ Booking created emails (customer + doctor + hospital)
+    sendBookingCreatedEmails({
+      booking,
+      billing: fareBreakdown,
+    });
+
+    // Keep existing helper for OP email attachment
     const [doctorUser, hospitalDoc] = await Promise.all([
       doctorId   ? DoctorProfile.findById(doctorId).populate('user', 'name').select('user').lean() : null,
       hospitalId ? Hospital.findById(hospitalId).select('name').lean() : null,
@@ -654,16 +947,17 @@ router.post('/doctor-consultation', protect, authorize('customer'), async (req, 
       });
       booking.paymentStatus = 'paid'; booking.payments = [wp];
       await booking.save();
-      await flushAndRecord(booking); // ✅ Wallet flush + record
+      await flushAndRecord(booking);
+      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' }); // ✉️
     }
 
     if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
       booking.paymentStatus = 'paid';
       await booking.save();
-      await flushAndRecord(booking); // ✅ Zero amount flush + record
+      await flushAndRecord(booking);
+      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Free (₹0)' }); // ✉️
     }
 
-    // FIX D: Cash — no flush, stays pending
     if (paymentMethod === 'Cash') {
       booking.paymentStatus = 'pending_cash';
       await booking.save();
@@ -691,6 +985,9 @@ router.post('/doctor-consultation', protect, authorize('customer'), async (req, 
       body: `Your appointment (${booking.bookingCode}) is confirmed.`,
       type: 'BOOKING', bookingId: booking._id,
     });
+
+    // ✉️ Booking created emails
+    sendBookingCreatedEmails({ booking, billing: fareBreakdown });
 
     const [doctorUser, hospitalDoc] = await Promise.all([
       doctorId   ? DoctorProfile.findById(doctorId).populate('user', 'name').select('user').lean() : null,
@@ -775,16 +1072,17 @@ router.post('/doctor-online', protect, authorize('customer'), async (req, res) =
       });
       booking.paymentStatus = 'paid'; booking.payments = [wp];
       await booking.save();
-      await flushAndRecord(booking); // ✅ Wallet flush + record
+      await flushAndRecord(booking);
+      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' }); // ✉️
     }
 
     if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
       booking.paymentStatus = 'paid';
       await booking.save();
-      await flushAndRecord(booking); // ✅ Zero amount flush + record
+      await flushAndRecord(booking);
+      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Free (₹0)' }); // ✉️
     }
 
-    // FIX D: Cash — no flush
     if (paymentMethod === 'Cash') {
       booking.paymentStatus = 'pending_cash';
       await booking.save();
@@ -794,6 +1092,9 @@ router.post('/doctor-online', protect, authorize('customer'), async (req, res) =
     if (paymentMethod === 'Razorpay' && fareBreakdown.totalAmount > 0) {
       razorpayOrder = await createRazorpayOrder(fareBreakdown.totalAmount, booking.bookingCode);
     }
+
+    // ✉️ Booking created emails
+    sendBookingCreatedEmails({ booking, billing: fareBreakdown });
 
     const doctorUser = await DoctorProfile.findById(doctorId)
       .populate('user', 'name').select('user').lean().catch(() => null);
@@ -919,16 +1220,17 @@ router.post('/patient-transport', protect, authorize('customer'), async (req, re
       });
       booking.paymentStatus = 'paid'; booking.payments = [wp];
       await booking.save();
-      await flushAndRecord(booking); // ✅ Wallet flush + record
+      await flushAndRecord(booking);
+      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' }); // ✉️
     }
 
     if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
       booking.paymentStatus = 'paid';
       await booking.save();
-      await flushAndRecord(booking); // ✅ Zero amount flush + record
+      await flushAndRecord(booking);
+      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Free (₹0)' }); // ✉️
     }
 
-    // FIX D: Cash — no flush
     if (paymentMethod === 'Cash') {
       booking.paymentStatus = 'pending_cash';
       await booking.save();
@@ -996,6 +1298,9 @@ router.post('/patient-transport', protect, authorize('customer'), async (req, re
       razorpayOrder = await createRazorpayOrder(fareBreakdown.totalAmount, booking.bookingCode);
     }
 
+    // ✉️ Booking created emails
+    sendBookingCreatedEmails({ booking, billing: fareBreakdown });
+
     return res.status(201).json({
       success: true,
       data: {
@@ -1037,7 +1342,6 @@ router.post('/physiotherapist', protect, authorize('customer'), async (req, res)
     const avail = await checkHospitalOrDoctorAvailability({ doctorId, scheduledAt: scheduledDate });
     if (!avail.available) return res.status(400).json({ success: false, message: avail.reason });
 
-    // Physio never uses sub quota
     const { fee: consultationFee, source: pricingSource } = await resolveConsultationFee({
       isFollowUp: false, followUpFee: 0, isCoveredBySubscription: false,
       doctorId, hospitalId: null,
@@ -1066,7 +1370,7 @@ router.post('/physiotherapist', protect, authorize('customer'), async (req, res)
       });
       booking.paymentStatus = 'paid'; booking.payments = [wp];
       await booking.save();
-      // No sub usage to flush for physio
+      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' }); // ✉️
     }
 
     if (paymentMethod === 'Cash') {
@@ -1084,6 +1388,9 @@ router.post('/physiotherapist', protect, authorize('customer'), async (req, res)
       body: `Your physiotherapy appointment (${booking.bookingCode}) is confirmed.`,
       type: 'BOOKING', bookingId: booking._id,
     });
+
+    // ✉️ Booking created emails
+    sendBookingCreatedEmails({ booking, billing: fareBreakdown });
 
     return res.status(201).json({
       success: true,
@@ -1118,7 +1425,6 @@ router.post('/follow-up', protect, authorize('customer'), async (req, res) => {
     const avail = await checkHospitalOrDoctorAvailability({ hospitalId, doctorId, scheduledAt: scheduledDate });
     if (!avail.available) return res.status(400).json({ success: false, message: avail.reason });
 
-    // Follow-up always charged — independent of sub quota, never increments sub usage
     const { fee: consultationFee } = await resolveConsultationFee({
       isFollowUp: true, followUpFee: followUpCheck.followUpFee,
       isCoveredBySubscription: false, doctorId, hospitalId, consultationType,
@@ -1147,7 +1453,7 @@ router.post('/follow-up', protect, authorize('customer'), async (req, res) => {
       });
       booking.paymentStatus = 'paid'; booking.payments = [wp];
       await booking.save();
-      // No sub usage for follow-up
+      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' }); // ✉️
     }
 
     if (paymentMethod === 'Cash') {
@@ -1172,6 +1478,9 @@ router.post('/follow-up', protect, authorize('customer'), async (req, res) => {
       razorpayOrder = await createRazorpayOrder(fareBreakdown.totalAmount, booking.bookingCode);
     }
 
+    // ✉️ Booking created emails
+    sendBookingCreatedEmails({ booking, billing: fareBreakdown });
+
     return res.status(201).json({
       success: true,
       data: {
@@ -1191,7 +1500,7 @@ router.post('/follow-up', protect, authorize('customer'), async (req, res) => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// BOOKING — DIAGNOSTIC CENTER  (FIX C)
+// BOOKING — DIAGNOSTIC CENTER
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/diagnostic-center', protect, authorize('customer'), async (req, res) => {
@@ -1219,7 +1528,6 @@ router.post('/diagnostic-center', protect, authorize('customer'), async (req, re
       if (p) { diagnosticFee += p.mrpPrice; packageNames.push(p.packageName); }
     }
 
-    // FIX C: correctly reads discount% from custom plan OR fixed plan
     const diagSub         = await checkSubscriptionDiagnostics(req.user._id);
     const discountPercent = diagSub.discountPercent;
     const discount        = discountPercent ? +(diagnosticFee * discountPercent / 100).toFixed(2) : 0;
@@ -1246,7 +1554,7 @@ router.post('/diagnostic-center', protect, authorize('customer'), async (req, re
       });
       booking.paymentStatus = 'paid'; booking.payments = [wp];
       await booking.save();
-      // No sub usage for diagnostics
+      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' }); // ✉️
     }
 
     if (paymentMethod === 'Cash') {
@@ -1258,6 +1566,9 @@ router.post('/diagnostic-center', protect, authorize('customer'), async (req, re
     if (paymentMethod === 'Razorpay' && fareBreakdown.totalAmount > 0) {
       razorpayOrder = await createRazorpayOrder(fareBreakdown.totalAmount, booking.bookingCode);
     }
+
+    // ✉️ Booking created emails
+    sendBookingCreatedEmails({ booking, billing: fareBreakdown });
 
     return res.status(201).json({
       success: true,
@@ -1275,7 +1586,7 @@ router.post('/diagnostic-center', protect, authorize('customer'), async (req, re
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// BOOKING — DIAGNOSTIC HOME  (FIX C)
+// BOOKING — DIAGNOSTIC HOME
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/diagnostic-home', protect, authorize('customer'), async (req, res) => {
@@ -1307,7 +1618,6 @@ router.post('/diagnostic-home', protect, authorize('customer'), async (req, res)
 
     const homeCollectionFee = lab.homeCollectionFee ?? 0;
 
-    // FIX C: reads BOTH discountPercent AND homeSampleCollection from custom/fixed plan
     const diagSub                       = await checkSubscriptionDiagnostics(req.user._id);
     const discountPercent               = diagSub.discountPercent;
     const discount                      = discountPercent ? +(diagnosticFee * discountPercent / 100).toFixed(2) : 0;
@@ -1340,7 +1650,7 @@ router.post('/diagnostic-home', protect, authorize('customer'), async (req, res)
       });
       booking.paymentStatus = 'paid'; booking.payments = [wp];
       await booking.save();
-      // No sub usage for diagnostics
+      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' }); // ✉️
     }
 
     if (paymentMethod === 'Cash') {
@@ -1374,6 +1684,9 @@ router.post('/diagnostic-home', protect, authorize('customer'), async (req, res)
       razorpayOrder = await createRazorpayOrder(fareBreakdown.totalAmount, booking.bookingCode);
     }
 
+    // ✉️ Booking created emails
+    sendBookingCreatedEmails({ booking, billing: fareBreakdown });
+
     return res.status(201).json({
       success: true,
       data: {
@@ -1391,7 +1704,7 @@ router.post('/diagnostic-home', protect, authorize('customer'), async (req, res)
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// BOOKING — CARE ASSISTANT ONLY  (FIX B + FIX D)
+// BOOKING — CARE ASSISTANT ONLY
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/care-assistant', protect, authorize('customer'), async (req, res) => {
@@ -1413,7 +1726,6 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
 
     const config = await PlatformPricingConfig.getGlobal();
 
-    // FIX B: custom plan users get customPlanOptions.careAssistant.pricingTiers[tierIndex]
     const careResult = await resolveCareAssistantFee({
       userId:        req.user._id,
       durationHours: parseInt(durationHours, 10) || 4,
@@ -1441,9 +1753,9 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
       careAssistantSnapshot: { name: careAssistant.fullName, photoUrl: careAssistant.photoUrl, phone: careAssistant.phone },
     });
 
- if ((careResult.isCoveredBySubscription || careResult.quotaTracked) && careResult.sub) {
-  await queueSubscriptionUsage(booking._id, careResult.sub._id, 'careAssistantVisitsUsed');
-}
+    if ((careResult.isCoveredBySubscription || careResult.quotaTracked) && careResult.sub) {
+      await queueSubscriptionUsage(booking._id, careResult.sub._id, 'careAssistantVisitsUsed');
+    }
 
     if (paymentMethod === 'Wallet') {
       if (fareBreakdown.totalAmount > 0) {
@@ -1456,26 +1768,29 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
         booking.paymentStatus = 'paid';
       }
       await booking.save();
-      await flushAndRecord(booking); // ✅ Wallet flush + record
+      await flushAndRecord(booking);
+      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' }); // ✉️
     }
 
     if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
       booking.paymentStatus = 'paid';
       await booking.save();
-      await flushAndRecord(booking); // ✅ Zero amount flush + record
+      await flushAndRecord(booking);
+      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Free (₹0)' }); // ✉️
     }
 
-    // FIX D: Cash — NO flush. Stays pending until admin confirms cash.
     if (paymentMethod === 'Cash') {
       booking.paymentStatus = 'pending_cash';
       await booking.save();
-      // subscriptionUsagePending stays — flushed on cash confirmation
     }
 
     let razorpayOrder = null;
     if (paymentMethod === 'Razorpay' && fareBreakdown.totalAmount > 0) {
       razorpayOrder = await createRazorpayOrder(fareBreakdown.totalAmount, booking.bookingCode);
     }
+
+    // ✉️ Booking created emails
+    sendBookingCreatedEmails({ booking, billing: fareBreakdown });
 
     return res.status(201).json({
       success: true,
@@ -1500,8 +1815,7 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /verify-payment
-// Razorpay payment verification → flush subscription usage
+// POST /verify-payment  — Razorpay webhook
 // ─────────────────────────────────────────────────────────────────────────────
 
 router.post('/verify-payment', protect, async (req, res) => {
@@ -1519,7 +1833,6 @@ router.post('/verify-payment', protect, async (req, res) => {
     if (!booking)
       return res.status(404).json({ success: false, message: 'Booking not found' });
 
-    // Idempotency guard — prevent double-flush on duplicate webhook
     if (booking.paymentStatus === 'paid') {
       console.log(`[verify-payment] ⚠️ already paid — skip duplicate for booking:${bookingId}`);
       return res.json({ success: true, message: 'Already verified', data: { bookingId, paymentStatus: 'paid' } });
@@ -1539,9 +1852,14 @@ router.post('/verify-payment', protect, async (req, res) => {
     booking.updatedBy = req.user._id;
     await booking.save();
 
-    // ✅ CRITICAL: flush subscription usage only after verified payment
     await flushAndRecord(booking);
     console.log(`[verify-payment] ✅ payment verified + usage flushed for booking:${bookingId}`);
+
+    // ✉️ Payment confirmed via Razorpay
+    sendPaymentConfirmedEmails({ booking, paymentMethod: 'Razorpay' });
+
+    // ✉️ Status update to Confirmed
+    sendStatusUpdateEmails({ booking, newStatus: 'Confirmed' });
 
     return res.json({
       success: true,
@@ -1555,10 +1873,7 @@ router.post('/verify-payment', protect, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /confirm-cash-payment  (FIX D)
-//
-// Admin confirms cash was collected for a pending_cash booking.
-// Flushes subscription usage that was held pending.
+// POST /confirm-cash-payment  — admin confirms cash collected
 // ─────────────────────────────────────────────────────────────────────────────
 
 router.post('/confirm-cash-payment', protect, authorize('admin', 'superadmin'), async (req, res) => {
@@ -1571,7 +1886,6 @@ router.post('/confirm-cash-payment', protect, authorize('admin', 'superadmin'), 
     if (!booking)
       return res.status(404).json({ success: false, message: 'Booking not found or not in pending_cash status' });
 
-    // Idempotency: already paid means already confirmed
     if (booking.paymentStatus === 'paid') {
       console.log(`[confirm-cash-payment] ⚠️ already confirmed for booking:${bookingId}`);
       return res.json({ success: true, message: 'Already confirmed', data: { bookingId } });
@@ -1590,9 +1904,14 @@ router.post('/confirm-cash-payment', protect, authorize('admin', 'superadmin'), 
     booking.updatedBy = req.user._id;
     await booking.save();
 
-    // ✅ CRITICAL: flush pending subscription usage now that cash confirmed
     await flushAndRecord(booking);
     console.log(`[confirm-cash-payment] ✅ cash confirmed + usage flushed for booking:${bookingId}`);
+
+    // ✉️ Cash payment confirmed → customer notified
+    sendPaymentConfirmedEmails({ booking, paymentMethod: 'Cash' });
+
+    // ✉️ Status update to Confirmed
+    sendStatusUpdateEmails({ booking, newStatus: 'Confirmed' });
 
     return res.json({
       success: true,
@@ -1672,18 +1991,7 @@ router.get('/my-bookings/:bookingId', protect, authorize('customer'), async (req
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /my-bookings/:bookingId/cancel  (FIX E)
-//
-// Cancellation correctly recovers subscription quota:
-//
-//   Case A — pending (payment never completed, sub usage never flushed):
-//     subscriptionUsagePending cleared → quota never consumed → nothing to recover
-//
-//   Case B — already paid (sub usage flushed via Wallet/Razorpay/zero-amount):
-//     confirmedSubscriptionUsage decremented → quota returned to user
-//
-//   Case C — pending_cash (no flush yet):
-//     subscriptionUsagePending cleared → same as Case A
+// POST /my-bookings/:bookingId/cancel
 // ─────────────────────────────────────────────────────────────────────────────
 
 router.post('/my-bookings/:bookingId/cancel', protect, authorize('customer'), async (req, res) => {
@@ -1700,9 +2008,6 @@ router.post('/my-bookings/:bookingId/cancel', protect, authorize('customer'), as
       ({ refundPercent, refundAmount } = await computeRefundAmount(booking));
     }
 
-    // ✅ Recover BEFORE saving cancel status
-    // (pre-save hook clears subscriptionUsagePending on status=cancelled,
-    //  so we must read pending/confirmed BEFORE that save)
     const recoveryResult = await recoverSubscriptionUsageOnCancel(booking);
 
     booking.status       = 'cancelled';
@@ -1716,7 +2021,7 @@ router.post('/my-bookings/:bookingId/cancel', protect, authorize('customer'), as
     };
     booking.fareBreakdown.refundAmount = refundAmount;
     booking.updatedBy = req.user._id;
-    await booking.save(); // pre-save hook clears subscriptionUsagePending
+    await booking.save();
 
     if (booking.rides?.length) {
       await Ride.updateMany(
@@ -1737,6 +2042,9 @@ router.post('/my-bookings/:bookingId/cancel', protect, authorize('customer'), as
       type:      'BOOKING',
       bookingId: booking._id,
     });
+
+    // ✉️ Cancellation + refund emails to customer, doctor, hospital
+    sendCancellationEmails({ booking, refundAmount, refundPercent });
 
     console.log(`[cancel] ✅ booking:${booking._id} cancelled. recovery:`, recoveryResult);
 
@@ -1834,12 +2142,8 @@ router.get('/platform-pricing', async (req, res) => {
   }
 });
 
-
-
 // ═════════════════════════════════════════════════════════════════════════════
 // GET /subscription-benefits/consultations
-// Returns consultation quota used/remaining for active subscriber.
-// Works for both fixed and custom plans.
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.get('/subscription-benefits/consultations', protect, authorize('customer'), async (req, res) => {
@@ -1853,7 +2157,6 @@ router.get('/subscription-benefits/consultations', protect, authorize('customer'
     if (!sub)
       return res.status(404).json({ success: false, message: 'No active subscription found.' });
 
-    // Resolve quota — limits snapshotted at subscribe time, fallback to plan
     let perMonth = sub.limits?.consultationsPerMonth ?? 0;
 
     if (perMonth === 0 && sub.plan) {
@@ -1876,7 +2179,6 @@ router.get('/subscription-benefits/consultations', protect, authorize('customer'
       ? null
       : perMonth === 0 ? 100 : Math.min(100, Math.round((used / perMonth) * 100));
 
-    // Consultation modes from plan
     const modes = sub.plan?.consultations?.modes ?? { inPerson: true, video: false, home: false };
     const specialNote = sub.plan?.consultations?.specialNote ?? null;
 
@@ -1889,13 +2191,7 @@ router.get('/subscription-benefits/consultations', protect, authorize('customer'
         status:      sub.status,
         expiryDate:  sub.expiryDate,
         consultations: {
-          perMonth,
-          unlimited,
-          used,
-          remaining,
-          percentUsed,
-          modes,
-          specialNote,
+          perMonth, unlimited, used, remaining, percentUsed, modes, specialNote,
         },
       },
     });
@@ -1907,9 +2203,6 @@ router.get('/subscription-benefits/consultations', protect, authorize('customer'
 
 // ═════════════════════════════════════════════════════════════════════════════
 // GET /subscription-benefits/care-assistant
-// Returns care assistant quota used/remaining + full tier details.
-// Populates platform pricing tiers for fixed plans.
-// For custom plans returns snapshotted tier. Both used/remaining shown.
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.get('/subscription-benefits/care-assistant', protect, authorize('customer'), async (req, res) => {
@@ -1923,7 +2216,6 @@ router.get('/subscription-benefits/care-assistant', protect, authorize('customer
     if (!sub)
       return res.status(404).json({ success: false, message: 'No active subscription found.' });
 
-    // Resolve visit limit
     let visitsPerMonth = sub.limits?.careAssistantVisitsPerMonth ?? null;
 
     if (visitsPerMonth == null && sub.plan) {
@@ -1960,27 +2252,21 @@ router.get('/subscription-benefits/care-assistant', protect, authorize('customer
       ? null
       : visitsPerMonth === 0 ? 100 : Math.min(100, Math.round((used / visitsPerMonth) * 100));
 
-    // ── Tier details ──────────────────────────────────────────────────────────
-    // Custom plan: use snapshotted tier from limits
-    // Fixed plan: populate all platform tiers so customer can see full pricing table
-
     let activeTier  = null;
     let allTiers    = [];
     const config    = await PlatformPricingConfig.getGlobal();
 
     if (sub.planType === 'custom') {
-      // Snapshotted at subscribe time — always accurate even if admin changes tiers later
       activeTier = sub.limits?.careAssistantTierIndex != null
         ? {
             tierIndex:         sub.limits.careAssistantTierIndex,
             label:             sub.limits.careAssistantTierLabel       ?? 'Custom Tier',
             chargeToUser:      sub.limits.careAssistantChargePerVisit  ?? null,
-            payoutToAssistant: null, // not exposed to customer
+            payoutToAssistant: null,
             source:            'snapshotted',
           }
         : null;
 
-      // Also provide full custom plan tiers for display (from config, labelled with index)
       const customTiers = config?.customPlanOptions?.careAssistant?.pricingTiers ?? [];
       allTiers = customTiers.map((t, idx) => ({
         tierIndex:    idx,
@@ -1993,7 +2279,6 @@ router.get('/subscription-benefits/care-assistant', protect, authorize('customer
       }));
 
     } else {
-      // Fixed plan — populate full platform duration-based pricing tiers
       const platformTiers = config?.careAssistant?.pricingTiers ?? [];
       allTiers = platformTiers
         .filter(t => t.isActive)
@@ -2006,14 +2291,13 @@ router.get('/subscription-benefits/care-assistant', protect, authorize('customer
           isActive:     true,
         }));
 
-      // For fixed plans, service type (Standard / Dedicated) stored in plan.careAssistant.serviceType
       const serviceType = sub.plan?.careAssistant?.serviceType ?? 'Standard';
       activeTier = {
         label:        serviceType === 'Dedicated' ? 'Dedicated Assistant' : 'Standard (Platform Rates Apply)',
         serviceType,
         chargeToUser: serviceType === 'Dedicated'
           ? config?.careAssistant?.dedicatedMonthlyCharge ?? null
-          : null, // per-visit charge resolved from platform tiers at booking time
+          : null,
         source:       'fixed_plan',
         note:         serviceType === 'Dedicated'
           ? 'Dedicated assistant — flat monthly charge applies'
@@ -2021,7 +2305,6 @@ router.get('/subscription-benefits/care-assistant', protect, authorize('customer
       };
     }
 
-    // Extra platform config relevant to customer
     const platformConfig = {
       punctualityBonusPerVisit: config?.careAssistant?.punctualityBonusPerVisit ?? null,
       overtimeRatePerHour:      config?.careAssistant?.overtimeRatePerHour      ?? null,
@@ -2038,15 +2321,9 @@ router.get('/subscription-benefits/care-assistant', protect, authorize('customer
         expiryDate: sub.expiryDate,
         included:   true,
         careAssistant: {
-          visitsPerMonth,
-          unlimited,
-          used,
-          remaining,
-          percentUsed,
+          visitsPerMonth, unlimited, used, remaining, percentUsed,
           isDedicated:  sub.plan?.careAssistant?.isDedicated ?? false,
-          activeTier,
-          allTiers,
-          platformConfig,
+          activeTier, allTiers, platformConfig,
         },
       },
     });

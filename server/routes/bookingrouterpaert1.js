@@ -1,22 +1,3 @@
-/**
- * bookingRouter2.js — Likeson.in
- *
- * Routes: Driver (agency + solo), Customer ride request,
- *         Care assistant ride request, Admin care-ride management
- *
- * FIXES vs previous version:
- *  - authorize('care_assistant') underscore everywhere
- *  - Ride.driver = Driver._id consistently (NOT User._id)
- *  - GET /driver/assigned: queries Ride by Driver._id (driverObjectId)
- *  - POST /:id/ride/end: queries Ride by Driver._id
- *  - POST /:id/ride/start REMOVED — OTP verify is socket-only (verify_otp)
- *  - PATCH /:id/ride/arrived: OTP raw stored (no hash), sent to customer + admin
- *  - sendEmail / sendSms: always wrapped in .catch() — never crash route
- *  - syncBookingStatusFromRide used instead of direct Booking.status writes
- *  - No dynamic import() on hot paths
- *  - emailQueueService used for OTP emails (not raw sendEmail)
- */
-
 import express from 'express';
 
 import Booking              from '../models/Booking.js';
@@ -35,7 +16,11 @@ import SystemLog            from '../models/SystemLog.js';
 import sendSms                       from '../services/Sendsms.js';
 import { generateBookingInvoicePdf } from '../utils/bookingInvoiceGenerator.js';
 import { getBookingSocketService }   from '../services/bookingSocketService.js';
-import { transactionalTemplate }     from '../utils/emailTemplates.js';
+import {
+  transactionalTemplate,
+  otpTemplate,
+  buildDeliveryOtpEmail,
+} from '../utils/emailTemplates.js';
 import { rideCompletedSms, driverAssignedSms, otpSms } from '../utils/Smstemplates.js';
 import { generateOpHtml, buildOpZipBuffer } from '../utils/opDocumentGenerator.js';
 import { opConfirmationEmailTemplate }       from '../utils/opEmailTemplates.js';
@@ -126,6 +111,192 @@ const sendOpZipEmail = async ({ op, booking, doctor, hospital, patient, followUp
   } catch (e) { console.error('[OP ZIP Email] failed:', e.message); }
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EMAIL HELPERS — fire-and-forget wrappers used throughout this router
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Send a driver-assigned notification email to the customer.
+ */
+const emailDriverAssigned = (customer, booking, driverDoc, driverUser) => {
+  if (!customer?.email) return;
+  sendEmail({
+    email:   customer.email,
+    subject: `Driver Assigned — Booking #${booking.bookingCode} | Likeson Healthcare`,
+    html: transactionalTemplate({
+      header:     'DRIVER ASSIGNED',
+      title:      `Your driver is on the way, ${customer.name}!`,
+      body: `
+        <strong>Booking:</strong> #${booking.bookingCode}<br/>
+        <strong>Driver:</strong> ${driverDoc.legalName || driverUser.name}<br/>
+        <strong>Vehicle:</strong> ${driverDoc.assignedVehicleSnapshot?.registrationNumber || 'N/A'}
+          ${driverDoc.assignedVehicleSnapshot?.make || ''}
+          ${driverDoc.assignedVehicleSnapshot?.model || ''}<br/>
+        <strong>Driver Phone:</strong> ${driverDoc.phone || driverUser.phone || 'N/A'}
+      `,
+      buttonLink: `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
+      buttonText: 'Track Your Ride',
+    }),
+  }).catch(e => console.error('[emailDriverAssigned]', e.message));
+};
+
+/**
+ * Notify customer their ride was rejected and is being reassigned.
+ */
+const emailRideRejected = (customer, booking, reason) => {
+  if (!customer?.email) return;
+  sendEmail({
+    email:   customer.email,
+    subject: `Ride Update — Booking #${booking.bookingCode} | Likeson Healthcare`,
+    html: transactionalTemplate({
+      header:     'RIDE UPDATE',
+      title:      'Driver unavailable — finding another driver',
+      body: `
+        Your booking <strong>#${booking.bookingCode}</strong> driver was unable to accept the ride
+        ${reason ? `(${reason})` : ''}. We are automatically reassigning a new driver — no action needed.
+      `,
+      buttonLink: `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
+      buttonText: 'View Booking',
+    }),
+  }).catch(e => console.error('[emailRideRejected]', e.message));
+};
+
+/**
+ * Send ride-request confirmation email to customer.
+ */
+const emailRideRequested = (customer, booking, data) => {
+  if (!customer?.email) return;
+  sendEmail({
+    email:   customer.email,
+    subject: `Ride Requested — Booking #${booking.bookingCode} | Likeson Healthcare`,
+    html: transactionalTemplate({
+      header:     'RIDE REQUESTED',
+      title:      `Ride booked! We're finding your driver`,
+      body: `
+        <strong>Booking:</strong> #${booking.bookingCode}<br/>
+        <strong>Pickup:</strong> ${data.pickup?.address || data.pickup?.label || 'As provided'}<br/>
+        <strong>Drop:</strong> ${data.destination?.address || data.destination?.label || 'As provided'}<br/>
+        <strong>Distance:</strong> ${data.distKm} km<br/>
+        <strong>Est. Fare:</strong> ₹${data.transportFee}<br/>
+        <strong>Rate:</strong> ₹${data.ratePerKm}/km (${data.rateSource})
+      `,
+      buttonLink: `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
+      buttonText: 'Track Booking',
+    }),
+  }).catch(e => console.error('[emailRideRequested]', e.message));
+};
+
+/**
+ * Notify admin / fallback that no driver was found near patient.
+ * Sends to support inbox so ops team acts quickly.
+ */
+const emailNoDriverNearby = (booking, data) => {
+  const supportEmail = process.env.SUPPORT_EMAIL || 'support@likeson.in';
+  sendEmail({
+    email:   supportEmail,
+    subject: `⚠️ No Driver Nearby — Booking #${booking.bookingCode} | Action Required`,
+    html: transactionalTemplate({
+      header:     'OPS ALERT',
+      title:      `No driver within ${data.searchRadiusKm}km — manual assignment needed`,
+      body: `
+        <strong>Booking:</strong> #${booking.bookingCode}<br/>
+        <strong>Ride ID:</strong> ${data.rideId}<br/>
+        <strong>Requester:</strong> ${data.requesterType || 'customer'}<br/>
+        <strong>Pickup:</strong> ${data.pickup?.address || JSON.stringify(data.pickup?.coordinates)}<br/>
+        <strong>Drop:</strong> ${data.destination?.address || JSON.stringify(data.destination?.coordinates)}<br/>
+        <strong>Distance:</strong> ${data.distKm} km &nbsp;|&nbsp; ₹${data.transportFee}<br/>
+        <strong>Search Radius:</strong> ${data.searchRadiusKm} km
+      `,
+      buttonLink: `${process.env.FRONTEND_URL}/admin/bookings/${booking._id}`,
+      buttonText: 'Assign Driver Now',
+    }),
+  }).catch(e => console.error('[emailNoDriverNearby]', e.message));
+};
+
+/**
+ * Notify care assistant that a ride was requested for their patient.
+ */
+const emailCareAssistantRideRequested = (caUser, booking, data) => {
+  if (!caUser?.email) return;
+  sendEmail({
+    email:   caUser.email,
+    subject: `Ride Requested for Patient — Booking #${booking.bookingCode} | Likeson Healthcare`,
+    html: transactionalTemplate({
+      header:     'CARE RIDE REQUESTED',
+      title:      `Ride booked for your patient`,
+      body: `
+        <strong>Booking:</strong> #${booking.bookingCode}<br/>
+        <strong>Pickup:</strong> ${data.pickup?.address || data.pickup?.label || 'As provided'}<br/>
+        <strong>Drop:</strong> ${data.destination?.address || data.destination?.label || 'As provided'}<br/>
+        <strong>Distance:</strong> ${data.distKm} km<br/>
+        <strong>Est. Fare:</strong> ₹${data.transportFee}<br/>
+        We are assigning a driver. You will be notified when driver accepts.
+      `,
+      buttonLink: `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
+      buttonText: 'View Booking',
+    }),
+  }).catch(e => console.error('[emailCareAssistantRideRequested]', e.message));
+};
+
+/**
+ * Notify doctor that their patient's ride is completed and OP card was sent.
+ */
+const emailDoctorRideCompleted = async (booking) => {
+  try {
+    if (!booking.doctor) return;
+    const doctorProfile = await DoctorProfile.findById(booking.doctor)
+      .populate('user', 'name email').lean();
+    const doctorEmail = doctorProfile?.user?.email;
+    if (!doctorEmail) return;
+
+    sendEmail({
+      email:   doctorEmail,
+      subject: `Patient Ride Completed — Booking #${booking.bookingCode} | Likeson Healthcare`,
+      html: transactionalTemplate({
+        header:     'PATIENT UPDATE',
+        title:      `Patient ride completed`,
+        body: `
+          Booking <strong>#${booking.bookingCode}</strong> has been completed.
+          Patient: <strong>${booking.patientInfo?.name || 'N/A'}</strong><br/>
+          The OP card and invoice have been dispatched to the patient.
+        `,
+        buttonLink: `${process.env.FRONTEND_URL}/doctor/bookings/${booking._id}`,
+        buttonText: 'View Booking',
+      }),
+    }).catch(e => console.error('[emailDoctorRideCompleted]', e.message));
+  } catch (e) { console.error('[emailDoctorRideCompleted] lookup failed:', e.message); }
+};
+
+/**
+ * Notify hospital that a booking tied to them is completed.
+ */
+const emailHospitalRideCompleted = async (booking) => {
+  try {
+    if (!booking.hospital) return;
+    const hospital = await Hospital.findById(booking.hospital)
+      .select('name contactEmail').lean();
+    const hospitalEmail = hospital?.contactEmail;
+    if (!hospitalEmail) return;
+
+    sendEmail({
+      email:   hospitalEmail,
+      subject: `Patient Booking Completed — #${booking.bookingCode} | Likeson Healthcare`,
+      html: transactionalTemplate({
+        header:     'HOSPITAL NOTIFICATION',
+        title:      `Patient booking completed`,
+        body: `
+          Booking <strong>#${booking.bookingCode}</strong> is now completed.<br/>
+          Patient: <strong>${booking.patientInfo?.name || 'N/A'}</strong><br/>
+          Hospital: <strong>${hospital.name}</strong><br/>
+          All documents have been dispatched.
+        `,
+        buttonLink: `${process.env.FRONTEND_URL}/hospital/bookings/${booking._id}`,
+        buttonText: 'View Records',
+      }),
+    }).catch(e => console.error('[emailHospitalRideCompleted]', e.message));
+  } catch (e) { console.error('[emailHospitalRideCompleted] lookup failed:', e.message); }
+};
+
 // ═════════════════════════════════════════════════════════════════════════════
 // DRIVER ROUTES
 // CRITICAL: Ride.driver = Driver._id (NOT User._id)
@@ -184,6 +355,7 @@ router.get('/driver/assigned',
 /**
  * PATCH /:id/ride/accept
  * FIX: queries ride by Driver._id (driverObjectId resolved from User._id)
+ * EMAIL: customer gets driver-assigned email
  */
 router.patch('/:id/ride/accept',
   protect, authorize('driver', 'solodriverpartner'),
@@ -204,7 +376,6 @@ router.patch('/:id/ride/accept',
       const booking = await Booking.findById(req.params.id);
       if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
-      // Use syncBookingStatusFromRide instead of direct status write
       await syncBookingStatusFromRide(booking._id, 'driver_accepted', req.user._id);
 
       const customer   = await User.findById(booking.customer).select('email phone name').lean();
@@ -218,6 +389,7 @@ router.patch('/:id/ride/accept',
         bookingId: booking._id,
       });
 
+      // SMS
       sendSms({
         to:      customer.phone,
         message: driverAssignedSms({
@@ -228,6 +400,9 @@ router.patch('/:id/ride/accept',
           driverPhone:   driverDoc.phone || driverUser.phone,
         }),
       }).catch(e => console.error('[Accept] SMS:', e.message));
+
+      // EMAIL → customer
+      emailDriverAssigned(customer, booking, driverDoc, driverUser);
 
       const trackingDoc = ride.trackingId
         ? await RideTracking.findById(ride.trackingId).select('expectedRoutePolyline').lean()
@@ -275,6 +450,7 @@ router.patch('/:id/ride/accept',
 
 /**
  * PATCH /:id/ride/reject
+ * EMAIL: customer notified of rejection + reassignment
  */
 router.patch('/:id/ride/reject',
   protect, authorize('driver', 'solodriverpartner'),
@@ -298,7 +474,12 @@ router.patch('/:id/ride/reject',
 
       await Ride.findByIdAndUpdate(ride._id, { $addToSet: { declinedDrivers: driverDoc._id } });
 
-      const booking = await Booking.findById(req.params.id).select('bookingCode transportPartner').lean();
+      const booking  = await Booking.findById(req.params.id).select('bookingCode transportPartner customer').lean();
+      const customer = await User.findById(booking?.customer).select('email phone name').lean();
+
+      // EMAIL → customer
+      if (booking) emailRideRejected(customer, booking, reason);
+
       if (booking?.transportPartner) {
         getBookingSocketService()?.emitToRoom(`tp:${booking.transportPartner}`, 'driver_rejected', {
           bookingId:   req.params.id,
@@ -323,6 +504,7 @@ router.patch('/:id/ride/reject',
  * FIX: OTP stored RAW (no hash) — socket verify_otp uses hashOtp to compare.
  * FIX: OTP email sent via emailQueueService (not raw sendEmail — idempotent).
  * FIX: emitOtpToAdmin called correctly.
+ * EMAIL: delivery OTP email to customer via buildDeliveryOtpEmail
  */
 router.patch('/:id/ride/arrived',
   protect, authorize('driver', 'solodriverpartner'),
@@ -354,23 +536,26 @@ router.patch('/:id/ride/arrived',
       const booking  = await Booking.findById(req.params.id);
       const customer = await User.findById(booking.customer).select('email phone name').lean();
 
-      // SMS to customer
+      // SMS
       sendSms({
         to:      customer.phone,
         message: otpSms({ otpCode: otp, purpose: `ride start #${booking.bookingCode}` }),
       }).catch(e => console.error('[Arrived] OTP SMS:', e.message));
 
-      // Email via queue (idempotent — deduplicates on rideId)
+      // EMAIL: delivery OTP via queue (idempotent — deduplicates on rideId)
       if (customer?.email) {
-        sendOtpEmail(customer.email, {
-          rideId:  String(ride._id),
-          otpCode: otp,
-          title:   'Your driver has arrived!',
-          body:    'Share this OTP with your driver to start the ride.',
-        }).catch(e => console.error('[Arrived] queue OTP email:', e.message));
+        // Use rich buildDeliveryOtpEmail template
+        sendEmail({
+          email:   customer.email,
+          subject: `Your Driver Has Arrived — OTP ${otp} | Booking #${booking.bookingCode}`,
+          html:    buildDeliveryOtpEmail({
+            userName: customer.name,
+            order:    { orderId: booking.bookingCode }, // reuse orderId slot for bookingCode
+            otpCode:  otp,
+          }),
+        }).catch(e => console.error('[Arrived] OTP email:', e.message));
       }
 
-      // Push notification with OTP visible in-app
       await createNotification({
         recipient: booking.customer,
         title:     'Driver Arrived',
@@ -390,7 +575,6 @@ router.patch('/:id/ride/arrived',
       });
       ss?.emitToRoom(`booking:${booking._id}`, 'otp_required', { bookingId: booking._id, otp });
 
-      // Admin:ops raw OTP for support
       ss?.emitOtpToAdmin({
         bookingId:     booking._id,
         bookingCode:   booking.bookingCode,
@@ -416,6 +600,7 @@ router.patch('/:id/ride/arrived',
  * FIX: queries ride by Driver._id.
  * FIX: syncBookingStatusFromRide used for booking status.
  * FIX: return ride tracking created with canonical polyline.
+ * EMAIL: invoice to customer, OP card if consultation, doctor + hospital notified on completion
  */
 router.post('/:id/ride/end',
   protect, authorize('driver', 'solodriverpartner'),
@@ -473,6 +658,28 @@ router.post('/:id/ride/end',
             expectedRoutePolyline: retPolyline,
           });
           await Ride.findByIdAndUpdate(returnRide._id, { $set: { trackingId: retTracking._id } });
+
+          // EMAIL → customer: return ride activated
+          const retCustomer = await User.findById(booking.customer).select('email name phone').lean();
+          if (retCustomer?.email) {
+            sendEmail({
+              email:   retCustomer.email,
+              subject: `Return Ride Activated — Booking #${booking.bookingCode} | Likeson Healthcare`,
+              html: transactionalTemplate({
+                header:     'RETURN RIDE ACTIVATED',
+                title:      'Your return ride is now active!',
+                body: `
+                  Outbound ride for booking <strong>#${booking.bookingCode}</strong> is complete.<br/>
+                  Same driver will take you back.<br/>
+                  <strong>From:</strong> ${returnRide.pickup?.address || 'As scheduled'}<br/>
+                  <strong>To:</strong> ${returnRide.dropoff?.address || 'As scheduled'}<br/>
+                  <strong>Est. Distance:</strong> ${retKm} km
+                `,
+                buttonLink: `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
+                buttonText: 'Track Return Ride',
+              }),
+            }).catch(e => console.error('[ReturnRide] email:', e.message));
+          }
 
           getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'return_ride_activated', {
             bookingId:        booking._id,
@@ -537,12 +744,12 @@ router.post('/:id/ride/end',
         }),
       }).catch(e => console.error('[End] SMS:', e.message));
 
-      // Invoice email
+      // EMAIL → customer: invoice
       try {
         const pdfBuffer = await generateBookingInvoicePdf(bookingDoc);
         await sendEmail({
           email:   customer.email,
-          subject: `Invoice — #${bookingDoc.bookingCode}`,
+          subject: `Invoice — #${bookingDoc.bookingCode} | Likeson Healthcare`,
           html:    transactionalTemplate({
             header:     'BOOKING COMPLETED',
             title:      `Booking #${bookingDoc.bookingCode} complete!`,
@@ -559,7 +766,11 @@ router.post('/:id/ride/end',
         });
       } catch (e) { console.error('[End] Invoice email:', e.message); }
 
-      // OP card email for consultation bookings
+      // EMAIL → doctor & hospital: ride complete notification
+      await emailDoctorRideCompleted(bookingDoc);
+      await emailHospitalRideCompleted(bookingDoc);
+
+      // EMAIL → customer: OP card for consultation bookings
       if (['doctor_consultation', 'full_care_ride', 'follow_up', 'physiotherapist'].includes(bookingDoc.bookingType)) {
         const op       = await OutPatientRecord.findOne({ booking: bookingDoc._id }).lean();
         const doctor   = await DoctorProfile.findById(bookingDoc.doctor).populate('user', 'name').lean();
@@ -663,6 +874,7 @@ router.patch('/driver/location',
 
 // ═════════════════════════════════════════════════════════════════════════════
 // CUSTOMER: self-request ride on existing booking
+// EMAIL: confirmation to customer; ops alert if no driver nearby
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/:id/request-ride',
@@ -732,7 +944,14 @@ router.post('/:id/request-ride',
         },
       });
 
-      getBookingSocketService()?.emitToAdminOps('ride_requested_by_customer', {
+      // EMAIL → customer: ride confirmed
+      const customer = await User.findById(req.user._id).select('email name phone').lean();
+      emailRideRequested(customer, booking, {
+        pickup: pickupGeo, destination: dropoffGeo,
+        distKm: +canonicalKm.toFixed(2), transportFee, ratePerKm, rateSource,
+      });
+
+      const rideData = {
         bookingId:      booking._id,
         bookingCode:    booking.bookingCode,
         rideId:         ride._id,
@@ -744,7 +963,12 @@ router.post('/:id/request-ride',
         noDriverNearby: nearbyCount === 0,
         searchRadiusKm: 30,
         timestamp:      new Date(),
-      });
+      };
+
+      // EMAIL → ops support if no driver nearby
+      if (nearbyCount === 0) emailNoDriverNearby(booking, rideData);
+
+      getBookingSocketService()?.emitToAdminOps('ride_requested_by_customer', rideData);
 
       return res.json({
         success: true,
@@ -768,6 +992,7 @@ router.post('/:id/request-ride',
 // ═════════════════════════════════════════════════════════════════════════════
 // CARE ASSISTANT: request ride for patient
 // FIX: authorize('care_assistant') underscore
+// EMAIL: care assistant + customer + ops if no driver
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/:id/care/request-ride',
@@ -840,6 +1065,44 @@ router.post('/:id/care/request-ride',
         },
       });
 
+      const rideData = {
+        pickup: pickupGeo, destination: dropoffGeo,
+        distKm: +canonicalKm.toFixed(2), transportFee, ratePerKm, rateSource,
+      };
+
+      // EMAIL → care assistant
+      const caUser = await User.findById(req.user._id).select('email name phone').lean();
+      emailCareAssistantRideRequested(caUser, booking, rideData);
+
+      // EMAIL → customer (patient)
+      const customer = await User.findById(booking.customer).select('email name phone').lean();
+      if (customer?.email) {
+        sendEmail({
+          email:   customer.email,
+          subject: `Ride Requested for You — Booking #${booking.bookingCode} | Likeson Healthcare`,
+          html: transactionalTemplate({
+            header:     'RIDE REQUESTED',
+            title:      'Your care assistant has requested a ride for you',
+            body: `
+              Your care assistant arranged a ride for booking <strong>#${booking.bookingCode}</strong>.<br/>
+              <strong>Pickup:</strong> ${pickupGeo.address || pickupGeo.label || 'As provided'}<br/>
+              <strong>Drop:</strong> ${dropoffGeo.address || dropoffGeo.label || 'As provided'}<br/>
+              <strong>Distance:</strong> ${rideData.distKm} km<br/>
+              <strong>Est. Fare:</strong> ₹${transportFee}
+            `,
+            buttonLink: `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
+            buttonText: 'Track Booking',
+          }),
+        }).catch(e => console.error('[CareRide] customer email:', e.message));
+      }
+
+      // EMAIL → ops if no driver nearby
+      if (nearbyCount === 0) {
+        emailNoDriverNearby(booking, {
+          ...rideData, rideId: ride._id, requesterType: 'care_assistant', searchRadiusKm: 30,
+        });
+      }
+
       getBookingSocketService()?.emitToAdminOps('ride_requested_by_care_assistant', {
         bookingId:       booking._id,
         bookingCode:     booking.bookingCode,
@@ -886,6 +1149,7 @@ router.post('/:id/care/request-ride',
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ADMIN: care-ride request (on behalf of customer or care assistant)
+// EMAIL: customer + care assistant notified; ops alert if no driver
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/admin/care-ride/request',
@@ -976,11 +1240,62 @@ router.post('/admin/care-ride/request',
           },
         });
 
+        // EMAIL → customer
+        const customer = await User.findById(resolvedCustomerId).select('email name phone').lean();
+        if (customer?.email) {
+          sendEmail({
+            email:   customer.email,
+            subject: `Ride Arranged for You — Booking #${booking.bookingCode} | Likeson Healthcare`,
+            html: transactionalTemplate({
+              header:     'RIDE ARRANGED',
+              title:      'Admin has arranged a ride for your booking',
+              body: `
+                A ride has been arranged for booking <strong>#${booking.bookingCode}</strong>.<br/>
+                <strong>Pickup:</strong> ${pickupGeo.address || pickupGeo.label || 'As provided'}<br/>
+                <strong>Drop:</strong> ${dropoffGeo.address || dropoffGeo.label || 'As provided'}<br/>
+                <strong>Distance:</strong> ${+canonicalKm.toFixed(2)} km &nbsp;|&nbsp; ₹${transportFee}<br/>
+                A driver will be assigned shortly.
+              `,
+              buttonLink: `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
+              buttonText: 'Track Booking',
+            }),
+          }).catch(e => console.error('[AdminCareRide] customer email:', e.message));
+        }
+
+        // EMAIL → care assistant if applicable
         if (requesterType === 'care_assistant' && careAssistantId) {
-          const ca = await CareAssistantProfile.findById(careAssistantId).select('user').lean();
-          if (ca) joinBookingRoom(ca.user, booking._id);
+          const ca     = await CareAssistantProfile.findById(careAssistantId).select('user').lean();
+          const caUser = ca ? await User.findById(ca.user).select('email name').lean() : null;
+          if (caUser?.email) {
+            sendEmail({
+              email:   caUser.email,
+              subject: `Care Ride Confirmed — Booking #${booking.bookingCode} | Likeson Healthcare`,
+              html: transactionalTemplate({
+                header:     'CARE RIDE CONFIRMED',
+                title:      'Admin confirmed your care ride request',
+                body: `
+                  The ride for your patient (booking <strong>#${booking.bookingCode}</strong>) has been confirmed by admin.<br/>
+                  <strong>Pickup:</strong> ${pickupGeo.address || pickupGeo.label || 'As provided'}<br/>
+                  <strong>Drop:</strong> ${dropoffGeo.address || dropoffGeo.label || 'As provided'}<br/>
+                  <strong>Distance:</strong> ${+canonicalKm.toFixed(2)} km
+                `,
+                buttonLink: `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
+                buttonText: 'View Booking',
+              }),
+            }).catch(e => console.error('[AdminCareRide] CA email:', e.message));
+          }
+
+          joinBookingRoom(ca.user, booking._id);
         }
         joinBookingRoom(booking.customer, booking._id);
+      }
+
+      // EMAIL → ops if no driver nearby
+      if (noDriverNearby && booking) {
+        emailNoDriverNearby(booking, {
+          rideId: ride._id, requesterType, pickup: pickupGeo, destination: dropoffGeo,
+          distKm: +canonicalKm.toFixed(2), transportFee, searchRadiusKm: 30,
+        });
       }
 
       getBookingSocketService()?.emitToAdminOps('care_ride_requested', {

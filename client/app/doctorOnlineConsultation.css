@@ -1,0 +1,111 @@
+/**
+ * doctorOnlineConsultation.css
+ * Likeson.in — Telemedicine room styles (doctor theme)
+ * Uses existing CSS variables from globals.css
+ */
+
+/* ── Room container ─────────────────────────────────────────── */
+.doc-room {
+  font-family: var(--font-family-poppins);
+  background-color: var(--base-100);
+  color: var(--base-content);
+}
+
+/* ── Video grid responsive ──────────────────────────────────── */
+.doc-room .participant-grid {
+  display: grid;
+  gap: 0.75rem;
+  width: 100%;
+  height: 100%;
+  padding: 0.75rem;
+}
+
+/* ── Glassmorphism panel surface ────────────────────────────── */
+.doc-room .glass-panel {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--base-100) 90%, var(--primary) 10%),
+    color-mix(in srgb, var(--base-100) 95%, var(--secondary) 5%)
+  );
+  backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid color-mix(in srgb, var(--base-content), transparent 88%);
+}
+
+/* ── Video tile overlay gradients ──────────────────────────── */
+.doc-room video {
+  background-color: var(--base-300);
+  display: block;
+}
+
+/* ── Control bar above safe area on iOS ─────────────────────── */
+.doc-room .control-bar {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+/* ── Pulse glow on speaking participant ─────────────────────── */
+.doc-room .speaking-border {
+  box-shadow: 0 0 0 2px var(--primary), 0 0 16px color-mix(in srgb, var(--primary), transparent 55%);
+  border-color: var(--primary) !important;
+}
+
+/* ── Recording indicator blink ───────────────────────────────── */
+@keyframes rec-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+.doc-room .recording-dot {
+  animation: rec-blink 1.2s ease-in-out infinite;
+}
+
+/* ── Sidebar slide transition ───────────────────────────────── */
+.doc-room .sidebar-enter {
+  animation: slideInLeft 0.25s ease-out;
+}
+.doc-room .sidebar-exit {
+  animation: slideOutLeft 0.25s ease-in;
+}
+@keyframes slideInLeft {
+  from { transform: translateX(-100%); opacity: 0; }
+  to   { transform: translateX(0);      opacity: 1; }
+}
+@keyframes slideOutLeft {
+  from { transform: translateX(0);      opacity: 1; }
+  to   { transform: translateX(-100%); opacity: 0; }
+}
+
+/* ── Mobile stacked layout ──────────────────────────────────── */
+@media (max-width: 768px) {
+  .doc-room .video-area {
+    height: 55vh;
+  }
+  .doc-room .panel-area {
+    height: 45vh;
+  }
+}
+
+/* ── Scrollbar doctor theme ─────────────────────────────────── */
+.doc-room ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--primary), var(--secondary));
+}
+
+/* ── Focus ring doctor color ────────────────────────────────── */
+.doc-room *:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* ── Skeleton shimmer ───────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+.doc-room .skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--base-300) 25%,
+    color-mix(in srgb, var(--base-300), var(--base-200) 50%) 50%,
+    var(--base-300) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}

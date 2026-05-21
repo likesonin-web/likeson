@@ -1,4 +1,3 @@
- 
 import express from 'express';
 
 import Booking              from '../models/Booking.js';
@@ -19,7 +18,11 @@ import sendEmail                     from '../utils/sendEmail.js';
 import sendSms                       from '../services/Sendsms.js';
 import { generateBookingInvoicePdf } from '../utils/bookingInvoiceGenerator.js';
 import { getBookingSocketService }   from '../services/bookingSocketService.js';
-import { transactionalTemplate }     from '../utils/emailTemplates.js';
+import {
+  transactionalTemplate,
+  buildStatusUpdateEmail,
+  buildRefundEmail,
+} from '../utils/emailTemplates.js';
 import {
   driverAssignedSms, careAssistantAssignedSms,
   appointmentConfirmedSms, newCareRequestToAssistantSms,
@@ -141,6 +144,129 @@ const joinTpRoom = (userId, tpId) => {
   catch (e) { console.error('[joinTpRoom]', e.message); }
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EMAIL HELPERS  (fire-and-forget — never block response)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Notify customer of any booking status change.
+ * Uses buildStatusUpdateEmail so it shares the same rich template as order emails.
+ */
+const emailCustomerStatusUpdate = async ({ booking, newStatus, customer }) => {
+  try {
+    if (!customer?.email) return;
+    const orderItems = (booking.items || []).map(i => ({
+      name:          i.name,
+      quantity:      i.quantity,
+      pricePerUnit:  i.pricePerUnit || 0,
+      medicineImage: i.medicineImage || null,
+    }));
+    await sendEmail({
+      email:   customer.email,
+      subject: `Booking #${booking.bookingCode} — Status Update: ${newStatus} | Likeson Healthcare`,
+      html:    buildStatusUpdateEmail({
+        userName:   customer.name,
+        order:      { orderId: booking.bookingCode },
+        orderItems,
+        billing:    booking.fareBreakdown
+          ? {
+              subTotal:       booking.fareBreakdown.totalAmount || 0,
+              gstAmount:      booking.fareBreakdown.taxAmount   || 0,
+              totalPayable:   booking.fareBreakdown.totalAmount || 0,
+              discountAmount: booking.fareBreakdown.discountAmount || 0,
+            }
+          : null,
+        actionLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
+        newStatus,
+      }),
+    });
+  } catch (e) { console.error('[emailCustomerStatusUpdate]', e.message); }
+};
+
+/**
+ * Notify driver (User) of assignment via transactionalTemplate.
+ */
+const emailDriverAssigned = async ({ driverUser, booking, verb = 'assigned' }) => {
+  try {
+    if (!driverUser?.email) return;
+    await sendEmail({
+      email:   driverUser.email,
+      subject: `Ride ${verb} — Booking #${booking.bookingCode} | Likeson Healthcare`,
+      html:    transactionalTemplate({
+        header:     'RIDE ASSIGNMENT',
+        title:      `Booking #${booking.bookingCode} has been ${verb} to you`,
+        body:       `<b>Patient:</b> ${booking.patientInfo?.name || 'N/A'}<br/>
+                     <b>Pickup:</b> ${booking.patientLocation?.address || 'N/A'}<br/>
+                     <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}`,
+        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/driver/rides`,
+        buttonText: 'View Ride',
+      }),
+    });
+  } catch (e) { console.error('[emailDriverAssigned]', e.message); }
+};
+
+/**
+ * Notify care assistant (User) of assignment.
+ */
+const emailCareAssistantAssigned = async ({ caUser, caName, booking, verb = 'assigned' }) => {
+  try {
+    if (!caUser?.email) return;
+    await sendEmail({
+      email:   caUser.email,
+      subject: `Care Request ${verb} — Booking #${booking.bookingCode} | Likeson Healthcare`,
+      html:    transactionalTemplate({
+        header:     'CARE ASSIGNMENT',
+        title:      `Booking #${booking.bookingCode} has been ${verb} to you`,
+        body:       `<b>Patient:</b> ${booking.patientInfo?.name || 'N/A'}<br/>
+                     <b>Location:</b> ${booking.patientLocation?.address || 'N/A'}<br/>
+                     <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}`,
+        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/care/bookings`,
+        buttonText: 'View Booking',
+      }),
+    });
+  } catch (e) { console.error('[emailCareAssistantAssigned]', e.message); }
+};
+
+/**
+ * Notify hospital of a new/updated booking.
+ */
+const emailHospitalBookingUpdate = async ({ hospitalUser, booking, subject, body }) => {
+  try {
+    if (!hospitalUser?.email) return;
+    await sendEmail({
+      email:   hospitalUser.email,
+      subject: subject || `Booking #${booking.bookingCode} Update | Likeson Healthcare`,
+      html:    transactionalTemplate({
+        header:     'HOSPITAL NOTIFICATION',
+        title:      subject || `Booking #${booking.bookingCode} Update`,
+        body,
+        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/hospital/bookings/${booking._id}`,
+        buttonText: 'View Booking',
+      }),
+    });
+  } catch (e) { console.error('[emailHospitalBookingUpdate]', e.message); }
+};
+
+/**
+ * Notify doctor of a booking or OP update.
+ */
+const emailDoctorBookingUpdate = async ({ doctorUser, booking, subject, body }) => {
+  try {
+    if (!doctorUser?.email) return;
+    await sendEmail({
+      email:   doctorUser.email,
+      subject: subject || `Booking #${booking.bookingCode} Update | Likeson Healthcare`,
+      html:    transactionalTemplate({
+        header:     'DOCTOR NOTIFICATION',
+        title:      subject || `Booking #${booking.bookingCode} Update`,
+        body,
+        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/doctor/ops`,
+        buttonText: 'View OP Records',
+      }),
+    });
+  } catch (e) { console.error('[emailDoctorBookingUpdate]', e.message); }
+};
+
 // ═════════════════════════════════════════════════════════════════════════════
 // TRANSPORT PARTNER ROUTES
 // ═════════════════════════════════════════════════════════════════════════════
@@ -191,11 +317,12 @@ router.get('/tp/drivers/available', protect, authorize('transportpartner'), asyn
 /**
  * PATCH /:id/tp/assign-driver
  * TP assigns one of their own drivers.
- * Ride.driver = Driver._id (driverId body param is Driver._id).
+ * → Email: driver notified of assignment
+ * → Email: customer notified booking confirmed with driver info
  */
 router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), async (req, res) => {
   try {
-    const { driverId } = req.body; // ← Driver._id
+    const { driverId } = req.body;
     if (!driverId) return res.status(400).json({ success: false, message: 'driverId required' });
 
     const tp = await TransportPartner.findOne({ user: req.user._id }).select('_id').lean();
@@ -207,7 +334,6 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
-    // Cancel any pending rides
     await Ride.updateMany(
       { booking: booking._id, status: { $in: ['requested', 'searching'] } },
       { status: 'cancelled', 'cancellation.cancelledBy': 'system', 'cancellation.cancelledAt': new Date() }
@@ -228,7 +354,7 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
         ...coords,
         createdBy:         req.user._id,
       }),
-      driver:               driverId,  // ← Driver._id
+      driver:               driverId,
       transportPartner:     tp._id,
       status:               'driver_assigned',
       estimatedDistanceKm:  distanceKm,
@@ -251,7 +377,8 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
       },
     });
 
-    const driverUser = await User.findById(driver.user).select('email phone name').lean();
+    const driverUser   = await User.findById(driver.user).select('email phone name').lean();
+    const customer     = await User.findById(booking.customer).select('email phone name').lean();
 
     await createNotification({
       recipient: driver.user,
@@ -261,6 +388,26 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
       bookingId: booking._id,
       priority:  'High',
     });
+
+    // Email: driver
+    emailDriverAssigned({ driverUser, booking }).catch(() => {});
+
+    // Email: customer — booking confirmed, driver details
+    sendEmail({
+      email:   customer?.email,
+      subject: `Driver Assigned — Booking #${booking.bookingCode} | Likeson Healthcare`,
+      html:    transactionalTemplate({
+        header:     'DRIVER ASSIGNED',
+        title:      `Your driver is confirmed for Booking #${booking.bookingCode}`,
+        body:       `<b>Driver:</b> ${driverUser?.name || 'N/A'}<br/>
+                     <b>Phone:</b> ${driverUser?.phone || 'N/A'}<br/>
+                     <b>Vehicle:</b> ${driver.assignedVehicleSnapshot?.registrationNumber || 'N/A'}<br/>
+                     <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}<br/>
+                     <b>Est. Distance:</b> ${distanceKm} km`,
+        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
+        buttonText: 'Track Booking',
+      }),
+    }).catch(e => console.error('[TP assign-driver] customer email:', e.message));
 
     sendSms({
       to:      driverUser.phone,
@@ -276,13 +423,13 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
       vehicle:     driver.assignedVehicleSnapshot,
       mapRoute: {
         polyline,
-        pickupCoords:    coords.pickupCoords,
-        pickupAddress:   coords.pickupAddress,
-        dropoffCoords:   coords.dropoffCoords,
-        dropoffAddress:  coords.dropoffAddress,
-        estimatedDistKm: distanceKm,
+        pickupCoords:     coords.pickupCoords,
+        pickupAddress:    coords.pickupAddress,
+        dropoffCoords:    coords.dropoffCoords,
+        dropoffAddress:   coords.dropoffAddress,
+        estimatedDistKm:  distanceKm,
         estimatedMinutes: durationMin,
-        currentTarget:   'pickup',
+        currentTarget:    'pickup',
       },
     });
 
@@ -305,9 +452,14 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
   }
 });
 
+/**
+ * PATCH /:id/tp/reassign-driver
+ * → Email: new driver notified
+ * → Email: customer notified of driver change
+ */
 router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), async (req, res) => {
   try {
-    const { newDriverId } = req.body; // ← Driver._id
+    const { newDriverId } = req.body;
     if (!newDriverId) return res.status(400).json({ success: false, message: 'newDriverId required' });
 
     const tp = await TransportPartner.findOne({ user: req.user._id }).select('_id').lean();
@@ -339,7 +491,7 @@ router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), 
         ...coords,
         createdBy:         req.user._id,
       }),
-      driver:               newDriverId, // ← Driver._id
+      driver:               newDriverId,
       transportPartner:     tp._id,
       status:               'driver_assigned',
       estimatedDistanceKm:  distanceKm,
@@ -356,6 +508,9 @@ router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), 
       $set:  { primaryRide: ride._id, updatedBy: req.user._id },
     });
 
+    const driverUser = await User.findById(driver.user).select('email phone name').lean();
+    const customer   = await User.findById(booking.customer).select('email phone name').lean();
+
     await createNotification({
       recipient: driver.user,
       title:     'Ride Assigned',
@@ -363,6 +518,24 @@ router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), 
       type:      'Ride_Request',
       bookingId: booking._id,
     });
+
+    // Email: new driver
+    emailDriverAssigned({ driverUser, booking, verb: 'reassigned' }).catch(() => {});
+
+    // Email: customer — driver changed
+    sendEmail({
+      email:   customer?.email,
+      subject: `Driver Updated — Booking #${booking.bookingCode} | Likeson Healthcare`,
+      html:    transactionalTemplate({
+        header:     'DRIVER UPDATED',
+        title:      `Your driver has been updated for Booking #${booking.bookingCode}`,
+        body:       `<b>New Driver:</b> ${driverUser?.name || 'N/A'}<br/>
+                     <b>Phone:</b> ${driverUser?.phone || 'N/A'}<br/>
+                     <b>Vehicle:</b> ${driver.assignedVehicleSnapshot?.registrationNumber || 'N/A'}`,
+        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
+        buttonText: 'Track Booking',
+      }),
+    }).catch(e => console.error('[TP reassign-driver] customer email:', e.message));
 
     joinBookingRoom(driver.user, booking._id);
     await invalidateBookingCache();
@@ -373,7 +546,7 @@ router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), 
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// CARE ASSISTANT ROUTES — authorize('care_assistant') underscore always
+// CARE ASSISTANT ROUTES
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.get('/care/assigned',
@@ -413,6 +586,8 @@ router.patch('/:id/care/arrived',
       booking.updatedBy = req.user._id;
       await booking.save();
 
+      const customer = await User.findById(booking.customer).select('email phone name').lean();
+
       await createNotification({
         recipient: booking.customer,
         title:     'Care Assistant Arrived',
@@ -420,6 +595,20 @@ router.patch('/:id/care/arrived',
         type:      'Care_Assistant_Arriving',
         bookingId: booking._id,
       });
+
+      // Email: customer — care assistant arrived
+      sendEmail({
+        email:   customer?.email,
+        subject: `Care Assistant Arrived — Booking #${booking.bookingCode} | Likeson Healthcare`,
+        html:    transactionalTemplate({
+          header:     'CARE ASSISTANT UPDATE',
+          title:      'Your care assistant has arrived',
+          body:       `Your care assistant is at your pickup location for Booking <b>#${booking.bookingCode}</b>.<br/>
+                       Please be ready to receive them.`,
+          buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
+          buttonText: 'View Booking',
+        }),
+      }).catch(e => console.error('[care/arrived] email:', e.message));
 
       getBookingSocketService()?.emitToRoom(
         `booking:${booking._id}`, 'care_arrived', { bookingId: booking._id }
@@ -432,6 +621,10 @@ router.patch('/:id/care/arrived',
   }
 );
 
+/**
+ * PATCH /:id/care/start
+ * → Email: customer notified task started
+ */
 router.patch('/:id/care/start',
   protect, authorize('care_assistant'),
   async (req, res) => {
@@ -450,6 +643,8 @@ router.patch('/:id/care/start',
       booking.updatedBy = req.user._id;
       await booking.save();
 
+      const customer = await User.findById(booking.customer).select('email phone name').lean();
+
       await createNotification({
         recipient: booking.customer,
         title:     'Care Task Started',
@@ -457,6 +652,20 @@ router.patch('/:id/care/start',
         type:      'Care_Task_Started',
         bookingId: booking._id,
       });
+
+      // Email: customer
+      sendEmail({
+        email:   customer?.email,
+        subject: `Care Task Started — Booking #${booking.bookingCode} | Likeson Healthcare`,
+        html:    transactionalTemplate({
+          header:     'CARE UPDATE',
+          title:      'Your care task has started',
+          body:       `Your care assistant has begun the task for Booking <b>#${booking.bookingCode}</b>.<br/>
+                       They will update you upon completion.`,
+          buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
+          buttonText: 'View Booking',
+        }),
+      }).catch(e => console.error('[care/start] email:', e.message));
 
       getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', {
         bookingId: booking._id, status: 'in_progress', timestamp: new Date(),
@@ -470,6 +679,10 @@ router.patch('/:id/care/start',
   }
 );
 
+/**
+ * PATCH /:id/care/complete
+ * → Email: customer notified task completed
+ */
 router.patch('/:id/care/complete',
   protect, authorize('care_assistant'),
   async (req, res) => {
@@ -488,6 +701,8 @@ router.patch('/:id/care/complete',
       booking.updatedBy = req.user._id;
       await booking.save();
 
+      const customer = await User.findById(booking.customer).select('email phone name').lean();
+
       await createNotification({
         recipient: booking.customer,
         title:     'Care Task Completed',
@@ -495,6 +710,20 @@ router.patch('/:id/care/complete',
         type:      'Care_Task_Completed',
         bookingId: booking._id,
       });
+
+      // Email: customer — task completed
+      sendEmail({
+        email:   customer?.email,
+        subject: `Care Task Completed — Booking #${booking.bookingCode} | Likeson Healthcare`,
+        html:    transactionalTemplate({
+          header:     'CARE COMPLETED',
+          title:      'Your care task is complete',
+          body:       `Your care assistant has successfully completed the task for Booking <b>#${booking.bookingCode}</b>.<br/>
+                       Please rate your experience.`,
+          buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}/rate`,
+          buttonText: 'Rate Your Experience',
+        }),
+      }).catch(e => console.error('[care/complete] email:', e.message));
 
       getBookingSocketService()?.emitToRoom(
         `booking:${booking._id}`, 'care_completed', { bookingId: booking._id }
@@ -565,6 +794,11 @@ router.get('/hospital/upcoming', protect, authorize('hospital'), async (req, res
   }
 });
 
+/**
+ * PATCH /:id/hospital/confirm
+ * → Email: customer appointment confirmed
+ * → Email: doctor notified of upcoming appointment
+ */
 router.patch('/:id/hospital/confirm', protect, authorize('hospital'), async (req, res) => {
   try {
     const booking = await Booking.findById(req.params.id);
@@ -580,7 +814,8 @@ router.patch('/:id/hospital/confirm', protect, authorize('hospital'), async (req
     booking.updatedBy = req.user._id;
     await booking.save();
 
-    const customer = await User.findById(booking.customer).select('phone name').lean();
+    const customer = await User.findById(booking.customer).select('phone name email').lean();
+
     sendSms({
       to:      customer.phone,
       message: appointmentConfirmedSms({
@@ -591,6 +826,39 @@ router.patch('/:id/hospital/confirm', protect, authorize('hospital'), async (req
         mode:          booking.consultationType || 'inPerson',
       }),
     }).catch(e => console.error('[Hospital confirm] SMS:', e.message));
+
+    // Email: customer — appointment confirmed
+    sendEmail({
+      email:   customer?.email,
+      subject: `Appointment Confirmed — Booking #${booking.bookingCode} | Likeson Healthcare`,
+      html:    transactionalTemplate({
+        header:     'APPOINTMENT CONFIRMED',
+        title:      `Your appointment has been confirmed`,
+        body:       `<b>Booking:</b> #${booking.bookingCode}<br/>
+                     <b>Doctor:</b> ${booking.doctorSnapshot?.name || 'Your Doctor'}<br/>
+                     <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}<br/>
+                     <b>Mode:</b> ${booking.consultationType || 'In-Person'}`,
+        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
+        buttonText: 'View Appointment',
+      }),
+    }).catch(e => console.error('[hospital/confirm] customer email:', e.message));
+
+    // Email: doctor — notified of upcoming appointment
+    if (booking.doctor) {
+      const doctorProfile = await DoctorProfile.findById(booking.doctor)
+        .populate('user', 'name email').lean();
+      if (doctorProfile?.user?.email) {
+        emailDoctorBookingUpdate({
+          doctorUser: doctorProfile.user,
+          booking,
+          subject:    `Appointment Confirmed — Patient: ${booking.patientInfo?.name} | Likeson`,
+          body:       `<b>Patient:</b> ${booking.patientInfo?.name || 'N/A'}<br/>
+                       <b>Booking:</b> #${booking.bookingCode}<br/>
+                       <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}<br/>
+                       <b>Mode:</b> ${booking.consultationType || 'In-Person'}`,
+        }).catch(() => {});
+      }
+    }
 
     return res.json({ success: true, message: 'Appointment confirmed' });
   } catch (err) {
@@ -770,6 +1038,11 @@ router.get('/doctor/ops/:opNumber',
   }
 );
 
+/**
+ * PATCH /:id/op/complete
+ * → Email: patient gets OP zip (existing sendOpZipEmail)
+ * → Email: hospital notified consultation completed
+ */
 router.patch('/:id/op/complete', protect, authorize('doctor'), async (req, res) => {
   try {
     const doctorProfile = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
@@ -802,7 +1075,25 @@ router.patch('/:id/op/complete', protect, authorize('doctor'), async (req, res) 
       bookingId: booking._id,
     });
 
+    // Email: patient — OP zip (existing helper)
     sendOpZipEmail({ op: op.toObject ? op.toObject() : op, booking, patient: customer, followUps });
+
+    // Email: hospital — doctor completed consultation
+    if (op.hospital) {
+      const hospital = await Hospital.findById(op.hospital)
+        .populate('managedBy', 'name email').lean();
+      if (hospital?.managedBy?.email) {
+        emailHospitalBookingUpdate({
+          hospitalUser: hospital.managedBy,
+          booking,
+          subject: `Consultation Completed — OP ${op.opNumber} | Likeson Healthcare`,
+          body:    `Dr. ${booking.doctorSnapshot?.name || 'Doctor'} has completed consultation for:<br/>
+                    <b>Patient:</b> ${booking.patientInfo?.name || 'N/A'}<br/>
+                    <b>OP Number:</b> ${op.opNumber}<br/>
+                    <b>Completed:</b> ${new Date().toLocaleString('en-IN')}`,
+        }).catch(() => {});
+      }
+    }
 
     await invalidateBookingCache();
     return res.json({ success: true, message: 'OP completed and sent to patient', data: { op } });
@@ -1067,6 +1358,12 @@ router.get('/admin/bookings/:id',
   }
 );
 
+/**
+ * PATCH /admin/bookings/:id/status
+ * → Email: customer notified of status change
+ * → Email: doctor notified if relevant (consultation statuses)
+ * → Email: hospital notified if relevant
+ */
 router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { status, note } = req.body;
@@ -1081,6 +1378,44 @@ router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadm
     });
     booking.updatedBy = req.user._id;
     await booking.save();
+
+    const customer = await User.findById(booking.customer).select('email phone name').lean();
+
+    // Email: customer — status update
+    emailCustomerStatusUpdate({ booking, newStatus: status, customer }).catch(() => {});
+
+    // Email: doctor — if booking involves consultation and status is significant
+    if (booking.doctor && ['confirmed', 'cancelled', 'completed'].includes(status)) {
+      const doctorProfile = await DoctorProfile.findById(booking.doctor)
+        .populate('user', 'name email').lean();
+      if (doctorProfile?.user?.email) {
+        emailDoctorBookingUpdate({
+          doctorUser: doctorProfile.user,
+          booking,
+          subject: `Booking #${booking.bookingCode} — Status: ${status} | Likeson Healthcare`,
+          body:    `<b>Patient:</b> ${booking.patientInfo?.name || 'N/A'}<br/>
+                    <b>Status:</b> ${status}<br/>
+                    <b>Note:</b> ${note || 'Admin update'}<br/>
+                    <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}`,
+        }).catch(() => {});
+      }
+    }
+
+    // Email: hospital — if involved
+    if (booking.hospital && ['confirmed', 'cancelled', 'completed'].includes(status)) {
+      const hospital = await Hospital.findById(booking.hospital)
+        .populate('managedBy', 'name email').lean();
+      if (hospital?.managedBy?.email) {
+        emailHospitalBookingUpdate({
+          hospitalUser: hospital.managedBy,
+          booking,
+          subject: `Booking #${booking.bookingCode} — Status: ${status} | Likeson Healthcare`,
+          body:    `<b>Patient:</b> ${booking.patientInfo?.name || 'N/A'}<br/>
+                    <b>Status changed to:</b> ${status}<br/>
+                    <b>Note:</b> ${note || 'Admin update'}`,
+        }).catch(() => {});
+      }
+    }
 
     getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_status_change', {
       bookingId: booking._id, status, timestamp: new Date(),
@@ -1325,6 +1660,11 @@ router.get('/admin/bookings/:id/nearby/hospitals',
 
 // ── Admin assignment routes ────────────────────────────────────────────────
 
+/**
+ * POST /admin/bookings/:id/assign/solo-driver
+ * → Email: solo driver notified
+ * → Email: customer — booking confirmed with driver info
+ */
 router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { soloDriverPartnerId } = req.body;
@@ -1364,7 +1704,7 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
         ...coords,
         createdBy:         req.user._id,
       }),
-      driver:               soloPartner.driverProfile, // ← Driver._id
+      driver:               soloPartner.driverProfile,
       soloPartner:          soloPartner._id,
       status:               'driver_assigned',
       estimatedDistanceKm:  distanceKm,
@@ -1390,6 +1730,26 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
       priority:  'High',
     });
 
+    // Email: driver
+    emailDriverAssigned({ driverUser: soloPartner.user, booking }).catch(() => {});
+
+    // Email: customer — booking confirmed + driver
+    const customer = await User.findById(booking.customer).select('email phone name').lean();
+    sendEmail({
+      email:   customer?.email,
+      subject: `Driver Assigned — Booking #${booking.bookingCode} | Likeson Healthcare`,
+      html:    transactionalTemplate({
+        header:     'DRIVER ASSIGNED',
+        title:      `Your driver has been assigned for Booking #${booking.bookingCode}`,
+        body:       `<b>Driver:</b> ${soloPartner.user?.name || 'N/A'}<br/>
+                     <b>Phone:</b> ${soloPartner.user?.phone || 'N/A'}<br/>
+                     <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}<br/>
+                     <b>Est. Distance:</b> ${distanceKm} km`,
+        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
+        buttonText: 'Track Booking',
+      }),
+    }).catch(e => console.error('[admin assign solo] customer email:', e.message));
+
     sendSms({
       to:      soloPartner.user.phone,
       message: `Hi ${soloPartner.user.name}, booking #${booking.bookingCode} assigned by admin. Check Likeson app.`,
@@ -1404,13 +1764,13 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
       driverInfo: { name: soloPartner.user.name, phone: soloPartner.user.phone },
       mapRoute: {
         polyline,
-        pickupCoords:    coords.pickupCoords,
-        pickupAddress:   coords.pickupAddress,
-        dropoffCoords:   coords.dropoffCoords,
-        dropoffAddress:  coords.dropoffAddress,
-        estimatedDistKm: distanceKm,
+        pickupCoords:     coords.pickupCoords,
+        pickupAddress:    coords.pickupAddress,
+        dropoffCoords:    coords.dropoffCoords,
+        dropoffAddress:   coords.dropoffAddress,
+        estimatedDistKm:  distanceKm,
         estimatedMinutes: durationMin,
-        currentTarget:   'pickup',
+        currentTarget:    'pickup',
       },
     });
 
@@ -1428,6 +1788,11 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
   }
 });
 
+/**
+ * POST /admin/bookings/:id/assign/transport-partner
+ * → Email: TP notified (already exists — kept)
+ * → Email: customer — TP assigned, driver coming soon
+ */
 router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { transportPartnerId } = req.body;
@@ -1456,17 +1821,35 @@ router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('
       priority:  'High',
     });
 
+    // Email: TP (existing)
     sendEmail({
       email:   tp.user.email,
       subject: `New Booking #${booking.bookingCode} — Assign Driver`,
       html:    transactionalTemplate({
         header:     'BOOKING ASSIGNED TO YOUR FLEET',
         title:      `Booking #${booking.bookingCode} needs a driver`,
-        body:       `<b>Type:</b> ${booking.bookingType}<br/><b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}<br/><b>Patient:</b> ${booking.patientInfo?.name}`,
+        body:       `<b>Type:</b> ${booking.bookingType}<br/>
+                     <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}<br/>
+                     <b>Patient:</b> ${booking.patientInfo?.name}`,
         buttonLink: `${process.env.FRONTEND_URL}/tp/bookings/${booking._id}`,
         buttonText: 'Assign Driver Now',
       }),
     }).catch(e => console.error('[Admin assign TP] Email:', e.message));
+
+    // Email: customer — transport partner assigned
+    const customer = await User.findById(booking.customer).select('email phone name').lean();
+    sendEmail({
+      email:   customer?.email,
+      subject: `Transport Arranged — Booking #${booking.bookingCode} | Likeson Healthcare`,
+      html:    transactionalTemplate({
+        header:     'TRANSPORT UPDATE',
+        title:      `Transport has been arranged for Booking #${booking.bookingCode}`,
+        body:       `Your transport partner <b>${tp.businessName || tp.ownerName}</b> has been assigned.<br/>
+                     A driver will be assigned shortly. You will receive further confirmation.`,
+        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
+        buttonText: 'View Booking',
+      }),
+    }).catch(e => console.error('[Admin assign TP] customer email:', e.message));
 
     sendSms({
       to:      tp.user.phone,
@@ -1501,6 +1884,11 @@ router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('
   }
 });
 
+/**
+ * POST /admin/bookings/:id/assign/care-assistant
+ * → Email: care assistant notified (in addition to existing SMS)
+ * → Email: customer notified (in addition to existing SMS)
+ */
 router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { careAssistantId } = req.body;
@@ -1529,7 +1917,7 @@ router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('adm
       priority:  'High',
     });
 
-    const customer = await User.findById(booking.customer).select('phone name').lean();
+    const customer = await User.findById(booking.customer).select('phone name email').lean();
 
     sendSms({
       to:      ca.user.phone,
@@ -1552,9 +1940,27 @@ router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('adm
       }),
     }).catch(e => console.error('[Admin assign CA] Customer SMS:', e.message));
 
+    // Email: care assistant
+    emailCareAssistantAssigned({ caUser: ca.user, caName: ca.fullName, booking }).catch(() => {});
+
+    // Email: customer
+    sendEmail({
+      email:   customer?.email,
+      subject: `Care Assistant Assigned — Booking #${booking.bookingCode} | Likeson Healthcare`,
+      html:    transactionalTemplate({
+        header:     'CARE ASSISTANT ASSIGNED',
+        title:      `Your care assistant has been assigned for Booking #${booking.bookingCode}`,
+        body:       `<b>Care Assistant:</b> ${ca.fullName}<br/>
+                     <b>Phone:</b> ${ca.phone}<br/>
+                     <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}`,
+        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
+        buttonText: 'View Booking',
+      }),
+    }).catch(e => console.error('[Admin assign CA] customer email:', e.message));
+
     joinBookingRoom(ca.user._id, booking._id);
     getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_assigned', {
-      bookingId:        booking._id,
+      bookingId:         booking._id,
       careAssistantName: ca.fullName,
     });
 
@@ -1572,6 +1978,11 @@ router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('adm
   }
 });
 
+/**
+ * POST /admin/bookings/:id/assign/hospital
+ * → Email: hospital manager notified of booking link
+ * → Email: customer notified hospital confirmed
+ */
 router.post('/admin/bookings/:id/assign/hospital', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { hospitalId } = req.body;
@@ -1580,13 +1991,44 @@ router.post('/admin/bookings/:id/assign/hospital', protect, authorize('admin', '
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
-    const hospital = await Hospital.findById(hospitalId).select('name isActive isVerified').lean();
+    const hospital = await Hospital.findById(hospitalId)
+      .populate('managedBy', 'name email phone')
+      .select('name isActive isVerified managedBy').lean();
     if (!hospital?.isActive || !hospital?.isVerified)
       return res.status(400).json({ success: false, message: 'Hospital not operational' });
 
     await Booking.findByIdAndUpdate(booking._id, {
       $set: { hospital: hospitalId, updatedBy: req.user._id },
     });
+
+    // Email: hospital manager
+    if (hospital.managedBy?.email) {
+      emailHospitalBookingUpdate({
+        hospitalUser: hospital.managedBy,
+        booking,
+        subject: `New Booking Assigned — #${booking.bookingCode} | Likeson Healthcare`,
+        body:    `<b>Patient:</b> ${booking.patientInfo?.name || 'N/A'}<br/>
+                  <b>Type:</b> ${booking.bookingType}<br/>
+                  <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}<br/>
+                  Please confirm the appointment slot in your dashboard.`,
+      }).catch(() => {});
+    }
+
+    // Email: customer — hospital linked
+    const customer = await User.findById(booking.customer).select('email phone name').lean();
+    sendEmail({
+      email:   customer?.email,
+      subject: `Hospital Assigned — Booking #${booking.bookingCode} | Likeson Healthcare`,
+      html:    transactionalTemplate({
+        header:     'HOSPITAL ASSIGNED',
+        title:      `${hospital.name} has been assigned for Booking #${booking.bookingCode}`,
+        body:       `Your appointment will be at <b>${hospital.name}</b>.<br/>
+                     <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}`,
+        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
+        buttonText: 'View Booking',
+      }),
+    }).catch(e => console.error('[Admin assign hospital] customer email:', e.message));
+
     await invalidateBookingCache();
     return res.json({ success: true, message: 'Hospital linked', data: { booking } });
   } catch (err) {
@@ -1594,9 +2036,14 @@ router.post('/admin/bookings/:id/assign/hospital', protect, authorize('admin', '
   }
 });
 
+/**
+ * PATCH /admin/bookings/:id/reassign/driver
+ * → Email: new driver notified
+ * → Email: customer notified of driver change
+ */
 router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
-    const { newDriverId, reason } = req.body; // newDriverId = Driver._id
+    const { newDriverId, reason } = req.body;
     if (!newDriverId)
       return res.status(400).json({ success: false, message: 'newDriverId (Driver._id) required' });
 
@@ -1625,7 +2072,7 @@ router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 
         ...coords,
         createdBy:         req.user._id,
       }),
-      driver:               newDriverId,                        // ← Driver._id
+      driver:               newDriverId,
       transportPartner:     driverDoc.ownerAgency  || undefined,
       soloPartner:          driverDoc.soloPartner  || undefined,
       status:               'driver_assigned',
@@ -1650,6 +2097,9 @@ router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 
     });
     await booking.save();
 
+    const driverUser = await User.findById(driverDoc.user).select('email phone name').lean();
+    const customer   = await User.findById(booking.customer).select('email phone name').lean();
+
     await createNotification({
       recipient: driverDoc.user,
       title:     'Ride Assigned',
@@ -1657,6 +2107,24 @@ router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 
       type:      'Ride_Request',
       bookingId: booking._id,
     });
+
+    // Email: new driver
+    emailDriverAssigned({ driverUser, booking, verb: 'reassigned' }).catch(() => {});
+
+    // Email: customer — driver changed
+    sendEmail({
+      email:   customer?.email,
+      subject: `Driver Updated — Booking #${booking.bookingCode} | Likeson Healthcare`,
+      html:    transactionalTemplate({
+        header:     'DRIVER UPDATED',
+        title:      `Your driver has been updated for Booking #${booking.bookingCode}`,
+        body:       `<b>New Driver:</b> ${driverUser?.name || 'N/A'}<br/>
+                     <b>Phone:</b> ${driverUser?.phone || 'N/A'}<br/>
+                     <b>Reason:</b> ${reason || 'Driver reassigned by operations team'}`,
+        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
+        buttonText: 'Track Booking',
+      }),
+    }).catch(e => console.error('[Admin reassign driver] customer email:', e.message));
 
     joinBookingRoom(driverDoc.user, booking._id);
     getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'driver_assigned', {
@@ -1670,6 +2138,11 @@ router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 
   }
 });
 
+/**
+ * PATCH /admin/bookings/:id/reassign/care
+ * → Email: new care assistant notified
+ * → Email: customer notified of change
+ */
 router.patch('/admin/bookings/:id/reassign/care', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { newCareAssistantId } = req.body;
@@ -1684,7 +2157,10 @@ router.patch('/admin/bookings/:id/reassign/care', protect, authorize('admin', 's
     });
 
     const ca = await CareAssistantProfile.findById(newCareAssistantId)
-      .populate('user', 'phone name').lean();
+      .populate('user', 'phone name email').lean();
+
+    const customer = await User.findById(booking.customer).select('email phone name').lean();
+
     if (ca) {
       await createNotification({
         recipient: ca.user._id,
@@ -1693,8 +2169,27 @@ router.patch('/admin/bookings/:id/reassign/care', protect, authorize('admin', 's
         type:      'Care_Assistant_Assigned',
         bookingId: booking._id,
       });
+
+      // Email: new care assistant
+      emailCareAssistantAssigned({ caUser: ca.user, caName: ca.fullName, booking, verb: 'reassigned' }).catch(() => {});
+
       joinBookingRoom(ca.user._id, booking._id);
     }
+
+    // Email: customer — care assistant changed
+    sendEmail({
+      email:   customer?.email,
+      subject: `Care Assistant Updated — Booking #${booking.bookingCode} | Likeson Healthcare`,
+      html:    transactionalTemplate({
+        header:     'CARE ASSISTANT UPDATED',
+        title:      `Your care assistant has been updated for Booking #${booking.bookingCode}`,
+        body:       `<b>New Care Assistant:</b> ${ca?.fullName || 'N/A'}<br/>
+                     <b>Phone:</b> ${ca?.phone || 'N/A'}<br/>
+                     <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}`,
+        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
+        buttonText: 'View Booking',
+      }),
+    }).catch(e => console.error('[Admin reassign care] customer email:', e.message));
 
     await invalidateBookingCache();
     return res.json({ success: true, message: 'Care assistant reassigned' });
@@ -1703,6 +2198,10 @@ router.patch('/admin/bookings/:id/reassign/care', protect, authorize('admin', 's
   }
 });
 
+/**
+ * POST /admin/bookings/:id/refund
+ * → Email: customer notified of refund with amount + method
+ */
 router.post('/admin/bookings/:id/refund', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { refundAmount, reason } = req.body;
@@ -1719,7 +2218,7 @@ router.post('/admin/bookings/:id/refund', protect, authorize('admin', 'superadmi
           amount: Math.round(amount * 100),
           notes:  { reason: reason || 'Admin initiated refund', bookingCode: booking.bookingCode },
         });
-        rzpPayment.status    = 'refunded';
+        rzpPayment.status     = 'refunded';
         rzpPayment.refundedAt = new Date();
       } catch (rzpErr) { console.error('[Refund] Razorpay refund failed:', rzpErr.message); }
     }
@@ -1749,6 +2248,8 @@ router.post('/admin/bookings/:id/refund', protect, authorize('admin', 'superadmi
     booking.updatedBy = req.user._id;
     await booking.save();
 
+    const customer = await User.findById(booking.customer).select('email phone name').lean();
+
     await createNotification({
       recipient: booking.customer,
       title:     'Refund Processed',
@@ -1756,6 +2257,21 @@ router.post('/admin/bookings/:id/refund', protect, authorize('admin', 'superadmi
       type:      'Refund_Processed',
       bookingId: booking._id,
     });
+
+    // Email: customer — refund confirmation using buildRefundEmail template
+    const refundMethod = rzpPayment ? 'Original_Source' : walletPayment ? 'Wallet' : 'Original_Source';
+    sendEmail({
+      email:   customer?.email,
+      subject: `Refund Processed — Booking #${booking.bookingCode} | Likeson Healthcare`,
+      html:    buildRefundEmail({
+        userName:     customer?.name || 'Valued Customer',
+        order:        { orderId: booking.bookingCode },
+        refundAmount: amount,
+        refundMethod,
+        actionLink:   `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
+      }),
+    }).catch(e => console.error('[Admin refund] email:', e.message));
+
     await invalidateBookingCache();
     return res.json({ success: true, message: 'Refund initiated', data: { booking } });
   } catch (err) {
@@ -1802,6 +2318,12 @@ router.get('/admin/ops',
   }
 );
 
+/**
+ * PATCH /admin/ops/:id/status
+ * → Email: patient gets OP zip if completed (existing)
+ * → Email: doctor notified of admin OP status change
+ * → Email: hospital notified of admin OP status change
+ */
 router.patch('/admin/ops/:id/status', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { status, doctorNotes } = req.body;
@@ -1816,7 +2338,11 @@ router.patch('/admin/ops/:id/status', protect, authorize('admin', 'superadmin'),
       status,
       ...(doctorNotes ? { doctorNotes } : {}),
       ...(status === 'completed' ? { completedAt: new Date() } : {}),
-    }, { new: true });
+    }, { new: true })
+      .populate('doctor',   'user specialization')
+      .populate('hospital', 'name managedBy')
+      .populate('patient',  'name email phone');
+
     if (!op) return res.status(404).json({ success: false, message: 'OP record not found' });
 
     if (status === 'completed') {
@@ -1824,6 +2350,37 @@ router.patch('/admin/ops/:id/status', protect, authorize('admin', 'superadmin'),
       const patient   = await User.findById(op.patient).select('email name phone').lean();
       const followUps = await OutPatientRecord.find({ parentOp: op._id }).sort({ scheduledAt: -1 }).lean();
       if (patient?.email) sendOpZipEmail({ op, booking, patient, followUps });
+    }
+
+    // Email: doctor — admin changed OP status
+    if (op.doctor?.user) {
+      const doctorUser = await User.findById(op.doctor.user).select('email name').lean();
+      if (doctorUser?.email) {
+        emailDoctorBookingUpdate({
+          doctorUser,
+          booking: { bookingCode: op.bookingNumber, _id: op.booking, patientInfo: { name: op.patientName }, scheduledAt: op.scheduledAt },
+          subject: `OP Record Updated — ${op.opNumber} | Likeson Healthcare`,
+          body:    `<b>OP Number:</b> ${op.opNumber}<br/>
+                    <b>Patient:</b> ${op.patientName || 'N/A'}<br/>
+                    <b>New Status:</b> ${status}<br/>
+                    ${doctorNotes ? `<b>Notes Added:</b> ${doctorNotes}` : ''}`,
+        }).catch(() => {});
+      }
+    }
+
+    // Email: hospital — admin changed OP status
+    if (op.hospital?.managedBy) {
+      const hospitalUser = await User.findById(op.hospital.managedBy).select('email name').lean();
+      if (hospitalUser?.email) {
+        emailHospitalBookingUpdate({
+          hospitalUser,
+          booking: { bookingCode: op.bookingNumber, _id: op.booking, patientInfo: { name: op.patientName }, scheduledAt: op.scheduledAt },
+          subject: `OP Record Updated — ${op.opNumber} | Likeson Healthcare`,
+          body:    `<b>OP Number:</b> ${op.opNumber}<br/>
+                    <b>Patient:</b> ${op.patientName || 'N/A'}<br/>
+                    <b>New Status:</b> ${status}`,
+        }).catch(() => {});
+      }
     }
 
     await invalidateBookingCache();
