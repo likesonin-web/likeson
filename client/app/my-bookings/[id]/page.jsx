@@ -9,13 +9,8 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
-import {
-  GoogleMap,
-  useJsApiLoader,
-  Marker,
-  DirectionsRenderer,
-  OverlayView,
-} from '@react-google-maps/api';
+ import { GoogleMap, Marker, DirectionsRenderer, OverlayView } from '@react-google-maps/api';
+ import { useGoogleMaps } from '@/context/GoogleMapsProvider'; // adjust path
 import {
   ArrowLeft,
   Calendar,
@@ -879,13 +874,7 @@ export default function BookingDetailsPage() {
   const [showRating, setShowRating] = useState(false);
   const [copied,     setCopied]     = useState(false);
 
-  // ── FIX: useJsApiLoader lives here at page level — called exactly once,
-  // always with the same MAPS_LIBRARIES reference. isLoaded is passed down
-  // as a prop to RouteMap so it never calls the loader itself.
-  const { isLoaded: mapsLoaded } = useJsApiLoader({
-    googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || '',
-    libraries: MAPS_LIBRARIES,   // stable module-level constant — never changes
-  });
+  const { isLoaded: mapsLoaded } = useGoogleMaps();
 
   // FIX: guard — never dispatch when id is falsy
   useEffect(() => {

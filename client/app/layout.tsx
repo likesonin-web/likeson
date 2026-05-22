@@ -7,7 +7,7 @@ import LayoutConditionalWrapper from '@/components/ui/LayoutConditionalWrapper';
 import { ThemeProvider } from '@/components/theme-provider';
 import { Toaster } from 'react-hot-toast';
 import AuthSocketBridge from '@/context/AuthSocketBridge';
-
+import {GoogleMapsProvider} from '@/context/GoogleMapsProvider';
 const poppins = Poppins({
   subsets: ['latin'],
   weight: ['400', '500', '600', '700'],
@@ -46,11 +46,13 @@ export default function RootLayout({
         <StoreProvider>
           <ThemeProvider attribute="class" defaultTheme="light">
             <AuthSocketBridge>
+               <GoogleMapsProvider>
               <ConnectivityWrapper>
                 <LayoutConditionalWrapper>
                   {children}
                 </LayoutConditionalWrapper>
               </ConnectivityWrapper>
+            </GoogleMapsProvider>
             </AuthSocketBridge>
 
             <Toaster

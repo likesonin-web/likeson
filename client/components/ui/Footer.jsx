@@ -226,14 +226,14 @@ const ROLE_FOOTER_CONFIG = {
 // ── Footer Component ───────────────────────────────────────────────────────────
 const Footer = () => {
   const currentYear = new Date().getFullYear();
-  const pathname = usePathname();
+  const pathname = usePathname() || ''; // Added fallback string to avoid null errors
 
   // Pull authenticated user from Redux
   const user = useSelector((s) => s.user?.user) ?? null;
 
-  // Visibility Logic: Hide on search or ride tracking (matching Header)
+  // Visibility Logic: Hide on search or ANY route containing 'tracking'
   const isHidden = useMemo(() => {
-    return pathname === '/search' || (pathname.startsWith('/rides/') && pathname.endsWith('/tracking'));
+    return pathname === '/search' || pathname.includes('tracking');
   }, [pathname]);
 
   // Resolve role → theme + link config

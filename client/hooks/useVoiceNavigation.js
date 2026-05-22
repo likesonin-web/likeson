@@ -1,145 +1,247 @@
 'use client';
 
- 
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { getAnnouncementBand } from '@/utils/navigationUtils';
+
+// Priority levels — higher = preempt lower
+const PRIORITY = { LOW: 0, NORMAL: 1, HIGH: 2, CRITICAL: 3 };
+
 export function useVoiceNavigation() {
   const [voiceEnabled, setVoiceEnabled] = useState(true);
 
-  // Queue: array of { text, lang, force }
-  const queueRef           = useRef([]);
-  const isSpeakingRef      = useRef(false);
-  const pausedRef          = useRef(false);
-  const voicesRef          = useRef([]);
-  const voicesReadyRef     = useRef(false);
+  const queueRef        = useRef([]);        // { text, lang, priority, id }
+  const isSpeakingRef   = useRef(false);
+  const pausedRef       = useRef(false);
+  const voicesRef       = useRef([]);
+  const voicesReadyRef  = useRef(false);
+  const currentUtterRef = useRef(null);
+  const retryTimerRef   = useRef(null);
 
-  // Per-maneuver distance band tracking — key = `${stepIndex}_${band}`
-  const maneuverBandRef    = useRef({});
+  // Per-maneuver per-step per-band dedup: key = `${stepIdx}_${bandKey}`
+  const announcedBandsRef = useRef({});
 
-  // ── Voice loading ──────────────────────────────────────────
+  // Android Chrome workaround — synth sometimes silently locks up
+  const synthWatchdogRef  = useRef(null);
+
+  // ── Voice loading ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
 
-    const loadVoices = () => {
-      voicesRef.current     = window.speechSynthesis.getVoices();
-      voicesReadyRef.current = true;
+    const load = () => {
+      voicesRef.current    = window.speechSynthesis.getVoices();
+      voicesReadyRef.current = voicesRef.current.length > 0;
     };
+    load();
+    window.speechSynthesis.addEventListener('voiceschanged', load);
 
-    loadVoices();
-    window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
+    // iOS Safari needs resume on user interaction to unlock audio
+    const unlockAudio = () => {
+      if (window.speechSynthesis?.paused) {
+        window.speechSynthesis.resume();
+      }
+    };
+    document.addEventListener('touchstart', unlockAudio, { once: true });
+    document.addEventListener('click',      unlockAudio, { once: true });
 
     return () => {
-      window.speechSynthesis.removeEventListener('voiceschanged', loadVoices);
-      window.speechSynthesis.cancel();
+      window.speechSynthesis.removeEventListener('voiceschanged', load);
+      document.removeEventListener('touchstart', unlockAudio);
+      document.removeEventListener('click', unlockAudio);
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+      if (synthWatchdogRef.current) clearInterval(synthWatchdogRef.current);
+      window.speechSynthesis?.cancel();
     };
   }, []);
 
-  // ── Process queue ──────────────────────────────────────────
+  // ── Android Chrome watchdog — detects stuck synth ─────────────────────────
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+
+    synthWatchdogRef.current = setInterval(() => {
+      if (!isSpeakingRef.current) return;
+      // If synth claims speaking but has been stuck > 8s, cancel + recover
+      if (window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+        const elapsed = Date.now() - (currentUtterRef.current?._startTs || Date.now());
+        if (elapsed > 8000) {
+          window.speechSynthesis.cancel();
+          isSpeakingRef.current = false;
+          retryTimerRef.current = setTimeout(processQueue, 400);
+        }
+      }
+    }, 2000);
+
+    return () => clearInterval(synthWatchdogRef.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Select best voice ──────────────────────────────────────────────────────
+  const selectVoice = useCallback((lang = 'en-IN') => {
+    const voices = voicesRef.current;
+    if (!voices.length) return undefined;
+
+    // Telugu
+    if (lang.startsWith('te')) {
+      return voices.find(v => v.lang.startsWith('te'));
+    }
+    // English India preferred
+    const enIN = voices.find(v => v.lang === 'en-IN');
+    if (enIN) return enIN;
+
+    // Female en-IN variants
+    const enINLike = voices.find(v =>
+      v.lang.startsWith('en') && (v.name.includes('India') || v.name.includes('Raveena'))
+    );
+    if (enINLike) return enINLike;
+
+    // Any English
+    return voices.find(v => v.lang.startsWith('en'));
+  }, []);
+
+  // ── Process queue ──────────────────────────────────────────────────────────
   const processQueue = useCallback(() => {
-    if (isSpeakingRef.current || pausedRef.current || !queueRef.current.length) return;
-    if (!window.speechSynthesis) return;
+    if (pausedRef.current || !queueRef.current.length) return;
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    if (isSpeakingRef.current) return;
 
-    const { text, lang } = queueRef.current.shift();
+    const item = queueRef.current.shift();
+    if (!item) return;
 
-    const utter    = new SpeechSynthesisUtterance(text);
-    utter.lang     = lang;
-    utter.rate     = 0.92;
-    utter.pitch    = 1.0;
-    utter.volume   = 1.0;
-
-    const voices     = voicesRef.current;
-    const enIN       = voices.find(v => v.lang === 'en-IN');
-    const enFallback = voices.find(v => v.lang.startsWith('en'));
-    const teVoice    = voices.find(v => v.lang.startsWith('te'));
-
-    if (lang.startsWith('te') && teVoice) utter.voice = teVoice;
-    else if (enIN)                         utter.voice = enIN;
-    else if (enFallback)                   utter.voice = enFallback;
+    const utter       = new SpeechSynthesisUtterance(item.text);
+    utter.lang        = item.lang || 'en-IN';
+    utter.rate        = 0.9;
+    utter.pitch       = 1.0;
+    utter.volume      = 1.0;
+    utter.voice       = selectVoice(item.lang);
+    utter._startTs    = Date.now();
+    currentUtterRef.current = utter;
 
     isSpeakingRef.current = true;
 
-    utter.onend = utter.onerror = () => {
-      isSpeakingRef.current = false;
-      setTimeout(processQueue, 300);
+    const finish = () => {
+      isSpeakingRef.current   = false;
+      currentUtterRef.current = null;
+      retryTimerRef.current   = setTimeout(processQueue, 250);
+    };
+
+    utter.onend   = finish;
+    utter.onerror = (e) => {
+      // 'interrupted' is normal when we cancel — not a real error
+      if (e.error !== 'interrupted') {
+        console.warn('[Voice] error:', e.error);
+      }
+      finish();
     };
 
     try {
+      window.speechSynthesis.cancel();         // clear any stuck utterance
       window.speechSynthesis.speak(utter);
-    } catch (e) {
+
+      // Android Chrome sometimes needs a resume after speak
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
+    } catch (err) {
+      console.warn('[Voice] speak failed:', err);
+      finish();
+    }
+  }, [selectVoice]);
+
+  // ── Core speak — priority queue with preemption ────────────────────────────
+  const speak = useCallback((text, {
+    priority = PRIORITY.NORMAL,
+    lang     = 'en-IN',
+    force    = false,
+  } = {}) => {
+    if (!text) return;
+    if (!voiceEnabled && !force) return;
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+
+    // Deduplicate — don't queue same text twice in a row
+    const last = queueRef.current[queueRef.current.length - 1];
+    if (last?.text === text) return;
+
+    // If new item has CRITICAL priority, preempt everything
+    if (priority >= PRIORITY.CRITICAL) {
+      queueRef.current = [];
+      window.speechSynthesis.cancel();
       isSpeakingRef.current = false;
     }
-  }, []);
 
-  // ── Core speak ─────────────────────────────────────────────
-  // NOTE: No global text dedup here — dedup lives in announceManeuver via band key.
-  // This allows same instruction text to be spoken at different distance bands.
-  const speak = useCallback((text, { force = false, lang = 'en-IN' } = {}) => {
-    if (!voiceEnabled && !force) return;
-    if (!text || typeof window === 'undefined' || !window.speechSynthesis) return;
+    // Drop lower-priority items if high-priority comes in
+    if (priority >= PRIORITY.HIGH) {
+      queueRef.current = queueRef.current.filter(q => q.priority >= PRIORITY.HIGH);
+    }
 
-    // Only block exact duplicate currently in queue (prevent instant re-queue)
-    if (queueRef.current.some(q => q.text === text)) return;
+    queueRef.current.push({ text, lang, priority, id: `${Date.now()}_${Math.random()}` });
 
-    queueRef.current.push({ text, lang, force });
-    processQueue();
+    // Sort by priority descending
+    queueRef.current.sort((a, b) => b.priority - a.priority);
+
+    if (!isSpeakingRef.current) processQueue();
   }, [voiceEnabled, processQueue]);
 
-  // ── Maneuver announcement (once per distance band per step) ─
-  const announceManeuver = useCallback((instruction, distanceMeters, stepIndex = -1) => {
-    if (!instruction) return;
+  // ── Maneuver announcement — once per step per distance band ───────────────
+  const announceManeuver = useCallback((instruction, distanceMeters, stepIndex = -1, speedKmh = 30) => {
+    if (!instruction || distanceMeters == null) return;
 
-    // Determine distance band
-    let band;
-    if (distanceMeters > 400)      band = '500';
-    else if (distanceMeters > 150) band = '300';
-    else if (distanceMeters > 50)  band = '100';
-    else                            band = 'now';
+    const band = getAnnouncementBand(distanceMeters, speedKmh);
+    if (!band) return;
 
-    // Key includes BOTH stepIndex AND band — resets automatically when step advances
-    const bandKey = `${stepIndex}_${band}`;
-
-    if (maneuverBandRef.current[bandKey]) return;
-    maneuverBandRef.current[bandKey] = true;
+    const key = `${stepIndex}_${band.key}`;
+    if (announcedBandsRef.current[key]) return;
+    announcedBandsRef.current[key] = true;
 
     let text;
-    if (band === '500')      text = `In ${Math.round(distanceMeters / 100) * 100} meters, ${instruction}`;
-    else if (band === '300') text = `In 300 meters, ${instruction}`;
-    else if (band === '100') text = `In 100 meters, ${instruction}`;
-    else                     text = instruction;
+    if (band.key === 'now') {
+      text = instruction;                           // "Turn left onto Main St"
+    } else {
+      text = `${band.prefix(distanceMeters)}, ${instruction.toLowerCase()}`;
+    }
 
-    speak(text);
+    const priority = band.key === 'now' ? PRIORITY.HIGH : PRIORITY.NORMAL;
+    speak(text, { priority });
   }, [speak]);
 
   const resetManeuverBands = useCallback(() => {
-    maneuverBandRef.current = {};
+    announcedBandsRef.current = {};
   }, []);
 
+  const resetStepBands = useCallback((stepIndex) => {
+    // Clear bands for a specific step only
+    Object.keys(announcedBandsRef.current).forEach(k => {
+      if (k.startsWith(`${stepIndex}_`)) {
+        delete announcedBandsRef.current[k];
+      }
+    });
+  }, []);
+
+  // ── Arrival ────────────────────────────────────────────────────────────────
   const announceArrival = useCallback((target = 'destination') => {
     const text = target === 'pickup'
-      ? 'You have arrived at the pickup location'
-      : 'You have arrived at the destination';
-    speak(text, { force: true });
+      ? 'You have arrived at the pickup location.'
+      : 'You have arrived at your destination.';
+    speak(text, { priority: PRIORITY.CRITICAL, force: true });
   }, [speak]);
 
+  // ── Rerouting ──────────────────────────────────────────────────────────────
   const announceRerouting = useCallback(() => {
-    queueRef.current = [];
-    if (window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      isSpeakingRef.current = false;
-    }
-    pausedRef.current = true;
-    speak('Recalculating route', { force: true });
-    setTimeout(() => {
-      pausedRef.current = false;
-      processQueue();
-    }, 3500);
-  }, [speak, processQueue]);
+    speak('Recalculating route.', { priority: PRIORITY.CRITICAL, force: true });
+  }, [speak]);
 
+  // ── Roundabout ────────────────────────────────────────────────────────────
+  const announceRoundabout = useCallback((exitNumber) => {
+    const text = exitNumber
+      ? `At the roundabout, take exit ${exitNumber}.`
+      : 'Enter the roundabout.';
+    speak(text, { priority: PRIORITY.HIGH });
+  }, [speak]);
+
+  // ── Pause / resume ─────────────────────────────────────────────────────────
   const pauseSpeaking = useCallback(() => {
     pausedRef.current = true;
     queueRef.current  = [];
-    if (window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      isSpeakingRef.current = false;
-    }
+    window.speechSynthesis?.cancel();
+    isSpeakingRef.current = false;
   }, []);
 
   const resumeSpeaking = useCallback(() => {
@@ -147,14 +249,13 @@ export function useVoiceNavigation() {
     processQueue();
   }, [processQueue]);
 
+  // ── Toggle voice ───────────────────────────────────────────────────────────
   const toggleVoice = useCallback(() => {
     setVoiceEnabled(prev => {
       if (prev) {
         queueRef.current = [];
-        if (window.speechSynthesis) {
-          window.speechSynthesis.cancel();
-          isSpeakingRef.current = false;
-        }
+        window.speechSynthesis?.cancel();
+        isSpeakingRef.current = false;
       }
       return !prev;
     });
@@ -167,11 +268,11 @@ export function useVoiceNavigation() {
     announceManeuver,
     announceArrival,
     announceRerouting,
+    announceRoundabout,
     pauseSpeaking,
     resumeSpeaking,
     resetManeuverBands,
+    resetStepBands,
+    PRIORITY,
   };
 }
-
-// ─── missing import at top of file ───
-import { useCallback, useEffect, useRef, useState } from 'react';
