@@ -1,38 +1,6 @@
 /**
  * bookingRouterShared.js — Likeson.in
- *
- * SUBSCRIPTION FIXES IN THIS VERSION:
- *
- *  FIX A — checkSubscriptionConsultation:
- *    homeVisit mode NEVER covered by sub quota.
- *    Only 'inPerson' and 'video' modes count against / benefit from sub quota.
- *    Returns isFree:false for homeVisit regardless of quota remaining.
- *
- *  FIX B — resolveCareAssistantFee (custom plan):
- *    Custom plan tier pricing MUST come from
- *    config.customPlanOptions.careAssistant.pricingTiers[careAssistantTierIndex],
- *    NOT from config.careAssistant.pricingTiers (platform tiers).
- *
- *  FIX C — checkSubscriptionDiagnostics:
- *    Correctly reads discount% + homeSampleCollection from BOTH
- *    sub.limits (fixed plans) AND plan.customOptions (custom plans).
- *
- *  FIX D — Cash payment:
- *    Cash payments do NOT flush subscription usage immediately.
- *    Cash = payment NOT yet confirmed. Usage flushed only after
- *    admin marks cash payment collected via POST /confirm-cash-payment.
- *
- *  FIX E — Cancellation recovery:
- *    decrementSubscriptionUsage called on cancel for ALREADY-FLUSHED usage.
- *    Pending (unflushed) usage cleared via Booking.subscriptionUsagePending = [].
- *    Result: cancel always recovers quota correctly regardless of payment method.
- *
- *  FIX F — snapshotLimits:
- *    Now snapshots careAssistantTierIndex, careAssistantTierLabel,
- *    careAssistantChargePerVisit into UserSubscription.limits so
- *    careAssistantSummary virtual works correctly.
- *    Requires PlatformPricingConfig as second arg for custom plans.
- */
+/** */
 
 import crypto   from 'crypto';
 import axios    from 'axios';

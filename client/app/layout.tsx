@@ -42,6 +42,7 @@ export default function RootLayout({
     >
       {/* Removed the invalid var(--font-montserrat) from the className string */}
       <body className="font-poppins antialiased" suppressHydrationWarning>
+        
         <StoreProvider>
           <ThemeProvider attribute="class" defaultTheme="light">
             <AuthSocketBridge>

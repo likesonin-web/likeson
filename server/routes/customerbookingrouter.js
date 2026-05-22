@@ -1053,7 +1053,7 @@ router.post('/doctor-online', protect, authorize('customer'), async (req, res) =
       bookingType: 'doctor_online',
       customer:    req.user._id,
       patientInfo, doctor: doctorId, consultationType: 'video',
-      scheduledAt: scheduledDate, onlineConsultation: { platform: 'Likeson Chat' },
+      scheduledAt: scheduledDate,
       documents, fareBreakdown,
       pricingSource: pricingSource === 'doctor' ? 'doctor' : 'platform',
       paymentStatus: 'unpaid', payments: [],
@@ -1364,14 +1364,15 @@ router.post('/physiotherapist', protect, authorize('customer'), async (req, res)
     });
 
     if (paymentMethod === 'Wallet' && fareBreakdown.totalAmount > 0) {
-      const wp = await processWalletPayment({
-        userId: req.user._id, amount: fareBreakdown.totalAmount,
-        bookingId: booking._id, bookingCode: booking.bookingCode,
-      });
-      booking.paymentStatus = 'paid'; booking.payments = [wp];
-      await booking.save();
-      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' }); // ✉️
-    }
+  const wp = await processWalletPayment({
+    userId: req.user._id, amount: fareBreakdown.totalAmount,
+    bookingId: booking._id, bookingCode: booking.bookingCode,
+  });
+  booking.paymentStatus = 'paid'; booking.payments = [wp];
+  await booking.save();
+  await flushAndRecord(booking);  // ADD THIS
+  sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' });
+}
 
     if (paymentMethod === 'Cash') {
       booking.paymentStatus = 'pending_cash';
@@ -1452,8 +1453,13 @@ router.post('/follow-up', protect, authorize('customer'), async (req, res) => {
         bookingId: booking._id, bookingCode: booking.bookingCode,
       });
       booking.paymentStatus = 'paid'; booking.payments = [wp];
-      await booking.save();
-      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' }); // ✉️
+
+      if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
+  booking.paymentStatus = 'paid';
+  await booking.save();
+  await flushAndRecord(booking);
+  sendPaymentConfirmedEmails({ booking, paymentMethod: 'Free (₹0)' });
+}
     }
 
     if (paymentMethod === 'Cash') {
@@ -1745,8 +1751,7 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
       scheduledAt:   new Date(scheduledAt),
       patientLocation: { type: 'Point', coordinates: patientLocation.coordinates, address: patientLocation.address, city: patientLocation.city },
       fareBreakdown,
-      pricingSource: careResult.source === 'subscription' ? 'subscription'
-        : careResult.source === 'custom_plan' ? 'custom_plan' : 'platform',
+      pricingSource: careResult.source === 'subscription' ? 'subscription' : 'platform',
       paymentStatus: 'unpaid', payments: [],
       status: 'pending', createdBy: req.user._id,
       subscriptionUsagePending: [], confirmedSubscriptionUsage: [],
@@ -1758,19 +1763,19 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
     }
 
     if (paymentMethod === 'Wallet') {
-      if (fareBreakdown.totalAmount > 0) {
-        const wp = await processWalletPayment({
-          userId: req.user._id, amount: fareBreakdown.totalAmount,
-          bookingId: booking._id, bookingCode: booking.bookingCode,
-        });
-        booking.paymentStatus = 'paid'; booking.payments = [wp];
-      } else {
-        booking.paymentStatus = 'paid';
-      }
-      await booking.save();
-      await flushAndRecord(booking);
-      sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' }); // ✉️
-    }
+  if (fareBreakdown.totalAmount > 0) {
+    const wp = await processWalletPayment({
+      userId: req.user._id, amount: fareBreakdown.totalAmount,
+      bookingId: booking._id, bookingCode: booking.bookingCode,
+    });
+    booking.paymentStatus = 'paid'; booking.payments = [wp];
+  } else {
+    booking.paymentStatus = 'paid';
+  }
+  await booking.save();
+  await flushAndRecord(booking);
+  sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' });
+}
 
     if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
       booking.paymentStatus = 'paid';

@@ -1,6 +1,7 @@
 import express from 'express';
 
 import Booking              from '../models/Booking.js';
+import Consultation         from '../models/Consultation.js';  // ← added
 import Ride                 from '../models/Ride.js';
 import RideTracking         from '../models/RideTracking.js';
 import User                 from '../models/User.js';
@@ -58,11 +59,12 @@ const careRideRadiusRad  = CARE_RIDE_RADIUS_M  / 1000 / 6378.1;
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CACHE_TTL = {
-  adminBookings: 30,
-  adminStats:    60,
-  nearby:        30,
-  ops:           45,
-  opRecord:      60,
+  adminBookings:    30,
+  adminStats:       60,
+  nearby:           30,
+  ops:              45,
+  opRecord:         60,
+  consultations:    30,
 };
 
 const invalidateBookingCache = async () => {
@@ -72,6 +74,7 @@ const invalidateBookingCache = async () => {
       'GET:/op/*',
       'GET:/hospital/*',
       'GET:/doctor/ops*',
+      'GET:/consultations*',
     ];
     for (const pattern of patterns) {
       let cursor = 0;
@@ -97,6 +100,10 @@ const getBookingCoords = (booking) => ({
   dropoffCity:    booking.destinationLocation?.city        || '',
 });
 
+/**
+ * Send OP zip email to patient.
+ * Used after consultation is confirmed/completed.
+ */
 const sendOpZipEmail = async ({ op, booking, patient, followUps = [] }) => {
   try {
     const doctor = op.doctor
@@ -134,6 +141,50 @@ const sendOpZipEmail = async ({ op, booking, patient, followUps = [] }) => {
   } catch (e) { console.error('[OP ZIP Email] failed:', e.message); }
 };
 
+/**
+ * Create or fetch an OutPatientRecord for a booking, then send OP zip to patient.
+ * Called when a booking/consultation is confirmed or a doctor accepts it.
+ */
+const createOrSendOpOnConfirmation = async ({ booking, triggeredBy = 'system' }) => {
+  try {
+    if (!booking.doctor) return;   // only for doctor-involved bookings
+
+    let op = await OutPatientRecord.findOne({ booking: booking._id }).lean();
+    if (!op) {
+      // Create a minimal OP record so the patient gets their card
+      const opDoc = await OutPatientRecord.create({
+        booking:          booking._id,
+        doctor:           booking.doctor,
+        hospital:         booking.hospital || null,
+        patient:          booking.customer,
+        consultationType: booking.consultationType || 'inPerson',
+        scheduledAt:      booking.scheduledAt,
+        status:           'scheduled',
+        isFollowUp:       !!booking.followUpParentBooking,
+        createdBy:        null,
+      });
+      op = opDoc.toObject();
+    }
+
+    const patient   = await User.findById(booking.customer).select('email name phone').lean();
+    const followUps = await OutPatientRecord.find({ parentOp: op._id }).sort({ scheduledAt: -1 }).lean();
+
+    if (patient?.email) {
+      await sendOpZipEmail({ op, booking, patient, followUps });
+    }
+
+    await createNotification({
+      recipient: booking.customer,
+      title:     'Booking Confirmed',
+      body:      `Your appointment OP ${op.opNumber} is ready. Check your email.`,
+      type:      'Booking_Confirmed',
+      bookingId: booking._id,
+    });
+  } catch (e) {
+    console.error('[createOrSendOpOnConfirmation] failed:', e.message);
+  }
+};
+
 const joinBookingRoom = (userId, bookingId) => {
   try { getBookingSocketService()?.emitJoinRoom(String(userId), `booking:${bookingId}`); }
   catch (e) { console.error('[joinBookingRoom]', e.message); }
@@ -145,13 +196,9 @@ const joinTpRoom = (userId, tpId) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EMAIL HELPERS  (fire-and-forget — never block response)
+// EMAIL HELPERS  (fire-and-forget)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Notify customer of any booking status change.
- * Uses buildStatusUpdateEmail so it shares the same rich template as order emails.
- */
 const emailCustomerStatusUpdate = async ({ booking, newStatus, customer }) => {
   try {
     if (!customer?.email) return;
@@ -171,9 +218,9 @@ const emailCustomerStatusUpdate = async ({ booking, newStatus, customer }) => {
         billing:    booking.fareBreakdown
           ? {
               subTotal:       booking.fareBreakdown.totalAmount || 0,
-              gstAmount:      booking.fareBreakdown.taxAmount   || 0,
+              gstAmount:      booking.fareBreakdown.taxes       || 0,   // fixed: was taxAmount
               totalPayable:   booking.fareBreakdown.totalAmount || 0,
-              discountAmount: booking.fareBreakdown.discountAmount || 0,
+              discountAmount: booking.fareBreakdown.discount    || 0,   // fixed: was discountAmount
             }
           : null,
         actionLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
@@ -183,9 +230,6 @@ const emailCustomerStatusUpdate = async ({ booking, newStatus, customer }) => {
   } catch (e) { console.error('[emailCustomerStatusUpdate]', e.message); }
 };
 
-/**
- * Notify driver (User) of assignment via transactionalTemplate.
- */
 const emailDriverAssigned = async ({ driverUser, booking, verb = 'assigned' }) => {
   try {
     if (!driverUser?.email) return;
@@ -205,9 +249,6 @@ const emailDriverAssigned = async ({ driverUser, booking, verb = 'assigned' }) =
   } catch (e) { console.error('[emailDriverAssigned]', e.message); }
 };
 
-/**
- * Notify care assistant (User) of assignment.
- */
 const emailCareAssistantAssigned = async ({ caUser, caName, booking, verb = 'assigned' }) => {
   try {
     if (!caUser?.email) return;
@@ -227,9 +268,6 @@ const emailCareAssistantAssigned = async ({ caUser, caName, booking, verb = 'ass
   } catch (e) { console.error('[emailCareAssistantAssigned]', e.message); }
 };
 
-/**
- * Notify hospital of a new/updated booking.
- */
 const emailHospitalBookingUpdate = async ({ hospitalUser, booking, subject, body }) => {
   try {
     if (!hospitalUser?.email) return;
@@ -247,9 +285,6 @@ const emailHospitalBookingUpdate = async ({ hospitalUser, booking, subject, body
   } catch (e) { console.error('[emailHospitalBookingUpdate]', e.message); }
 };
 
-/**
- * Notify doctor of a booking or OP update.
- */
 const emailDoctorBookingUpdate = async ({ doctorUser, booking, subject, body }) => {
   try {
     if (!doctorUser?.email) return;
@@ -266,6 +301,590 @@ const emailDoctorBookingUpdate = async ({ doctorUser, booking, subject, body }) 
     });
   } catch (e) { console.error('[emailDoctorBookingUpdate]', e.message); }
 };
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CONSULTATION ROUTES
+// These use the Consultation model (linked via booking.consultationSessionId)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /consultations/:bookingId
+ * Fetch the Consultation document for a booking.
+ * Accessible by customer (own), doctor (assigned), hospital, admin.
+ */
+router.get('/consultations/:bookingId',
+  protect,
+  cache(CACHE_TTL.consultations, req => `GET:/consultations/${req.params.bookingId}:${req.user._id}`),
+  async (req, res) => {
+    try {
+      const booking = await Booking.findById(req.params.bookingId)
+        .select('customer doctor consultationSessionId bookingCode')
+        .lean();
+      if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+      // Access control
+      const role = req.user.role;
+      if (role === 'customer' && String(booking.customer) !== String(req.user._id)) {
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
+      if (role === 'doctor') {
+        const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
+        if (!dp || String(booking.doctor) !== String(dp._id)) {
+          return res.status(403).json({ success: false, message: 'Access denied' });
+        }
+      }
+
+      if (!booking.consultationSessionId) {
+        return res.status(404).json({ success: false, message: 'No consultation session linked to this booking' });
+      }
+
+      const consultation = await Consultation.findById(booking.consultationSessionId)
+        .populate('patient', 'name phone email')
+        .populate({ path: 'doctor', populate: { path: 'user', select: 'name phone' } })
+        .populate('hospital', 'name address')
+        .lean();
+
+      if (!consultation) {
+        return res.status(404).json({ success: false, message: 'Consultation not found' });
+      }
+
+      return res.json({ success: true, data: { consultation } });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * PATCH /consultations/:consultationId/confirm
+ * Doctor or admin confirms/starts the consultation.
+ * Sets status → 'scheduled', grants telemedicine consent if provided, and
+ * sends OP zip to the patient.
+ *
+ * Body: { consentAccepted?: boolean }
+ */
+router.patch('/consultations/:consultationId/confirm',
+  protect, authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const { consentAccepted = false } = req.body;
+
+      const consultation = await Consultation.findById(req.params.consultationId);
+      if (!consultation) return res.status(404).json({ success: false, message: 'Consultation not found' });
+
+      // Doctor access check
+      if (req.user.role === 'doctor') {
+        const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
+        if (!dp || String(consultation.doctor) !== String(dp._id)) {
+          return res.status(403).json({ success: false, message: 'Access denied' });
+        }
+      }
+
+      if (['completed', 'cancelled', 'failed'].includes(consultation.status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot confirm a consultation in status: ${consultation.status}`,
+        });
+      }
+
+      // Update consent if provided
+      if (consentAccepted) {
+        const existingConsent = consultation.consents?.find(c => c.consentType === 'telemedicine');
+        if (!existingConsent) {
+          consultation.consents.push({
+            consentType:    'telemedicine',
+            accepted:       true,
+            acceptedAt:     new Date(),
+            consentVersion: '1.0',
+          });
+        }
+        consultation.telemedicineConsentAccepted = true;
+      }
+
+      consultation.status            = 'scheduled';
+      consultation.consultationStage = 'pre_consultation';
+      consultation.updatedBy         = req.user._id;
+      await consultation.save();
+
+      // Fetch linked booking
+      const booking = await Booking.findById(consultation.bookingId).lean();
+
+      // Confirm booking too if still pending
+      if (booking && booking.status === 'pending') {
+        await Booking.findByIdAndUpdate(booking._id, {
+          $set: { status: 'confirmed', updatedBy: req.user._id },
+        });
+      }
+
+      // Send OP card to patient
+      if (booking) {
+        createOrSendOpOnConfirmation({ booking: { ...booking, status: 'confirmed' }, triggeredBy: req.user.role })
+          .catch(() => {});
+      }
+
+      // Notify patient
+      await createNotification({
+        recipient: consultation.patient,
+        title:     'Consultation Confirmed',
+        body:      `Your consultation has been confirmed. Please check your email for your OP card.`,
+        type:      'Booking_Confirmed',
+        bookingId: consultation.bookingId,
+      });
+
+      // Email: patient
+      const patient = await User.findById(consultation.patient).select('email name phone').lean();
+      if (patient?.email) {
+        sendEmail({
+          email:   patient.email,
+          subject: `Consultation Confirmed | Likeson Healthcare`,
+          html:    transactionalTemplate({
+            header:     'CONSULTATION CONFIRMED',
+            title:      'Your consultation has been confirmed',
+            body:       `<b>Booking:</b> #${booking?.bookingCode || 'N/A'}<br/>
+                         <b>Doctor:</b> ${booking?.doctorSnapshot?.name || 'Your Doctor'}<br/>
+                         <b>Scheduled:</b> ${new Date(consultation.scheduledStartTime).toLocaleString('en-IN')}<br/>
+                         <b>Type:</b> ${consultation.consultationType}<br/>
+                         Your OP card is attached to a separate email.`,
+            buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${consultation.bookingId}`,
+            buttonText: 'View Booking',
+          }),
+        }).catch(e => console.error('[consultation/confirm] patient email:', e.message));
+      }
+
+      // Email: doctor confirmation back
+      const doctorProfile = await DoctorProfile.findById(consultation.doctor)
+        .populate('user', 'name email').lean();
+      if (doctorProfile?.user?.email) {
+        emailDoctorBookingUpdate({
+          doctorUser: doctorProfile.user,
+          booking:    booking || { bookingCode: 'N/A', _id: consultation.bookingId, scheduledAt: consultation.scheduledStartTime, patientInfo: {} },
+          subject:    `Consultation Confirmed | Likeson Healthcare`,
+          body:       `<b>Patient:</b> ${patient?.name || 'N/A'}<br/>
+                       <b>Scheduled:</b> ${new Date(consultation.scheduledStartTime).toLocaleString('en-IN')}<br/>
+                       <b>Type:</b> ${consultation.consultationType}`,
+        }).catch(() => {});
+      }
+
+      getBookingSocketService()?.emitToRoom(`booking:${consultation.bookingId}`, 'consultation_confirmed', {
+        consultationId: consultation._id,
+        status:         'scheduled',
+        timestamp:      new Date(),
+      });
+
+      await invalidateBookingCache();
+      return res.json({ success: true, message: 'Consultation confirmed and OP sent to patient', data: { consultation } });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * PATCH /consultations/:consultationId/accept
+ * Doctor explicitly accepts an incoming consultation request.
+ * Transitions: created/scheduled → waiting (entering waiting room phase).
+ * Sends OP card to patient on acceptance.
+ */
+router.patch('/consultations/:consultationId/accept',
+  protect, authorize('doctor'),
+  async (req, res) => {
+    try {
+      const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
+      if (!dp) return res.status(404).json({ success: false, message: 'Doctor profile not found' });
+
+      const consultation = await Consultation.findOne({
+        _id:    req.params.consultationId,
+        doctor: dp._id,
+      });
+      if (!consultation) return res.status(404).json({ success: false, message: 'Consultation not found or not assigned to you' });
+
+      if (!['created', 'scheduled'].includes(consultation.status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot accept consultation in status: ${consultation.status}`,
+        });
+      }
+
+      consultation.status            = 'waiting';
+      consultation.consultationStage = 'waiting_room';
+      consultation.updatedBy         = req.user._id;
+      await consultation.save();
+
+      // Confirm linked booking
+      const booking = await Booking.findById(consultation.bookingId);
+      if (booking && booking.status === 'pending') {
+        booking.status    = 'confirmed';
+        booking.updatedBy = req.user._id;
+        await booking.save();
+      }
+
+      // Send OP card to patient
+      if (booking) {
+        createOrSendOpOnConfirmation({
+          booking: booking.toObject ? booking.toObject() : booking,
+          triggeredBy: 'doctor',
+        }).catch(() => {});
+      }
+
+      const patient = await User.findById(consultation.patient).select('email name phone').lean();
+
+      await createNotification({
+        recipient: consultation.patient,
+        title:     'Doctor Accepted Your Consultation',
+        body:      `Your doctor has accepted. Your OP card has been sent to your email.`,
+        type:      'Booking_Confirmed',
+        bookingId: consultation.bookingId,
+      });
+
+      if (patient?.email) {
+        sendEmail({
+          email:   patient.email,
+          subject: `Doctor Accepted Your Consultation | Likeson Healthcare`,
+          html:    transactionalTemplate({
+            header:     'DOCTOR ACCEPTED',
+            title:      'Your doctor has accepted your consultation request',
+            body:       `<b>Booking:</b> #${booking?.bookingCode || 'N/A'}<br/>
+                         <b>Doctor:</b> ${booking?.doctorSnapshot?.name || 'Your Doctor'}<br/>
+                         <b>Scheduled:</b> ${new Date(consultation.scheduledStartTime).toLocaleString('en-IN')}<br/>
+                         Please join the waiting room. Your OP card is attached in a separate email.`,
+            buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${consultation.bookingId}`,
+            buttonText: 'Join Waiting Room',
+          }),
+        }).catch(e => console.error('[consultation/accept] patient email:', e.message));
+      }
+
+      getBookingSocketService()?.emitToRoom(`booking:${consultation.bookingId}`, 'consultation_accepted', {
+        consultationId: consultation._id,
+        status:         'waiting',
+        timestamp:      new Date(),
+      });
+
+      await invalidateBookingCache();
+      return res.json({ success: true, message: 'Consultation accepted. Patient notified and OP sent.', data: { consultation } });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * PATCH /consultations/:consultationId/start
+ * Doctor starts the active session (waiting → active).
+ * Requires telemedicine consent to be accepted (model pre-validate enforces this).
+ */
+router.patch('/consultations/:consultationId/start',
+  protect, authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const consultation = await Consultation.findById(req.params.consultationId);
+      if (!consultation) return res.status(404).json({ success: false, message: 'Consultation not found' });
+
+      if (req.user.role === 'doctor') {
+        const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
+        if (!dp || String(consultation.doctor) !== String(dp._id)) {
+          return res.status(403).json({ success: false, message: 'Access denied' });
+        }
+      }
+
+      if (consultation.status !== 'waiting') {
+        return res.status(400).json({
+          success: false,
+          message: `Consultation must be in 'waiting' status to start. Current: ${consultation.status}`,
+        });
+      }
+
+      if (!consultation.telemedicineConsentAccepted) {
+        return res.status(400).json({
+          success: false,
+          message: 'Telemedicine consent must be accepted before starting the consultation',
+        });
+      }
+
+      consultation.status            = 'active';
+      consultation.consultationStage = 'in_progress';
+      consultation.actualStartTime   = new Date();
+      consultation.roomStarted       = true;
+      consultation.doctorJoinedAt    = new Date();
+      consultation.updatedBy         = req.user._id;
+      await consultation.save();
+
+      // Move booking to in_progress
+      await Booking.findByIdAndUpdate(consultation.bookingId, {
+        $set: { status: 'in_progress', updatedBy: req.user._id },
+      });
+
+      await createNotification({
+        recipient: consultation.patient,
+        title:     'Consultation Started',
+        body:      'Your consultation has started. Please join now.',
+        type:      'Care_Task_Started',
+        bookingId: consultation.bookingId,
+      });
+
+      getBookingSocketService()?.emitToRoom(`booking:${consultation.bookingId}`, 'consultation_started', {
+        consultationId: consultation._id,
+        meetingId:      consultation.meetingId,
+        roomId:         consultation.roomId,
+        meetingLink:    consultation.meetingLink,
+        timestamp:      new Date(),
+      });
+
+      await invalidateBookingCache();
+      return res.json({ success: true, message: 'Consultation started', data: { consultation } });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * PATCH /consultations/:consultationId/end
+ * End an active/paused consultation.
+ * Body: { reason?: string, prescriptionUploaded?: boolean }
+ */
+router.patch('/consultations/:consultationId/end',
+  protect, authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const { reason, prescriptionUploaded = false } = req.body;
+
+      const consultation = await Consultation.findById(req.params.consultationId);
+      if (!consultation) return res.status(404).json({ success: false, message: 'Consultation not found' });
+
+      if (req.user.role === 'doctor') {
+        const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
+        if (!dp || String(consultation.doctor) !== String(dp._id)) {
+          return res.status(403).json({ success: false, message: 'Access denied' });
+        }
+      }
+
+      if (!['active', 'paused'].includes(consultation.status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Can only end an active or paused consultation. Current: ${consultation.status}`,
+        });
+      }
+
+      consultation.status               = 'completed';
+      consultation.actualEndTime        = new Date();
+      consultation.roomEnded            = true;
+      consultation.patientLeftAt        = new Date();
+      consultation.doctorLeftAt         = new Date();
+      consultation.prescriptionUploaded = prescriptionUploaded;
+      consultation.endedBy              = req.user.role === 'doctor' ? 'doctor' : 'admin';
+      consultation.endedByUserId        = req.user._id;
+      consultation.endedReason          = reason || null;
+      consultation.updatedBy            = req.user._id;
+
+      if (consultation.actualStartTime) {
+        const diffMs = consultation.actualEndTime - consultation.actualStartTime;
+        consultation.actualDurationMinutes = Math.round(diffMs / 60000);
+      }
+
+      await consultation.save();
+
+      // Complete the booking
+      await Booking.findByIdAndUpdate(consultation.bookingId, {
+        $set: { status: 'completed', updatedBy: req.user._id },
+      });
+
+      // Send final OP zip with any follow-up info
+      const booking   = await Booking.findById(consultation.bookingId).lean();
+      const patient   = await User.findById(consultation.patient).select('email name phone').lean();
+      if (booking) {
+        const op      = await OutPatientRecord.findOne({ booking: booking._id }).lean();
+        const followUps = op ? await OutPatientRecord.find({ parentOp: op._id }).sort({ scheduledAt: -1 }).lean() : [];
+        if (op && patient?.email) sendOpZipEmail({ op, booking, patient, followUps });
+      }
+
+      await createNotification({
+        recipient: consultation.patient,
+        title:     'Consultation Completed',
+        body:      'Your consultation has ended. Please check your email for your prescription and OP card.',
+        type:      'Care_Task_Completed',
+        bookingId: consultation.bookingId,
+      });
+
+      if (patient?.email) {
+        sendEmail({
+          email:   patient.email,
+          subject: `Consultation Completed | Likeson Healthcare`,
+          html:    transactionalTemplate({
+            header:     'CONSULTATION COMPLETE',
+            title:      'Your consultation has ended',
+            body:       `<b>Duration:</b> ${consultation.actualDurationMinutes || 0} minutes<br/>
+                         <b>Prescription:</b> ${prescriptionUploaded ? 'Uploaded — check your email' : 'Pending'}<br/>
+                         Please rate your experience.`,
+            buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${consultation.bookingId}/rate`,
+            buttonText: 'Rate Your Experience',
+          }),
+        }).catch(e => console.error('[consultation/end] patient email:', e.message));
+      }
+
+      getBookingSocketService()?.emitToRoom(`booking:${consultation.bookingId}`, 'consultation_ended', {
+        consultationId:        consultation._id,
+        status:                'completed',
+        actualDurationMinutes: consultation.actualDurationMinutes,
+        timestamp:             new Date(),
+      });
+
+      await invalidateBookingCache();
+      return res.json({ success: true, message: 'Consultation ended', data: { consultation } });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * PATCH /consultations/:consultationId/consent
+ * Patient submits telemedicine consent before the session.
+ * Body: { consentType: 'telemedicine'|'recording'|'ai_analysis'|..., accepted: boolean }
+ */
+router.patch('/consultations/:consultationId/consent',
+  protect,
+  async (req, res) => {
+    try {
+      const { consentType = 'telemedicine', accepted = true } = req.body;
+
+      const consultation = await Consultation.findById(req.params.consultationId);
+      if (!consultation) return res.status(404).json({ success: false, message: 'Consultation not found' });
+
+      // Only patient or admin may submit consent
+      if (req.user.role === 'customer' && String(consultation.patient) !== String(req.user._id)) {
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
+
+      // Upsert the consent entry
+      const existing = consultation.consents?.findIndex(c => c.consentType === consentType);
+      const entry = {
+        consentType,
+        accepted,
+        acceptedAt:     accepted ? new Date() : undefined,
+        consentVersion: '1.0',
+      };
+      if (existing >= 0) {
+        consultation.consents[existing] = { ...consultation.consents[existing], ...entry };
+      } else {
+        consultation.consents.push(entry);
+      }
+
+      // Sync quick-access flags
+      if (consentType === 'telemedicine') consultation.telemedicineConsentAccepted = accepted;
+      if (consentType === 'recording')    consultation.recordingConsentAccepted    = accepted;
+
+      consultation.updatedBy = req.user._id;
+      await consultation.save();
+
+      return res.json({ success: true, message: `Consent for '${consentType}' recorded`, data: { consentType, accepted } });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * POST /consultations/:consultationId/chat
+ * Send a chat message inside a consultation.
+ * Body: { message: string, messageType?: string }
+ */
+router.post('/consultations/:consultationId/chat',
+  protect,
+  async (req, res) => {
+    try {
+      const { message, messageType = 'text' } = req.body;
+      if (!message?.trim()) return res.status(400).json({ success: false, message: 'message is required' });
+
+      const consultation = await Consultation.findById(req.params.consultationId);
+      if (!consultation) return res.status(404).json({ success: false, message: 'Consultation not found' });
+      if (!consultation.chatEnabled) return res.status(400).json({ success: false, message: 'Chat is disabled for this consultation' });
+
+      // Determine sender role
+      let senderRole = 'patient';
+      if (req.user.role === 'doctor') {
+        const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
+        if (dp && String(consultation.doctor) === String(dp._id)) senderRole = 'doctor';
+      } else if (['admin', 'superadmin'].includes(req.user.role)) {
+        senderRole = 'admin';
+      } else if (req.user.role === 'care_assistant') {
+        senderRole = 'care_assistant';
+      }
+
+      const chatEntry = {
+        sender:      req.user._id,
+        senderRole,
+        messageType,
+        message:     message.trim(),
+        attachments: [],
+      };
+      consultation.chatMessages.push(chatEntry);
+      consultation.updatedBy = req.user._id;
+      await consultation.save();
+
+      const saved = consultation.chatMessages[consultation.chatMessages.length - 1];
+
+      getBookingSocketService()?.emitToRoom(`booking:${consultation.bookingId}`, 'chat_message', {
+        consultationId: consultation._id,
+        message:        saved,
+      });
+
+      return res.json({ success: true, data: { message: saved } });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * GET /consultations/:consultationId/join-token
+ * Returns the meeting join info for a participant.
+ * Doctor gets hostToken, patient gets participantToken (both stored select: false — fetch explicitly).
+ */
+router.get('/consultations/:consultationId/join-token',
+  protect,
+  async (req, res) => {
+    try {
+      const consultation = await Consultation.findById(req.params.consultationId)
+        .select('+hostToken +participantToken roomId meetingId meetingLink provider sdkConfiguration status patient doctor')
+        .lean();
+      if (!consultation) return res.status(404).json({ success: false, message: 'Consultation not found' });
+
+      if (!['scheduled', 'waiting', 'active'].includes(consultation.status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot join a consultation in status: ${consultation.status}`,
+        });
+      }
+
+      let token;
+      let role = 'patient';
+
+      if (req.user.role === 'doctor') {
+        const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
+        if (dp && String(consultation.doctor) === String(dp._id)) {
+          token = consultation.hostToken;
+          role  = 'doctor';
+        }
+      }
+      if (!token) token = consultation.participantToken;
+
+      return res.json({
+        success: true,
+        data: {
+          token,
+          role,
+          roomId:         consultation.roomId,
+          meetingId:      consultation.meetingId,
+          meetingLink:    consultation.meetingLink,
+          provider:       consultation.provider,
+          sdkConfig:      consultation.sdkConfiguration,
+        },
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
 
 // ═════════════════════════════════════════════════════════════════════════════
 // TRANSPORT PARTNER ROUTES
@@ -317,8 +936,6 @@ router.get('/tp/drivers/available', protect, authorize('transportpartner'), asyn
 /**
  * PATCH /:id/tp/assign-driver
  * TP assigns one of their own drivers.
- * → Email: driver notified of assignment
- * → Email: customer notified booking confirmed with driver info
  */
 router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), async (req, res) => {
   try {
@@ -377,8 +994,8 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
       },
     });
 
-    const driverUser   = await User.findById(driver.user).select('email phone name').lean();
-    const customer     = await User.findById(booking.customer).select('email phone name').lean();
+    const driverUser = await User.findById(driver.user).select('email phone name').lean();
+    const customer   = await User.findById(booking.customer).select('email phone name').lean();
 
     await createNotification({
       recipient: driver.user,
@@ -389,10 +1006,8 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
       priority:  'High',
     });
 
-    // Email: driver
     emailDriverAssigned({ driverUser, booking }).catch(() => {});
 
-    // Email: customer — booking confirmed, driver details
     sendEmail({
       email:   customer?.email,
       subject: `Driver Assigned — Booking #${booking.bookingCode} | Likeson Healthcare`,
@@ -454,8 +1069,6 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
 
 /**
  * PATCH /:id/tp/reassign-driver
- * → Email: new driver notified
- * → Email: customer notified of driver change
  */
 router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), async (req, res) => {
   try {
@@ -477,7 +1090,6 @@ router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), 
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
     const coords = getBookingCoords(booking);
-    const otp    = genOtp();
     const { distanceKm, durationMin, polyline } = await calculateCanonicalRoute(
       coords.pickupCoords, coords.dropoffCoords,
     );
@@ -496,7 +1108,7 @@ router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), 
       status:               'driver_assigned',
       estimatedDistanceKm:  distanceKm,
       estimatedDurationMin: durationMin,
-      pickupOtp:            hashOtp(otp),
+      pickupOtp:            hashOtp(genOtp()),
     });
 
     const tracking = await RideTracking.create({
@@ -519,10 +1131,8 @@ router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), 
       bookingId: booking._id,
     });
 
-    // Email: new driver
     emailDriverAssigned({ driverUser, booking, verb: 'reassigned' }).catch(() => {});
 
-    // Email: customer — driver changed
     sendEmail({
       email:   customer?.email,
       subject: `Driver Updated — Booking #${booking.bookingCode} | Likeson Healthcare`,
@@ -574,6 +1184,8 @@ router.patch('/:id/care/arrived',
   async (req, res) => {
     try {
       const profile = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
+      if (!profile) return res.status(404).json({ success: false, message: 'Care assistant profile not found' });
+
       const booking = await Booking.findOne({ _id: req.params.id, careAssistant: profile._id });
       if (!booking) return res.status(404).json({ success: false, message: 'Booking not found or not assigned to you' });
 
@@ -596,7 +1208,6 @@ router.patch('/:id/care/arrived',
         bookingId: booking._id,
       });
 
-      // Email: customer — care assistant arrived
       sendEmail({
         email:   customer?.email,
         subject: `Care Assistant Arrived — Booking #${booking.bookingCode} | Likeson Healthcare`,
@@ -621,17 +1232,19 @@ router.patch('/:id/care/arrived',
   }
 );
 
-/**
- * PATCH /:id/care/start
- * → Email: customer notified task started
- */
 router.patch('/:id/care/start',
   protect, authorize('care_assistant'),
   async (req, res) => {
     try {
       const profile = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
+      if (!profile) return res.status(404).json({ success: false, message: 'Care assistant profile not found' });
+
       const booking = await Booking.findOne({ _id: req.params.id, careAssistant: profile._id });
       if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+      if (booking.status !== 'confirmed') {
+        return res.status(400).json({ success: false, message: `Cannot start a booking in status: ${booking.status}` });
+      }
 
       booking.status = 'in_progress';
       booking.statusLog.push({
@@ -653,7 +1266,6 @@ router.patch('/:id/care/start',
         bookingId: booking._id,
       });
 
-      // Email: customer
       sendEmail({
         email:   customer?.email,
         subject: `Care Task Started — Booking #${booking.bookingCode} | Likeson Healthcare`,
@@ -679,17 +1291,19 @@ router.patch('/:id/care/start',
   }
 );
 
-/**
- * PATCH /:id/care/complete
- * → Email: customer notified task completed
- */
 router.patch('/:id/care/complete',
   protect, authorize('care_assistant'),
   async (req, res) => {
     try {
       const profile = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
+      if (!profile) return res.status(404).json({ success: false, message: 'Care assistant profile not found' });
+
       const booking = await Booking.findOne({ _id: req.params.id, careAssistant: profile._id });
       if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+      if (booking.status !== 'in_progress') {
+        return res.status(400).json({ success: false, message: `Cannot complete a booking in status: ${booking.status}` });
+      }
 
       booking.status = 'completed';
       booking.statusLog.push({
@@ -711,7 +1325,6 @@ router.patch('/:id/care/complete',
         bookingId: booking._id,
       });
 
-      // Email: customer — task completed
       sendEmail({
         email:   customer?.email,
         subject: `Care Task Completed — Booking #${booking.bookingCode} | Likeson Healthcare`,
@@ -777,7 +1390,7 @@ router.get('/hospital/upcoming', protect, authorize('hospital'), async (req, res
       scheduledAt: { $gte: new Date() },
       bookingType: { $in: ['full_care_ride', 'doctor_consultation', 'doctor_online', 'physiotherapist', 'follow_up'] },
     })
-      .select('bookingCode patientInfo scheduledAt bookingType status consultationType doctorSnapshot careAssistantSnapshot fareBreakdown primaryRide')
+      .select('bookingCode patientInfo scheduledAt bookingType status consultationType doctorSnapshot careAssistantSnapshot fareBreakdown primaryRide consultationSessionId')
       .populate({
         path:     'doctor',
         select:   'specialization registrationNumber',
@@ -796,13 +1409,15 @@ router.get('/hospital/upcoming', protect, authorize('hospital'), async (req, res
 
 /**
  * PATCH /:id/hospital/confirm
- * → Email: customer appointment confirmed
- * → Email: doctor notified of upcoming appointment
+ * Hospital confirms appointment. Sends OP card to patient.
  */
 router.patch('/:id/hospital/confirm', protect, authorize('hospital'), async (req, res) => {
   try {
-    const booking = await Booking.findById(req.params.id);
-    if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+    const hospital = await Hospital.findOne({ managedBy: req.user._id }).select('_id').lean();
+    if (!hospital) return res.status(404).json({ success: false, message: 'Hospital not found' });
+
+    const booking = await Booking.findOne({ _id: req.params.id, hospital: hospital._id });
+    if (!booking) return res.status(404).json({ success: false, message: 'Booking not found or not your hospital' });
 
     booking.statusLog.push({
       fromStatus: booking.status,
@@ -827,23 +1442,27 @@ router.patch('/:id/hospital/confirm', protect, authorize('hospital'), async (req
       }),
     }).catch(e => console.error('[Hospital confirm] SMS:', e.message));
 
+    // Send OP card
+    createOrSendOpOnConfirmation({ booking: booking.toObject(), triggeredBy: 'hospital' }).catch(() => {});
+
     // Email: customer — appointment confirmed
     sendEmail({
       email:   customer?.email,
       subject: `Appointment Confirmed — Booking #${booking.bookingCode} | Likeson Healthcare`,
       html:    transactionalTemplate({
         header:     'APPOINTMENT CONFIRMED',
-        title:      `Your appointment has been confirmed`,
+        title:      'Your appointment has been confirmed',
         body:       `<b>Booking:</b> #${booking.bookingCode}<br/>
                      <b>Doctor:</b> ${booking.doctorSnapshot?.name || 'Your Doctor'}<br/>
                      <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}<br/>
-                     <b>Mode:</b> ${booking.consultationType || 'In-Person'}`,
+                     <b>Mode:</b> ${booking.consultationType || 'In-Person'}<br/>
+                     Your OP card has been sent in a separate email.`,
         buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
         buttonText: 'View Appointment',
       }),
     }).catch(e => console.error('[hospital/confirm] customer email:', e.message));
 
-    // Email: doctor — notified of upcoming appointment
+    // Email: doctor
     if (booking.doctor) {
       const doctorProfile = await DoctorProfile.findById(booking.doctor)
         .populate('user', 'name email').lean();
@@ -860,7 +1479,7 @@ router.patch('/:id/hospital/confirm', protect, authorize('hospital'), async (req
       }
     }
 
-    return res.json({ success: true, message: 'Appointment confirmed' });
+    return res.json({ success: true, message: 'Appointment confirmed and OP sent to patient' });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -988,7 +1607,7 @@ router.get('/doctor/ops',
         OutPatientRecord.find(filter)
           .populate('patient',  'name phone email')
           .populate('hospital', 'name address contact')
-          .populate('booking',  'bookingCode bookingType fareBreakdown patientInfo')
+          .populate('booking',  'bookingCode bookingType fareBreakdown patientInfo consultationSessionId')
           .populate('parentOp', 'opNumber consultationType scheduledAt status')
           .sort({ scheduledAt: -1 }).skip(skip).limit(parseInt(limit)).lean(),
         OutPatientRecord.countDocuments(filter),
@@ -1019,7 +1638,7 @@ router.get('/doctor/ops/:opNumber',
       })
         .populate('patient',  'name phone email avatar')
         .populate('hospital', 'name address contact consultationPricing')
-        .populate('booking',  'bookingCode bookingType fareBreakdown patientInfo status documents')
+        .populate('booking',  'bookingCode bookingType fareBreakdown patientInfo status documents consultationSessionId')
         .populate('parentOp', 'opNumber consultationType scheduledAt status')
         .lean();
       if (!op) return res.status(404).json({ success: false, message: 'OP record not found' });
@@ -1040,8 +1659,8 @@ router.get('/doctor/ops/:opNumber',
 
 /**
  * PATCH /:id/op/complete
- * → Email: patient gets OP zip (existing sendOpZipEmail)
- * → Email: hospital notified consultation completed
+ * Doctor marks OP as completed. Sends OP zip to patient. Notifies hospital.
+ * Also ends the linked Consultation if still active.
  */
 router.patch('/:id/op/complete', protect, authorize('doctor'), async (req, res) => {
   try {
@@ -1063,7 +1682,31 @@ router.patch('/:id/op/complete', protect, authorize('doctor'), async (req, res) 
     op.updatedBy = req.user._id;
     await op.save();
 
-    const booking   = await Booking.findById(req.params.id).lean();
+    const booking = await Booking.findById(req.params.id).lean();
+    if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+    // End linked consultation if active
+    if (booking.consultationSessionId) {
+      const activeConsultation = await Consultation.findOne({
+        _id:    booking.consultationSessionId,
+        status: { $in: ['active', 'paused', 'waiting'] },
+      });
+      if (activeConsultation) {
+        activeConsultation.status               = 'completed';
+        activeConsultation.actualEndTime        = new Date();
+        activeConsultation.roomEnded            = true;
+        activeConsultation.prescriptionUploaded = !!prescriptionUrl;
+        activeConsultation.endedBy              = 'doctor';
+        activeConsultation.endedByUserId        = req.user._id;
+        activeConsultation.updatedBy            = req.user._id;
+        if (activeConsultation.actualStartTime) {
+          const diffMs = activeConsultation.actualEndTime - activeConsultation.actualStartTime;
+          activeConsultation.actualDurationMinutes = Math.round(diffMs / 60000);
+        }
+        await activeConsultation.save();
+      }
+    }
+
     const customer  = await User.findById(booking.customer).select('email phone name').lean();
     const followUps = await OutPatientRecord.find({ parentOp: op._id }).sort({ scheduledAt: -1 }).lean();
 
@@ -1075,10 +1718,10 @@ router.patch('/:id/op/complete', protect, authorize('doctor'), async (req, res) 
       bookingId: booking._id,
     });
 
-    // Email: patient — OP zip (existing helper)
+    // Send OP zip to patient
     sendOpZipEmail({ op: op.toObject ? op.toObject() : op, booking, patient: customer, followUps });
 
-    // Email: hospital — doctor completed consultation
+    // Notify hospital
     if (op.hospital) {
       const hospital = await Hospital.findById(op.hospital)
         .populate('managedBy', 'name email').lean();
@@ -1124,7 +1767,7 @@ router.get('/op/:opNumber',
         .populate('doctor',   'user specialization registrationNumber profilePhotoUrl')
         .populate('hospital', 'name address contact operatingHours is24x7')
         .populate('patient',  'name phone email')
-        .populate('booking',  'bookingCode bookingType fareBreakdown status patientInfo consultationType documents')
+        .populate('booking',  'bookingCode bookingType fareBreakdown status patientInfo consultationType documents consultationSessionId')
         .populate('parentOp', 'opNumber scheduledAt consultationType status')
         .lean();
       if (!op) return res.status(404).json({ success: false, message: 'OP record not found' });
@@ -1286,19 +1929,21 @@ router.get('/admin/bookings/export', protect, authorize('admin', 'superadmin'), 
     }
 
     const bookings = await Booking.find(filter)
-      .select('bookingCode bookingType status scheduledAt patientInfo fareBreakdown paymentStatus createdAt')
+      .select('bookingCode bookingType status scheduledAt patientInfo fareBreakdown paymentStatus createdAt consultationSessionId')
       .populate('customer', 'name email phone')
       .sort({ createdAt: -1 }).limit(5000).lean();
 
-    const csvHeader = 'BookingCode,Type,Status,Scheduled,Patient,Customer,Phone,Total(INR),AmountPaid(INR),PaymentStatus,CreatedAt\n';
+    const csvHeader = 'BookingCode,Type,Status,Scheduled,Patient,Customer,Phone,Total(INR),AmountPaid(INR),PaymentStatus,HasConsultation,CreatedAt\n';
     const csvRows   = bookings.map(b =>
       [
         b.bookingCode, b.bookingType, b.status,
         new Date(b.scheduledAt).toLocaleString('en-IN'),
         b.patientInfo?.name, b.customer?.name, b.customer?.phone,
         b.fareBreakdown?.totalAmount, b.fareBreakdown?.amountPaid,
-        b.paymentStatus, new Date(b.createdAt).toLocaleString('en-IN'),
-      ].join(',')
+        b.paymentStatus,
+        b.consultationSessionId ? 'Yes' : 'No',   // extra useful column
+        new Date(b.createdAt).toLocaleString('en-IN'),
+      ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')  // proper CSV quoting
     );
 
     res.setHeader('Content-Type', 'text/csv');
@@ -1351,7 +1996,15 @@ router.get('/admin/bookings/:id',
         ? await OutPatientRecord.find({ parentOp: opRecord._id }).sort({ scheduledAt: -1 }).lean()
         : [];
 
-      return res.json({ success: true, data: { booking, opRecord, followUps, mapRoute } });
+      // Fetch consultation session if linked
+      let consultation = null;
+      if (booking.consultationSessionId) {
+        consultation = await Consultation.findById(booking.consultationSessionId)
+          .select('-hostToken -participantToken -webhookSecret -doctorInternalNotes -internalAdminNotes')
+          .lean();
+      }
+
+      return res.json({ success: true, data: { booking, opRecord, followUps, mapRoute, consultation } });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -1360,13 +2013,24 @@ router.get('/admin/bookings/:id',
 
 /**
  * PATCH /admin/bookings/:id/status
- * → Email: customer notified of status change
- * → Email: doctor notified if relevant (consultation statuses)
- * → Email: hospital notified if relevant
+ * Admin changes booking status. Sends OP on 'confirmed'. Notifies all parties.
  */
 router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
     const { status, note } = req.body;
+
+    // Validate against model enum
+    const BOOKING_STATUSES = [
+      'draft', 'pending', 'confirmed', 'in_progress', 'completed',
+      'cancelled', 'no_show', 'refund_pending', 'refunded',
+    ];
+    if (!BOOKING_STATUSES.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status. Valid: ${BOOKING_STATUSES.join(', ')}`,
+      });
+    }
+
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
@@ -1381,10 +2045,13 @@ router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadm
 
     const customer = await User.findById(booking.customer).select('email phone name').lean();
 
-    // Email: customer — status update
+    // Send OP when admin confirms booking with a doctor
+    if (status === 'confirmed' && booking.doctor) {
+      createOrSendOpOnConfirmation({ booking: booking.toObject(), triggeredBy: 'admin' }).catch(() => {});
+    }
+
     emailCustomerStatusUpdate({ booking, newStatus: status, customer }).catch(() => {});
 
-    // Email: doctor — if booking involves consultation and status is significant
     if (booking.doctor && ['confirmed', 'cancelled', 'completed'].includes(status)) {
       const doctorProfile = await DoctorProfile.findById(booking.doctor)
         .populate('user', 'name email').lean();
@@ -1401,7 +2068,6 @@ router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadm
       }
     }
 
-    // Email: hospital — if involved
     if (booking.hospital && ['confirmed', 'cancelled', 'completed'].includes(status)) {
       const hospital = await Hospital.findById(booking.hospital)
         .populate('managedBy', 'name email').lean();
@@ -1662,8 +2328,6 @@ router.get('/admin/bookings/:id/nearby/hospitals',
 
 /**
  * POST /admin/bookings/:id/assign/solo-driver
- * → Email: solo driver notified
- * → Email: customer — booking confirmed with driver info
  */
 router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
@@ -1690,7 +2354,6 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
     );
 
     const coords = getBookingCoords(booking);
-    const otp    = genOtp();
     const { distanceKm, durationMin, polyline } = await calculateCanonicalRoute(
       coords.pickupCoords, coords.dropoffCoords,
     );
@@ -1709,7 +2372,7 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
       status:               'driver_assigned',
       estimatedDistanceKm:  distanceKm,
       estimatedDurationMin: durationMin,
-      pickupOtp:            hashOtp(otp),
+      pickupOtp:            hashOtp(genOtp()),
     });
 
     const tracking = await RideTracking.create({
@@ -1730,10 +2393,8 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
       priority:  'High',
     });
 
-    // Email: driver
     emailDriverAssigned({ driverUser: soloPartner.user, booking }).catch(() => {});
 
-    // Email: customer — booking confirmed + driver
     const customer = await User.findById(booking.customer).select('email phone name').lean();
     sendEmail({
       email:   customer?.email,
@@ -1790,8 +2451,6 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
 
 /**
  * POST /admin/bookings/:id/assign/transport-partner
- * → Email: TP notified (already exists — kept)
- * → Email: customer — TP assigned, driver coming soon
  */
 router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
@@ -1821,10 +2480,9 @@ router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('
       priority:  'High',
     });
 
-    // Email: TP (existing)
     sendEmail({
       email:   tp.user.email,
-      subject: `New Booking #${booking.bookingCode} — Assign Driver`,
+      subject: `New Booking #${booking.bookingCode} — Assign Driver | Likeson Healthcare`,
       html:    transactionalTemplate({
         header:     'BOOKING ASSIGNED TO YOUR FLEET',
         title:      `Booking #${booking.bookingCode} needs a driver`,
@@ -1836,7 +2494,6 @@ router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('
       }),
     }).catch(e => console.error('[Admin assign TP] Email:', e.message));
 
-    // Email: customer — transport partner assigned
     const customer = await User.findById(booking.customer).select('email phone name').lean();
     sendEmail({
       email:   customer?.email,
@@ -1845,7 +2502,7 @@ router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('
         header:     'TRANSPORT UPDATE',
         title:      `Transport has been arranged for Booking #${booking.bookingCode}`,
         body:       `Your transport partner <b>${tp.businessName || tp.ownerName}</b> has been assigned.<br/>
-                     A driver will be assigned shortly. You will receive further confirmation.`,
+                     A driver will be assigned shortly.`,
         buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
         buttonText: 'View Booking',
       }),
@@ -1886,8 +2543,6 @@ router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('
 
 /**
  * POST /admin/bookings/:id/assign/care-assistant
- * → Email: care assistant notified (in addition to existing SMS)
- * → Email: customer notified (in addition to existing SMS)
  */
 router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
@@ -1936,14 +2591,12 @@ router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('adm
         userName:       customer.name,
         requestId:      booking.bookingCode,
         assistantName:  ca.fullName,
-        assistantPhone: ca.phone,
+        assistantPhone: ca.user.phone,
       }),
     }).catch(e => console.error('[Admin assign CA] Customer SMS:', e.message));
 
-    // Email: care assistant
     emailCareAssistantAssigned({ caUser: ca.user, caName: ca.fullName, booking }).catch(() => {});
 
-    // Email: customer
     sendEmail({
       email:   customer?.email,
       subject: `Care Assistant Assigned — Booking #${booking.bookingCode} | Likeson Healthcare`,
@@ -1951,7 +2604,7 @@ router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('adm
         header:     'CARE ASSISTANT ASSIGNED',
         title:      `Your care assistant has been assigned for Booking #${booking.bookingCode}`,
         body:       `<b>Care Assistant:</b> ${ca.fullName}<br/>
-                     <b>Phone:</b> ${ca.phone}<br/>
+                     <b>Phone:</b> ${ca.user.phone}<br/>
                      <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}`,
         buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
         buttonText: 'View Booking',
@@ -1980,8 +2633,6 @@ router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('adm
 
 /**
  * POST /admin/bookings/:id/assign/hospital
- * → Email: hospital manager notified of booking link
- * → Email: customer notified hospital confirmed
  */
 router.post('/admin/bookings/:id/assign/hospital', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
@@ -2001,7 +2652,6 @@ router.post('/admin/bookings/:id/assign/hospital', protect, authorize('admin', '
       $set: { hospital: hospitalId, updatedBy: req.user._id },
     });
 
-    // Email: hospital manager
     if (hospital.managedBy?.email) {
       emailHospitalBookingUpdate({
         hospitalUser: hospital.managedBy,
@@ -2014,7 +2664,6 @@ router.post('/admin/bookings/:id/assign/hospital', protect, authorize('admin', '
       }).catch(() => {});
     }
 
-    // Email: customer — hospital linked
     const customer = await User.findById(booking.customer).select('email phone name').lean();
     sendEmail({
       email:   customer?.email,
@@ -2038,8 +2687,6 @@ router.post('/admin/bookings/:id/assign/hospital', protect, authorize('admin', '
 
 /**
  * PATCH /admin/bookings/:id/reassign/driver
- * → Email: new driver notified
- * → Email: customer notified of driver change
  */
 router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
@@ -2058,7 +2705,6 @@ router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 
     if (!driverDoc) return res.status(404).json({ success: false, message: 'Driver not found' });
 
     const coords = getBookingCoords(booking);
-    const otp    = genOtp();
     const { distanceKm, durationMin, polyline } = await calculateCanonicalRoute(
       coords.pickupCoords, coords.dropoffCoords,
     );
@@ -2072,13 +2718,13 @@ router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 
         ...coords,
         createdBy:         req.user._id,
       }),
-      driver:               newDriverId,
-      transportPartner:     driverDoc.ownerAgency  || undefined,
-      soloPartner:          driverDoc.soloPartner  || undefined,
+      driver:           newDriverId,
+      transportPartner: driverDoc.ownerAgency || undefined,
+      soloPartner:      driverDoc.soloPartner  || undefined,
       status:               'driver_assigned',
       estimatedDistanceKm:  distanceKm,
       estimatedDurationMin: durationMin,
-      pickupOtp:            hashOtp(otp),
+      pickupOtp:            hashOtp(genOtp()),
     });
 
     const tracking = await RideTracking.create({
@@ -2108,10 +2754,8 @@ router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 
       bookingId: booking._id,
     });
 
-    // Email: new driver
     emailDriverAssigned({ driverUser, booking, verb: 'reassigned' }).catch(() => {});
 
-    // Email: customer — driver changed
     sendEmail({
       email:   customer?.email,
       subject: `Driver Updated — Booking #${booking.bookingCode} | Likeson Healthcare`,
@@ -2140,8 +2784,6 @@ router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 
 
 /**
  * PATCH /admin/bookings/:id/reassign/care
- * → Email: new care assistant notified
- * → Email: customer notified of change
  */
 router.patch('/admin/bookings/:id/reassign/care', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
@@ -2170,13 +2812,10 @@ router.patch('/admin/bookings/:id/reassign/care', protect, authorize('admin', 's
         bookingId: booking._id,
       });
 
-      // Email: new care assistant
       emailCareAssistantAssigned({ caUser: ca.user, caName: ca.fullName, booking, verb: 'reassigned' }).catch(() => {});
-
       joinBookingRoom(ca.user._id, booking._id);
     }
 
-    // Email: customer — care assistant changed
     sendEmail({
       email:   customer?.email,
       subject: `Care Assistant Updated — Booking #${booking.bookingCode} | Likeson Healthcare`,
@@ -2184,7 +2823,7 @@ router.patch('/admin/bookings/:id/reassign/care', protect, authorize('admin', 's
         header:     'CARE ASSISTANT UPDATED',
         title:      `Your care assistant has been updated for Booking #${booking.bookingCode}`,
         body:       `<b>New Care Assistant:</b> ${ca?.fullName || 'N/A'}<br/>
-                     <b>Phone:</b> ${ca?.phone || 'N/A'}<br/>
+                     <b>Phone:</b> ${ca?.user?.phone || 'N/A'}<br/>
                      <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}`,
         buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
         buttonText: 'View Booking',
@@ -2200,7 +2839,6 @@ router.patch('/admin/bookings/:id/reassign/care', protect, authorize('admin', 's
 
 /**
  * POST /admin/bookings/:id/refund
- * → Email: customer notified of refund with amount + method
  */
 router.post('/admin/bookings/:id/refund', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
@@ -2258,7 +2896,6 @@ router.post('/admin/bookings/:id/refund', protect, authorize('admin', 'superadmi
       bookingId: booking._id,
     });
 
-    // Email: customer — refund confirmation using buildRefundEmail template
     const refundMethod = rzpPayment ? 'Original_Source' : walletPayment ? 'Wallet' : 'Original_Source';
     sendEmail({
       email:   customer?.email,
@@ -2320,9 +2957,8 @@ router.get('/admin/ops',
 
 /**
  * PATCH /admin/ops/:id/status
- * → Email: patient gets OP zip if completed (existing)
- * → Email: doctor notified of admin OP status change
- * → Email: hospital notified of admin OP status change
+ * Admin updates OP status. On completion sends OP zip to patient.
+ * Also notifies doctor and hospital.
  */
 router.patch('/admin/ops/:id/status', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
@@ -2339,7 +2975,7 @@ router.patch('/admin/ops/:id/status', protect, authorize('admin', 'superadmin'),
       ...(doctorNotes ? { doctorNotes } : {}),
       ...(status === 'completed' ? { completedAt: new Date() } : {}),
     }, { new: true })
-      .populate('doctor',   'user specialization')
+      .populate({ path: 'doctor', populate: { path: 'user', select: 'name email' } })
       .populate('hospital', 'name managedBy')
       .populate('patient',  'name email phone');
 
@@ -2347,18 +2983,28 @@ router.patch('/admin/ops/:id/status', protect, authorize('admin', 'superadmin'),
 
     if (status === 'completed') {
       const booking   = await Booking.findById(op.booking).lean();
-      const patient   = await User.findById(op.patient).select('email name phone').lean();
+      const patient   = await User.findById(op.patient._id || op.patient).select('email name phone').lean();
       const followUps = await OutPatientRecord.find({ parentOp: op._id }).sort({ scheduledAt: -1 }).lean();
-      if (patient?.email) sendOpZipEmail({ op, booking, patient, followUps });
+      const opPlain   = op.toObject ? op.toObject() : op;
+      if (patient?.email) sendOpZipEmail({ op: opPlain, booking, patient, followUps });
+
+      // End consultation if linked and still active
+      if (booking?.consultationSessionId) {
+        Consultation.findOneAndUpdate(
+          { _id: booking.consultationSessionId, status: { $in: ['active', 'paused', 'waiting'] } },
+          { status: 'completed', actualEndTime: new Date(), roomEnded: true, endedBy: 'admin', updatedBy: req.user._id },
+          { new: true }
+        ).catch(e => console.error('[admin ops complete] close consultation:', e.message));
+      }
     }
 
-    // Email: doctor — admin changed OP status
+    // Email: doctor
     if (op.doctor?.user) {
-      const doctorUser = await User.findById(op.doctor.user).select('email name').lean();
+      const doctorUser = await User.findById(op.doctor.user._id || op.doctor.user).select('email name').lean();
       if (doctorUser?.email) {
         emailDoctorBookingUpdate({
           doctorUser,
-          booking: { bookingCode: op.bookingNumber, _id: op.booking, patientInfo: { name: op.patientName }, scheduledAt: op.scheduledAt },
+          booking: { bookingCode: op.bookingNumber || 'N/A', _id: op.booking, patientInfo: { name: op.patientName }, scheduledAt: op.scheduledAt },
           subject: `OP Record Updated — ${op.opNumber} | Likeson Healthcare`,
           body:    `<b>OP Number:</b> ${op.opNumber}<br/>
                     <b>Patient:</b> ${op.patientName || 'N/A'}<br/>
@@ -2368,13 +3014,13 @@ router.patch('/admin/ops/:id/status', protect, authorize('admin', 'superadmin'),
       }
     }
 
-    // Email: hospital — admin changed OP status
+    // Email: hospital
     if (op.hospital?.managedBy) {
       const hospitalUser = await User.findById(op.hospital.managedBy).select('email name').lean();
       if (hospitalUser?.email) {
         emailHospitalBookingUpdate({
           hospitalUser,
-          booking: { bookingCode: op.bookingNumber, _id: op.booking, patientInfo: { name: op.patientName }, scheduledAt: op.scheduledAt },
+          booking: { bookingCode: op.bookingNumber || 'N/A', _id: op.booking, patientInfo: { name: op.patientName }, scheduledAt: op.scheduledAt },
           subject: `OP Record Updated — ${op.opNumber} | Likeson Healthcare`,
           body:    `<b>OP Number:</b> ${op.opNumber}<br/>
                     <b>Patient:</b> ${op.patientName || 'N/A'}<br/>

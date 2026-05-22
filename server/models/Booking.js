@@ -1,3 +1,5 @@
+ 
+
 import mongoose from 'mongoose';
 import { customAlphabet } from 'nanoid';
 
@@ -5,8 +7,8 @@ const { Schema } = mongoose;
 
 const generateBookingCode = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 8);
 
+// ── Constants ──────────────────────────────────────────────────────────────────
 
- 
 export const BOOKING_TYPES = [
   'full_care_ride',
   'doctor_consultation',
@@ -146,347 +148,6 @@ const diagnosticDetailsSchema = new Schema(
   { _id: false }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ONLINE CONSULTATION SCHEMA — PRODUCTION GRADE VIDEOSDK ARCHITECTURE
-// ─────────────────────────────────────────────────────────────────────────────
-const onlineConsultationSchema = new Schema(
-  {
-    // Provider
-    provider: {
-      type: String,
-      enum: ['VideoSDK'],
-      default: 'VideoSDK',
-    },
-
-    // VideoSDK Room Details
-    roomId: {
-      type: String,
-      trim: true,
-      index: true,
-    },
-
-    meetingId: {
-      type: String,
-      trim: true,
-      index: true,
-    },
-
-    meetingLink: {
-      type: String,
-      trim: true,
-    },
-
-    videoSessionId: {
-      type: String,
-      trim: true,
-      index: true,
-    },
-
-    // Secure Tokens (NEVER expose in API response)
-    hostToken: {
-      type: String,
-      select: false,
-    },
-
-    patientToken: {
-      type: String,
-      select: false,
-    },
-
-    // Consultation Lifecycle
-    consultationStatus: {
-      type: String,
-      enum: [
-        'created',
-        'waiting_for_doctor',
-        'waiting_for_patient',
-        'live',
-        'paused',
-        'completed',
-        'cancelled',
-        'expired',
-        'failed',
-      ],
-      default: 'created',
-      index: true,
-    },
-
-    roomStarted: {
-      type: Boolean,
-      default: false,
-    },
-
-    roomEnded: {
-      type: Boolean,
-      default: false,
-    },
-
-    // Doctor Participation
-    doctorJoined: {
-      type: Boolean,
-      default: false,
-    },
-
-    doctorJoinedAt: {
-      type: Date,
-    },
-
-    doctorLeftAt: {
-      type: Date,
-    },
-
-    // Patient Participation
-    patientJoined: {
-      type: Boolean,
-      default: false,
-    },
-
-    patientJoinedAt: {
-      type: Date,
-    },
-
-    patientLeftAt: {
-      type: Date,
-    },
-
-    // Timing
-    startedAt: {
-      type: Date,
-    },
-
-    endedAt: {
-      type: Date,
-    },
-
-    durationMinutes: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-
-    allowedDurationMinutes: {
-      type: Number,
-      default: 30,
-      min: 1,
-    },
-
-    waitingDurationMinutes: {
-      type: Number,
-      default: 0,
-    },
-
-    // Waiting Room
-    waitingRoomEnabled: {
-      type: Boolean,
-      default: true,
-    },
-
-    waitingRoomApproved: {
-      type: Boolean,
-      default: false,
-    },
-
-    waitingRoomApprovedBy: {
-      type: Schema.Types.ObjectId,
-      ref: 'User',
-    },
-
-    waitingRoomApprovedAt: {
-      type: Date,
-    },
-
-    // Recording
-    recordingEnabled: {
-      type: Boolean,
-      default: false,
-    },
-
-    recordingStarted: {
-      type: Boolean,
-      default: false,
-    },
-
-    recordingStartedAt: {
-      type: Date,
-    },
-
-    recordingEndedAt: {
-      type: Date,
-    },
-
-    recordingUrl: {
-      type: String,
-      trim: true,
-      select: false,
-    },
-
-    recordingSizeMB: {
-      type: Number,
-      default: 0,
-    },
-
-    // Reconnect + Network Tracking
-    reconnectCount: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-
-    networkIssueDetected: {
-      type: Boolean,
-      default: false,
-    },
-
-    lastReconnectAt: {
-      type: Date,
-    },
-
-    networkQualityLogs: [
-      {
-        participant: {
-          type: String,
-          enum: ['doctor', 'patient'],
-        },
-
-        quality: {
-          type: String,
-          enum: ['excellent', 'good', 'poor', 'disconnected'],
-        },
-
-        timestamp: {
-          type: Date,
-          default: Date.now,
-        },
-      },
-    ],
-
-    // Telemedicine Consent
-    isTelemedicineConsentAccepted: {
-      type: Boolean,
-      default: false,
-    },
-
-    telemedicineConsentAcceptedAt: {
-      type: Date,
-    },
-
-    consentIpAddress: {
-      type: String,
-    },
-
-    // Consultation Notes
-    consultationSummary: {
-      type: String,
-      trim: true,
-      maxlength: 5000,
-    },
-
-    doctorNotes: {
-      type: String,
-      trim: true,
-      maxlength: 10000,
-      select: false,
-    },
-
-    followUpInstructions: {
-      type: String,
-      trim: true,
-    },
-
-    // Prescription
-    prescriptionUploaded: {
-      type: Boolean,
-      default: false,
-    },
-
-    prescriptionUrl: {
-      type: String,
-      trim: true,
-    },
-
-    prescriptionUploadedAt: {
-      type: Date,
-    },
-
-    // Consultation Ending
-    consultationEndedBy: {
-      type: String,
-      enum: ['doctor', 'patient', 'admin', 'system'],
-    },
-
-    endedReason: {
-      type: String,
-      trim: true,
-      maxlength: 1000,
-    },
-
-    autoEndedBySystem: {
-      type: Boolean,
-      default: false,
-    },
-
-    // Failure Tracking
-    failedReason: {
-      type: String,
-      trim: true,
-    },
-
-    failureCode: {
-      type: String,
-      trim: true,
-    },
-
-    // Event Logs (Audit + Analytics)
-    eventLogs: [
-      {
-        event: {
-          type: String,
-          required: true,
-        },
-
-        participant: {
-          type: String,
-          enum: ['doctor', 'patient', 'system', 'admin'],
-        },
-
-        timestamp: {
-          type: Date,
-          default: Date.now,
-        },
-
-        metadata: {
-          type: Schema.Types.Mixed,
-        },
-      },
-    ],
-
-    // Analytics
-    analytics: {
-      peakParticipants: {
-        type: Number,
-        default: 0,
-      },
-
-      averageNetworkQuality: {
-        type: String,
-        enum: ['excellent', 'good', 'poor'],
-      },
-
-      totalReconnects: {
-        type: Number,
-        default: 0,
-      },
-
-      consultationScore: {
-        type: Number,
-        min: 0,
-        max: 100,
-      },
-    },
-  },
-  { _id: false }
-);
-
 const cancellationSchema = new Schema(
   {
     cancelledBy:       { type: String, enum: CANCELLATION_ACTORS },
@@ -528,7 +189,6 @@ const ratingSchema = new Schema(
   { _id: false }
 );
 
-// ── Deferred subscription usage schema ───────────────────────────────────────
 const subscriptionUsagePendingSchema = new Schema(
   {
     subId:  { type: String, required: true },
@@ -639,9 +299,22 @@ const bookingSchema = new Schema(
       default: null,
     },
 
-    onlineConsultation: {
-      type:    onlineConsultationSchema,
+    /**
+     * ─────────────────────────────────────────────────────────────────────────
+     * TELEMEDICINE SESSION LINK
+     *
+     * All VideoSDK / RTC / meeting / recording / AI / consent logic lives in
+     * the dedicated Consultation document. Booking only holds this reference.
+     *
+     * Usage:
+     *   const session = await Consultation.findById(booking.consultationSessionId);
+     * ─────────────────────────────────────────────────────────────────────────
+     */
+    consultationSessionId: {
+      type:    Schema.Types.ObjectId,
+      ref:     'Consultation',
       default: null,
+      index:   true,
     },
 
     // ── Location ──────────────────────────────────────────────────────────────
@@ -676,15 +349,14 @@ const bookingSchema = new Schema(
       max:     100,
     },
 
-    // Finalized applied usage items
     confirmedSubscriptionUsage: {
       type: [
         {
           subId: { type: String, required: true },
-          field: { type: String, required: true }
-        }
+          field: { type: String, required: true },
+        },
       ],
-      default: []
+      default: [],
     },
 
     // ── Ride Linkage ──────────────────────────────────────────────────────────
@@ -786,7 +458,7 @@ const bookingSchema = new Schema(
       completionSummary:   { type: Boolean, default: false },
     },
 
-    // ── BUG #3 + #5 FIX: Deferred subscription usage increments ──────────────
+    // ── Deferred subscription usage increments ────────────────────────────────
     subscriptionUsagePending: {
       type:    [subscriptionUsagePendingSchema],
       default: [],
@@ -842,6 +514,10 @@ bookingSchema.virtual('amountDue').get(function () {
 
 bookingSchema.virtual('hasSubscriptionUsagePending').get(function () {
   return Array.isArray(this.subscriptionUsagePending) && this.subscriptionUsagePending.length > 0;
+});
+
+bookingSchema.virtual('hasActiveConsultation').get(function () {
+  return !!this.consultationSessionId;
 });
 
 // ── Pre-validate ──────────────────────────────────────────────────────────────
@@ -905,7 +581,7 @@ bookingSchema.pre('save', async function () {
     this.bookingCode = code;
   }
 
-  // statusLog fromStatus — read from last log entry
+  // statusLog fromStatus
   if (this.isModified('status') && !this.isNew) {
     const lastLog    = this.statusLog?.[this.statusLog.length - 1];
     const fromStatus = lastLog?.toStatus ?? null;
@@ -928,7 +604,7 @@ bookingSchema.pre('save', async function () {
     this.completedAt = new Date();
   }
 
-  // BUG #3 + #5 FIX: On cancellation, clear pending subscription usage
+  // On cancellation, clear pending subscription usage
   if (this.isModified('status') && this.status === 'cancelled') {
     if (this.subscriptionUsagePending?.length > 0) {
       this.subscriptionUsagePending = [];
@@ -985,6 +661,7 @@ bookingSchema.index({ 'diagnosticDetails.labPartner': 1 });
 bookingSchema.index({ createdAt: -1 });
 bookingSchema.index({ bookingType: 1, status: 1, scheduledAt: 1 });
 bookingSchema.index({ 'subscriptionUsagePending.0': 1, paymentStatus: 1 });
+bookingSchema.index({ consultationSessionId: 1 }); // join to Consultation
 
 const Booking = mongoose.model('Booking', bookingSchema);
 export default Booking;

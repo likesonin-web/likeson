@@ -1,1064 +1,1465 @@
-import express from 'express';
-import mongoose from 'mongoose';
+/**
+ * consultationRoutes.js
+ *
+ * ENTERPRISE TELEMEDICINE CONSULTATION ROUTER
+ * Fully standalone — zero Booking.onlineConsultation usage.
+ * All logic operates on Consultation model directly.
+ *
+ * Mount: app.use('/api/consultations', consultationRouter)
+ */
 
-import Booking               from '../models/Booking.js';
-import DoctorProfile         from '../models/DoctorProfile.js';
-import Hospital              from '../models/Hospital.js';
-import OutPatientRecord      from '../models/OutPatientRecord.js';
-import PlatformPricingConfig from '../models/PlatformPricingConfig.js';
-import Notification          from '../models/Notification.js';
-import User                  from '../models/User.js';
-import { protect, authorize } from '../middleware/authMiddleware.js';
+import express        from 'express';
+import mongoose       from 'mongoose';
+
+import Consultation   from '../models/Consultation.js';
+import Booking        from '../models/Booking.js';
+import DoctorProfile  from '../models/DoctorProfile.js';
+import Hospital       from '../models/Hospital.js';
+import User           from '../models/User.js';
+import EPrescription  from '../models/EPrescription.js';
+import Notification   from '../models/Notification.js';
+
+import { protect, authorize }          from '../middleware/authMiddleware.js';
 import { generateVideoSdkToken, createVideoSdkRoom } from '../utils/videoSdk.js';
-import sendEmail             from '../utils/sendEmail.js';
-import { transactionalTemplate } from '../utils/emailTemplates.js';
+import { getConsultationSocketService, rooms }        from '../services/consultationSocketService.js';
 
 const router = express.Router();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SOCKET SERVICE HELPER (Fixed: Resolves User._id for doctor room)
+// HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const emitConsultationEvent = async (req, booking, event, payload = {}) => {
-  const io = req.app.get('io');
-  if (!io) return;
+const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
+const isAdmin   = (req) => ['admin', 'superadmin'].includes(req.user.role);
 
-  const base = {
-    bookingId:   booking._id?.toString(),
-    bookingCode: booking.bookingCode,
-    bookingType: booking.bookingType,
-    status:      booking.status,
-    ...payload,
-  };
-
-  // Booking-level room
-  io.to(`booking:${booking._id}`).emit(event, base);
-
-  // Customer personal room
-  if (booking.customer) {
-    const customerId = booking.customer._id || booking.customer;
-    io.to(`user:${customerId}`).emit(event, base);
-  }
-
-  // Doctor personal room (requires User._id, not DoctorProfile._id)
-  if (booking.doctor) {
-    let doctorUserId = null;
-
-    if (req.user && req.user.role === 'doctor') {
-      doctorUserId = req.user._id;
-    } else {
-      const doctorProfileId = booking.doctor._id || booking.doctor;
-      const dp = await DoctorProfile.findById(doctorProfileId).select('user').lean();
-      if (dp) doctorUserId = dp.user;
-    }
-
-    if (doctorUserId) {
-      io.to(`doctor:${doctorUserId}`).emit(event, base);
-    }
-  }
-
-  // Admin global room
-  io.to('admin:global').emit(event, { ...base, _internal: true });
+/** Resolve DoctorProfile._id from User._id */
+const resolveDoctorProfile = async (userId) => {
+  return DoctorProfile.findOne({ user: userId }).select('_id user primaryHospital specialty').lean();
 };
 
-const isAdmin = (req) => ['admin', 'superadmin'].includes(req.user.role);
+/**
+ * assertConsultationAccess
+ * Returns consultation doc or sends 403/404.
+ * Returns null if response already sent.
+ */
+const assertConsultationAccess = async (req, res, options = {}) => {
+  const { consultationId } = req.params;
+  const { requireStatus, select = '' } = options;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PRICING HELPER
-// ─────────────────────────────────────────────────────────────────────────────
+  const query = isValidId(consultationId)
+    ? { $or: [{ _id: consultationId }, { consultationId }] }
+    : { consultationId };
 
-const resolveConsultationPricing = async (doctorProfile, consultationType) => {
-  const globalConfig = await PlatformPricingConfig.getGlobal();
-
-  // hospital-manager path
-  if (doctorProfile.primaryHospital) {
-    const hospital = await Hospital.findById(doctorProfile.primaryHospital)
-      .select('managementModel consultationPricing platformFee')
-      .lean();
-
-    if (hospital?.managementModel === 'hospital-manager' && hospital.consultationPricing) {
-      const cp = hospital.consultationPricing;
-
-      const feeMap = {
-        inPerson:  cp.inPersonFee,
-        video:     cp.videoFee,
-        homeVisit: cp.homeVisitFee,
-      };
-
-      const platformFee =
-        cp.platformFee ??
-        hospital.platformFee ??
-        PlatformPricingConfig.resolveHospitalPlatformFee(globalConfig, hospital) ??
-        globalConfig.doctor.platformFee;
-
-      return {
-        source:           'hospital',
-        consultationFee:  feeMap[consultationType] ?? cp.inPersonFee,
-        platformFee,
-        followUpFee:      cp.followUpFee,
-        followUpDiscountPercent: cp.followUpDiscountPercent,
-        followUpValidDays: cp.followUpValidDays,
-        hospitalId:       hospital._id,
-      };
-    }
-  }
-
-  // doctor-owner / no hospital path
-  const fees = doctorProfile.fees ?? {};
-
-  const feeMap = {
-    inPerson:  fees.inPersonFee,
-    video:     fees.videoFee,
-    homeVisit: fees.homeVisitFee,
-  };
-
-  const platformFee =
-    doctorProfile.platformFee ??
-    globalConfig.doctor.platformFee;
-
-  return {
-    source:           'doctor',
-    consultationFee:  feeMap[consultationType] ?? fees.inPersonFee ?? 0,
-    platformFee,
-    followUpFee:      fees.followUpFee,
-    followUpDiscountPercent: fees.followUpDiscountPercent,
-    followUpValidDays: fees.followUpValidDays,
-  };
-};
-
-const computeFareBreakdown = (consultationFee, platformFee, discount = 0, couponDiscount = 0) => {
-  let platformFeeAmount = 0;
-
-  if (platformFee?.type === 'fixed') {
-    platformFeeAmount = platformFee.value;
-  } else if (platformFee?.type === 'percentage') {
-    platformFeeAmount = Math.round((consultationFee * platformFee.value) / 100);
-  }
-
-  const subtotal    = consultationFee + platformFeeAmount;
-  const totalAmount = Math.max(0, subtotal - discount - couponDiscount);
-
-  return {
-    consultationFee,
-    platformFee:    platformFeeAmount,
-    discount,
-    couponDiscount,
-    totalAmount,
-    amountPaid:     0,
-    refundAmount:   0,
-    currency:       'INR',
-  };
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// OP NUMBER GENERATOR (Fixed: Modern Mongoose syntax)
-// ─────────────────────────────────────────────────────────────────────────────
-
-const generateOpNumber = async (hospitalCode = 'LKSN') => {
-  const date = new Date();
-  const dateStr = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
-  const prefix = `OP-${dateStr}-${hospitalCode.toUpperCase().slice(0, 6)}`;
-
-  const last = await OutPatientRecord.findOne({ opNumber: new RegExp(`^${prefix}`) })
-    .select('opNumber')
-    .sort({ opNumber: -1 })
+  const consultation = await Consultation.findOne(query)
+    .select(`patient doctor hospital status consultationId bookingId ${select}`)
     .lean();
 
-  let seq = 1;
-  if (last) {
-    const parts = last.opNumber.split('-');
-    seq = (parseInt(parts[parts.length - 1], 10) || 0) + 1;
+  if (!consultation) {
+    res.status(404).json({ success: false, message: 'Consultation not found' });
+    return null;
   }
 
-  return `${prefix}-${String(seq).padStart(4, '0')}`;
+  if (requireStatus && !requireStatus.includes(consultation.status)) {
+    res.status(400).json({
+      success: false,
+      message: `Operation not allowed — consultation is '${consultation.status}'`,
+    });
+    return null;
+  }
+
+  const { _id: userId, role } = req.user;
+
+  if (isAdmin(req)) return consultation;
+
+  // Patient check
+  if (consultation.patient?.toString() === userId.toString()) return consultation;
+
+  // Doctor check
+  if (role === 'doctor') {
+    const dp = await resolveDoctorProfile(userId);
+    if (dp && consultation.doctor?.toString() === dp._id.toString()) return consultation;
+  }
+
+  // Hospital check
+  if (role === 'hospital') {
+    const h = await Hospital.findOne({ managedBy: userId }).select('_id').lean();
+    if (h && consultation.hospital?.toString() === h._id.toString()) return consultation;
+  }
+
+  res.status(403).json({ success: false, message: 'Forbidden' });
+  return null;
+};
+
+/** Emit consultation socket event via service */
+const emitConsultationEvent = (consultationId, event, payload = {}) => {
+  const svc = getConsultationSocketService();
+  if (!svc) return;
+  svc.emitToConsultation(consultationId, event, payload);
+  svc.emitToAdmins(event, { ...payload, _internal: true });
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ── ROUTES ───────────────────────────────────────────────────────────────────
+// ── 1. POST /consultations — CREATE
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 1. GET /consultations/pricing
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.get(
-  '/pricing',
+router.post(
+  '/',
   protect,
   authorize('customer', 'doctor', 'admin', 'superadmin'),
   async (req, res) => {
     try {
-      const { doctorProfileId, consultationType = 'inPerson' } = req.query;
+      const {
+        bookingId,
+        consultationType = 'video',
+        consultationMode = 'scheduled',
+        scheduledStartTime,
+        estimatedDurationMinutes = 30,
+        chiefComplaint,
+        symptoms = [],
+        language = 'English',
+        priority = 'routine',
+        waitingRoomEnabled = true,
+        recordingSupported = false,
+      } = req.body;
 
-      if (!doctorProfileId)
-        return res.status(400).json({ success: false, message: 'doctorProfileId is required' });
+      if (!bookingId || !isValidId(bookingId))
+        return res.status(400).json({ success: false, message: 'Valid bookingId required' });
+      if (!scheduledStartTime)
+        return res.status(400).json({ success: false, message: 'scheduledStartTime required' });
 
-      const doctorProfile = await DoctorProfile.findById(doctorProfileId)
-        .select('fees platformFee primaryHospital consultationTypes isVerified isActive')
-        .lean();
-
-      if (!doctorProfile)
-        return res.status(404).json({ success: false, message: 'Doctor not found' });
-
-      if (!doctorProfile.isVerified || !doctorProfile.isActive)
-        return res.status(400).json({ success: false, message: 'Doctor not available' });
-
-      const pricing = await resolveConsultationPricing(doctorProfile, consultationType);
-      const fare    = computeFareBreakdown(pricing.consultationFee, pricing.platformFee);
-
-      return res.json({
-        success: true,
-        data: {
-          source:             pricing.source,
-          consultationType,
-          consultationFee:    fare.consultationFee,
-          platformFeeAmount:  fare.platformFee,
-          totalAmount:        fare.totalAmount,
-          platformFeePolicy:  pricing.platformFee,
-          followUpFee:        pricing.followUpFee,
-          followUpDiscountPercent: pricing.followUpDiscountPercent,
-          followUpValidDays:  pricing.followUpValidDays,
-          currency:           'INR',
-        },
-      });
-    } catch (err) {
-      console.error('[GET /consultations/pricing]', err);
-      return res.status(500).json({ success: false, message: err.message });
-    }
-  }
-);
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// 4. GET /consultations/:bookingId/join
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.get(
-  '/:bookingId/join',
-  protect,
-  authorize('customer', 'doctor'),
-  async (req, res) => {
-    try {
-      const booking = await Booking.findById(req.params.bookingId)
-        .select('+onlineConsultation.hostToken +onlineConsultation.patientToken')
+      // Load booking — verify it exists and is confirmed
+      const booking = await Booking.findById(bookingId)
+        .select('customer doctor hospital status bookingType paymentStatus consultationSessionId')
         .lean();
 
       if (!booking)
         return res.status(404).json({ success: false, message: 'Booking not found' });
 
-      if (booking.bookingType !== 'doctor_online')
-        return res.status(400).json({ success: false, message: 'Not an online consultation' });
-
       if (!['confirmed', 'in_progress'].includes(booking.status))
-        return res.status(400).json({
-          success: false,
-          message: 'Booking not yet confirmed or already completed',
-        });
+        return res.status(400).json({ success: false, message: 'Booking must be confirmed' });
 
       if (booking.paymentStatus !== 'paid')
-        return res.status(402).json({
-          success: false,
-          message: 'Payment required to join consultation',
-        });
+        return res.status(402).json({ success: false, message: 'Payment required' });
 
-      const isDoctor   = req.user.role === 'doctor';
-      const isCustomer = req.user.role === 'customer';
-
-      if (isCustomer && booking.customer.toString() !== req.user._id.toString())
-        return res.status(403).json({ success: false, message: 'Forbidden' });
-
-      if (isDoctor) {
-        const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
-        if (!dp || dp._id.toString() !== booking.doctor.toString())
-          return res.status(403).json({ success: false, message: 'Forbidden' });
-      }
-
-      if (isCustomer && !booking.onlineConsultation?.isTelemedicineConsentAccepted)
-        return res.status(400).json({
-          success: false,
-          message: 'Telemedicine consent not accepted. Call PATCH /consultations/:id/consent first.',
-        });
-
-      // ── Ensure room exists — create lazily if missing ──────────────────────
-     let roomId      = booking.onlineConsultation?.roomId;
-      let meetingId   = booking.onlineConsultation?.meetingId;
-      let meetingLink = booking.onlineConsultation?.meetingLink
-
-      if (!roomId) {
-        // FIX: Removed the dynamic import here, passing booking._id
-        const room = await createVideoSdkRoom(booking.bookingCode, booking._id);
-
-        roomId      = room.roomId;
-        meetingId   = room.meetingId;
-        meetingLink = room.meetingLink;
-
-        await Booking.findByIdAndUpdate(booking._id, {
-          $set: {
-            'onlineConsultation.roomId':      roomId,
-            'onlineConsultation.meetingId':   meetingId,
-            'onlineConsultation.meetingLink': meetingLink,
-          },
-        });
-      }
-
-      // FIX: Override legacy fake links dynamically for older database records
-      if (!meetingLink || meetingLink.includes('meet.videosdk.live')) {
-        meetingLink = `${"https://www.likeson.in"||process.env.FRONTEND_URL || 'http://localhost:3000'}/consultations/${booking._id}/room`;
-      }
-
-      // ── Send meeting link emails ───────────────────────────────────────────
-      const scheduledAtStr = new Date(booking.scheduledAt).toLocaleString('en-IN');
-      const durationMins   = booking.onlineConsultation?.allowedDurationMinutes ?? 30;
-
-      // Customer email
-      const customerUser = await User.findById(booking.customer).select('name email').lean();
-      if (customerUser?.email) {
-        await sendEmail({
-          email:   customerUser.email,
-          subject: `Your Consultation is Ready — ${booking.bookingCode}`,
-          html:    transactionalTemplate({
-            header:     'CONSULTATION READY',
-            title:      'Join Your Online Consultation',
-            body: `
-              <p>Dear <strong>${customerUser.name}</strong>,</p>
-              <p>Your consultation <strong>${booking.bookingCode}</strong> is scheduled for <strong>${scheduledAtStr}</strong>.</p>
-              <p>Click the button below to join. Session allows up to <strong>${durationMins} minutes</strong>.</p>
-              <p><strong>Meeting Room ID:</strong> ${roomId}</p>
-            `,
-            buttonText: 'Join Consultation',
-            buttonLink: meetingLink,
-          }),
-        }).catch((e) => console.warn('[join email customer]', e.message));
-      }
-
-      // Doctor email
-      const doctorProfileId  = booking.doctor._id || booking.doctor;
-      const doctorProfileDoc = await DoctorProfile.findById(doctorProfileId).select('user').lean();
-      if (doctorProfileDoc?.user) {
-        const doctorUser = await User.findById(doctorProfileDoc.user).select('name email').lean();
-        if (doctorUser?.email) {
-          await sendEmail({
-            email:   doctorUser.email,
-            subject: `Patient Ready — Consultation ${booking.bookingCode}`,
-            html:    transactionalTemplate({
-              header:     'CONSULTATION READY',
-              title:      'Your Patient is Waiting',
-              body: `
-                <p>Dear Dr. <strong>${doctorUser.name}</strong>,</p>
-                <p>Consultation <strong>${booking.bookingCode}</strong> is active. Your patient is ready.</p>
-                <p><strong>Scheduled:</strong> ${scheduledAtStr}</p>
-                <p><strong>Duration allowed:</strong> ${durationMins} minutes</p>
-                <p><strong>Meeting Room ID:</strong> ${roomId}</p>
-              `,
-              buttonText: 'Start Consultation',
-              buttonLink: meetingLink,
-            }),
-          }).catch((e) => console.warn('[join email doctor]', e.message));
+      // Prevent duplicate consultation creation
+      if (booking.consultationSessionId) {
+        const existing = await Consultation.findById(booking.consultationSessionId).lean();
+        if (existing) {
+          return res.status(409).json({
+            success: false,
+            message: 'Consultation already exists for this booking',
+            data: { consultationId: existing.consultationId },
+          });
         }
       }
 
-      // ── Generate scoped role-aware token ──────────────────────────────────
-      const token = generateVideoSdkToken(
-        roomId,
-        isDoctor ? 'host' : 'participant',
-        '2h'
+      // Resolve doctor profile
+      const doctorProfileId = booking.doctor;
+      if (!doctorProfileId)
+        return res.status(400).json({ success: false, message: 'No doctor assigned to booking' });
+
+      const dp = await DoctorProfile.findById(doctorProfileId).select('_id specialty').lean();
+
+      // Create VideoSDK room
+      const { roomId, meetingId, meetingLink } = await createVideoSdkRoom(
+        booking.bookingCode || bookingId,
+        bookingId
       );
+
+      // Build consultation document
+      const consultation = new Consultation({
+        bookingId:               booking._id,
+        patient:                 booking.customer,
+        doctor:                  doctorProfileId,
+        hospital:                booking.hospital || null,
+        consultationType,
+        consultationMode,
+        specialty:               dp?.specialty || '',
+        language,
+        priority,
+        symptoms,
+        chiefComplaint,
+        scheduledStartTime:      new Date(scheduledStartTime),
+        estimatedDurationMinutes,
+        waitingRoomEnabled,
+        recordingSupported,
+        roomId,
+        meetingId,
+        meetingLink,
+        status:                  'scheduled',
+        createdBy:               req.user._id,
+      });
+
+      await consultation.save();
+
+      // Back-link in Booking
+      await Booking.findByIdAndUpdate(bookingId, {
+        $set: { consultationSessionId: consultation._id },
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: 'Consultation created',
+        data: {
+          consultationId:   consultation.consultationId,
+          _id:              consultation._id,
+          status:           consultation.status,
+          roomId,
+          meetingId,
+          meetingLink,
+          scheduledStartTime: consultation.scheduledStartTime,
+        },
+      });
+    } catch (err) {
+      console.error('[POST /consultations]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 2. POST /consultations/:consultationId/join
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.post(
+  '/:consultationId/join',
+  protect,
+  authorize('customer', 'doctor', 'care_assistant', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const { consultationId } = req.params;
+      const { _id: userId, role } = req.user;
+
+      const consultation = await Consultation.findOne({ consultationId })
+        .select('+hostToken +participantToken patient doctor status telemedicineConsentAccepted waitingRoomEnabled roomId meetingId meetingLink estimatedDurationMinutes consents participants')
+        .lean();
+
+      if (!consultation)
+        return res.status(404).json({ success: false, message: 'Consultation not found' });
+
+      if (['cancelled', 'failed', 'expired', 'completed'].includes(consultation.status))
+        return res.status(400).json({ success: false, message: `Consultation is ${consultation.status}` });
+
+      // Determine participantRole
+      let participantRole = null;
+      let isHost = false;
+
+      if (isAdmin(req)) {
+        participantRole = 'admin';
+        isHost = true;
+      } else if (role === 'doctor') {
+        const dp = await resolveDoctorProfile(userId);
+        if (!dp || dp._id.toString() !== consultation.doctor?.toString())
+          return res.status(403).json({ success: false, message: 'Not your consultation' });
+        participantRole = 'doctor';
+        isHost = true;
+      } else if (role === 'customer') {
+        if (consultation.patient?.toString() !== userId.toString())
+          return res.status(403).json({ success: false, message: 'Not your consultation' });
+        participantRole = 'patient';
+      } else if (role === 'care_assistant') {
+        const inList = consultation.participants?.some(
+          (p) => p.userId?.toString() === userId.toString()
+        );
+        if (!inList)
+          return res.status(403).json({ success: false, message: 'Not authorized' });
+        participantRole = 'care_assistant';
+      }
+
+      if (!participantRole)
+        return res.status(403).json({ success: false, message: 'Forbidden' });
+
+      // Patient must have telemedicine consent
+      if (participantRole === 'patient' && !consultation.telemedicineConsentAccepted) {
+        return res.status(400).json({
+          success: false,
+          message: 'Telemedicine consent required. POST /consultations/:id/consents first.',
+        });
+      }
+
+      // Ensure room exists (idempotent)
+      let { roomId, meetingId, meetingLink } = consultation;
+      if (!roomId) {
+        const room = await createVideoSdkRoom(consultationId, consultation._id.toString());
+        roomId      = room.roomId;
+        meetingId   = room.meetingId;
+        meetingLink = room.meetingLink;
+        await Consultation.findByIdAndUpdate(consultation._id, {
+          $set: { roomId, meetingId, meetingLink },
+        });
+      }
+
+      // Override stale meeting links
+      if (!meetingLink || meetingLink.includes('api.videosdk.live')) {
+        const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        meetingLink = `${baseUrl}/consultations/${consultationId}/room`;
+      }
+
+      // Dynamic scoped token (short-lived: 2h)
+      const token = generateVideoSdkToken(roomId, isHost ? 'host' : 'participant', '2h');
+
+      // Waiting room determination
+      const inWaitingRoom = participantRole === 'patient' &&
+        consultation.waitingRoomEnabled &&
+        consultation.status !== 'active';
+
+      // Update status → waiting if first join
+      if (consultation.status === 'scheduled') {
+        await Consultation.findByIdAndUpdate(consultation._id, {
+          $set: { status: 'waiting', consultationStage: 'waiting_room' },
+        });
+      }
 
       return res.json({
         success: true,
         data: {
+          consultationId,
           roomId,
           meetingId,
           meetingLink,
           token,
-          role:        isDoctor ? 'host' : 'participant',
-          bookingCode: booking.bookingCode,
-          scheduledAt: booking.scheduledAt,
-          allowedDurationMinutes: durationMins,
+          participantRole,
+          isHost,
+          permissions: {
+            canMute:        isHost,
+            canKick:        isHost,
+            canRecord:      isHost,
+            canShareScreen: true,
+            canChat:        true,
+            canPrescribe:   participantRole === 'doctor',
+          },
+          rtcConfig: {
+            provider:     'VideoSDK',
+            region:       consultation.region || 'ap-south-1',
+            codec:        'VP8',
+            quality:      'auto',
+            noiseSuppressionEnabled: true,
+            echoCancellationEnabled: true,
+          },
+          waitingRoomStatus:        inWaitingRoom ? 'in_waiting_room' : 'admitted',
+          estimatedDurationMinutes: consultation.estimatedDurationMinutes,
+          tokenExpiresIn:           '2h',
         },
       });
     } catch (err) {
-      console.error('[GET /consultations/:bookingId/join]', err);
+      console.error('[POST /consultations/:id/join]', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   }
 );
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 5. PATCH /consultations/:bookingId/consent
-// ═══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 3. GET /consultations/:consultationId
+// ─────────────────────────────────────────────────────────────────────────────
 
-router.patch(
-  '/:bookingId/consent',
+router.get(
+  '/:consultationId',
   protect,
-  authorize('customer'),
+  authorize('customer', 'doctor', 'hospital', 'admin', 'superadmin'),
   async (req, res) => {
     try {
-      const { accepted, ipAddress } = req.body;
-
-      if (!accepted)
-        return res.status(400).json({ success: false, message: 'Consent must be accepted' });
-
-      const booking = await Booking.findOne({
-        _id:      req.params.bookingId,
-        customer: req.user._id,
+      const consultation = await assertConsultationAccess(req, res, {
+        select: 'consultationType consultationMode specialty language symptoms chiefComplaint diagnosisSummary treatmentPlan followUpAdvice scheduledStartTime actualStartTime actualEndTime actualDurationMinutes estimatedDurationMinutes roomId meetingId meetingLink status consultationStage priority participants waitingRoomQueue chatMessages prescription recording attachments consents feedback isRated analytics createdAt',
       });
+      if (!consultation) return;
 
-      if (!booking)
-        return res.status(404).json({ success: false, message: 'Booking not found' });
-
-     if (booking.bookingType !== 'doctor_online')
-        return res.status(400).json({ success: false, message: 'Not an online consultation' });
-
-      // FIX: Initialize subdocument if null
-      if (!booking.onlineConsultation) booking.onlineConsultation = {};
-      if (!booking.onlineConsultation.eventLogs) booking.onlineConsultation.eventLogs = [];
-
-      booking.onlineConsultation.isTelemedicineConsentAccepted  = true;
-      booking.onlineConsultation.telemedicineConsentAcceptedAt  = new Date();
-      booking.onlineConsultation.consentIpAddress               = ipAddress ?? req.ip;
-
-      booking.onlineConsultation.eventLogs.push({
-        event:       'consent_accepted',
-        participant: 'patient',
-        timestamp:   new Date(),
-        metadata:    { ipAddress: ipAddress ?? req.ip },
-      });
-
-      await booking.save();
-
-      return res.json({ success: true, message: 'Telemedicine consent recorded' });
-    } catch (err) {
-      console.error('[PATCH /consultations/:bookingId/consent]', err);
-      return res.status(500).json({ success: false, message: err.message });
-    }
-  }
-);
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// 6. POST /consultations/:bookingId/start
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.post(
-  '/:bookingId/start',
-  protect,
-  authorize('doctor'),
-  async (req, res) => {
-    try {
-      const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
-      if (!dp) return res.status(403).json({ success: false, message: 'Doctor profile not found' });
-
-      const booking = await Booking.findOne({
-        _id:    req.params.bookingId,
-        doctor: dp._id,
-        status: 'confirmed',
-      });
-
-      if (!booking)
-        return res.status(404).json({ success: false, message: 'Booking not found or not confirmed' });
-
-      const now = new Date();
-
-   if (booking.bookingType === 'doctor_online') {
-        // FIX: Initialize subdocument if null
-        if (!booking.onlineConsultation) booking.onlineConsultation = {};
-        if (!booking.onlineConsultation.eventLogs) booking.onlineConsultation.eventLogs = [];
-
-        booking.onlineConsultation.consultationStatus = 'live';
-        booking.onlineConsultation.roomStarted        = true;
-        booking.onlineConsultation.startedAt          = now;
-        booking.onlineConsultation.doctorJoined       = true;
-        booking.onlineConsultation.doctorJoinedAt     = now;
-        booking.onlineConsultation.eventLogs.push({
-          event:       'consultation_started',
-          participant: 'doctor',
-          timestamp:   now,
-        });
+      // Strip sensitive fields for non-admins
+      if (!isAdmin(req)) {
+        delete consultation.hostToken;
+        delete consultation.participantToken;
+        delete consultation.webhookSecret;
+        delete consultation.internalAdminNotes;
+        delete consultation.doctorInternalNotes;
+        if (consultation.recording) {
+          delete consultation.recording.recordingUrl;
+          delete consultation.recording.storageKey;
+          delete consultation.recording.storageBucket;
+        }
       }
 
-      booking.status    = 'in_progress';
-      booking.updatedBy = req.user._id;
-      await booking.save();
-
-      await OutPatientRecord.findOneAndUpdate(
-        { booking: booking._id },
-        { $set: { status: 'in_progress', startedAt: now } }
-      );
-
-      // Trigger socket event
-      await emitConsultationEvent(req, booking, 'consultation:started', {
-        startedAt:    now,
-        roomId:       booking.onlineConsultation?.roomId,
-        doctorJoined: true,
-      });
-
-      await Notification.create({
-        recipient:         booking.customer,
-        title:             'Consultation Started',
-        body:              `Dr. has started your consultation. Join now.`,
-        type:              'Consultation_Started',
-        priority:          'Critical',
-        relatedEntityType: 'Booking',
-        relatedEntityId:   booking._id,
-      });
-
-      return res.json({ success: true, message: 'Consultation started', data: { status: booking.status } });
+      return res.json({ success: true, data: consultation });
     } catch (err) {
-      console.error('[POST /consultations/:bookingId/start]', err);
+      console.error('[GET /consultations/:id]', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   }
 );
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 7. POST /consultations/:bookingId/end
-// ═══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 4. GET /consultations/:consultationId/details
+// ─────────────────────────────────────────────────────────────────────────────
 
-router.post(
-  '/:bookingId/end',
+router.get(
+  '/:consultationId/details',
+  protect,
+  authorize('customer', 'doctor', 'hospital', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      const consultation = await Consultation.findById(base._id)
+        .populate('patient', 'name email phone avatar')
+        .populate('doctor',  'user specialization registrationNumber profilePhotoUrl fees')
+        .populate('hospital','name contact address')
+        .populate('bookingId', 'bookingCode bookingType scheduledAt paymentStatus fareBreakdown')
+        .lean();
+
+      if (!isAdmin(req)) {
+        delete consultation.hostToken;
+        delete consultation.participantToken;
+        delete consultation.internalAdminNotes;
+        delete consultation.doctorInternalNotes;
+      }
+
+      return res.json({ success: true, data: consultation });
+    } catch (err) {
+      console.error('[GET /consultations/:id/details]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 5. GET /consultations/:consultationId/participants
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get(
+  '/:consultationId/participants',
+  protect,
+  authorize('customer', 'doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res, { select: 'participants' });
+      if (!base) return;
+
+      const consultation = await Consultation.findById(base._id)
+        .select('participants consultationId')
+        .lean();
+
+      return res.json({ success: true, data: { participants: consultation.participants } });
+    } catch (err) {
+      console.error('[GET /consultations/:id/participants]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 6. GET /consultations/:consultationId/events
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get(
+  '/:consultationId/events',
   protect,
   authorize('doctor', 'admin', 'superadmin'),
   async (req, res) => {
     try {
-      const { reason, consultationSummary, followUpInstructions } = req.body;
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
 
-      const dp = req.user.role === 'doctor'
-        ? await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean()
-        : null;
+      const { page = 1, limit = 50, eventType } = req.query;
+      const skip = (Number(page) - 1) * Number(limit);
 
-      const query = {
-        _id:    req.params.bookingId,
-        status: 'in_progress',
-      };
-      if (dp) query.doctor = dp._id;
+      const consultation = await Consultation.findById(base._id)
+        .select('eventLogs consultationId')
+        .lean();
 
-      const booking = await Booking.findOne(query);
-      if (!booking)
-        return res.status(404).json({ success: false, message: 'Booking not found or not in progress' });
+      let logs = consultation.eventLogs || [];
+      if (eventType) logs = logs.filter(e => e.eventType === eventType);
 
-      const now = new Date();
+      const total  = logs.length;
+      const paged  = logs.slice(skip, skip + Number(limit));
 
-    if (booking.bookingType === 'doctor_online') {
-        // FIX: Initialize subdocument if null
-        if (!booking.onlineConsultation) booking.onlineConsultation = {};
-        if (!booking.onlineConsultation.eventLogs) booking.onlineConsultation.eventLogs = [];
+      return res.json({
+        success: true,
+        data: {
+          events: paged,
+          pagination: { total, page: Number(page), limit: Number(limit), totalPages: Math.ceil(total / Number(limit)) },
+        },
+      });
+    } catch (err) {
+      console.error('[GET /consultations/:id/events]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
 
-        const startedAt    = booking.onlineConsultation.startedAt ?? now;
-        const durationMins = Math.round((now - startedAt) / 60000);
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 7. GET /consultations/:consultationId/analytics
+// ─────────────────────────────────────────────────────────────────────────────
 
-        booking.onlineConsultation.consultationStatus     = 'completed';
-        booking.onlineConsultation.roomEnded              = true;
-        booking.onlineConsultation.endedAt                = now;
-        booking.onlineConsultation.durationMinutes        = durationMins;
-        booking.onlineConsultation.doctorLeftAt           = now;
-        booking.onlineConsultation.consultationEndedBy    = isAdmin(req) ? 'admin' : 'doctor';
-        booking.onlineConsultation.consultationSummary    = consultationSummary ?? '';
-        booking.onlineConsultation.followUpInstructions   = followUpInstructions ?? '';
-        booking.onlineConsultation.endedReason            = reason ?? '';
-        booking.onlineConsultation.eventLogs.push({
-          event:       'consultation_ended',
-          participant: isAdmin(req) ? 'admin' : 'doctor',
-          timestamp:   now,
-          metadata:    { reason, durationMins },
+router.get(
+  '/:consultationId/analytics',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      const consultation = await Consultation.findById(base._id)
+        .select('analytics networkStats reconnectLogs sdkErrors actualDurationMinutes waitingDurationMinutes participants consultationId')
+        .lean();
+
+      return res.json({ success: true, data: consultation });
+    } catch (err) {
+      console.error('[GET /consultations/:id/analytics]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 8. WAITING ROOM — GET, ADMIT, REJECT
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get(
+  '/:consultationId/waiting-room',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      const consultation = await Consultation.findById(base._id)
+        .select('waitingRoomQueue consultationId')
+        .lean();
+
+      const queue = consultation.waitingRoomQueue?.filter(w => w.waitingRoomStatus === 'waiting') ?? [];
+      return res.json({ success: true, data: { waitingRoomQueue: queue, count: queue.length } });
+    } catch (err) {
+      console.error('[GET /consultations/:id/waiting-room]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+router.post(
+  '/:consultationId/waiting-room/admit',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const { patientUserId } = req.body;
+      if (!patientUserId) return res.status(400).json({ success: false, message: 'patientUserId required' });
+
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      await Consultation.findByIdAndUpdate(base._id, {
+        $set: {
+          'waitingRoomQueue.$[el].waitingRoomStatus': 'admitted',
+          'waitingRoomQueue.$[el].approvedAt':        new Date(),
+          'waitingRoomQueue.$[el].approvedBy':        req.user._id,
+        },
+      }, {
+        arrayFilters: [{ 'el.userId': new mongoose.Types.ObjectId(patientUserId) }],
+      });
+
+      // Socket: move patient from waiting → main room
+      const svc = getConsultationSocketService();
+      if (svc) {
+        const { consultationId } = req.params;
+        svc.forceJoinRoom(patientUserId, rooms.consultation(consultationId));
+        svc.emitToUser(patientUserId, 'consultation:waiting_room_approved', {
+          consultationId, admittedBy: req.user._id,
+        });
+        svc.emitToConsultation(consultationId, 'consultation:waiting_room_updated', {
+          consultationId, patientUserId, action: 'admitted',
         });
       }
 
-      booking.status      = 'completed';
-      booking.completedAt = now;
-      booking.updatedBy   = req.user._id;
-      await booking.save();
+      return res.json({ success: true, message: 'Patient admitted' });
+    } catch (err) {
+      console.error('[POST /consultations/:id/waiting-room/admit]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
 
-      await OutPatientRecord.findOneAndUpdate(
-        { booking: booking._id },
-        { $set: { status: 'completed', completedAt: now } }
-      );
+router.post(
+  '/:consultationId/waiting-room/reject',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const { patientUserId, reason } = req.body;
+      if (!patientUserId) return res.status(400).json({ success: false, message: 'patientUserId required' });
 
-      // Trigger socket event
-      await emitConsultationEvent(req, booking, 'consultation:ended', {
-        endedAt:  now,
-        endedBy:  isAdmin(req) ? 'admin' : 'doctor',
-        reason,
-        durationMinutes: booking.onlineConsultation?.durationMinutes,
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      await Consultation.findByIdAndUpdate(base._id, {
+        $set: {
+          'waitingRoomQueue.$[el].waitingRoomStatus': 'rejected',
+          'waitingRoomQueue.$[el].rejectedAt':        new Date(),
+          'waitingRoomQueue.$[el].rejectionReason':   reason || '',
+        },
+      }, {
+        arrayFilters: [{ 'el.userId': new mongoose.Types.ObjectId(patientUserId) }],
       });
 
-      await Notification.create([
-        {
-          recipient:         booking.customer,
-          title:             'Consultation Completed',
-          body:              `Your consultation (${booking.bookingCode}) is complete. Please rate your experience.`,
-          type:              'Booking_Completed',
-          priority:          'Medium',
-          relatedEntityType: 'Booking',
-          relatedEntityId:   booking._id,
+      const svc = getConsultationSocketService();
+      if (svc) {
+        svc.emitToUser(patientUserId, 'consultation:waiting_room_rejected', {
+          consultationId: req.params.consultationId, reason,
+        });
+      }
+
+      return res.json({ success: true, message: 'Patient rejected' });
+    } catch (err) {
+      console.error('[POST /consultations/:id/waiting-room/reject]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 9. CHAT
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.post(
+  '/:consultationId/chat',
+  protect,
+  authorize('customer', 'doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const { message, messageType = 'text' } = req.body;
+      if (!message?.trim()) return res.status(400).json({ success: false, message: 'message required' });
+
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      const { _id: userId, role, name } = req.user;
+
+      const updated = await Consultation.findByIdAndUpdate(base._id, {
+        $push: {
+          chatMessages: {
+            sender:      userId,
+            senderRole:  role,
+            messageType,
+            message:     message.trim(),
+            deliveredAt: new Date(),
+          },
         },
-      ]);
+        $inc: { totalMessages: 1 },
+      }, { new: true, select: 'chatMessages' });
+
+      const saved = updated?.chatMessages?.slice(-1)[0];
+
+      emitConsultationEvent(base.consultationId, 'consultation:chat_message', {
+        consultationId: base.consultationId,
+        messageId:      saved?._id,
+        senderId:       userId,
+        senderName:     name,
+        senderRole:     role,
+        messageType,
+        message:        message.trim(),
+      });
+
+      return res.status(201).json({ success: true, data: saved });
+    } catch (err) {
+      console.error('[POST /consultations/:id/chat]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+router.get(
+  '/:consultationId/chat/messages',
+  protect,
+  authorize('customer', 'doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      const { page = 1, limit = 50 } = req.query;
+      const skip = (Number(page) - 1) * Number(limit);
+
+      const consultation = await Consultation.findById(base._id)
+        .select('chatMessages totalMessages consultationId')
+        .lean();
+
+      const messages = (consultation.chatMessages || [])
+        .filter(m => !m.isDeleted)
+        .slice(skip, skip + Number(limit));
+
+      return res.json({
+        success: true,
+        data: {
+          messages,
+          pagination: {
+            total:      consultation.totalMessages,
+            page:       Number(page),
+            limit:      Number(limit),
+            totalPages: Math.ceil(consultation.totalMessages / Number(limit)),
+          },
+        },
+      });
+    } catch (err) {
+      console.error('[GET /consultations/:id/chat/messages]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+router.patch(
+  '/:consultationId/chat/messages/:messageId/read',
+  protect,
+  authorize('customer', 'doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      await Consultation.findByIdAndUpdate(base._id, {
+        $set: { 'chatMessages.$[el].readAt': new Date() },
+      }, {
+        arrayFilters: [{ 'el._id': new mongoose.Types.ObjectId(req.params.messageId) }],
+      });
+
+      return res.json({ success: true });
+    } catch (err) {
+      console.error('[PATCH /chat/messages/:id/read]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 10. PARTICIPANT CONTROL
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.patch(
+  '/:consultationId/participants/:participantId/mute',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const { participantId } = req.params;
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      await Consultation.findByIdAndUpdate(base._id, {
+        $set: {
+          'participants.$[el].isMutedByHost':       true,
+          'participants.$[el].microphoneEnabled':    false,
+        },
+      }, { arrayFilters: [{ 'el._id': new mongoose.Types.ObjectId(participantId) }] });
+
+      emitConsultationEvent(base.consultationId, 'consultation:participant_muted', {
+        consultationId: base.consultationId, participantId, mutedBy: req.user._id,
+      });
+
+      return res.json({ success: true, message: 'Participant muted' });
+    } catch (err) {
+      console.error('[PATCH participants/:id/mute]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+router.patch(
+  '/:consultationId/participants/:participantId/remove',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const { participantId } = req.params;
+      const { reason } = req.body;
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      // Find userId of target participant
+      const consultation = await Consultation.findById(base._id).select('participants').lean();
+      const target = consultation?.participants?.find(p => p._id.toString() === participantId);
+
+      await Consultation.findByIdAndUpdate(base._id, {
+        $set: { 'participants.$[el].connectionStatus': 'disconnected', 'participants.$[el].leftAt': new Date() },
+      }, { arrayFilters: [{ 'el._id': new mongoose.Types.ObjectId(participantId) }] });
+
+      const svc = getConsultationSocketService();
+      if (svc && target?.userId) {
+        svc.emitToUser(target.userId.toString(), 'consultation:removed', {
+          consultationId: base.consultationId, reason,
+        });
+      }
+
+      emitConsultationEvent(base.consultationId, 'consultation:participant_removed', {
+        consultationId: base.consultationId, participantId, reason,
+      });
+
+      return res.json({ success: true, message: 'Participant removed' });
+    } catch (err) {
+      console.error('[PATCH participants/:id/remove]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 11. LIFECYCLE — START, PAUSE, RESUME, END, CANCEL
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.patch(
+  '/:consultationId/start',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res, {
+        requireStatus: ['created', 'scheduled', 'waiting'],
+      });
+      if (!base) return;
+
+      const now = new Date();
+      const updated = await Consultation.findByIdAndUpdate(base._id, {
+        $set: {
+          status:            'active',
+          actualStartTime:   now,
+          consultationStage: 'in_progress',
+          roomStarted:       true,
+        },
+      }, { new: true });
+
+      emitConsultationEvent(base.consultationId, 'consultation:consultation_started', {
+        consultationId: base.consultationId,
+        startedBy:      req.user._id,
+        startedAt:      now.toISOString(),
+      });
+
+      await Notification.create({
+        recipient:         base.patient,
+        title:             'Consultation Started',
+        body:              'Your doctor has started the consultation. Join now.',
+        type:              'Consultation_Started',
+        priority:          'Critical',
+        relatedEntityType: 'Consultation',
+        relatedEntityId:   base._id,
+      }).catch(() => {});
+
+      return res.json({ success: true, message: 'Consultation started', data: { status: updated.status } });
+    } catch (err) {
+      console.error('[PATCH /:id/start]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+router.patch(
+  '/:consultationId/pause',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res, { requireStatus: ['active'] });
+      if (!base) return;
+
+      await Consultation.findByIdAndUpdate(base._id, { $set: { status: 'paused' } });
+
+      emitConsultationEvent(base.consultationId, 'consultation:paused', {
+        consultationId: base.consultationId, pausedBy: req.user._id,
+      });
+
+      return res.json({ success: true, message: 'Consultation paused' });
+    } catch (err) {
+      console.error('[PATCH /:id/pause]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+router.patch(
+  '/:consultationId/resume',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res, { requireStatus: ['paused'] });
+      if (!base) return;
+
+      await Consultation.findByIdAndUpdate(base._id, { $set: { status: 'active', consultationStage: 'in_progress' } });
+
+      emitConsultationEvent(base.consultationId, 'consultation:resumed', {
+        consultationId: base.consultationId, resumedBy: req.user._id,
+      });
+
+      return res.json({ success: true, message: 'Consultation resumed' });
+    } catch (err) {
+      console.error('[PATCH /:id/resume]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+router.patch(
+  '/:consultationId/end',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const { reason, summary, followUpAdvice } = req.body;
+
+      const base = await assertConsultationAccess(req, res, {
+        requireStatus: ['active', 'paused', 'waiting'],
+      });
+      if (!base) return;
+
+      const now = new Date();
+
+      const updated = await Consultation.findByIdAndUpdate(base._id, {
+        $set: {
+          status:            'completed',
+          actualEndTime:     now,
+          consultationStage: 'post_consultation',
+          roomEnded:         true,
+          endedBy:           isAdmin(req) ? 'admin' : 'doctor',
+          endedByUserId:     req.user._id,
+          endedReason:       reason || '',
+          diagnosisSummary:  summary || '',
+          followUpAdvice:    followUpAdvice || '',
+          doctorLeftAt:      now,
+        },
+      }, { new: true });
+
+      emitConsultationEvent(base.consultationId, 'consultation:consultation_ended', {
+        consultationId:  base.consultationId,
+        endedBy:         req.user._id,
+        endedAt:         now.toISOString(),
+        reason,
+        durationMinutes: updated.actualDurationMinutes,
+      });
+
+      await Notification.create({
+        recipient:         base.patient,
+        title:             'Consultation Completed',
+        body:              'Your consultation is complete. Please rate your experience.',
+        type:              'Booking_Completed',
+        priority:          'Medium',
+        relatedEntityType: 'Consultation',
+        relatedEntityId:   base._id,
+      }).catch(() => {});
 
       return res.json({
         success: true,
         message: 'Consultation ended',
         data: {
-          status:          booking.status,
+          status:          'completed',
           completedAt:     now,
-          durationMinutes: booking.onlineConsultation?.durationMinutes,
+          durationMinutes: updated.actualDurationMinutes,
         },
       });
     } catch (err) {
-      console.error('[POST /consultations/:bookingId/end]', err);
+      console.error('[PATCH /:id/end]', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   }
 );
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 8. POST /consultations/:bookingId/cancel
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.post(
-  '/:bookingId/cancel',
+router.patch(
+  '/:consultationId/cancel',
   protect,
   authorize('customer', 'doctor', 'hospital', 'admin', 'superadmin'),
   async (req, res) => {
     try {
-      const { reason, refundEligible = false, refundPercent = 0 } = req.body;
+      const { reason } = req.body;
 
-      const booking = await Booking.findById(req.params.bookingId);
-      if (!booking)
-        return res.status(404).json({ success: false, message: 'Booking not found' });
-
-      if (['completed', 'cancelled', 'no_show'].includes(booking.status))
-        return res.status(400).json({ success: false, message: `Cannot cancel a ${booking.status} booking` });
-
-      if (req.user.role === 'customer' && booking.customer.toString() !== req.user._id.toString())
-        return res.status(403).json({ success: false, message: 'Forbidden' });
-
-      if (req.user.role === 'doctor') {
-        const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
-        if (!dp || dp._id.toString() !== booking.doctor?.toString())
-          return res.status(403).json({ success: false, message: 'Forbidden' });
-      }
-
-      if (req.user.role === 'hospital') {
-        const h = await Hospital.findOne({ managedBy: req.user._id }).select('_id').lean();
-        if (!h || h._id.toString() !== booking.hospital?.toString())
-          return res.status(403).json({ success: false, message: 'Forbidden' });
-      }
+      const base = await assertConsultationAccess(req, res, {
+        requireStatus: ['created', 'scheduled', 'waiting'],
+      });
+      if (!base) return;
 
       const actorMap = {
-        customer:   'customer',
-        doctor:     'doctor',
-        hospital:   'hospital',
-        admin:      'admin',
-        superadmin: 'admin',
+        customer: 'patient', doctor: 'doctor', hospital: 'hospital',
+        admin: 'admin', superadmin: 'admin',
       };
 
-      booking.status = 'cancelled';
-      booking.cancellation = {
-        cancelledBy:       actorMap[req.user.role],
-        cancelledByUserId: req.user._id,
-        reason,
-        refundEligible,
-        refundPercent,
-        cancelledAt: new Date(),
-      };
-      booking.updatedBy = req.user._id;
+      await Consultation.findByIdAndUpdate(base._id, {
+        $set: {
+          status:             'cancelled',
+          consultationStage:  'closed',
+          cancelledBy:        actorMap[req.user.role],
+          cancelledByUserId:  req.user._id,
+          cancellationReason: reason || '',
+          cancelledAt:        new Date(),
+        },
+      });
 
-      // Fixed: Prevent NaN if amountPaid is undefined
-      if (refundEligible && Number(refundPercent) > 0) {
-        const paid = booking.fareBreakdown?.amountPaid || 0;
-        booking.fareBreakdown.refundAmount = Math.round((paid * Number(refundPercent)) / 100);
-        booking.paymentStatus = 'refund_pending';
-      }
-
-      if (booking.bookingType === 'doctor_online' && booking.onlineConsultation) {
-        booking.onlineConsultation.consultationStatus = 'cancelled';
-      }
-
-      await booking.save();
-
-      await OutPatientRecord.findOneAndUpdate(
-        { booking: booking._id },
-        { $set: { status: 'cancelled' } }
-      );
-
-      // Trigger socket event
-      await emitConsultationEvent(req, booking, 'consultation:cancelled', {
+      emitConsultationEvent(base.consultationId, 'consultation:cancelled', {
+        consultationId: base.consultationId,
         cancelledBy:    actorMap[req.user.role],
         reason,
-        refundEligible,
-        refundAmount:   booking.fareBreakdown?.refundAmount || 0,
       });
 
-      await Notification.create({
-        recipient:         booking.customer,
-        title:             'Booking Cancelled',
-        body:              `Booking ${booking.bookingCode} has been cancelled. ${refundEligible ? `Refund of ₹${booking.fareBreakdown.refundAmount} will be processed.` : ''}`,
-        type:              'Booking_Cancelled',
-        priority:          'High',
-        relatedEntityType: 'Booking',
-        relatedEntityId:   booking._id,
-      });
-
-      return res.json({ success: true, message: 'Booking cancelled', data: { status: booking.status, refundAmount: booking.fareBreakdown?.refundAmount || 0 } });
+      return res.json({ success: true, message: 'Consultation cancelled' });
     } catch (err) {
-      console.error('[POST /consultations/:bookingId/cancel]', err);
+      console.error('[PATCH /:id/cancel]', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   }
 );
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 9. POST /consultations/:bookingId/prescription
-// ═══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 12. RECORDING
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.patch(
+  '/:consultationId/recording/start',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res, { requireStatus: ['active'] });
+      if (!base) return;
+
+      const now = new Date();
+      await Consultation.findByIdAndUpdate(base._id, {
+        $set: {
+          'recording.recordingEnabled':   true,
+          'recording.recordingStarted':   true,
+          'recording.recordingStatus':    'recording',
+          'recording.recordingStartedAt': now,
+        },
+      });
+
+      emitConsultationEvent(base.consultationId, 'consultation:recording_started', {
+        consultationId: base.consultationId, startedBy: req.user._id, startedAt: now.toISOString(),
+      });
+
+      return res.json({ success: true, message: 'Recording started' });
+    } catch (err) {
+      console.error('[PATCH recording/start]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+router.patch(
+  '/:consultationId/recording/stop',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      const now = new Date();
+      await Consultation.findByIdAndUpdate(base._id, {
+        $set: {
+          'recording.recordingStatus':  'processing',
+          'recording.recordingEndedAt': now,
+        },
+      });
+
+      emitConsultationEvent(base.consultationId, 'consultation:recording_stopped', {
+        consultationId: base.consultationId, stoppedBy: req.user._id,
+      });
+
+      return res.json({ success: true, message: 'Recording stopped — processing' });
+    } catch (err) {
+      console.error('[PATCH recording/stop]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+router.get(
+  '/:consultationId/recordings',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      const consultation = await Consultation.findById(base._id)
+        .select('+recording.recordingUrl recording.recordingStatus recording.recordingStartedAt recording.recordingEndedAt recording.recordingDurationMinutes recording.encrypted')
+        .lean();
+
+      return res.json({ success: true, data: { recording: consultation.recording } });
+    } catch (err) {
+      console.error('[GET recordings]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 13. PRESCRIPTIONS
+// ─────────────────────────────────────────────────────────────────────────────
 
 router.post(
-  '/:bookingId/prescription',
+  '/:consultationId/prescriptions',
   protect,
   authorize('doctor'),
   async (req, res) => {
     try {
-      const { prescriptionUrl } = req.body;
-      if (!prescriptionUrl)
-        return res.status(400).json({ success: false, message: 'prescriptionUrl is required' });
+      const {
+        diagnosis, medicines = [], labTests = [],
+        followUpDate, followUpInstructions,
+        chiefComplaints = [], clinicalFindings, advice, vitals,
+      } = req.body;
 
-      const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
+      if (!medicines.length)
+        return res.status(400).json({ success: false, message: 'At least one medicine required' });
 
-      const booking = await Booking.findOne({ _id: req.params.bookingId, doctor: dp._id });
-      if (!booking)
-        return res.status(404).json({ success: false, message: 'Booking not found' });
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
 
-      booking.documents.push({
-        docType:      'prescription',
-        url:          prescriptionUrl,
-        originalName: 'prescription.pdf',
-        uploadedAt:   new Date(),
+      // Resolve doctor snapshot
+      const dp = await DoctorProfile.findById(base.doctor)
+        .select('user registrationNumber registrationCouncil specialization profilePhotoUrl')
+        .populate('user', 'name email phone')
+        .lean();
+
+      const consultationDoc = await Consultation.findById(base._id)
+        .select('patient')
+        .populate('patient', 'name email phone')
+        .lean();
+
+      const rxData = {
+        bookingId:        base.bookingId,
+        doctor: {
+          userId:              dp?.user?._id,
+          doctorProfileId:     dp?._id,
+          name:                dp?.user?.name || 'Doctor',
+          registrationNumber:  dp?.registrationNumber || '',
+          specialization:      dp?.specialization || '',
+        },
+        patient: {
+          userId: consultationDoc?.patient?._id,
+          name:   consultationDoc?.patient?.name || 'Patient',
+          phone:  consultationDoc?.patient?.phone || '',
+        },
+        diagnosis,
+        chiefComplaints,
+        clinicalFindings,
+        advice,
+        vitals,
+        medicines,
+        labTests,
+        followUpDate,
+        followUpInstructions,
+        createdBy: req.user._id,
+      };
+
+      const rx = await EPrescription.create(rxData);
+
+      // Embed summary in Consultation
+      await Consultation.findByIdAndUpdate(base._id, {
+        $set: {
+          prescription: {
+            ePrescriptionId:    rx._id,
+            rxNumber:           rx.rxNumber,
+            diagnosis,
+            medications:        medicines.map(m => ({
+              medicineName: m.medicineName,
+              dosage:       m.dosage,
+              frequency:    m.frequency,
+              duration:     m.durationDays ? `${m.durationDays} days` : '',
+              instructions: m.instructions || '',
+            })),
+            labTests,
+            followUpDate,
+            issuedAt: new Date(),
+          },
+          prescriptionUploaded:   true,
+          prescriptionUploadedAt: new Date(),
+        },
       });
 
-if (booking.bookingType === 'doctor_online') {
-        // FIX: Initialize subdocument if null
-        if (!booking.onlineConsultation) booking.onlineConsultation = {};
-        if (!booking.onlineConsultation.eventLogs) booking.onlineConsultation.eventLogs = [];
-
-        booking.onlineConsultation.prescriptionUploaded   = true;
-        booking.onlineConsultation.prescriptionUrl        = prescriptionUrl;
-        booking.onlineConsultation.prescriptionUploadedAt = new Date();
-        booking.onlineConsultation.eventLogs.push({
-          event:       'prescription_uploaded',
-          participant: 'doctor',
-          timestamp:   new Date(),
-        });
-      }
-
-      await booking.save();
-
-      await OutPatientRecord.findOneAndUpdate(
-        { booking: booking._id },
-        { $set: { prescriptionUrl } }
-      );
+      emitConsultationEvent(base.consultationId, 'consultation:prescription_issued', {
+        consultationId: base.consultationId,
+        rxNumber:       rx.rxNumber,
+        issuedBy:       req.user._id,
+      });
 
       await Notification.create({
-        recipient:         booking.customer,
+        recipient:         base.patient,
         title:             'Prescription Ready',
-        body:              `Your prescription for booking ${booking.bookingCode} has been uploaded.`,
+        body:              `Your prescription (${rx.rxNumber}) has been issued.`,
         type:              'Prescription_Added',
         priority:          'High',
-        relatedEntityType: 'Booking',
-        relatedEntityId:   booking._id,
-      });
+        relatedEntityType: 'Consultation',
+        relatedEntityId:   base._id,
+      }).catch(() => {});
 
-      return res.json({ success: true, message: 'Prescription uploaded', data: { prescriptionUrl } });
+      return res.status(201).json({
+        success: true,
+        message: 'Prescription issued',
+        data: { rxNumber: rx.rxNumber, ePrescriptionId: rx._id },
+      });
     } catch (err) {
-      console.error('[POST /consultations/:bookingId/prescription]', err);
+      console.error('[POST prescriptions]', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   }
 );
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 10. POST /consultations/:bookingId/rate
-// ═══════════════════════════════════════════════════════════════════════════════
+router.get(
+  '/:consultationId/prescriptions',
+  protect,
+  authorize('customer', 'doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      const rxList = await EPrescription.find({ bookingId: base.bookingId })
+        .select('-doctor.signatureUrl')
+        .lean();
+
+      return res.json({ success: true, data: { prescriptions: rxList } });
+    } catch (err) {
+      console.error('[GET prescriptions]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 14. CONSENTS
+// ─────────────────────────────────────────────────────────────────────────────
 
 router.post(
-  '/:bookingId/rate',
+  '/:consultationId/consents',
   protect,
   authorize('customer'),
   async (req, res) => {
     try {
-      const {
-        doctorRating,
-        doctorComment,
-        overallRating,
-        overallComment,
-      } = req.body;
+      const { consentType = 'telemedicine', accepted, ipAddress } = req.body;
 
-      if (!overallRating || !doctorRating)
-        return res.status(400).json({ success: false, message: 'doctorRating and overallRating are required' });
+      if (!accepted)
+        return res.status(400).json({ success: false, message: 'Consent must be accepted=true' });
 
-      const booking = await Booking.findOne({
-        _id:      req.params.bookingId,
-        customer: req.user._id,
-        status:   'completed',
-      });
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
 
-      if (!booking)
-        return res.status(404).json({ success: false, message: 'Completed booking not found' });
-
-      if (booking.isRated)
-        return res.status(400).json({ success: false, message: 'Already rated' });
-
-      booking.rating = {
-        doctorRating,
-        doctorComment,
-        overallRating,
-        overallComment,
-        isPublic: true,
+      const consentEntry = {
+        consentType,
+        accepted:       true,
+        acceptedAt:     new Date(),
+        ipAddress:      ipAddress || req.ip,
+        userAgent:      req.headers['user-agent'] || '',
+        consentVersion: '1.0',
       };
-      booking.isRated   = true;
-      booking.updatedBy = req.user._id;
-      await booking.save();
 
-      return res.json({ success: true, message: 'Rating submitted' });
+      const updates = {
+        $push: { consents: consentEntry },
+      };
+
+      if (consentType === 'telemedicine') {
+        updates.$set = { telemedicineConsentAccepted: true };
+      }
+      if (consentType === 'recording') {
+        updates.$set = { ...(updates.$set || {}), recordingConsentAccepted: true };
+      }
+
+      await Consultation.findByIdAndUpdate(base._id, updates);
+
+      return res.json({ success: true, message: `${consentType} consent recorded` });
     } catch (err) {
-      console.error('[POST /consultations/:bookingId/rate]', err);
+      console.error('[POST consents]', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   }
 );
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 11. POST /consultations/:bookingId/admin-notes
-// ═══════════════════════════════════════════════════════════════════════════════
+router.get(
+  '/:consultationId/consents',
+  protect,
+  authorize('customer', 'doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      const consultation = await Consultation.findById(base._id)
+        .select('consents telemedicineConsentAccepted recordingConsentAccepted')
+        .lean();
+
+      return res.json({ success: true, data: consultation });
+    } catch (err) {
+      console.error('[GET consents]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 15. ATTACHMENTS
+// ─────────────────────────────────────────────────────────────────────────────
 
 router.post(
-  '/:bookingId/admin-notes',
+  '/:consultationId/attachments',
+  protect,
+  authorize('customer', 'doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const { attachmentType, fileName, mimeType, fileSize, storageUrl, description, accessLevel = 'shared' } = req.body;
+
+      if (!fileName || !attachmentType)
+        return res.status(400).json({ success: false, message: 'fileName and attachmentType required' });
+
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      const entry = {
+        uploadedBy:     req.user._id,
+        uploaderRole:   req.user.role,
+        attachmentType,
+        fileName,
+        mimeType,
+        fileSize,
+        storageUrl,
+        description,
+        accessLevel,
+        uploadedAt:     new Date(),
+        encrypted:      true,
+      };
+
+      const updated = await Consultation.findByIdAndUpdate(base._id, {
+        $push: { attachments: entry },
+      }, { new: true, select: 'attachments' });
+
+      const saved = updated?.attachments?.slice(-1)[0];
+
+      emitConsultationEvent(base.consultationId, 'consultation:file_uploaded', {
+        consultationId: base.consultationId,
+        attachmentId:   saved?._id,
+        fileName,
+        attachmentType,
+        uploadedBy:     req.user._id,
+      });
+
+      return res.status(201).json({ success: true, data: saved });
+    } catch (err) {
+      console.error('[POST attachments]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+router.get(
+  '/:consultationId/attachments',
+  protect,
+  authorize('customer', 'doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      const consultation = await Consultation.findById(base._id)
+        .select('attachments')
+        .lean();
+
+      const visible = (consultation.attachments || []).filter(a => {
+        if (a.isDeleted) return false;
+        if (isAdmin(req)) return true;
+        if (a.accessLevel === 'shared') return true;
+        if (a.accessLevel === 'doctor_only' && req.user.role === 'doctor') return true;
+        if (a.accessLevel === 'patient_only' && req.user.role === 'customer') return true;
+        if (a.uploadedBy?.toString() === req.user._id.toString()) return true;
+        return false;
+      });
+
+      return res.json({ success: true, data: { attachments: visible } });
+    } catch (err) {
+      console.error('[GET attachments]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+router.delete(
+  '/:consultationId/attachments/:attachmentId',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  async (req, res) => {
+    try {
+      const base = await assertConsultationAccess(req, res);
+      if (!base) return;
+
+      await Consultation.findByIdAndUpdate(base._id, {
+        $set: { 'attachments.$[el].isDeleted': true },
+      }, { arrayFilters: [{ 'el._id': new mongoose.Types.ObjectId(req.params.attachmentId) }] });
+
+      return res.json({ success: true, message: 'Attachment deleted' });
+    } catch (err) {
+      console.error('[DELETE attachments/:id]', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 16. ADMIN ANALYTICS OVERVIEW
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get(
+  '/admin/analytics/overview',
   protect,
   authorize('admin', 'superadmin'),
   async (req, res) => {
     try {
-      const { note, sendEmail: doSendEmail = false, transactionId } = req.body;
+      const { from, to } = req.query;
 
-      if (!note?.trim())
-        return res.status(400).json({ success: false, message: 'Note content is required' });
+      const dateFilter = {};
+      if (from) dateFilter.$gte = new Date(from);
+      if (to)   dateFilter.$lte = new Date(to);
 
-      const booking = await Booking.findById(req.params.bookingId)
-        .populate('doctor', 'user primaryHospital')
-        .populate('hospital', 'contact.email managementModel name managedBy')
-        .select('+internalNotes');
+      const filter = Object.keys(dateFilter).length ? { createdAt: dateFilter } : {};
 
-      if (!booking)
-        return res.status(404).json({ success: false, message: 'Booking not found' });
+      const [
+        total,
+        byStatus,
+        byType,
+        avgDuration,
+        ratedCount,
+      ] = await Promise.all([
+        Consultation.countDocuments(filter),
+        Consultation.aggregate([
+          { $match: filter },
+          { $group: { _id: '$status', count: { $sum: 1 } } },
+        ]),
+        Consultation.aggregate([
+          { $match: filter },
+          { $group: { _id: '$consultationType', count: { $sum: 1 } } },
+        ]),
+        Consultation.aggregate([
+          { $match: { ...filter, status: 'completed' } },
+          { $group: { _id: null, avg: { $avg: '$actualDurationMinutes' } } },
+        ]),
+        Consultation.countDocuments({ ...filter, isRated: true }),
+      ]);
 
-      // Append to internalNotes
-      const timestamp = new Date().toISOString();
-      const adminName = req.user.name;
-      const noteEntry = `[${timestamp}] [${req.user.role.toUpperCase()}] ${adminName}${transactionId ? ` | TxnID: ${transactionId}` : ''}: ${note}`;
-
-      const newNotes = booking.internalNotes
-        ? `${booking.internalNotes}\n${noteEntry}`
-        : noteEntry;
-
-      // Fixed: Safe update without saving the populated document
-      await Booking.updateOne(
-        { _id: booking._id },
-        { $set: { internalNotes: newNotes, updatedBy: req.user._id } }
-      );
-      booking.internalNotes = newNotes;
-
-      let targetEmail = null;
-      let targetName  = null;
-      let recipientType = null;
-
-      const hospital = booking.hospital;
-
-      if (hospital?.managementModel === 'hospital-manager' && hospital?.managedBy) {
-        const hospitalUser = await User.findById(hospital.managedBy)
-          .select('email name')
-          .lean();
-        targetEmail   = hospitalUser?.email ?? hospital.contact?.email;
-        targetName    = hospitalUser?.name  ?? hospital.name;
-        recipientType = 'hospital';
-      } else if (booking.doctor?.user) {
-        const doctorUser = await User.findById(booking.doctor.user)
-          .select('email name')
-          .lean();
-        targetEmail   = doctorUser?.email;
-        targetName    = doctorUser?.name;
-        recipientType = 'doctor';
-      }
-
-      if (doSendEmail && targetEmail) {
-        const emailBody = `
-          <p>Dear <strong>${targetName}</strong>,</p>
-          <p>An internal note has been added to booking <strong>${booking.bookingCode}</strong> by Likeson admin.</p>
-          <hr/>
-          <p><strong>Note:</strong> ${note}</p>
-          ${transactionId ? `<p><strong>Transaction Reference:</strong> ${transactionId}</p>` : ''}
-          <p><em>Booking Date:</em> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}</p>
-          <p>Please log in to the Likeson portal for full details.</p>
-        `;
-
-        await sendEmail({
-          email:   targetEmail,
-          subject: `Admin Note — Booking ${booking.bookingCode}`,
-          html:    transactionalTemplate({
-            header:     'ADMIN NOTE',
-            title:      `Update on Booking ${booking.bookingCode}`,
-            body:       emailBody,
-            buttonText: 'View Booking',
-            buttonLink: `${process.env.CLIENT_URL || 'https://likeson.in'}/dashboard/bookings/${booking._id}`,
-          }),
-        }).catch((e) => console.warn('[admin-notes email]', e.message));
-      }
-
-      const io = req.app.get('io');
-      if (io) {
-        io.to('admin:global').emit('admin:note_added', {
-          bookingId:     booking._id,
-          bookingCode:   booking.bookingCode,
-          addedBy:       req.user.name,
-          addedByRole:   req.user.role,
-          transactionId,
-          recipientType,
-          note,
-          timestamp,
-        });
-      }
-
-      return res.json({
-        success: true,
-        message: 'Admin note added',
-        data: {
-          bookingCode:   booking.bookingCode,
-          noteEntry,
-          recipientType,
-          emailSent:     doSendEmail && !!targetEmail,
-          emailTarget:   targetEmail,
-        },
-      });
-    } catch (err) {
-      console.error('[POST /consultations/:bookingId/admin-notes]', err);
-      return res.status(500).json({ success: false, message: err.message });
-    }
-  }
-);
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// 12. GET /consultations/:bookingId/admin-notes
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.get(
-  '/:bookingId/admin-notes',
-  protect,
-  authorize('admin', 'superadmin'),
-  async (req, res) => {
-    try {
-      const booking = await Booking.findById(req.params.bookingId)
-        .select('+internalNotes bookingCode status bookingType scheduledAt doctor hospital pricingSource fareBreakdown paymentStatus payments')
-        .populate('doctor', 'user specialization')
-        .populate('hospital', 'name managementModel')
-        .lean();
-
-      if (!booking)
-        return res.status(404).json({ success: false, message: 'Booking not found' });
-
-      const noteLines = (booking.internalNotes ?? '').split('\n').filter(Boolean);
-
-      const parsedNotes = noteLines.map((line) => {
-        const match = line.match(/^\[(.+?)\] \[(.+?)\] (.+?)(?:\s\| TxnID: (.+?))?: (.+)$/);
-        if (match) {
-          return {
-            timestamp:     match[1],
-            role:          match[2],
-            author:        match[3],
-            transactionId: match[4] ?? null,
-            note:          match[5],
-          };
-        }
-        return { raw: line };
-      });
+      const svc   = getConsultationSocketService();
+      const stats = svc?.getStats() ?? {};
 
       return res.json({
         success: true,
         data: {
-          bookingId:     booking._id,
-          bookingCode:   booking.bookingCode,
-          status:        booking.status,
-          bookingType:   booking.bookingType,
-          scheduledAt:   booking.scheduledAt,
-          pricingSource: booking.pricingSource,
-          fareBreakdown: booking.fareBreakdown,
-          paymentStatus: booking.paymentStatus,
-          payments:      booking.payments,
-          managementModel: booking.hospital?.managementModel ?? 'doctor-owner',
-          notes:         parsedNotes,
-          rawNotes:      booking.internalNotes,
+          total,
+          byStatus:           byStatus.reduce((a, b) => { a[b._id] = b.count; return a; }, {}),
+          byType:             byType.reduce((a, b) => { a[b._id] = b.count; return a; }, {}),
+          avgDurationMinutes: avgDuration[0]?.avg?.toFixed(1) ?? 0,
+          ratedCount,
+          live: stats,
         },
       });
     } catch (err) {
-      console.error('[GET /consultations/:bookingId/admin-notes]', err);
+      console.error('[GET admin/analytics/overview]', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   }
 );
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 13. GET /consultations/:bookingId
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.get(
-  '/:bookingId',
-  protect,
-  authorize('customer', 'doctor', 'hospital', 'admin', 'superadmin'),
-  async (req, res) => {
-    try {
-      const booking = await Booking.findById(req.params.bookingId)
-        .populate('doctor', 'user specialization registrationNumber profilePhotoUrl fees consultationTypes')
-        .populate('hospital', 'name contact address managementModel consultationPricing')
-        .populate('customer', 'name email phone')
-        .lean();
-
-      if (!booking)
-        return res.status(404).json({ success: false, message: 'Booking not found' });
-
-      if (req.user.role === 'customer' && booking.customer._id.toString() !== req.user._id.toString())
-        return res.status(403).json({ success: false, message: 'Forbidden' });
-
-      if (req.user.role === 'doctor') {
-        const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
-        if (!dp || dp._id.toString() !== booking.doctor._id.toString())
-          return res.status(403).json({ success: false, message: 'Forbidden' });
-      }
-
-      if (req.user.role === 'hospital') {
-        const h = await Hospital.findOne({ managedBy: req.user._id }).select('_id').lean();
-        if (!h || h._id.toString() !== booking.hospital?._id?.toString())
-          return res.status(403).json({ success: false, message: 'Forbidden' });
-      }
-
-      if (booking.onlineConsultation && !isAdmin(req)) {
-        delete booking.onlineConsultation.hostToken;
-        delete booking.onlineConsultation.patientToken;
-        delete booking.onlineConsultation.recordingUrl;
-        delete booking.onlineConsultation.doctorNotes;
-      }
-
-      if (!isAdmin(req)) {
-        delete booking.internalNotes;
-      }
-
-      const opRecord = await OutPatientRecord.findOne({ booking: booking._id }).lean();
-
-      return res.json({
-        success: true,
-        data: { ...booking, outPatientRecord: opRecord ?? null },
-      });
-    } catch (err) {
-      console.error('[GET /consultations/:bookingId]', err);
-      return res.status(500).json({ success: false, message: err.message });
-    }
-  }
-);
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// 14. GET /consultations
-// ═══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 17. LIST /consultations
+// ─────────────────────────────────────────────────────────────────────────────
 
 router.get(
   '/',
@@ -1066,49 +1467,39 @@ router.get(
   authorize('customer', 'doctor', 'hospital', 'admin', 'superadmin'),
   async (req, res) => {
     try {
-      const {
-        status,
-        bookingType,
-        from,
-        to,
-        page  = 1,
-        limit = 20,
-      } = req.query;
+      const { status, consultationType, from, to, page = 1, limit = 20 } = req.query;
+      const { _id: userId, role } = req.user;
 
-      const filter = {
-        bookingType: { $in: ['doctor_consultation', 'doctor_online', 'follow_up', 'physiotherapist'] },
-      };
-
-      if (status)      filter.status      = status;
-      if (bookingType) filter.bookingType = bookingType;
-
+      const filter = {};
+      if (status)          filter.status          = status;
+      if (consultationType) filter.consultationType = consultationType;
       if (from || to) {
-        filter.scheduledAt = {};
-        if (from) filter.scheduledAt.$gte = new Date(from);
-        if (to)   filter.scheduledAt.$lte = new Date(to);
+        filter.scheduledStartTime = {};
+        if (from) filter.scheduledStartTime.$gte = new Date(from);
+        if (to)   filter.scheduledStartTime.$lte = new Date(to);
       }
 
-      if (req.user.role === 'customer') {
-        filter.customer = req.user._id;
-      } else if (req.user.role === 'doctor') {
-        const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
+      if (role === 'customer') {
+        filter.patient = userId;
+      } else if (role === 'doctor') {
+        const dp = await resolveDoctorProfile(userId);
         if (!dp) return res.status(403).json({ success: false, message: 'Doctor profile not found' });
         filter.doctor = dp._id;
-      } else if (req.user.role === 'hospital') {
-        const h = await Hospital.findOne({ managedBy: req.user._id }).select('_id').lean();
+      } else if (role === 'hospital') {
+        const h = await Hospital.findOne({ managedBy: userId }).select('_id').lean();
         if (!h) return res.status(403).json({ success: false, message: 'Hospital not found' });
         filter.hospital = h._id;
       }
 
       const skip  = (Number(page) - 1) * Number(limit);
-      const total = await Booking.countDocuments(filter);
+      const total = await Consultation.countDocuments(filter);
 
-      const bookings = await Booking.find(filter)
-        .select('-internalNotes -onlineConsultation.hostToken -onlineConsultation.patientToken -onlineConsultation.recordingUrl')
-        .populate('doctor',   'user specialization profilePhotoUrl')
-        .populate('hospital', 'name')
-        .populate('customer', 'name phone')
-        .sort({ scheduledAt: -1 })
+      const consultations = await Consultation.find(filter)
+        .select('-hostToken -participantToken -webhookSecret -internalAdminNotes -doctorInternalNotes -chatMessages -eventLogs -networkAnalytics -sdkErrors -reconnectLogs')
+        .populate('patient', 'name phone avatar')
+        .populate('doctor',  'user specialization profilePhotoUrl')
+        .populate('hospital','name')
+        .sort({ scheduledStartTime: -1 })
         .skip(skip)
         .limit(Number(limit))
         .lean();
@@ -1116,7 +1507,7 @@ router.get(
       return res.json({
         success: true,
         data: {
-          bookings,
+          consultations,
           pagination: {
             total,
             page:       Number(page),
@@ -1132,101 +1523,89 @@ router.get(
   }
 );
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 15. POST /consultations/:bookingId/network-quality
-// ═══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 18. VIDEOSDK WEBHOOK
+// ─────────────────────────────────────────────────────────────────────────────
 
 router.post(
-  '/:bookingId/network-quality',
-  protect,
-  authorize('customer', 'doctor'),
+  '/webhooks/videosdk',
   async (req, res) => {
     try {
-      const { participant, quality } = req.body;
-
-      const booking = await Booking.findById(req.params.bookingId);
-      if (!booking || booking.bookingType !== 'doctor_online')
-        return res.status(404).json({ success: false, message: 'Online consultation not found' });
-
-      if (!booking.onlineConsultation)
-        return res.status(400).json({ success: false, message: 'No online consultation data' });
-
-      booking.onlineConsultation.networkQualityLogs.push({
-        participant,
-        quality,
-        timestamp: new Date(),
-      });
-
-      if (quality === 'disconnected') {
-        booking.onlineConsultation.networkIssueDetected = true;
-        booking.onlineConsultation.reconnectCount       = (booking.onlineConsultation.reconnectCount ?? 0) + 1;
-        booking.onlineConsultation.lastReconnectAt      = new Date();
+      // Validate VideoSDK webhook secret
+      const secret = req.headers['x-videosdk-signature'] || req.headers['authorization'];
+      if (!secret || secret !== process.env.VIDEOSDK_WEBHOOK_SECRET) {
+        return res.status(401).json({ success: false, message: 'Unauthorized webhook' });
       }
 
-      await booking.save();
+      const { event, data } = req.body;
+      const { roomId, participantId } = data || {};
 
-      // Trigger socket event
-      await emitConsultationEvent(req, booking, 'consultation:network_quality', {
-        participant,
-        quality,
-        reconnectCount: booking.onlineConsultation.reconnectCount,
-      });
+      if (!roomId) return res.status(200).json({ received: true });
 
-      return res.json({ success: true, message: 'Network quality logged' });
-    } catch (err) {
-      console.error('[POST /consultations/:bookingId/network-quality]', err);
-      return res.status(500).json({ success: false, message: err.message });
-    }
-  }
-);
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// 16. GET /consultations/:bookingId/follow-up-eligibility
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.get(
-  '/:bookingId/follow-up-eligibility',
-  protect,
-  authorize('customer', 'admin', 'superadmin'),
-  async (req, res) => {
-    try {
-      const booking = await Booking.findById(req.params.bookingId)
-        .select('customer doctor status bookingCode')
+      const consultation = await Consultation.findOne({ roomId })
+        .select('consultationId status _id')
         .lean();
 
-      if (!booking)
-        return res.status(404).json({ success: false, message: 'Booking not found' });
+      if (!consultation) return res.status(200).json({ received: true });
 
-      if (req.user.role === 'customer' && booking.customer.toString() !== req.user._id.toString())
-        return res.status(403).json({ success: false, message: 'Forbidden' });
+      const { consultationId } = consultation;
 
-      if (booking.status !== 'completed')
-        return res.json({ success: true, data: { eligible: false, reason: 'Booking not completed' } });
+      switch (event) {
+        case 'session:participant-joined':
+          emitConsultationEvent(consultationId, 'consultation:participant_joined', {
+            consultationId, participantId, source: 'videosdk_webhook',
+          });
+          break;
 
-      const opRecord = await OutPatientRecord.findOne({ booking: booking._id }).lean();
+        case 'session:participant-left':
+          emitConsultationEvent(consultationId, 'consultation:participant_left', {
+            consultationId, participantId, source: 'videosdk_webhook',
+          });
+          break;
 
-      if (!opRecord?.followUpExpiry)
-        return res.json({ success: true, data: { eligible: false, reason: 'No follow-up window set' } });
+        case 'recording:statusChanged':
+          if (data.status === 'RECORDING_STARTED') {
+            await Consultation.findByIdAndUpdate(consultation._id, {
+              $set: { 'recording.recordingStatus': 'recording' },
+            });
+            emitConsultationEvent(consultationId, 'consultation:recording_started', { consultationId });
+          }
+          if (data.status === 'RECORDING_STOPPED') {
+            await Consultation.findByIdAndUpdate(consultation._id, {
+              $set: {
+                'recording.recordingStatus': 'processing',
+                'recording.recordingUrl':    data.fileUrl || '',
+              },
+            });
+            emitConsultationEvent(consultationId, 'consultation:recording_stopped', { consultationId, fileUrl: data.fileUrl });
+          }
+          break;
 
-      const now      = new Date();
-      const eligible = now < opRecord.followUpExpiry;
-      const daysLeft = eligible
-        ? Math.ceil((opRecord.followUpExpiry - now) / (1000 * 60 * 60 * 24))
-        : 0;
+        case 'session:ended':
+          await Consultation.findOneAndUpdate(
+            { consultationId, status: { $in: ['active', 'paused', 'waiting'] } },
+            {
+              $set: {
+                status:            'completed',
+                actualEndTime:     new Date(),
+                roomEnded:         true,
+                endedBy:           'system',
+                autoEndedBySystem: true,
+              },
+            }
+          );
+          emitConsultationEvent(consultationId, 'consultation:consultation_ended', {
+            consultationId, endedBy: 'system', source: 'videosdk_webhook',
+          });
+          break;
 
-      return res.json({
-        success: true,
-        data: {
-          eligible,
-          followUpExpiry: opRecord.followUpExpiry,
-          followUpFee:    opRecord.followUpFee,
-          daysLeft,
-          parentBookingId:   booking._id,
-          parentBookingCode: booking.bookingCode,
-        },
-      });
+        default:
+          break;
+      }
+
+      return res.status(200).json({ received: true });
     } catch (err) {
-      console.error('[GET /consultations/:bookingId/follow-up-eligibility]', err);
+      console.error('[POST /webhooks/videosdk]', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   }
