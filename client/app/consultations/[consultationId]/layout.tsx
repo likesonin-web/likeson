@@ -12,6 +12,19 @@ interface RootState {
   auth: { token: string | null };
 }
 
+
+interface ConsultationSocketProviderProps {
+  children: ReactNode;
+  token: string;
+  consultationId: string;
+  autoJoin?: boolean;
+  autoRequestState?: boolean;
+  // Add '?' to make these optional
+  onConnect?: () => void;
+  onDisconnect?: () => void;
+  onError?: (error: any) => void;
+}
+
 // Inner component handles hook usage
 function ConsultationLayoutInner({
   children,
@@ -23,13 +36,16 @@ function ConsultationLayoutInner({
   const token = useSelector((state: RootState) => state.auth.token);
 
   return (
-    <ConsultationSocketProvider
-      token={token ?? ''}
-      consultationId={consultationId}
-      autoJoin={false}
-    >
-      {children}
-    </ConsultationSocketProvider>
+   <ConsultationSocketProvider
+  token={token ?? ''}
+  consultationId={consultationId}
+  autoJoin={false}
+  onConnect={() => console.log('Connected')}
+  onDisconnect={() => console.log('Disconnected')}
+  onError={(err: RootState) => console.error(err)}
+>
+  {children}
+</ConsultationSocketProvider>
   );
 }
 
