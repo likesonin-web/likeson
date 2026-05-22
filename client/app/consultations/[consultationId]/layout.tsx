@@ -1,57 +1,55 @@
 'use client';
+
 import { ReactNode } from 'react';
 import { ConsultationSocketProvider } from '@/provider/ConsultationSocketProvider';
 import { useSelector } from 'react-redux';
 
-interface Props {
-  children: ReactNode;
-  params: { consultationId: string };
-}
-
 interface RootState {
-  auth: { token: string | null };
+  auth: {
+    token: string | null;
+  };
 }
 
-
-interface ConsultationSocketProviderProps {
+interface ConsultationLayoutInnerProps {
   children: ReactNode;
-  token: string;
   consultationId: string;
-  autoJoin?: boolean;
-  autoRequestState?: boolean;
-  // Add '?' to make these optional
-  onConnect?: () => void;
-  onDisconnect?: () => void;
-  onError?: (error: any) => void;
 }
 
-// Inner component handles hook usage
 function ConsultationLayoutInner({
   children,
   consultationId,
-}: {
-  children: ReactNode;
-  consultationId: string;
-}) {
+}: ConsultationLayoutInnerProps) {
   const token = useSelector((state: RootState) => state.auth.token);
 
   return (
-   <ConsultationSocketProvider
-  token={token ?? ''}
-  consultationId={consultationId}
-  autoJoin={false}
-  onConnect={() => console.log('Connected')}
-  onDisconnect={() => console.log('Disconnected')}
-  onError={(err: RootState) => console.error(err)}
->
-  {children}
-</ConsultationSocketProvider>
+    <ConsultationSocketProvider
+      token={token ?? ''}
+      consultationId={consultationId}
+      autoJoin={false}
+      onConnect={() => console.log('Connected')}
+      onDisconnect={() => console.log('Disconnected')}
+      onError={(err: any) => console.error(err)}
+    >
+      {children}
+    </ConsultationSocketProvider>
   );
 }
 
-export default function ConsultationLayout({ children, params }: Props) {
+interface LayoutProps {
+  children: ReactNode;
+  params: Promise<{
+    consultationId: string;
+  }>;
+}
+
+export default async function ConsultationLayout({
+  children,
+  params,
+}: LayoutProps) {
+  const { consultationId } = await params;
+
   return (
-    <ConsultationLayoutInner consultationId={params.consultationId}>
+    <ConsultationLayoutInner consultationId={consultationId}>
       {children}
     </ConsultationLayoutInner>
   );
