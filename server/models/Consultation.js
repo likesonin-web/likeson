@@ -456,14 +456,13 @@ const aiAnalysisSchema = new Schema(
     },
 
     // Diagnosis Suggestions
-    aiDiagnosisSuggestions: {
-      enabled:         { type: Boolean, default: false },
-      suggestions:     [{ type: String, trim: true }],
-      icdCodes:        [{ type: String, trim: true }],
-      confidence:      { type: Number, min: 0, max: 1 },
-      generatedAt:     { type: Date },
-      select:          false,
-    },
+   aiDiagnosisSuggestions: {
+  enabled:     { type: Boolean, default: false },
+  suggestions: [{ type: String, trim: true }],
+  icdCodes:    [{ type: String, trim: true }],
+  confidence:  { type: Number, min: 0, max: 1 },
+  generatedAt: { type: Date },
+},
 
     // Risk Prediction
     aiRiskPrediction: {
@@ -472,7 +471,7 @@ const aiAnalysisSchema = new Schema(
       riskFactors:     [{ type: String }],
       recommendations: [{ type: String }],
       generatedAt:     { type: Date },
-      select:          false,
+       
     },
 
     // Drug Interaction Warnings
