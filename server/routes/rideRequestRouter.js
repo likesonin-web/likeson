@@ -1064,7 +1064,7 @@ router.patch('/:rideId/status',
           const otpCode        = genOtp();
           ride.status          = 'driver_arrived';
           ride.driverArrivedAt = new Date();
-          ride.pickupOtp       = otpCode; // ← RAW string, no hash
+          ride.pickupOtp = hashOtp(otpCode); // ← RAW string, no hash
 
           await ride.save();
 

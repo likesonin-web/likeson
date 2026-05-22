@@ -10,6 +10,7 @@ import {
   Autocomplete,
   Marker,
 } from "@react-google-maps/api";
+import { useGoogleMaps } from '@/context/GoogleMapsProvider';
 import {
   Stethoscope,
   Video,
@@ -2026,6 +2027,12 @@ function StepProvider({
     if (isOnline) set("consultationType", "video");
   }, [isOnline, set]);
 
+  useEffect(() => {
+  if (isOnline && !doctorsByHospital?.length && !doctorsLoading) {
+    onLoadHospitals(""); // load all available online doctors
+  }
+}, [isOnline]);
+
   // Replace showConsultTypes line in StepProvider
   const showConsultTypes =
     bt?.needsDoctor &&
@@ -2386,31 +2393,65 @@ function StepProvider({
             </Field>
           )}
 
-          {isOnline && (
-            <Field label="Search Doctors" note="Find doctors for video">
-              <div className="flex gap-2">
-                <Inp
-                  placeholder="City or doctor name…"
-                  value={form.hospSearch || ""}
-                  onChange={(e) => set("hospSearch", e.target.value)}
-                  className="flex-1"
-                />
-                <button
-                  type="button"
-                  onClick={() => onLoadHospitals(form.hospSearch)}
-                  className="px-3 py-2.5 rounded-xl border-2 border-purple-500 text-purple-600 font-black text-xs flex items-center gap-1 hover:bg-purple-500 hover:text-white transition-colors flex-shrink-0 min-w-[64px] justify-center"
-                  style={PP}
-                >
-                  {hospitalsLoading ? (
-                    <Loader2 size={12} className="animate-spin" />
-                  ) : (
-                    <Search size={12} />
-                  )}
-                  <span className="hidden sm:inline ml-1">Find</span>
-                </button>
-              </div>
-            </Field>
-          )}
+           
+           {isOnline && (
+  <Field label="Select Doctor" note="Choose doctor for video call" error={errors.doctorId}>
+    {doctorsLoading ? (
+      <div className="flex items-center gap-2 text-xs text-base-content/40 py-2" style={PP}>
+        <Loader2 size={11} className="animate-spin" />Loading doctors…
+      </div>
+    ) : (
+      <Sel
+        value={form.doctorId || ""}
+        onChange={(e) => {
+          const d = doctorsByHospital?.find((d) => d._id === e.target.value);
+          set("doctorId", e.target.value);
+          set("doctorName", d?.user?.name || d?.name || "");
+          set("doctorSpec", d?.specialization || "");
+          set("doctorFees", d?.effectiveFees || null);
+          set("hospitalId", d?.hospitalId || d?.hospital?._id || "");
+          set("hospitalName", d?.hospital?.name || d?.hospitalName || "");
+          onResetDocAvail?.();
+        }}
+      >
+        <option value="">— Select doctor —</option>
+        {(doctorsByHospital || []).map((d) => (
+          <option key={d._id} value={d._id}>
+            {buildDoctorOptionText(d)}
+          </option>
+        ))}
+      </Sel>
+    )}
+  </Field>
+)}
+
+{isOnline && form.doctorId && (form.hospitalName || form.doctorSpec) && (
+  <motion.div
+    initial={{ opacity: 0, y: 4 }}
+    animate={{ opacity: 1, y: 0 }}
+    className="flex items-center gap-2.5 p-2.5 rounded-xl border border-purple-200 bg-purple-50"
+  >
+    <Building2 size={13} style={{ color: "#8b5cf6", flexShrink: 0 }} />
+    <div className="min-w-0 flex-1">
+      {form.hospitalName && (
+        <p className="text-xs font-black text-purple-700 truncate" style={PP}>
+          {form.hospitalName}
+        </p>
+      )}
+      {form.doctorSpec && (
+        <p className="text-[10px] text-purple-500 font-semibold" style={PP}>
+          {form.doctorSpec}
+        </p>
+      )}
+    </div>
+    <span
+      className="text-[9px] font-black uppercase tracking-widest bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded-md flex-shrink-0"
+      style={PP}
+    >
+      Hospital
+    </span>
+  </motion.div>
+)}
 
           {doctorsLoading && (
             <div
@@ -4719,10 +4760,7 @@ export default function BookingSystem() {
   const consultationCoverage = useSelector(selectConsultationCoverage);
 
   // FIX: single useJsApiLoader call with merged GMAPS_LIBRARIES=['places','geometry']
-  const { isLoaded } = useJsApiLoader({
-    googleMapsApiKey: GMAPS_KEY,
-    libraries: GMAPS_LIBRARIES,
-  });
+ const { isLoaded } = useGoogleMaps();
 
   const hospitals = useSelector(selectHospitals);
   const hospitalsLoading = useSelector(selectHospitalsLoading);
@@ -4784,6 +4822,8 @@ export default function BookingSystem() {
   useEffect(() => {
     dispatch(fetchPlatformPricing());
   }, [dispatch]);
+
+ 
 
   useEffect(() => {
     dispatch(fetchSubscriptionBenefitConsultations());

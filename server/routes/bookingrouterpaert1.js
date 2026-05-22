@@ -524,7 +524,7 @@ router.patch('/:id/ride/arrived',
 
       const otp      = genOtp();
       ride.status    = 'driver_arrived';
-      ride.pickupOtp = hashOtp(otp); // ← store HASHED; socket verify_otp hashes input to compare
+      ride.pickupOtp = otp; // ← FIXED: store RAW (was hashOtp(otp))
       await ride.save();
 
       if (ride.trackingId) {
@@ -536,21 +536,18 @@ router.patch('/:id/ride/arrived',
       const booking  = await Booking.findById(req.params.id);
       const customer = await User.findById(booking.customer).select('email phone name').lean();
 
-      // SMS
       sendSms({
         to:      customer.phone,
         message: otpSms({ otpCode: otp, purpose: `ride start #${booking.bookingCode}` }),
       }).catch(e => console.error('[Arrived] OTP SMS:', e.message));
 
-      // EMAIL: delivery OTP via queue (idempotent — deduplicates on rideId)
       if (customer?.email) {
-        // Use rich buildDeliveryOtpEmail template
         sendEmail({
           email:   customer.email,
           subject: `Your Driver Has Arrived — OTP ${otp} | Booking #${booking.bookingCode}`,
           html:    buildDeliveryOtpEmail({
             userName: customer.name,
-            order:    { orderId: booking.bookingCode }, // reuse orderId slot for bookingCode
+            order:    { orderId: booking.bookingCode },
             otpCode:  otp,
           }),
         }).catch(e => console.error('[Arrived] OTP email:', e.message));

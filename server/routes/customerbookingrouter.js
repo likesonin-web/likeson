@@ -135,30 +135,107 @@ const resolveBookingEmails = async (booking) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const sendBookingCreatedEmails = async ({ booking, orderItems = [], billing, storeName, actionLink }) => {
   try {
-    const { customerEmail, customerName, doctorEmail, doctorName, hospitalEmail, hospitalName } =
-      await resolveBookingEmails(booking);
+    const {
+      customerEmail, customerName,
+      doctorEmail, doctorName,
+      hospitalEmail, hospitalName,
+    } = await resolveBookingEmails(booking);
+
+    const fb = billing || booking.fareBreakdown || {};
+
+    const fmt = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
+    // Build rich order items from fareBreakdown fields
+    const resolvedItems = orderItems.length ? orderItems : [
+      fb.consultationFee  > 0 && { name: 'Consultation Fee',        qty: 1, price: fmt(fb.consultationFee)  },
+      fb.careAssistantFee > 0 && { name: 'Care Assistant',          qty: 1, price: fmt(fb.careAssistantFee) },
+      fb.transportFee     > 0 && { name: 'Transport',               qty: 1, price: fmt(fb.transportFee)     },
+      fb.diagnosticFee    > 0 && { name: 'Diagnostic Tests',        qty: 1, price: fmt(fb.diagnosticFee)    },
+      fb.homeCollectionFee > 0 && { name: 'Home Collection Fee',    qty: 1, price: fmt(fb.homeCollectionFee)},
+      fb.discount         > 0 && { name: 'Subscription Discount',   qty: 1, price: `-${fmt(fb.discount)}`   },
+      fb.couponDiscount   > 0 && { name: 'Coupon Discount',         qty: 1, price: `-${fmt(fb.couponDiscount)}` },
+      fb.taxes            > 0 && { name: `GST / Taxes`,             qty: 1, price: fmt(fb.taxes)            },
+    ].filter(Boolean);
+
+    const paymentStatus = booking.paymentStatus ?? 'unpaid';
+    const paymentMethod = booking.payments?.[0]?.gateway ?? 'Pending';
+    const isPaid        = paymentStatus === 'paid';
+
+    const billingPayload = {
+      subtotal:    fmt((fb.totalAmount || 0) - (fb.taxes || 0)),
+      tax:         fmt(fb.taxes),
+      discount:    fmt((fb.discount || 0) + (fb.couponDiscount || 0)),
+      total:       fmt(fb.totalAmount),
+      amountPaid:  fmt(fb.amountPaid),
+      amountDue:   fmt(Math.max(0, (fb.totalAmount || 0) - (fb.amountPaid || 0))),
+      currency:    fb.currency || 'INR',
+      paymentStatus: isPaid ? 'PAID ✅' : 'UNPAID ⏳',
+      paymentMethod: paymentMethod,
+    };
+
+    const scheduledStr = booking.scheduledAt
+      ? new Date(booking.scheduledAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })
+      : '—';
+
+    // Build GST breakdown note
+    const gstNote = [
+      fb.consultationFee  > 0 ? `Consultation: 0% GST (exempt)`           : null,
+      fb.transportFee     > 0 ? `Transport: 5% GST`                       : null,
+      fb.careAssistantFee > 0 ? `Care Assistant: 18% GST`                 : null,
+      fb.diagnosticFee    > 0 ? `Diagnostics: 5% GST`                     : null,
+    ].filter(Boolean).join(' · ');
+
+    const headerNote = `
+      Booking <strong>#${booking.bookingCode}</strong> confirmed for 
+      <strong>${scheduledStr}</strong>.<br>
+      Payment Status: <strong style="color:${isPaid ? '#15803d' : '#dc2626'}">${billingPayload.paymentStatus}</strong>
+      ${isPaid ? '' : ` — Amount Due: <strong>${billingPayload.amountDue}</strong>`}
+    `;
 
     const sharedPayload = {
       userName:    customerName,
       order:       { orderId: booking.bookingCode },
-      orderItems,
-      billing,
-      storeName,
+      orderItems:  resolvedItems,
+      billing:     billingPayload,
+      storeName:   storeName || 'Likeson Healthcare',
       actionLink:  actionLink || `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
-      statusLabel: 'Booking Confirmed!',
-      statusIcon:  '✅',
-      statusColor: '#15803d',
-      statusBg:    '#f0fdf4',
-      statusBorder:'#bbf7d0',
-      headerNote:  `Booking #${booking.bookingCode} confirmed. Scheduled: ${new Date(booking.scheduledAt).toLocaleString('en-IN')}`,
+      statusLabel: isPaid ? 'Booking Confirmed & Paid!' : 'Booking Confirmed — Payment Pending',
+      statusIcon:  isPaid ? '✅' : '⏳',
+      statusColor: isPaid ? '#15803d' : '#d97706',
+      statusBg:    isPaid ? '#f0fdf4' : '#fffbeb',
+      statusBorder:isPaid ? '#bbf7d0' : '#fde68a',
+      headerNote,
     };
 
-    // Customer
+    // Customer — full breakdown
     if (customerEmail) {
+      const customerHtml = buildOrderEmailHtml(sharedPayload);
+
+      // Append GST + payment instructions block
+      const gstBlock = `
+        <div style="margin:16px 0;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#64748b;">
+          <p style="margin:0 0 6px;font-weight:700;color:#374151;">GST Breakdown</p>
+          <p style="margin:0;">${gstNote || 'GST included in total above'}</p>
+        </div>
+        ${!isPaid ? `
+        <div style="margin:16px 0;padding:12px 16px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:12px;color:#92400e;">
+          <p style="margin:0 0 6px;font-weight:700;">Payment Instructions</p>
+          <p style="margin:0;">
+            Amount Due: <strong>${billingPayload.amountDue}</strong><br>
+            ${paymentMethod === 'Cash'
+              ? 'Pay cash at the time of service to the assigned provider.'
+              : paymentMethod === 'Wallet'
+              ? 'Deducted from your Likeson wallet.'
+              : 'Complete payment via Razorpay — UPI, Card, or Net Banking accepted.'
+            }
+          </p>
+        </div>` : ''}
+      `;
+
       sendEmail({
         email:   customerEmail,
-        subject: `Booking Confirmed — #${booking.bookingCode} | Likeson Healthcare`,
-        html:    buildOrderEmailHtml(sharedPayload),
+        subject: `Booking ${isPaid ? 'Confirmed & Paid' : 'Confirmed — Payment Pending'} — #${booking.bookingCode} | Likeson Healthcare`,
+        html:    customerHtml + gstBlock,
       }).catch(e => console.error('[email] customer booking-created:', e.message));
     }
 
@@ -170,7 +247,14 @@ const sendBookingCreatedEmails = async ({ booking, orderItems = [], billing, sto
         html:    transactionalTemplate({
           header: 'NEW APPOINTMENT',
           title:  `New booking from ${customerName}`,
-          body:   `Booking <strong>#${booking.bookingCode}</strong> scheduled for <strong>${new Date(booking.scheduledAt).toLocaleString('en-IN')}</strong>. Patient: ${booking.patientInfo?.name ?? customerName}.`,
+          body: `
+            Booking <strong>#${booking.bookingCode}</strong> scheduled for 
+            <strong>${scheduledStr}</strong>.<br><br>
+            Patient: <strong>${booking.patientInfo?.name ?? customerName}</strong><br>
+            Type: <strong>${booking.bookingType?.replace(/_/g, ' ')}</strong><br>
+            Consultation Fee: <strong>${fmt(fb.consultationFee)}</strong><br>
+            Payment: <strong>${billingPayload.paymentStatus}</strong>
+          `,
           buttonText: 'View Appointment',
           buttonLink: `${process.env.FRONTEND_URL}/doctor/bookings/${booking._id}`,
         }),
@@ -185,7 +269,15 @@ const sendBookingCreatedEmails = async ({ booking, orderItems = [], billing, sto
         html:    transactionalTemplate({
           header: 'NEW PATIENT BOOKING',
           title:  `Booking #${booking.bookingCode} received`,
-          body:   `A new booking has been placed by <strong>${customerName}</strong> scheduled for <strong>${new Date(booking.scheduledAt).toLocaleString('en-IN')}</strong>. Doctor: ${doctorName}.`,
+          body: `
+            Customer: <strong>${customerName}</strong><br>
+            Scheduled: <strong>${scheduledStr}</strong><br>
+            Doctor: <strong>${doctorName}</strong><br>
+            Service: <strong>${booking.bookingType?.replace(/_/g, ' ')}</strong><br><br>
+            Total: <strong>${fmt(fb.totalAmount)}</strong> · 
+            GST: <strong>${fmt(fb.taxes)}</strong><br>
+            Payment: <strong>${billingPayload.paymentStatus}</strong>
+          `,
           buttonText: 'View Booking',
           buttonLink: `${process.env.FRONTEND_URL}/hospital/bookings/${booking._id}`,
         }),
@@ -201,14 +293,49 @@ const sendBookingCreatedEmails = async ({ booking, orderItems = [], billing, sto
 // ─────────────────────────────────────────────────────────────────────────────
 const sendPaymentConfirmedEmails = async ({ booking, paymentMethod = 'Razorpay' }) => {
   try {
-    const { customerEmail, customerName, doctorEmail, hospitalEmail, hospitalName } =
+    const { customerEmail, customerName, doctorEmail, hospitalEmail } =
       await resolveBookingEmails(booking);
 
+    const fb  = booking.fareBreakdown || {};
+    const fmt = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
+    const scheduledStr = booking.scheduledAt
+      ? new Date(booking.scheduledAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })
+      : '—';
+
     const body = `
-      Payment of <strong>₹${booking.fareBreakdown?.totalAmount?.toFixed(2) ?? '0.00'}</strong>
-      received via <strong>${paymentMethod}</strong> for booking
-      <strong>#${booking.bookingCode}</strong>.
-      Your booking is confirmed and all details remain unchanged.
+      Payment of <strong>${fmt(fb.totalAmount)}</strong> received via 
+      <strong>${paymentMethod}</strong> for booking <strong>#${booking.bookingCode}</strong>.<br><br>
+
+      <table width="100%" cellpadding="0" cellspacing="0" 
+             style="font-size:13px;color:#374151;border-collapse:collapse;">
+        <tr style="border-bottom:1px solid #f1f5f9;">
+          <td style="padding:5px 0;color:#6b7280;">Scheduled At</td>
+          <td style="text-align:right;font-weight:600;">${scheduledStr}</td>
+        </tr>
+        ${fb.consultationFee  > 0 ? `<tr><td style="padding:5px 0;color:#6b7280;">Consultation Fee</td><td style="text-align:right;">${fmt(fb.consultationFee)}</td></tr>` : ''}
+        ${fb.careAssistantFee > 0 ? `<tr><td style="padding:5px 0;color:#6b7280;">Care Assistant</td><td style="text-align:right;">${fmt(fb.careAssistantFee)}</td></tr>` : ''}
+        ${fb.transportFee     > 0 ? `<tr><td style="padding:5px 0;color:#6b7280;">Transport</td><td style="text-align:right;">${fmt(fb.transportFee)}</td></tr>` : ''}
+        ${fb.diagnosticFee    > 0 ? `<tr><td style="padding:5px 0;color:#6b7280;">Diagnostic Tests</td><td style="text-align:right;">${fmt(fb.diagnosticFee)}</td></tr>` : ''}
+        ${fb.homeCollectionFee> 0 ? `<tr><td style="padding:5px 0;color:#6b7280;">Home Collection</td><td style="text-align:right;">${fmt(fb.homeCollectionFee)}</td></tr>` : ''}
+        ${(fb.discount || 0) + (fb.couponDiscount || 0) > 0 ? `<tr><td style="padding:5px 0;color:#059669;">Discounts</td><td style="text-align:right;color:#059669;">−${fmt((fb.discount||0)+(fb.couponDiscount||0))}</td></tr>` : ''}
+        ${fb.taxes            > 0 ? `<tr><td style="padding:5px 0;color:#6b7280;">GST / Taxes</td><td style="text-align:right;">${fmt(fb.taxes)}</td></tr>` : ''}
+        <tr style="border-top:2px solid #e2e8f0;">
+          <td style="padding:8px 0;font-weight:800;font-size:14px;">Total Paid</td>
+          <td style="text-align:right;font-weight:800;font-size:14px;color:#4f46e5;">${fmt(fb.totalAmount)}</td>
+        </tr>
+      </table>
+
+      <div style="margin-top:12px;padding:10px 14px;background:#f0fdf4;border:1px solid #bbf7d0;
+                  border-radius:8px;font-size:12px;color:#15803d;">
+        ✅ Payment confirmed via <strong>${paymentMethod}</strong>. 
+        Your booking is fully confirmed.
+      </div>
+
+      <div style="margin-top:10px;padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;
+                  border-radius:8px;font-size:11px;color:#64748b;">
+        <strong>GST Notes:</strong> Consultation 0% · Transport 5% · Care Assistant 18% · Diagnostics 5%
+      </div>
     `;
 
     if (customerEmail) {
@@ -1363,17 +1490,24 @@ router.post('/physiotherapist', protect, authorize('customer'), async (req, res)
       subscriptionUsagePending: [], confirmedSubscriptionUsage: [],
     });
 
-    if (paymentMethod === 'Wallet' && fareBreakdown.totalAmount > 0) {
+  if (paymentMethod === 'Wallet' && fareBreakdown.totalAmount > 0) {
   const wp = await processWalletPayment({
     userId: req.user._id, amount: fareBreakdown.totalAmount,
     bookingId: booking._id, bookingCode: booking.bookingCode,
   });
-  booking.paymentStatus = 'paid'; booking.payments = [wp];
+  booking.paymentStatus = 'paid';
+  booking.payments = [wp];
   await booking.save();
-  await flushAndRecord(booking);  // ADD THIS
+  await flushAndRecord(booking);
   sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' });
 }
 
+if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
+  booking.paymentStatus = 'paid';
+  await booking.save();
+  await flushAndRecord(booking);
+  sendPaymentConfirmedEmails({ booking, paymentMethod: 'Free (₹0)' });
+}
     if (paymentMethod === 'Cash') {
       booking.paymentStatus = 'pending_cash';
       await booking.save();
@@ -1447,20 +1581,24 @@ router.post('/follow-up', protect, authorize('customer'), async (req, res) => {
       subscriptionUsagePending: [], confirmedSubscriptionUsage: [],
     });
 
-    if (paymentMethod === 'Wallet' && fareBreakdown.totalAmount > 0) {
-      const wp = await processWalletPayment({
-        userId: req.user._id, amount: fareBreakdown.totalAmount,
-        bookingId: booking._id, bookingCode: booking.bookingCode,
-      });
-      booking.paymentStatus = 'paid'; booking.payments = [wp];
+   if (paymentMethod === 'Wallet' && fareBreakdown.totalAmount > 0) {
+  const wp = await processWalletPayment({
+    userId: req.user._id, amount: fareBreakdown.totalAmount,
+    bookingId: booking._id, bookingCode: booking.bookingCode,
+  });
+  booking.paymentStatus = 'paid';
+  booking.payments = [wp];
+  await booking.save();
+  await flushAndRecord(booking);
+  sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' });
+}
 
-      if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
+if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
   booking.paymentStatus = 'paid';
   await booking.save();
   await flushAndRecord(booking);
   sendPaymentConfirmedEmails({ booking, paymentMethod: 'Free (₹0)' });
 }
-    }
 
     if (paymentMethod === 'Cash') {
       booking.paymentStatus = 'pending_cash';

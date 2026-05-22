@@ -321,7 +321,9 @@ const NavInstructionCard = memo(function NavInstructionCard({ step, stepIndex, d
   const IconFn = MANEUVER_ICONS[type] || MANEUVER_ICONS.straight;
 
   // Distance color feedback
-  const dist     = distanceMeters ?? step.distanceMeters ?? 0;
+ const dist = (distanceMeters && distanceMeters > 0)
+  ? distanceMeters
+  : (step.distanceMeters ?? 0);
   const distColor = dist < 50 ? 'bg-error' : dist < 200 ? 'bg-warning' : 'bg-success';
 
   return (
