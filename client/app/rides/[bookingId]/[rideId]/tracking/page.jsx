@@ -1,20 +1,57 @@
 'use client';
 
+/**
+ * CustomerRideLiveTracking.jsx — Likeson.in
+ *
+ * Customer-side live ride tracking page.
+ *
+ * Route params (Next.js App Router):
+ *   /bookings/[bookingId]/tracking   — preferred (bookingId in URL)
+ *   /rides/[rideId]/tracking         — fallback (rideId only)
+ *
+ * What this page does:
+ *  - Joins booking socket room → receives live driver location, ETA, status
+ *  - Shows Google Map with animated driver marker moving toward pickup / dropoff
+ *  - Displays OTP to customer (customer SHOWS it to driver — does NOT type it)
+ *  - Shows driver info card, booking summary, ETA badge
+ *  - SOS button for customer safety
+ *  - Handles all ride status transitions gracefully
+ *  - Polling fallback (fetchRideLive every 5s) when socket offline
+ *
+ * Redux slices used:
+ *  - rideRequestSlice  → currentRide, socketLive, liveData, trackingData
+ *  - operationsSlice   → selectedBooking, liveLocation (set via setLiveLocation etc)
+ *
+ * Socket hooks used (from SocketProvider.jsx):
+ *  - useBookingRoom(bookingId)
+ *  - useSos(bookingId, rideId)
+ *
+ * Key design decisions:
+ *  - OTP is DISPLAYED (big bold digits), not typed — customer shows phone to driver
+ *  - Driver marker animates with smooth interpolation
+ *  - Map follows driver in pickup phase, then auto-zooms to show full route in ride phase
+ *  - No editing, no forms — pure read-only live view
+ */
+
 import React, {
   useEffect, useRef, useCallback, useState, useMemo, memo,
 } from 'react';
 import { useParams, useRouter }    from 'next/navigation';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence }  from 'framer-motion';
-import { GoogleMap, useJsApiLoader } from '@react-google-maps/api';
+import {
+  GoogleMap, DirectionsRenderer,
+} from '@react-google-maps/api';
+import { useGoogleMaps } from '@/context/GoogleMapsProvider'; 
 import {
   Phone, User, MapPin, Navigation, Clock, Shield,
   ShieldAlert, WifiOff, ChevronDown, ChevronLeft,
   CheckCircle, Loader2, X, Star, Car, RefreshCw,
-  AlertTriangle, Copy, Check, ArrowUpRight, Zap,
+  AlertTriangle, Zap, Copy, Check, ArrowUpRight,
+  MessageCircle, Info,
 } from 'lucide-react';
 
-// ── Redux ─────────────────────────────────────────────────────────────────────
+// Redux
 import {
   fetchRide,
   fetchRideLive,
@@ -37,13 +74,13 @@ import {
   socketNavigationTargetChanged,
   socketRideAssigned,
 } from '@/store/slices/rideRequestSlice';
-import { useGoogleMaps } from '@/context/GoogleMapsProvider';
+
 import {
   fetchMyBookingById,
   selectSelectedBooking,
 } from '@/store/slices/bookingSlice';
 
-// ── Socket context ────────────────────────────────────────────────────────────
+// Socket context
 import {
   useSocket,
   useBookingRoom,
@@ -54,377 +91,254 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
-const MAP_ID   = process.env.NEXT_PUBLIC_MAP_ID          || '33a293614af186975a18525f';
-const MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || '';
-const POLL_MS  = 6000;
-const ROUTE_RECALC_DISTANCE_THRESHOLD_M = 80;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// STATUS ARCHITECTURE
-// ─────────────────────────────────────────────────────────────────────────────
-const STATUS = {
-  SEARCHING:     'searching',
-  ASSIGNED:      'driver_assigned',
-  ARRIVING:      'driver_en_route',
-  ARRIVED:       'driver_arrived',
-  TRIP_STARTED:  'in_progress',
-  AT_STOP:       'at_stop',
-  COMPLETED:     'completed',
-  CANCELLED:     'cancelled',
+const GOOGLE_MAPS_LIBRARIES = ['geometry', 'marker'];
+const MAP_ID      = process.env.NEXT_PUBLIC_MAP_ID          || '33a293614af186975a18525f';
+const MAPS_KEY    = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || '';
+const POLL_MS     = 5000; // 5 s polling fallback
+
+/** Ride status → human label + theme color */
+const STATUS_CONFIG = {
+  searching:       { label: 'Finding Driver',  color: '#f59e0b', bg: 'rgba(245,158,11,0.12)',  border: 'rgba(245,158,11,0.30)', icon: '🔍' },
+  driver_assigned: { label: 'Driver Assigned', color: '#3b82f6', bg: 'rgba(59,130,246,0.12)',  border: 'rgba(59,130,246,0.30)', icon: '👤' },
+  driver_accepted: { label: 'Driver On Way',   color: '#06b6d4', bg: 'rgba(6,182,212,0.12)',   border: 'rgba(6,182,212,0.30)',  icon: '🚗' },
+  driver_en_route: { label: 'Driver En Route', color: '#06b6d4', bg: 'rgba(6,182,212,0.12)',   border: 'rgba(6,182,212,0.30)',  icon: '🚗' },
+  driver_arrived:  { label: 'Driver Arrived!', color: '#8b5cf6', bg: 'rgba(139,92,246,0.15)',  border: 'rgba(139,92,246,0.40)', icon: '📍' },
+  otp_verified:    { label: 'Starting Ride',   color: '#10b981', bg: 'rgba(16,185,129,0.12)',  border: 'rgba(16,185,129,0.30)', icon: '✅' },
+  in_progress:     { label: 'Ride In Progress',color: '#22c55e', bg: 'rgba(34,197,94,0.12)',   border: 'rgba(34,197,94,0.30)',  icon: '🏥' },
+  at_stop:         { label: 'Stopped',         color: '#f97316', bg: 'rgba(249,115,22,0.12)',  border: 'rgba(249,115,22,0.30)', icon: '⏸️' },
+  completed:       { label: 'Ride Completed',  color: '#64748b', bg: 'rgba(100,116,139,0.12)', border: 'rgba(100,116,139,0.30)',icon: '🎉' },
+  cancelled:       { label: 'Ride Cancelled',  color: '#ef4444', bg: 'rgba(239,68,68,0.12)',   border: 'rgba(239,68,68,0.30)',  icon: '❌' },
 };
 
-const normalizeStatus = (raw) => {
-  const map = {
-    requested:       STATUS.SEARCHING,
-    searching:       STATUS.SEARCHING,
-    driver_assigned: STATUS.ASSIGNED,
-    driver_accepted: STATUS.ARRIVING,
-    driver_en_route: STATUS.ARRIVING,
-    driver_arrived:  STATUS.ARRIVED,
-    otp_verified:    STATUS.ARRIVED,
-    in_progress:     STATUS.TRIP_STARTED,
-    at_stop:         STATUS.AT_STOP,
-    completed:       STATUS.COMPLETED,
-    cancelled:       STATUS.CANCELLED,
-  };
-  return map[raw] || STATUS.SEARCHING;
-};
-
-const STATUS_META = {
-  [STATUS.SEARCHING]:    { label: 'Finding Driver',   color: '#f59e0b', icon: '🔍', phase: 'pre' },
-  [STATUS.ASSIGNED]:     { label: 'Driver Assigned',  color: '#3b82f6', icon: '👤', phase: 'pre' },
-  [STATUS.ARRIVING]:     { label: 'Driver En Route',  color: '#06b6d4', icon: '🚗', phase: 'arriving' },
-  [STATUS.ARRIVED]:      { label: 'Driver Arrived',   color: '#8b5cf6', icon: '📍', phase: 'arrived' },
-  [STATUS.TRIP_STARTED]: { label: 'In Progress',      color: '#22c55e', icon: '🏥', phase: 'trip' },
-  [STATUS.AT_STOP]:      { label: 'At Stop',          color: '#f97316', icon: '⏸',  phase: 'trip' },
-  [STATUS.COMPLETED]:    { label: 'Completed',        color: '#64748b', icon: '✓',  phase: 'done' },
-  [STATUS.CANCELLED]:    { label: 'Cancelled',        color: '#ef4444', icon: '✕',  phase: 'done' },
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ROUTE COLORS
-// ─────────────────────────────────────────────────────────────────────────────
-const ROUTE_COLOR = {
-  DRIVER_TO_PICKUP: '#22c55e',
-  PICKUP_TO_DEST:   '#2563eb',
-  TRIP_ACTIVE:      '#2563eb',
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TIMELINE CONFIG
-// ─────────────────────────────────────────────────────────────────────────────
-const TIMELINE = [
-  { status: STATUS.SEARCHING,    label: 'Confirmed' },
-  { status: STATUS.ASSIGNED,     label: 'Assigned'  },
-  { status: STATUS.ARRIVING,     label: 'En Route'  },
-  { status: STATUS.ARRIVED,      label: 'Arrived'   },
-  { status: STATUS.TRIP_STARTED, label: 'Started'   },
-  { status: STATUS.COMPLETED,    label: 'Done'      },
+/** Steps shown in timeline (in order) */
+const TIMELINE_STEPS = [
+  { key: 'searching',       label: 'Booking Confirmed' },
+  { key: 'driver_assigned', label: 'Driver Assigned'   },
+  { key: 'driver_en_route', label: 'Driver En Route'   },
+  { key: 'driver_arrived',  label: 'Driver Arrived'    },
+  { key: 'in_progress',     label: 'Ride Started'      },
+  { key: 'completed',       label: 'Completed'         },
 ];
 
-const getTimelineIdx = (status) => {
-  const idx = TIMELINE.findIndex(t => t.status === status);
-  return idx >= 0 ? idx : 0;
-};
+const STEP_ORDER = TIMELINE_STEPS.map(s => s.key);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UTILITY HELPERS
+// HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** Linearly interpolate between two LatLng positions for smooth marker animation */
 const lerp = (a, b, t) => a + (b - a) * t;
 
-const haversineMeters = (a, b) => {
-  if (!a || !b) return Infinity;
-  const R = 6371000;
-  const dLat = (b.lat - a.lat) * Math.PI / 180;
-  const dLng = (b.lng - a.lng) * Math.PI / 180;
-  const sin2 = Math.sin(dLat / 2) ** 2 +
-    Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) *
-    Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(sin2), Math.sqrt(1 - sin2));
-};
-
+/** Format minutes as "X min" or "< 1 min" */
 const fmtEta = (min) => {
   if (min == null) return null;
   if (min < 1) return '< 1 min';
   return `${Math.round(min)} min`;
 };
 
-const fmtDist = (km) => {
+/** Format km distance */
+const fmtKm = (km) => {
   if (km == null) return null;
-  return km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`;
+  if (km < 1) return `${Math.round(km * 1000)} m`;
+  return `${km.toFixed(1)} km`;
 };
 
-const decodePolyline = (encoded) => {
-  if (!encoded) return [];
-  if (window?.google?.maps?.geometry?.encoding) {
-    return window.google.maps.geometry.encoding
-      .decodePath(encoded)
-      .map(p => ({ lat: p.lat(), lng: p.lng() }));
-  }
-  const pts = [];
-  let idx = 0, lat = 0, lng = 0;
-  while (idx < encoded.length) {
-    let b, shift = 0, result = 0;
-    do { b = encoded.charCodeAt(idx++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
-    lat += result & 1 ? ~(result >> 1) : result >> 1;
-    shift = 0; result = 0;
-    do { b = encoded.charCodeAt(idx++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
-    lng += result & 1 ? ~(result >> 1) : result >> 1;
-    pts.push({ lat: lat / 1e5, lng: lng / 1e5 });
-  }
-  return pts;
+/** Step index for given status */
+const getStepIdx = (status) => {
+  if (['driver_accepted', 'driver_en_route'].includes(status)) return STEP_ORDER.indexOf('driver_en_route');
+  if (status === 'otp_verified') return STEP_ORDER.indexOf('driver_arrived');
+  const idx = STEP_ORDER.indexOf(status);
+  return idx >= 0 ? idx : 0;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MARKER BUILDERS
+// MARKER HTML BUILDERS
 // ─────────────────────────────────────────────────────────────────────────────
-const buildDriverMarkerElement = () => {
-  const wrapper = document.createElement('div');
-  wrapper.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none;';
 
-  const container = document.createElement('div');
-  container.style.cssText = `
-    position:absolute;width:48px;height:48px;
-    left:-24px;top:-24px;
-    display:flex;align-items:center;justify-content:center;
-  `;
-
-  const pulse = document.createElement('div');
-  pulse.style.cssText = `
-    position:absolute;width:48px;height:48px;border-radius:50%;
-    background:rgba(34,197,94,0.18);
-    animation:mkrPulse 2.4s ease-out infinite;pointer-events:none;
-  `;
-
-  const shadow = document.createElement('div');
-  shadow.style.cssText = `
-    position:absolute;width:36px;height:10px;bottom:-2px;left:6px;
-    border-radius:50%;background:rgba(0,0,0,0.22);
-    filter:blur(4px);pointer-events:none;
-  `;
-
-  const img = document.createElement('img');
-  img.src = 'https://ik.imagekit.io/zxxzgk3iq/car.png';
-  img.alt = '';
-  img.setAttribute('data-role', 'car-img');
-  img.style.cssText = `
-    width:40px;height:40px;object-fit:contain;
-    position:relative;z-index:2;
-    transition:transform 0.35s cubic-bezier(0.4,0,0.2,1);
-    transform-origin:center center;
-    filter:drop-shadow(0 3px 6px rgba(0,0,0,0.30));pointer-events:none;
-  `;
-
-  container.appendChild(pulse);
-  container.appendChild(shadow);
-  container.appendChild(img);
-  wrapper.appendChild(container);
-
-  if (!document.getElementById('mkrPulseKf')) {
-    const style = document.createElement('style');
-    style.id = 'mkrPulseKf';
-    style.textContent = `
-      @keyframes mkrPulse {
-        0%   { transform:scale(0.85);opacity:0.7; }
-        70%  { transform:scale(1.9); opacity:0; }
-        100% { transform:scale(0.85);opacity:0; }
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
-  return wrapper;
-};
-
-const updateDriverMarkerRotation = (markerEl, heading) => {
-  if (!markerEl) return;
-  const img = markerEl.querySelector('[data-role="car-img"]');
-  if (img) img.style.transform = `rotate(${heading}deg)`;
-};
-
-const buildPickupMarkerEl = () => {
-  const w = document.createElement('div');
-  w.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none;';
-  w.innerHTML = `
-    <div style="position:absolute;left:-14px;top:-46px;display:flex;flex-direction:column;align-items:center;gap:0;">
-      <div style="width:28px;height:28px;background:#22c55e;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2.5px solid #fff;box-shadow:0 3px 12px rgba(34,197,94,0.45),0 1px 3px rgba(0,0,0,0.2);display:flex;align-items:center;justify-content:center;">
-        <div style="width:8px;height:8px;background:#fff;border-radius:50%;transform:rotate(45deg);"></div>
+const createDriverMarkerHtml = (heading = 0) => `
+  <div style="position:absolute;width:0;height:0;pointer-events:none;">
+    <div style="position:absolute;width:56px;height:56px;left:-28px;top:-28px;display:flex;align-items:center;justify-content:center;">
+      <div style="position:absolute;width:52px;height:52px;border-radius:50%;background:rgba(34,197,94,0.22);animation:custPulse 2s infinite ease-out;"></div>
+      <div style="position:relative;width:42px;height:42px;background:linear-gradient(135deg,#22c55e,#16a34a);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(34,197,94,0.55);transform:rotate(${heading}deg);transition:transform 0.4s ease-out;z-index:2;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M5 17H3a2 2 0 01-2-2V5a2 2 0 012-2h11a2 2 0 012 2v3m-4 0h7l2 3v4h-2m-5 0H9m0 0a2 2 0 100 4 2 2 0 000-4zm9 0a2 2 0 100 4 2 2 0 000-4z"/></svg>
       </div>
-      <div style="background:#fff;color:#166534;font-size:9px;font-weight:800;letter-spacing:0.08em;padding:2px 6px;border-radius:20px;margin-top:3px;box-shadow:0 2px 8px rgba(0,0,0,0.15);white-space:nowrap;font-family:ui-sans-serif,system-ui,sans-serif;text-transform:uppercase;">Pickup</div>
     </div>
-  `;
-  return w;
-};
+  </div>
+  <style>@keyframes custPulse{0%{transform:scale(0.9);opacity:0.8}100%{transform:scale(2.4);opacity:0}}</style>
+`;
 
-const buildDestMarkerEl = () => {
-  const w = document.createElement('div');
-  w.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none;';
-  w.innerHTML = `
-    <div style="position:absolute;left:-14px;top:-46px;display:flex;flex-direction:column;align-items:center;gap:0;">
-      <div style="width:28px;height:28px;background:#2563eb;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2.5px solid #fff;box-shadow:0 3px 12px rgba(37,99,235,0.45),0 1px 3px rgba(0,0,0,0.2);display:flex;align-items:center;justify-content:center;">
-        <div style="width:8px;height:8px;background:#fff;border-radius:50%;transform:rotate(45deg);"></div>
-      </div>
-      <div style="background:#fff;color:#1e3a8a;font-size:9px;font-weight:800;letter-spacing:0.08em;padding:2px 6px;border-radius:20px;margin-top:3px;box-shadow:0 2px 8px rgba(0,0,0,0.15);white-space:nowrap;font-family:ui-sans-serif,system-ui,sans-serif;text-transform:uppercase;">Hospital</div>
+const createPickupMarkerHtml = () => `
+  <div style="position:absolute;left:-18px;top:-52px;display:flex;flex-direction:column;align-items:center;pointer-events:none;">
+    <div style="width:36px;height:36px;background:linear-gradient(135deg,#3b82f6,#1d4ed8);border-radius:50%;border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(59,130,246,0.55);">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><circle cx="12" cy="10" r="3"/><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/></svg>
     </div>
-  `;
-  return w;
-};
+    <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid #3b82f6;margin-top:-1px;"></div>
+    <div style="background:#3b82f6;color:#fff;padding:2px 7px;border-radius:20px;font-size:9px;font-weight:800;letter-spacing:0.07em;text-transform:uppercase;white-space:nowrap;margin-top:2px;box-shadow:0 2px 8px rgba(0,0,0,0.22);">You</div>
+  </div>
+`;
+
+const createDestMarkerHtml = () => `
+  <div style="position:absolute;left:-18px;top:-52px;display:flex;flex-direction:column;align-items:center;pointer-events:none;">
+    <div style="width:36px;height:36px;background:linear-gradient(135deg,#ef4444,#f97316);border-radius:50%;border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(239,68,68,0.55);">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5" fill="none" stroke="white" stroke-width="1.5"/></svg>
+    </div>
+    <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid #ef4444;margin-top:-1px;"></div>
+    <div style="background:#ef4444;color:#fff;padding:2px 7px;border-radius:20px;font-size:9px;font-weight:800;letter-spacing:0.07em;text-transform:uppercase;white-space:nowrap;margin-top:2px;box-shadow:0 2px 8px rgba(0,0,0,0.22);">Hospital</div>
+  </div>
+`;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MAP STYLE
+// OTP DISPLAY MODAL (customer SHOWS this to driver)
 // ─────────────────────────────────────────────────────────────────────────────
-const MAP_STYLES = [
-  { featureType: 'poi',            elementType: 'all',      stylers: [{ visibility: 'off' }] },
-  { featureType: 'poi.park',       elementType: 'geometry', stylers: [{ color: '#e8f5e9' }, { visibility: 'simplified' }] },
-  { featureType: 'transit',        elementType: 'all',      stylers: [{ visibility: 'off' }] },
-  { featureType: 'administrative', elementType: 'labels',   stylers: [{ visibility: 'simplified' }] },
-  { featureType: 'road',           elementType: 'geometry', stylers: [{ color: '#ffffff' }] },
-  { featureType: 'road.highway',   elementType: 'geometry', stylers: [{ color: '#f0f0f0' }, { weight: 1.5 }] },
-  { featureType: 'road.arterial',  elementType: 'labels.text.fill', stylers: [{ color: '#888' }] },
-  { featureType: 'landscape',      elementType: 'geometry', stylers: [{ color: '#f5f5f0' }] },
-  { featureType: 'water',          elementType: 'geometry', stylers: [{ color: '#c9e3f5' }] },
-];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// OTP MODAL
-// ─────────────────────────────────────────────────────────────────────────────
-const OtpModal = memo(function OtpModal({ otp, onClose }) {
+const OtpDisplay = memo(function OtpDisplay({ otp, onClose }) {
   const [copied, setCopied] = useState(false);
-  if (!otp) return null;
 
-  const digits = String(otp).padStart(4, '0').split('');
-
-  const handleCopy = () => {
+  const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(String(otp)).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  };
+  }, [otp]);
+
+  if (!otp) return null;
+
+  const digits = String(otp).split('');
 
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center px-4 pb-6 sm:pb-0"
-      style={{ background: 'rgba(0,0,0,0.60)', backdropFilter: 'blur(6px)' }}
+      className="fixed inset-0 z-[60] flex items-center justify-center px-4"
+      style={{ background: 'rgba(0,0,0,0.70)', backdropFilter: 'blur(8px)' }}
       onClick={onClose}
     >
       <motion.div
-        initial={{ y: 80, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        exit={{ y: 80, opacity: 0 }}
-        transition={{ type: 'spring', damping: 22, stiffness: 340 }}
-        className="w-full max-w-[340px] rounded-2xl overflow-hidden"
-        style={{ background: 'var(--base-200)', border: '1px solid var(--base-300)' }}
+        initial={{ scale: 0.80, opacity: 0, y: 50 }}
+        animate={{ scale: 1, opacity: 1, y: 0 }}
+        exit={{ scale: 0.80, opacity: 0, y: 50 }}
+        transition={{ type: 'spring', damping: 20, stiffness: 300 }}
+        className="w-full max-w-sm rounded-3xl p-7 bg-base-200 border border-base-300 shadow-[0_24px_64px_rgba(0,0,0,0.7)]"
         onClick={e => e.stopPropagation()}
       >
-        <div style={{ background: '#8b5cf6', padding: '14px 18px' }} className="flex items-center justify-between">
+        {/* Header */}
+        <div className="flex items-start justify-between mb-2">
           <div>
-            <p className="text-white font-bold text-sm m-0">Your Ride OTP</p>
-            <p className="text-purple-200 text-[11px] m-0 mt-0.5">Show this to your driver to start trip</p>
+            <h3 className="text-lg font-black text-base-content m-0">Your Ride OTP</h3>
+            <p className="text-xs text-base-content/50 mt-1 m-0">Show this to your driver</p>
           </div>
-          <button onClick={onClose} className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center border-none cursor-pointer">
-            <X size={13} color="white" />
-          </button>
-        </div>
-
-        <div className="px-6 pt-6 pb-4">
-          <div className="flex gap-2.5 justify-center mb-4">
-            {digits.map((d, i) => (
-              <motion.div
-                key={i}
-                initial={{ scale: 0, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ delay: i * 0.06, type: 'spring', stiffness: 500 }}
-                className="w-14 h-16 rounded-xl flex items-center justify-center font-black text-3xl"
-                style={{
-                  background: 'rgba(139,92,246,0.10)',
-                  border: '2px solid #8b5cf6',
-                  color: '#7c3aed',
-                  fontFamily: 'ui-monospace, monospace',
-                }}
-              >
-                {d}
-              </motion.div>
-            ))}
-          </div>
-
-          <motion.div
-            animate={{ opacity: [0.6, 1, 0.6] }}
-            transition={{ repeat: Infinity, duration: 2.2 }}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg mb-4"
-            style={{ background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.25)' }}
-          >
-            <AlertTriangle size={12} style={{ color: '#f59e0b', flexShrink: 0 }} />
-            <p className="text-[11px] font-semibold m-0" style={{ color: '#b45309' }}>
-              Only share with your driver — never anyone else
-            </p>
-          </motion.div>
-
           <button
-            onClick={handleCopy}
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold cursor-pointer border transition-all"
-            style={{
-              background: copied ? 'rgba(34,197,94,0.08)' : 'transparent',
-              borderColor: copied ? 'rgba(34,197,94,0.3)' : 'var(--base-300)',
-              color: copied ? '#16a34a' : 'var(--base-content)',
-            }}
+            onClick={onClose}
+            className="w-8 h-8 rounded-xl bg-base-300 flex items-center justify-center text-base-content/50 hover:text-base-content transition-colors cursor-pointer border border-base-300"
           >
-            {copied ? <><Check size={13} /> Copied!</> : <><Copy size={13} /> Copy OTP</>}
+            <X size={14} />
           </button>
         </div>
+
+        {/* Pulsing notice */}
+        <motion.div
+          animate={{ opacity: [0.7, 1, 0.7] }}
+          transition={{ repeat: Infinity, duration: 2 }}
+          className="flex items-center gap-2 px-3 py-2 rounded-xl mb-5 bg-warning/10 border border-warning/30"
+        >
+          <AlertTriangle size={13} className="text-warning flex-shrink-0" />
+          <p className="text-xs font-semibold text-warning m-0">Driver will ask for this — do NOT share elsewhere</p>
+        </motion.div>
+
+        {/* Big OTP digits */}
+        <div className="flex gap-3 justify-center mb-5">
+          {digits.map((d, i) => (
+            <motion.div
+              key={i}
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ delay: i * 0.08, type: 'spring', stiffness: 400 }}
+              className="w-[58px] h-[66px] rounded-2xl flex items-center justify-center font-black text-3xl border-2"
+              style={{
+                background: 'linear-gradient(135deg, var(--primary)/0.15, var(--secondary)/0.08)',
+                borderColor: 'var(--primary)',
+                color: 'var(--primary)',
+                backgroundColor: 'rgba(59,130,246,0.12)',
+              }}
+            >
+              {d}
+            </motion.div>
+          ))}
+        </div>
+
+        {/* Copy button */}
+        <button
+          onClick={handleCopy}
+          className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border border-base-300 text-sm font-semibold text-base-content/60 hover:text-base-content hover:border-primary/40 transition-all cursor-pointer bg-transparent"
+        >
+          {copied ? <><Check size={14} className="text-success" /> Copied!</> : <><Copy size={14} /> Copy OTP</>}
+        </button>
       </motion.div>
     </motion.div>
   );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DRIVER CARD
+// DRIVER INFO CARD
 // ─────────────────────────────────────────────────────────────────────────────
-const DriverCard = memo(function DriverCard({ driverSnapshot, vehicleSnapshot }) {
+
+const DriverCard = memo(function DriverCard({ driverSnapshot, vehicleSnapshot, onCall }) {
   if (!driverSnapshot?.name && !driverSnapshot?.legalName) return null;
-  const name   = driverSnapshot.legalName || driverSnapshot.name || 'Driver';
-  const phone  = driverSnapshot.phone;
-  const rating = driverSnapshot.rating;
-  const photo  = driverSnapshot.photoUrl;
+
+  const name    = driverSnapshot.legalName || driverSnapshot.name || 'Driver';
+  const phone   = driverSnapshot.phone;
+  const rating  = driverSnapshot.rating;
+  const photo   = driverSnapshot.photoUrl;
+  const vehicle = vehicleSnapshot;
 
   return (
-    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex items-center gap-3">
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex items-center gap-3 p-3 rounded-2xl bg-base-300/60 border border-base-300"
+    >
+      {/* Avatar */}
       <div
-        className="w-10 h-10 rounded-full overflow-hidden flex-shrink-0 flex items-center justify-center"
-        style={{ background: 'rgba(34,197,94,0.12)', border: '2px solid rgba(34,197,94,0.25)' }}
+        className="w-12 h-12 rounded-xl flex-shrink-0 overflow-hidden flex items-center justify-center"
+        style={{ background: 'linear-gradient(135deg, var(--success)/0.2, var(--success)/0.08)' }}
       >
         {photo
           ? <img src={photo} alt={name} className="w-full h-full object-cover" />
-          : <User size={16} style={{ color: '#22c55e' }} />
+          : <User size={20} className="text-success" />
         }
       </div>
 
+      {/* Info */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className="text-sm font-bold truncate" style={{ color: 'var(--base-content)' }}>{name}</span>
-          {rating != null && (
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-bold text-base-content m-0 truncate">{name}</p>
+          {rating && (
             <div className="flex items-center gap-0.5 flex-shrink-0">
-              <Star size={9} style={{ color: '#f59e0b', fill: '#f59e0b' }} />
-              <span className="text-[10px] font-bold" style={{ color: 'var(--base-content)', opacity: 0.6 }}>{rating.toFixed(1)}</span>
+              <Star size={10} className="text-warning fill-warning" />
+              <span className="text-[10px] font-bold text-base-content/60">{rating.toFixed(1)}</span>
             </div>
           )}
         </div>
-        {vehicleSnapshot && (
-          <p className="text-[11px] truncate m-0 mt-0.5" style={{ color: 'var(--base-content)', opacity: 0.45 }}>
-            {[vehicleSnapshot.make, vehicleSnapshot.model, vehicleSnapshot.color].filter(Boolean).join(' · ')}
-            {vehicleSnapshot.registrationNumber && ` · ${vehicleSnapshot.registrationNumber}`}
-          </p>
+        {vehicle && (
+          <div className="flex items-center gap-1 mt-0.5">
+            <Car size={11} className="text-base-content/40 flex-shrink-0" />
+            <p className="text-[11px] text-base-content/50 m-0 truncate">
+              {[vehicle.make, vehicle.model, vehicle.color].filter(Boolean).join(' · ')}
+              {vehicle.registrationNumber && ` · ${vehicle.registrationNumber}`}
+            </p>
+          </div>
         )}
       </div>
 
+      {/* Call button */}
       {phone && (
         <a
           href={`tel:${phone}`}
-          className="w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center no-underline transition-colors"
-          style={{ background: 'rgba(34,197,94,0.12)', border: '1.5px solid rgba(34,197,94,0.30)', color: '#22c55e' }}
+          onClick={onCall}
+          className="w-10 h-10 rounded-xl flex items-center justify-center text-success bg-success/10 border border-success/25 no-underline flex-shrink-0 hover:bg-success/20 transition-colors"
         >
-          <Phone size={14} />
+          <Phone size={16} />
         </a>
       )}
     </motion.div>
@@ -432,50 +346,54 @@ const DriverCard = memo(function DriverCard({ driverSnapshot, vehicleSnapshot })
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TIMELINE STRIP
+// TIMELINE
 // ─────────────────────────────────────────────────────────────────────────────
-const TimelineStrip = memo(function TimelineStrip({ status }) {
-  const activeIdx = getTimelineIdx(status);
+
+const RideTimeline = memo(function RideTimeline({ status }) {
+  const activeIdx = getStepIdx(status || 'searching');
 
   return (
-    <div className="flex items-start relative" style={{ gap: 0 }}>
-      <div
-        className="absolute"
-        style={{ top: 11, left: '6%', right: '6%', height: 2, background: 'var(--base-300)', borderRadius: 2, zIndex: 0 }}
-      />
-      <motion.div
-        className="absolute"
-        style={{ top: 11, left: '6%', height: 2, borderRadius: 2, zIndex: 1 }}
-        animate={{ width: `${(activeIdx / (TIMELINE.length - 1)) * 88}%`, background: '#22c55e' }}
-        transition={{ duration: 0.5, ease: 'easeInOut' }}
-      />
-      {TIMELINE.map((step, i) => {
-        const done   = i <= activeIdx;
-        const active = i === activeIdx;
-        return (
-          <div key={step.status} className="flex flex-col items-center flex-1 relative z-10" style={{ gap: 4 }}>
-            <motion.div
-              className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0"
-              animate={{
-                background: done ? '#22c55e' : 'var(--base-200)',
-                borderColor: done ? '#22c55e' : 'var(--base-300)',
-                scale: active ? 1.2 : 1,
-                boxShadow: active ? '0 0 0 3px rgba(34,197,94,0.20)' : 'none',
-              }}
-              style={{ border: '2px solid' }}
-              transition={{ duration: 0.25 }}
-            >
-              {done && <Check size={9} color="white" strokeWidth={3} />}
-            </motion.div>
-            <p
-              className="text-[8.5px] text-center font-semibold leading-tight m-0"
-              style={{ color: done ? '#22c55e' : 'var(--base-content)', opacity: done ? 0.9 : 0.35, letterSpacing: '0.02em' }}
-            >
-              {step.label}
-            </p>
-          </div>
-        );
-      })}
+    <div className="px-4 py-3">
+      <div className="flex items-start justify-between relative">
+        {/* Connector line */}
+        <div
+          className="absolute top-3 h-0.5 bg-base-300"
+          style={{ left: '5%', right: '5%', zIndex: 0 }}
+        />
+        {/* Progress fill */}
+        <motion.div
+          className="absolute top-3 h-0.5 bg-primary"
+          style={{ left: '5%', zIndex: 1 }}
+          animate={{ width: `${(activeIdx / (TIMELINE_STEPS.length - 1)) * 90}%` }}
+          transition={{ duration: 0.6, ease: 'easeInOut' }}
+        />
+
+        {TIMELINE_STEPS.map((step, i) => {
+          const done   = i <= activeIdx;
+          const active = i === activeIdx;
+          return (
+            <div key={step.key} className="flex flex-col items-center gap-1 relative z-10 flex-1">
+              <motion.div
+                className="w-6 h-6 rounded-full flex items-center justify-center border-2 flex-shrink-0"
+                animate={{
+                  backgroundColor: done ? 'var(--primary)' : 'var(--base-200)',
+                  borderColor: done ? 'var(--primary)' : 'var(--base-300)',
+                  scale: active ? 1.25 : 1,
+                }}
+                transition={{ duration: 0.3 }}
+              >
+                {done && <Check size={10} color="white" strokeWidth={3} />}
+              </motion.div>
+              <p
+                className="text-[9px] text-center leading-tight font-semibold"
+                style={{ color: done ? 'var(--primary)' : 'var(--base-content)', opacity: done ? 1 : 0.4 }}
+              >
+                {step.label}
+              </p>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 });
@@ -483,125 +401,137 @@ const TimelineStrip = memo(function TimelineStrip({ status }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // BOTTOM SHEET
 // ─────────────────────────────────────────────────────────────────────────────
+
 const BottomSheet = memo(function BottomSheet({
-  open, onToggle,
-  status, rideCode, booking, otp,
-  onShowOtp, driverSnapshot, vehicleSnapshot,
-  etaMinutes, distanceKm,
+  open, onToggle, rideStatus, rideCode, booking, otp, onShowOtp,
+  driverSnapshot, vehicleSnapshot, etaMinutes, distanceKm,
 }) {
-  const meta    = STATUS_META[status] || STATUS_META[STATUS.SEARCHING];
-  const showOtp = status === STATUS.ARRIVED;
+  const statusCfg = STATUS_CONFIG[rideStatus] || STATUS_CONFIG.searching;
+  const showOtpBtn = rideStatus === 'driver_arrived' || rideStatus === 'otp_verified';
 
   return (
     <motion.div
       initial={{ y: '100%' }}
-      animate={{ y: open ? '0%' : 'calc(100% - 72px)' }}
-      transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-      className="fixed bottom-0 left-0 right-0 z-30 rounded-t-2xl"
-      style={{
-        maxHeight: '50vh',
-        background: 'var(--base-200)',
-        borderTop: '1px solid var(--base-300)',
-        boxShadow: '0 -4px 24px rgba(0,0,0,0.12)',
-      }}
+      animate={{ y: open ? '0%' : 'calc(100% - 80px)' }}
+      transition={{ type: 'spring', damping: 26, stiffness: 280 }}
+      className="fixed bottom-0 left-0 right-0 z-30 rounded-t-3xl bg-base-200 border border-base-300 border-b-0 shadow-[0_-8px_40px_rgba(0,0,0,0.35)]"
+      style={{ maxHeight: '80vh' }}
     >
+      {/* Drag handle */}
       <button
         onClick={onToggle}
-        className="w-full bg-transparent border-none cursor-pointer px-4 pt-2.5 pb-2 flex flex-col items-center"
+        className="w-full bg-transparent border-none cursor-pointer px-4 pt-3 pb-1 flex flex-col items-center"
       >
-        <div className="w-8 h-1 rounded-full mb-3 flex-shrink-0" style={{ background: 'var(--base-300)' }} />
-        <div className="flex items-center justify-between w-full">
-          <div className="flex items-center gap-1.5">
-            <span className="text-sm">{meta.icon}</span>
-            <span className="text-xs font-bold uppercase tracking-wider" style={{ color: meta.color }}>{meta.label}</span>
-          </div>
+        <div className="w-9 h-1 rounded-full bg-base-300 mb-3" />
+
+        {/* Status + ETA row */}
+        <div className="flex items-center justify-between w-full mb-1">
+          <span
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest border"
+            style={{ background: statusCfg.bg, borderColor: statusCfg.border, color: statusCfg.color }}
+          >
+            <span>{statusCfg.icon}</span>
+            {statusCfg.label}
+          </span>
+
           <div className="flex items-center gap-3">
             {etaMinutes != null && (
               <div className="flex items-center gap-1">
-                <Clock size={11} style={{ color: '#2563eb' }} />
-                <span className="text-xs font-black" style={{ color: '#2563eb' }}>{fmtEta(etaMinutes)}</span>
+                <Clock size={11} className="text-primary" />
+                <span className="text-xs font-bold text-primary">{fmtEta(etaMinutes)}</span>
               </div>
             )}
             {distanceKm != null && (
-              <span className="text-[11px] font-semibold" style={{ color: 'var(--base-content)', opacity: 0.4 }}>{fmtDist(distanceKm)}</span>
+              <div className="flex items-center gap-1">
+                <Navigation size={11} className="text-base-content/50" />
+                <span className="text-xs font-semibold text-base-content/60">{fmtKm(distanceKm)}</span>
+              </div>
             )}
             <motion.div animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.2 }}>
-              <ChevronDown size={14} style={{ color: 'var(--base-content)', opacity: 0.4 }} />
+              <ChevronDown size={15} className="text-base-content/40" />
             </motion.div>
           </div>
         </div>
       </button>
 
-      <div className="overflow-y-auto px-4 pb-8" style={{ maxHeight: 'calc(50vh - 72px)' }}>
+      {/* Scrollable content */}
+      <div className="overflow-y-auto px-4 pb-8" style={{ maxHeight: 'calc(80vh - 80px)' }}>
+
+        {/* OTP section — prominent when driver arrived */}
         <AnimatePresence>
-          {showOtp && otp && (
+          {showOtpBtn && otp && (
             <motion.button
-              initial={{ opacity: 0, y: 6 }}
+              initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
               onClick={onShowOtp}
-              className="w-full flex items-center justify-between px-4 py-3.5 rounded-xl mb-3 cursor-pointer border-none"
-              style={{ background: 'rgba(139,92,246,0.10)', border: '1.5px solid rgba(139,92,246,0.30)' }}
+              className="w-full flex items-center justify-between p-4 rounded-2xl mb-3 border-2 cursor-pointer"
+              style={{
+                background: 'rgba(139,92,246,0.10)',
+                borderColor: 'rgba(139,92,246,0.40)',
+              }}
             >
               <div className="flex items-center gap-3">
-                <span className="text-xl">🔑</span>
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+                  style={{ background: 'rgba(139,92,246,0.15)' }}>
+                  <span className="text-xl">🔑</span>
+                </div>
                 <div className="text-left">
-                  <p className="text-sm font-bold m-0" style={{ color: '#7c3aed' }}>Show OTP to Driver</p>
-                  <p className="text-[11px] m-0" style={{ color: 'rgba(124,58,237,0.65)' }}>Tap to reveal your ride code</p>
+                  <p className="text-sm font-black m-0" style={{ color: '#8b5cf6' }}>Show OTP to Driver</p>
+                  <p className="text-[11px] m-0 mt-0.5" style={{ color: 'rgba(139,92,246,0.7)' }}>Tap to reveal your ride code</p>
                 </div>
               </div>
-              <ArrowUpRight size={16} style={{ color: '#7c3aed' }} />
+              <ArrowUpRight size={18} style={{ color: '#8b5cf6' }} />
             </motion.button>
           )}
         </AnimatePresence>
 
-        <div className="mb-3">
-          <DriverCard driverSnapshot={driverSnapshot} vehicleSnapshot={vehicleSnapshot} />
-        </div>
+        {/* Driver card */}
+        <DriverCard
+          driverSnapshot={driverSnapshot}
+          vehicleSnapshot={vehicleSnapshot}
+        />
 
-        <div className="mb-3">
-          <TimelineStrip status={status} />
-        </div>
-
+        {/* Booking summary */}
         {booking && (
-          <div
-            className="rounded-xl px-3 py-2.5 mb-2"
-            style={{ background: 'var(--base-300)', border: '1px solid var(--base-300)' }}
-          >
-            <p className="text-[9px] font-bold uppercase tracking-widest m-0 mb-2" style={{ opacity: 0.35 }}>Booking Details</p>
+          <div className="mt-3 p-3 rounded-2xl bg-base-300/60 border border-base-300">
+            <p className="text-[10px] text-base-content/40 font-bold uppercase tracking-widest m-0 mb-2">Booking</p>
+
             {[
-              ['Code',    booking.bookingCode],
-              ['Type',    booking.bookingType?.replace(/_/g, ' ')],
-              ['Payment', booking.paymentStatus],
-              ['Fare',    booking.fareBreakdown?.totalAmount ? `₹${booking.fareBreakdown.totalAmount}` : null],
+              ['Code',        booking.bookingCode],
+              ['Ride Code',   rideCode],
+              ['Type',        booking.bookingType?.replace(/_/g, ' ')],
+              ['Scheduled',   booking.scheduledAt ? new Date(booking.scheduledAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : null],
+              ['Payment',     booking.paymentStatus],
+              ['Total Fare',  booking.fareBreakdown?.totalAmount ? `₹${booking.fareBreakdown.totalAmount}` : null],
             ].map(([label, val]) => val ? (
-              <div key={label} className="flex justify-between py-1 border-b last:border-b-0" style={{ borderColor: 'var(--base-300)' }}>
-                <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ opacity: 0.4 }}>{label}</span>
-                <span className="text-[11px] font-semibold font-mono" style={{ opacity: 0.7 }}>{val}</span>
+              <div key={label} className="flex justify-between py-1.5 border-b border-base-300/60 last:border-b-0">
+                <span className="text-[11px] text-base-content/40 font-semibold uppercase tracking-wide">{label}</span>
+                <span className="text-xs text-base-content/70 font-semibold font-mono">{val}</span>
               </div>
             ) : null)}
           </div>
         )}
 
+        {/* Route */}
         {(booking?.patientLocation || booking?.destinationLocation) && (
-          <div className="flex gap-3 px-1 py-2">
-            <div className="flex flex-col items-center gap-1 pt-0.5 flex-shrink-0">
-              <div className="w-2 h-2 rounded-full" style={{ background: '#22c55e' }} />
-              <div className="w-px flex-1" style={{ background: 'var(--base-300)', minHeight: 20 }} />
-              <div className="w-2 h-2 rounded-full" style={{ background: '#2563eb' }} />
-            </div>
-            <div className="flex flex-col gap-2.5 flex-1 min-w-0">
-              <div>
-                <p className="text-xs font-semibold m-0 truncate" style={{ color: 'var(--base-content)' }}>
-                  {booking.patientLocation?.address || booking.patientLocation?.label || 'Pickup'}
-                </p>
-                <p className="text-[10px] m-0" style={{ opacity: 0.35 }}>Pickup</p>
+          <div className="mt-3 p-3 rounded-2xl bg-base-300/60 border border-base-300">
+            <p className="text-[10px] text-base-content/40 font-bold uppercase tracking-widest m-0 mb-3">Route</p>
+            <div className="flex gap-3">
+              <div className="flex flex-col items-center gap-1 pt-1">
+                <div className="w-2.5 h-2.5 rounded-full bg-primary border-2 border-base-100 flex-shrink-0" />
+                <div className="w-0.5 h-8 bg-base-300" />
+                <div className="w-2.5 h-2.5 rounded-full bg-error border-2 border-base-100 flex-shrink-0" />
               </div>
-              <div>
-                <p className="text-xs font-semibold m-0 truncate" style={{ color: 'var(--base-content)' }}>
-                  {booking.destinationLocation?.address || booking.destinationLocation?.label || 'Destination'}
-                </p>
-                <p className="text-[10px] m-0" style={{ opacity: 0.35 }}>Destination</p>
+              <div className="flex-1 flex flex-col gap-3">
+                <div>
+                  <p className="text-xs font-semibold text-base-content m-0">{booking.patientLocation?.address || booking.patientLocation?.label || 'Pickup'}</p>
+                  <p className="text-[10px] text-base-content/40 mt-0.5 m-0">Pickup</p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-base-content m-0">{booking.destinationLocation?.address || booking.destinationLocation?.label || 'Hospital'}</p>
+                  <p className="text-[10px] text-base-content/40 mt-0.5 m-0">Destination</p>
+                </div>
               </div>
             </div>
           </div>
@@ -614,65 +544,79 @@ const BottomSheet = memo(function BottomSheet({
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPLETED SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
+
 const CompletedScreen = memo(function CompletedScreen({ booking, onBack, onRate }) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="fixed inset-0 z-[70] flex flex-col items-center justify-center px-6"
-      style={{ background: 'var(--base-100)' }}
+      className="fixed inset-0 z-[70] bg-base-100 flex flex-col items-center justify-center px-6 font-poppins"
     >
-      <motion.div
-        initial={{ scale: 0 }}
-        animate={{ scale: 1 }}
-        transition={{ delay: 0.1, type: 'spring', damping: 16 }}
-        className="w-20 h-20 rounded-full flex items-center justify-center mb-8"
-        style={{ background: 'rgba(34,197,94,0.12)', border: '2px solid rgba(34,197,94,0.30)' }}
-      >
-        <CheckCircle size={40} style={{ color: '#22c55e' }} />
-      </motion.div>
+      {/* Confetti-like rings */}
+      <div className="relative mb-8">
+        {[72, 52, 36].map((sz, i) => (
+          <motion.div
+            key={i}
+            initial={{ scale: 0, opacity: 0 }}
+            animate={{ scale: 1, opacity: 0.15 }}
+            transition={{ delay: i * 0.12, type: 'spring', stiffness: 200 }}
+            className="absolute rounded-full border-2 border-success"
+            style={{ width: sz, height: sz, top: `${(72 - sz) / 2}px`, left: `${(72 - sz) / 2}px` }}
+          />
+        ))}
+        <motion.div
+          initial={{ scale: 0 }}
+          animate={{ scale: 1 }}
+          transition={{ delay: 0.18, type: 'spring', damping: 14 }}
+          className="w-[72px] h-[72px] rounded-full flex items-center justify-center bg-success/15 border-2 border-success/40"
+        >
+          <CheckCircle size={38} className="text-success" />
+        </motion.div>
+      </div>
+
       <motion.h2
-        initial={{ opacity: 0, y: 16 }}
+        initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
-        className="text-2xl font-black text-center m-0 mb-2"
-        style={{ color: 'var(--base-content)' }}
+        transition={{ delay: 0.30 }}
+        className="text-2xl font-black text-base-content text-center m-0 mb-2"
       >
-        Ride Completed
+        Ride Completed!
       </motion.h2>
       <motion.p
-        initial={{ opacity: 0, y: 12 }}
+        initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3 }}
-        className="text-sm text-center m-0 mb-8"
-        style={{ opacity: 0.5 }}
+        transition={{ delay: 0.40 }}
+        className="text-sm text-base-content/50 text-center m-0 mb-8"
       >
-        Hope you had a safe journey.
+        Hope you had a comfortable journey.
         {booking?.fareBreakdown?.totalAmount && (
-          <> · <span className="font-bold" style={{ color: '#2563eb' }}>₹{booking.fareBreakdown.totalAmount}</span></>
+          <> Total fare: <span className="font-bold text-primary">₹{booking.fareBreakdown.totalAmount}</span></>
         )}
       </motion.p>
+
       <motion.div
-        initial={{ opacity: 0, y: 12 }}
+        initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.4 }}
-        className="flex flex-col gap-3 w-full max-w-[280px]"
+        transition={{ delay: 0.50 }}
+        className="flex flex-col gap-3 w-full max-w-xs"
       >
-        <button
+        <motion.button
+          whileTap={{ scale: 0.97 }}
           onClick={onRate}
-          className="w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 border-none cursor-pointer"
-          style={{ background: '#22c55e', color: '#fff' }}
+          className="btn btn-primary btn-lg rounded-2xl font-bold"
+          style={{ fontFamily: 'inherit' }}
         >
-          <Star size={15} />
-          Rate Experience
-        </button>
-        <button
+          <Star size={16} />
+          Rate Your Experience
+        </motion.button>
+        <motion.button
+          whileTap={{ scale: 0.97 }}
           onClick={onBack}
-          className="w-full py-3.5 rounded-xl font-semibold text-sm border-none cursor-pointer"
-          style={{ background: 'var(--base-300)', color: 'var(--base-content)', opacity: 0.7 }}
+          className="btn btn-ghost btn-lg rounded-2xl font-semibold text-base-content/60"
+          style={{ fontFamily: 'inherit' }}
         >
           Back to Bookings
-        </button>
+        </motion.button>
       </motion.div>
     </motion.div>
   );
@@ -681,30 +625,25 @@ const CompletedScreen = memo(function CompletedScreen({ booking, onBack, onRate 
 // ─────────────────────────────────────────────────────────────────────────────
 // CANCELLED SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
+
 const CancelledScreen = memo(function CancelledScreen({ onBack }) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="fixed inset-0 z-[70] flex flex-col items-center justify-center px-6"
-      style={{ background: 'var(--base-100)' }}
+      className="fixed inset-0 z-[70] bg-base-100 flex flex-col items-center justify-center px-6 font-poppins"
     >
-      <div
-        className="w-20 h-20 rounded-full flex items-center justify-center mb-8"
-        style={{ background: 'rgba(239,68,68,0.10)', border: '2px solid rgba(239,68,68,0.25)' }}
-      >
-        <X size={36} style={{ color: '#ef4444' }} />
+      <div className="w-[72px] h-[72px] rounded-full flex items-center justify-center bg-error/10 border-2 border-error/30 mb-6">
+        <X size={36} className="text-error" />
       </div>
-      <h2 className="text-2xl font-black text-center m-0 mb-2" style={{ color: 'var(--base-content)' }}>
-        Ride Cancelled
-      </h2>
-      <p className="text-sm text-center m-0 mb-8" style={{ opacity: 0.45 }}>
-        Your ride was cancelled. Book again or contact support.
+      <h2 className="text-2xl font-black text-base-content text-center m-0 mb-2">Ride Cancelled</h2>
+      <p className="text-sm text-base-content/50 text-center m-0 mb-8">
+        Your ride was cancelled. Please book again or contact support.
       </p>
       <button
         onClick={onBack}
-        className="px-8 py-3.5 rounded-xl font-bold text-sm border-none cursor-pointer"
-        style={{ background: '#2563eb', color: '#fff' }}
+        className="btn btn-primary btn-lg rounded-2xl px-8 font-bold"
+        style={{ fontFamily: 'inherit' }}
       >
         Back to Bookings
       </button>
@@ -713,62 +652,48 @@ const CancelledScreen = memo(function CancelledScreen({ onBack }) {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SEARCHING OVERLAY  (BUG 6 FIX: now overlay, not screen replacement)
+// LOADING SKELETON
 // ─────────────────────────────────────────────────────────────────────────────
-const SearchingOverlay = memo(function SearchingOverlay({ bookingCode }) {
+
+const LoadingSkeleton = memo(function LoadingSkeleton() {
   return (
-    <div
-      className="absolute inset-0 flex flex-col items-center justify-center z-20 px-6"
-      style={{ background: 'var(--base-100)' }}
-    >
-      <div className="relative w-24 h-24 mb-8">
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ repeat: Infinity, duration: 2, ease: 'linear' }}
-          className="absolute inset-0 rounded-full"
-          style={{ border: '3px solid transparent', borderTopColor: '#22c55e', borderRightColor: 'rgba(34,197,94,0.3)' }}
-        />
-        <div
-          className="absolute inset-2 rounded-full flex items-center justify-center"
-          style={{ background: 'rgba(34,197,94,0.08)' }}
-        >
-          <Car size={28} style={{ color: '#22c55e' }} />
-        </div>
-      </div>
-      <h3 className="text-xl font-black text-center m-0 mb-2" style={{ color: 'var(--base-content)' }}>
-        Finding Your Driver
-      </h3>
-      <p className="text-sm text-center m-0 mb-1" style={{ opacity: 0.45 }}>
-        Matching you with the best available driver nearby.
-      </p>
-      {bookingCode && (
-        <p className="text-xs font-mono m-0 mt-3" style={{ opacity: 0.25 }}>#{bookingCode}</p>
-      )}
+    <div className="fixed inset-0 bg-base-100 flex flex-col items-center justify-center gap-4 font-poppins">
       <motion.div
-        animate={{ opacity: [0.3, 1, 0.3] }}
-        transition={{ repeat: Infinity, duration: 2.5 }}
-        className="flex items-center gap-1.5 mt-8"
+        animate={{ scale: [1, 1.12, 1], opacity: [0.6, 1, 0.6] }}
+        transition={{ repeat: Infinity, duration: 1.8 }}
+        className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center"
       >
-        <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#22c55e' }} />
-        <span className="text-xs font-semibold" style={{ color: '#22c55e' }}>
-          You'll be notified instantly
-        </span>
+        <Loader2 size={28} className="text-primary animate-spin" />
       </motion.div>
+      <p className="text-sm text-base-content/50 font-semibold">Loading your ride...</p>
     </div>
   );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LOADING SKELETON
+// SEARCHING SCREEN (no driver yet)
 // ─────────────────────────────────────────────────────────────────────────────
-const LoadingScreen = memo(function LoadingScreen() {
+
+const SearchingScreen = memo(function SearchingScreen({ bookingCode }) {
   return (
-    <div
-      className="fixed inset-0 flex flex-col items-center justify-center gap-4"
-      style={{ background: 'var(--base-100)' }}
-    >
-      <Loader2 size={28} className="animate-spin" style={{ color: '#22c55e' }} />
-      <p className="text-sm font-semibold m-0" style={{ opacity: 0.4 }}>Loading your ride...</p>
+    <div className="absolute inset-0 flex flex-col items-center justify-center z-10 bg-base-100 px-6">
+      <motion.div
+        animate={{ rotate: 360 }}
+        transition={{ repeat: Infinity, duration: 3, ease: 'linear' }}
+        className="w-20 h-20 rounded-full border-4 border-primary/20 border-t-primary mb-6"
+      />
+      <h3 className="text-xl font-black text-base-content m-0 mb-2 text-center">Finding Your Driver</h3>
+      <p className="text-sm text-base-content/50 text-center m-0 mb-1">We're matching you with the best available driver.</p>
+      {bookingCode && (
+        <p className="text-xs text-base-content/30 font-mono m-0 mt-2">#{bookingCode}</p>
+      )}
+      <motion.p
+        animate={{ opacity: [0.4, 1, 0.4] }}
+        transition={{ repeat: Infinity, duration: 2 }}
+        className="text-xs text-primary font-semibold mt-6 m-0"
+      >
+        You'll be notified when a driver accepts
+      </motion.p>
     </div>
   );
 });
@@ -776,108 +701,108 @@ const LoadingScreen = memo(function LoadingScreen() {
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-export default function CustomerRideLiveTracking() {
-  const params   = useParams();
-  const router   = useRouter();
-  const dispatch = useDispatch();
 
+export default function CustomerRideLiveTracking() {
+  const params    = useParams();
+  const router    = useRouter();
+  const dispatch  = useDispatch();
+
+  // Resolve IDs from URL
   const bookingId = params?.bookingId || null;
   const rideId    = params?.rideId    || null;
 
-  // ── Redux ──────────────────────────────────────────────────────────────────
-  const currentRide = useSelector(selectCurrentRide);
-  const socketLive  = useSelector(selectSocketLive);
-  const liveData    = useSelector(selectLiveData);
-  const booking     = useSelector(selectSelectedBooking);
+  // ── Redux state ─────────────────────────────────────────────
+  const currentRide   = useSelector(selectCurrentRide);
+  const socketLive    = useSelector(selectSocketLive);
+  const liveData      = useSelector(selectLiveData);
+  const trackingData  = useSelector(selectTrackingData);
+  const rideLoading   = useSelector(selectRideLoading);
+  const booking       = useSelector(selectSelectedBooking);
 
-  // ── Socket ─────────────────────────────────────────────────────────────────
-  // BUG 5 FIX: destructure `on` so it can be added to deps
-  const { on, connected } = useSocket();
-  const { locationUpdate, etaUpdate: etaEvt } = useBookingRoom(bookingId);
+  // ── Socket hooks ─────────────────────────────────────────────
+  const { on, connected, SOCKET_EVENTS: EV } = useSocket();
+  const { locationUpdate, etaUpdate: etaEvt, rideStatus: rideStatusEvt, snapshot } = useBookingRoom(bookingId);
+
+  // Resolve active rideId (from URL or from ride data)
   const activeRideId = rideId || currentRide?._id || liveData?.rideId;
   const { trigger: triggerSos, sosActive, dismiss: dismissSos } = useSos(bookingId, activeRideId);
 
-  // ── Google Maps ────────────────────────────────────────────────────────────
-  const { isLoaded } = useGoogleMaps();
-
-  // ── Refs ───────────────────────────────────────────────────────────────────
+  // ── Refs ─────────────────────────────────────────────────────
   const mapRef            = useRef(null);
   const dirServiceRef     = useRef(null);
   const driverMarkerRef   = useRef(null);
-  const driverMarkerElRef = useRef(null);
   const pickupMarkerRef   = useRef(null);
   const destMarkerRef     = useRef(null);
-  const staticInitRef     = useRef(false);
-  const driverPolyRef     = useRef(null);
-  const overviewPolyRef   = useRef(null);
+  const staticMarkersInit = useRef(false);
+  const driverPosRef      = useRef(null);    // current interpolated position
+  const driverTargetRef   = useRef(null);    // target position from socket
+  const animFrameRef      = useRef(null);
+  const pollTimerRef      = useRef(null);
+  const smoothHeadRef     = useRef(0);
+  const otpRef            = useRef(null);    // store otp from ride/notifications
 
-  // Animation
-  const driverPosRef    = useRef(null);
-  const driverTargetRef = useRef(null);
-  const animFrameRef    = useRef(null);
-  const isHiddenRef     = useRef(false);
+  // ── Local state ──────────────────────────────────────────────
+  const [mapLoaded,          setMapLoaded]          = useState(false);
+  // driverRoute  = driver current pos → pickup  (dashed blue, pickup phase only)
+  // overviewRoute = pickup → dropoff             (solid muted, always visible)
+  const [driverRoute,        setDriverRoute]        = useState(null);
+  const [overviewRoute,      setOverviewRoute]      = useState(null);
+  const [rideStatus,         setRideStatus]         = useState(null);
+  const [sheetOpen,     setSheetOpen]     = useState(false);
+  const [showOtpModal,  setShowOtpModal]  = useState(false);
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [showCancelled, setShowCancelled] = useState(false);
+  const [otp,           setOtp]           = useState(null);
+  const [etaMinutes,    setEtaMinutes]    = useState(null);
+  const [remainingKm,   setRemainingKm]   = useState(null);
+  const [isInitLoading, setIsInitLoading] = useState(true);
+  const [followDriver,  setFollowDriver]  = useState(true);
+  const [driverPos,     setDriverPos]     = useState(null);   // for UI updates
+  const [headingDeg,    setHeadingDeg]    = useState(0);
 
-  // Route recalc gating
-  const lastRouteCalcPosRef = useRef(null);
-  const routeCalcInFlight   = useRef(false);
+  const { isLoaded } = useGoogleMaps();
 
-  // Heading smoothing
-  const headingRef    = useRef(0);
-  const targetHeadRef = useRef(0);
+  // ── Derived data ─────────────────────────────────────────────
+  const rd = currentRide || liveData;
 
-  // OTP
-  const otpRef = useRef(null);
+  const driverSnapshot  = useMemo(() =>
+    socketLive?.driverSnapshot || rd?.driverSnapshot, [socketLive, rd]);
 
-  // ── State ──────────────────────────────────────────────────────────────────
-  const [mapLoaded,      setMapLoaded]      = useState(false);
-  const [rawStatus,      setRawStatus]      = useState(null);
-  const [otp,            setOtp]            = useState(null);
-  const [etaMinutes,     setEtaMinutes]     = useState(null);
-  const [remainingKm,    setRemainingKm]    = useState(null);
-  const [sheetOpen,      setSheetOpen]      = useState(false);
-  const [showOtpModal,   setShowOtpModal]   = useState(false);
-  const [showCompleted,  setShowCompleted]  = useState(false);
-  const [showCancelled,  setShowCancelled]  = useState(false);
-  const [followDriver,   setFollowDriver]   = useState(true);
-  const [driverPos,      setDriverPos]      = useState(null);
-  const [isInitLoading,  setIsInitLoading]  = useState(true);
-
-  // ── Derived ────────────────────────────────────────────────────────────────
-  const rd              = currentRide || liveData;
-  const driverSnapshot  = useMemo(() => socketLive?.driverSnapshot  || rd?.driverSnapshot,  [socketLive, rd]);
-  const vehicleSnapshot = useMemo(() => socketLive?.vehicleSnapshot || rd?.vehicleSnapshot, [socketLive, rd]);
+  const vehicleSnapshot = useMemo(() =>
+    socketLive?.vehicleSnapshot || rd?.vehicleSnapshot, [socketLive, rd]);
 
   const pickupCoords = useMemo(() => {
     const c = rd?.pickup?.coordinates || booking?.patientLocation?.coordinates;
-    return c?.length >= 2 ? { lat: c[1], lng: c[0] } : null;
+    if (!c || c.length < 2) return null;
+    return { lat: c[1], lng: c[0] };
   }, [rd, booking]);
 
   const dropoffCoords = useMemo(() => {
     const c = rd?.dropoff?.coordinates || booking?.destinationLocation?.coordinates;
-    return c?.length >= 2 ? { lat: c[1], lng: c[0] } : null;
+    if (!c || c.length < 2) return null;
+    return { lat: c[1], lng: c[0] };
   }, [rd, booking]);
 
-  const status = useMemo(() => {
-    const raw = rawStatus || socketLive?.status || rd?.status || 'searching';
-    return normalizeStatus(raw);
-  }, [rawStatus, socketLive?.status, rd?.status]);
+  const activeStatus = rideStatus || socketLive?.status || rd?.status || 'searching';
+  const isSearching  = ['searching', 'requested'].includes(activeStatus);
+  const isPostOtp    = ['otp_verified', 'in_progress', 'at_stop'].includes(activeStatus);
 
-  // BUG 6 FIX: isSearching no longer gates map render — used only for overlay
-  const isSearching = status === STATUS.SEARCHING || status === STATUS.ASSIGNED;
-  const isPostOtp   = [STATUS.TRIP_STARTED, STATUS.AT_STOP].includes(status);
-
-  // ── Initial fetch ──────────────────────────────────────────────────────────
+  // ── Initial data fetch ───────────────────────────────────────
   useEffect(() => {
     const load = async () => {
       setIsInitLoading(true);
       try {
-        await Promise.all([
-          rideId    && dispatch(fetchRideTracking({ rideId })),
-          rideId    && dispatch(fetchRideLive(rideId)),
-          bookingId && dispatch(fetchMyBookingById({ bookingId })),
-        ].filter(Boolean));
+        const tasks = [];
+        if (rideId) {
+          tasks.push(dispatch(fetchRideTracking({ rideId })));
+          tasks.push(dispatch(fetchRideLive(rideId)));
+        }
+        if (bookingId) {
+          tasks.push(dispatch(fetchMyBookingById({ bookingId })));
+        }
+        await Promise.all(tasks);
       } catch (e) {
-        console.error('[Tracking] init:', e);
+        console.error('[CustomerTracking] init fetch:', e);
       } finally {
         setIsInitLoading(false);
       }
@@ -885,37 +810,13 @@ export default function CustomerRideLiveTracking() {
     load();
   }, [rideId, bookingId]); // eslint-disable-line
 
-  // ── BUG 2 FIX: Seed driverTargetRef from REST liveData on mount ────────────
-  useEffect(() => {
-    if (!liveData) return;
-    // Try various field paths backends might use
-    const loc =
-      liveData.currentLocation ||
-      liveData.driverLocation  ||
-      liveData.location;
-    if (loc?.coordinates?.length >= 2) {
-      const seeded = { lat: loc.coordinates[1], lng: loc.coordinates[0] };
-      driverTargetRef.current = seeded;
-      driverPosRef.current    = seeded; // also seed interpolated pos
-    } else if (loc?.lat != null && loc?.lng != null) {
-      const seeded = { lat: loc.lat, lng: loc.lng };
-      driverTargetRef.current = seeded;
-      driverPosRef.current    = seeded;
-    }
-    // Seed heading if available
-    if (liveData.heading != null) {
-      headingRef.current    = liveData.heading;
-      targetHeadRef.current = liveData.heading;
-    }
-  }, [liveData]);
-
-  // ── Sync status from Redux ─────────────────────────────────────────────────
+  // ── Sync rideStatus from redux ────────────────────────────────
   useEffect(() => {
     const s = socketLive?.status || rd?.status;
-    if (s) setRawStatus(s);
+    if (s) setRideStatus(s);
   }, [socketLive?.status, rd?.status]);
 
-  // ── Sync ETA ───────────────────────────────────────────────────────────────
+  // ── Sync ETA from various sources ────────────────────────────
   useEffect(() => {
     const eta = etaEvt?.etaMinutes ?? socketLive?.etaMinutes ?? liveData?.currentEtaMinutes;
     if (eta != null) setEtaMinutes(eta);
@@ -923,41 +824,45 @@ export default function CustomerRideLiveTracking() {
     if (km != null) setRemainingKm(km);
   }, [etaEvt, socketLive?.etaMinutes, liveData?.currentEtaMinutes]);
 
-  // ── BUG 5 FIX: Socket events — `on` in deps so handlers stay fresh ─────────
+  // ── Socket: fine-grained status events ──────────────────────
   useEffect(() => {
-    if (!on) return;
     const unsubs = [
-      on('ride_status_changed',       (d) => { dispatch(socketRideStatusChanged(d));      setRawStatus(d.status); }),
-      on('driver_accepted',           (d) => { dispatch(socketDriverAccepted(d));         setRawStatus('driver_accepted'); }),
-      on('driver_en_route',           (d) => { dispatch(socketDriverEnRoute(d));          setRawStatus('driver_en_route'); }),
-      on('driver_arrived',            (d) => { dispatch(socketDriverArrived(d));          setRawStatus('driver_arrived'); setSheetOpen(true); }),
-      on('otp_verified',              (d) => { dispatch(socketOtpVerified(d));            setRawStatus('otp_verified'); setShowOtpModal(false); }),
-      on('ride_started',              (d) => { dispatch(socketRideStarted(d));            setRawStatus('in_progress'); }),
-      on('ride_completed',            (d) => { dispatch(socketRideCompleted(d));          setRawStatus('completed'); }),
-      on('ride_cancelled',            (d) => { dispatch(socketRideCancelled(d));          setRawStatus('cancelled'); }),
-      on('ride_assigned',             (d) => { dispatch(socketRideAssigned(d));           setRawStatus(d.status); }),
-      on('navigation_target_changed', (d) => { dispatch(socketNavigationTargetChanged(d)); }),
-      on('otp_required',              (d) => {
-        if (d?.otp) { setOtp(String(d.otp)); otpRef.current = String(d.otp); }
-        setRawStatus('driver_arrived');
+      on(EV.RIDE_STATUS_CHANGED,     (d) => { dispatch(socketRideStatusChanged(d)); setRideStatus(d.status); }),
+      on('driver_accepted',          (d) => { dispatch(socketDriverAccepted(d));    setRideStatus('driver_accepted'); }),
+      on('driver_en_route',          (d) => { dispatch(socketDriverEnRoute(d));     setRideStatus('driver_en_route'); }),
+      on('driver_arrived',           (d) => { dispatch(socketDriverArrived(d));     setRideStatus('driver_arrived'); setSheetOpen(true); }),
+      on('otp_verified',             (d) => { dispatch(socketOtpVerified(d));       setRideStatus('otp_verified'); setShowOtpModal(false); }),
+      on('ride_started',             (d) => { dispatch(socketRideStarted(d));       setRideStatus('in_progress'); }),
+      on('ride_completed',           (d) => { dispatch(socketRideCompleted(d));     setRideStatus('completed'); }),
+      on('ride_cancelled',           (d) => { dispatch(socketRideCancelled(d));     setRideStatus('cancelled'); }),
+      on('ride_assigned',            (d) => { dispatch(socketRideAssigned(d));      setRideStatus(d.status); }),
+      on(EV.NAVIGATION_TARGET_CHANGED,(d) => { dispatch(socketNavigationTargetChanged(d)); }),
+
+      // OTP arrives via otp_required socket event (sent to customer)
+      on('otp_required', (d) => {
+        if (d.otp) {
+          setOtp(String(d.otp));
+          otpRef.current = String(d.otp);
+        }
+        setRideStatus('driver_arrived');
         setSheetOpen(true);
       }),
-    ].filter(Boolean);
-    return () => unsubs.forEach(fn => typeof fn === 'function' && fn());
-  }, [on, dispatch]); // BUG 5 FIX: `on` in deps
+    ];
+    return () => unsubs.forEach(fn => fn?.());
+  }, []); // eslint-disable-line
 
-  // ── Socket location_update ─────────────────────────────────────────────────
+  // ── Socket: location_update ───────────────────────────────────
   useEffect(() => {
     if (!locationUpdate) return;
     dispatch(socketLocationUpdate(locationUpdate));
     const { lat, lng, heading = 0 } = locationUpdate;
-    if (typeof lat === 'number' && typeof lng === 'number') {
-      driverTargetRef.current = { lat, lng };
-      targetHeadRef.current   = heading;
-    }
+    driverTargetRef.current = { lat, lng };
+    // Smooth heading (simple weighted avg)
+    smoothHeadRef.current = smoothHeadRef.current * 0.75 + heading * 0.25;
+    setHeadingDeg(smoothHeadRef.current);
   }, [locationUpdate, dispatch]);
 
-  // ── Socket ETA ─────────────────────────────────────────────────────────────
+  // ── ETA update from useBookingRoom ────────────────────────────
   useEffect(() => {
     if (!etaEvt) return;
     dispatch(socketEtaUpdate(etaEvt));
@@ -965,251 +870,194 @@ export default function CustomerRideLiveTracking() {
     if (etaEvt.distanceRemainingKm != null) setRemainingKm(etaEvt.distanceRemainingKm);
   }, [etaEvt, dispatch]);
 
-  // ── Completed / cancelled triggers ────────────────────────────────────────
+  // ── Completed / cancelled triggers ───────────────────────────
   useEffect(() => {
-    if (status === STATUS.COMPLETED) {
-      const t = setTimeout(() => setShowCompleted(true), 2000);
+    if (activeStatus === 'completed') {
+      const t = setTimeout(() => setShowCompleted(true), 2200);
       return () => clearTimeout(t);
     }
-    if (status === STATUS.CANCELLED) {
-      const t = setTimeout(() => setShowCancelled(true), 1000);
+    if (activeStatus === 'cancelled') {
+      const t = setTimeout(() => setShowCancelled(true), 1200);
       return () => clearTimeout(t);
     }
-  }, [status]);
+  }, [activeStatus]);
 
-  // ── Polling fallback ───────────────────────────────────────────────────────
+  // ── Polling fallback when socket offline ─────────────────────
   useEffect(() => {
-    if (connected || !activeRideId) return;
-    const id = setInterval(() => dispatch(fetchRideLive(activeRideId)), POLL_MS);
-    return () => clearInterval(id);
+    if (connected) {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      return;
+    }
+    if (!activeRideId) return;
+    pollTimerRef.current = setInterval(() => {
+      dispatch(fetchRideLive(activeRideId));
+    }, POLL_MS);
+    return () => clearInterval(pollTimerRef.current);
   }, [connected, activeRideId, dispatch]);
 
-  // ── Page Visibility API ────────────────────────────────────────────────────
+  // ── Animate driver marker (smooth interpolation) ─────────────
   useEffect(() => {
-    const handleVisibility = () => { isHiddenRef.current = document.hidden; };
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => document.removeEventListener('visibilitychange', handleVisibility);
-  }, []);
-
-  // ── RAF animation loop ─────────────────────────────────────────────────────
-  useEffect(() => {
-    const tick = () => {
-      animFrameRef.current = requestAnimationFrame(tick);
-      if (isHiddenRef.current) return;
-
+    const animate = () => {
       const target = driverTargetRef.current;
-      if (!target) return;
+      if (!target) { animFrameRef.current = requestAnimationFrame(animate); return; }
 
       const current = driverPosRef.current || { ...target };
-      const newLat  = lerp(current.lat, target.lat, 0.10);
-      const newLng  = lerp(current.lng, target.lng, 0.10);
+      const newLat = lerp(current.lat, target.lat, 0.12);
+      const newLng = lerp(current.lng, target.lng, 0.12);
       driverPosRef.current = { lat: newLat, lng: newLng };
 
-      let diff = targetHeadRef.current - headingRef.current;
-      if (diff > 180) diff -= 360;
-      if (diff < -180) diff += 360;
-      headingRef.current += diff * 0.10;
-
-      if (driverMarkerRef.current) {
-        driverMarkerRef.current.position = { lat: newLat, lng: newLng };
-      }
-      if (driverMarkerElRef.current) {
-        updateDriverMarkerRotation(driverMarkerElRef.current, headingRef.current);
-      }
-
-      if (followDriver && mapRef.current) {
-        mapRef.current.panTo({ lat: newLat, lng: newLng });
-      }
-
       setDriverPos({ lat: newLat, lng: newLng });
+      animFrameRef.current = requestAnimationFrame(animate);
     };
-
-    animFrameRef.current = requestAnimationFrame(tick);
+    animFrameRef.current = requestAnimationFrame(animate);
     return () => { if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); };
-  }, [followDriver]);
+  }, []);
 
-  // ── BUG 3 FIX: Create driver marker — wait for target pos to exist ─────────
+  // ── Update driver AdvancedMarker ──────────────────────────────
   useEffect(() => {
-    if (!mapLoaded || driverMarkerRef.current) return;
+    if (!mapLoaded || !driverPos) return;
     if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
 
-    // BUG 3 FIX: use seeded driverPosRef first, then pickupCoords as last resort
-    const initialPos = driverPosRef.current || pickupCoords || { lat: 16.506, lng: 80.648 };
+    if (!driverMarkerRef.current) {
+      const el = document.createElement('div');
+      el.style.position = 'relative';
+      el.style.width = '0'; el.style.height = '0';
+      el.innerHTML = createDriverMarkerHtml(headingDeg);
+      driverMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
+        map: mapRef.current, content: el, position: driverPos, zIndex: 10,
+      });
+    } else {
+      driverMarkerRef.current.position = driverPos;
+      if (driverMarkerRef.current.content) {
+        driverMarkerRef.current.content.innerHTML = createDriverMarkerHtml(headingDeg);
+      }
+    }
 
-    const el = buildDriverMarkerElement();
-    driverMarkerElRef.current = el;
-    driverMarkerRef.current   = new window.google.maps.marker.AdvancedMarkerElement({
-      map:      mapRef.current,
-      content:  el,
-      position: initialPos,
-      zIndex:   20,
-    });
-  }, [mapLoaded, pickupCoords]);
+    // Follow driver on map in pickup phase
+    if (followDriver && mapRef.current) {
+      mapRef.current.panTo(driverPos);
+    }
+  }, [driverPos, headingDeg, mapLoaded, followDriver]);
 
-  // ── Create static markers once ────────────────────────────────────────────
+  // ── Static markers (pickup + destination) ────────────────────
   useEffect(() => {
-    if (!mapLoaded || staticInitRef.current) return;
+    if (!mapLoaded || staticMarkersInit.current) return;
     if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
+
     let created = false;
 
     if (pickupCoords && !pickupMarkerRef.current) {
+      const el = document.createElement('div');
+      el.style.position = 'relative'; el.style.width = '0'; el.style.height = '0';
+      el.innerHTML = createPickupMarkerHtml();
       pickupMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
-        map: mapRef.current, content: buildPickupMarkerEl(), position: pickupCoords, zIndex: 10,
+        map: mapRef.current, content: el, position: pickupCoords, zIndex: 5,
       });
       created = true;
     }
+
     if (dropoffCoords && !destMarkerRef.current) {
+      const el = document.createElement('div');
+      el.style.position = 'relative'; el.style.width = '0'; el.style.height = '0';
+      el.innerHTML = createDestMarkerHtml();
       destMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
-        map: mapRef.current, content: buildDestMarkerEl(), position: dropoffCoords, zIndex: 10,
+        map: mapRef.current, content: el, position: dropoffCoords, zIndex: 5,
       });
       created = true;
     }
-    if (created) staticInitRef.current = true;
+
+    if (created) staticMarkersInit.current = true;
   }, [mapLoaded, pickupCoords, dropoffCoords]);
 
-  // ── ROUTE SYSTEM ───────────────────────────────────────────────────────────
-  const createOrUpdatePolyline = useCallback((polyRef, path, options) => {
-    if (!window.google?.maps?.Polyline) return;
-    if (polyRef.current) {
-      polyRef.current.setPath(path);
-      polyRef.current.setOptions(options);
-    } else {
-      polyRef.current = new window.google.maps.Polyline({
-        map: mapRef.current, path, ...options,
-      });
-    }
-  }, []);
-
-  const clearPolyline = useCallback((polyRef) => {
-    if (polyRef.current) {
-      polyRef.current.setMap(null);
-      polyRef.current = null;
-    }
-  }, []);
-
-  const fetchRoute = useCallback(async (origin, destination) => {
+  // ── Route helpers ─────────────────────────────────────────────
+  const routeOnce = useCallback(async (origin, destination) => {
     if (!dirServiceRef.current || !origin || !destination) return null;
     try {
       const result = await dirServiceRef.current.route({
-        origin,
-        destination,
-        travelMode:               window.google.maps.TravelMode.DRIVING,
+        origin, destination,
+        travelMode: window.google.maps.TravelMode.DRIVING,
         provideRouteAlternatives: false,
       });
-      if (result.status !== 'OK') return null;
-      const encoded = result.routes[0]?.overview_polyline;
-      return encoded ? decodePolyline(encoded) : [];
-    } catch {
-      return null;
-    }
+      return result.status === 'OK' ? result : null;
+    } catch { return null; }
   }, []);
 
-  const calcRoutes = useCallback(async (driverPosition) => {
-    if (routeCalcInFlight.current) return;
-    routeCalcInFlight.current = true;
-    try {
-      const origin = driverPosition || driverPosRef.current;
+  /**
+   * calcBothRoutes — always draws TWO lines:
+   *  1. driverRoute   : driver current pos → pickup  (dashed, pickup phase)
+   *                     driver current pos → dropoff (solid, ride phase)
+   *  2. overviewRoute : pickup → dropoff             (faint dashed, always)
+   *
+   * In pickup phase  : driverRoute = driver→pickup (dashed blue)
+   *                    overviewRoute = pickup→dropoff (faint teal dashes)
+   * In ride phase    : driverRoute = driver→dropoff (solid green)
+   *                    overviewRoute = pickup→dropoff (faint dashed, context)
+   */
+  const calcBothRoutes = useCallback(async (driverPosition) => {
+    if (!mapLoaded || !pickupCoords) return;
 
-      // Overview route (pickup→dest) — draw once
-      if (pickupCoords && dropoffCoords && !overviewPolyRef.current) {
-        const path = await fetchRoute(pickupCoords, dropoffCoords);
-        if (path?.length) {
-          createOrUpdatePolyline(overviewPolyRef, path, {
-            strokeColor:   '#94a3b8',
-            strokeWeight:  3,
-            strokeOpacity: 0,
-            icons: [{
-              icon: { path: window.google.maps.SymbolPath.CIRCLE, fillColor: '#94a3b8', fillOpacity: 0.5, strokeWeight: 0, scale: 2 },
-              offset: '0',
-              repeat: '12px',
-            }],
-          });
-        }
-      }
+    const origin = driverPosition || driverPosRef.current;
 
-      // Driver route — only if origin known
-      if (origin) {
-        // BUG 4 FIX: dest based on phase; origin must be driver pos, not pickup
-        const dest = isPostOtp ? dropoffCoords : pickupCoords;
-        const path = await fetchRoute(origin, dest);
-        if (path?.length) {
-          if (isPostOtp) {
-            createOrUpdatePolyline(driverPolyRef, path, {
-              strokeColor:   ROUTE_COLOR.TRIP_ACTIVE,
-              strokeWeight:  6,
-              strokeOpacity: 0.90,
-              icons: [{
-                icon: { path: window.google.maps.SymbolPath.FORWARD_OPEN_ARROW, strokeColor: '#fff', strokeWeight: 2, scale: 3, strokeOpacity: 0.9 },
-                offset: '100%', repeat: '60px',
-              }],
-            });
-          } else {
-            createOrUpdatePolyline(driverPolyRef, path, {
-              strokeColor:   ROUTE_COLOR.DRIVER_TO_PICKUP,
-              strokeWeight:  5,
-              strokeOpacity: 0.92,
-              icons: [{
-                icon: { path: window.google.maps.SymbolPath.FORWARD_OPEN_ARROW, strokeColor: '#fff', strokeWeight: 2, scale: 3, strokeOpacity: 0.9 },
-                offset: '100%', repeat: '50px',
-              }],
-            });
-          }
-          lastRouteCalcPosRef.current = driverPosRef.current || origin;
-        }
-      }
-    } finally {
-      routeCalcInFlight.current = false;
+    // Overview route pickup→dropoff (always, if we have dropoff)
+    if (pickupCoords && dropoffCoords) {
+      const ovr = await routeOnce(pickupCoords, dropoffCoords);
+      if (ovr) setOverviewRoute(ovr);
     }
-  }, [pickupCoords, dropoffCoords, isPostOtp, fetchRoute, createOrUpdatePolyline]);
 
-  // Recalc on significant driver movement
+    // Driver route: driver→pickup (pre-otp) or driver→dropoff (post-otp)
+    if (origin) {
+      const dest = isPostOtp ? dropoffCoords : pickupCoords;
+      if (dest) {
+        const dr = await routeOnce(origin, dest);
+        if (dr) setDriverRoute(dr);
+      }
+    }
+  }, [mapLoaded, pickupCoords, dropoffCoords, isPostOtp, routeOnce]);
+
+  // Recalc driver route when driver position updates significantly
+  const lastRouteCalcRef = useRef(null);
   useEffect(() => {
     if (!mapLoaded || !driverPos) return;
-    const dist = haversineMeters(lastRouteCalcPosRef.current, driverPos);
-    if (dist < ROUTE_RECALC_DISTANCE_THRESHOLD_M && lastRouteCalcPosRef.current) return;
-    calcRoutes(driverPos);
+    const now = Date.now();
+    // Recalc at most every 30s or on phase change
+    if (lastRouteCalcRef.current && now - lastRouteCalcRef.current < 30_000) return;
+    lastRouteCalcRef.current = now;
+    calcBothRoutes(driverPos);
   }, [driverPos, mapLoaded]); // eslint-disable-line
 
-  // BUG 4 FIX: Recalc on phase change — pass null origin so calcRoutes uses driverPosRef
+  // Recalc when map first loads or phase changes
   useEffect(() => {
-    if (!mapLoaded) return;
-    clearPolyline(driverPolyRef);
-    lastRouteCalcPosRef.current = null;
-    // BUG 4 FIX: pass null — calcRoutes will use driverPosRef.current internally
-    calcRoutes(null);
+    if (!mapLoaded || !pickupCoords) return;
+    lastRouteCalcRef.current = null; // force recalc
+    calcBothRoutes(driverPosRef.current || pickupCoords);
   }, [mapLoaded, isPostOtp]); // eslint-disable-line
 
-  // ── Fit bounds on load ─────────────────────────────────────────────────────
+  // ── Fit map to show driver + target on first load ─────────────
   useEffect(() => {
     if (!mapLoaded || !mapRef.current) return;
-    const bounds    = new window.google.maps.LatLngBounds();
-    let hasPoints   = false;
-    const seedPos   = driverPosRef.current; // use seeded pos if available
-    [pickupCoords, dropoffCoords, seedPos].forEach(p => {
-      if (p) { bounds.extend(p); hasPoints = true; }
-    });
-    if (hasPoints) {
-      mapRef.current.fitBounds(bounds, { top: 80, bottom: 180, left: 30, right: 30 });
-    }
+    if (!pickupCoords && !dropoffCoords) return;
+    const bounds = new window.google.maps.LatLngBounds();
+    if (pickupCoords)  bounds.extend(pickupCoords);
+    if (dropoffCoords) bounds.extend(dropoffCoords);
+    if (driverPos)     bounds.extend(driverPos);
+    mapRef.current.fitBounds(bounds, { top: 80, bottom: 200, left: 40, right: 40 });
   }, [mapLoaded]); // eslint-disable-line
 
-  // ── Cleanup on unmount ─────────────────────────────────────────────────────
+  // ── Cleanup markers on unmount ────────────────────────────────
   useEffect(() => {
     return () => {
+      [driverMarkerRef, pickupMarkerRef, destMarkerRef].forEach(ref => {
+        if (ref.current) { ref.current.map = null; ref.current = null; }
+      });
+      staticMarkersInit.current = false;
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-      [driverMarkerRef, pickupMarkerRef, destMarkerRef].forEach(r => {
-        if (r.current) { r.current.map = null; r.current = null; }
-      });
-      [driverPolyRef, overviewPolyRef].forEach(r => {
-        if (r.current) { r.current.setMap(null); r.current = null; }
-      });
-      staticInitRef.current = false;
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
   }, []);
 
-  // ── Handlers ──────────────────────────────────────────────────────────────
+  // ── Handlers ─────────────────────────────────────────────────
   const onMapLoad = useCallback((map) => {
-    mapRef.current        = map;
+    mapRef.current = map;
     dirServiceRef.current = new window.google.maps.DirectionsService();
     setMapLoaded(true);
   }, []);
@@ -1220,284 +1068,301 @@ export default function CustomerRideLiveTracking() {
   }, [router]);
 
   const handleRate = useCallback(() => {
-    router.push(bookingId ? `/bookings/${bookingId}/rate` : '/bookings');
+    if (bookingId) router.push(`/bookings/${bookingId}/rate`);
+    else router.push('/bookings');
   }, [router, bookingId]);
 
   const handleRecenter = useCallback(() => {
     setFollowDriver(true);
-    const pos = driverPosRef.current || pickupCoords;
-    if (pos && mapRef.current) {
-      mapRef.current.panTo(pos);
+    if (driverPos && mapRef.current) {
+      mapRef.current.panTo(driverPos);
       mapRef.current.setZoom(16);
+    } else if (pickupCoords && mapRef.current) {
+      mapRef.current.panTo(pickupCoords);
     }
-  }, [pickupCoords]);
+  }, [driverPos, pickupCoords]);
 
   const handleSos = useCallback(() => {
-    if (sosActive) dismissSos();
-    else triggerSos({ sosType: 'safety' });
+    if (sosActive) { dismissSos(); return; }
+    triggerSos({ sosType: 'safety' });
   }, [sosActive, triggerSos, dismissSos]);
 
-  // ── Render guards ──────────────────────────────────────────────────────────
-  if (isInitLoading || !isLoaded) return <LoadingScreen />;
+  // ── Render guards ─────────────────────────────────────────────
+  if (isInitLoading || !isLoaded) return <LoadingSkeleton />;
   if (showCompleted) return <CompletedScreen booking={booking} onBack={handleBack} onRate={handleRate} />;
   if (showCancelled) return <CancelledScreen onBack={handleBack} />;
 
-  const meta = STATUS_META[status] || STATUS_META[STATUS.SEARCHING];
+  const statusCfg = STATUS_CONFIG[activeStatus] || STATUS_CONFIG.searching;
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── Main render ───────────────────────────────────────────────
   return (
-    <div className="fixed inset-0 overflow-hidden" style={{ fontFamily: 'var(--font-family-poppins, ui-sans-serif, system-ui, sans-serif)' }}>
+    <>
+      <style>{`
+        @keyframes custPulse { 0%{transform:scale(0.9);opacity:0.8} 100%{transform:scale(2.4);opacity:0} }
+      `}</style>
 
-      {/* ── MAP — BUG 6 FIX: always mounted so markers/route init early ── */}
-      <div className="absolute inset-0">
-        <GoogleMap
-          mapContainerStyle={{ width: '100%', height: '100%' }}
-          center={driverPosRef.current || pickupCoords || { lat: 16.506, lng: 80.648 }}
-          zoom={15}
-          options={{
-            mapId:            MAP_ID,
-            disableDefaultUI: true,
-            clickableIcons:   false,
-            gestureHandling:  'greedy',
-            mapTypeId:        'roadmap',
-            styles:           MAP_STYLES,
-          }}
-          onLoad={onMapLoad}
-          onDragStart={() => setFollowDriver(false)}
-        />
-      </div>
+      <div className="fixed inset-0 overflow-hidden font-poppins">
 
-      {/* BUG 6 FIX: SearchingOverlay on top of map (z-20), not replacing it */}
-      <AnimatePresence>
-        {isSearching && (
-          <motion.div
-            key="searching-overlay"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 z-20"
-          >
-            <SearchingOverlay bookingCode={booking?.bookingCode} />
-          </motion.div>
-        )}
-      </AnimatePresence>
+        {/* ── MAP ──────────────────────────────────── */}
+        <div className="absolute inset-0">
+          {isSearching ? (
+            <SearchingScreen bookingCode={booking?.bookingCode} />
+          ) : (
+            <GoogleMap
+              mapContainerStyle={{ width: '100%', height: '100%' }}
+              center={driverPos || pickupCoords || { lat: 16.506, lng: 80.648 }}
+              zoom={15}
+              options={{
+                mapId:            MAP_ID,
+                disableDefaultUI: true,
+                clickableIcons:   false,
+                gestureHandling:  'greedy',
+                mapTypeId:        'roadmap',
+              }}
+              onLoad={onMapLoad}
+              onDragStart={() => setFollowDriver(false)}
+            >
+              {/* Overview route: pickup → dropoff (always visible, faint dashes) */}
+              {overviewRoute && (
+                <DirectionsRenderer
+                  directions={overviewRoute}
+                  options={{
+                    suppressMarkers: true,
+                    polylineOptions: {
+                      strokeColor:   isPostOtp ? 'rgba(34,197,94,0.30)' : 'rgba(6,182,212,0.28)',
+                      strokeWeight:  4,
+                      strokeOpacity: 1,
+                      icons: [{
+                        icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 },
+                        offset: '0',
+                        repeat: '14px',
+                      }],
+                    },
+                  }}
+                />
+              )}
 
-      {/* ── OFFLINE BANNER ──────────────────────────────────── */}
-      <AnimatePresence>
-        {!connected && !isSearching && (
-          <motion.div
-            initial={{ y: -40 }} animate={{ y: 0 }} exit={{ y: -40 }}
-            className="absolute top-0 left-0 right-0 z-50 flex items-center justify-center gap-2 py-2 text-xs font-semibold"
-            style={{ background: '#f59e0b', color: '#1c1917' }}
-          >
-            <WifiOff size={12} />
-            Reconnecting — tracking may be delayed
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ── TOP BAR ─────────────────────────────────────────── */}
-      <div className="absolute top-0 left-0 right-0 z-30">
-        <div
-          className="flex items-center gap-2.5 px-3 py-2.5"
-          style={{
-            background:     'color-mix(in srgb, var(--base-200) 94%, transparent)',
-            backdropFilter: 'blur(14px)',
-            borderBottom:   '1px solid var(--base-300)',
-          }}
-        >
-          <button
-            onClick={handleBack}
-            className="w-8 h-8 rounded-lg flex-shrink-0 flex items-center justify-center cursor-pointer border-none"
-            style={{ background: 'var(--base-300)', color: 'var(--base-content)', opacity: 0.7 }}
-          >
-            <ChevronLeft size={17} />
-          </button>
-
-          <div
-            className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-            style={{
-              background: connected ? '#22c55e' : '#f59e0b',
-              boxShadow:  connected ? '0 0 5px #22c55e' : 'none',
-            }}
-          />
-
-          <span
-            className="text-[10px] font-bold uppercase tracking-widest flex-shrink-0"
-            style={{ color: meta.color }}
-          >
-            {meta.icon} {meta.label}
-          </span>
-
-          <div className="flex-1" />
-
-          {etaMinutes != null && (
-            <div className="flex items-center gap-1">
-              <Clock size={10} style={{ color: '#2563eb' }} />
-              <span className="text-xs font-black" style={{ color: '#2563eb' }}>{fmtEta(etaMinutes)}</span>
-            </div>
-          )}
-          {remainingKm != null && (
-            <span className="text-[11px] font-semibold" style={{ opacity: 0.38 }}>{fmtDist(remainingKm)}</span>
+              {/* Driver route: driver→pickup (pickup phase) or driver→dropoff (ride phase) */}
+              {driverRoute && (
+                <DirectionsRenderer
+                  directions={driverRoute}
+                  options={{
+                    suppressMarkers: true,
+                    polylineOptions: isPostOtp
+                      ? {
+                          // Ride phase: solid green — heading to hospital
+                          strokeColor:   '#22c55e',
+                          strokeWeight:  6,
+                          strokeOpacity: 0.92,
+                        }
+                      : {
+                          // Pickup phase: dashed blue — driver coming to you
+                          strokeColor:   '#3b82f6',
+                          strokeWeight:  5,
+                          strokeOpacity: 1,
+                          icons: [{
+                            icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 4 },
+                            offset: '0',
+                            repeat: '12px',
+                          }],
+                        },
+                  }}
+                />
+              )}
+            </GoogleMap>
           )}
         </div>
 
-        {/* Driver arrived banner */}
+        {/* ── OFFLINE BANNER ────────────────────── */}
         <AnimatePresence>
-          {status === STATUS.ARRIVED && (
-            <motion.button
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowOtpModal(true)}
-              className="w-full flex items-center justify-between px-4 py-2.5 cursor-pointer border-none"
-              style={{
-                background:     'rgba(139,92,246,0.16)',
-                backdropFilter: 'blur(10px)',
-                borderBottom:   '1px solid rgba(139,92,246,0.25)',
-              }}
+          {!connected && !isSearching && (
+            <motion.div
+              initial={{ y: -48 }} animate={{ y: 0 }} exit={{ y: -48 }}
+              className="absolute top-0 left-0 right-0 z-[50] flex items-center justify-center gap-2 py-2.5 text-xs font-bold bg-warning/95 text-warning-content"
             >
-              <div className="flex items-center gap-2">
-                <motion.span
-                  animate={{ scale: [1, 1.18, 1] }}
-                  transition={{ repeat: Infinity, duration: 1.8 }}
-                >📍</motion.span>
-                <span className="text-xs font-bold" style={{ color: '#7c3aed' }}>
-                  Driver has arrived — show OTP to start
-                </span>
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="text-[10px] font-bold" style={{ color: '#7c3aed' }}>Show OTP</span>
-                <ArrowUpRight size={11} style={{ color: '#7c3aed' }} />
-              </div>
-            </motion.button>
+              <WifiOff size={13} />
+              Reconnecting — tracking may be delayed
+            </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Trip in progress banner */}
+        {/* ── TOP BAR ───────────────────────────── */}
+        <div className="absolute top-0 left-0 right-0 z-20 pt-1">
+          <motion.div
+            initial={{ opacity: 0, y: -16 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex items-center gap-2 px-3.5 py-2.5 bg-base-200/96 border-b border-base-300"
+            style={{ backdropFilter: 'blur(12px)' }}
+          >
+            {/* Back */}
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              onClick={handleBack}
+              className="w-8 h-8 rounded-xl flex-shrink-0 flex items-center justify-center cursor-pointer text-base-content/60 bg-base-300 border border-base-300 hover:text-base-content transition-colors"
+            >
+              <ChevronLeft size={18} />
+            </motion.button>
+
+            {/* Socket dot */}
+            <div
+              className="w-2 h-2 rounded-full flex-shrink-0"
+              style={{
+                background:  connected ? 'var(--success)' : 'var(--warning)',
+                boxShadow:   connected ? '0 0 6px var(--success)' : 'none',
+              }}
+            />
+
+            {/* Status chip */}
+            <span
+              className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest border flex-shrink-0"
+              style={{ background: statusCfg.bg, borderColor: statusCfg.border, color: statusCfg.color }}
+            >
+              {statusCfg.icon} {statusCfg.label}
+            </span>
+
+            {/* ETA */}
+            {etaMinutes != null && (
+              <div className="flex items-center gap-1 flex-shrink-0 ml-auto">
+                <Clock size={11} className="text-primary" />
+                <span className="text-xs font-black text-primary">{fmtEta(etaMinutes)}</span>
+              </div>
+            )}
+            {remainingKm != null && (
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <Navigation size={11} className="text-base-content/40" />
+                <span className="text-xs font-semibold text-base-content/50">{fmtKm(remainingKm)}</span>
+              </div>
+            )}
+          </motion.div>
+
+          {/* Driver arrived banner */}
+          <AnimatePresence>
+            {activeStatus === 'driver_arrived' && (
+              <motion.button
+                initial={{ opacity: 0, y: -12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -12 }}
+                onClick={() => { setShowOtpModal(true); }}
+                className="w-full flex items-center justify-between px-4 py-2.5 cursor-pointer border-b border-purple-500/30"
+                style={{ background: 'rgba(139,92,246,0.18)', backdropFilter: 'blur(12px)' }}
+              >
+                <div className="flex items-center gap-2">
+                  <motion.div
+                    animate={{ scale: [1, 1.2, 1] }}
+                    transition={{ repeat: Infinity, duration: 1.5 }}
+                    className="text-base"
+                  >
+                    📍
+                  </motion.div>
+                  <span className="text-xs font-bold text-purple-300">Driver has arrived at your location!</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] font-bold text-purple-400">Show OTP</span>
+                  <ArrowUpRight size={12} className="text-purple-400" />
+                </div>
+              </motion.button>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* ── RIDE IN PROGRESS BANNER ────────────── */}
         <AnimatePresence>
-          {status === STATUS.TRIP_STARTED && (
+          {activeStatus === 'in_progress' && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex items-center gap-2 px-4 py-2"
-              style={{
-                background:     'rgba(37,99,235,0.10)',
-                backdropFilter: 'blur(10px)',
-                borderBottom:   '1px solid rgba(37,99,235,0.20)',
-              }}
+              className="absolute top-[52px] left-3 right-3 z-20 flex items-center gap-2 px-3.5 py-2 rounded-xl border border-success/30 text-xs font-bold text-success"
+              style={{ background: 'rgba(34,197,94,0.10)', backdropFilter: 'blur(12px)' }}
             >
-              <Zap size={11} style={{ color: '#2563eb' }} />
-              <span className="text-[11px] font-bold" style={{ color: '#2563eb' }}>
-                Ride in progress · Heading to hospital
-              </span>
+              <Zap size={12} />
+              Ride in progress — heading to hospital
             </motion.div>
           )}
         </AnimatePresence>
-      </div>
 
-      {/* ── FABs (right side) — z-30 so above searching overlay ── */}
-      <div
-        className="absolute right-3 z-30 flex flex-col gap-2"
-        style={{ top: 100 }}
-      >
-        <motion.button
-          whileTap={{ scale: 0.88 }}
-          onClick={handleRecenter}
-          className="w-10 h-10 rounded-xl flex items-center justify-center cursor-pointer border-none"
-          style={{
-            background:     followDriver ? '#22c55e' : 'color-mix(in srgb, var(--base-200) 92%, transparent)',
-            color:          followDriver ? '#fff' : 'var(--base-content)',
-            boxShadow:      '0 2px 12px rgba(0,0,0,0.15)',
-            backdropFilter: 'blur(10px)',
-            border:         followDriver ? 'none' : '1px solid var(--base-300)',
-          }}
-        >
-          <Navigation size={15} />
-        </motion.button>
-
-        <motion.button
-          whileTap={{ scale: 0.88 }}
-          onClick={handleSos}
-          className="w-10 h-10 rounded-xl flex items-center justify-center cursor-pointer border-none"
-          style={{
-            background:     sosActive ? '#ef4444' : 'rgba(239,68,68,0.10)',
-            color:          sosActive ? '#fff' : '#ef4444',
-            boxShadow:      '0 2px 12px rgba(0,0,0,0.12)',
-            backdropFilter: 'blur(10px)',
-            border:         sosActive ? 'none' : '1px solid rgba(239,68,68,0.25)',
-          }}
-          animate={sosActive ? { scale: [1, 1.06, 1] } : {}}
-          transition={{ repeat: Infinity, duration: 1 }}
-        >
-          {sosActive ? <ShieldAlert size={15} /> : <Shield size={15} />}
-        </motion.button>
-
-        {!connected && (
+        {/* ── FABs ──────────────────────────────── */}
+        <div className="absolute top-[110px] right-3 z-20 flex flex-col gap-2">
+          {/* Recenter */}
           <motion.button
             whileTap={{ scale: 0.88 }}
-            onClick={() => activeRideId && dispatch(fetchRideLive(activeRideId))}
-            className="w-10 h-10 rounded-xl flex items-center justify-center cursor-pointer border-none"
-            style={{
-              background:     'color-mix(in srgb, var(--base-200) 90%, transparent)',
-              color:          'var(--base-content)',
-              backdropFilter: 'blur(10px)',
-              border:         '1px solid var(--base-300)',
-              boxShadow:      '0 2px 12px rgba(0,0,0,0.12)',
-              opacity:        0.7,
-            }}
+            onClick={handleRecenter}
+            className={`w-11 h-11 rounded-[13px] flex items-center justify-center cursor-pointer border shadow-[0_4px_16px_rgba(0,0,0,0.35)] transition-colors ${followDriver ? 'bg-primary text-primary-content border-primary' : 'bg-base-200/90 text-base-content/60 border-base-300'}`}
           >
-            <RefreshCw size={14} />
+            <Navigation size={16} />
           </motion.button>
-        )}
-      </div>
 
-      {/* ── SOS BANNER ──────────────────────────────────────── */}
-      <AnimatePresence>
-        {sosActive && (
-          <motion.div
-            initial={{ y: 80, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 80, opacity: 0 }}
-            className="fixed left-4 right-4 z-40 flex items-center gap-3 p-3.5 rounded-xl"
-            style={{ bottom: 96, background: '#ef4444', boxShadow: '0 4px 24px rgba(239,68,68,0.40)' }}
+          {/* SOS */}
+          <motion.button
+            whileTap={{ scale: 0.88 }}
+            onClick={handleSos}
+            className={`w-11 h-11 rounded-[13px] flex items-center justify-center cursor-pointer border shadow-[0_4px_16px_rgba(0,0,0,0.35)] transition-colors ${sosActive ? 'bg-error border-error text-error-content animate-pulse' : 'bg-error/10 border-error/30 text-error'}`}
           >
-            <ShieldAlert size={18} color="white" className="flex-shrink-0" />
-            <div className="flex-1">
-              <p className="text-sm font-bold text-white m-0">SOS Alert Sent</p>
-              <p className="text-xs text-red-100 m-0">Help is on the way. Stay calm.</p>
-            </div>
-            <button onClick={dismissSos} className="border-none bg-transparent cursor-pointer p-1">
-              <X size={14} color="rgba(255,255,255,0.8)" />
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            {sosActive ? <ShieldAlert size={16} /> : <Shield size={16} />}
+          </motion.button>
 
-      {/* ── BOTTOM SHEET ────────────────────────────────────── */}
-      <BottomSheet
-        open={sheetOpen}
-        onToggle={() => setSheetOpen(p => !p)}
-        status={status}
-        rideCode={rd?.rideCode}
-        booking={booking}
-        otp={otp}
-        onShowOtp={() => setShowOtpModal(true)}
-        driverSnapshot={driverSnapshot}
-        vehicleSnapshot={vehicleSnapshot}
-        etaMinutes={etaMinutes}
-        distanceKm={remainingKm}
-      />
+          {/* Refresh */}
+          {!connected && (
+            <motion.button
+              whileTap={{ scale: 0.88 }}
+              onClick={() => { if (activeRideId) dispatch(fetchRideLive(activeRideId)); }}
+              className="w-11 h-11 rounded-[13px] flex items-center justify-center cursor-pointer bg-base-200/90 border border-base-300 text-base-content/60 shadow-[0_4px_16px_rgba(0,0,0,0.35)] hover:text-base-content transition-colors"
+            >
+              <RefreshCw size={15} />
+            </motion.button>
+          )}
+        </div>
 
-      {/* ── OTP MODAL ───────────────────────────────────────── */}
-      <AnimatePresence>
-        {showOtpModal && otp && (
-          <OtpModal otp={otp} onClose={() => setShowOtpModal(false)} />
-        )}
-      </AnimatePresence>
-    </div>
+        {/* ── BOTTOM SHEET ──────────────────────── */}
+        <BottomSheet
+          open={sheetOpen}
+          onToggle={() => setSheetOpen(p => !p)}
+          rideStatus={activeStatus}
+          rideCode={rd?.rideCode}
+          booking={booking}
+          otp={otp}
+          onShowOtp={() => setShowOtpModal(true)}
+          driverSnapshot={driverSnapshot}
+          vehicleSnapshot={vehicleSnapshot}
+          etaMinutes={etaMinutes}
+          distanceKm={remainingKm}
+        />
+
+        {/* ── OTP MODAL ─────────────────────────── */}
+        <AnimatePresence>
+          {showOtpModal && otp && (
+            <OtpDisplay
+              otp={otp}
+              onClose={() => setShowOtpModal(false)}
+            />
+          )}
+        </AnimatePresence>
+
+        {/* ── SOS ACTIVE BANNER ─────────────────── */}
+        <AnimatePresence>
+          {sosActive && (
+            <motion.div
+              initial={{ y: 100, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 100, opacity: 0 }}
+              className="fixed bottom-[88px] left-4 right-4 z-40 flex items-center gap-3 p-4 rounded-2xl bg-error border border-error/70 shadow-[0_8px_32px_rgba(239,68,68,0.55)]"
+            >
+              <ShieldAlert size={20} className="text-error-content flex-shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm font-black text-error-content m-0">SOS Alert Sent!</p>
+                <p className="text-xs text-error-content/80 m-0">Help is on the way. Stay calm.</p>
+              </div>
+              <button
+                onClick={dismissSos}
+                className="text-error-content/70 hover:text-error-content transition-colors cursor-pointer bg-transparent border-none"
+              >
+                <X size={16} />
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+      </div>
+    </>
   );
 }

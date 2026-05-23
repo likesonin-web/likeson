@@ -1057,14 +1057,17 @@ router.patch('/:rideId/status',
         // ── ARRIVED ───────────────────────────────────────────────────────────
         // Generates OTP → stored as RAW string (no hash) in ride.pickupOtp
         // verify_otp below does plain string compare to match
-        case 'arrived': {
+       case 'arrived': {
           if (currentStatus !== 'driver_en_route')
             return res.status(400).json({ success: false, message: `Cannot arrive from: ${currentStatus}` });
 
           const otpCode        = genOtp();
           ride.status          = 'driver_arrived';
           ride.driverArrivedAt = new Date();
-          ride.pickupOtp = hashOtp(otpCode); // ← RAW string, no hash
+          
+          // ❌ OLD CODE: ride.pickupOtp = hashOtp(otpCode);
+          // ✅ NEW CODE: Store the raw string directly so verify_otp can match it
+          ride.pickupOtp = otpCode; 
 
           await ride.save();
 
