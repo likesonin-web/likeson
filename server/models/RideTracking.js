@@ -157,6 +157,74 @@ const rideTrackingSchema = new Schema(
       index:   true,
     },
 
+        careAssistant: {
+      type:    Schema.Types.ObjectId,
+      ref:     'CareAssistantProfile',
+      default: null,
+      index:   true,
+    },
+
+    hospital: {
+      type:    Schema.Types.ObjectId,
+      ref:     'Hospital',
+      default: null,
+      index:   true,
+    },
+
+    activeTarget: {
+      type: String,
+      enum: [
+        'pickup_patient',
+        'pickup_care_assistant',
+        'hospital_drop',
+        'patient_drop',
+      ],
+      default: 'pickup_patient',
+    },
+
+    liveRouteContext: {
+      currentLegDistanceKm: { type: Number, default: 0 },
+      currentLegEtaMinutes: { type: Number, default: 0 },
+
+      patientPickupReachedAt: Date,
+      careAssistantPickupReachedAt: Date,
+      hospitalReachedAt: Date,
+      patientDroppedAt: Date,
+
+      nearestHospitalDistanceKm: { type: Number, default: 0 },
+
+      nearestHospitalCalculatedAt: Date,
+      activeTarget: {
+
+  type: String,
+
+  default:
+    'patient_pickup',
+},
+
+hospitalEtaMinutes: {
+  type: Number,
+  default: 0,
+},
+
+hospitalDistanceKm: {
+  type: Number,
+  default: 0,
+},
+
+careAssistantJoinedAt: {
+  type: Date,
+},
+
+patientPickedUpAt: {
+  type: Date,
+},
+
+hospitalReachedAt: {
+  type: Date,
+},
+    },
+
     // ── GPS Breadcrumbs ───────────────────────────────────────────────────────
     breadcrumbs: {
       type:    [breadcrumbSchema],
@@ -185,6 +253,44 @@ const rideTrackingSchema = new Schema(
       type:    [etaUpdateSchema],
       default: [],
     },
+
+    // ── Care Assistant Participant ─────────────────────────────────────────────
+careAssistant: {
+  type:    Schema.Types.ObjectId,
+  ref:     'CareAssistantProfile',
+  default: null,
+  index:   true,
+},
+
+careAssistantJoinedAt: { type: Date, default: null },
+
+careAssistantStatus: {
+  type:    String,
+  enum:    ['not_joined', 'en_route_to_pickup', 'at_pickup', 'in_ride', 'departed'],
+  default: 'not_joined',
+},
+
+careAssistantLiveLocation: {
+  type: new Schema(
+    {
+      type:        { type: String, enum: ['Point'], default: 'Point' },
+      coordinates: { type: [Number], default: [80.648, 16.506] },
+      heading:     { type: Number, min: 0, max: 360 },
+      speedKmh:    { type: Number, min: 0 },
+      updatedAt:   { type: Date, default: Date.now },
+    },
+    { _id: false }
+  ),
+  default: null,
+},
+
+// Ring-buffered CA breadcrumbs (separate from driver breadcrumbs)
+careAssistantBreadcrumbs: {
+  type:    [breadcrumbSchema],  // reuse existing breadcrumbSchema
+  default: [],
+},
+
+careAssistantBreadcrumbCount: { type: Number, default: 0, min: 0 },
 
     // ── Route Summary ─────────────────────────────────────────────────────────
     totalDistanceKm:       { type: Number, default: 0, min: 0 },
@@ -362,6 +468,79 @@ rideTrackingSchema.statics.addEtaUpdate = async function (rideId, etaData) {
     },
     { new: true }
   ).select('currentEtaMinutes currentEtaTarget');
+};
+
+/**
+ * attachCareAssistant — link CA to tracking doc when CA assigned to booking.
+ * Called when admin assigns CA or CA accepts booking.
+ */
+rideTrackingSchema.statics.attachCareAssistant = async function (rideId, careAssistantProfileId) {
+  return this.findOneAndUpdate(
+    { ride: rideId },
+    {
+      $set: {
+        careAssistant:         careAssistantProfileId,
+        careAssistantStatus:   'en_route_to_pickup',
+        careAssistantJoinedAt: new Date(),
+      },
+    },
+    { new: true }
+  ).select('careAssistant careAssistantStatus careAssistantJoinedAt');
+};
+
+/**
+ * updateCareAssistantLocation — push CA GPS ping + update live location.
+ * Returns lightweight select for socket broadcast.
+ */
+rideTrackingSchema.statics.updateCareAssistantLocation = async function (rideId, pingData) {
+  const { coordinates, heading, speedKmh, accuracyM, source } = pingData;
+  if (!coordinates || coordinates.length !== 2)
+    throw new Error('updateCareAssistantLocation: coordinates [lng, lat] required');
+
+  const breadcrumb = {
+    coordinates,
+    heading:   heading   ?? 0,
+    speedKmh:  speedKmh  ?? 0,
+    accuracyM: accuracyM ?? null,
+    source:    source    ?? 'gps',
+    timestamp: new Date(),
+  };
+
+  return this.findOneAndUpdate(
+    { ride: rideId },
+    {
+      $set: {
+        careAssistantLiveLocation: {
+          type:        'Point',
+          coordinates,
+          heading:     heading  ?? 0,
+          speedKmh:    speedKmh ?? 0,
+          updatedAt:   new Date(),
+        },
+      },
+      $push: {
+        careAssistantBreadcrumbs: {
+          $each:  [breadcrumb],
+          $slice: -MAX_BREADCRUMBS,   // reuse same constant
+        },
+      },
+      $inc: { careAssistantBreadcrumbCount: 1 },
+    },
+    { new: true }
+  ).select('careAssistantLiveLocation careAssistantBreadcrumbCount careAssistantStatus');
+};
+
+/**
+ * updateCareAssistantStatus — transition CA status in ride.
+ */
+rideTrackingSchema.statics.updateCareAssistantStatus = async function (rideId, status) {
+  const valid = ['not_joined', 'en_route_to_pickup', 'at_pickup', 'in_ride', 'departed'];
+  if (!valid.includes(status)) throw new Error(`Invalid CA status: ${status}`);
+  return this.findOneAndUpdate(
+    { ride: rideId },
+    { $set: { careAssistantStatus: status } },
+    { new: true }
+  ).select('careAssistantStatus');
 };
 
 /**

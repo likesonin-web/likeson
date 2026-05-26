@@ -15,13 +15,13 @@ import Consultation   from '../models/Consultation.js';
 import Booking        from '../models/Booking.js';
 import DoctorProfile  from '../models/DoctorProfile.js';
 import Hospital       from '../models/Hospital.js';
-import User           from '../models/User.js';
+ 
 import EPrescription  from '../models/EPrescription.js';
 import Notification   from '../models/Notification.js';
 
-import { protect, authorize }          from '../middleware/authMiddleware.js';
-import { generateVideoSdkToken, createVideoSdkRoom } from '../utils/videoSdk.js';
-import { getConsultationSocketService, rooms }        from '../services/consultationSocketService.js';
+import { protect, authorize }                    from '../middleware/authMiddleware.js';
+import { generateAgoraToken, createAgoraRoom }   from '../services/agoraService.js';
+import { getConsultationSocketService, rooms }   from '../services/consultationSocketService.js';
 
 const router = express.Router();
 
@@ -129,7 +129,7 @@ router.post(
 
       // Load booking — verify it exists and is confirmed
       const booking = await Booking.findById(bookingId)
-        .select('customer doctor hospital status bookingType paymentStatus consultationSessionId')
+        .select('customer doctor hospital status bookingType paymentStatus consultationSessionId bookingCode')
         .lean();
 
       if (!booking)
@@ -160,8 +160,8 @@ router.post(
 
       const dp = await DoctorProfile.findById(doctorProfileId).select('_id specialty').lean();
 
-      // Create VideoSDK room
-      const { roomId, meetingId, meetingLink } = await createVideoSdkRoom(
+      // Create Agora room (channel)
+      const { roomId, meetingId, meetingLink } = await createAgoraRoom(
         booking.bookingCode || bookingId,
         bookingId
       );
@@ -183,6 +183,7 @@ router.post(
         estimatedDurationMinutes,
         waitingRoomEnabled,
         recordingSupported,
+        provider:                'Agora',
         roomId,
         meetingId,
         meetingLink,
@@ -201,9 +202,9 @@ router.post(
         success: true,
         message: 'Consultation created',
         data: {
-          consultationId:   consultation.consultationId,
-          _id:              consultation._id,
-          status:           consultation.status,
+          consultationId:     consultation.consultationId,
+          _id:                consultation._id,
+          status:             consultation.status,
           roomId,
           meetingId,
           meetingLink,
@@ -230,8 +231,13 @@ router.post(
       const { consultationId } = req.params;
       const { _id: userId, role } = req.user;
 
+      // uid for Agora token — convert ObjectId to numeric uid (Agora requires uint)
+      // Use last 8 hex chars of userId → parse as int, masked to 32-bit uint
+      const agoraUid = parseInt(userId.toString().slice(-8), 16) >>> 0;
+
       const consultation = await Consultation.findOne({ consultationId })
-        .select('+hostToken +participantToken patient doctor status telemedicineConsentAccepted waitingRoomEnabled roomId meetingId meetingLink estimatedDurationMinutes consents participants')
+        // In the join route, you select these fields:
+       .select('+hostToken +participantToken patient doctor status telemedicineConsentAccepted waitingRoomEnabled roomId meetingId meetingLink estimatedDurationMinutes consents participants')
         .lean();
 
       if (!consultation)
@@ -280,7 +286,7 @@ router.post(
       // Ensure room exists (idempotent)
       let { roomId, meetingId, meetingLink } = consultation;
       if (!roomId) {
-        const room = await createVideoSdkRoom(consultationId, consultation._id.toString());
+        const room = await createAgoraRoom(consultationId, consultation._id.toString());
         roomId      = room.roomId;
         meetingId   = room.meetingId;
         meetingLink = room.meetingLink;
@@ -289,14 +295,19 @@ router.post(
         });
       }
 
-      // Override stale meeting links
-      if (!meetingLink || meetingLink.includes('api.videosdk.live')) {
+      // Ensure meetingLink points to frontend (not SDK endpoint)
+      if (!meetingLink || !meetingLink.startsWith(process.env.FRONTEND_URL || 'http://localhost:3000')) {
         const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
         meetingLink = `${baseUrl}/consultations/${consultationId}/room`;
       }
 
-      // Dynamic scoped token (short-lived: 2h)
-      const token = generateVideoSdkToken(roomId, isHost ? 'host' : 'participant', '2h');
+      // Generate Agora RTC token (2h = 7200s)
+      const token = generateAgoraToken(
+        roomId,
+        isHost ? 'host' : 'participant',
+        agoraUid,
+        7200
+      );
 
       // Waiting room determination
       const inWaitingRoom = participantRole === 'patient' &&
@@ -314,10 +325,11 @@ router.post(
         success: true,
         data: {
           consultationId,
-          roomId,
-          meetingId,
+          roomId,          // Agora channelName
+          meetingId,       // same as roomId for Agora
           meetingLink,
-          token,
+          token,           // Agora RTC token
+          uid: agoraUid,   // must pass this uid when joining Agora channel
           participantRole,
           isHost,
           permissions: {
@@ -329,12 +341,12 @@ router.post(
             canPrescribe:   participantRole === 'doctor',
           },
           rtcConfig: {
-            provider:     'VideoSDK',
-            region:       consultation.region || 'ap-south-1',
-            codec:        'VP8',
-            quality:      'auto',
-            noiseSuppressionEnabled: true,
-            echoCancellationEnabled: true,
+            provider:    'Agora',
+            appId:       process.env.AGORAIO_APP_ID,
+            channelName: roomId,
+            uid:         agoraUid,
+            codec:       'vp8',
+            mode:        'rtc',
           },
           waitingRoomStatus:        inWaitingRoom ? 'in_waiting_room' : 'admitted',
           estimatedDurationMinutes: consultation.estimatedDurationMinutes,
@@ -1471,7 +1483,7 @@ router.get(
       const { _id: userId, role } = req.user;
 
       const filter = {};
-      if (status)          filter.status          = status;
+      if (status)           filter.status           = status;
       if (consultationType) filter.consultationType = consultationType;
       if (from || to) {
         filter.scheduledStartTime = {};
@@ -1524,25 +1536,27 @@ router.get(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ── 18. VIDEOSDK WEBHOOK
+// ── 18. AGORA WEBHOOK
+// Agora Cloud Recording / NCS (Notification Center Service) callbacks
 // ─────────────────────────────────────────────────────────────────────────────
 
 router.post(
-  '/webhooks/videosdk',
+  '/webhooks/agora',
   async (req, res) => {
     try {
-      // Validate VideoSDK webhook secret
-      const secret = req.headers['x-videosdk-signature'] || req.headers['authorization'];
-      if (!secret || secret !== process.env.VIDEOSDK_WEBHOOK_SECRET) {
+      // Validate Agora NCS secret
+      const secret = req.headers['x-agora-signature'] || req.headers['authorization'];
+      if (!secret || secret !== process.env.AGORA_WEBHOOK_SECRET) {
         return res.status(401).json({ success: false, message: 'Unauthorized webhook' });
       }
 
-      const { event, data } = req.body;
-      const { roomId, participantId } = data || {};
+      const { eventType, payload } = req.body;
 
-      if (!roomId) return res.status(200).json({ received: true });
+      // Agora NCS sends channelName as the room identifier
+      const channelName = payload?.channelName || payload?.cname;
+      if (!channelName) return res.status(200).json({ received: true });
 
-      const consultation = await Consultation.findOne({ roomId })
+      const consultation = await Consultation.findOne({ roomId: channelName })
         .select('consultationId status _id')
         .lean();
 
@@ -1550,38 +1564,50 @@ router.post(
 
       const { consultationId } = consultation;
 
-      switch (event) {
-        case 'session:participant-joined':
+      switch (eventType) {
+        // NCS event 103: host/audience joins channel
+        case 103:
           emitConsultationEvent(consultationId, 'consultation:participant_joined', {
-            consultationId, participantId, source: 'videosdk_webhook',
+            consultationId,
+            uid:    payload?.uid,
+            source: 'agora_webhook',
           });
           break;
 
-        case 'session:participant-left':
+        // NCS event 104: host/audience leaves channel
+        case 104:
           emitConsultationEvent(consultationId, 'consultation:participant_left', {
-            consultationId, participantId, source: 'videosdk_webhook',
+            consultationId,
+            uid:    payload?.uid,
+            source: 'agora_webhook',
           });
           break;
 
-        case 'recording:statusChanged':
-          if (data.status === 'RECORDING_STARTED') {
-            await Consultation.findByIdAndUpdate(consultation._id, {
-              $set: { 'recording.recordingStatus': 'recording' },
-            });
-            emitConsultationEvent(consultationId, 'consultation:recording_started', { consultationId });
-          }
-          if (data.status === 'RECORDING_STOPPED') {
-            await Consultation.findByIdAndUpdate(consultation._id, {
-              $set: {
-                'recording.recordingStatus': 'processing',
-                'recording.recordingUrl':    data.fileUrl || '',
-              },
-            });
-            emitConsultationEvent(consultationId, 'consultation:recording_stopped', { consultationId, fileUrl: data.fileUrl });
-          }
+        // Cloud Recording: recording started
+        case 'cloud_recording_started':
+          await Consultation.findByIdAndUpdate(consultation._id, {
+            $set: { 'recording.recordingStatus': 'recording' },
+          });
+          emitConsultationEvent(consultationId, 'consultation:recording_started', { consultationId });
           break;
 
-        case 'session:ended':
+        // Cloud Recording: recording stopped / file uploaded
+        case 'cloud_recording_uploaded': {
+          const fileUrl = payload?.fileList?.[0]?.fileName
+            ? `https://${process.env.AGORA_RECORDING_BUCKET}.s3.amazonaws.com/${payload.fileList[0].fileName}`
+            : '';
+          await Consultation.findByIdAndUpdate(consultation._id, {
+            $set: {
+              'recording.recordingStatus': 'ready',
+              'recording.recordingUrl':    fileUrl,
+            },
+          });
+          emitConsultationEvent(consultationId, 'consultation:recording_stopped', { consultationId, fileUrl });
+          break;
+        }
+
+        // NCS event 105: channel destroyed (all users left)
+        case 105:
           await Consultation.findOneAndUpdate(
             { consultationId, status: { $in: ['active', 'paused', 'waiting'] } },
             {
@@ -1595,7 +1621,7 @@ router.post(
             }
           );
           emitConsultationEvent(consultationId, 'consultation:consultation_ended', {
-            consultationId, endedBy: 'system', source: 'videosdk_webhook',
+            consultationId, endedBy: 'system', source: 'agora_webhook',
           });
           break;
 
@@ -1605,7 +1631,7 @@ router.post(
 
       return res.status(200).json({ received: true });
     } catch (err) {
-      console.error('[POST /webhooks/videosdk]', err);
+      console.error('[POST /webhooks/agora]', err);
       return res.status(500).json({ success: false, message: err.message });
     }
   }

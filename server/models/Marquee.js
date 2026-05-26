@@ -2,16 +2,8 @@ import mongoose from 'mongoose';
 const { Schema } = mongoose;
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  MARQUEE MODEL  —  Likeson.in Healthcare Platform
-//
-//  Marquees are scrolling announcement banners shown across the app.
-//  Each marquee can be:
-//    • Targeted to specific roles or "all" users
-//    • Scheduled with start/end dates
-//    • Styled with a type (info / warning / success / error / promo)
-//    • Prioritised so urgent notices bubble to the top
-//    • Linked to an action URL (deep link or external)
-//    • Tracked for impressions & dismissals
+//  ENTERPRISE MARQUEE MODEL 
+//  Optimized for scale, guest users, scheduling, and strict validation.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ROLES = [
@@ -21,148 +13,79 @@ const ROLES = [
 
 const MARQUEE_TYPES  = ['info', 'warning', 'success', 'error', 'promo'];
 const MARQUEE_SPEEDS = ['slow', 'normal', 'fast'];
-
-// ─── Sub-schema: per-user dismissal log ──────────────────────────────────────
-
-const dismissalSchema = new Schema({
-  user:        { type: Schema.Types.ObjectId, ref: 'User', required: true },
-  dismissedAt: { type: Date, default: Date.now },
-}, { _id: false });
+const AUDIENCE_TYPES = ['public', 'guests_only', 'authenticated', 'targeted'];
+const STATUS_TYPES   = ['draft', 'published', 'archived']; // Replaces isActive/isArchived
 
 // ─── Sub-schema: click/impression analytics ──────────────────────────────────
-
 const analyticsSchema = new Schema({
-  impressions: { type: Number, default: 0 },   // total views
-  clicks:      { type: Number, default: 0 },   // CTA clicks
-  dismissals:  { type: Number, default: 0 },   // total dismiss count
+  impressions: { type: Number, default: 0 },
+  clicks:      { type: Number, default: 0 },
+  dismissals:  { type: Number, default: 0 },
 }, { _id: false });
 
 // ─── Main schema ─────────────────────────────────────────────────────────────
-
 const marqueeSchema = new Schema({
 
   // ── Content ──────────────────────────────────────────────────────────────
   message: {
     type:     String,
-    required: true,
+    required: [true, 'A marquee message is required'],
     trim:     true,
     maxlength: 500,
   },
-
-  // Optional rich sub-text (shown on hover / expanded view)
-  subText: {
-    type:      String,
-    trim:      true,
-    maxlength: 1000,
-    default:   '',
-  },
-
-  // Optional icon name (lucide icon string, e.g. "AlertTriangle")
-  icon: {
-    type:    String,
-    default: '',
-  },
+  subText: { type: String, trim: true, maxlength: 1000, default: '' },
+  icon:    { type: String, default: '' },
 
   // ── Display Settings ─────────────────────────────────────────────────────
-  type: {
-    type:    String,
-    enum:    MARQUEE_TYPES,
-    default: 'info',
+  type:     { type: String, enum: MARQUEE_TYPES, default: 'info' },
+  speed:    { type: String, enum: MARQUEE_SPEEDS, default: 'normal' },
+  priority: { type: Number, default: 0, min: 0, max: 100 },
+  
+  // Unique identifier for frontend localStorage/cookie dismissal tracking
+  clientKey: { 
+    type: String, 
+    required: true, 
+    unique: true,
+    default: () => `mq_${new mongoose.Types.ObjectId().toString()}` 
   },
+  
+  isDismissible: { type: Boolean, default: true },
 
-  speed: {
-    type:    String,
-    enum:    MARQUEE_SPEEDS,
-    default: 'normal',
-  },
-
-  // Priority: higher number = rendered first
-  priority: {
-    type:    Number,
-    default: 0,
-    min:     0,
-    max:     100,
-  },
-
-  // Whether users can dismiss this marquee
-  isDismissible: {
-    type:    Boolean,
-    default: true,
-  },
-
-  // Show a CTA button alongside the text
   cta: {
     label:  { type: String, default: '' },
-    url:    { type: String, default: '' },   // absolute URL or relative path
+    url:    { type: String, default: '' },
     target: { type: String, enum: ['_self', '_blank'], default: '_self' },
   },
 
-  // ── Targeting ────────────────────────────────────────────────────────────
-  // Empty array = shown to ALL roles
-  targetRoles: [{
+  // ── Audience & Targeting ─────────────────────────────────────────────────
+  audience: {
     type: String,
-    enum: ROLES,
-  }],
-
-  // Specific users (e.g. announce to one doctor)
-  targetUsers: [{
-    type: Schema.Types.ObjectId,
-    ref:  'User',
-  }],
-
-  // Pages / screens where this marquee is visible
-  // Empty = show on all pages
-  targetPages: [{
-    type: String,
-    trim: true,
-  }],
-
-  // ── Scheduling ───────────────────────────────────────────────────────────
-  startsAt: {
-    type:    Date,
-    default: Date.now,
+    enum: AUDIENCE_TYPES,
+    default: 'public',
   },
 
-  endsAt: {
-    type:    Date,
-    default: null,   // null = no expiry
+  targetRoles: [{ type: String, enum: ROLES }],
+  targetUsers: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+  targetPages: [{ type: String, trim: true }],
+
+  // ── Scheduling & Status ──────────────────────────────────────────────────
+  startsAt: { type: Date, default: Date.now },
+  endsAt:   { type: Date, default: null }, // null = runs indefinitely
+  
+  status: { 
+    type: String, 
+    enum: STATUS_TYPES, 
+    default: 'draft' 
   },
 
-  // ── Status ───────────────────────────────────────────────────────────────
-  isActive: {
-    type:    Boolean,
-    default: true,
-    index:   true,
-  },
-
-  isArchived: {
-    type:    Boolean,
-    default: false,
-  },
-
-  // ── Per-user dismissal log ────────────────────────────────────────────────
-  dismissedBy: {
-    type:    [dismissalSchema],
-    default: [],
-  },
-
-  // ── Analytics ────────────────────────────────────────────────────────────
+  // ── Analytics & Metadata ─────────────────────────────────────────────────
   analytics: {
-    type:    analyticsSchema,
+    type: analyticsSchema,
     default: () => ({ impressions: 0, clicks: 0, dismissals: 0 }),
   },
 
-  // ── Metadata ─────────────────────────────────────────────────────────────
-  createdBy: {
-    type: Schema.Types.ObjectId,
-    ref:  'User',
-    required: true,
-  },
-
-  updatedBy: {
-    type: Schema.Types.ObjectId,
-    ref:  'User',
-  },
+  createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
 
 }, {
   timestamps: true,
@@ -170,23 +93,37 @@ const marqueeSchema = new Schema({
   toObject: { virtuals: true },
 });
 
-// ─── Virtual: isLive (active + within schedule) ───────────────────────────────
+// ─── Custom Validation ───────────────────────────────────────────────────────
 
+// Ensure that if audience is 'targeted', they actually provided targets
+marqueeSchema.pre('save', async function () {
+  if (this.audience === 'targeted') {
+    const hasRoles = this.targetRoles && this.targetRoles.length > 0;
+    const hasUsers = this.targetUsers && this.targetUsers.length > 0;
+    
+    if (!hasRoles && !hasUsers) {
+      return next(new Error('A "targeted" marquee must have at least one targetRole or targetUser.'));
+    }
+  }
+   
+});
+
+// ─── Virtual: isLive ─────────────────────────────────────────────────────────
+
+// Dynamically checks if the marquee should currently be visible
 marqueeSchema.virtual('isLive').get(function () {
   const now = new Date();
-  if (!this.isActive || this.isArchived) return false;
+  if (this.status !== 'published') return false;
   if (this.startsAt && now < this.startsAt) return false;
-  if (this.endsAt   && now > this.endsAt)  return false;
+  if (this.endsAt && now > this.endsAt) return false;
   return true;
 });
 
 // ─── Indexes ─────────────────────────────────────────────────────────────────
 
-marqueeSchema.index({ isActive: 1, startsAt: 1, endsAt: 1 });
-marqueeSchema.index({ priority: -1, createdAt: -1 });
-marqueeSchema.index({ targetRoles: 1, isActive: 1 });
-
-// ─── Model ───────────────────────────────────────────────────────────────────
+// Optimized index for the frontend fetching active marquees.
+// Queries will usually filter by status, audience, and dates, then sort by priority.
+marqueeSchema.index({ status: 1, audience: 1, startsAt: 1, endsAt: 1, priority: -1 });
 
 const Marquee = mongoose.model('Marquee', marqueeSchema);
 export default Marquee;

@@ -23,7 +23,9 @@ const router = express.Router();
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ADMIN_ROLES  = ['superadmin', 'admin'];
-const MAX_FILE_MB  = 10;
+
+// Set to 100 to allow files up to 100 MB (or change to 50 for a 50 MB limit)
+const MAX_FILE_MB  = 100; 
 const MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024;
 
 const ALLOWED_MIME = new Set([

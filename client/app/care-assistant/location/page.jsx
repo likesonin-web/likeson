@@ -17,18 +17,34 @@ const GOOGLE_MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
 /* ─── Load Google Maps script once ─────────────────────────────── */
 function loadGoogleMaps() {
   return new Promise((resolve, reject) => {
+    // Already loaded
     if (window.google?.maps) return resolve(window.google.maps);
+
+    // Script already in DOM — wait for it via callback
     const existing = document.getElementById('gmap-script');
     if (existing) {
+      // Script may already be loaded but google not yet assigned — check both
       existing.addEventListener('load', () => resolve(window.google.maps));
+      existing.addEventListener('error', reject);
       return;
     }
+
+    // Fresh inject — use callback param so google guarantees availability
+    const callbackName = '__gmaps_cb_' + Date.now();
+    window[callbackName] = () => {
+      resolve(window.google.maps);
+      delete window[callbackName];
+    };
+
     const script = document.createElement('script');
-    script.id  = 'gmap-script';
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&libraries=places,geometry`;
+    script.id    = 'gmap-script';
+    script.src   = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&libraries=places,geometry&callback=${callbackName}`;
     script.async = true;
-    script.onload  = () => resolve(window.google.maps);
-    script.onerror = reject;
+    script.defer = true;
+    script.onerror = () => {
+      delete window[callbackName];
+      reject(new Error('Script load failed'));
+    };
     document.head.appendChild(script);
   });
 }

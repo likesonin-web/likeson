@@ -154,6 +154,28 @@ const initialState = {
   nearbyHospitals:       [],
   careRideNearby:        null,
 
+  // after activeRide:
+careTrackingSnapshot:  null,   // from fetchCareTrackingSnapshot
+careAssistantLocation: null,   // from socket care_assistant_location_update
+careAssistantStatus:   null,   // from socket care_assistant_status_change
+careAssistantJoined:   null,   // from socket care_assistant_joined_ride
+careRideStatus: {
+
+  status: null,
+
+  activeTarget: null,
+
+  currentLeg: null,
+
+  patientPickedUp: false,
+
+  careAssistantJoined: false,
+
+  hospitalReached: false,
+
+  handoverCompleted: false,
+},
+
   // ── Single-record ────────────────────────────────────────────────────────
   selectedBooking:       null,
   selectedOp:            null,
@@ -265,8 +287,10 @@ export const markCareComplete = mkThunk(
 
 export const updateCareLocation = mkThunk(
   'operations/updateCareLocation',
-  async ({ lat, lng, bookingId }) => {
-    const { data } = await API.patch(`${BASE}/care/location`, { lat, lng, bookingId });
+  async ({ lat, lng, bookingId, status }) => {
+    const { data } = await API.patch(`${BASE}/care/location`, {
+      lat, lng, bookingId, status,   // ← added status
+    });
     return data;
   }
 );
@@ -278,6 +302,37 @@ export const careRequestRide = mkThunk(
       pickupLocation, destinationLocation,
     });
     toast.success('Ride requested');
+    return data.data;
+  }
+);
+
+// ADD after careRequestRide thunk
+
+export const careJoinRide = mkThunk(
+  'operations/careJoinRide',
+  async ({ bookingId, currentLat, currentLng }) => {
+    const { data } = await API.post(`${BASE}/${bookingId}/care/join-ride`, {
+      currentLat, currentLng,
+    });
+    toast.success('Joined ride session');
+    return data.data;
+  }
+);
+
+export const careUpdateRideStatus = mkThunk(
+  'operations/careUpdateRideStatus',
+  async ({ bookingId, status, lat, lng }) => {
+    const { data } = await API.patch(`${BASE}/${bookingId}/care/ride-status`, {
+      status, lat, lng,
+    });
+    return data.data;
+  }
+);
+
+export const fetchCareTrackingSnapshot = mkThunk(
+  'operations/fetchCareTrackingSnapshot',
+  async ({ bookingId }) => {
+    const { data } = await API.get(`${BASE}/${bookingId}/care/tracking-snapshot`);
     return data.data;
   }
 );
@@ -828,7 +883,18 @@ const operationsSlice = createSlice({
 
   reducers: {
     // ── Socket live-state setters (called from SocketProvider listeners) ─────
+    setCareRideWorkflow(
+  state,
+  action
+) {
 
+  state.careRideStatus = {
+
+    ...state.careRideStatus,
+
+    ...action.payload,
+  };
+},
     /** Call from useBookingRoom / location_update event */
     setLiveLocation(state, { payload }) {
       state.liveLocation = payload;
@@ -946,6 +1012,38 @@ const operationsSlice = createSlice({
     resetAdminOpStatusUpdate(state) {
       state.adminOpStatusUpdate = null;
     },
+
+    /** From socket care_assistant_location_update */
+setCareAssistantLocation(state, { payload }) {
+  state.careAssistantLocation = payload;
+},
+
+/** From socket care_assistant_status_change */
+setCareAssistantStatus(state, { payload }) {
+  state.careAssistantStatus = payload;
+  if (payload?.careAssistantStatus) {
+    state.careRideStatus = payload.careAssistantStatus;
+  }
+},
+
+/** From socket care_assistant_joined_ride or care_assistant_attached_to_ride */
+setCareAssistantJoined(state, { payload }) {
+  state.careAssistantJoined = payload;
+  // patch snapshot if already loaded
+  if (state.careTrackingSnapshot?.careAssistant) {
+    state.careTrackingSnapshot.careAssistant.status   = 'en_route_to_pickup';
+    state.careTrackingSnapshot.careAssistant.joinedAt = payload?.joinedAt ?? null;
+    state.careTrackingSnapshot.careAssistant.isLinkedToRide = true;
+  }
+},
+
+clearCareRideState(state) {
+  state.careTrackingSnapshot  = null;
+  state.careAssistantLocation = null;
+  state.careAssistantStatus   = null;
+  state.careAssistantJoined   = null;
+  state.careRideStatus        = null;
+},
 
     /** Set socket connection status — call from SocketProvider connect/disconnect events */
     setSocketConnected(state, { payload }) {
@@ -1280,8 +1378,41 @@ const operationsSlice = createSlice({
     wire(requestBookingState, (state, { payload }) => {
       state.bookingSnapshot = payload ?? null;
     });
+
+    // after wire(careRequestRide, ...)
+
+wire(careJoinRide, (state, { payload }) => {
+  state.careRideStatus = 'en_route_to_pickup';
+  // patch snapshot if loaded
+  if (state.careTrackingSnapshot?.careAssistant) {
+    state.careTrackingSnapshot.careAssistant.isLinkedToRide = true;
+    state.careTrackingSnapshot.careAssistant.status = 'en_route_to_pickup';
+  }
+});
+
+wire(careUpdateRideStatus, (state, { payload }) => {
+  if (payload?.status) state.careRideStatus = payload.status;
+  if (state.careTrackingSnapshot?.careAssistant) {
+    state.careTrackingSnapshot.careAssistant.status = payload?.status ?? state.careRideStatus;
+  }
+});
+
+wire(fetchCareTrackingSnapshot, (state, { payload }) => {
+  state.careTrackingSnapshot = payload ?? null;
+  // sync CA live location into careAssistantLocation too
+  if (payload?.careAssistant?.liveLocation) {
+    state.careAssistantLocation = payload.careAssistant.liveLocation;
+  }
+  if (payload?.careAssistant?.status) {
+    state.careRideStatus = payload.careAssistant.status;
+  }
+});
   },
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACTIONS
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ACTIONS
@@ -1308,6 +1439,11 @@ export const {
   resetAdminRefund,
   resetAdminOpStatusUpdate,
   setSocketConnected,
+  setCareAssistantLocation,
+  setCareAssistantStatus,
+  setCareAssistantJoined,
+  clearCareRideState,
+  setCareRideWorkflow, // <--- ADD THIS HERE
 } = operationsSlice.actions;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1419,6 +1555,18 @@ export const selectAdminAssignLoading = (s) => (
   (s.operations.loading['adminReassignDriver']          ?? false) ||
   (s.operations.loading['adminReassignCareAssistant']   ?? false)
 );
+
+// ── Care Ride Tracking ────────────────────────────────────────────────────────
+export const selectCareTrackingSnapshot  = (s) => s.operations.careTrackingSnapshot;
+export const selectCareAssistantLocation = (s) => s.operations.careAssistantLocation;
+export const selectCareAssistantStatus   = (s) => s.operations.careAssistantStatus;
+export const selectCareAssistantJoined   = (s) => s.operations.careAssistantJoined;
+export const selectCareRideStatus        = (s) => s.operations.careRideStatus;
+
+export const selectCareTrackingLoading   = (s) =>
+  s.operations.loading['fetchCareTrackingSnapshot'] ?? false;
+export const selectCareJoinLoading       = (s) =>
+  s.operations.loading['careJoinRide'] ?? false;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RE-EXPORT DRIVER_STATUS constants for components

@@ -1,5 +1,4 @@
 import express from 'express';
-
 import Booking              from '../models/Booking.js';
 import Consultation         from '../models/Consultation.js';  // ← added
 import Ride                 from '../models/Ride.js';
@@ -86,6 +85,8 @@ const invalidateBookingCache = async () => {
     }
   } catch (e) { console.error('[Cache] invalidation error:', e.message); }
 };
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INTERNAL HELPERS
@@ -845,7 +846,7 @@ router.get('/consultations/:consultationId/join-token',
   async (req, res) => {
     try {
       const consultation = await Consultation.findById(req.params.consultationId)
-        .select('+hostToken +participantToken roomId meetingId meetingLink provider sdkConfiguration status patient doctor')
+        .select('roomId meetingId meetingLink provider status patient doctor')
         .lean();
       if (!consultation) return res.status(404).json({ success: false, message: 'Consultation not found' });
 
@@ -856,28 +857,41 @@ router.get('/consultations/:consultationId/join-token',
         });
       }
 
-      let token;
+      if (!consultation.roomId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Consultation room not configured yet',
+        });
+      }
+
+      const { generateAgoraToken } = await import('../services/agoraService.js');
+
       let role = 'patient';
+      let uid  = 0;
 
       if (req.user.role === 'doctor') {
         const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
         if (dp && String(consultation.doctor) === String(dp._id)) {
-          token = consultation.hostToken;
-          role  = 'doctor';
+          role = 'doctor';
         }
       }
-      if (!token) token = consultation.participantToken;
+
+      // Fresh short-lived token (2 hours) — never cache tokens
+      const token = generateAgoraToken(consultation.roomId, role === 'doctor' ? 'host' : 'participant', uid, 7200);
 
       return res.json({
         success: true,
         data: {
           token,
           role,
-          roomId:         consultation.roomId,
-          meetingId:      consultation.meetingId,
-          meetingLink:    consultation.meetingLink,
-          provider:       consultation.provider,
-          sdkConfig:      consultation.sdkConfiguration,
+          uid,
+          channelName: consultation.roomId,
+          roomId:      consultation.roomId,
+          meetingId:   consultation.meetingId,
+          meetingLink: consultation.meetingLink,
+          provider:    consultation.provider ?? 'Agora',
+          appId:       process.env.AGORAIO_APP_ID,
+          expiresInSeconds: 7200,
         },
       });
     } catch (err) {
@@ -1354,21 +1368,348 @@ router.patch('/care/location',
   protect, authorize('care_assistant'),
   async (req, res) => {
     try {
-      const { lat, lng, bookingId } = req.body;
+      const { lat, lng, heading, speed, bookingId, status } = req.body;
       if (!lat || !lng) return res.status(400).json({ success: false, message: 'lat, lng required' });
 
-      await CareAssistantProfile.findOneAndUpdate(
+      const profile = await CareAssistantProfile.findOneAndUpdate(
         { user: req.user._id },
-        { 'location.coordinates': [lng, lat], 'location.updatedAt': new Date() }
-      );
+        { 'location.coordinates': [lng, lat], 'location.updatedAt': new Date() },
+        { new: true }
+      ).select('_id').lean();
 
       if (bookingId) {
-        getBookingSocketService()?.emitToRoom(`booking:${bookingId}`, 'location_update', {
-          lat, lng, role: 'care_assistant', updatedAt: new Date(),
+        // Find active ride for this booking
+        const activeRide = await Ride.findOne({
+          booking: bookingId,
+          status: { $in: ['driver_assigned', 'driver_accepted', 'driver_en_route',
+                          'driver_arrived', 'otp_verified', 'in_progress', 'at_stop'] },
+        }).select('_id').lean();
+
+        if (activeRide) {
+          // Push CA breadcrumb + update live location in RideTracking
+          await RideTracking.updateCareAssistantLocation(activeRide._id, {
+            coordinates: [lng, lat], heading, speedKmh: speed,
+          }).catch(e => console.error('[CA location] tracking update:', e.message));
+
+          // Update CA status in tracking if provided
+          if (status) {
+            await RideTracking.updateCareAssistantStatus(activeRide._id, status)
+              .catch(e => console.error('[CA location] status update:', e.message));
+          }
+        }
+
+        // Broadcast to booking room — driver + customer both see CA position
+        getBookingSocketService()?.emitToRoom(`booking:${bookingId}`, 'care_assistant_location_update', {
+          lat, lng, heading,
+          speed:          speed ?? 0,
+          role:           'care_assistant',
+          careAssistantId: profile?._id,
+          status:         status ?? null,
+          updatedAt:      new Date(),
+          rideId:         activeRide?._id ?? null,
         });
       }
 
       return res.json({ success: true });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CARE ASSISTANT — RIDE SESSION PARTICIPATION
+// CA joins/updates status in an active ride tracking session
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /:id/care/join-ride
+ * CA joins ride session at any stage (before pickup, during, or midway).
+ * Links CA profile to RideTracking. Broadcasts to booking room.
+ * Body: { currentLat, currentLng }
+ */
+router.post('/:id/care/join-ride',
+  protect, authorize('care_assistant'),
+  async (req, res) => {
+    try {
+      const { currentLat, currentLng } = req.body;
+
+      const profile = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id fullName').lean();
+      if (!profile) return res.status(404).json({ success: false, message: 'Care assistant profile not found' });
+
+      const booking = await Booking.findOne({ _id: req.params.id, careAssistant: profile._id })
+        .select('_id bookingCode customer primaryRide status').lean();
+      if (!booking) return res.status(404).json({ success: false, message: 'Booking not found or not assigned to you' });
+
+      if (!booking.primaryRide)
+        return res.status(400).json({ success: false, message: 'No active ride on this booking yet' });
+
+      const ride = await Ride.findById(booking.primaryRide)
+        .select('_id status trackingId').lean();
+      if (!ride) return res.status(404).json({ success: false, message: 'Ride not found' });
+
+      const activeMidwayStatuses = [
+        'driver_assigned', 'driver_accepted', 'driver_en_route',
+        'driver_arrived', 'otp_verified', 'in_progress', 'at_stop',
+      ];
+      if (!activeMidwayStatuses.includes(ride.status))
+        return res.status(400).json({ success: false, message: `Cannot join ride in status: ${ride.status}` });
+
+      // Attach CA to RideTracking
+      const tracking = await RideTracking.attachCareAssistant(ride._id, profile._id);
+      if (!tracking) return res.status(404).json({ success: false, message: 'Ride tracking not found' });
+
+      // If CA provides current location, record first breadcrumb immediately
+      if (currentLat && currentLng) {
+        await RideTracking.updateCareAssistantLocation(ride._id, {
+          coordinates: [currentLng, currentLat], source: 'gps',
+        }).catch(() => {});
+
+        // Update CA profile location too
+        await CareAssistantProfile.findByIdAndUpdate(profile._id, {
+          'location.coordinates': [currentLng, currentLat],
+          'location.updatedAt':   new Date(),
+        });
+      }
+
+      // Join booking socket room
+      getBookingSocketService()?.emitJoinRoom(String(req.user._id), `booking:${booking._id}`);
+
+      // Broadcast CA joined to all participants in booking room
+      getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'care_assistant_joined_ride', {
+        bookingId:         booking._id,
+        rideId:            ride._id,
+        careAssistantId:   profile._id,
+        careAssistantName: profile.fullName,
+        joinedAt:          new Date(),
+        currentLocation:   (currentLat && currentLng) ? { lat: currentLat, lng: currentLng } : null,
+        rideStatus:        ride.status,
+      });
+
+      await createNotification({
+        recipient: booking.customer,
+        title:     'Care Assistant Joined',
+        body:      `${profile.fullName} has joined your ride session.`,
+        type:      'Care_Assistant_Assigned',
+        bookingId: booking._id,
+      });
+
+      return res.json({
+        success: true,
+        message: 'Joined ride session successfully',
+        data: {
+          rideId:            ride._id,
+          bookingId:         booking._id,
+          careAssistantStatus: 'en_route_to_pickup',
+          socketRoom:        `booking:${booking._id}`,
+          socketEvents:      ['care_assistant_location_update', 'care_assistant_status_change'],
+        },
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * PATCH /:id/care/ride-status
+ * CA updates their status within ride session.
+ * Statuses: en_route_to_pickup | at_pickup | in_ride | departed
+ * Body: { status, lat?, lng? }
+ */
+router.patch('/:id/care/ride-status',
+  protect, authorize('care_assistant'),
+  async (req, res) => {
+    try {
+      const { status, lat, lng } = req.body;
+      const validStatuses = ['en_route_to_pickup', 'at_pickup', 'in_ride', 'departed'];
+      if (!status || !validStatuses.includes(status))
+        return res.status(400).json({ success: false, message: `status must be one of: ${validStatuses.join(', ')}` });
+
+      const profile = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id fullName').lean();
+      if (!profile) return res.status(404).json({ success: false, message: 'Care assistant profile not found' });
+
+      const booking = await Booking.findOne({ _id: req.params.id, careAssistant: profile._id })
+        .select('_id customer primaryRide').lean();
+      if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+      if (!booking.primaryRide)
+        return res.status(400).json({ success: false, message: 'No active ride on this booking' });
+
+      // Update status in tracking
+      await RideTracking.updateCareAssistantStatus(booking.primaryRide, status);
+
+      // If location provided, update too
+      if (lat && lng) {
+        await RideTracking.updateCareAssistantLocation(booking.primaryRide, {
+          coordinates: [lng, lat], source: 'gps',
+        }).catch(() => {});
+      }
+
+      // Add milestone to ride tracking for key transitions
+      const milestoneMap = {
+        at_pickup: 'care_assistant_joined',
+        in_ride:   'care_assistant_joined',
+      };
+      if (milestoneMap[status]) {
+        RideTracking.addMilestone(booking.primaryRide, milestoneMap[status], {
+          coordinates:      lat && lng ? [lng, lat] : null,
+          meta:             { careAssistantId: profile._id, status },
+          recordedBy:       'driver',
+          recordedByUserId: req.user._id,
+        }).catch(() => {});
+      }
+
+      // Broadcast status change to booking room
+      getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'care_assistant_status_change', {
+        bookingId:           booking._id,
+        rideId:              booking.primaryRide,
+        careAssistantId:     profile._id,
+        careAssistantName:   profile.fullName,
+        careAssistantStatus: status,
+        location:            (lat && lng) ? { lat, lng } : null,
+        timestamp:           new Date(),
+      });
+
+      if (status === 'at_pickup') {
+        await createNotification({
+          recipient: booking.customer,
+          title:     'Care Assistant Arrived',
+          body:      `${profile.fullName} has arrived at pickup and is ready.`,
+          type:      'Care_Assistant_Arriving',
+          bookingId: booking._id,
+        });
+      }
+
+      return res.json({ success: true, message: `Status updated to ${status}`, data: { status } });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+/**
+ * GET /:id/care/tracking-snapshot
+ * Customer/admin gets full tracking snapshot including CA position.
+ * Returns driver live location + CA live location + both route contexts.
+ */
+router.get('/:id/care/tracking-snapshot',
+  protect, authorize('customer', 'admin', 'superadmin', 'care_assistant'),
+  async (req, res) => {
+    try {
+      const booking = await Booking.findById(req.params.id)
+        .select('customer primaryRide careAssistant status bookingType')
+        .lean();
+      if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+      // Access control for customer
+      if (req.user.role === 'customer' && String(booking.customer) !== String(req.user._id))
+        return res.status(403).json({ success: false, message: 'Access denied' });
+
+      if (!booking.primaryRide)
+        return res.status(200).json({ success: true, data: { message: 'No active ride yet', hasRide: false } });
+
+      const [ride, tracking] = await Promise.all([
+        Ride.findById(booking.primaryRide)
+          .select('status liveLocation driverSnapshot vehicleSnapshot pickup dropoff estimatedDistanceKm estimatedDurationMin rideStartedAt scheduledPickupAt')
+          .lean(),
+        RideTracking.findOne({ ride: booking.primaryRide })
+          .select('currentEtaMinutes currentEtaTarget hasActiveSos expectedRoutePolyline careAssistant careAssistantLiveLocation careAssistantStatus careAssistantJoinedAt careAssistantBreadcrumbCount milestones')
+          .lean(),
+      ]);
+
+      if (!ride) return res.status(404).json({ success: false, message: 'Ride not found' });
+
+      // CA profile snapshot
+      let careAssistantSnapshot = null;
+      if (booking.careAssistant) {
+        const ca = await CareAssistantProfile.findById(booking.careAssistant)
+          .select('fullName phone photoUrl specializations performance.averageRating')
+          .lean();
+        if (ca) {
+          careAssistantSnapshot = {
+            profileId:       ca._id,
+            name:            ca.fullName,
+            phone:           ca.phone,
+            photoUrl:        ca.photoUrl,
+            specializations: ca.specializations,
+            rating:          ca.performance?.averageRating,
+            isLinkedToRide:  !!tracking?.careAssistant,
+            status:          tracking?.careAssistantStatus ?? 'not_joined',
+            joinedAt:        tracking?.careAssistantJoinedAt ?? null,
+          };
+        }
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          bookingId: booking._id,
+          rideId:    ride._id,
+          rideStatus: ride.status,
+
+          // Driver live tracking
+          driver: {
+            liveLocation: ride.liveLocation?.coordinates?.length === 2
+              ? {
+                  lat:       ride.liveLocation.coordinates[1],
+                  lng:       ride.liveLocation.coordinates[0],
+                  heading:   ride.liveLocation.heading  ?? 0,
+                  speedKmh:  ride.liveLocation.speedKmh ?? 0,
+                  updatedAt: ride.liveLocation.updatedAt,
+                }
+              : null,
+            snapshot:         ride.driverSnapshot,
+            vehicleSnapshot:  ride.vehicleSnapshot,
+          },
+
+          // Route
+          route: {
+            pickup:               ride.pickup,
+            dropoff:              ride.dropoff,
+            expectedPolyline:     tracking?.expectedRoutePolyline ?? null,
+            estimatedDistanceKm:  ride.estimatedDistanceKm,
+            estimatedDurationMin: ride.estimatedDurationMin,
+            currentEtaMinutes:    tracking?.currentEtaMinutes ?? null,
+            currentEtaTarget:     tracking?.currentEtaTarget  ?? null,
+          },
+
+          // Care Assistant live tracking (secondary participant)
+          careAssistant: careAssistantSnapshot
+            ? {
+                ...careAssistantSnapshot,
+                liveLocation: tracking?.careAssistantLiveLocation?.coordinates?.length === 2
+                  ? {
+                      lat:       tracking.careAssistantLiveLocation.coordinates[1],
+                      lng:       tracking.careAssistantLiveLocation.coordinates[0],
+                      heading:   tracking.careAssistantLiveLocation.heading  ?? 0,
+                      speedKmh:  tracking.careAssistantLiveLocation.speedKmh ?? 0,
+                      updatedAt: tracking.careAssistantLiveLocation.updatedAt,
+                    }
+                  : null,
+                breadcrumbCount: tracking?.careAssistantBreadcrumbCount ?? 0,
+              }
+            : null,
+
+          hasActiveSos: tracking?.hasActiveSos ?? false,
+          milestones:   tracking?.milestones ?? [],
+
+          socketHint: {
+            room:   `booking:${booking._id}`,
+            events: [
+              'location_update',           // driver GPS
+              'care_assistant_location_update',  // CA GPS
+              'care_assistant_status_change',    // CA milestone
+              'care_assistant_joined_ride',      // CA joins midway
+              'eta_update',
+              'ride_status_changed',
+            ],
+          },
+
+          _serverTime: new Date().toISOString(),
+        },
+      });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -2019,7 +2360,6 @@ router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadm
   try {
     const { status, note } = req.body;
 
-    // Validate against model enum
     const BOOKING_STATUSES = [
       'draft', 'pending', 'confirmed', 'in_progress', 'completed',
       'cancelled', 'no_show', 'refund_pending', 'refunded',
@@ -2042,6 +2382,61 @@ router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadm
     });
     booking.updatedBy = req.user._id;
     await booking.save();
+
+    // ── AUTO-CREATE CONSULTATION on confirm for online booking types ──────────
+    if (
+      status === 'confirmed' &&
+      ['doctor_online'].includes(booking.bookingType) &&
+      booking.doctor &&
+      !booking.consultationSessionId
+    ) {
+    try {
+        const { createAgoraRoom, generateAgoraToken } = await import('../services/agoraService.js');
+
+        const scheduledStartTime              = booking.scheduledAt;
+        const { roomId, meetingId, meetingLink } = createAgoraRoom(
+          booking.bookingCode,
+          booking._id.toString()
+        );
+
+        const hostToken        = generateAgoraToken(roomId, 'host',        0);
+        const participantToken = generateAgoraToken(roomId, 'participant', 0);
+
+        const consultation = new Consultation({
+          bookingId:                booking._id,
+          patient:                  booking.customer,
+          doctor:                   booking.doctor,
+          hospital:                 booking.hospital || null,
+          consultationType:         booking.consultationType || 'video',
+          consultationMode:         'scheduled',
+          language:                 'English',
+          priority:                 'routine',
+          scheduledStartTime,
+          estimatedDurationMinutes: 30,
+          waitingRoomEnabled:       true,
+          recordingSupported:       false,
+          provider:                 'Agora',
+          roomId,
+          meetingId,
+          meetingLink,
+          hostToken,
+          participantToken,
+          status:    'scheduled',
+          createdBy: req.user._id,
+        });
+
+        await consultation.save();
+
+        await Booking.findByIdAndUpdate(booking._id, {
+          $set: { consultationSessionId: consultation._id },
+        });
+
+        booking.consultationSessionId = consultation._id;
+      } catch (consultErr) {
+        console.error('[admin/status] Agora room creation failed:', consultErr.message);
+        
+      }
+    }
 
     const customer = await User.findById(booking.customer).select('email phone name').lean();
 
@@ -2553,15 +2948,33 @@ router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('adm
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
+    // ✅ FIX: Fetch the 'ca' profile FIRST before trying to use it
     const ca = await CareAssistantProfile.findById(careAssistantId)
       .populate('user', 'name phone email').lean();
+      
     if (!ca) return res.status(404).json({ success: false, message: 'Care assistant not found' });
     if (!ca.isActive || !ca.verification?.isVerified)
       return res.status(400).json({ success: false, message: 'Care assistant not available or not verified' });
 
+    // Auto-attach CA to RideTracking if ride already active
+    if (booking.primaryRide) {
+      RideTracking.attachCareAssistant(booking.primaryRide, careAssistantId)
+        .catch(e => console.error('[Admin assign CA] tracking attach:', e.message));
+
+      // Notify booking room that CA is now a participant
+      getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'care_assistant_attached_to_ride', {
+        bookingId:         booking._id,
+        rideId:            booking.primaryRide,
+        careAssistantId,
+        careAssistantName: ca.fullName, // ✅ This will now work perfectly
+        timestamp:         new Date(),
+      });
+    }
+
     await Booking.findByIdAndUpdate(booking._id, {
       $set: { careAssistant: careAssistantId, updatedBy: req.user._id },
     });
+ 
 
     await createNotification({
       recipient: ca.user._id,

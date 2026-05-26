@@ -204,6 +204,17 @@ const rideSchema = new Schema(
 
     isReturnRide: { type: Boolean, default: false },
 
+    activeNavigationTarget: {
+  type: String,
+  enum: [
+    'pickup_patient',
+    'pickup_care_assistant',
+    'hospital_drop',
+    'patient_drop',
+  ],
+  default: 'pickup_patient',
+},
+
     // ── Driver & Vehicle ──────────────────────────────────────────────────────
     // Ride.driver → Driver._id (NOT User._id). See socket service for why this matters.
     driver: {
@@ -286,6 +297,71 @@ const rideSchema = new Schema(
       type:    rideFareBreakdownSchema,
       default: () => ({}),
     },
+    activeTarget: {
+
+  type: String,
+
+  enum: [
+
+    'patient_pickup',
+
+    'care_assistant_pickup',
+
+    'hospital_drop',
+
+    'return_trip',
+
+  ],
+
+  default:
+    'patient_pickup',
+},
+
+currentLeg: {
+
+  type: String,
+
+  enum: [
+
+    'driver_to_patient',
+
+    'patient_to_care_assistant',
+
+    'to_hospital',
+
+    'return_trip',
+
+  ],
+
+  default:
+    'driver_to_patient',
+},
+
+hospitalEtaMinutes: {
+  type: Number,
+  default: 0,
+},
+
+hospitalDistanceKm: {
+  type: Number,
+  default: 0,
+},
+
+routeWorkflow: {
+  type: String,
+
+  enum: [
+    'driver_to_patient',
+    'driver_to_care_assistant',
+    'care_assistant_to_patient',
+    'patient_to_hospital',
+    'hospital_waiting',
+    'return_trip',
+    'completed',
+  ],
+
+  default: 'driver_to_patient',
+},
 
     // ── Status ────────────────────────────────────────────────────────────────
     status: {

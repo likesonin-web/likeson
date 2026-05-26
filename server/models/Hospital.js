@@ -11,7 +11,7 @@ const { Schema } = mongoose;
 //      - Doctors linked to this hospital use the hospital's consultation fees
 //      - platformFee is set/overridden by superadmin only
 //
-//  OWNER-OPERATED hospitals → Clinic | Nursing Home
+//  OWNER-OPERATED hospitals → Clinic | Nursing  Home
 //    • managementModel: 'doctor-owner'
 //    • managedBy  → User{ role: 'doctor' }
 //    • PRICING IS SET AT DOCTOR LEVEL — doctor controls their own fees
@@ -229,9 +229,20 @@ const hospitalSchema = new Schema(
       },
     },
 
-   location: {
-  type:        { type: String, enum: ['Point'], default: 'Point' },
-  coordinates: { type: [Number], default: [80.648, 16.506] },
+      location: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point',
+      },
+
+      coordinates: {
+        type: [Number],
+        required: true,
+      },
+
+      address: String,
+   
  
 },
     googleMapsUrl: { type: String },

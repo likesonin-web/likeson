@@ -3,15 +3,24 @@ import API from '../api';
 import toast from 'react-hot-toast';
 
 // ═══════════════════════════════════════════════════════════════
-//  USER THUNKS
+//  USER THUNKS (CONSUMPTION)
 // ═══════════════════════════════════════════════════════════════
 
-/** Fetch all live marquees visible to the logged-in user */
+/** Fetch all live marquees visible to the logged-in user or guest */
 export const fetchMarquees = createAsyncThunk(
   'marquee/fetchMarquees',
   async (_, { rejectWithValue }) => {
     try {
       const { data } = await API.get('/marquee');
+      
+      // Filter out marquees the user has already dismissed locally
+      if (typeof window !== 'undefined') {
+        const visibleMarquees = data.marquees.filter(
+          (m) => !localStorage.getItem(`marquee_dismissed_${m.clientKey}`)
+        );
+        return visibleMarquees;
+      }
+      
       return data.marquees;
     } catch (err) {
       return rejectWithValue(err.response?.data?.message ?? 'Failed to load marquees');
@@ -19,13 +28,21 @@ export const fetchMarquees = createAsyncThunk(
   }
 );
 
-/** Dismiss a marquee for the current user */
+/** * Dismiss a marquee. 
+ * Saves the clientKey locally and pings the backend for analytics.
+ * Accepts the entire marquee object: { _id, clientKey } 
+ */
 export const dismissMarquee = createAsyncThunk(
   'marquee/dismissMarquee',
-  async (marqueeId, { rejectWithValue }) => {
+  async (marquee, { rejectWithValue }) => {
     try {
-      await API.post(`/marquee/${marqueeId}/dismiss`);
-      return marqueeId;
+      // 1. Instantly save to local storage
+      if (typeof window !== 'undefined' && marquee.clientKey) {
+        localStorage.setItem(`marquee_dismissed_${marquee.clientKey}`, 'true');
+      }
+      // 2. Ping backend for analytics (fire-and-forget style)
+      await API.post(`/marquee/${marquee._id}/dismiss`);
+      return marquee._id;
     } catch (err) {
       return rejectWithValue(err.response?.data?.message ?? 'Failed to dismiss');
     }
@@ -46,7 +63,7 @@ export const trackMarqueeClick = createAsyncThunk(
 );
 
 // ═══════════════════════════════════════════════════════════════
-//  ADMIN THUNKS
+//  ADMIN THUNKS (MANAGEMENT)
 // ═══════════════════════════════════════════════════════════════
 
 /** Admin: fetch all marquees with filters + pagination */
@@ -107,32 +124,16 @@ export const updateMarquee = createAsyncThunk(
   }
 );
 
-/** Admin: quick toggle isActive */
-export const toggleMarquee = createAsyncThunk(
-  'marquee/toggleMarquee',
-  async (id, { rejectWithValue }) => {
+/** Admin: Update status (replaces toggle and archive endpoints) */
+export const updateMarqueeStatus = createAsyncThunk(
+  'marquee/updateMarqueeStatus',
+  async ({ id, status }, { rejectWithValue }) => {
     try {
-      const { data } = await API.patch(`/marquee/admin/${id}/toggle`);
+      const { data } = await API.patch(`/marquee/admin/${id}/status`, { status });
       toast.success(data.message);
-      return { id, isActive: data.isActive };
+      return { id, status: data.status };
     } catch (err) {
-      const msg = err.response?.data?.message ?? 'Failed to toggle marquee';
-      toast.error(msg);
-      return rejectWithValue(msg);
-    }
-  }
-);
-
-/** Admin: archive / unarchive */
-export const archiveMarquee = createAsyncThunk(
-  'marquee/archiveMarquee',
-  async ({ id, archive = true }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.patch(`/marquee/admin/${id}/archive`, { archive });
-      toast.success(archive ? 'Marquee archived' : 'Marquee unarchived');
-      return data.marquee;
-    } catch (err) {
-      const msg = err.response?.data?.message ?? 'Failed to archive marquee';
+      const msg = err.response?.data?.message ?? 'Failed to update status';
       toast.error(msg);
       return rejectWithValue(msg);
     }
@@ -155,16 +156,16 @@ export const deleteMarquee = createAsyncThunk(
   }
 );
 
-/** Admin: clear dismissal log */
-export const clearDismissals = createAsyncThunk(
-  'marquee/clearDismissals',
+/** Admin: Reset analytics (impressions, clicks, dismissals) */
+export const resetMarqueeAnalytics = createAsyncThunk(
+  'marquee/resetMarqueeAnalytics',
   async (id, { rejectWithValue }) => {
     try {
-      await API.delete(`/marquee/admin/${id}/dismissals`);
-      toast.success('Dismissal log cleared');
+      const { data } = await API.delete(`/marquee/admin/${id}/analytics`);
+      toast.success(data.message);
       return id;
     } catch (err) {
-      const msg = err.response?.data?.message ?? 'Failed to clear dismissals';
+      const msg = err.response?.data?.message ?? 'Failed to reset analytics';
       toast.error(msg);
       return rejectWithValue(msg);
     }
@@ -205,7 +206,7 @@ const initialState = {
   selectedLoading: false,
   selectedError:   null,
 
-  // Mutation loading (create / update / archive / delete / clearDismissals)
+  // Mutation loading
   actionLoading: false,
   actionError:   null,
 
@@ -229,10 +230,10 @@ const marqueeSlice = createSlice({
 
   reducers: {
     clearMarqueeErrors(state) {
-      state.userError     = null;
-      state.adminError    = null;
-      state.selectedError = null;
-      state.actionError   = null;
+      state.userError      = null;
+      state.adminError     = null;
+      state.selectedError  = null;
+      state.actionError    = null;
       state.analyticsError = null;
     },
     clearSelectedMarquee(state) {
@@ -242,14 +243,14 @@ const marqueeSlice = createSlice({
     resetMarqueeState: () => initialState,
 
     /**
-     * Optimistically remove a marquee from the user-facing list
-     * before the dismiss API call resolves.
-     * Call this right before dispatching dismissMarquee so the UI
-     * feels instant. dismissMarquee.fulfilled will then no-op
-     * (the item is already gone).
+     * Optimistically remove a marquee from the user-facing list.
+     * Receives the whole marquee object to cache the clientKey immediately.
      */
-    optimisticallyDismiss(state, { payload: marqueeId }) {
-      state.marquees = state.marquees.filter((m) => m._id !== marqueeId);
+    optimisticallyDismiss(state, { payload: marquee }) {
+      if (typeof window !== 'undefined' && marquee.clientKey) {
+        localStorage.setItem(`marquee_dismissed_${marquee.clientKey}`, 'true');
+      }
+      state.marquees = state.marquees.filter((m) => m._id !== marquee._id);
     },
   },
 
@@ -268,14 +269,11 @@ const marqueeSlice = createSlice({
       });
 
     // ── dismissMarquee ───────────────────────────────────────────────────────
-    // fulfilled: remove from list (covers the case where optimisticallyDismiss
-    // was NOT called; if it was called the filter is a safe no-op)
     builder
       .addCase(dismissMarquee.fulfilled, (s, { payload: id }) => {
         s.marquees = s.marquees.filter((m) => m._id !== id);
       })
       .addCase(dismissMarquee.rejected, (s, { payload }) => {
-        // If dismiss failed, re-fetch so the dismissed item reappears
         s.userError = payload;
       });
 
@@ -315,9 +313,9 @@ const marqueeSlice = createSlice({
     builder
       .addCase(createMarquee.pending,   (s) => { s.actionLoading = true;  s.actionError = null; })
       .addCase(createMarquee.fulfilled, (s, { payload }) => {
-        s.actionLoading       = false;
-        s.adminMarquees       = [payload, ...s.adminMarquees];
-        s.adminPagination     = { ...s.adminPagination, total: s.adminPagination.total + 1 };
+        s.actionLoading   = false;
+        s.adminMarquees   = [payload, ...s.adminMarquees];
+        s.adminPagination = { ...s.adminPagination, total: s.adminPagination.total + 1 };
       })
       .addCase(createMarquee.rejected,  (s, { payload }) => {
         s.actionLoading = false;
@@ -337,30 +335,15 @@ const marqueeSlice = createSlice({
         s.actionError   = payload;
       });
 
-    // ── toggleMarquee ────────────────────────────────────────────────────────
+    // ── updateMarqueeStatus ──────────────────────────────────────────────────
     builder
-      .addCase(toggleMarquee.pending,   (s) => { s.actionLoading = true;  s.actionError = null; })
-      .addCase(toggleMarquee.fulfilled, (s, { payload: { id, isActive } }) => {
+      .addCase(updateMarqueeStatus.pending,   (s) => { s.actionLoading = true;  s.actionError = null; })
+      .addCase(updateMarqueeStatus.fulfilled, (s, { payload: { id, status } }) => {
         s.actionLoading = false;
-        s.adminMarquees = s.adminMarquees.map((m) =>
-          m._id === id ? { ...m, isActive } : m
-        );
-        if (s.selected?._id === id) s.selected = { ...s.selected, isActive };
+        s.adminMarquees = s.adminMarquees.map((m) => m._id === id ? { ...m, status } : m);
+        if (s.selected?._id === id) s.selected = { ...s.selected, status };
       })
-      .addCase(toggleMarquee.rejected,  (s, { payload }) => {
-        s.actionLoading = false;
-        s.actionError   = payload;
-      });
-
-    // ── archiveMarquee ───────────────────────────────────────────────────────
-    builder
-      .addCase(archiveMarquee.pending,   (s) => { s.actionLoading = true;  s.actionError = null; })
-      .addCase(archiveMarquee.fulfilled, (s, { payload }) => {
-        s.actionLoading = false;
-        s.adminMarquees = s.adminMarquees.map((m) => m._id === payload._id ? payload : m);
-        if (s.selected?._id === payload._id) s.selected = payload;
-      })
-      .addCase(archiveMarquee.rejected,  (s, { payload }) => {
+      .addCase(updateMarqueeStatus.rejected,  (s, { payload }) => {
         s.actionLoading = false;
         s.actionError   = payload;
       });
@@ -379,26 +362,20 @@ const marqueeSlice = createSlice({
         s.actionError   = payload;
       });
 
-    // ── clearDismissals ──────────────────────────────────────────────────────
+    // ── resetMarqueeAnalytics ────────────────────────────────────────────────
     builder
-      .addCase(clearDismissals.pending,   (s) => { s.actionLoading = true;  s.actionError = null; })
-      .addCase(clearDismissals.fulfilled, (s, { payload: id }) => {
+      .addCase(resetMarqueeAnalytics.pending,   (s) => { s.actionLoading = true;  s.actionError = null; })
+      .addCase(resetMarqueeAnalytics.fulfilled, (s, { payload: id }) => {
         s.actionLoading = false;
-        // Reset dismissedBy array AND analytics.dismissals count in admin list
+        const defaultAnalytics = { impressions: 0, clicks: 0, dismissals: 0 };
         s.adminMarquees = s.adminMarquees.map((m) =>
-          m._id === id
-            ? { ...m, dismissedBy: [], analytics: { ...m.analytics, dismissals: 0 } }
-            : m
+          m._id === id ? { ...m, analytics: defaultAnalytics } : m
         );
         if (s.selected?._id === id) {
-          s.selected = {
-            ...s.selected,
-            dismissedBy: [],
-            analytics: { ...s.selected.analytics, dismissals: 0 },
-          };
+          s.selected = { ...s.selected, analytics: defaultAnalytics };
         }
       })
-      .addCase(clearDismissals.rejected,  (s, { payload }) => {
+      .addCase(resetMarqueeAnalytics.rejected,  (s, { payload }) => {
         s.actionLoading = false;
         s.actionError   = payload;
       });

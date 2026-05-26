@@ -454,7 +454,7 @@ router.get(
 router.get(
   '/care-assistant/weekly',
   protect,
-  authorize('care assistant'),
+  authorize('care_assistant'),
   async (req, res) => {
     try {
       const profile = await CareAssistantProfile.findOne({ user: req.user._id })
@@ -479,7 +479,7 @@ router.get(
 router.put(
   '/care-assistant/weekly',
   protect,
-  authorize('care assistant'),
+  authorize('care_assistant'),
   async (req, res) => {
     try {
       const { weeklySchedule } = req.body;
@@ -528,14 +528,14 @@ router.put(
 
 /**
  * PATCH /availability/care-assistant/status
- * Toggle care assistant online/availability status.
+ * Toggle care_assistant online/availability status.
  *
  * Body: { isOnline: boolean, status?: 'Available'|'Offline'|'On-Break' }
  */
 router.patch(
   '/care-assistant/status',
   protect,
-  authorize('care assistant'),
+  authorize('care_assistant'),
   async (req, res) => {
     try {
       const { isOnline, status } = req.body;
@@ -580,7 +580,7 @@ router.patch(
 router.get(
   '/care-assistant/tasks',
   protect,
-  authorize('care assistant'),
+  authorize('care_assistant'),
   async (req, res) => {
     try {
       const days = parseInt(req.query.days) || 7;
@@ -613,7 +613,7 @@ router.get(
 router.get(
   '/care-assistant/tasks/date/:date',
   protect,
-  authorize('care assistant'),
+  authorize('care_assistant'),
   async (req, res) => {
     try {
       const { start, end } = dayRange(req.params.date);

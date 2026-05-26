@@ -23,6 +23,7 @@ import PatientCareRecord               from '../models/PatientCareRecord.js';
 import Booking                         from '../models/Booking.js';
 import DoctorProfile                   from '../models/DoctorProfile.js';
 import CareAssistantProfile            from '../models/CareAssistantProfile.js';
+import Hospital                        from '../models/Hospital.js';  // FIX #1: import directly, not inline mongoose.model()
 import User                            from '../models/User.js';
 import generateEPrescriptionPdf        from '../utils/generateEPrescriptionPdf.js';
 
@@ -48,6 +49,11 @@ const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).cat
  * POST /clinical/prescriptions
  * Doctor creates a new ePrescription.
  * Body mirrors EPrescription schema (medicines[], labTests[], vitals, etc.)
+ *
+ * FIX #4: hospital field — EPrescription.hospital is a hospitalSnapshotSchema
+ * (object with hospitalId, name, address, phone, email, logo, licenseNo).
+ * Body must send a pre-built snapshot object, NOT a raw ObjectId string.
+ * Router passes it through as-is; validation relies on Mongoose schema casting.
  */
 router.post('/prescriptions', ...isDoctor, wrap(async (req, res) => {
   const doctorProfile = await DoctorProfile.findOne({ user: req.user._id })
@@ -87,6 +93,16 @@ router.post('/prescriptions', ...isDoctor, wrap(async (req, res) => {
     email:               doctorProfile.user.email,
   };
 
+  // FIX #4: hospital must be a snapshot object matching hospitalSnapshotSchema,
+  // not a raw ObjectId. Caller is responsible for sending the full snapshot.
+  // If hospital is an ObjectId string (old usage), reject with clear message.
+  if (hospital && typeof hospital === 'string' && hospital.match(/^[a-f\d]{24}$/i)) {
+    return res.status(400).json({
+      success: false,
+      message: 'hospital must be a snapshot object { hospitalId, name, address, ... }, not a raw ObjectId string.',
+    });
+  }
+
   const rx = await EPrescription.create({
     booking, outPatientRecord, patientCareRecord,
     doctor:   doctorSnap,
@@ -124,8 +140,7 @@ router.get('/prescriptions', ...isAnyStaff, wrap(async (req, res) => {
   }
 
   if (req.user.role === 'hospital') {
-    // hospital manager sees prescriptions issued at their hospital
-    const Hospital = mongoose.model('Hospital');
+    // FIX #1: use imported Hospital model, not inline mongoose.model('Hospital')
     const hosp = await Hospital.findOne({ managedBy: req.user._id }).select('_id name').lean();
     if (!hosp) return res.status(404).json({ success: false, message: 'Hospital not found.' });
     filter['hospital.hospitalId'] = hosp._id;
@@ -288,7 +303,7 @@ router.get('/op-records', ...isAnyStaff, wrap(async (req, res) => {
   }
 
   if (req.user.role === 'hospital') {
-    const Hospital = mongoose.model('Hospital');
+    // FIX #1: use imported Hospital model
     const hosp = await Hospital.findOne({ managedBy: req.user._id }).select('_id').lean();
     if (!hosp) return res.status(404).json({ success: false, message: 'Hospital not found.' });
     filter.hospital = hosp._id;
@@ -355,6 +370,8 @@ router.patch('/op-records/:id/complete', ...isDoctor, wrap(async (req, res) => {
   const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
   const op = await OutPatientRecord.findById(req.params.id);
   if (!op) return res.status(404).json({ success: false, message: 'OP Record not found.' });
+
+  // FIX #5: op.doctor is ObjectId (not populated here). toString() safe.
   if (op.doctor.toString() !== dp._id.toString()) {
     return res.status(403).json({ success: false, message: 'Access denied.' });
   }
@@ -396,7 +413,7 @@ router.patch('/op-records/:id/status',
     if (!op) return res.status(404).json({ success: false, message: 'OP Record not found.' });
 
     if (req.user.role === 'hospital') {
-      const Hospital = mongoose.model('Hospital');
+      // FIX #1: use imported Hospital model
       const hosp = await Hospital.findOne({ managedBy: req.user._id }).select('_id').lean();
       if (op.hospital?.toString() !== hosp?._id?.toString()) {
         return res.status(403).json({ success: false, message: 'Access denied.' });
@@ -493,30 +510,83 @@ router.get('/care/bookings/pending', ...isCareAssistant, wrap(async (req, res) =
  * GET /clinical/care/bookings/:bookingId
  * Care assistant — full booking detail.
  */
-router.get('/care/bookings/:bookingId', ...isCareAssistant, wrap(async (req, res) => {
-  const cap = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
-
-  const booking = await Booking.findOne({
-    _id: req.params.bookingId,
-    careAssistant: cap._id,
-  })
-    .populate('customer', 'name phone email')
-    .populate('doctor')
+router.get('/care/bookings/:bookingId', ...isAnyStaff, wrap(async (req, res) => {
+  const { role } = req.user;
+ 
+  // ── Build ownership filter per role ──────────────────────────────────────
+  const query = { _id: req.params.bookingId };
+ 
+  if (role === 'care_assistant') {
+    const cap = await CareAssistantProfile
+      .findOne({ user: req.user._id })
+      .select('_id')
+      .lean();
+ 
+    if (!cap) {
+      return res.status(404).json({ success: false, message: 'Care assistant profile not found.' });
+    }
+    query.careAssistant = cap._id;
+ 
+  } else if (role === 'doctor') {
+    const dp = await DoctorProfile
+      .findOne({ user: req.user._id })
+      .select('_id')
+      .lean();
+ 
+    if (!dp) {
+      return res.status(404).json({ success: false, message: 'Doctor profile not found.' });
+    }
+    query.doctor = dp._id;
+ 
+  } else if (role === 'hospital') {
+    const hosp = await Hospital
+      .findOne({ managedBy: req.user._id })
+      .select('_id')
+      .lean();
+ 
+    if (!hosp) {
+      return res.status(404).json({ success: false, message: 'Hospital not found.' });
+    }
+    query.hospital = hosp._id;
+  }
+  // admin / superadmin → query stays { _id: bookingId }, no ownership restriction
+ 
+  // ── Fetch booking ─────────────────────────────────────────────────────────
+  const booking = await Booking
+    .findOne(query)
+    .populate('customer',      'name phone email')
+    .populate('doctor',        'specialization registrationNumber profilePhotoUrl')
+    .populate('careAssistant', 'fullName phone photoUrl')
+    .populate('hospital',      'name address phone')
     .lean();
-
-  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found or not assigned to you.' });
-
-  // Attach linked care record if exists
-  const careRecord = await PatientCareRecord.findOne({ booking: booking._id })
+ 
+  if (!booking) {
+    return res.status(404).json({
+      success: false,
+      message: 'Booking not found or you do not have access to it.',
+    });
+  }
+ 
+  // ── Attach linked care record ─────────────────────────────────────────────
+  const careRecord = await PatientCareRecord
+    .findOne({ booking: booking._id })
     .select('status assignedAt latestVitals openAlerts todaysMissedMeds')
     .lean();
-
-  // Attach OP record if exists
-  const opRecord = await OutPatientRecord.findOne({ booking: booking._id })
+ 
+  // ── Attach linked OP record ───────────────────────────────────────────────
+  const opRecord = await OutPatientRecord
+    .findOne({ booking: booking._id })
     .select('opNumber prescriptionUrl diagnosisCode doctorNotes followUpExpiry')
     .lean();
-
-  res.json({ success: true, data: { ...booking, careRecord: careRecord || null, opRecord: opRecord || null } });
+ 
+  return res.json({
+    success: true,
+    data: {
+      ...booking,
+      careRecord: careRecord || null,
+      opRecord:   opRecord   || null,
+    },
+  });
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -666,25 +736,29 @@ router.get('/care/records', ...isCareAssistant, wrap(async (req, res) => {
 /**
  * GET /clinical/care/records/:id
  * Full care record detail for care assistant.
+ *
+ * FIX #6: Removed redundant double-fetch. One query with +hospitalInstructions.
  */
 router.get('/care/records/:id', ...isCareAssistant, wrap(async (req, res) => {
   const cap = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
-  const { record, error, forbidden } = await loadOwnCareRecord(req.params.id, cap._id);
-  if (error) return res.status(forbidden ? 403 : 404).json({ success: false, message: error });
 
-  // Populate linked prescription for care context
-  const prescriptions = await EPrescription.find({ patientCareRecord: record._id })
+  // FIX #6: fetch with hospitalInstructions directly, skip loadOwnCareRecord (which fetches without it)
+  const full = await PatientCareRecord.findById(req.params.id).select('+hospitalInstructions').lean();
+  if (!full) return res.status(404).json({ success: false, message: 'Care record not found.' });
+  if (full.careAssistant.toString() !== cap._id.toString()) {
+    return res.status(403).json({ success: false, message: 'Access denied.' });
+  }
+
+  // Populate linked prescriptions
+  const prescriptions = await EPrescription.find({ patientCareRecord: full._id })
     .select('rxNumber medicines labTests status issuedAt expiresAt advice')
     .lean();
 
-  const opRecord = record.outPatientRecord
-    ? await OutPatientRecord.findById(record.outPatientRecord)
+  const opRecord = full.outPatientRecord
+    ? await OutPatientRecord.findById(full.outPatientRecord)
         .select('opNumber prescriptionUrl diagnosisCode doctorNotes followUpExpiry')
         .lean()
     : null;
-
-  // Manually include hospitalInstructions (select:false in schema)
-  const full = await PatientCareRecord.findById(record._id).select('+hospitalInstructions').lean();
 
   res.json({ success: true, data: { ...full, prescriptions, opRecord } });
 }));
@@ -869,6 +943,8 @@ router.patch('/care/records/:id/notes/:noteId/resolve', ...isCareAssistant, wrap
  * POST /clinical/care/records/:id/instructions
  * APPEND-ONLY hospital instruction.
  * Body: { instruction, category, attachments }
+ *
+ * FIX #7: Removed redundant double-fetch for doctor/admin path.
  */
 router.post('/care/records/:id/instructions',
   protect, authorize('care_assistant', 'doctor', 'admin', 'superadmin'),
@@ -876,20 +952,17 @@ router.post('/care/records/:id/instructions',
     const { instruction, category, attachments } = req.body;
     if (!instruction) return res.status(400).json({ success: false, message: 'instruction text is required.' });
 
-    // Care assistant: ownership check. Doctor/admin: skip.
-    let record;
+    // FIX #7: always fetch with +hospitalInstructions up front, then do ownership check
+    const fullRecord = await PatientCareRecord.findById(req.params.id).select('+hospitalInstructions');
+    if (!fullRecord) return res.status(404).json({ success: false, message: 'Care record not found.' });
+
+    // Care assistant ownership check
     if (req.user.role === 'care_assistant') {
       const cap = await CareAssistantProfile.findOne({ user: req.user._id }).select('_id').lean();
-      const result = await loadOwnCareRecord(req.params.id, cap._id);
-      if (result.error) return res.status(result.forbidden ? 403 : 404).json({ success: false, message: result.error });
-      record = result.record;
-    } else {
-      record = await PatientCareRecord.findById(req.params.id).select('+hospitalInstructions');
-      if (!record) return res.status(404).json({ success: false, message: 'Care record not found.' });
+      if (fullRecord.careAssistant.toString() !== cap._id.toString()) {
+        return res.status(403).json({ success: false, message: 'Access denied.' });
+      }
     }
-
-    // Re-fetch with hospitalInstructions (select:false)
-    const fullRecord = await PatientCareRecord.findById(record._id).select('+hospitalInstructions');
 
     fullRecord.hospitalInstructions.push({
       instruction,
@@ -1132,8 +1205,6 @@ router.get('/admin/care-records/:id', ...isAdmin, wrap(async (req, res) => {
   res.json({ success: true, data: { ...record, prescriptions } });
 }));
 
-// ─────────────────────────────────────────────────────────────────────────────
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  SECTION F — DOCTOR DASHBOARD & PRACTICE MANAGEMENT
@@ -1143,10 +1214,21 @@ router.get('/admin/care-records/:id', ...isAdmin, wrap(async (req, res) => {
  * GET /clinical/doctor/appointments
  * List all bookings assigned to the logged-in doctor.
  */
+/**
+ * GET /clinical/doctor/appointments
+ * List all bookings assigned to the logged-in doctor.
+ * Now populates consultation details, hospital, and care assistant.
+ */
 router.get('/doctor/appointments', ...isDoctor, wrap(async (req, res) => {
   const { status, from, to, page = 1, limit = 20 } = req.query;
-  const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
   
+  // Find the doctor's profile ID based on their logged-in user ID
+  const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
+
+  if (!dp) {
+    return res.status(404).json({ success: false, message: 'Doctor profile not found.' });
+  }
+
   const filter = { doctor: dp._id };
   if (status) filter.status = status;
   if (from || to) {
@@ -1156,11 +1238,25 @@ router.get('/doctor/appointments', ...isDoctor, wrap(async (req, res) => {
   }
 
   const skip = (Number(page) - 1) * Number(limit);
+  
   const [data, total] = await Promise.all([
     Booking.find(filter)
       .sort({ scheduledAt: -1 })
-      .skip(skip).limit(Number(limit))
+      .skip(skip)
+      .limit(Number(limit))
+      // 1. Populate Customer data
       .populate('customer', 'name phone profilePhotoUrl')
+      // 2. Populate Hospital data (useful if it's an in-person visit)
+      .populate('hospital', 'name address phone')
+      // 3. Populate Care Assistant data (useful for full_care_ride)
+      .populate('careAssistant', 'fullName phone photoUrl')
+      // 4. Populate the linked Consultation Session
+      .populate({
+        path: 'consultationSessionId',
+        // Select only the fields the doctor needs to see on the dashboard 
+        // to avoid pulling massive chat logs/analytics arrays unnecessarily
+        select: 'consultationId status consultationType consultationStage roomId meetingLink providerMeetingId actualStartTime scheduledStartTime' 
+      })
       .lean(),
     Booking.countDocuments(filter),
   ]);
@@ -1178,7 +1274,7 @@ router.get('/doctor/availability', ...isDoctor, wrap(async (req, res) => {
   const dp = await DoctorProfile.findOne({ user: req.user._id })
     .select('weeklyAvailability consultationTypes')
     .lean();
-    
+
   res.json({ success: true, data: dp });
 }));
 
@@ -1188,14 +1284,14 @@ router.get('/doctor/availability', ...isDoctor, wrap(async (req, res) => {
  */
 router.patch('/doctor/availability', ...isDoctor, wrap(async (req, res) => {
   const { weeklyAvailability, consultationTypes } = req.body;
-  
+
   const dp = await DoctorProfile.findOne({ user: req.user._id });
   if (weeklyAvailability) dp.weeklyAvailability = weeklyAvailability;
   if (consultationTypes)  dp.consultationTypes = consultationTypes;
-  
+
   dp.updatedBy = req.user._id;
   await dp.save();
-  
+
   res.json({ success: true, message: 'Availability updated successfully.', data: dp.weeklyAvailability });
 }));
 
@@ -1204,22 +1300,24 @@ router.patch('/doctor/availability', ...isDoctor, wrap(async (req, res) => {
 /**
  * GET /clinical/doctor/earnings
  * Summary of total earnings, pending settlements, and stats.
+ * NOTE: Relies on DoctorProfile.stats / bankDetails / settlementCycle fields.
+ *       Verify these exist in your DoctorProfile schema.
  */
 router.get('/doctor/earnings', ...isDoctor, wrap(async (req, res) => {
   const dp = await DoctorProfile.findOne({ user: req.user._id })
     .select('stats bankDetails settlementCycle')
     .lean();
 
-  res.json({ 
-    success: true, 
+  res.json({
+    success: true,
     data: {
       summary: dp.stats,
       settlement: {
-        cycle: dp.settlementCycle,
-        bankLast4: dp.bankDetails?.accountLast4,
-        isVerified: dp.bankDetails?.isBankVerified
-      }
-    } 
+        cycle:       dp.settlementCycle,
+        bankLast4:   dp.bankDetails?.accountLast4,
+        isVerified:  dp.bankDetails?.isBankVerified,
+      },
+    },
   });
 }));
 
@@ -1228,20 +1326,28 @@ router.get('/doctor/earnings', ...isDoctor, wrap(async (req, res) => {
 /**
  * GET /clinical/doctor/transactions
  * List all payments/payouts related to this doctor.
- * (Assumes a Transaction model exists in your system)
+ *
+ * FIX #10: wrapped in try/catch so unregistered Transaction model throws 500
+ * instead of crashing the process.
  */
 router.get('/doctor/transactions', ...isDoctor, wrap(async (req, res) => {
-  const Transaction = mongoose.model('Transaction'); // Ensure this model exists
+  let Transaction;
+  try {
+    Transaction = mongoose.model('Transaction');
+  } catch {
+    return res.status(500).json({ success: false, message: 'Transaction model not registered. Ensure it is imported at app startup.' });
+  }
+
   const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
-  
+
   const { page = 1, limit = 20 } = req.query;
   const skip = (Number(page) - 1) * Number(limit);
 
   const filter = { doctorProfile: dp._id };
-  
+
   const [data, total] = await Promise.all([
     Transaction.find(filter).sort({ createdAt: -1 }).skip(skip).limit(Number(limit)).lean(),
-    Transaction.countDocuments(filter)
+    Transaction.countDocuments(filter),
   ]);
 
   res.json({ success: true, total, data });
@@ -1252,37 +1358,41 @@ router.get('/doctor/transactions', ...isDoctor, wrap(async (req, res) => {
 /**
  * GET /clinical/doctor/invoices/:bookingId
  * Generate or retrieve an invoice for a specific completed booking.
+ *
+ * FIX #3: bookingType.replace(/_/g, ' ') — regex /g replaces ALL underscores,
+ * not just the first one. e.g. full_care_ride → "full care ride" (correct).
  */
 router.get('/doctor/invoices/:bookingId', ...isDoctor, wrap(async (req, res) => {
   const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
-  
-  const booking = await Booking.findOne({ 
-    _id: req.params.bookingId, 
+
+  const booking = await Booking.findOne({
+    _id:    req.params.bookingId,
     doctor: dp._id,
-    status: 'completed'
+    status: 'completed',
   }).populate('customer', 'name email phone address');
 
   if (!booking) {
     return res.status(404).json({ success: false, message: 'Completed booking not found.' });
   }
 
-  // Logic to return fare breakdown as an "invoice" object
   res.json({
     success: true,
     data: {
       invoiceNumber: `INV-${booking.bookingCode}`,
-      date: booking.completedAt,
-      customer: booking.customer,
+      date:          booking.completedAt,
+      customer:      booking.customer,
       items: [
-        { 
-          description: `${booking.bookingType.replace('_', ' ')} Fee`, 
-          amount: booking.fareBreakdown.consultationFee 
-        }
+        {
+          // FIX #3: /g flag replaces ALL underscores
+          description: `${booking.bookingType.replace(/_/g, ' ')} Fee`,
+          amount:      booking.fareBreakdown.consultationFee,
+        },
       ],
-      totals: booking.fareBreakdown
-    }
+      totals: booking.fareBreakdown,
+    },
   });
 }));
+
 /**
  * Global error handler for this router.
  */

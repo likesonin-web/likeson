@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useEffect, useState, useRef, useCallback, useMemo, memo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, memo } from 'react';
+import Link from 'next/link';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -17,7 +18,7 @@ import {
   selectUserLoading,
 } from '@/store/slices/marqueeSlice';
 
-// ─── Static Theme Map (Zero Inline Styles) ───────────────────────────────────
+// ─── Static Theme Map ────────────────────────────────────────────────────────
 
 const THEME_MAP = {
   info: {
@@ -94,9 +95,8 @@ const THEME_MAP = {
 
 const SPEED_DURATION = { slow: 42, normal: 26, fast: 14 };
 const CAROUSEL_INTERVAL_MS = 8000;
-const SESSION_KEY = 'mq_dismissed';
 
-// ─── Animation Variants ───────────────────────────────────────────────────────
+// ─── Animation Variants ──────────────────────────────────────────────────────
 
 const STRIP_VARIANTS = {
   hidden: { height: 0, opacity: 0 },
@@ -120,53 +120,19 @@ const MESSAGE_VARIANTS = {
 
 const getTokens = (type) => THEME_MAP[type] || THEME_MAP.info;
 
-const readSessionDismissed = () => {
-  if (typeof window === 'undefined') return [];
-  try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || '[]'); } 
-  catch { return []; }
-};
-
-const writeSessionDismissed = (ids) => {
-  if (typeof window === 'undefined') return;
-  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(ids)); } 
-  catch { /* noop */ }
-};
-
-const isVisibleToUser = (marquee, userRole, userId) => {
+const isCurrentlyLive = (marquee) => {
   const now = new Date();
-  if (!marquee.isActive || marquee.isArchived) return false;
+  
+  // FIX: Only check status and dates if they actually exist in the API response.
+  // The backend already filters for live marquees, so missing = safe to show.
+  if (marquee.status && marquee.status !== 'published') return false;
   if (marquee.startsAt && new Date(marquee.startsAt) > now) return false;
   if (marquee.endsAt && new Date(marquee.endsAt) <= now) return false;
-
-  const hasTargetRoles = Array.isArray(marquee.targetRoles) && marquee.targetRoles.length > 0;
-  const hasTargetUsers = Array.isArray(marquee.targetUsers) && marquee.targetUsers.length > 0;
-
-  if (!hasTargetRoles && !hasTargetUsers) return true;
-  if (hasTargetRoles && userRole && marquee.targetRoles.includes(userRole)) return true;
-  if (hasTargetUsers && userId) {
-    return marquee.targetUsers.some((u) => String(u?._id ?? u) === String(userId));
-  }
-  return false;
+  
+  return true;
 };
 
 // ─── Custom Hooks ────────────────────────────────────────────────────────────
-
-function useMarqueeData() {
-  const allMarquees = useSelector(selectMarquees);
-  const loading = useSelector(selectUserLoading);
-  const user = useSelector((s) => s.user?.user) || null;
-  const userRole = user?.role || null;
-  const userId = user?._id || null;
-
-  // Hydration safe state
-  const [localDismissed, setLocalDismissed] = useState([]);
-
-  useEffect(() => {
-    setLocalDismissed(readSessionDismissed());
-  }, []);
-
-  return { allMarquees, loading, userRole, userId, localDismissed, setLocalDismissed };
-}
 
 function useCarousel(length) {
   const [idx, setIdx] = useState(0);
@@ -181,8 +147,9 @@ function useCarousel(length) {
     return () => clearInterval(timer);
   }, [length, next, paused]);
 
+  // Safeguard: Ensure idx never falls out of bounds if array shrinks
   useEffect(() => {
-    setIdx((i) => Math.min(i, Math.max(0, length - 1)));
+    if (length > 0) setIdx((i) => Math.min(i, length - 1));
   }, [length]);
 
   return { idx, next, prev, paused, setPaused };
@@ -260,23 +227,28 @@ ScrollRow.displayName = 'ScrollRow';
 
 const CtaPill = memo(({ cta, tokens, onCtaClick, id }) => {
   if (!cta?.url || !cta?.label) return null;
+
+  // Intelligently route based on URL type
+  const isExternal = cta.url.startsWith('http') || cta.target === '_blank';
+  const Component = isExternal ? 'a' : Link;
+
   return (
-    <a
+    <Component
       href={cta.url}
       target={cta.target || '_self'}
-      rel="noopener noreferrer"
+      rel={isExternal ? 'noopener noreferrer' : undefined}
       onClick={() => onCtaClick(id)}
       className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-bold tracking-wide transition-all duration-200 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary font-poppins ${tokens.pill}`}
       aria-label={`${cta.label}${cta.target === '_blank' ? ' (opens in new tab)' : ''}`}
     >
       {cta.label}
       {cta.target === '_blank' && <ExternalLink className="w-2.5 h-2.5" aria-hidden="true" />}
-    </a>
+    </Component>
   );
 });
 CtaPill.displayName = 'CtaPill';
 
-// ─── Layout Components ────────────────────────────────────────────────────────
+// ─── Layout Components ───────────────────────────────────────────────────────
 
 const MarqueeStrip = memo(({ marquee, onDismiss, onCtaClick }) => {
   const tokens = useMemo(() => getTokens(marquee.type), [marquee.type]);
@@ -312,7 +284,8 @@ const MarqueeStrip = memo(({ marquee, onDismiss, onCtaClick }) => {
           <CtaPill cta={marquee.cta} tokens={tokens} onCtaClick={onCtaClick} id={marquee._id} />
           {marquee.isDismissible !== false && (
             <button
-              onClick={() => onDismiss(marquee._id)}
+              type="button"
+              onClick={() => onDismiss(marquee)}
               aria-label="Dismiss announcement"
               className={`w-5 h-5 rounded-full flex items-center justify-center transition-all duration-200 active:scale-90 outline-none ${tokens.dismiss}`}
             >
@@ -342,6 +315,7 @@ const MarqueeCarousel = memo(({ marquees, onDismiss, onCtaClick }) => {
       <AccentBar tokens={tokens} animated />
       <div className="relative flex items-center h-8 px-3 gap-2 max-w-screen-2xl mx-auto">
         <button
+          type="button"
           onClick={prev}
           aria-label="Previous announcement"
           className={`flex-shrink-0 hidden md:flex items-center gap-0.5 text-[10px] font-bold tabular-nums transition-colors outline-none font-poppins ${tokens.counter}`}
@@ -374,14 +348,15 @@ const MarqueeCarousel = memo(({ marquees, onDismiss, onCtaClick }) => {
           <CtaPill cta={current.cta} tokens={tokens} onCtaClick={onCtaClick} id={current._id} />
           {current.isDismissible !== false && (
             <button
-              onClick={() => onDismiss(current._id)}
+              type="button"
+              onClick={() => onDismiss(current)}
               aria-label="Dismiss announcement"
               className={`w-5 h-5 rounded-full flex items-center justify-center transition-all duration-200 active:scale-90 outline-none ${tokens.dismiss}`}
             >
               <X className="w-3 h-3" strokeWidth={2.5} aria-hidden="true" />
             </button>
           )}
-          <button onClick={next} aria-label="Next announcement" className={`flex-shrink-0 transition-colors outline-none ${tokens.counter}`}>
+          <button type="button" onClick={next} aria-label="Next announcement" className={`flex-shrink-0 transition-colors outline-none ${tokens.counter}`}>
             <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
         </div>
@@ -395,32 +370,38 @@ MarqueeCarousel.displayName = 'MarqueeCarousel';
 
 export default function Marquee() {
   const dispatch = useDispatch();
-  const { allMarquees, loading, userRole, userId, localDismissed, setLocalDismissed } = useMarqueeData();
+  
+  // Explicit fallback to empty array to prevent fatal selector errors
+  const allMarquees = useSelector(selectMarquees) || [];
+  const loading = useSelector(selectUserLoading);
+  const user = useSelector((s) => s.user?.user) || null;
+
+  // Hydration state sync
+  const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
+    setIsMounted(true);
     dispatch(fetchMarquees());
-  }, [dispatch, userId, userRole]);
+  }, [dispatch, user?._id]);
 
   const visible = useMemo(() => 
     allMarquees
-      .filter((m) => !localDismissed.includes(String(m._id)) && isVisibleToUser(m, userRole, userId))
+      .filter((m) => isCurrentlyLive(m))
       .sort((a, b) => (b.priority || 0) - (a.priority || 0)),
-    [allMarquees, localDismissed, userRole, userId]
+    [allMarquees]
   );
 
-  const handleDismiss = useCallback((id) => {
-    dispatch(optimisticallyDismiss(id));
-    const next = [...localDismissed, String(id)];
-    setLocalDismissed(next);
-    writeSessionDismissed(next);
-    dispatch(dismissMarquee(id));
-  }, [dispatch, localDismissed, setLocalDismissed]);
+  const handleDismiss = useCallback((marquee) => {
+    dispatch(optimisticallyDismiss(marquee));
+    dispatch(dismissMarquee(marquee));
+  }, [dispatch]);
 
   const handleCtaClick = useCallback((id) => { 
     dispatch(trackMarqueeClick(id)); 
   }, [dispatch]);
 
-  if (loading || visible.length === 0) return null;
+  // Prevent rendering on server to avoid hydration mismatch, and handle loading/empty states
+  if (!isMounted || loading || visible.length === 0) return null;
 
   return (
     <AnimatePresence>

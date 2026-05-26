@@ -1014,6 +1014,18 @@ export default function BookingDetailsPage() {
                     <span className="hidden sm:inline">Track Live</span>
                   </Link>
                 )}
+                
+            
+
+{booking.bookingType === 'doctor_online' && booking.consultationSessionId?.meetingLink && (
+  
+   <Link href={`/consultations/${booking.consultationSessionId.consultationId}`}
+    className="btn btn-accent btn-sm gap-1.5"
+  >
+    <Video size={13} />
+    <span className="hidden sm:inline">Join Call</span>
+  </Link>
+)}
                 {canRate && (
                   <button onClick={() => setShowRating(true)} className="btn btn-primary btn-sm gap-1.5">
                     <Star size={13} />

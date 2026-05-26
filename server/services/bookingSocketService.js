@@ -27,8 +27,12 @@ import Ride                 from '../models/Ride.js';
 import RideTracking         from '../models/RideTracking.js';
 import TransportPartner     from '../models/TransportPartner.js';
 import User                 from '../models/User.js';
-
-import { hashOtp, syncBookingStatusFromRide } from '../routes/bookingRouterShared.js';
+import Hospital             from '../models/Hospital.js';
+import {
+  hashOtp,
+  syncBookingStatusFromRide,
+  calculateEtaMinutes,
+} from '../routes/bookingRouterShared.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SINGLETON
@@ -78,6 +82,8 @@ const EXTRA_MILESTONE_MAP = {
   stop_departed: 'stop_departed',
 };
 
+const CARE_ASSISTANT_LOCATION_EVENT =
+  'care_assistant_location_update';
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -180,11 +186,42 @@ const canJoinRoom = async (user, room) => {
       }
     }
 
-    if (role === 'care_assistant') {
-      const ca = await CareAssistantProfile.findOne({ user: userId }).select('_id').lean();
-      if (ca && booking.careAssistant?.toString() === ca._id.toString())
-        return { allowed: true };
+   if (
+  role === 'care_assistant' &&
+  ride.booking
+) {
+
+  const ca =
+    await CareAssistantProfile
+      .findOne({
+        user: userId,
+      })
+      .select('_id')
+      .lean();
+
+  if (ca) {
+
+    const booking =
+      await Booking.findById(
+        ride.booking
+      )
+        .select('careAssistant')
+        .lean();
+
+    if (
+      booking?.careAssistant
+        ?.toString() ===
+      ca._id.toString()
+    ) {
+
+      return {
+        allowed: true,
+        liveTracking: true,
+        hospitalTracking: true,
+      };
     }
+  }
+}
 
     if (role === 'transportpartner') {
       const tp = await TransportPartner.findOne({ user: userId }).select('_id').lean();
@@ -330,106 +367,563 @@ class BookingSocketService {
       }
     });
 
-    // ── driver_location ───────────────────────────────────────────────────────
-    socket.on('driver_location', async ({ bookingId, lat, lng, heading, speed, accuracy } = {}) => {
-      try {
-        const now  = Date.now();
-        const last = this.locationThrottle.get(socket.id) ?? 0;
-        if (now - last < LOCATION_THROTTLE_MS) return;
-        this.locationThrottle.set(socket.id, now);
+    socket.on(
+  'care_assistant_location',
+  async (payload = {}) => {
 
-        if (typeof lat !== 'number' || typeof lng !== 'number') return;
-        if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return;
-        if (!['driver', 'solodriverpartner'].includes(role)) return;
+    try {
 
-        const coords = [lng, lat];
+      const {
+        bookingId,
+        coordinates,
+        heading,
+      } = payload;
 
-        await Driver.findOneAndUpdate({ user: userId }, {
-          'location.type':        'Point',
-          'location.coordinates': coords,
-          'location.heading':     heading ?? 0,
-          'location.speedKmh':    speed   ?? 0,
-          'location.updatedAt':   new Date(),
-        });
+      if (
+        !bookingId ||
+        !coordinates?.length
+      ) return;
 
-        if (role === 'solodriverpartner') {
-          await SoloDriverPartner.findOneAndUpdate({ user: userId }, {
-            'vehicle.lastKnownLocation.type':        'Point',
-            'vehicle.lastKnownLocation.coordinates': coords,
-            'vehicle.lastLocationUpdatedAt':          new Date(),
-          });
+      io.to(`booking:${bookingId}`).emit(
+        CARE_ASSISTANT_LOCATION_EVENT,
+        {
+          coordinates,
+          heading: heading || 0,
+          updatedAt: new Date(),
         }
+      );
 
-        if (bookingId && isValidId(bookingId) && driverObjectId) {
-          const ride = await Ride.findOne({
-            booking: bookingId,
-            driver:  driverObjectId,
-            status:  { $in: ACTIVE_RIDE_STATUSES },
-          }).select('_id trackingId status pickup dropoff estimatedDistanceKm').lean();
+    } catch (e) {
+      console.error(
+        '[care_assistant_location]',
+        e.message
+      );
+    }
+  }
+);
 
-          if (ride) {
-            await Ride.findByIdAndUpdate(ride._id, {
-              liveLocation: {
-                type: 'Point', coordinates: coords,
-                heading: heading ?? 0, speedKmh: speed ?? 0, updatedAt: new Date(),
-              },
-            });
+    // ── driver_location ───────────────────────────────────────────────────────
+   socket.on(
+  'driver_location',
 
-            if (ride.trackingId) {
-              RideTracking.addBreadcrumb(ride._id, {
-                coordinates: coords, heading: heading ?? 0,
-                speedKmh: speed ?? 0, accuracyM: accuracy ?? null, source: 'gps',
-              }).catch(e => console.error('[GPS] breadcrumb:', e.message));
+  async ({
+    bookingId,
+    lat,
+    lng,
+    heading,
+    speed,
+    accuracy,
+  } = {}) => {
+
+    try {
+
+      const now =
+        Date.now();
+
+      const last =
+        this.locationThrottle.get(
+          socket.id
+        ) ?? 0;
+
+      if (
+        now - last <
+        LOCATION_THROTTLE_MS
+      ) {
+        return;
+      }
+
+      this.locationThrottle.set(
+        socket.id,
+        now
+      );
+
+      if (
+        typeof lat !== 'number' ||
+        typeof lng !== 'number'
+      ) {
+        return;
+      }
+
+      if (
+        lat < -90 ||
+        lat > 90 ||
+        lng < -180 ||
+        lng > 180
+      ) {
+        return;
+      }
+
+      if (
+        ![
+          'driver',
+          'solodriverpartner',
+        ].includes(role)
+      ) {
+        return;
+      }
+
+      const coords = [lng, lat];
+
+      await Driver.findOneAndUpdate(
+        {
+          user: userId,
+        },
+
+        {
+          'location.type': 'Point',
+
+          'location.coordinates':
+            coords,
+
+          'location.heading':
+            heading ?? 0,
+
+          'location.speedKmh':
+            speed ?? 0,
+
+          'location.updatedAt':
+            new Date(),
+        }
+      );
+
+      if (
+        role ===
+        'solodriverpartner'
+      ) {
+
+        await SoloDriverPartner
+          .findOneAndUpdate(
+            {
+              user: userId,
+            },
+
+            {
+              'vehicle.lastKnownLocation.type':
+                'Point',
+
+              'vehicle.lastKnownLocation.coordinates':
+                coords,
+
+              'vehicle.lastLocationUpdatedAt':
+                new Date(),
             }
+          );
+      }
 
-            const lastEta = this.etaThrottle.get(socket.id) ?? 0;
-            if (now - lastEta > ETA_RECALC_THROTTLE_MS) {
-              this.etaThrottle.set(socket.id, now);
-              const mapTarget    = resolveMapTarget(ride.status);
-              const targetCoords = mapTarget === 'dropoff'
-                ? ride.dropoff?.coordinates
-                : ride.pickup?.coordinates;
+      if (
+        bookingId &&
+        isValidId(bookingId) &&
+        driverObjectId
+      ) {
 
-              if (targetCoords) {
-                const remainingKm = +haversineKm(coords, targetCoords).toFixed(2);
-                const speedKmh    = (speed && speed > 2) ? speed : 30;
-                const etaMin      = Math.round((remainingKm / speedKmh) * 60);
+        const ride =
+          await Ride.findOne({
 
-                if (ride.trackingId) {
-                  RideTracking.addEtaUpdate(ride._id, {
-                    toWaypoint: mapTarget, etaMinutes: etaMin,
-                    distanceRemainingKm: remainingKm, source: 'estimate',
-                  }).catch(e => console.error('[GPS] etaUpdate:', e.message));
+            booking: bookingId,
+
+            driver:
+              driverObjectId,
+
+            status: {
+              $in:
+                ACTIVE_RIDE_STATUSES,
+            },
+
+          })
+            .select(`
+              _id
+              trackingId
+              status
+              pickup
+              dropoff
+              estimatedDistanceKm
+            `)
+            .lean();
+
+        if (ride) {
+
+          await Ride.findByIdAndUpdate(
+            ride._id,
+
+            {
+              liveLocation: {
+
+                type: 'Point',
+
+                coordinates:
+                  coords,
+
+                heading:
+                  heading ?? 0,
+
+                speedKmh:
+                  speed ?? 0,
+
+                updatedAt:
+                  new Date(),
+              },
+            }
+          );
+
+          let tracking = null;
+
+          if (ride.trackingId) {
+
+            await RideTracking
+              .addBreadcrumb(
+                ride._id,
+
+                {
+                  coordinates:
+                    coords,
+
+                  heading:
+                    heading ?? 0,
+
+                  speedKmh:
+                    speed ?? 0,
+
+                  accuracyM:
+                    accuracy ?? null,
+
+                  source: 'gps',
                 }
+              )
+              .catch(e =>
+                console.error(
+                  '[GPS] breadcrumb:',
+                  e.message
+                )
+              );
 
-                this.io.to(`booking:${bookingId}`).emit('eta_update', {
-                  etaMinutes: etaMin, distanceRemainingKm: remainingKm,
-                  currentTarget: mapTarget, _serverTime: new Date().toISOString(),
+            tracking =
+              await RideTracking
+                .findOne({
+                  ride: ride._id,
                 });
+
+            if (tracking) {
+
+              const booking =
+                await Booking
+                  .findById(
+                    bookingId
+                  )
+                  .populate(
+                    'careAssistant'
+                  )
+                  .lean();
+
+              // ─────────────────────────
+              // HOSPITAL ETA
+              // ─────────────────────────
+
+              if (
+                tracking.hospital &&
+                tracking.activeTarget ===
+                  'hospital_drop'
+              ) {
+
+                const hospital =
+                  await Hospital
+                    .findById(
+                      tracking.hospital
+                    )
+                    .lean();
+
+                if (
+                  hospital
+                    ?.location
+                    ?.coordinates
+                    ?.length
+                ) {
+
+                  const distanceKm =
+                    haversineKm(
+                      coords,
+                      hospital.location
+                        .coordinates
+                    );
+
+                  const etaMinutes =
+                    calculateEtaMinutes(
+                      distanceKm
+                    );
+
+                  tracking.liveRouteContext.currentLegDistanceKm =
+                    distanceKm;
+
+                  tracking.liveRouteContext.currentLegEtaMinutes =
+                    etaMinutes;
+
+                  await tracking.save();
+
+                this.io.to(
+  `care:${bookingId}`
+)
+.emit(
+  'hospital:eta:update',
+                    {
+
+                      hospitalId:
+                        hospital._id,
+
+                      hospitalName:
+                        hospital.name,
+
+                      etaMinutes,
+
+                      distanceKm,
+
+                      coordinates:
+                        hospital.location
+                          .coordinates,
+                    }
+                  );
+                }
+              }
+
+              // ─────────────────────────
+              // CARE ASSISTANT TRACKING
+              // ─────────────────────────
+
+              if (
+                booking?.careAssistant
+              ) {
+
+                this.io.to(
+                  `booking:${bookingId}`
+                ).emit(
+                  'care-assistant:ride:tracking',
+                  {
+
+                    bookingId,
+
+                    rideId:
+                      ride._id,
+
+                    driverLocation: {
+                      coordinates:
+                        coords,
+                    },
+
+                    activeTarget:
+                      tracking.activeTarget,
+
+                    etaMinutes:
+                      tracking
+                        ?.liveRouteContext
+                        ?.currentLegEtaMinutes || 0,
+
+                    distanceKm:
+                      tracking
+                        ?.liveRouteContext
+                        ?.currentLegDistanceKm || 0,
+                  }
+                );
               }
             }
-
-            this.io.to(`booking:${bookingId}`).emit('location_update', {
-              lat, lng, heading, speed, accuracy,
-              rideId:        String(ride._id),
-              bookingId,
-              role,
-              rideStatus:    ride.status,
-              currentTarget: resolveMapTarget(ride.status),
-              updatedAt:     new Date().toISOString(),
-            });
           }
-        }
 
-        this.io.to('admin:ops').emit('driver_location', {
-          userId, driverObjectId, name, role, lat, lng,
-          heading: heading ?? 0, speed: speed ?? 0,
-          bookingId: bookingId || null, updatedAt: new Date().toISOString(),
-        });
-      } catch (err) {
-        console.error('[driver_location]', err.message, { lat, lng });
+          // ─────────────────────────
+          // ETA RECALCULATION
+          // ─────────────────────────
+
+          const lastEta =
+            this.etaThrottle.get(
+              socket.id
+            ) ?? 0;
+
+          if (
+            now - lastEta >
+            ETA_RECALC_THROTTLE_MS
+          ) {
+
+            this.etaThrottle.set(
+              socket.id,
+              now
+            );
+
+            const mapTarget =
+              resolveMapTarget(
+                ride.status
+              );
+
+            const targetCoords =
+              mapTarget ===
+              'dropoff'
+                ? ride.dropoff
+                    ?.coordinates
+                : ride.pickup
+                    ?.coordinates;
+
+            if (targetCoords) {
+
+              const remainingKm =
+                +haversineKm(
+                  coords,
+                  targetCoords
+                ).toFixed(2);
+
+              const speedKmh =
+                (
+                  speed &&
+                  speed > 2
+                )
+                  ? speed
+                  : 30;
+
+              const etaMin =
+                Math.round(
+                  (
+                    remainingKm /
+                    speedKmh
+                  ) * 60
+                );
+
+              if (
+                ride.trackingId
+              ) {
+
+                RideTracking
+                  .addEtaUpdate(
+                    ride._id,
+
+                    {
+                      toWaypoint:
+                        mapTarget,
+
+                      etaMinutes:
+                        etaMin,
+
+                      distanceRemainingKm:
+                        remainingKm,
+
+                      source:
+                        'estimate',
+                    }
+                  )
+                  .catch(e =>
+                    console.error(
+                      '[GPS] etaUpdate:',
+                      e.message
+                    )
+                  );
+              }
+
+              this.io.to(
+                `booking:${bookingId}`
+              ).emit(
+                'eta_update',
+
+                {
+                  etaMinutes:
+                    etaMin,
+
+                  distanceRemainingKm:
+                    remainingKm,
+
+                  currentTarget:
+                    mapTarget,
+
+                  _serverTime:
+                    new Date()
+                      .toISOString(),
+                }
+              );
+            }
+          }
+
+          // ─────────────────────────
+          // LIVE LOCATION EVENT
+          // ─────────────────────────
+
+          this.io.to(
+            `booking:${bookingId}`
+          ).emit(
+            'location_update',
+
+            {
+              lat,
+              lng,
+              heading,
+              speed,
+              accuracy,
+
+              rideId:
+                String(
+                  ride._id
+                ),
+
+              bookingId,
+
+              role,
+
+              rideStatus:
+                ride.status,
+
+              currentTarget:
+                resolveMapTarget(
+                  ride.status
+                ),
+
+              updatedAt:
+                new Date()
+                  .toISOString(),
+            }
+          );
+        }
       }
-    });
+
+      // ─────────────────────────
+      // ADMIN TRACKING
+      // ─────────────────────────
+
+      this.io.to(
+        'admin:ops'
+      ).emit(
+        'driver_location',
+
+        {
+          userId,
+
+          driverObjectId,
+
+          name,
+
+          role,
+
+          lat,
+          lng,
+
+          heading:
+            heading ?? 0,
+
+          speed:
+            speed ?? 0,
+
+          bookingId:
+            bookingId || null,
+
+          updatedAt:
+            new Date()
+              .toISOString(),
+        }
+      );
+
+    } catch (err) {
+
+      console.error(
+        '[driver_location]',
+        err.message,
+        {
+          lat,
+          lng,
+        }
+      );
+    }
+  }
+);
 
     // ── care_location ─────────────────────────────────────────────────────────
     socket.on('care_location', async ({ bookingId, lat, lng } = {}) => {
@@ -536,7 +1030,44 @@ class BookingSocketService {
 
         this.io.to(`booking:${bookingId}`).emit('ride_status_changed', statusPayload);
         this.io.to('admin:ops').emit('ride_status_changed', statusPayload);
+        if (ride.trackingId) {
 
+  const tracking =
+    await RideTracking.findById(
+      ride.trackingId
+    );
+
+  if (tracking) {
+
+    if (
+      tracking.activeTarget ===
+      'pickup_care_assistant'
+    ) {
+
+      tracking.liveRouteContext
+        .careAssistantPickupReachedAt =
+        new Date();
+
+      tracking.activeTarget =
+        'hospital_drop';
+    }
+
+    else if (
+      tracking.activeTarget ===
+      'pickup_patient'
+    ) {
+
+      tracking.liveRouteContext
+        .patientPickupReachedAt =
+        new Date();
+
+      tracking.activeTarget =
+        'hospital_drop';
+    }
+
+    await tracking.save();
+  }
+}
         if (mappedStatus === 'driver_arrived') {
           this.emitToAdminOps('otp_for_admin', {
             bookingId, rideId, driverName: name,

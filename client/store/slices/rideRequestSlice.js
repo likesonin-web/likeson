@@ -229,17 +229,46 @@ const initialState = {
   createdRide: null,
 
   // Socket-pushed live state (updated by socket actions below)
-  socketLive: {
-    status:            null,
-    liveLocation:      null,
-    etaMinutes:        null,
-    etaTarget:         null,
-    navigationTarget:  null,  // { currentTarget, coords, address, polyline }
-    driverSnapshot:    null,
-    vehicleSnapshot:   null,
-    otpResult:         null,
-    wrongOtpAttempts:  0,
+ socketLive: {
+
+  status: null,
+
+  liveLocation: null,
+
+  etaMinutes: null,
+
+  etaTarget: null,
+
+  navigationTarget: null,
+
+  driverSnapshot: null,
+
+  vehicleSnapshot: null,
+
+  otpResult: null,
+
+  wrongOtpAttempts: 0,
+
+  // NEW
+  activeTarget: null,
+
+  hospitalEta: {
+    hospitalId: null,
+    hospitalName: null,
+    etaMinutes: null,
+    distanceKm: null,
+    coordinates: null,
   },
+
+  careAssistantTracking: {
+    bookingId: null,
+    rideId: null,
+    driverLocation: null,
+    activeTarget: null,
+    etaMinutes: null,
+    distanceKm: null,
+  },
+},
 
   // Loading states per operation
   loading: {
@@ -351,7 +380,60 @@ socketLocationUpdate(state, action) {
       state.socketLive.status = 'cancelled';
       if (state.currentRide) state.currentRide.status = 'cancelled';
     },
+    socketHospitalEtaUpdate(
+  state,
+  action
+) {
 
+  state.socketLive.hospitalEta = {
+
+    hospitalId:
+      action.payload.hospitalId,
+
+    hospitalName:
+      action.payload.hospitalName,
+
+    etaMinutes:
+      action.payload.etaMinutes,
+
+    distanceKm:
+      action.payload.distanceKm,
+
+    coordinates:
+      action.payload.coordinates,
+  };
+},
+
+socketCareAssistantTracking(
+  state,
+  action
+) {
+
+  state.socketLive
+    .careAssistantTracking = {
+
+    bookingId:
+      action.payload.bookingId,
+
+    rideId:
+      action.payload.rideId,
+
+    driverLocation:
+      action.payload.driverLocation,
+
+    activeTarget:
+      action.payload.activeTarget,
+
+    etaMinutes:
+      action.payload.etaMinutes,
+
+    distanceKm:
+      action.payload.distanceKm,
+  };
+
+  state.socketLive.activeTarget =
+    action.payload.activeTarget;
+},
     // navigation_target_changed → SOCKET_EVENTS.NAVIGATION_TARGET_CHANGED
     // payload: { currentTarget, coords, address, polyline, bookingId, rideId }
     socketNavigationTargetChanged(state, action) {
@@ -654,6 +736,8 @@ export const {
   socketOtpResult,
   socketOtpWrongAttempt,
   socketRideAssigned,
+  socketHospitalEtaUpdate,
+socketCareAssistantTracking,
 
   // Manual resets
   clearCurrentRide,
@@ -679,6 +763,20 @@ export const selectAdminPagination    = (s) => ({
 });
 export const selectNearbyResult       = (s) => s.rideRequest.nearbyResult;
 export const selectSocketLive         = (s) => s.rideRequest.socketLive;
+export const selectHospitalEta =
+  (s) =>
+    s.rideRequest.socketLive
+      .hospitalEta;
+
+export const selectCareAssistantTracking =
+  (s) =>
+    s.rideRequest.socketLive
+      .careAssistantTracking;
+
+export const selectActiveTarget =
+  (s) =>
+    s.rideRequest.socketLive
+      .activeTarget;
 export const selectRideStatus         = (s) => s.rideRequest.socketLive.status;
 export const selectLiveLocation       = (s) => s.rideRequest.socketLive.liveLocation;
 export const selectNavigationTarget   = (s) => s.rideRequest.socketLive.navigationTarget;
@@ -727,6 +825,23 @@ export function wireRideSocketEvents(on, SOCKET_EVENTS, dispatch) {
     on(EV.NAVIGATION_TARGET_CHANGED, (d) => dispatch(socketNavigationTargetChanged(d))),
     on(EV.OTP_RESULT,                (d) => dispatch(socketOtpResult(d))),
     on(EV.OTP_WRONG_ATTEMPT,         ()  => dispatch(socketOtpWrongAttempt())),
+    on(
+  'hospital:eta:update',
+
+  (d) =>
+    dispatch(
+      socketHospitalEtaUpdate(d)
+    )
+),
+
+on(
+  'care-assistant:ride:tracking',
+
+  (d) =>
+    dispatch(
+      socketCareAssistantTracking(d)
+    )
+),
 
     // Fine-grained ride status events
     on('driver_accepted',  (d) => dispatch(socketDriverAccepted(d))),

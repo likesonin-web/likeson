@@ -103,7 +103,7 @@ const Home: React.FC = () => {
       )}
 
       {/* ── LAB PARTNER ───────────────────────────────────────────────────── */}
-      {user?.role === "lab partner" && (
+      {user?.role === "lab_partner" && (
         <>
           <Container className="w-full flex flex-col gap-12 py-6">
             <LabHero />

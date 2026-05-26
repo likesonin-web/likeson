@@ -1,18 +1,16 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * MARQUEE ROUTER  —  Likeson.in Healthcare Platform
- * All route logic is inline (no external controller).
- *
- * Public/User routes   → require `protect`
- * Admin/SuperAdmin     → require `protect` + `authorize('superadmin','admin')`
- *
+ * ENTERPRISE MARQUEE ROUTER  —  Likeson.in Healthcare Platform
+ * * Upgraded for Guest Support, High-Scale Analytics, and Targeted Audiences.
  * Base path (mount in app.js):  app.use('/api/marquee', marqueeRouter)
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
 import express  from 'express';
 import mongoose from 'mongoose';
+import jwt from 'jsonwebtoken';
 import Marquee  from '../models/Marquee.js';
+import User from '../models/User.js'; // Assuming you have a User model
 import { protect, authorize } from '../middleware/authMiddleware.js';
 import cache from '../middleware/cache.js'; 
 import { invalidatePattern, invalidateKey } from '../utils/cacheInvalidation.js';
@@ -20,108 +18,107 @@ import { invalidatePattern, invalidateKey } from '../utils/cacheInvalidation.js'
 const router = express.Router();
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  CACHE INVALIDATION HELPER
+//  MIDDLEWARE & HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Wipes out all marquee-related caches.
- * Clears admin lists, analytics, individual marquee details, and ALL user-specific marquee feeds.
+ * Optional Auth Middleware
+ * Allows a route to be accessed by BOTH guests and logged-in users.
+ * If a valid token exists, req.user is populated. If not, req.user is null.
  */
-const clearMarqueeCaches = async (marqueeId = null) => {
-  // Clear admin lists and analytics summaries
-  await invalidatePattern('GET:/api/marquee/admin*');
-  
-  // Clear all user-specific marquee feeds
-  await invalidatePattern('user:*:marquees');
-
-  // Clear specific marquee detail cache if an ID is provided
-  if (marqueeId) {
-    await invalidateKey(`marquee:${marqueeId}`);
+const optionalAuth = async (req, res, next) => {
+  let token;
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    try {
+      token = req.headers.authorization.split(' ')[1];
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      req.user = await User.findById(decoded.id).select('-password');
+    } catch (error) {
+      // Token failed, but we still allow them to proceed as a guest
+      req.user = null;
+    }
+  } else {
+    req.user = null;
   }
+  next();
 };
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+/**
+ * Wipes out marquee caches.
+ */
+const clearMarqueeCaches = async (marqueeId = null) => {
+  await invalidatePattern('GET:/api/marquee/admin*');
+  await invalidatePattern('user:*:marquees');
+  await invalidatePattern('public:marquees'); // Added for guest caches
+  if (marqueeId) await invalidateKey(`marquee:${marqueeId}`);
+};
 
 /**
  * buildLiveQuery
  * ──────────────
- * Returns a Mongoose filter for "currently live" marquees visible to a given
- * user.  The targeting union logic is:
- *
- * SHOW the marquee if ALL of these are true:
- * 1. isActive === true
- * 2. isArchived === false
- * 3. startsAt <= now
- * 4. endsAt is null  OR  endsAt > now
- * 5. This user has NOT already dismissed it
- * 6. ONE of the following audience rules matches:
- * (a) PUBLIC  — both targetRoles[] and targetUsers[] are empty
- * (b) ROLES   — targetRoles is non-empty AND user's role is in it
- * (c) USERS   — targetUsers is non-empty AND user's _id is in it
- * (d) BOTH    — (b) OR (c)  [union, not intersection]
- *
- * NOTE: rules (a)/(b)/(c)/(d) are mutually exclusive by design but we still
- * use a clean $or so any combination stored in the DB works correctly.
- *
- * @param {string} role   - e.g. 'customer' | 'doctor' | 'admin' …
- * @param {ObjectId|string} userId
+ * Builds a highly optimized Mongoose query based on the new Audience model.
  */
-const buildLiveQuery = (role, userId) => {
+const buildLiveQuery = (user) => {
   const now = new Date();
-  const userOid = new mongoose.Types.ObjectId(String(userId));
-
-  return {
-    isActive: true,
-    isArchived: false,
+  
+  const baseQuery = {
+    status: 'published',
     startsAt: { $lte: now },
     $or: [{ endsAt: null }, { endsAt: { $gt: now } }],
-    'dismissedBy.user': { $ne: userOid },
-    
-    // ── Corrected Audience Targeting Logic ──
-    $or: [
-      // 1. Global: Both arrays are empty (shown to everyone)
-      { targetRoles: { $size: 0 }, targetUsers: { $size: 0 } },
-      
-      // 2. Role-based: User's role is in the targetRoles array
-      { targetRoles: role },
-      
-      // 3. User-based: User's specific ID is in the targetUsers array
-      { targetUsers: userOid }
-    ]
   };
+
+  if (!user) {
+    // Guest User logic
+    baseQuery.audience = { $in: ['public', 'guests_only'] };
+  } else {
+    // Authenticated User logic
+    const userOid = new mongoose.Types.ObjectId(String(user._id));
+    
+    // An authenticated user sees: Public, Authenticated, OR Targeted (if they match)
+    baseQuery.$or = [
+      { audience: { $in: ['public', 'authenticated'] } },
+      { 
+        audience: 'targeted',
+        $or: [
+          { targetRoles: user.role },
+          { targetUsers: userOid }
+        ]
+      }
+    ];
+  }
+
+  return baseQuery;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  PUBLIC / USER ROUTE
+//  PUBLIC / USER ROUTES (CONSUMPTION)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * GET /api/marquee
+ * Dynamically fetches active marquees based on guest or user status.
+ */
 router.get(
   '/', 
-  protect, 
-  cache(60, (req) => `user:${req.user._id}:marquees`), 
+  optionalAuth, 
+  cache(60, (req) => req.user ? `user:${req.user._id}:marquees` : 'public:marquees'), 
   async (req, res) => {
     try {
-      const { role, _id: userId } = req.user;
+      const query = buildLiveQuery(req.user);
 
-      if (!mongoose.Types.ObjectId.isValid(String(userId))) {
-        return res.status(400).json({ success: false, message: 'Invalid user id' });
-      }
-
-      // Pass the role and userId to the corrected query builder
-      const query = buildLiveQuery(role, userId);
-
+      // We explicitly select clientKey so the frontend can track dismissals locally
       const marquees = await Marquee.find(query)
-        .select('-dismissedBy -__v')         
+        .select('message subText icon type speed priority clientKey isDismissible cta audience')         
         .sort({ priority: -1, createdAt: -1 })
         .lean();
 
-      // Fire-and-forget impression counter (runs on cache miss)
+      // Fire-and-forget impression counter
       if (marquees.length > 0) {
         const ids = marquees.map((m) => m._id);
         Marquee.updateMany(
           { _id: { $in: ids } },
           { $inc: { 'analytics.impressions': 1 } },
-        ).catch(() => {});
+        ).catch((err) => console.error('Failed to update impressions', err));
       }
 
       res.json({ success: true, marquees });
@@ -131,40 +128,29 @@ router.get(
     }
   }
 );
+
 /**
  * POST /api/marquee/:id/dismiss
- *
- * Marks a marquee as dismissed for the current user.
+ * Tracks a dismissal for analytics. 
+ * NOTE: The frontend MUST store the `clientKey` in localStorage to keep it hidden.
  */
-router.post('/:id/dismiss', protect, async (req, res) => {
+router.post('/:id/dismiss', optionalAuth, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ success: false, message: 'Invalid marquee id' });
     }
 
-    const marquee = await Marquee.findById(req.params.id);
-    if (!marquee) {
-      return res.status(404).json({ success: false, message: 'Marquee not found' });
-    }
+    const marquee = await Marquee.findByIdAndUpdate(req.params.id, {
+      $inc: { 'analytics.dismissals': 1 },
+    });
 
-    if (!marquee.isDismissible) {
-      return res.status(400).json({ success: false, message: 'This marquee cannot be dismissed' });
-    }
+    if (!marquee) return res.status(404).json({ success: false, message: 'Marquee not found' });
 
-    const alreadyDismissed = marquee.dismissedBy.some(
-      (d) => d.user.toString() === req.user._id.toString(),
-    );
-
-    if (!alreadyDismissed) {
-      marquee.dismissedBy.push({ user: req.user._id, dismissedAt: new Date() });
-      marquee.analytics.dismissals += 1;
-      await marquee.save();
-      
-      // Invalidate ONLY this specific user's marquee cache so it disappears immediately
-      await invalidateKey(`user:${req.user._id}:marquees`);
-    }
-
-    res.json({ success: true, message: 'Marquee dismissed' });
+    res.json({ 
+      success: true, 
+      message: 'Dismissal recorded.',
+      clientKey: marquee.clientKey 
+    });
   } catch (err) {
     console.error('[Marquee POST /dismiss]', err);
     res.status(500).json({ success: false, message: err.message });
@@ -173,10 +159,9 @@ router.post('/:id/dismiss', protect, async (req, res) => {
 
 /**
  * POST /api/marquee/:id/click
- *
  * Tracks a CTA click for analytics.
  */
-router.post('/:id/click', protect, async (req, res) => {
+router.post('/:id/click', optionalAuth, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ success: false, message: 'Invalid marquee id' });
@@ -186,7 +171,6 @@ router.post('/:id/click', protect, async (req, res) => {
       $inc: { 'analytics.clicks': 1 },
     });
 
-    // We do NOT clear the cache here to prevent unnecessary DB hits just for tracking clicks.
     res.json({ success: true });
   } catch (err) {
     console.error('[Marquee POST /click]', err);
@@ -195,12 +179,11 @@ router.post('/:id/click', protect, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ADMIN ROUTES
+//  ADMIN ROUTES (MANAGEMENT)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * GET /api/marquee/admin/analytics/summary
- * Cached for 60 seconds
  */
 router.get(
   '/admin/analytics/summary',
@@ -215,14 +198,13 @@ router.get(
             $group: {
               _id:           null,
               totalMarquees: { $sum: 1 },
-              activeCount:   { $sum: { $cond: ['$isActive', 1, 0] } },
+              publishedCount:{ $sum: { $cond: [{ $eq: ['$status', 'published'] }, 1, 0] } },
               impressions:   { $sum: '$analytics.impressions' },
               clicks:        { $sum: '$analytics.clicks' },
               dismissals:    { $sum: '$analytics.dismissals' },
             },
           },
         ]),
-
         Marquee.aggregate([
           {
             $group: {
@@ -233,20 +215,16 @@ router.get(
           },
           { $sort: { count: -1 } },
         ]),
-
         Marquee.find()
-          .select('message type analytics priority isActive')
+          .select('message type analytics priority status audience')
           .sort({ 'analytics.clicks': -1 })
           .limit(5)
           .lean(),
       ]);
 
       res.json({
-        success:    true,
-        summary:    totals[0] || {
-          totalMarquees: 0, activeCount: 0,
-          impressions: 0, clicks: 0, dismissals: 0,
-        },
+        success: true,
+        summary: totals[0] || { totalMarquees: 0, publishedCount: 0, impressions: 0, clicks: 0, dismissals: 0 },
         byType,
         topClicked,
       });
@@ -259,7 +237,6 @@ router.get(
 
 /**
  * GET /api/marquee/admin
- * Cached for 60 seconds based on query params
  */
 router.get(
   '/admin',
@@ -268,43 +245,29 @@ router.get(
   cache(60),
   async (req, res) => {
     try {
-      const {
-        page       = 1,
-        limit      = 20,
-        type,
-        isActive,
-        isArchived,
-        role,
-        search,
-      } = req.query;
+      const { page = 1, limit = 20, type, status, audience, search } = req.query;
 
       const filter = {};
-
-      if (type)                     filter.type        = type;
-      if (isActive   !== undefined) filter.isActive    = isActive   === 'true';
-      if (isArchived !== undefined) filter.isArchived  = isArchived === 'true';
-      if (role)                     filter.targetRoles = role;          
-      if (search)                   filter.message     = { $regex: search, $options: 'i' };
+      if (type)     filter.type     = type;
+      if (status)   filter.status   = status;
+      if (audience) filter.audience = audience;
+      if (search)   filter.message  = { $regex: search, $options: 'i' };
 
       const skip  = (Number(page) - 1) * Number(limit);
-      const total = await Marquee.countDocuments(filter);
-
-      const marquees = await Marquee.find(filter)
-        .populate('createdBy', 'name role avatar')
-        .populate('updatedBy', 'name role')
-        .sort({ priority: -1, createdAt: -1 })
-        .skip(skip)
-        .limit(Number(limit));
+      const [total, marquees] = await Promise.all([
+        Marquee.countDocuments(filter),
+        Marquee.find(filter)
+          .populate('createdBy', 'name role avatar')
+          .populate('updatedBy', 'name role')
+          .sort({ priority: -1, createdAt: -1 })
+          .skip(skip)
+          .limit(Number(limit))
+      ]);
 
       res.json({
         success: true,
         marquees,
-        pagination: {
-          total,
-          pages: Math.ceil(total / Number(limit)),
-          page:  Number(page),
-          limit: Number(limit),
-        },
+        pagination: { total, pages: Math.ceil(total / Number(limit)), page: Number(page), limit: Number(limit) },
       });
     } catch (err) {
       console.error('[Marquee GET /admin]', err);
@@ -315,7 +278,6 @@ router.get(
 
 /**
  * GET /api/marquee/admin/:id
- * Cached for 60 seconds with a custom key
  */
 router.get(
   '/admin/:id',
@@ -324,20 +286,12 @@ router.get(
   cache(60, (req) => `marquee:${req.params.id}`),
   async (req, res) => {
     try {
-      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-        return res.status(400).json({ success: false, message: 'Invalid marquee id' });
-      }
-
       const marquee = await Marquee.findById(req.params.id)
-        .populate('createdBy',        'name role avatar')
-        .populate('updatedBy',        'name role')
-        .populate('dismissedBy.user', 'name role avatar')
-        .populate('targetUsers',      'name role avatar email');   
+        .populate('createdBy',   'name role avatar')
+        .populate('updatedBy',   'name role')
+        .populate('targetUsers', 'name role avatar email');   
 
-      if (!marquee) {
-        return res.status(404).json({ success: false, message: 'Marquee not found' });
-      }
-
+      if (!marquee) return res.status(404).json({ success: false, message: 'Marquee not found' });
       res.json({ success: true, marquee });
     } catch (err) {
       console.error('[Marquee GET /admin/:id]', err);
@@ -356,27 +310,24 @@ router.post(
   async (req, res) => {
     try {
       const {
-        message, subText, icon, type, speed, priority,
-        isDismissible, cta, targetRoles, targetUsers,
-        targetPages, startsAt, endsAt, isActive,
+        message, subText, icon, type, speed, priority, isDismissible, cta, 
+        audience, targetRoles, targetUsers, targetPages, startsAt, endsAt, status
       } = req.body;
-
-      if (!message?.trim()) {
-        return res.status(400).json({ success: false, message: 'message is required' });
-      }
 
       const safeTargetUsers = Array.isArray(targetUsers)
         ? targetUsers.filter((id) => mongoose.Types.ObjectId.isValid(String(id)))
         : [];
 
       const marquee = await Marquee.create({
-        message:       message.trim(),
+        message:       message?.trim(),
         subText:       subText?.trim()  || '',
         icon:          icon?.trim()     || '',
         type:          type             || 'info',
         speed:         speed            || 'normal',
         priority:      Number(priority) || 0,
         isDismissible: isDismissible !== false,
+        audience:      audience         || 'public',
+        status:        status           || 'draft',
         cta: {
           label:  cta?.label?.trim() || '',
           url:    cta?.url?.trim()   || '',
@@ -387,7 +338,6 @@ router.post(
         targetPages:  Array.isArray(targetPages) ? targetPages : [],
         startsAt:     startsAt ? new Date(startsAt) : new Date(),
         endsAt:       endsAt   ? new Date(endsAt)   : null,
-        isActive:     isActive !== false,
         createdBy:    req.user._id,
       });
 
@@ -396,13 +346,11 @@ router.post(
         { path: 'targetUsers', select: 'name role avatar email' },
       ]);
 
-      // Global invalidation so the new marquee appears instantly for eligible users
       await clearMarqueeCaches();
-
       res.status(201).json({ success: true, marquee: populated });
     } catch (err) {
       console.error('[Marquee POST /admin]', err);
-      res.status(500).json({ success: false, message: err.message });
+      res.status(400).json({ success: false, message: err.message });
     }
   },
 );
@@ -416,44 +364,23 @@ router.patch(
   authorize('superadmin', 'admin'),
   async (req, res) => {
     try {
-      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-        return res.status(400).json({ success: false, message: 'Invalid marquee id' });
-      }
-
       const marquee = await Marquee.findById(req.params.id);
-      if (!marquee) {
-        return res.status(404).json({ success: false, message: 'Marquee not found' });
-      }
+      if (!marquee) return res.status(404).json({ success: false, message: 'Marquee not found' });
 
       const SCALAR_FIELDS = [
         'message', 'subText', 'icon', 'type', 'speed', 'priority',
-        'isDismissible', 'targetPages', 'isActive', 'isArchived',
+        'isDismissible', 'targetPages', 'audience', 'status'
       ];
 
       SCALAR_FIELDS.forEach((key) => {
         if (req.body[key] !== undefined) marquee[key] = req.body[key];
       });
 
-      if (req.body.startsAt !== undefined) {
-        marquee.startsAt = req.body.startsAt ? new Date(req.body.startsAt) : new Date();
-      }
-      if (req.body.endsAt !== undefined) {
-        marquee.endsAt = req.body.endsAt ? new Date(req.body.endsAt) : null;
-      }
-
-      if (Array.isArray(req.body.targetRoles)) {
-        marquee.targetRoles = req.body.targetRoles;
-      }
-
-      if (Array.isArray(req.body.targetUsers)) {
-        marquee.targetUsers = req.body.targetUsers.filter(
-          (id) => mongoose.Types.ObjectId.isValid(String(id)),
-        );
-      }
-
-      if (req.body.cta) {
-        marquee.cta = { ...marquee.cta.toObject(), ...req.body.cta };
-      }
+      if (req.body.startsAt !== undefined) marquee.startsAt = req.body.startsAt ? new Date(req.body.startsAt) : new Date();
+      if (req.body.endsAt !== undefined)   marquee.endsAt   = req.body.endsAt   ? new Date(req.body.endsAt)   : null;
+      if (Array.isArray(req.body.targetRoles)) marquee.targetRoles = req.body.targetRoles;
+      if (Array.isArray(req.body.targetUsers)) marquee.targetUsers = req.body.targetUsers.filter(id => mongoose.Types.ObjectId.isValid(String(id)));
+      if (req.body.cta) marquee.cta = { ...marquee.cta.toObject(), ...req.body.cta };
 
       marquee.updatedBy = req.user._id;
       await marquee.save();
@@ -464,93 +391,42 @@ router.patch(
         { path: 'targetUsers', select: 'name role avatar email' },
       ]);
 
-      // Global invalidation
       await clearMarqueeCaches(marquee._id);
-
       res.json({ success: true, marquee: populated });
     } catch (err) {
       console.error('[Marquee PATCH /admin/:id]', err);
-      res.status(500).json({ success: false, message: err.message });
+      res.status(400).json({ success: false, message: err.message });
     }
   },
 );
 
 /**
- * PATCH /api/marquee/admin/:id/toggle
+ * PATCH /api/marquee/admin/:id/status
+ * Replaces the old toggle & archive endpoints. Safely move between draft, published, and archived.
  */
 router.patch(
-  '/admin/:id/toggle',
+  '/admin/:id/status',
   protect,
   authorize('superadmin', 'admin'),
   async (req, res) => {
     try {
-      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-        return res.status(400).json({ success: false, message: 'Invalid marquee id' });
+      const { status } = req.body;
+      if (!['draft', 'published', 'archived'].includes(status)) {
+        return res.status(400).json({ success: false, message: 'Invalid status' });
       }
-
-      const marquee = await Marquee.findById(req.params.id);
-      if (!marquee) {
-        return res.status(404).json({ success: false, message: 'Marquee not found' });
-      }
-
-      marquee.isActive  = !marquee.isActive;
-      marquee.updatedBy = req.user._id;
-      await marquee.save();
-
-      // Global invalidation
-      await clearMarqueeCaches(marquee._id);
-
-      res.json({
-        success:  true,
-        isActive: marquee.isActive,
-        message:  `Marquee ${marquee.isActive ? 'activated' : 'deactivated'}`,
-      });
-    } catch (err) {
-      console.error('[Marquee PATCH /admin/:id/toggle]', err);
-      res.status(500).json({ success: false, message: err.message });
-    }
-  },
-);
-
-/**
- * PATCH /api/marquee/admin/:id/archive
- */
-router.patch(
-  '/admin/:id/archive',
-  protect,
-  authorize('superadmin', 'admin'),
-  async (req, res) => {
-    try {
-      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-        return res.status(400).json({ success: false, message: 'Invalid marquee id' });
-      }
-
-      const archive = req.body.archive !== false;   // default true
 
       const marquee = await Marquee.findByIdAndUpdate(
         req.params.id,
-        {
-          isArchived: archive,
-          ...(archive ? { isActive: false } : {}),
-          updatedBy: req.user._id,
-        },
-        { new: true },
+        { status, updatedBy: req.user._id },
+        { new: true }
       );
 
-      if (!marquee) {
-        return res.status(404).json({ success: false, message: 'Marquee not found' });
-      }
+      if (!marquee) return res.status(404).json({ success: false, message: 'Marquee not found' });
 
-      // Global invalidation
       await clearMarqueeCaches(marquee._id);
-
-      res.json({
-        success: true,
-        message: archive ? 'Marquee archived' : 'Marquee unarchived',
-        marquee,
-      });
+      res.json({ success: true, status: marquee.status, message: `Marquee marked as ${status}` });
     } catch (err) {
-      console.error('[Marquee PATCH /admin/:id/archive]', err);
+      console.error('[Marquee PATCH /admin/:id/status]', err);
       res.status(500).json({ success: false, message: err.message });
     }
   },
@@ -565,18 +441,10 @@ router.delete(
   authorize('superadmin'),
   async (req, res) => {
     try {
-      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-        return res.status(400).json({ success: false, message: 'Invalid marquee id' });
-      }
-
       const marquee = await Marquee.findByIdAndDelete(req.params.id);
-      if (!marquee) {
-        return res.status(404).json({ success: false, message: 'Marquee not found' });
-      }
+      if (!marquee) return res.status(404).json({ success: false, message: 'Marquee not found' });
 
-      // Global invalidation
       await clearMarqueeCaches(req.params.id);
-
       res.json({ success: true, message: 'Marquee permanently deleted' });
     } catch (err) {
       console.error('[Marquee DELETE /admin/:id]', err);
@@ -586,28 +454,23 @@ router.delete(
 );
 
 /**
- * DELETE /api/marquee/admin/:id/dismissals
+ * DELETE /api/marquee/admin/:id/analytics
+ * Resets the analytics counts since we no longer have a dismissals array to clear.
  */
 router.delete(
-  '/admin/:id/dismissals',
+  '/admin/:id/analytics',
   protect,
   authorize('superadmin', 'admin'),
   async (req, res) => {
     try {
-      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-        return res.status(400).json({ success: false, message: 'Invalid marquee id' });
-      }
-
       await Marquee.findByIdAndUpdate(req.params.id, {
-        $set: { dismissedBy: [], 'analytics.dismissals': 0 },
+        $set: { 'analytics.impressions': 0, 'analytics.clicks': 0, 'analytics.dismissals': 0 },
       });
 
-      // Global invalidation so the marquee reappears for everyone who previously dismissed it
       await clearMarqueeCaches(req.params.id);
-
-      res.json({ success: true, message: 'Dismissal log cleared' });
+      res.json({ success: true, message: 'Marquee analytics reset to zero' });
     } catch (err) {
-      console.error('[Marquee DELETE /admin/:id/dismissals]', err);
+      console.error('[Marquee DELETE /admin/:id/analytics]', err);
       res.status(500).json({ success: false, message: err.message });
     }
   },

@@ -1,29 +1,29 @@
 /**
- * clinicalSlice.js
- * Likeson.in — Redux Toolkit slice
- * Covers ALL routes in prescriptionCareRouter.js
- *
- * Mount: store.js → import clinicalReducer from './slices/clinicalSlice'
+ * clinicalSlice.js — Likeson.in
+ * Redux Toolkit slice for /api/v1/clinical routes.
+ * Sections:
+ *   A — Prescriptions
+ *   B — OP Records
+ *   C — Care Assistant: Bookings
+ *   D — Care Assistant: Care Records
+ *   E — Admin
+ *   F — Doctor Dashboard (appointments, availability, earnings, transactions, invoices)
  */
 
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import API   from '../api';
 import toast from 'react-hot-toast';
 
-// ─── Base path ────────────────────────────────────────────────────────────────
 const BASE = '/clinical';
 
-// ─── Thunk factory helpers ────────────────────────────────────────────────────
+// ─── Loading / error helpers ──────────────────────────────────────────────────
 const pending  = (state, key)        => { state.loading[key] = true;  state.errors[key] = null; };
-const rejected = (state, action, key) => {
-  state.loading[key] = false;
-  state.errors[key]  = action.payload;
-};
-const fulfilled = (state, key) => { state.loading[key] = false; state.errors[key] = null; };
+const rejected = (state, action, key) => { state.loading[key] = false; state.errors[key] = action.payload; };
+const fulfilled = (state, key)        => { state.loading[key] = false; state.errors[key] = null; };
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SECTION A — PRESCRIPTIONS
+//  A — PRESCRIPTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const createPrescription = createAsyncThunk(
@@ -46,10 +46,9 @@ export const fetchPrescriptions = createAsyncThunk(
   async (params = {}, { rejectWithValue }) => {
     try {
       const { data } = await API.get(`${BASE}/prescriptions`, { params });
-      return data; // { total, page, data[] }
+      return data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to fetch prescriptions.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch prescriptions.');
     }
   }
 );
@@ -75,26 +74,17 @@ export const fetchPrescriptionById = createAsyncThunk(
       const { data } = await API.get(`${BASE}/prescriptions/${id}`);
       return data.data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to fetch prescription.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch prescription.');
     }
   }
 );
 
-/**
- * downloadPrescriptionPdf
- * Opens PDF in a new tab via blob URL.
- */
 export const downloadPrescriptionPdf = createAsyncThunk(
   'clinical/downloadPrescriptionPdf',
   async (id, { rejectWithValue }) => {
     try {
-      const response = await API.get(`${BASE}/prescriptions/${id}/pdf`, {
-        responseType: 'blob',
-      });
-      const url = window.URL.createObjectURL(
-        new Blob([response.data], { type: 'application/pdf' })
-      );
+      const response = await API.get(`${BASE}/prescriptions/${id}/pdf`, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
       window.open(url, '_blank');
       return id;
     } catch (err) {
@@ -122,7 +112,7 @@ export const cancelPrescription = createAsyncThunk(
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SECTION B — OP RECORDS
+//  B — OP RECORDS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const fetchOPRecords = createAsyncThunk(
@@ -130,10 +120,9 @@ export const fetchOPRecords = createAsyncThunk(
   async (params = {}, { rejectWithValue }) => {
     try {
       const { data } = await API.get(`${BASE}/op-records`, { params });
-      return data; // { total, page, data[] }
+      return data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to fetch OP records.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch OP records.');
     }
   }
 );
@@ -145,8 +134,7 @@ export const fetchOPRecordById = createAsyncThunk(
       const { data } = await API.get(`${BASE}/op-records/${id}`);
       return data.data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to fetch OP record.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch OP record.');
     }
   }
 );
@@ -185,7 +173,7 @@ export const updateOPStatus = createAsyncThunk(
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SECTION C — CARE ASSISTANT: BOOKINGS
+//  C — CARE ASSISTANT: BOOKINGS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const fetchCABookings = createAsyncThunk(
@@ -193,10 +181,9 @@ export const fetchCABookings = createAsyncThunk(
   async (params = {}, { rejectWithValue }) => {
     try {
       const { data } = await API.get(`${BASE}/care/bookings`, { params });
-      return data; // { total, page, data[] }
+      return data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to fetch bookings.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch bookings.');
     }
   }
 );
@@ -206,10 +193,9 @@ export const fetchCAPendingBookings = createAsyncThunk(
   async (_, { rejectWithValue }) => {
     try {
       const { data } = await API.get(`${BASE}/care/bookings/pending`);
-      return data.data; // []
+      return data.data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to fetch pending bookings.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch pending bookings.');
     }
   }
 );
@@ -221,8 +207,7 @@ export const fetchCABookingById = createAsyncThunk(
       const { data } = await API.get(`${BASE}/care/bookings/${bookingId}`);
       return data.data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to fetch booking detail.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch booking detail.');
     }
   }
 );
@@ -259,7 +244,7 @@ export const rejectCABooking = createAsyncThunk(
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SECTION D — CARE ASSISTANT: CARE RECORDS
+//  D — CARE ASSISTANT: CARE RECORDS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const fetchCareRecords = createAsyncThunk(
@@ -267,10 +252,9 @@ export const fetchCareRecords = createAsyncThunk(
   async (params = {}, { rejectWithValue }) => {
     try {
       const { data } = await API.get(`${BASE}/care/records`, { params });
-      return data; // { total, page, data[] }
+      return data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to fetch care records.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch care records.');
     }
   }
 );
@@ -282,8 +266,7 @@ export const fetchCareRecordById = createAsyncThunk(
       const { data } = await API.get(`${BASE}/care/records/${id}`);
       return data.data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to fetch care record.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch care record.');
     }
   }
 );
@@ -389,8 +372,7 @@ export const fetchInstructions = createAsyncThunk(
       const { data } = await API.get(`${BASE}/care/records/${id}/instructions`);
       return { id, instructions: data.data };
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to fetch instructions.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch instructions.');
     }
   }
 );
@@ -427,7 +409,7 @@ export const updateCareRecordStatus = createAsyncThunk(
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SECTION E — ADMIN
+//  E — ADMIN
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const adminFetchPrescriptions = createAsyncThunk(
@@ -437,8 +419,7 @@ export const adminFetchPrescriptions = createAsyncThunk(
       const { data } = await API.get(`${BASE}/admin/prescriptions`, { params });
       return data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Admin: failed to fetch prescriptions.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Admin: failed to fetch prescriptions.');
     }
   }
 );
@@ -450,8 +431,7 @@ export const adminFetchOPRecords = createAsyncThunk(
       const { data } = await API.get(`${BASE}/admin/op-records`, { params });
       return data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Admin: failed to fetch OP records.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Admin: failed to fetch OP records.');
     }
   }
 );
@@ -463,8 +443,7 @@ export const adminFetchCareRecords = createAsyncThunk(
       const { data } = await API.get(`${BASE}/admin/care-records`, { params });
       return data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Admin: failed to fetch care records.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Admin: failed to fetch care records.');
     }
   }
 );
@@ -476,8 +455,7 @@ export const adminFetchCareRecordById = createAsyncThunk(
       const { data } = await API.get(`${BASE}/admin/care-records/${id}`);
       return data.data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Admin: failed to fetch care record.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Admin: failed to fetch care record.');
     }
   }
 );
@@ -500,19 +478,62 @@ export const adminAssignCareAssistant = createAsyncThunk(
 );
 
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  SECTION F — DOCTOR DASHBOARD (NEW — add to existing thunks)
-// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+//  F — DOCTOR DASHBOARD
+//  Route: GET /clinical/doctor/appointments
+//  Supports: status, consultationType, search, from, to, page, limit
+// ═══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Fetch doctor's appointments (bookings where doctor = logged-in doctor profile).
+ * Params: status, consultationType, search, from, to, page, limit
+ */
 export const fetchDoctorAppointments = createAsyncThunk(
   'clinical/fetchDoctorAppointments',
   async (params = {}, { rejectWithValue }) => {
     try {
       const { data } = await API.get(`${BASE}/doctor/appointments`, { params });
+      return data; // { total, page, data[] }
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch appointments.');
+    }
+  }
+);
+
+/**
+ * Fetch single appointment detail by bookingId.
+ * Uses GET /clinical/care/bookings/:bookingId (all-staff route — doctor has access).
+ */
+export const fetchDoctorAppointmentById = createAsyncThunk(
+  'clinical/fetchDoctorAppointmentById',
+  async (bookingId, { rejectWithValue }) => {
+    try {
+      // Booking detail: reuse the booking router endpoint via operations pattern.
+      // Since prescriptionCareRouter doesn't have a single-booking endpoint for doctors,
+      // we call the care/bookings/:id route which is isAnyStaff (includes doctor).
+      const { data } = await API.get(`${BASE}/care/bookings/${bookingId}`);
+      return data.data;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch appointment detail.');
+    }
+  }
+);
+
+/**
+ * Fetch today's appointment count — derived from fetchDoctorAppointments.
+ * Convenience thunk: filters to today's date server-side.
+ */
+export const fetchDoctorTodayAppointments = createAsyncThunk(
+  'clinical/fetchDoctorTodayAppointments',
+  async (_, { rejectWithValue }) => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data } = await API.get(`${BASE}/doctor/appointments`, {
+        params: { from: today, to: today, limit: 100 },
+      });
       return data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to fetch appointments.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch today\'s appointments.');
     }
   }
 );
@@ -524,8 +545,7 @@ export const fetchDoctorAvailability = createAsyncThunk(
       const { data } = await API.get(`${BASE}/doctor/availability`);
       return data.data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to fetch availability.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch availability.');
     }
   }
 );
@@ -554,8 +574,7 @@ export const fetchDoctorEarnings = createAsyncThunk(
       const { data } = await API.get(`${BASE}/doctor/earnings`);
       return data.data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to fetch earnings.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch earnings.');
     }
   }
 );
@@ -567,8 +586,7 @@ export const fetchDoctorTransactions = createAsyncThunk(
       const { data } = await API.get(`${BASE}/doctor/transactions`, { params });
       return data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to fetch transactions.';
-      return rejectWithValue(msg);
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch transactions.');
     }
   }
 );
@@ -593,35 +611,34 @@ export const fetchDoctorInvoice = createAsyncThunk(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const initialState = {
-  // ── Prescriptions ──────────────────────────────────────────────────────────
+  // A — Prescriptions
   prescriptions:        [],
   prescriptionsTotal:   0,
   prescriptionsPage:    1,
   selectedPrescription: null,
   verifiedRx:           null,
 
-  // ── OP Records ─────────────────────────────────────────────────────────────
+  // B — OP Records
   opRecords:      [],
   opRecordsTotal: 0,
   opRecordsPage:  1,
   selectedOP:     null,
 
-  // ── CA: Bookings ───────────────────────────────────────────────────────────
+  // C — CA Bookings
   caBookings:        [],
   caBookingsTotal:   0,
   caBookingsPage:    1,
   caPendingBookings: [],
   selectedCABooking: null,
 
-  // ── CA: Care Records ───────────────────────────────────────────────────────
+  // D — Care Records
   careRecords:        [],
   careRecordsTotal:   0,
   careRecordsPage:    1,
   selectedCareRecord: null,
-  // Instructions are stored per record id
-  instructions: {},   // { [recordId]: [] }
+  instructions:       {}, // { [recordId]: [] }
 
-  // ── Admin ──────────────────────────────────────────────────────────────────
+  // E — Admin
   adminPrescriptions:      [],
   adminPrescriptionsTotal: 0,
   adminOPRecords:          [],
@@ -630,16 +647,20 @@ const initialState = {
   adminCareRecordsTotal:   0,
   adminSelectedCareRecord: null,
 
-  doctorAppointments:      [],
-doctorAppointmentsTotal: 0,
-doctorAppointmentsPage:  1,
-doctorAvailability:      null,
-doctorEarnings:          null,
-doctorTransactions:      [],
-doctorTransactionsTotal: 0,
-doctorInvoice:           null,
+  // F — Doctor Dashboard
+  doctorAppointments:        [],
+  doctorAppointmentsTotal:   0,
+  doctorAppointmentsPage:    1,
+  doctorTodayAppointments:   [],
+  doctorTodayTotal:          0,
+  selectedDoctorAppointment: null, // from fetchDoctorAppointmentById
+  doctorAvailability:        null,
+  doctorEarnings:            null,
+  doctorTransactions:        [],
+  doctorTransactionsTotal:   0,
+  doctorInvoice:             null,
 
-  // ── Loading / Error maps ───────────────────────────────────────────────────
+  // Loading / Error maps
   loading: {},
   errors:  {},
 };
@@ -654,391 +675,377 @@ const clinicalSlice = createSlice({
   initialState,
 
   reducers: {
-    clearSelectedPrescription: (state) => { state.selectedPrescription = null; },
-    clearVerifiedRx:           (state) => { state.verifiedRx           = null; },
-    clearSelectedOP:           (state) => { state.selectedOP           = null; },
-    clearSelectedCABooking:    (state) => { state.selectedCABooking    = null; },
-    clearSelectedCareRecord:   (state) => { state.selectedCareRecord   = null; },
-    clearClinicalErrors:       (state) => { state.errors               = {};   },
-    resetClinical:             ()      => initialState,
+    clearSelectedPrescription:      (state) => { state.selectedPrescription      = null; },
+    clearVerifiedRx:                (state) => { state.verifiedRx                = null; },
+    clearSelectedOP:                (state) => { state.selectedOP                = null; },
+    clearSelectedCABooking:         (state) => { state.selectedCABooking         = null; },
+    clearSelectedCareRecord:        (state) => { state.selectedCareRecord        = null; },
+    clearSelectedDoctorAppointment: (state) => { state.selectedDoctorAppointment = null; },
+    clearClinicalErrors:            (state) => { state.errors                    = {};   },
+    resetClinical:                  ()      => initialState,
   },
 
   extraReducers: (builder) => {
 
     // ── A. PRESCRIPTIONS ─────────────────────────────────────────────────────
-
-    // createPrescription
     builder
-      .addCase(createPrescription.pending,   (state) => pending(state, 'createPrescription'))
-      .addCase(createPrescription.rejected,  (state, a) => rejected(state, a, 'createPrescription'))
-      .addCase(createPrescription.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'createPrescription');
-        state.prescriptions.unshift(payload);
-        state.selectedPrescription = payload;
+      .addCase(createPrescription.pending,   (s)    => pending(s, 'createPrescription'))
+      .addCase(createPrescription.rejected,  (s, a) => rejected(s, a, 'createPrescription'))
+      .addCase(createPrescription.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'createPrescription');
+        s.prescriptions.unshift(payload);
+        s.selectedPrescription = payload;
       });
 
-    // fetchPrescriptions
     builder
-      .addCase(fetchPrescriptions.pending,   (state) => pending(state, 'fetchPrescriptions'))
-      .addCase(fetchPrescriptions.rejected,  (state, a) => rejected(state, a, 'fetchPrescriptions'))
-      .addCase(fetchPrescriptions.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'fetchPrescriptions');
-        state.prescriptions      = payload.data;
-        state.prescriptionsTotal = payload.total;
-        state.prescriptionsPage  = payload.page;
+      .addCase(fetchPrescriptions.pending,   (s)    => pending(s, 'fetchPrescriptions'))
+      .addCase(fetchPrescriptions.rejected,  (s, a) => rejected(s, a, 'fetchPrescriptions'))
+      .addCase(fetchPrescriptions.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchPrescriptions');
+        s.prescriptions      = payload.data;
+        s.prescriptionsTotal = payload.total;
+        s.prescriptionsPage  = payload.page;
       });
 
-    // verifyPrescription
     builder
-      .addCase(verifyPrescription.pending,   (state) => pending(state, 'verifyPrescription'))
-      .addCase(verifyPrescription.rejected,  (state, a) => rejected(state, a, 'verifyPrescription'))
-      .addCase(verifyPrescription.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'verifyPrescription');
-        state.verifiedRx = payload;
+      .addCase(verifyPrescription.pending,   (s)    => pending(s, 'verifyPrescription'))
+      .addCase(verifyPrescription.rejected,  (s, a) => rejected(s, a, 'verifyPrescription'))
+      .addCase(verifyPrescription.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'verifyPrescription');
+        s.verifiedRx = payload;
       });
 
-    // fetchPrescriptionById
     builder
-      .addCase(fetchPrescriptionById.pending,   (state) => pending(state, 'fetchPrescriptionById'))
-      .addCase(fetchPrescriptionById.rejected,  (state, a) => rejected(state, a, 'fetchPrescriptionById'))
-      .addCase(fetchPrescriptionById.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'fetchPrescriptionById');
-        state.selectedPrescription = payload;
+      .addCase(fetchPrescriptionById.pending,   (s)    => pending(s, 'fetchPrescriptionById'))
+      .addCase(fetchPrescriptionById.rejected,  (s, a) => rejected(s, a, 'fetchPrescriptionById'))
+      .addCase(fetchPrescriptionById.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchPrescriptionById');
+        s.selectedPrescription = payload;
       });
 
-    // downloadPrescriptionPdf
     builder
-      .addCase(downloadPrescriptionPdf.pending,   (state) => pending(state, 'downloadPrescriptionPdf'))
-      .addCase(downloadPrescriptionPdf.rejected,  (state, a) => rejected(state, a, 'downloadPrescriptionPdf'))
-      .addCase(downloadPrescriptionPdf.fulfilled, (state) => fulfilled(state, 'downloadPrescriptionPdf'));
+      .addCase(downloadPrescriptionPdf.pending,   (s)    => pending(s, 'downloadPrescriptionPdf'))
+      .addCase(downloadPrescriptionPdf.rejected,  (s, a) => rejected(s, a, 'downloadPrescriptionPdf'))
+      .addCase(downloadPrescriptionPdf.fulfilled, (s)    => fulfilled(s, 'downloadPrescriptionPdf'));
 
-    // cancelPrescription
     builder
-      .addCase(cancelPrescription.pending,   (state) => pending(state, 'cancelPrescription'))
-      .addCase(cancelPrescription.rejected,  (state, a) => rejected(state, a, 'cancelPrescription'))
-      .addCase(cancelPrescription.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'cancelPrescription');
-        // Update in list
-        const idx = state.prescriptions.findIndex((p) => p._id === payload._id);
-        if (idx !== -1) state.prescriptions[idx] = payload;
-        if (state.selectedPrescription?._id === payload._id) state.selectedPrescription = payload;
+      .addCase(cancelPrescription.pending,   (s)    => pending(s, 'cancelPrescription'))
+      .addCase(cancelPrescription.rejected,  (s, a) => rejected(s, a, 'cancelPrescription'))
+      .addCase(cancelPrescription.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'cancelPrescription');
+        const idx = s.prescriptions.findIndex((p) => p._id === payload._id);
+        if (idx !== -1) s.prescriptions[idx] = payload;
+        if (s.selectedPrescription?._id === payload._id) s.selectedPrescription = payload;
       });
 
 
     // ── B. OP RECORDS ────────────────────────────────────────────────────────
-
     builder
-      .addCase(fetchOPRecords.pending,   (state) => pending(state, 'fetchOPRecords'))
-      .addCase(fetchOPRecords.rejected,  (state, a) => rejected(state, a, 'fetchOPRecords'))
-      .addCase(fetchOPRecords.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'fetchOPRecords');
-        state.opRecords      = payload.data;
-        state.opRecordsTotal = payload.total;
-        state.opRecordsPage  = payload.page;
+      .addCase(fetchOPRecords.pending,   (s)    => pending(s, 'fetchOPRecords'))
+      .addCase(fetchOPRecords.rejected,  (s, a) => rejected(s, a, 'fetchOPRecords'))
+      .addCase(fetchOPRecords.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchOPRecords');
+        s.opRecords      = payload.data;
+        s.opRecordsTotal = payload.total;
+        s.opRecordsPage  = payload.page;
       });
 
     builder
-      .addCase(fetchOPRecordById.pending,   (state) => pending(state, 'fetchOPRecordById'))
-      .addCase(fetchOPRecordById.rejected,  (state, a) => rejected(state, a, 'fetchOPRecordById'))
-      .addCase(fetchOPRecordById.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'fetchOPRecordById');
-        state.selectedOP = payload;
+      .addCase(fetchOPRecordById.pending,   (s)    => pending(s, 'fetchOPRecordById'))
+      .addCase(fetchOPRecordById.rejected,  (s, a) => rejected(s, a, 'fetchOPRecordById'))
+      .addCase(fetchOPRecordById.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchOPRecordById');
+        s.selectedOP = payload;
       });
 
     builder
-      .addCase(completeOPRecord.pending,   (state) => pending(state, 'completeOPRecord'))
-      .addCase(completeOPRecord.rejected,  (state, a) => rejected(state, a, 'completeOPRecord'))
-      .addCase(completeOPRecord.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'completeOPRecord');
-        const idx = state.opRecords.findIndex((o) => o._id === payload._id);
-        if (idx !== -1) state.opRecords[idx] = payload;
-        if (state.selectedOP?._id === payload._id) state.selectedOP = payload;
+      .addCase(completeOPRecord.pending,   (s)    => pending(s, 'completeOPRecord'))
+      .addCase(completeOPRecord.rejected,  (s, a) => rejected(s, a, 'completeOPRecord'))
+      .addCase(completeOPRecord.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'completeOPRecord');
+        const idx = s.opRecords.findIndex((o) => o._id === payload._id);
+        if (idx !== -1) s.opRecords[idx] = payload;
+        if (s.selectedOP?._id === payload._id) s.selectedOP = payload;
       });
 
     builder
-      .addCase(updateOPStatus.pending,   (state) => pending(state, 'updateOPStatus'))
-      .addCase(updateOPStatus.rejected,  (state, a) => rejected(state, a, 'updateOPStatus'))
-      .addCase(updateOPStatus.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'updateOPStatus');
-        const idx = state.opRecords.findIndex((o) => o._id === payload._id);
-        if (idx !== -1) state.opRecords[idx] = payload;
-        if (state.selectedOP?._id === payload._id) state.selectedOP = payload;
+      .addCase(updateOPStatus.pending,   (s)    => pending(s, 'updateOPStatus'))
+      .addCase(updateOPStatus.rejected,  (s, a) => rejected(s, a, 'updateOPStatus'))
+      .addCase(updateOPStatus.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'updateOPStatus');
+        const idx = s.opRecords.findIndex((o) => o._id === payload._id);
+        if (idx !== -1) s.opRecords[idx] = payload;
+        if (s.selectedOP?._id === payload._id) s.selectedOP = payload;
       });
 
 
     // ── C. CA: BOOKINGS ──────────────────────────────────────────────────────
-
     builder
-      .addCase(fetchCABookings.pending,   (state) => pending(state, 'fetchCABookings'))
-      .addCase(fetchCABookings.rejected,  (state, a) => rejected(state, a, 'fetchCABookings'))
-      .addCase(fetchCABookings.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'fetchCABookings');
-        state.caBookings      = payload.data;
-        state.caBookingsTotal = payload.total;
-        state.caBookingsPage  = payload.page;
+      .addCase(fetchCABookings.pending,   (s)    => pending(s, 'fetchCABookings'))
+      .addCase(fetchCABookings.rejected,  (s, a) => rejected(s, a, 'fetchCABookings'))
+      .addCase(fetchCABookings.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchCABookings');
+        s.caBookings      = payload.data;
+        s.caBookingsTotal = payload.total;
+        s.caBookingsPage  = payload.page;
       });
 
     builder
-      .addCase(fetchCAPendingBookings.pending,   (state) => pending(state, 'fetchCAPendingBookings'))
-      .addCase(fetchCAPendingBookings.rejected,  (state, a) => rejected(state, a, 'fetchCAPendingBookings'))
-      .addCase(fetchCAPendingBookings.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'fetchCAPendingBookings');
-        state.caPendingBookings = payload;
+      .addCase(fetchCAPendingBookings.pending,   (s)    => pending(s, 'fetchCAPendingBookings'))
+      .addCase(fetchCAPendingBookings.rejected,  (s, a) => rejected(s, a, 'fetchCAPendingBookings'))
+      .addCase(fetchCAPendingBookings.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchCAPendingBookings');
+        s.caPendingBookings = payload;
       });
 
     builder
-      .addCase(fetchCABookingById.pending,   (state) => pending(state, 'fetchCABookingById'))
-      .addCase(fetchCABookingById.rejected,  (state, a) => rejected(state, a, 'fetchCABookingById'))
-      .addCase(fetchCABookingById.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'fetchCABookingById');
-        state.selectedCABooking = payload;
+      .addCase(fetchCABookingById.pending,   (s)    => pending(s, 'fetchCABookingById'))
+      .addCase(fetchCABookingById.rejected,  (s, a) => rejected(s, a, 'fetchCABookingById'))
+      .addCase(fetchCABookingById.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchCABookingById');
+        s.selectedCABooking = payload;
       });
 
     builder
-      .addCase(acceptCABooking.pending,   (state) => pending(state, 'acceptCABooking'))
-      .addCase(acceptCABooking.rejected,  (state, a) => rejected(state, a, 'acceptCABooking'))
-      .addCase(acceptCABooking.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'acceptCABooking');
-        // Remove from pending list
-        state.caPendingBookings = state.caPendingBookings.filter(
-          (b) => b._id !== payload.bookingId
-        );
-        // Update in main bookings list if present
-        const idx = state.caBookings.findIndex((b) => b._id === payload.bookingId);
-        if (idx !== -1) state.caBookings[idx].status = 'in_progress';
-        // Push new care record into list
-        state.careRecords.unshift(payload.careRecord);
+      .addCase(acceptCABooking.pending,   (s)    => pending(s, 'acceptCABooking'))
+      .addCase(acceptCABooking.rejected,  (s, a) => rejected(s, a, 'acceptCABooking'))
+      .addCase(acceptCABooking.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'acceptCABooking');
+        s.caPendingBookings = s.caPendingBookings.filter((b) => b._id !== payload.bookingId);
+        const idx = s.caBookings.findIndex((b) => b._id === payload.bookingId);
+        if (idx !== -1) s.caBookings[idx].status = 'in_progress';
+        s.careRecords.unshift(payload.careRecord);
       });
 
     builder
-      .addCase(rejectCABooking.pending,   (state) => pending(state, 'rejectCABooking'))
-      .addCase(rejectCABooking.rejected,  (state, a) => rejected(state, a, 'rejectCABooking'))
-      .addCase(rejectCABooking.fulfilled, (state, { payload: bookingId }) => {
-        fulfilled(state, 'rejectCABooking');
-        state.caPendingBookings = state.caPendingBookings.filter((b) => b._id !== bookingId);
-        state.caBookings        = state.caBookings.filter((b) => b._id !== bookingId);
+      .addCase(rejectCABooking.pending,   (s)    => pending(s, 'rejectCABooking'))
+      .addCase(rejectCABooking.rejected,  (s, a) => rejected(s, a, 'rejectCABooking'))
+      .addCase(rejectCABooking.fulfilled, (s, { payload: bookingId }) => {
+        fulfilled(s, 'rejectCABooking');
+        s.caPendingBookings = s.caPendingBookings.filter((b) => b._id !== bookingId);
+        s.caBookings        = s.caBookings.filter((b) => b._id !== bookingId);
       });
 
 
-    // ── D. CA: CARE RECORDS ──────────────────────────────────────────────────
-
+    // ── D. CARE RECORDS ──────────────────────────────────────────────────────
     builder
-      .addCase(fetchCareRecords.pending,   (state) => pending(state, 'fetchCareRecords'))
-      .addCase(fetchCareRecords.rejected,  (state, a) => rejected(state, a, 'fetchCareRecords'))
-      .addCase(fetchCareRecords.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'fetchCareRecords');
-        state.careRecords      = payload.data;
-        state.careRecordsTotal = payload.total;
-        state.careRecordsPage  = payload.page;
+      .addCase(fetchCareRecords.pending,   (s)    => pending(s, 'fetchCareRecords'))
+      .addCase(fetchCareRecords.rejected,  (s, a) => rejected(s, a, 'fetchCareRecords'))
+      .addCase(fetchCareRecords.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchCareRecords');
+        s.careRecords      = payload.data;
+        s.careRecordsTotal = payload.total;
+        s.careRecordsPage  = payload.page;
       });
 
     builder
-      .addCase(fetchCareRecordById.pending,   (state) => pending(state, 'fetchCareRecordById'))
-      .addCase(fetchCareRecordById.rejected,  (state, a) => rejected(state, a, 'fetchCareRecordById'))
-      .addCase(fetchCareRecordById.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'fetchCareRecordById');
-        state.selectedCareRecord = payload;
+      .addCase(fetchCareRecordById.pending,   (s)    => pending(s, 'fetchCareRecordById'))
+      .addCase(fetchCareRecordById.rejected,  (s, a) => rejected(s, a, 'fetchCareRecordById'))
+      .addCase(fetchCareRecordById.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchCareRecordById');
+        s.selectedCareRecord = payload;
       });
 
     builder
-      .addCase(logVitals.pending,   (state) => pending(state, 'logVitals'))
-      .addCase(logVitals.rejected,  (state, a) => rejected(state, a, 'logVitals'))
-      .addCase(logVitals.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'logVitals');
-        if (state.selectedCareRecord?._id === payload.id) {
-          state.selectedCareRecord.vitalsLog.push(payload.entry);
+      .addCase(logVitals.pending,   (s)    => pending(s, 'logVitals'))
+      .addCase(logVitals.rejected,  (s, a) => rejected(s, a, 'logVitals'))
+      .addCase(logVitals.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'logVitals');
+        if (s.selectedCareRecord?._id === payload.id) s.selectedCareRecord.vitalsLog.push(payload.entry);
+      });
+
+    builder
+      .addCase(logFood.pending,   (s)    => pending(s, 'logFood'))
+      .addCase(logFood.rejected,  (s, a) => rejected(s, a, 'logFood'))
+      .addCase(logFood.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'logFood');
+        if (s.selectedCareRecord?._id === payload.id) s.selectedCareRecord.foodLog.push(payload.entry);
+      });
+
+    builder
+      .addCase(logMedicine.pending,   (s)    => pending(s, 'logMedicine'))
+      .addCase(logMedicine.rejected,  (s, a) => rejected(s, a, 'logMedicine'))
+      .addCase(logMedicine.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'logMedicine');
+        if (s.selectedCareRecord?._id === payload.id) s.selectedCareRecord.medicineLog.push(payload.entry);
+      });
+
+    builder
+      .addCase(addCareNote.pending,   (s)    => pending(s, 'addCareNote'))
+      .addCase(addCareNote.rejected,  (s, a) => rejected(s, a, 'addCareNote'))
+      .addCase(addCareNote.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'addCareNote');
+        if (s.selectedCareRecord?._id === payload.id) s.selectedCareRecord.careNotes.push(payload.note);
+      });
+
+    builder
+      .addCase(resolveCareNote.pending,   (s)    => pending(s, 'resolveCareNote'))
+      .addCase(resolveCareNote.rejected,  (s, a) => rejected(s, a, 'resolveCareNote'))
+      .addCase(resolveCareNote.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'resolveCareNote');
+        if (s.selectedCareRecord?._id === payload.id) {
+          const note = s.selectedCareRecord.careNotes.find((n) => n._id === payload.note._id);
+          if (note) { note.isResolved = true; note.resolvedAt = payload.note.resolvedAt; }
         }
       });
 
     builder
-      .addCase(logFood.pending,   (state) => pending(state, 'logFood'))
-      .addCase(logFood.rejected,  (state, a) => rejected(state, a, 'logFood'))
-      .addCase(logFood.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'logFood');
-        if (state.selectedCareRecord?._id === payload.id) {
-          state.selectedCareRecord.foodLog.push(payload.entry);
-        }
+      .addCase(addInstruction.pending,   (s)    => pending(s, 'addInstruction'))
+      .addCase(addInstruction.rejected,  (s, a) => rejected(s, a, 'addInstruction'))
+      .addCase(addInstruction.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'addInstruction');
+        if (!s.instructions[payload.id]) s.instructions[payload.id] = [];
+        s.instructions[payload.id].push(payload.instruction);
       });
 
     builder
-      .addCase(logMedicine.pending,   (state) => pending(state, 'logMedicine'))
-      .addCase(logMedicine.rejected,  (state, a) => rejected(state, a, 'logMedicine'))
-      .addCase(logMedicine.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'logMedicine');
-        if (state.selectedCareRecord?._id === payload.id) {
-          state.selectedCareRecord.medicineLog.push(payload.entry);
-        }
+      .addCase(fetchInstructions.pending,   (s)    => pending(s, 'fetchInstructions'))
+      .addCase(fetchInstructions.rejected,  (s, a) => rejected(s, a, 'fetchInstructions'))
+      .addCase(fetchInstructions.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchInstructions');
+        s.instructions[payload.id] = payload.instructions;
       });
 
     builder
-      .addCase(addCareNote.pending,   (state) => pending(state, 'addCareNote'))
-      .addCase(addCareNote.rejected,  (state, a) => rejected(state, a, 'addCareNote'))
-      .addCase(addCareNote.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'addCareNote');
-        if (state.selectedCareRecord?._id === payload.id) {
-          state.selectedCareRecord.careNotes.push(payload.note);
-        }
+      .addCase(dischargePatient.pending,   (s)    => pending(s, 'dischargePatient'))
+      .addCase(dischargePatient.rejected,  (s, a) => rejected(s, a, 'dischargePatient'))
+      .addCase(dischargePatient.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'dischargePatient');
+        const idx = s.careRecords.findIndex((r) => r._id === payload._id);
+        if (idx !== -1) s.careRecords[idx] = payload;
+        if (s.selectedCareRecord?._id === payload._id) s.selectedCareRecord = payload;
       });
 
     builder
-      .addCase(resolveCareNote.pending,   (state) => pending(state, 'resolveCareNote'))
-      .addCase(resolveCareNote.rejected,  (state, a) => rejected(state, a, 'resolveCareNote'))
-      .addCase(resolveCareNote.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'resolveCareNote');
-        if (state.selectedCareRecord?._id === payload.id) {
-          const note = state.selectedCareRecord.careNotes.find(
-            (n) => n._id === payload.note._id
-          );
-          if (note) {
-            note.isResolved = true;
-            note.resolvedAt = payload.note.resolvedAt;
-          }
-        }
-      });
-
-    builder
-      .addCase(addInstruction.pending,   (state) => pending(state, 'addInstruction'))
-      .addCase(addInstruction.rejected,  (state, a) => rejected(state, a, 'addInstruction'))
-      .addCase(addInstruction.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'addInstruction');
-        if (!state.instructions[payload.id]) state.instructions[payload.id] = [];
-        state.instructions[payload.id].push(payload.instruction);
-      });
-
-    builder
-      .addCase(fetchInstructions.pending,   (state) => pending(state, 'fetchInstructions'))
-      .addCase(fetchInstructions.rejected,  (state, a) => rejected(state, a, 'fetchInstructions'))
-      .addCase(fetchInstructions.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'fetchInstructions');
-        state.instructions[payload.id] = payload.instructions;
-      });
-
-    builder
-      .addCase(dischargePatient.pending,   (state) => pending(state, 'dischargePatient'))
-      .addCase(dischargePatient.rejected,  (state, a) => rejected(state, a, 'dischargePatient'))
-      .addCase(dischargePatient.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'dischargePatient');
-        // Update in list
-        const idx = state.careRecords.findIndex((r) => r._id === payload._id);
-        if (idx !== -1) state.careRecords[idx] = payload;
-        if (state.selectedCareRecord?._id === payload._id) state.selectedCareRecord = payload;
-      });
-
-    builder
-      .addCase(updateCareRecordStatus.pending,   (state) => pending(state, 'updateCareRecordStatus'))
-      .addCase(updateCareRecordStatus.rejected,  (state, a) => rejected(state, a, 'updateCareRecordStatus'))
-      .addCase(updateCareRecordStatus.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'updateCareRecordStatus');
-        const idx = state.careRecords.findIndex((r) => r._id === payload._id);
-        if (idx !== -1) state.careRecords[idx] = payload;
-        if (state.selectedCareRecord?._id === payload._id) state.selectedCareRecord = payload;
-        // Admin list too
-        const aidx = state.adminCareRecords.findIndex((r) => r._id === payload._id);
-        if (aidx !== -1) state.adminCareRecords[aidx] = payload;
+      .addCase(updateCareRecordStatus.pending,   (s)    => pending(s, 'updateCareRecordStatus'))
+      .addCase(updateCareRecordStatus.rejected,  (s, a) => rejected(s, a, 'updateCareRecordStatus'))
+      .addCase(updateCareRecordStatus.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'updateCareRecordStatus');
+        const idx = s.careRecords.findIndex((r) => r._id === payload._id);
+        if (idx !== -1) s.careRecords[idx] = payload;
+        if (s.selectedCareRecord?._id === payload._id) s.selectedCareRecord = payload;
+        const aidx = s.adminCareRecords.findIndex((r) => r._id === payload._id);
+        if (aidx !== -1) s.adminCareRecords[aidx] = payload;
       });
 
 
     // ── E. ADMIN ─────────────────────────────────────────────────────────────
-
     builder
-      .addCase(adminFetchPrescriptions.pending,   (state) => pending(state, 'adminFetchPrescriptions'))
-      .addCase(adminFetchPrescriptions.rejected,  (state, a) => rejected(state, a, 'adminFetchPrescriptions'))
-      .addCase(adminFetchPrescriptions.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'adminFetchPrescriptions');
-        state.adminPrescriptions      = payload.data;
-        state.adminPrescriptionsTotal = payload.total;
+      .addCase(adminFetchPrescriptions.pending,   (s)    => pending(s, 'adminFetchPrescriptions'))
+      .addCase(adminFetchPrescriptions.rejected,  (s, a) => rejected(s, a, 'adminFetchPrescriptions'))
+      .addCase(adminFetchPrescriptions.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'adminFetchPrescriptions');
+        s.adminPrescriptions      = payload.data;
+        s.adminPrescriptionsTotal = payload.total;
       });
 
     builder
-      .addCase(adminFetchOPRecords.pending,   (state) => pending(state, 'adminFetchOPRecords'))
-      .addCase(adminFetchOPRecords.rejected,  (state, a) => rejected(state, a, 'adminFetchOPRecords'))
-      .addCase(adminFetchOPRecords.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'adminFetchOPRecords');
-        state.adminOPRecords      = payload.data;
-        state.adminOPRecordsTotal = payload.total;
+      .addCase(adminFetchOPRecords.pending,   (s)    => pending(s, 'adminFetchOPRecords'))
+      .addCase(adminFetchOPRecords.rejected,  (s, a) => rejected(s, a, 'adminFetchOPRecords'))
+      .addCase(adminFetchOPRecords.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'adminFetchOPRecords');
+        s.adminOPRecords      = payload.data;
+        s.adminOPRecordsTotal = payload.total;
       });
 
     builder
-      .addCase(adminFetchCareRecords.pending,   (state) => pending(state, 'adminFetchCareRecords'))
-      .addCase(adminFetchCareRecords.rejected,  (state, a) => rejected(state, a, 'adminFetchCareRecords'))
-      .addCase(adminFetchCareRecords.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'adminFetchCareRecords');
-        state.adminCareRecords      = payload.data;
-        state.adminCareRecordsTotal = payload.total;
+      .addCase(adminFetchCareRecords.pending,   (s)    => pending(s, 'adminFetchCareRecords'))
+      .addCase(adminFetchCareRecords.rejected,  (s, a) => rejected(s, a, 'adminFetchCareRecords'))
+      .addCase(adminFetchCareRecords.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'adminFetchCareRecords');
+        s.adminCareRecords      = payload.data;
+        s.adminCareRecordsTotal = payload.total;
       });
 
     builder
-      .addCase(adminFetchCareRecordById.pending,   (state) => pending(state, 'adminFetchCareRecordById'))
-      .addCase(adminFetchCareRecordById.rejected,  (state, a) => rejected(state, a, 'adminFetchCareRecordById'))
-      .addCase(adminFetchCareRecordById.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'adminFetchCareRecordById');
-        state.adminSelectedCareRecord = payload;
+      .addCase(adminFetchCareRecordById.pending,   (s)    => pending(s, 'adminFetchCareRecordById'))
+      .addCase(adminFetchCareRecordById.rejected,  (s, a) => rejected(s, a, 'adminFetchCareRecordById'))
+      .addCase(adminFetchCareRecordById.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'adminFetchCareRecordById');
+        s.adminSelectedCareRecord = payload;
       });
 
     builder
-      .addCase(adminAssignCareAssistant.pending,   (state) => pending(state, 'adminAssignCareAssistant'))
-      .addCase(adminAssignCareAssistant.rejected,  (state, a) => rejected(state, a, 'adminAssignCareAssistant'))
-      .addCase(adminAssignCareAssistant.fulfilled, (state, { payload }) => {
-        fulfilled(state, 'adminAssignCareAssistant');
-        // Update booking in any list it appears in
-        const idx = state.caBookings.findIndex((b) => b._id === payload._id);
-        if (idx !== -1) state.caBookings[idx] = payload;
+      .addCase(adminAssignCareAssistant.pending,   (s)    => pending(s, 'adminAssignCareAssistant'))
+      .addCase(adminAssignCareAssistant.rejected,  (s, a) => rejected(s, a, 'adminAssignCareAssistant'))
+      .addCase(adminAssignCareAssistant.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'adminAssignCareAssistant');
+        const idx = s.caBookings.findIndex((b) => b._id === payload._id);
+        if (idx !== -1) s.caBookings[idx] = payload;
       });
 
-      // ── F. DOCTOR DASHBOARD ──────────────────────────────────────────────────
 
-builder
-  .addCase(fetchDoctorAppointments.pending,   (state) => pending(state, 'fetchDoctorAppointments'))
-  .addCase(fetchDoctorAppointments.rejected,  (state, a) => rejected(state, a, 'fetchDoctorAppointments'))
-  .addCase(fetchDoctorAppointments.fulfilled, (state, { payload }) => {
-    fulfilled(state, 'fetchDoctorAppointments');
-    state.doctorAppointments      = payload.data;
-    state.doctorAppointmentsTotal = payload.total;
-    state.doctorAppointmentsPage  = payload.page;
-  });
+    // ── F. DOCTOR DASHBOARD ──────────────────────────────────────────────────
+    builder
+      .addCase(fetchDoctorAppointments.pending,   (s)    => pending(s, 'fetchDoctorAppointments'))
+      .addCase(fetchDoctorAppointments.rejected,  (s, a) => rejected(s, a, 'fetchDoctorAppointments'))
+      .addCase(fetchDoctorAppointments.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchDoctorAppointments');
+        s.doctorAppointments      = payload.data;
+        s.doctorAppointmentsTotal = payload.total;
+        s.doctorAppointmentsPage  = payload.page;
+      });
 
-builder
-  .addCase(fetchDoctorAvailability.pending,   (state) => pending(state, 'fetchDoctorAvailability'))
-  .addCase(fetchDoctorAvailability.rejected,  (state, a) => rejected(state, a, 'fetchDoctorAvailability'))
-  .addCase(fetchDoctorAvailability.fulfilled, (state, { payload }) => {
-    fulfilled(state, 'fetchDoctorAvailability');
-    state.doctorAvailability = payload;
-  });
+    builder
+      .addCase(fetchDoctorAppointmentById.pending,   (s)    => pending(s, 'fetchDoctorAppointmentById'))
+      .addCase(fetchDoctorAppointmentById.rejected,  (s, a) => rejected(s, a, 'fetchDoctorAppointmentById'))
+      .addCase(fetchDoctorAppointmentById.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchDoctorAppointmentById');
+        s.selectedDoctorAppointment = payload;
+      });
 
-builder
-  .addCase(updateDoctorAvailability.pending,   (state) => pending(state, 'updateDoctorAvailability'))
-  .addCase(updateDoctorAvailability.rejected,  (state, a) => rejected(state, a, 'updateDoctorAvailability'))
-  .addCase(updateDoctorAvailability.fulfilled, (state, { payload }) => {
-    fulfilled(state, 'updateDoctorAvailability');
-    state.doctorAvailability = payload;
-  });
+    builder
+      .addCase(fetchDoctorTodayAppointments.pending,   (s)    => pending(s, 'fetchDoctorTodayAppointments'))
+      .addCase(fetchDoctorTodayAppointments.rejected,  (s, a) => rejected(s, a, 'fetchDoctorTodayAppointments'))
+      .addCase(fetchDoctorTodayAppointments.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchDoctorTodayAppointments');
+        s.doctorTodayAppointments = payload.data;
+        s.doctorTodayTotal        = payload.total;
+      });
 
-builder
-  .addCase(fetchDoctorEarnings.pending,   (state) => pending(state, 'fetchDoctorEarnings'))
-  .addCase(fetchDoctorEarnings.rejected,  (state, a) => rejected(state, a, 'fetchDoctorEarnings'))
-  .addCase(fetchDoctorEarnings.fulfilled, (state, { payload }) => {
-    fulfilled(state, 'fetchDoctorEarnings');
-    state.doctorEarnings = payload;
-  });
+    builder
+      .addCase(fetchDoctorAvailability.pending,   (s)    => pending(s, 'fetchDoctorAvailability'))
+      .addCase(fetchDoctorAvailability.rejected,  (s, a) => rejected(s, a, 'fetchDoctorAvailability'))
+      .addCase(fetchDoctorAvailability.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchDoctorAvailability');
+        s.doctorAvailability = payload;
+      });
 
-builder
-  .addCase(fetchDoctorTransactions.pending,   (state) => pending(state, 'fetchDoctorTransactions'))
-  .addCase(fetchDoctorTransactions.rejected,  (state, a) => rejected(state, a, 'fetchDoctorTransactions'))
-  .addCase(fetchDoctorTransactions.fulfilled, (state, { payload }) => {
-    fulfilled(state, 'fetchDoctorTransactions');
-    state.doctorTransactions      = payload.data;
-    state.doctorTransactionsTotal = payload.total;
-  });
+    builder
+      .addCase(updateDoctorAvailability.pending,   (s)    => pending(s, 'updateDoctorAvailability'))
+      .addCase(updateDoctorAvailability.rejected,  (s, a) => rejected(s, a, 'updateDoctorAvailability'))
+      .addCase(updateDoctorAvailability.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'updateDoctorAvailability');
+        s.doctorAvailability = payload;
+      });
 
-builder
-  .addCase(fetchDoctorInvoice.pending,   (state) => pending(state, 'fetchDoctorInvoice'))
-  .addCase(fetchDoctorInvoice.rejected,  (state, a) => rejected(state, a, 'fetchDoctorInvoice'))
-  .addCase(fetchDoctorInvoice.fulfilled, (state, { payload }) => {
-    fulfilled(state, 'fetchDoctorInvoice');
-    state.doctorInvoice = payload;
-  });
+    builder
+      .addCase(fetchDoctorEarnings.pending,   (s)    => pending(s, 'fetchDoctorEarnings'))
+      .addCase(fetchDoctorEarnings.rejected,  (s, a) => rejected(s, a, 'fetchDoctorEarnings'))
+      .addCase(fetchDoctorEarnings.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchDoctorEarnings');
+        s.doctorEarnings = payload;
+      });
+
+    builder
+      .addCase(fetchDoctorTransactions.pending,   (s)    => pending(s, 'fetchDoctorTransactions'))
+      .addCase(fetchDoctorTransactions.rejected,  (s, a) => rejected(s, a, 'fetchDoctorTransactions'))
+      .addCase(fetchDoctorTransactions.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchDoctorTransactions');
+        s.doctorTransactions      = payload.data;
+        s.doctorTransactionsTotal = payload.total;
+      });
+
+    builder
+      .addCase(fetchDoctorInvoice.pending,   (s)    => pending(s, 'fetchDoctorInvoice'))
+      .addCase(fetchDoctorInvoice.rejected,  (s, a) => rejected(s, a, 'fetchDoctorInvoice'))
+      .addCase(fetchDoctorInvoice.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchDoctorInvoice');
+        s.doctorInvoice = payload;
+      });
   },
 });
+
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
 export const {
@@ -1047,47 +1054,61 @@ export const {
   clearSelectedOP,
   clearSelectedCABooking,
   clearSelectedCareRecord,
+  clearSelectedDoctorAppointment,
   clearClinicalErrors,
   resetClinical,
 } = clinicalSlice.actions;
 
+
 // ─── Selectors ────────────────────────────────────────────────────────────────
 
-// Prescriptions
+// A — Prescriptions
 export const selectPrescriptions        = (s) => s.clinical.prescriptions;
 export const selectPrescriptionsTotal   = (s) => s.clinical.prescriptionsTotal;
 export const selectSelectedPrescription = (s) => s.clinical.selectedPrescription;
 export const selectVerifiedRx           = (s) => s.clinical.verifiedRx;
 
-// OP Records
+// B — OP Records
 export const selectOPRecords      = (s) => s.clinical.opRecords;
 export const selectOPRecordsTotal = (s) => s.clinical.opRecordsTotal;
 export const selectSelectedOP     = (s) => s.clinical.selectedOP;
 
-// CA Bookings
+// C — CA Bookings
 export const selectCABookings        = (s) => s.clinical.caBookings;
 export const selectCABookingsTotal   = (s) => s.clinical.caBookingsTotal;
 export const selectCAPendingBookings = (s) => s.clinical.caPendingBookings;
 export const selectSelectedCABooking = (s) => s.clinical.selectedCABooking;
 export const selectCAPendingCount    = (s) => s.clinical.caPendingBookings.length;
 
-// Care Records
+// D — Care Records
 export const selectCareRecords        = (s) => s.clinical.careRecords;
 export const selectCareRecordsTotal   = (s) => s.clinical.careRecordsTotal;
 export const selectSelectedCareRecord = (s) => s.clinical.selectedCareRecord;
 export const selectInstructionsFor    = (id) => (s) => s.clinical.instructions[id] || [];
 
+// E — Admin
+export const selectAdminPrescriptions      = (s) => s.clinical.adminPrescriptions;
+export const selectAdminPrescriptionsTotal = (s) => s.clinical.adminPrescriptionsTotal;
+export const selectAdminOPRecords          = (s) => s.clinical.adminOPRecords;
+export const selectAdminOPRecordsTotal     = (s) => s.clinical.adminOPRecordsTotal;
+export const selectAdminCareRecords        = (s) => s.clinical.adminCareRecords;
+export const selectAdminCareRecordsTotal   = (s) => s.clinical.adminCareRecordsTotal;
+export const selectAdminSelectedCareRecord = (s) => s.clinical.adminSelectedCareRecord;
 
-// Doctor Dashboard
-export const selectDoctorAppointments      = (s) => s.clinical.doctorAppointments;
-export const selectDoctorAppointmentsTotal = (s) => s.clinical.doctorAppointmentsTotal;
-export const selectDoctorAvailability      = (s) => s.clinical.doctorAvailability;
-export const selectDoctorEarnings          = (s) => s.clinical.doctorEarnings;
-export const selectDoctorTransactions      = (s) => s.clinical.doctorTransactions;
-export const selectDoctorTransactionsTotal = (s) => s.clinical.doctorTransactionsTotal;
-export const selectDoctorInvoice           = (s) => s.clinical.doctorInvoice;
+// F — Doctor Dashboard
+export const selectDoctorAppointments        = (s) => s.clinical.doctorAppointments;
+export const selectDoctorAppointmentsTotal   = (s) => s.clinical.doctorAppointmentsTotal;
+export const selectDoctorAppointmentsPage    = (s) => s.clinical.doctorAppointmentsPage;
+export const selectDoctorTodayAppointments   = (s) => s.clinical.doctorTodayAppointments;
+export const selectDoctorTodayTotal          = (s) => s.clinical.doctorTodayTotal;
+export const selectSelectedDoctorAppointment = (s) => s.clinical.selectedDoctorAppointment;
+export const selectDoctorAvailability        = (s) => s.clinical.doctorAvailability;
+export const selectDoctorEarnings            = (s) => s.clinical.doctorEarnings;
+export const selectDoctorTransactions        = (s) => s.clinical.doctorTransactions;
+export const selectDoctorTransactionsTotal   = (s) => s.clinical.doctorTransactionsTotal;
+export const selectDoctorInvoice             = (s) => s.clinical.doctorInvoice;
 
-// Active care record helpers (derived)
+// Derived care record helpers
 export const selectLatestVitals = (s) => {
   const rec = s.clinical.selectedCareRecord;
   if (!rec?.vitalsLog?.length) return null;
@@ -1103,15 +1124,6 @@ export const selectTodaysMissedMeds = (s) => {
     (m) => m.status === 'missed' && new Date(m.scheduledAt) >= today
   );
 };
-
-// Admin
-export const selectAdminPrescriptions      = (s) => s.clinical.adminPrescriptions;
-export const selectAdminPrescriptionsTotal = (s) => s.clinical.adminPrescriptionsTotal;
-export const selectAdminOPRecords          = (s) => s.clinical.adminOPRecords;
-export const selectAdminOPRecordsTotal     = (s) => s.clinical.adminOPRecordsTotal;
-export const selectAdminCareRecords        = (s) => s.clinical.adminCareRecords;
-export const selectAdminCareRecordsTotal   = (s) => s.clinical.adminCareRecordsTotal;
-export const selectAdminSelectedCareRecord = (s) => s.clinical.adminSelectedCareRecord;
 
 // Loading / Error
 export const selectClinicalLoading = (key) => (s) => !!s.clinical.loading[key];

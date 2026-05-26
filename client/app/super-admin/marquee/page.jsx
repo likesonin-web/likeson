@@ -8,15 +8,14 @@ import {
   Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import {
-  Megaphone, Plus, Search, ToggleLeft, ToggleRight,
-  Trash2, Archive, ArchiveRestore, Edit3, Eye, X,
-  RefreshCw, BarChart3, MousePointerClick,
+  Megaphone, Plus, Search, Trash2, Archive, ArchiveRestore,
+  Edit3, Eye, X, RefreshCw, BarChart3, MousePointerClick,
   AlertCircle, CheckCircle2, Info, AlertTriangle, Tag,
-  Clock, Shield, Zap, Globe, Lock, ChevronLeft,
-  ChevronRight, ExternalLink, Loader2,
-  RotateCcw, Activity, BellOff, SlidersHorizontal,
-  EyeOff, Layers, Users, UserCheck, UserX, ChevronDown,
-  Check, Search as SearchIcon,
+  Clock, Shield, Zap, Globe, ChevronLeft, ChevronRight,
+  ExternalLink, Loader2, RotateCcw, Activity, BellOff,
+  SlidersHorizontal, Layers, Users, UserCheck,
+  UserX, ChevronDown, Check, Search as SearchIcon,
+  FileEdit, Wifi,
 } from 'lucide-react';
 
 import {
@@ -24,10 +23,9 @@ import {
   fetchAdminMarqueeById,
   createMarquee,
   updateMarquee,
-  toggleMarquee,
-  archiveMarquee,
+  updateMarqueeStatus,
   deleteMarquee,
-  clearDismissals,
+  resetMarqueeAnalytics,
   fetchMarqueeAnalytics,
   clearSelectedMarquee,
   selectAdminMarquees,
@@ -40,9 +38,7 @@ import {
   selectAnalyticsLoading,
 } from '@/store/slices/marqueeSlice';
 
-import {
-  adminGetAllUsers,
-} from '@/store/slices/userSlice';
+import { adminGetAllUsers } from '@/store/slices/userSlice';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -65,20 +61,37 @@ const SPEED_CONFIG = {
   fast:   { label: 'Fast',   duration: 15 },
 };
 
-const BLANK_FORM = {
-  message: '', subText: '', icon: '', type: 'info', speed: 'normal',
-  priority: 0, isDismissible: true,
-  cta: { label: '', url: '', target: '_self' },
-  targetRoles: [], targetUsers: [], targetPages: [],
-  startsAt: '', endsAt: '', isActive: true,
+// Status config — matches model: 'draft' | 'published' | 'archived'
+const STATUS_CONFIG = {
+  draft:     { label: 'Draft',     color: 'text-base-content/50', bg: 'bg-base-200',     border: 'border-base-300',     icon: FileEdit },
+  published: { label: 'Published', color: 'text-success',         bg: 'bg-success/10',   border: 'border-success/30',   icon: Wifi },
+  archived:  { label: 'Archived',  color: 'text-base-content/40', bg: 'bg-base-300',     border: 'border-base-300',     icon: Archive },
 };
 
-// Target audience modes
-const TARGET_MODE = {
-  ALL:   'all',    // empty targetRoles + empty targetUsers => all users
-  ROLES: 'roles',  // targetRoles has values
-  USERS: 'users',  // targetUsers has specific user IDs
-  BOTH:  'both',   // targetRoles + targetUsers combined
+// Audience config — matches model: 'public' | 'guests_only' | 'authenticated' | 'targeted'
+const AUDIENCE_CONFIG = {
+  public:        { label: 'Public',        icon: Globe,     color: 'text-info',    desc: 'Everyone including guests' },
+  guests_only:   { label: 'Guests Only',   icon: UserX,     color: 'text-warning', desc: 'Non-logged-in visitors only' },
+  authenticated: { label: 'Authenticated', icon: UserCheck, color: 'text-success', desc: 'All logged-in users' },
+  targeted:      { label: 'Targeted',      icon: Shield,    color: 'text-accent',  desc: 'Specific roles or users' },
+};
+
+const BLANK_FORM = {
+  message:       '',
+  subText:       '',
+  icon:          '',
+  type:          'info',
+  speed:         'normal',
+  priority:      0,
+  isDismissible: true,
+  cta:           { label: '', url: '', target: '_self' },
+  audience:      'public',
+  targetRoles:   [],
+  targetUsers:   [],
+  targetPages:   [],
+  startsAt:      '',
+  endsAt:        '',
+  status:        'draft',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -96,34 +109,26 @@ const toInputDate = (d) => {
   return new Date(d).toISOString().slice(0, 16);
 };
 
+// isLive uses status + schedule — matches schema virtual
 const isLive = (m) => {
-  if (!m.isActive || m.isArchived) return false;
+  if (m.status !== 'published') return false;
   const now = new Date();
   if (m.startsAt && new Date(m.startsAt) > now) return false;
   if (m.endsAt   && new Date(m.endsAt)   < now) return false;
   return true;
 };
 
-const getTargetMode = (form) => {
-  const hasRoles = form.targetRoles?.length > 0;
-  const hasUsers = form.targetUsers?.length > 0;
-  if (hasRoles && hasUsers) return TARGET_MODE.BOTH;
-  if (hasRoles) return TARGET_MODE.ROLES;
-  if (hasUsers) return TARGET_MODE.USERS;
-  return TARGET_MODE.ALL;
-};
-
 // ─── Animated Marquee Preview ─────────────────────────────────────────────────
 
 function MarqueePreview({ message, type = 'info', speed = 'normal', icon, cta }) {
-  const cfg = TYPE_CONFIG[type] || TYPE_CONFIG.info;
+  const cfg  = TYPE_CONFIG[type] || TYPE_CONFIG.info;
   const Icon = cfg.icon;
-  const dur = SPEED_CONFIG[speed]?.duration || 25;
-  const txt = message || 'Your marquee message will appear here...';
+  const dur  = SPEED_CONFIG[speed]?.duration || 25;
+  const txt  = message || 'Your marquee message will appear here…';
 
   return (
     <div className={`relative flex items-center gap-2 px-4 py-2.5 rounded-xl border overflow-hidden ${cfg.bg} ${cfg.border}`}>
-      <div className={`flex-shrink-0 flex items-center gap-1.5 ${cfg.color} font-semibold text-xs`}>
+      <div className={`flex-shrink-0 flex items-center gap-1.5 font-semibold text-xs ${cfg.color}`}>
         <Icon className="w-3.5 h-3.5" />
         {icon && <span>{icon}</span>}
       </div>
@@ -145,6 +150,14 @@ function MarqueePreview({ message, type = 'info', speed = 'normal', icon, cta })
   );
 }
 
+// ─── Field Note (helper text) ─────────────────────────────────────────────────
+
+function FieldNote({ children }) {
+  return (
+    <p className="text-xs text-base-content/40 mt-1 leading-snug">{children}</p>
+  );
+}
+
 // ─── User Multi-Select Dropdown ───────────────────────────────────────────────
 
 function UserMultiSelect({ selectedUserIds = [], onChange, allUsers = [], filterByRoles = [] }) {
@@ -152,11 +165,10 @@ function UserMultiSelect({ selectedUserIds = [], onChange, allUsers = [], filter
   const [search, setSearch] = useState('');
   const ref                 = useRef(null);
 
-  // Filter allUsers by selected roles (if any) and by search query
   const filtered = allUsers.filter((u) => {
-    const roleMatch = filterByRoles.length === 0 || filterByRoles.includes(u.role);
-    const q         = search.toLowerCase();
-    const nameMatch = u.name?.toLowerCase().includes(q);
+    const roleMatch  = filterByRoles.length === 0 || filterByRoles.includes(u.role);
+    const q          = search.toLowerCase();
+    const nameMatch  = u.name?.toLowerCase().includes(q);
     const emailMatch = u.email?.toLowerCase().includes(q);
     const roleSearch = u.role?.toLowerCase().includes(q);
     return roleMatch && (q === '' || nameMatch || emailMatch || roleSearch);
@@ -173,11 +185,8 @@ function UserMultiSelect({ selectedUserIds = [], onChange, allUsers = [], filter
     }
   };
 
-  const removeUser = (userId) => {
-    onChange(selectedUserIds.filter(i => i !== String(userId)));
-  };
+  const removeUser = (userId) => onChange(selectedUserIds.filter(i => i !== String(userId)));
 
-  // Close on outside click
   useEffect(() => {
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener('mousedown', handler);
@@ -186,13 +195,13 @@ function UserMultiSelect({ selectedUserIds = [], onChange, allUsers = [], filter
 
   return (
     <div ref={ref} className="relative">
-      {/* Selected chips */}
       {selectedUsers.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-2">
           {selectedUsers.map(u => (
             <span key={String(u._id)}
               className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-primary/10 text-primary border border-primary/20 rounded-full text-xs font-semibold">
-              <img src={u.avatar} alt="" className="w-4 h-4 rounded-full object-cover" onError={e => { e.target.style.display='none'; }} />
+              <img src={u.avatar} alt="" className="w-4 h-4 rounded-full object-cover"
+                onError={e => { e.target.style.display = 'none'; }} />
               {u.name}
               <button type="button" onClick={() => removeUser(u._id)}
                 className="hover:text-error transition-colors">
@@ -207,7 +216,6 @@ function UserMultiSelect({ selectedUserIds = [], onChange, allUsers = [], filter
         </div>
       )}
 
-      {/* Trigger */}
       <button type="button" onClick={() => setOpen(v => !v)}
         className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 bg-base-200 rounded-xl border text-sm transition-all
           ${open ? 'border-primary' : 'border-transparent hover:border-base-300'}`}>
@@ -220,7 +228,6 @@ function UserMultiSelect({ selectedUserIds = [], onChange, allUsers = [], filter
         <ChevronDown className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
-      {/* Dropdown */}
       <AnimatePresence>
         {open && (
           <motion.div
@@ -230,7 +237,6 @@ function UserMultiSelect({ selectedUserIds = [], onChange, allUsers = [], filter
             transition={{ duration: 0.15 }}
             className="absolute z-30 top-full left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-2xl shadow-2xl overflow-hidden"
           >
-            {/* Search */}
             <div className="p-2 border-b border-base-300">
               <div className="relative">
                 <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-base-content/30" />
@@ -244,7 +250,6 @@ function UserMultiSelect({ selectedUserIds = [], onChange, allUsers = [], filter
               </div>
             </div>
 
-            {/* Count header */}
             <div className="px-3 py-1.5 border-b border-base-300 flex items-center justify-between">
               <span className="text-xs text-base-content/40">
                 {filtered.length} user{filtered.length !== 1 ? 's' : ''}
@@ -253,13 +258,12 @@ function UserMultiSelect({ selectedUserIds = [], onChange, allUsers = [], filter
               {filtered.length > 0 && (
                 <button type="button"
                   onClick={() => {
-                    const allIds = filtered.map(u => String(u._id));
+                    const allIds      = filtered.map(u => String(u._id));
                     const allSelected = allIds.every(id => selectedUserIds.includes(id));
                     if (allSelected) {
                       onChange(selectedUserIds.filter(id => !allIds.includes(id)));
                     } else {
-                      const merged = [...new Set([...selectedUserIds, ...allIds])];
-                      onChange(merged);
+                      onChange([...new Set([...selectedUserIds, ...allIds])]);
                     }
                   }}
                   className="text-xs font-bold text-primary hover:underline">
@@ -268,7 +272,6 @@ function UserMultiSelect({ selectedUserIds = [], onChange, allUsers = [], filter
               )}
             </div>
 
-            {/* List */}
             <div className="max-h-56 overflow-y-auto">
               {filtered.length === 0 ? (
                 <div className="py-6 text-center text-xs text-base-content/40">No users found</div>
@@ -278,9 +281,7 @@ function UserMultiSelect({ selectedUserIds = [], onChange, allUsers = [], filter
                   return (
                     <button key={String(u._id)} type="button"
                       onClick={() => toggleUser(u._id)}
-                      className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-base-200
-                        ${isSelected ? 'bg-primary/5' : ''}`}
-                    >
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-base-200 ${isSelected ? 'bg-primary/5' : ''}`}>
                       <div className="relative flex-shrink-0">
                         <img src={u.avatar} alt=""
                           className="w-7 h-7 rounded-full object-cover bg-base-300"
@@ -315,28 +316,28 @@ function UserMultiSelect({ selectedUserIds = [], onChange, allUsers = [], filter
   );
 }
 
-// ─── Recharts Analytics Panel ─────────────────────────────────────────────────
+// ─── Analytics Panel ──────────────────────────────────────────────────────────
 
 function AnalyticsPanel({ analytics, loading, marquees }) {
   const s = analytics?.summary;
 
   const stats = [
-    { label: 'Total',       value: s?.totalMarquees ?? 0, icon: Layers,           color: 'text-primary',  bg: 'bg-primary/10' },
-    { label: 'Active',      value: s?.activeCount   ?? 0, icon: Activity,         color: 'text-success',  bg: 'bg-success/10' },
-    { label: 'Impressions', value: s?.impressions   ?? 0, icon: Eye,              color: 'text-info',     bg: 'bg-info/10' },
-    { label: 'Clicks',      value: s?.clicks        ?? 0, icon: MousePointerClick,color: 'text-accent',   bg: 'bg-accent/10' },
-    { label: 'Dismissals',  value: s?.dismissals    ?? 0, icon: BellOff,          color: 'text-warning',  bg: 'bg-warning/10' },
+    { label: 'Total',      value: s?.totalMarquees  ?? 0, icon: Layers,            color: 'text-primary', bg: 'bg-primary/10' },
+    { label: 'Published',  value: s?.publishedCount ?? 0, icon: Wifi,              color: 'text-success', bg: 'bg-success/10' },
+    { label: 'Impressions',value: s?.impressions    ?? 0, icon: Eye,               color: 'text-info',    bg: 'bg-info/10'    },
+    { label: 'Clicks',     value: s?.clicks         ?? 0, icon: MousePointerClick, color: 'text-accent',  bg: 'bg-accent/10'  },
+    { label: 'Dismissals', value: s?.dismissals     ?? 0, icon: BellOff,           color: 'text-warning', bg: 'bg-warning/10' },
   ];
 
-  const chartData = (marquees || []).slice(0, 8).map((m) => ({
-    name: m.message?.slice(0, 14) + (m.message?.length > 14 ? '…' : ''),
+  const chartData = (marquees || []).slice(0, 8).map(m => ({
+    name:        m.message?.slice(0, 14) + (m.message?.length > 14 ? '…' : ''),
     Impressions: m.analytics?.impressions || 0,
     Clicks:      m.analytics?.clicks      || 0,
     Dismissals:  m.analytics?.dismissals  || 0,
   }));
 
   const typeData = Object.entries(TYPE_CONFIG).map(([key, c]) => ({
-    type: c.label,
+    type:  c.label,
     count: (marquees || []).filter(m => m.type === key).length,
   }));
 
@@ -347,8 +348,7 @@ function AnalyticsPanel({ analytics, loading, marquees }) {
           <motion.div key={stat.label}
             initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.06 }}
-            className="bg-base-100 border border-base-300 rounded-2xl p-3.5 flex items-center gap-3"
-          >
+            className="bg-base-100 border border-base-300 rounded-2xl p-3.5 flex items-center gap-3">
             <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${stat.bg}`}>
               {loading
                 ? <Loader2 className="w-4 h-4 animate-spin text-base-content/30" />
@@ -412,12 +412,7 @@ function AnalyticsPanel({ analytics, loading, marquees }) {
                 <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} allowDecimals={false} />
                 <Tooltip contentStyle={{ borderRadius: '12px', border: '1px solid rgba(0,0,0,.08)', fontSize: 12 }}
                   cursor={{ fill: 'rgba(0,0,0,.04)' }} />
-                <Bar dataKey="count" radius={[6, 6, 0, 0]}>
-                  {typeData.map((entry, index) => {
-                    const colors = ['#38bdf8', '#fb923c', '#4ade80', '#f87171', '#a78bfa'];
-                    return <rect key={index} fill={colors[index % colors.length]} />;
-                  })}
-                </Bar>
+                <Bar dataKey="count" radius={[6, 6, 0, 0]} fill="#38bdf8" />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -427,47 +422,64 @@ function AnalyticsPanel({ analytics, loading, marquees }) {
   );
 }
 
-// ─── Target Audience Summary Badge ───────────────────────────────────────────
+// ─── Status Badge ─────────────────────────────────────────────────────────────
 
-function TargetAudienceBadge({ marquee, allUsers = [] }) {
-  const hasRoles = marquee.targetRoles?.length > 0;
-  const hasUsers = marquee.targetUsers?.length > 0;
+function StatusBadge({ marquee }) {
+  const live = isLive(marquee);
 
-  if (!hasRoles && !hasUsers) {
+  if (live) {
     return (
-      <span className="flex items-center gap-1 text-xs text-base-content/40">
-        <Globe className="w-3 h-3" /> All users
+      <span className="flex items-center gap-1 text-xs font-bold text-success bg-success/10 border border-success/25 px-2 py-0.5 rounded-full">
+        <motion.span className="w-1.5 h-1.5 rounded-full bg-success"
+          animate={{ scale: [1, 1.4, 1], opacity: [1, 0.5, 1] }}
+          transition={{ duration: 1.5, repeat: Infinity }} />
+        Live
       </span>
     );
   }
 
+  const cfg  = STATUS_CONFIG[marquee.status] || STATUS_CONFIG.draft;
+  const Icon = cfg.icon;
+
   return (
-    <span className="flex items-center gap-1 text-xs">
-      {hasRoles && (
-        <span className="flex items-center gap-1 text-primary/70">
-          <Shield className="w-3 h-3" />
-          {marquee.targetRoles.slice(0, 2).join(', ')}
-          {marquee.targetRoles.length > 2 && ` +${marquee.targetRoles.length - 2}`}
-        </span>
-      )}
-      {hasRoles && hasUsers && <span className="text-base-content/30">·</span>}
-      {hasUsers && (
-        <span className="flex items-center gap-1 text-accent/70">
-          <Users className="w-3 h-3" />
-          {marquee.targetUsers.length} user{marquee.targetUsers.length !== 1 ? 's' : ''}
-        </span>
-      )}
+    <span className={`flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full border ${cfg.bg} ${cfg.color} ${cfg.border}`}>
+      <Icon className="w-3 h-3" />
+      {cfg.label}
+    </span>
+  );
+}
+
+// ─── Audience Badge ───────────────────────────────────────────────────────────
+
+function AudienceBadge({ marquee }) {
+  const cfg  = AUDIENCE_CONFIG[marquee.audience] || AUDIENCE_CONFIG.public;
+  const Icon = cfg.icon;
+
+  const hasRoles = marquee.targetRoles?.length > 0;
+  const hasUsers = marquee.targetUsers?.length > 0;
+
+  return (
+    <span className={`flex items-center gap-1 text-xs ${cfg.color}`}>
+      <Icon className="w-3 h-3" />
+      {marquee.audience === 'targeted' ? (
+        <>
+          {hasRoles && marquee.targetRoles.slice(0, 2).join(', ')}
+          {hasRoles && marquee.targetRoles.length > 2 && ` +${marquee.targetRoles.length - 2}`}
+          {hasRoles && hasUsers && ' · '}
+          {hasUsers && `${marquee.targetUsers.length} user${marquee.targetUsers.length !== 1 ? 's' : ''}`}
+        </>
+      ) : cfg.label}
     </span>
   );
 }
 
 // ─── Marquee Card ─────────────────────────────────────────────────────────────
 
-function MarqueeCard({ marquee, index, onEdit, onView, onToggle, onArchive, onDelete, onClearDismissals, isSuperAdmin, actionLoading, allUsers }) {
+function MarqueeCard({ marquee, index, onEdit, onView, onStatusChange, onDelete, onResetAnalytics, isSuperAdmin, actionLoading, allUsers }) {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
-  const cfg     = TYPE_CONFIG[marquee.type] || TYPE_CONFIG.info;
+  const cfg      = TYPE_CONFIG[marquee.type] || TYPE_CONFIG.info;
   const TypeIcon = cfg.icon;
-  const live    = isLive(marquee);
+  const live     = isLive(marquee);
 
   return (
     <motion.div
@@ -475,13 +487,14 @@ function MarqueeCard({ marquee, index, onEdit, onView, onToggle, onArchive, onDe
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.05, type: 'spring', damping: 18 }}
       className={`group relative bg-base-100 rounded-2xl border transition-all duration-300 overflow-hidden
-        ${marquee.isArchived ? 'opacity-55 border-base-300' : 'border-base-300 hover:border-primary/40 hover:shadow-lg'}`}
+        ${marquee.status === 'archived' ? 'opacity-55 border-base-300' : 'border-base-300 hover:border-primary/40 hover:shadow-lg'}`}
     >
-      <div className={`h-1 w-full ${
-        marquee.type === 'error'   ? 'bg-error' :
-        marquee.type === 'warning' ? 'bg-warning' :
-        marquee.type === 'success' ? 'bg-success' :
-        marquee.type === 'promo'   ? 'bg-accent' : 'bg-info'}`}
+      {/* Type accent bar */}
+      <div className={`h-1 w-full
+        ${marquee.type === 'error'   ? 'bg-error'   :
+          marquee.type === 'warning' ? 'bg-warning' :
+          marquee.type === 'success' ? 'bg-success' :
+          marquee.type === 'promo'   ? 'bg-accent'  : 'bg-info'}`}
       />
 
       <div className="p-4">
@@ -499,22 +512,7 @@ function MarqueeCard({ marquee, index, onEdit, onView, onToggle, onArchive, onDe
             </div>
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap justify-end">
-            {live ? (
-              <span className="flex items-center gap-1 text-xs font-bold text-success bg-success/10 border border-success/25 px-2 py-0.5 rounded-full">
-                <motion.span className="w-1.5 h-1.5 rounded-full bg-success"
-                  animate={{ scale: [1, 1.4, 1], opacity: [1, 0.5, 1] }}
-                  transition={{ duration: 1.5, repeat: Infinity }} />
-                Live
-              </span>
-            ) : marquee.isArchived ? (
-              <span className="flex items-center gap-1 text-xs font-bold text-base-content/40 bg-base-300 px-2 py-0.5 rounded-full">
-                <Archive className="w-3 h-3" /> Archived
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-xs font-bold text-base-content/40 bg-base-200 border border-base-300 px-2 py-0.5 rounded-full">
-                <EyeOff className="w-3 h-3" /> Inactive
-              </span>
-            )}
+            <StatusBadge marquee={marquee} />
             <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${cfg.bg} ${cfg.color} ${cfg.border}`}>
               {cfg.label}
             </span>
@@ -525,15 +523,16 @@ function MarqueeCard({ marquee, index, onEdit, onView, onToggle, onArchive, onDe
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-base-content/40 mb-3">
           <span className="flex items-center gap-1"><Zap className="w-3 h-3" /> Priority {marquee.priority}</span>
           <span className="flex items-center gap-1"><Activity className="w-3 h-3" /> {SPEED_CONFIG[marquee.speed]?.label || 'Normal'}</span>
-          {/* ── Audience summary ── */}
-          <TargetAudienceBadge marquee={marquee} allUsers={allUsers} />
+          <AudienceBadge marquee={marquee} />
           {marquee.endsAt && (
             <span className="flex items-center gap-1 text-warning/70">
               <Clock className="w-3 h-3" /> Ends {fmtDate(marquee.endsAt)}
             </span>
           )}
           {marquee.isDismissible === false && (
-            <span className="flex items-center gap-1 text-error/60"><Lock className="w-3 h-3" /> Non-dismissible</span>
+            <span className="flex items-center gap-1 text-error/60">
+              <BellOff className="w-3 h-3" /> Non-dismissible
+            </span>
           )}
         </div>
 
@@ -560,7 +559,7 @@ function MarqueeCard({ marquee, index, onEdit, onView, onToggle, onArchive, onDe
           </div>
         )}
 
-        {/* ── Target users preview chips ── */}
+        {/* Target users preview */}
         {marquee.targetUsers?.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-1.5">
             {(allUsers || [])
@@ -568,7 +567,7 @@ function MarqueeCard({ marquee, index, onEdit, onView, onToggle, onArchive, onDe
               .slice(0, 4)
               .map(u => (
                 <span key={String(u._id)}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 bg-accent/8 border border-accent/15 rounded-full text-xs text-accent/80 font-semibold">
+                  className="inline-flex items-center gap-1 px-2 py-0.5 bg-accent/10 border border-accent/15 rounded-full text-xs text-accent/80 font-semibold">
                   <img src={u.avatar} alt="" className="w-3.5 h-3.5 rounded-full object-cover"
                     onError={e => { e.target.style.display = 'none'; }} />
                   {u.name?.split(' ')[0]}
@@ -584,16 +583,24 @@ function MarqueeCard({ marquee, index, onEdit, onView, onToggle, onArchive, onDe
 
         {/* Actions */}
         <div className="flex items-center gap-2 flex-wrap">
-          <button type="button" onClick={() => onToggle(marquee._id)}
-            disabled={actionLoading || marquee.isArchived}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all disabled:opacity-40
-              ${marquee.isActive
-                ? 'bg-success/10 text-success border border-success/25 hover:bg-success hover:text-white'
-                : 'bg-base-200 text-base-content/50 border border-base-300 hover:border-success hover:text-success'}`}
-          >
-            {marquee.isActive ? <ToggleRight className="w-3.5 h-3.5" /> : <ToggleLeft className="w-3.5 h-3.5" />}
-            {marquee.isActive ? 'Active' : 'Inactive'}
-          </button>
+
+          {/* Status cycle buttons */}
+          {marquee.status !== 'published' && (
+            <button type="button"
+              onClick={() => onStatusChange(marquee._id, 'published')}
+              disabled={actionLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-success/10 text-success border border-success/25 hover:bg-success hover:text-white transition-all disabled:opacity-40">
+              <Wifi className="w-3.5 h-3.5" /> Publish
+            </button>
+          )}
+          {marquee.status === 'published' && (
+            <button type="button"
+              onClick={() => onStatusChange(marquee._id, 'draft')}
+              disabled={actionLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-base-200 text-base-content/50 border border-base-300 hover:border-warning hover:text-warning transition-all disabled:opacity-40">
+              <FileEdit className="w-3.5 h-3.5" /> Unpublish
+            </button>
+          )}
 
           <button type="button" onClick={() => onEdit(marquee)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-primary/10 text-primary border border-primary/20 hover:bg-primary hover:text-white transition-all">
@@ -605,26 +612,29 @@ function MarqueeCard({ marquee, index, onEdit, onView, onToggle, onArchive, onDe
             <Eye className="w-3.5 h-3.5" /> Detail
           </button>
 
-          {(marquee.analytics?.dismissals || 0) > 0 && (
-            <button type="button" onClick={() => onClearDismissals(marquee._id)}
+          {/* Reset analytics */}
+          {((marquee.analytics?.impressions || 0) + (marquee.analytics?.clicks || 0) + (marquee.analytics?.dismissals || 0)) > 0 && (
+            <button type="button" onClick={() => onResetAnalytics(marquee._id)}
               disabled={actionLoading}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-warning/10 text-warning border border-warning/20 hover:bg-warning hover:text-white transition-all disabled:opacity-40">
               <RotateCcw className="w-3.5 h-3.5" /> Reset
             </button>
           )}
 
+          {/* Archive / Unarchive */}
           <button type="button"
-            onClick={() => onArchive(marquee._id, !marquee.isArchived)}
+            onClick={() => onStatusChange(marquee._id, marquee.status === 'archived' ? 'draft' : 'archived')}
             disabled={actionLoading}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all disabled:opacity-40
-              ${marquee.isArchived
+              ${marquee.status === 'archived'
                 ? 'bg-info/10 text-info border-info/20 hover:bg-info hover:text-white'
-                : 'bg-base-200 text-base-content/50 border-base-300 hover:border-warning hover:text-warning'}`}
-          >
-            {marquee.isArchived ? <ArchiveRestore className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}
-            {marquee.isArchived ? 'Unarchive' : 'Archive'}
+                : 'bg-base-200 text-base-content/50 border-base-300 hover:border-warning hover:text-warning'}`}>
+            {marquee.status === 'archived'
+              ? <><ArchiveRestore className="w-3.5 h-3.5" /> Unarchive</>
+              : <><Archive className="w-3.5 h-3.5" /> Archive</>}
           </button>
 
+          {/* Delete (superadmin only) */}
           {isSuperAdmin && (
             <>
               {showConfirmDelete ? (
@@ -660,21 +670,20 @@ function MarqueeFormModal({ initial, onClose, onSubmit, loading, currentUserId, 
   const [form, setForm] = useState(() => ({
     ...BLANK_FORM,
     ...initial,
-    startsAt: toInputDate(initial?.startsAt),
-    endsAt:   toInputDate(initial?.endsAt),
-    cta: { label: '', url: '', target: '_self', ...(initial?.cta || {}) },
+    startsAt:    toInputDate(initial?.startsAt),
+    endsAt:      toInputDate(initial?.endsAt),
+    cta:         { label: '', url: '', target: '_self', ...(initial?.cta || {}) },
     targetRoles: initial?.targetRoles || [],
     targetUsers: (initial?.targetUsers || []).map(String),
+    status:      initial?.status   || 'draft',
+    audience:    initial?.audience || 'public',
   }));
 
-  const isEdit   = !!initial?._id;
-  const set      = (key, val) => setForm(f => ({ ...f, [key]: val }));
-  const setCta   = (key, val) => setForm(f => ({ ...f, cta: { ...f.cta, [key]: val } }));
+  const isEdit = !!initial?._id;
+  const set    = (key, val) => setForm(f => ({ ...f, [key]: val }));
+  const setCta = (key, val) => setForm(f => ({ ...f, cta: { ...f.cta, [key]: val } }));
 
-  // Derived audience mode
-  const audienceMode = getTargetMode(form);
-
-  const toggleRole = (role) => {
+  const handleRoleToggle = (role) => {
     setForm(f => ({
       ...f,
       targetRoles: f.targetRoles.includes(role)
@@ -683,25 +692,14 @@ function MarqueeFormModal({ initial, onClose, onSubmit, loading, currentUserId, 
     }));
   };
 
-  // When roles change, also filter down targetUsers to only users with those roles
-  // (optional — keeps consistency. Comment out if you want independent targeting)
-  const handleRoleToggle = (role) => {
-    setForm(f => {
-      const newRoles = f.targetRoles.includes(role)
-        ? f.targetRoles.filter(r => r !== role)
-        : [...f.targetRoles, role];
-      return { ...f, targetRoles: newRoles };
-    });
-  };
-
   const handleSubmit = (e) => {
     e.preventDefault();
     const payload = {
       ...form,
-      priority: Number(form.priority) || 0,
-      startsAt: form.startsAt ? new Date(form.startsAt).toISOString() : undefined,
-      endsAt:   form.endsAt   ? new Date(form.endsAt).toISOString()   : null,
-      targetUsers: form.targetUsers, // array of user ID strings
+      priority:    Number(form.priority) || 0,
+      startsAt:    form.startsAt ? new Date(form.startsAt).toISOString() : undefined,
+      endsAt:      form.endsAt   ? new Date(form.endsAt).toISOString()   : null,
+      targetUsers: form.targetUsers,
       ...(isEdit
         ? { id: initial._id, updatedBy: currentUserId }
         : { createdBy: currentUserId }),
@@ -711,14 +709,17 @@ function MarqueeFormModal({ initial, onClose, onSubmit, loading, currentUserId, 
 
   const cfg = TYPE_CONFIG[form.type] || TYPE_CONFIG.info;
 
-  // Audience mode label
-  const AUDIENCE_LABELS = {
-    [TARGET_MODE.ALL]:   { icon: Globe,     text: 'All Users',          color: 'text-base-content/60' },
-    [TARGET_MODE.ROLES]: { icon: Shield,    text: 'By Role',            color: 'text-primary' },
-    [TARGET_MODE.USERS]: { icon: UserCheck, text: 'Specific Users',     color: 'text-accent' },
-    [TARGET_MODE.BOTH]:  { icon: Users,     text: 'Roles + Users',      color: 'text-success' },
-  };
-  const audLabel = AUDIENCE_LABELS[audienceMode];
+  // Audience summary text
+  const hasRoles = form.targetRoles.length > 0;
+  const hasUsers = form.targetUsers.length > 0;
+  const audienceSummary = {
+    public:        'Shown to everyone — guests and logged-in users.',
+    guests_only:   'Shown only to visitors who are NOT logged in.',
+    authenticated: 'Shown to all users who are logged in, regardless of role.',
+    targeted:      hasRoles || hasUsers
+      ? `Targeting ${hasRoles ? form.targetRoles.length + ' role(s)' : ''} ${hasRoles && hasUsers ? '+ ' : ''}${hasUsers ? form.targetUsers.length + ' specific user(s)' : ''}.`
+      : 'Select at least one role or user below.',
+  }[form.audience] || '';
 
   return (
     <motion.div
@@ -761,9 +762,9 @@ function MarqueeFormModal({ initial, onClose, onSubmit, loading, currentUserId, 
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="overflow-y-auto flex-1 px-5 pb-5 pt-4 space-y-4">
+        <form onSubmit={handleSubmit} className="overflow-y-auto flex-1 px-5 pb-5 pt-4 space-y-5">
 
-          {/* Message */}
+          {/* ── Message ── */}
           <div>
             <label className="block text-xs font-bold text-base-content/60 mb-1.5 uppercase tracking-wider">
               Message <span className="text-error">*</span>
@@ -772,17 +773,22 @@ function MarqueeFormModal({ initial, onClose, onSubmit, loading, currentUserId, 
               required rows={2} maxLength={500}
               placeholder="Enter the scrolling announcement text…"
               className="input-field w-full resize-none" />
-            <p className="text-xs text-base-content/30 text-right mt-1">{form.message.length}/500</p>
+            <div className="flex items-center justify-between mt-1">
+              <FieldNote>Main scrolling text displayed in the marquee bar. Keep it concise and action-oriented.</FieldNote>
+              <span className="text-xs text-base-content/30 flex-shrink-0 ml-2">{form.message.length}/500</span>
+            </div>
           </div>
 
-          {/* Sub Text */}
+          {/* ── Sub Text ── */}
           <div>
             <label className="block text-xs font-bold text-base-content/60 mb-1.5 uppercase tracking-wider">Sub Text</label>
             <input type="text" value={form.subText} onChange={e => set('subText', e.target.value)}
-              placeholder="Optional tooltip/expanded detail…" className="input-field w-full" />
+              maxLength={1000}
+              placeholder="Optional expanded detail or tooltip…" className="input-field w-full" />
+            <FieldNote>Secondary descriptive text. Shown as tooltip or expanded detail. Max 1000 characters.</FieldNote>
           </div>
 
-          {/* Type / Speed / Priority */}
+          {/* ── Type / Speed / Priority ── */}
           <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-bold text-base-content/60 mb-1.5 uppercase tracking-wider">Type</label>
@@ -795,7 +801,9 @@ function MarqueeFormModal({ initial, onClose, onSubmit, loading, currentUserId, 
                   </button>
                 ))}
               </div>
+              <FieldNote>Visual style and color theme for the marquee bar.</FieldNote>
             </div>
+
             <div>
               <label className="block text-xs font-bold text-base-content/60 mb-1.5 uppercase tracking-wider">Speed</label>
               <div className="flex flex-col gap-1.5">
@@ -807,41 +815,49 @@ function MarqueeFormModal({ initial, onClose, onSubmit, loading, currentUserId, 
                   </button>
                 ))}
               </div>
+              <FieldNote>How fast the text scrolls across the screen.</FieldNote>
             </div>
+
             <div>
-              <label className="block text-xs font-bold text-base-content/60 mb-1.5 uppercase tracking-wider">Priority (0–100)</label>
+              <label className="block text-xs font-bold text-base-content/60 mb-1.5 uppercase tracking-wider">Priority</label>
               <input type="number" value={form.priority} onChange={e => set('priority', e.target.value)}
                 min={0} max={100} className="input-field w-full" />
-              <p className="text-xs text-base-content/30 mt-1">Higher = shown first</p>
-              <div className="mt-2">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" checked={form.isDismissible} onChange={e => set('isDismissible', e.target.checked)}
-                    className="w-4 h-4 rounded border-base-300 accent-primary" />
-                  <span className="text-xs text-base-content/60 font-semibold">Dismissible by users</span>
-                </label>
-              </div>
+              <FieldNote>0–100. Higher value = shown first when multiple marquees are active.</FieldNote>
+              <label className="flex items-center gap-2 cursor-pointer mt-2.5">
+                <input type="checkbox" checked={form.isDismissible} onChange={e => set('isDismissible', e.target.checked)}
+                  className="checkbox checkbox-sm" />
+                <span className="text-xs text-base-content/60 font-semibold">Dismissible by users</span>
+              </label>
+              <FieldNote>If unchecked, users cannot close this marquee.</FieldNote>
             </div>
           </div>
 
-          {/* Icon */}
+          {/* ── Icon ── */}
           <div>
             <label className="block text-xs font-bold text-base-content/60 mb-1.5 uppercase tracking-wider">
-              Icon <span className="text-base-content/30">(lucide icon name, e.g. "Stethoscope")</span>
+              Icon Emoji
             </label>
             <input type="text" value={form.icon} onChange={e => set('icon', e.target.value)}
-              placeholder="e.g. AlertTriangle" className="input-field w-full" />
+              placeholder="e.g. 🏥 🚑 💊 ⚠️" className="input-field w-full" />
+            <FieldNote>Optional emoji icon displayed beside the type icon. Paste any emoji directly.</FieldNote>
           </div>
 
-          {/* CTA */}
+          {/* ── CTA ── */}
           <div>
             <label className="block text-xs font-bold text-base-content/60 mb-1.5 uppercase tracking-wider">
               Call-to-Action Button <span className="text-base-content/30">(optional)</span>
             </label>
             <div className="grid grid-cols-2 gap-2">
-              <input type="text" value={form.cta.label} onChange={e => setCta('label', e.target.value)}
-                placeholder="Button label" className="input-field" />
-              <input  value={form.cta.url} onChange={e => setCta('url', e.target.value)}
-                placeholder="https://..." className="input-field" />
+              <div>
+                <input type="text" value={form.cta.label} onChange={e => setCta('label', e.target.value)}
+                  placeholder="Button label e.g. Book Now" className="input-field" />
+                <FieldNote>Text shown on the clickable button inside the marquee.</FieldNote>
+              </div>
+              <div>
+                <input  value={form.cta.url} onChange={e => setCta('url', e.target.value)}
+                  placeholder="https://…" className="input-field" />
+                <FieldNote>Full URL the button links to. Must include https://</FieldNote>
+              </div>
             </div>
             <div className="flex gap-2 mt-2">
               {['_self', '_blank'].map(t => (
@@ -854,134 +870,144 @@ function MarqueeFormModal({ initial, onClose, onSubmit, loading, currentUserId, 
             </div>
           </div>
 
-          {/* ═══════════════════════════════════════════════════════════════════
-              AUDIENCE TARGETING  —  Key section
-              Shows current audience mode + role toggles + user multi-select
-          ════════════════════════════════════════════════════════════════════ */}
+          {/* ── Audience ── */}
           <div className="bg-base-200 rounded-2xl p-4 space-y-4 border border-base-300">
-            {/* Header with live audience badge */}
             <div className="flex items-center justify-between">
-              <label className="block text-xs font-bold text-base-content/60 uppercase tracking-wider flex items-center gap-1.5">
-                <Users className="w-3.5 h-3.5" /> Audience Targeting
+              <label className="text-xs font-bold text-base-content/60 uppercase tracking-wider flex items-center gap-1.5">
+                <Globe className="w-3.5 h-3.5" /> Audience
               </label>
-              <span className={`flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full bg-base-100 border border-base-300 ${audLabel.color}`}>
-                <audLabel.icon className="w-3 h-3" />
-                {audLabel.text}
+              <span className={`text-xs font-bold px-2.5 py-1 rounded-full bg-base-100 border border-base-300 ${AUDIENCE_CONFIG[form.audience]?.color}`}>
+                {AUDIENCE_CONFIG[form.audience]?.label}
               </span>
             </div>
 
-            {/* Quick mode buttons */}
+            {/* Audience mode buttons */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {[
-                { mode: TARGET_MODE.ALL,   icon: Globe,     label: 'All Users',      desc: 'No filter',           action: () => { set('targetRoles', []); set('targetUsers', []); } },
-                { mode: TARGET_MODE.ROLES, icon: Shield,    label: 'By Roles',       desc: 'Select roles below',  action: () => { set('targetUsers', []); } },
-                { mode: TARGET_MODE.USERS, icon: UserCheck, label: 'Specific Users', desc: 'Pick users below',    action: () => { set('targetRoles', []); } },
-                { mode: TARGET_MODE.BOTH,  icon: Users,     label: 'Roles + Users',  desc: 'Combined targeting',  action: () => {} },
-              ].map(({ mode, icon: Ic, label, desc, action }) => (
-                <button key={mode} type="button"
-                  onClick={action}
-                  className={`flex flex-col items-center gap-1 px-3 py-2.5 rounded-xl border text-center transition-all
-                    ${audienceMode === mode
-                      ? 'bg-primary/10 text-primary border-primary/30 shadow-sm'
-                      : 'bg-base-100 text-base-content/40 border-base-300 hover:border-primary/20 hover:text-base-content/60'}`}
-                >
-                  <Ic className="w-4 h-4" />
-                  <span className="text-xs font-bold leading-tight">{label}</span>
-                  <span className="text-xs opacity-60 leading-tight">{desc}</span>
-                </button>
-              ))}
-            </div>
-
-            {/* Role chips — shown for ROLES or BOTH modes */}
-            <div>
-              <p className="text-xs font-bold text-base-content/50 mb-2 flex items-center gap-1.5">
-                <Shield className="w-3.5 h-3.5" /> Target Roles
-                <span className="text-base-content/30 font-normal">(empty = all roles)</span>
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {ROLES.map(role => (
-                  <button key={role} type="button" onClick={() => handleRoleToggle(role)}
-                    className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-all capitalize
-                      ${form.targetRoles.includes(role)
-                        ? 'bg-primary/15 text-primary border-primary/35 shadow-sm'
-                        : 'bg-base-100 text-base-content/40 border-base-300 hover:border-primary/30'}`}>
-                    {form.targetRoles.includes(role) && <Check className="w-2.5 h-2.5 inline mr-1" />}
-                    {role}
+              {Object.entries(AUDIENCE_CONFIG).map(([key, c]) => {
+                const Icon = c.icon;
+                return (
+                  <button key={key} type="button"
+                    onClick={() => set('audience', key)}
+                    className={`flex flex-col items-center gap-1 px-3 py-2.5 rounded-xl border text-center transition-all
+                      ${form.audience === key
+                        ? 'bg-primary/10 text-primary border-primary/30 shadow-sm'
+                        : 'bg-base-100 text-base-content/40 border-base-300 hover:border-primary/20 hover:text-base-content/60'}`}>
+                    <Icon className="w-4 h-4" />
+                    <span className="text-xs font-bold leading-tight">{c.label}</span>
+                    <span className="text-xs opacity-60 leading-tight">{c.desc}</span>
                   </button>
-                ))}
-              </div>
+                );
+              })}
             </div>
 
-            {/* User multi-select */}
-            <div>
-              <p className="text-xs font-bold text-base-content/50 mb-2 flex items-center gap-1.5">
-                <UserCheck className="w-3.5 h-3.5" /> Specific Users
-                <span className="text-base-content/30 font-normal">
-                  {form.targetRoles.length > 0 ? `(filtered to: ${form.targetRoles.join(', ')})` : '(all users shown)'}
-                </span>
-              </p>
-              <UserMultiSelect
-                selectedUserIds={form.targetUsers}
-                onChange={(ids) => set('targetUsers', ids)}
-                allUsers={allUsers}
-                filterByRoles={form.targetRoles}
-              />
-            </div>
+            {/* Target Roles — visible when audience is 'targeted' */}
+            <AnimatePresence>
+              {form.audience === 'targeted' && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden space-y-3"
+                >
+                  <div>
+                    <p className="text-xs font-bold text-base-content/50 mb-2 flex items-center gap-1.5">
+                      <Shield className="w-3.5 h-3.5" /> Target Roles
+                      <span className="text-base-content/30 font-normal">(select at least one role or user)</span>
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {ROLES.map(role => (
+                        <button key={role} type="button" onClick={() => handleRoleToggle(role)}
+                          className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-all capitalize
+                            ${form.targetRoles.includes(role)
+                              ? 'bg-primary/15 text-primary border-primary/35 shadow-sm'
+                              : 'bg-base-100 text-base-content/40 border-base-300 hover:border-primary/30'}`}>
+                          {form.targetRoles.includes(role) && <Check className="w-2.5 h-2.5 inline mr-1" />}
+                          {role}
+                        </button>
+                      ))}
+                    </div>
+                    <FieldNote>Select which user roles can see this marquee. Toggle multiple roles for broad targeting.</FieldNote>
+                  </div>
 
-            {/* Summary */}
-            <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold
-              ${audienceMode === TARGET_MODE.ALL
+                  <div>
+                    <p className="text-xs font-bold text-base-content/50 mb-2 flex items-center gap-1.5">
+                      <UserCheck className="w-3.5 h-3.5" /> Specific Users
+                      <span className="text-base-content/30 font-normal">
+                        {form.targetRoles.length > 0 ? `(filtered to: ${form.targetRoles.join(', ')})` : '(showing all users)'}
+                      </span>
+                    </p>
+                    <UserMultiSelect
+                      selectedUserIds={form.targetUsers}
+                      onChange={(ids) => set('targetUsers', ids)}
+                      allUsers={allUsers}
+                      filterByRoles={form.targetRoles}
+                    />
+                    <FieldNote>Optionally pin this marquee to specific individual users in addition to roles.</FieldNote>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Audience summary */}
+            <div className={`flex items-start gap-2 px-3 py-2 rounded-xl border text-xs font-semibold
+              ${form.audience === 'public'
                 ? 'bg-base-100 border-base-300 text-base-content/50'
                 : 'bg-primary/5 border-primary/15 text-primary'}`}>
-              <audLabel.icon className="w-3.5 h-3.5 flex-shrink-0" />
-              <span>
-                {audienceMode === TARGET_MODE.ALL && 'This marquee will be shown to ALL users regardless of role.'}
-                {audienceMode === TARGET_MODE.ROLES && `Targeting ${form.targetRoles.length} role${form.targetRoles.length > 1 ? 's' : ''}: ${form.targetRoles.join(', ')}`}
-                {audienceMode === TARGET_MODE.USERS && `Targeting ${form.targetUsers.length} specific user${form.targetUsers.length !== 1 ? 's' : ''}`}
-                {audienceMode === TARGET_MODE.BOTH && `Targeting ${form.targetRoles.length} role${form.targetRoles.length > 1 ? 's' : ''} + ${form.targetUsers.length} specific user${form.targetUsers.length !== 1 ? 's' : ''}`}
-              </span>
+              {(() => { const I = AUDIENCE_CONFIG[form.audience]?.icon || Globe; return <I className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />; })()}
+              <span>{audienceSummary}</span>
             </div>
           </div>
 
-          {/* Target Pages */}
+          {/* ── Target Pages ── */}
           <div>
             <label className="block text-xs font-bold text-base-content/60 mb-1.5 uppercase tracking-wider">
-              Target Pages <span className="text-base-content/30">(comma-separated paths, empty = all pages)</span>
+              Target Pages
             </label>
             <input type="text"
               value={form.targetPages.join(', ')}
               onChange={e => set('targetPages', e.target.value.split(',').map(p => p.trim()).filter(Boolean))}
-              placeholder="/pharmacy, /dashboard, /orders…" className="input-field w-full" />
+              placeholder="/pharmacy, /dashboard, /orders" className="input-field w-full" />
+            <FieldNote>Comma-separated page paths where this marquee should appear. Leave empty to show on all pages.</FieldNote>
           </div>
 
-          {/* Schedule */}
+          {/* ── Schedule ── */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-base-content/60 mb-1.5 uppercase tracking-wider">Starts At</label>
               <input type="datetime-local" value={form.startsAt} onChange={e => set('startsAt', e.target.value)}
                 className="input-field w-full" />
+              <FieldNote>Date and time when this marquee becomes visible. Defaults to now.</FieldNote>
             </div>
             <div>
-              <label className="block text-xs font-bold text-base-content/60 mb-1.5 uppercase tracking-wider">
-                Ends At <span className="text-base-content/30">(empty = never)</span>
-              </label>
+              <label className="block text-xs font-bold text-base-content/60 mb-1.5 uppercase tracking-wider">Ends At</label>
               <input type="datetime-local" value={form.endsAt} onChange={e => set('endsAt', e.target.value)}
                 className="input-field w-full" />
+              <FieldNote>When to automatically stop showing this marquee. Leave empty to run indefinitely.</FieldNote>
             </div>
           </div>
 
-          {/* Active toggle */}
-          <label className="flex items-center gap-3 p-3 bg-base-200 rounded-xl cursor-pointer border border-base-300 hover:border-primary/30 transition-colors">
-            <input type="checkbox" checked={form.isActive} onChange={e => set('isActive', e.target.checked)}
-              className="w-4 h-4 rounded accent-primary" />
-            <div>
-              <p className="text-sm font-bold text-base-content">Activate Immediately</p>
-              <p className="text-xs text-base-content/40">Make this marquee visible right away (respects schedule)</p>
+          {/* ── Status ── */}
+          <div>
+            <label className="block text-xs font-bold text-base-content/60 mb-1.5 uppercase tracking-wider">Status</label>
+            <div className="flex gap-2">
+              {Object.entries(STATUS_CONFIG).map(([key, c]) => {
+                const Icon = c.icon;
+                return (
+                  <button key={key} type="button" onClick={() => set('status', key)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold border transition-all flex-1 justify-center
+                      ${form.status === key ? `${c.bg} ${c.color} ${c.border}` : 'bg-base-200 text-base-content/40 border-base-300 hover:border-base-content/20'}`}>
+                    <Icon className="w-3.5 h-3.5" />
+                    {c.label}
+                  </button>
+                );
+              })}
             </div>
-            <div className={`ml-auto w-2 h-2 rounded-full flex-shrink-0 ${form.isActive ? 'bg-success' : 'bg-base-300'}`} />
-          </label>
+            <FieldNote>
+              <strong>Draft</strong> — saved but not visible. <strong>Published</strong> — live (respects schedule). <strong>Archived</strong> — hidden and retired.
+            </FieldNote>
+          </div>
 
-          {/* Submit */}
+          {/* ── Submit ── */}
           <div className="flex gap-2 pt-2">
             <button type="button" onClick={onClose}
               className="flex-1 py-2.5 rounded-xl border border-base-300 text-sm font-bold text-base-content/60 hover:bg-base-200 transition-all">
@@ -989,7 +1015,9 @@ function MarqueeFormModal({ initial, onClose, onSubmit, loading, currentUserId, 
             </button>
             <button type="submit" disabled={loading || !form.message.trim()}
               className="flex-1 py-2.5 rounded-xl bg-primary text-white text-sm font-bold hover:bg-primary/85 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : isEdit ? <Edit3 className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+              {loading
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : isEdit ? <Edit3 className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
               {loading ? 'Saving…' : isEdit ? 'Save Changes' : 'Create Marquee'}
             </button>
           </div>
@@ -1022,7 +1050,6 @@ function DetailModal({ marquee, loading, onClose, allUsers }) {
     { name: 'Dismissals',  value: marquee.analytics?.dismissals  || 0, fill: '#fb923c' },
   ];
 
-  // Resolve targetUsers to full user objects
   const targetedUsers = (allUsers || []).filter(u =>
     (marquee.targetUsers || []).map(String).includes(String(u._id))
   );
@@ -1035,9 +1062,9 @@ function DetailModal({ marquee, loading, onClose, allUsers }) {
         exit={{ scale: 0.92, y: 20, opacity: 0 }} transition={{ type: 'spring', damping: 20 }}
         className="bg-base-100 rounded-3xl border border-base-300 shadow-2xl w-full max-w-xl max-h-[85vh] overflow-y-auto">
 
-        <div className={`h-1.5 w-full rounded-t-3xl ${
-          marquee.type === 'error' ? 'bg-error' : marquee.type === 'warning' ? 'bg-warning' :
-          marquee.type === 'success' ? 'bg-success' : marquee.type === 'promo' ? 'bg-accent' : 'bg-info'}`} />
+        <div className={`h-1.5 w-full rounded-t-3xl
+          ${marquee.type === 'error' ? 'bg-error' : marquee.type === 'warning' ? 'bg-warning' :
+            marquee.type === 'success' ? 'bg-success' : marquee.type === 'promo' ? 'bg-accent' : 'bg-info'}`} />
 
         <div className="p-5">
           <div className="flex items-start justify-between gap-3 mb-4">
@@ -1067,10 +1094,12 @@ function DetailModal({ marquee, loading, onClose, allUsers }) {
           {/* Meta grid */}
           <div className="grid grid-cols-2 gap-3 mb-4">
             {[
-              { label: 'Status',      value: live ? '🟢 Live' : marquee.isArchived ? '📦 Archived' : '⚫ Inactive' },
+              { label: 'Status',      value: live ? '🟢 Live' : STATUS_CONFIG[marquee.status]?.label || marquee.status },
+              { label: 'Audience',    value: AUDIENCE_CONFIG[marquee.audience]?.label || marquee.audience },
               { label: 'Speed',       value: SPEED_CONFIG[marquee.speed]?.label || marquee.speed },
               { label: 'Priority',    value: marquee.priority },
               { label: 'Dismissible', value: marquee.isDismissible ? 'Yes' : 'No' },
+              { label: 'Client Key',  value: marquee.clientKey || '—' },
               { label: 'Starts At',   value: fmtDate(marquee.startsAt) },
               { label: 'Ends At',     value: marquee.endsAt ? fmtDate(marquee.endsAt) : 'Never' },
               { label: 'Created',     value: fmtDate(marquee.createdAt) },
@@ -1078,61 +1107,51 @@ function DetailModal({ marquee, loading, onClose, allUsers }) {
             ].map(r => (
               <div key={r.label} className="bg-base-200 rounded-xl px-3 py-2">
                 <p className="text-xs text-base-content/40 font-semibold">{r.label}</p>
-                <p className="text-sm font-bold text-base-content">{String(r.value ?? '—')}</p>
+                <p className="text-sm font-bold text-base-content truncate">{String(r.value ?? '—')}</p>
               </div>
             ))}
           </div>
 
-          {/* ── Audience section ── */}
-          <div className="mb-4 bg-base-200 rounded-2xl p-3 border border-base-300">
-            <p className="text-xs text-base-content/40 font-bold uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
-              <Users className="w-3.5 h-3.5" /> Audience
-            </p>
-
-            {/* Target Roles */}
-            {marquee.targetRoles?.length > 0 ? (
-              <div className="mb-2.5">
-                <p className="text-xs text-base-content/40 font-semibold mb-1.5 flex items-center gap-1">
-                  <Shield className="w-3 h-3" /> Target Roles ({marquee.targetRoles.length})
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {marquee.targetRoles.map(r => (
-                    <span key={r} className="text-xs bg-primary/10 text-primary px-2.5 py-1 rounded-full border border-primary/20 font-semibold capitalize">{r}</span>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <p className="text-xs text-base-content/40 flex items-center gap-1.5 mb-2.5">
-                <Globe className="w-3.5 h-3.5" /> No role restriction — visible to all roles
+          {/* Audience detail */}
+          {(marquee.targetRoles?.length > 0 || targetedUsers.length > 0) && (
+            <div className="mb-4 bg-base-200 rounded-2xl p-3 border border-base-300">
+              <p className="text-xs text-base-content/40 font-bold uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5" /> Targeting
               </p>
-            )}
-
-            {/* Target Users */}
-            {targetedUsers.length > 0 ? (
-              <div>
-                <p className="text-xs text-base-content/40 font-semibold mb-1.5 flex items-center gap-1">
-                  <UserCheck className="w-3 h-3" /> Specific Users ({targetedUsers.length})
-                </p>
-                <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
-                  {targetedUsers.map(u => (
-                    <span key={String(u._id)}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-accent/8 border border-accent/15 rounded-full text-xs text-accent/80 font-semibold">
-                      <img src={u.avatar} alt="" className="w-4 h-4 rounded-full object-cover"
-                        onError={e => { e.target.style.display='none'; }} />
-                      {u.name}
-                      <span className="text-accent/40 text-xs capitalize">· {u.role}</span>
-                    </span>
-                  ))}
+              {marquee.targetRoles?.length > 0 && (
+                <div className="mb-2.5">
+                  <p className="text-xs text-base-content/40 font-semibold mb-1.5 flex items-center gap-1">
+                    <Shield className="w-3 h-3" /> Roles ({marquee.targetRoles.length})
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {marquee.targetRoles.map(r => (
+                      <span key={r} className="text-xs bg-primary/10 text-primary px-2.5 py-1 rounded-full border border-primary/20 font-semibold capitalize">{r}</span>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <p className="text-xs text-base-content/40 flex items-center gap-1.5">
-                <UserX className="w-3.5 h-3.5" /> No specific users targeted
-              </p>
-            )}
-          </div>
+              )}
+              {targetedUsers.length > 0 && (
+                <div>
+                  <p className="text-xs text-base-content/40 font-semibold mb-1.5 flex items-center gap-1">
+                    <UserCheck className="w-3 h-3" /> Users ({targetedUsers.length})
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                    {targetedUsers.map(u => (
+                      <span key={String(u._id)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-accent/10 border border-accent/15 rounded-full text-xs text-accent/80 font-semibold">
+                        <img src={u.avatar} alt="" className="w-4 h-4 rounded-full object-cover"
+                          onError={e => { e.target.style.display = 'none'; }} />
+                        {u.name}
+                        <span className="text-accent/40 text-xs capitalize">· {u.role}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
-          {/* Analytics chart */}
+          {/* Analytics */}
           <div className="mb-4">
             <p className="text-xs text-base-content/40 font-semibold uppercase tracking-wider mb-2">Analytics</p>
             <ResponsiveContainer width="100%" height={120}>
@@ -1141,33 +1160,10 @@ function DetailModal({ marquee, loading, onClose, allUsers }) {
                 <XAxis dataKey="name" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
                 <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} allowDecimals={false} />
                 <Tooltip contentStyle={{ borderRadius: '10px', fontSize: 12 }} cursor={{ fill: 'rgba(0,0,0,.04)' }} />
-                <Bar dataKey="value" radius={[6, 6, 0, 0]}>
-                  {engData.map((entry, i) => (
-                    <rect key={i} fill={entry.fill} />
-                  ))}
-                </Bar>
+                <Bar dataKey="value" radius={[6, 6, 0, 0]} fill="#38bdf8" />
               </BarChart>
             </ResponsiveContainer>
           </div>
-
-          {/* Dismissed by */}
-          {marquee.dismissedBy?.length > 0 && (
-            <div>
-              <p className="text-xs text-base-content/40 font-semibold uppercase tracking-wider mb-2">
-                Dismissed By ({marquee.dismissedBy.length})
-              </p>
-              <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                {marquee.dismissedBy.map((d, i) => (
-                  <div key={i} className="flex items-center justify-between px-3 py-2 bg-base-200 rounded-xl text-xs">
-                    <span className="font-semibold text-base-content">
-                      {d.user?.name || String(d.user?._id || d.user || '—')}
-                    </span>
-                    <span className="text-base-content/40">{fmtDate(d.dismissedAt)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       </motion.div>
     </motion.div>
@@ -1185,10 +1181,9 @@ export default function MarqueeManagement() {
   const user         = useSelector((state) => state.user?.user) ?? null;
   const isSuperAdmin = user?.role === 'superadmin';
 
-  // ── All users (from userSlice) ────────────────────────────────────────────
-  const allUsersState  = useSelector((state) => state.user?.allUsers);
-  const allUsers       = allUsersState?.data || [];
-  const usersLoading   = useSelector((state) => state.user?.loading) ?? false;
+  // ── All users ─────────────────────────────────────────────────────────────
+  const allUsersState = useSelector((state) => state.user?.allUsers);
+  const allUsers      = allUsersState?.data || [];
 
   // ── Marquee slice ─────────────────────────────────────────────────────────
   const marquees      = useSelector(selectAdminMarquees);
@@ -1204,41 +1199,36 @@ export default function MarqueeManagement() {
   const [page,           setPage]           = useState(1);
   const [search,         setSearch]         = useState('');
   const [filterType,     setFilterType]     = useState('');
-  const [filterActive,   setFilterActive]   = useState('');
-  const [filterArchived, setFilterArchived] = useState('false');
-  const [filterRole,     setFilterRole]     = useState('');
+  const [filterStatus,   setFilterStatus]   = useState('');
+  const [filterAudience, setFilterAudience] = useState('');
   const [showFilters,    setShowFilters]    = useState(false);
   const [showForm,       setShowForm]       = useState(false);
   const [editData,       setEditData]       = useState(null);
   const [showDetail,     setShowDetail]     = useState(false);
   const [showAnalytics,  setShowAnalytics]  = useState(true);
 
+  const LIMIT = 15;
+
   // ── Fetch marquees ────────────────────────────────────────────────────────
   const load = useCallback(() => {
-    const params = { page, limit: 12 };
-    if (search)         params.search     = search;
-    if (filterType)     params.type       = filterType;
-    if (filterActive)   params.isActive   = filterActive;
-    if (filterArchived) params.isArchived = filterArchived;
-    if (filterRole)     params.role       = filterRole;
+    const params = { page, limit: LIMIT };
+    if (search)         params.search   = search;
+    if (filterType)     params.type     = filterType;
+    if (filterStatus)   params.status   = filterStatus;
+    if (filterAudience) params.audience = filterAudience;
     dispatch(fetchAdminMarquees(params));
-  }, [dispatch, page, search, filterType, filterActive, filterArchived, filterRole]);
+  }, [dispatch, page, search, filterType, filterStatus, filterAudience]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { dispatch(fetchMarqueeAnalytics()); }, [dispatch]);
-
-  // ── Fetch all users for targeting (paginate large sets if needed) ─────────
-  useEffect(() => {
-    // Fetch enough users to cover targeting needs — adjust limit as required
-    dispatch(adminGetAllUsers({ page: 1, limit: 500 }));
-  }, [dispatch]);
+  useEffect(() => { dispatch(adminGetAllUsers({ page: 1, limit: 500 })); }, [dispatch]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
-  const openCreate  = () => { setEditData(null); setShowForm(true); };
-  const openEdit    = (m)  => { setEditData(m);   setShowForm(true); };
-  const openDetail  = (id) => { dispatch(fetchAdminMarqueeById(id)); setShowDetail(true); };
-  const closeForm   = ()   => { setShowForm(false); setEditData(null); };
-  const closeDetail = ()   => { setShowDetail(false); dispatch(clearSelectedMarquee()); };
+  const openCreate  = ()    => { setEditData(null); setShowForm(true); };
+  const openEdit    = (m)   => { setEditData(m);    setShowForm(true); };
+  const openDetail  = (id)  => { dispatch(fetchAdminMarqueeById(id)); setShowDetail(true); };
+  const closeForm   = ()    => { setShowForm(false); setEditData(null); };
+  const closeDetail = ()    => { setShowDetail(false); dispatch(clearSelectedMarquee()); };
 
   const handleSubmit = async (payload) => {
     if (payload.id) {
@@ -1251,19 +1241,26 @@ export default function MarqueeManagement() {
     dispatch(fetchMarqueeAnalytics());
   };
 
-  const handleToggle          = (id)          => dispatch(toggleMarquee(id));
-  const handleArchive         = (id, archive) => dispatch(archiveMarquee({ id, archive }));
-  const handleClearDismissals = (id)          => dispatch(clearDismissals(id));
-  const handleDelete          = (id)          => {
+  // Correct: uses updateMarqueeStatus from slice (PATCH /admin/:id/status)
+  const handleStatusChange = (id, status) => {
+    dispatch(updateMarqueeStatus({ id, status })).then(() => {
+      load();
+      dispatch(fetchMarqueeAnalytics());
+    });
+  };
+
+  // Correct: uses resetMarqueeAnalytics from slice (DELETE /admin/:id/analytics)
+  const handleResetAnalytics = (id) => dispatch(resetMarqueeAnalytics(id));
+
+  const handleDelete = (id) => {
     dispatch(deleteMarquee(id)).then(() => { load(); dispatch(fetchMarqueeAnalytics()); });
   };
 
   const clearFilters = () => {
-    setSearch(''); setFilterType(''); setFilterActive('');
-    setFilterArchived('false'); setFilterRole('');
+    setSearch(''); setFilterType(''); setFilterStatus(''); setFilterAudience('');
   };
 
-  const hasFilters = search || filterType || filterActive || filterRole || filterArchived !== 'false';
+  const hasFilters = search || filterType || filterStatus || filterAudience;
   const liveCount  = marquees.filter(isLive).length;
 
   return (
@@ -1274,12 +1271,12 @@ export default function MarqueeManagement() {
         <motion.div initial={{ opacity: 0, y: -14 }} animate={{ opacity: 1, y: 0 }}
           className="flex items-start justify-between gap-4 mb-5 flex-wrap">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary/20 to-secondary/20 border border-primary/20 flex items-center justify-center shadow-sm">
+            <div className="w-12 h-12 rounded-2xl bg-primary/20 border border-primary/20 flex items-center justify-center shadow-sm">
               <Megaphone className="w-6 h-6 text-primary" />
             </div>
             <div>
               <h1 className="font-black text-xl text-base-content leading-tight">Marquee Management</h1>
-              <div className="flex items-center gap-2 mt-0.5">
+              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                 <p className="text-xs text-base-content/40">{pagination.total} total</p>
                 {liveCount > 0 && (
                   <span className="flex items-center gap-1 text-xs font-bold text-success bg-success/10 px-2 py-0.5 rounded-full border border-success/20">
@@ -1288,11 +1285,9 @@ export default function MarqueeManagement() {
                     {liveCount} Live
                   </span>
                 )}
-                {/* Users loaded indicator */}
                 {allUsers.length > 0 && (
                   <span className="flex items-center gap-1 text-xs text-base-content/30 bg-base-100 px-2 py-0.5 rounded-full border border-base-300">
-                    <Users className="w-3 h-3" />
-                    {allUsers.length} users loaded
+                    <Users className="w-3 h-3" /> {allUsers.length} users loaded
                   </span>
                 )}
                 {user?.role && (
@@ -1363,9 +1358,10 @@ export default function MarqueeManagement() {
               <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
                 <div className="pt-3 mt-3 border-t border-base-300 space-y-2.5">
+
                   {/* Type filter */}
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs text-base-content/40 font-bold w-14 flex-shrink-0">Type:</span>
+                    <span className="text-xs text-base-content/40 font-bold w-16 flex-shrink-0">Type:</span>
                     {Object.entries(TYPE_CONFIG).map(([key, c]) => (
                       <button key={key} type="button" onClick={() => setFilterType(filterType === key ? '' : key)}
                         className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-all
@@ -1374,39 +1370,37 @@ export default function MarqueeManagement() {
                       </button>
                     ))}
                   </div>
-                  {/* Status filter */}
+
+                  {/* Status filter — uses model status values */}
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs text-base-content/40 font-bold w-14 flex-shrink-0">Status:</span>
-                    {[
-                      { label: 'Active',   val: 'true',  color: 'text-success', bg: 'bg-success/10', border: 'border-success/30' },
-                      { label: 'Inactive', val: 'false', color: 'text-error',   bg: 'bg-error/10',   border: 'border-error/30' },
-                    ].map(s => (
-                      <button key={s.val} type="button" onClick={() => setFilterActive(filterActive === s.val ? '' : s.val)}
-                        className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-all
-                          ${filterActive === s.val ? `${s.bg} ${s.color} ${s.border}` : 'bg-base-200 text-base-content/40 border-transparent hover:border-base-300'}`}>
-                        {s.label}
-                      </button>
-                    ))}
-                    <span className="text-xs text-base-content/40 font-bold ml-2">Archived:</span>
-                    {[{ label: 'Yes', val: 'true' }, { label: 'No', val: 'false' }].map(s => (
-                      <button key={s.val} type="button" onClick={() => setFilterArchived(s.val)}
-                        className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-all
-                          ${filterArchived === s.val ? 'bg-primary/10 text-primary border-primary/30' : 'bg-base-200 text-base-content/40 border-transparent hover:border-base-300'}`}>
-                        {s.label}
-                      </button>
-                    ))}
+                    <span className="text-xs text-base-content/40 font-bold w-16 flex-shrink-0">Status:</span>
+                    {Object.entries(STATUS_CONFIG).map(([key, c]) => {
+                      const Icon = c.icon;
+                      return (
+                        <button key={key} type="button" onClick={() => setFilterStatus(filterStatus === key ? '' : key)}
+                          className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-all
+                            ${filterStatus === key ? `${c.bg} ${c.color} ${c.border}` : 'bg-base-200 text-base-content/40 border-transparent hover:border-base-300'}`}>
+                          <Icon className="w-3 h-3" />{c.label}
+                        </button>
+                      );
+                    })}
                   </div>
-                  {/* Role filter */}
+
+                  {/* Audience filter — uses model audience values */}
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs text-base-content/40 font-bold w-14 flex-shrink-0">Role:</span>
-                    {ROLES.map(r => (
-                      <button key={r} type="button" onClick={() => setFilterRole(filterRole === r ? '' : r)}
-                        className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-all capitalize
-                          ${filterRole === r ? 'bg-primary/10 text-primary border-primary/30' : 'bg-base-200 text-base-content/40 border-transparent hover:border-base-300'}`}>
-                        {r}
-                      </button>
-                    ))}
+                    <span className="text-xs text-base-content/40 font-bold w-16 flex-shrink-0">Audience:</span>
+                    {Object.entries(AUDIENCE_CONFIG).map(([key, c]) => {
+                      const Icon = c.icon;
+                      return (
+                        <button key={key} type="button" onClick={() => setFilterAudience(filterAudience === key ? '' : key)}
+                          className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-all
+                            ${filterAudience === key ? `bg-primary/10 text-primary border-primary/30` : 'bg-base-200 text-base-content/40 border-transparent hover:border-base-300'}`}>
+                          <Icon className="w-3 h-3" />{c.label}
+                        </button>
+                      );
+                    })}
                   </div>
+
                   {hasFilters && (
                     <button type="button" onClick={clearFilters}
                       className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold text-error bg-error/10 border border-error/20 hover:bg-error hover:text-white transition-all">
@@ -1471,10 +1465,9 @@ export default function MarqueeManagement() {
                   index={i}
                   onEdit={openEdit}
                   onView={openDetail}
-                  onToggle={handleToggle}
-                  onArchive={handleArchive}
+                  onStatusChange={handleStatusChange}
                   onDelete={handleDelete}
-                  onClearDismissals={handleClearDismissals}
+                  onResetAnalytics={handleResetAnalytics}
                   isSuperAdmin={isSuperAdmin}
                   actionLoading={actionLoading}
                   allUsers={allUsers}

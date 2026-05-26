@@ -23,6 +23,7 @@ export const BOOKING_TYPES = [
 
 export const BOOKING_STATUSES = [
   'draft',
+  'payment_pending', 
   'pending',
   'confirmed',
   'in_progress',
@@ -36,6 +37,7 @@ export const BOOKING_STATUSES = [
 export const PAYMENT_STATUSES = [
   'unpaid',
   'pending',
+  'payment_pending',
   'paid',
   'partially_paid',
   'failed',
@@ -303,13 +305,7 @@ const bookingSchema = new Schema(
      * ─────────────────────────────────────────────────────────────────────────
      * TELEMEDICINE SESSION LINK
      *
-     * All VideoSDK / RTC / meeting / recording / AI / consent logic lives in
-     * the dedicated Consultation document. Booking only holds this reference.
-     *
-     * Usage:
-     *   const session = await Consultation.findById(booking.consultationSessionId);
-     * ─────────────────────────────────────────────────────────────────────────
-     */
+    /** */
     consultationSessionId: {
       type:    Schema.Types.ObjectId,
       ref:     'Consultation',
@@ -326,6 +322,34 @@ const bookingSchema = new Schema(
     destinationLocation: {
       type:    geoPointSchema,
       default: null,
+    },
+
+        careAssistantPickupLocation: {
+      type: geoPointSchema,
+      default: null,
+    },
+
+    nearestHospitalSnapshot: {
+      hospital: {
+        type: Schema.Types.ObjectId,
+        ref: 'Hospital',
+        default: null,
+      },
+
+      hospitalName: String,
+
+      coordinates: {
+        type: [Number],
+        default: [],
+      },
+
+      address: String,
+
+      etaMinutes: Number,
+
+      distanceKm: Number,
+
+      calculatedAt: Date,
     },
 
     // ── Diagnostic Details ────────────────────────────────────────────────────

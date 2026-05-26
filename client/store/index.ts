@@ -40,6 +40,7 @@ import clinicalReducer from "./slices/clinicalSlice";
 import bloodbankReducer from "./slices/bloodbankSlice";
 import adminAnalysticsReducer from "./slices/adminAnalyticsSlice";
 import consulationReducer from "./slices/consultationSlice";
+ 
 export const store = configureStore({
   reducer: {
     user: userReducer,
@@ -83,7 +84,6 @@ export const store = configureStore({
     clinical: clinicalReducer,
     bloodBank: bloodbankReducer,
     adminAnalytics: adminAnalysticsReducer,
-
     consultation: consulationReducer,
   },
   devTools: process.env.NODE_ENV !== "production",

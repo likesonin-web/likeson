@@ -371,6 +371,15 @@ router.patch('/:id/ride/accept',
         return res.status(400).json({ success: false, message: `Ride status is ${ride.status}, expected driver_assigned` });
 
       ride.status = 'driver_accepted';
+
+ride.driverAcceptedAt =
+  new Date();
+
+ride.activeTarget =
+  'patient_pickup';
+
+ride.currentLeg =
+  'driver_to_patient';
       await ride.save();
 
       const booking = await Booking.findById(req.params.id);
@@ -1403,6 +1412,137 @@ router.get('/admin/care-ride/:bookingId/nearby',
       });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+router.post(
+  '/:id/care/join-ride',
+
+  protect,
+  authorize(
+    'careassistant'
+  ),
+
+  async (
+    req,
+    res
+  ) => {
+
+    try {
+
+      const booking =
+        await Booking
+          .findById(
+            req.params.id
+          );
+
+      if (!booking) {
+
+        return res
+          .status(404)
+          .json({
+
+            success: false,
+
+            message:
+              'Booking not found',
+          });
+      }
+
+      const ride =
+        await Ride.findOne({
+
+          booking:
+            booking._id,
+
+          status: {
+            $in:
+              RIDE_STATUSES_ACTIVE,
+          },
+        });
+
+      if (!ride) {
+
+        return res
+          .status(404)
+          .json({
+
+            success: false,
+
+            message:
+              'Ride not active',
+          });
+      }
+
+      ride.activeTarget =
+        'hospital_drop';
+
+      ride.currentLeg =
+        'to_hospital';
+
+      await ride.save();
+
+      await RideTracking
+        .findOneAndUpdate(
+
+          {
+            ride:
+              ride._id,
+          },
+
+          {
+            $set: {
+
+              'liveRouteContext.activeTarget':
+                'hospital_drop',
+
+              careAssistantJoinedAt:
+                new Date(),
+            },
+          }
+        );
+
+      getBookingSocketService()
+        ?.emitToRoom(
+
+          `care:${booking._id}`,
+
+          'care_assistant_joined',
+
+          {
+
+            bookingId:
+              booking._id,
+
+            rideId:
+              ride._id,
+
+            activeTarget:
+              'hospital_drop',
+          }
+        );
+
+      return res.json({
+
+        success: true,
+
+        data: {
+          ride,
+        },
+      });
+
+    } catch (err) {
+
+      return res
+        .status(500)
+        .json({
+
+          success: false,
+
+          message:
+            err.message,
+        });
     }
   }
 );

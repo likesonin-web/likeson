@@ -13,7 +13,6 @@ import TransportPartnerDashboard from '@/components/dashboard/Transportpartnerda
 import DoctorDashboard from '@/components/dashboard/DoctorDashboard'
  import { usePathname } from 'next/navigation';
 import BloodBankDashboard from "@/components/dashboard/BloodBankDashboard";
- 
 import LabPartnerDashboard from "@/components/dashboard/LabPartnerDashboard";
 export default function LayoutConditionalWrapper({ children }) {
   const { user } = useSelector((state) => state.user);
@@ -57,7 +56,8 @@ export default function LayoutConditionalWrapper({ children }) {
 
   return (
     <>
-      {user && !isTrackingPage && <Marquee />}
+      {user && !isTrackingPage }
+       <Marquee />
       <Header />
       <main className="min-h-screen transition-all duration-300">
         {children}

@@ -67,10 +67,6 @@ export const CARE_ASSISTANT_DASHBOARD_LINKS = [
     icons: <FolderHeart />,
     links: [
       { name: "Active Care Records",  href: "/care-assistant/care-records/active",     icon: <FileCheck size={18} />       },
-      { name: "Record Vitals",        href: "/care-assistant/care-records/vitals",     icon: <HeartPulse size={18} />      },
-      { name: "Medicine Log",         href: "/care-assistant/care-records/medicines",  icon: <Pill size={18} />            },
-      { name: "Food & Fluids",        href: "/care-assistant/care-records/food",       icon: <Utensils size={18} />        },
-      { name: "Past Care Logs",       href: "/care-assistant/care-records/history",    icon: <FolderHeart size={18} />     },
     ],
   },
 

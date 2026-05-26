@@ -1,6 +1,5 @@
 import express from "express";
 import dotenv from "dotenv";
-dotenv.config();
 import { Server } from 'socket.io';
 import cors from "cors";
 import helmet from "helmet";
@@ -12,12 +11,14 @@ import passport from "passport";
 import session from "express-session";
 import { createServer } from "http";
 
+// Config & Services
 import connectDB from "./config/DB.js";
 import "./config/passport.js";
 import redisClient from "./config/redis.js";
 import { initSocket } from "./services/socketService.js";
 import { initBookingSocket } from './services/bookingSocketService.js';
-// Import Routes
+
+// Route Imports
 import userRouter               from "./routes/userRoutes.js";
 import notificationRouter       from "./routes/notificationRoutes.js";
 import hospitalRoutes           from "./routes/hospitalRoutes.js";
@@ -44,15 +45,28 @@ import pharmacyStoreRoutes      from "./routes/pharmacy/Pharmacystoreroutes.js";
 import customerUserRouter       from "./routes/customer/Customeruserroutes.js";
 import AdminUserRoutes          from "./routes/super-admin/adminUserRoutes.js";
 import referralRouter           from "./routes/referralRoutes.js";
-import pricingRouter            from './routes/Platformpricingroutes.js'
-import soloDriverRouter           from './routes/solordriverRoutes.js'
-import careAssistantRouter           from'./routes/careassistantRoutes.js'
-import driverRouter           from './routes/driverRouter.js'
-import searchRouter           from './routes/searchRouter.js'
-// ─────────────────────────────────────────────
+import pricingRouter            from './routes/Platformpricingroutes.js';
+import soloDriverRouter         from './routes/solordriverRoutes.js';
+import careAssistantRouter      from './routes/careassistantRoutes.js';
+import driverRouter             from './routes/driverRouter.js';
+import searchRouter             from './routes/searchRouter.js';
+import labRoutes                from './routes/labRoutes.js';
+import bookingRoutes            from './routes/bookingRoutes.js';
+import customerBookingRouter    from './routes/customerbookingrouter.js';
+import hospitalManagerRouter    from './routes/hospitalManagerRouter.js';
+import availabilityRouter       from './routes/availabilityRouter.js';
+import booking1Routes           from './routes/bookingrouterpaert1.js';
+import rideRequestRouter        from './routes/rideRequestRouter.js';
+import prescriptionCareRouter   from './routes/prescriptionCareRouter.js';
+import bloodBankRouter          from './routes/bloodbankRouter.js';
+import adminAnalyticsRouter     from './routes/super-admin/adminanalyticsRouter.js';
+import consultationRouter       from './routes/consultationrouter.js';
  
+
+dotenv.config();
+
 // ─────────────────────────────────────────────
-// 1. CORE MIDDLEWARES
+// 1. CORE CONFIGURATION
 // ─────────────────────────────────────────────
 const app = express();
 const server = createServer(app);
@@ -62,34 +76,21 @@ const NODE_ENV = process.env.NODE_ENV || "development";
 
 app.set("trust proxy", 1);
 
-/* ---------------- Core Middleware ---------------- */
-
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser());
 app.use(compression());
 
 // ─────────────────────────────────────────────
-// 2. SECURITY
+// 2. SECURITY & CORS
 // ─────────────────────────────────────────────
-/* ---------------- Security ---------------- */
-
-app.use(
-  helmet({
-    crossOriginResourcePolicy: false,
-  })
-);
+app.use(helmet({ crossOriginResourcePolicy: false }));
 
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   "http://localhost:3000",
   "http://localhost:5173",
 ].filter(Boolean);
-
-
- 
-
- 
 
 app.use(
   cors({
@@ -104,9 +105,9 @@ app.use(
   })
 );
 
-
-/* ---------------- Session ---------------- */
-
+// ─────────────────────────────────────────────
+// 3. SESSION & AUTHENTICATION
+// ─────────────────────────────────────────────
 if (NODE_ENV === "production" && !process.env.SESSION_SECRET) {
   throw new Error("SESSION_SECRET missing in production");
 }
@@ -132,16 +133,19 @@ app.use(passport.session());
 // ─────────────────────────────────────────────
 // 4. LOGGING & RATE LIMITING
 // ─────────────────────────────────────────────
-app.use(morgan(process.env.NODE_ENV === "development" ? "dev" : "combined"));
+app.use(morgan(NODE_ENV === "development" ? "dev" : "combined"));
 
 app.use(
-  "/api/",
+  "/api",
   rateLimit({
-    windowMs:        15 * 60 * 1000,
-    max:             200,
-    message:         "Too many requests, please try again later.",
+    windowMs: 15 * 60 * 1000,
+    max: 200,
     standardHeaders: true,
-    legacyHeaders:   false,
+    legacyHeaders: false,
+    message: {
+      success: false,
+      message: "Too many requests, please try again later.",
+    },
   })
 );
 
@@ -172,95 +176,61 @@ app.use("/api/hero",               heroRoutes);
 app.use("/api/pharmacy-store",     pharmacyStoreRoutes);
 app.use("/api/customer",           customerUserRouter);
 app.use("/api/admin/users",        AdminUserRoutes);
-app.use("/api/transport", transportPartnerRouter);
+app.use("/api/transport",          transportPartnerRouter);
 app.use("/api/referral",           referralRouter);
-app.use("/api/pricing",           pricingRouter);
-app.use("/api/solo-driver",           soloDriverRouter);
-app.use("/api/care-assistant",           careAssistantRouter);
-app.use("/api/driver", driverRouter);
-app.use('/api/search', searchRouter);
-import labRoutes from './routes/labRoutes.js';
-app.use('/api/labs', labRoutes);
-import bookingRoutes from './routes/bookingRoutes.js';
-app.use('/api/bookings', bookingRoutes);
-import customerBookingRouter from './routes/customerbookingrouter.js';
-app.use('/api/bookings', customerBookingRouter);
-import hospitalManagerRouter from './routes/hospitalManagerRouter.js';
-app.use('/api/hospital-manager', hospitalManagerRouter);
+app.use("/api/pricing",            pricingRouter);
+app.use("/api/solo-driver",        soloDriverRouter);
+app.use("/api/care-assistant",     careAssistantRouter);
+app.use("/api/driver",             driverRouter);
+app.use("/api/search",             searchRouter);
+app.use("/api/labs",               labRoutes);
+app.use("/api/hospital-manager",   hospitalManagerRouter);
+app.use("/api/availability",       availabilityRouter);
+app.use("/api/ride-requests",      rideRequestRouter);
+app.use("/api/clinical",           prescriptionCareRouter);
+app.use("/api/blood-banks",        bloodBankRouter);
+app.use("/api/admin/analytics",    adminAnalyticsRouter);
+app.use("/api/consultations",      consultationRouter);
 
-import availabilityRouter from './routes/availabilityRouter.js';
-app.use('/api/availability', availabilityRouter);
 
-import booking1Routes from './routes/bookingrouterpaert1.js';
-app.use('/api/bookings', booking1Routes);
-import rideRequestRouter from './routes/rideRequestRouter.js';
-app.use('/api/ride-requests', rideRequestRouter);
+// ⚠️ Warning: Three separate routers mounted to the exact same path
+app.use("/api/bookings", bookingRoutes);
+app.use("/api/bookings", customerBookingRouter);
+app.use("/api/bookings", booking1Routes);
 
-import prescriptionCareRouter from './routes/prescriptionCareRouter.js';
-app.use('/api/clinical',prescriptionCareRouter)
-
-import bloodBankRouter from './routes/bloodbankRouter.js';
-app.use('/api/blood-banks', bloodBankRouter);
-
-import adminAnalyticsRouter from './routes/super-admin/adminanalyticsRouter.js';
-app.use('/api/admin/analytics', adminAnalyticsRouter);
-
-import consultationRouter from './routes/consultationrouter.js';
-app.use('/api/consultations', consultationRouter);
-/* ---------------- Logs ---------------- */
-
-app.use(morgan(NODE_ENV === "development" ? "dev" : "combined"));
-
-/* ---------------- Rate Limit ---------------- */
-
-app.use(
-  "/api",
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 200,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: {
-      success: false,
-      message: "Too many requests",
-    },
-  })
-);
-
-/* ---------------- Health Check ---------------- */
-
+// ─────────────────────────────────────────────
+// 6. HEALTH CHECK & ERROR HANDLING
+// ─────────────────────────────────────────────
 app.get("/", (_req, res) => {
   res.status(200).json({
     success: true,
     service: "Likeson API",
     status: "Live",
-    redis: redisClient.isReady,
+    redis: redisClient?.isReady || false,
     env: NODE_ENV,
   });
 });
 
- 
-
 app.use((err, req, res, next) => {
   console.error(err);
-
   res.status(err.status || 500).json({
     success: false,
     message: err.message || "Internal Server Error",
   });
 });
 
-/* ---------------- Boot Server ---------------- */
-
- 
-
+// ─────────────────────────────────────────────
+// 7. SERVER BOOTSTRAP
+// ─────────────────────────────────────────────
 async function startServer() {
   try {
     await connectDB();
 
-    // initSocket creates the ONE io instance — don't create another
-    const io = initSocket(server);   // server = createServer(app) from top of file
-    initBookingSocket(io);           // reuse same io
+    // Socket.io initialization
+    const io = initSocket(server);
+    initBookingSocket(io);           
+    
+    // Attach io to Express app so routers (like Announcement) can emit events
     app.set("io", io);
 
     server.listen(PORT, "0.0.0.0", () => {
@@ -275,16 +245,15 @@ async function startServer() {
 
 startServer();
 
-/* ---------------- Graceful Shutdown ---------------- */
-
+// ─────────────────────────────────────────────
+// 8. GRACEFUL SHUTDOWN
+// ─────────────────────────────────────────────
 process.on("SIGTERM", async () => {
   console.log("SIGTERM received");
-
   server.close(async () => {
     try {
-      await redisClient.quit();
+      if (redisClient) await redisClient.quit();
     } catch {}
-
     process.exit(0);
   });
 });

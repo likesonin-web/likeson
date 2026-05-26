@@ -5,17 +5,26 @@
  * Care Assistant — Booking & Care Record Hub
  * Uses: clinicalSlice thunks, Next.js, Tailwind CSS, Lucide, Framer Motion
  * Theme: care-assistant (Rose) from globals.css
+ *
+ * FIXES:
+ * 1. Added "Track Ride" button → /care-assistant/rides/[bookingId]/[rideId]/tracking
+ *    - Uses booking.primaryRide (ObjectId) as rideId
+ *    - Falls back to booking.rides[0] if primaryRide null
+ *    - Button disabled/hidden if no ride linked
+ * 2. BookingDetailPanel shows tracking link with ride status context
+ * 3. Booking list row shows tracking icon when ride active
  */
 
 import { useEffect, useState, useCallback } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useDispatch, useSelector }          from 'react-redux';
+import { useRouter }                         from 'next/navigation';
+import { motion, AnimatePresence }           from 'framer-motion';
 import {
   Calendar, Clock, User, Phone, MapPin, CheckCircle2, XCircle,
   ChevronRight, RefreshCw, AlertTriangle, Activity, Heart,
   FileText, ChevronDown, ChevronUp, Stethoscope, Shield,
   ClipboardList, Bell, Search, Filter, Eye, UserCheck, UserX,
-  ArrowRight, Loader2, Info, Badge, Inbox
+  ArrowRight, Loader2, Info, Inbox, Navigation, Radio,
 } from 'lucide-react';
 
 import {
@@ -38,7 +47,7 @@ import {
 
 const fadeUp = {
   hidden:  { opacity: 0, y: 18 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.38, ease: [0.22, 1, 0.36, 1] } },
+  visible: { opacity: 1, y: 0,  transition: { duration: 0.38, ease: [0.22, 1, 0.36, 1] } },
   exit:    { opacity: 0, y: -12, transition: { duration: 0.22 } },
 };
 
@@ -61,27 +70,75 @@ const scaleIn = {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const STATUS_CONFIG = {
-  pending:     { label: 'Pending',     color: 'badge-warning',  dot: 'status-dot-warning',  icon: Clock },
-  confirmed:   { label: 'Confirmed',   color: 'badge-info',     dot: 'status-dot-info',     icon: CheckCircle2 },
-  in_progress: { label: 'In Progress', color: 'badge-success',  dot: 'status-dot-success',  icon: Activity },
-  completed:   { label: 'Completed',   color: 'badge-secondary',dot: 'status-dot-info',     icon: CheckCircle2 },
-  cancelled:   { label: 'Cancelled',   color: 'badge-error',    dot: 'status-dot-error',    icon: XCircle },
-  no_show:     { label: 'No Show',     color: 'badge-error',    dot: 'status-dot-error',    icon: UserX },
+  pending:        { label: 'Pending',        color: 'badge-warning',   dot: 'status-dot-warning',  icon: Clock },
+  confirmed:      { label: 'Confirmed',      color: 'badge-info',      dot: 'status-dot-info',     icon: CheckCircle2 },
+  in_progress:    { label: 'In Progress',    color: 'badge-success',   dot: 'status-dot-success',  icon: Activity },
+  completed:      { label: 'Completed',      color: 'badge-secondary', dot: 'status-dot-info',     icon: CheckCircle2 },
+  cancelled:      { label: 'Cancelled',      color: 'badge-error',     dot: 'status-dot-error',    icon: XCircle },
+  no_show:        { label: 'No Show',        color: 'badge-error',     dot: 'status-dot-error',    icon: UserX },
+  payment_pending:{ label: 'Payment Pending',color: 'badge-warning',   dot: 'status-dot-warning',  icon: Clock },
+  draft:          { label: 'Draft',          color: 'badge-ghost',     dot: '',                    icon: FileText },
 };
 
 const BOOKING_TYPE_LABELS = {
-  full_care_ride:    'Full Care Ride',
+  full_care_ride:      'Full Care Ride',
   doctor_consultation: 'Doctor Consultation',
-  doctor_online:     'Online Consultation',
-  physiotherapist:   'Physiotherapy',
-  care_assistant:    'Care Assistant',
-  diagnostic_center: 'Diagnostic Center',
-  diagnostic_home:   'Home Diagnostic',
-  patient_transport: 'Patient Transport',
-  follow_up:         'Follow-Up',
+  doctor_online:       'Online Consultation',
+  physiotherapist:     'Physiotherapy',
+  care_assistant:      'Care Assistant',
+  diagnostic_center:   'Diagnostic Center',
+  diagnostic_home:     'Home Diagnostic',
+  patient_transport:   'Patient Transport',
+  follow_up:           'Follow-Up',
 };
 
+/**
+ * Booking types that involve a ride (driver/vehicle dispatched).
+ * Only these show the tracking button.
+ */
+const RIDE_BOOKING_TYPES = new Set([
+  'full_care_ride',
+  'patient_transport',
+  'diagnostic_home',
+]);
+
+/** Ride statuses considered "active/trackable" */
+const TRACKABLE_STATUSES = new Set([
+  'pending', 'confirmed', 'in_progress',
+]);
+
 const PAGE_LIMIT = 10;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * getRideId — extract rideId from booking.
+ * primaryRide is preferred (ObjectId or populated object).
+ * Falls back to rides[0].
+ * Returns string or null.
+ */
+function getRideId(booking) {
+  if (!booking) return null;
+  const raw = booking.primaryRide || booking.rides?.[0];
+  if (!raw) return null;
+  // May be ObjectId string or populated object with _id
+  return typeof raw === 'string' ? raw : (raw._id?.toString() ?? raw.toString());
+}
+
+/**
+ * canTrack — show tracking button only when:
+ * 1. booking type involves a ride
+ * 2. booking has a primaryRide or rides[0]
+ * 3. booking status is active (not completed/cancelled)
+ */
+function canTrack(booking) {
+  if (!booking) return false;
+  return (
+    RIDE_BOOKING_TYPES.has(booking.bookingType) &&
+    !!getRideId(booking) &&
+    TRACKABLE_STATUSES.has(booking.status)
+  );
+}
 
 // ─── Helper Components ────────────────────────────────────────────────────────
 
@@ -94,7 +151,7 @@ function FieldNote({ children }) {
 }
 
 function StatusBadge({ status }) {
-  const cfg = STATUS_CONFIG[status] || { label: status, color: 'badge-secondary', dot: '' };
+  const cfg  = STATUS_CONFIG[status] || { label: status, color: 'badge-secondary', dot: '' };
   const Icon = cfg.icon || CheckCircle2;
   return (
     <span className={`badge badge-sm ${cfg.color} gap-1.5`}>
@@ -128,7 +185,16 @@ function InfoRow({ icon: Icon, label, value, note }) {
 }
 
 function Spinner({ size = 'md' }) {
-  return <span className={`loading loading-${size}`} style={{ width: size === 'sm' ? '1.25rem' : '1.75rem', height: size === 'sm' ? '1.25rem' : '1.75rem', borderWidth: '3px' }} />;
+  return (
+    <span
+      className={`loading loading-${size}`}
+      style={{
+        width:       size === 'sm' ? '1.25rem' : size === 'xs' ? '0.85rem' : '1.75rem',
+        height:      size === 'sm' ? '1.25rem' : size === 'xs' ? '0.85rem' : '1.75rem',
+        borderWidth: '3px',
+      }}
+    />
+  );
 }
 
 function EmptyState({ icon: Icon, title, subtitle }) {
@@ -144,6 +210,69 @@ function EmptyState({ icon: Icon, title, subtitle }) {
   );
 }
 
+// ─── Track Ride Button ─────────────────────────────────────────────────────────
+
+/**
+ * TrackRideButton
+ * Renders only when booking is trackable.
+ * Navigates to /care-assistant/rides/[bookingId]/[rideId]/tracking
+ */
+function TrackRideButton({ booking, variant = 'default' }) {
+  const router = useRouter();
+
+  if (!canTrack(booking)) return null;
+
+  const bookingId = booking._id?.toString() ?? booking._id;
+  const rideId    = getRideId(booking);
+
+  function handleTrack(e) {
+    e.stopPropagation(); // prevent row click from firing
+    router.push(`/care-assistant/rides/${bookingId}/${rideId}/tracking`);
+  }
+
+  if (variant === 'panel') {
+    return (
+      <motion.button
+        whileHover={{ scale: 1.02 }}
+        whileTap={{ scale: 0.98 }}
+        onClick={handleTrack}
+        className="w-full flex items-center justify-between gap-3 p-4 rounded-xl transition-all duration-200"
+        style={{
+          background:   'linear-gradient(135deg, var(--primary), var(--secondary))',
+          boxShadow:    '0 4px 16px color-mix(in srgb, var(--primary), transparent 60%)',
+        }}>
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg bg-white/20 flex items-center justify-center flex-shrink-0">
+            <Navigation className="w-4 h-4 text-white" />
+          </div>
+          <div className="text-left">
+            <p className="text-sm font-bold text-white">Track Live Ride</p>
+            <p className="text-xs text-white/70 mt-0.5">Real-time driver & route tracking</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {/* Pulsing live indicator */}
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white/60 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white" />
+          </span>
+          <ChevronRight className="w-4 h-4 text-white/70" />
+        </div>
+      </motion.button>
+    );
+  }
+
+  // Default: compact button for cards/rows
+  return (
+    <button
+      onClick={handleTrack}
+      className="btn btn-primary btn-xs gap-1.5 flex-shrink-0">
+      <Navigation className="w-3.5 h-3.5" />
+      Track
+    </button>
+  );
+}
+
 // ─── Pending Booking Card ─────────────────────────────────────────────────────
 
 function PendingBookingCard({ booking, onAccept, onReject, onView, isAccepting, isRejecting }) {
@@ -151,7 +280,7 @@ function PendingBookingCard({ booking, onAccept, onReject, onView, isAccepting, 
   const [reason, setReason]         = useState('');
 
   const patientName = booking.patientInfo?.name || booking.customer?.name || 'Unknown Patient';
-  const phone       = booking.customer?.phone || booking.patientInfo?.phone || '—';
+  const phone       = booking.customer?.phone   || booking.patientInfo?.phone || '—';
   const scheduled   = booking.scheduledAt ? new Date(booking.scheduledAt) : null;
 
   function handleReject() {
@@ -162,14 +291,14 @@ function PendingBookingCard({ booking, onAccept, onReject, onView, isAccepting, 
 
   return (
     <motion.div variants={fadeUp}
-      className="card overflow-hidden border-l-4 border-l-warning"
+      className="card overflow-hidden border-l-4"
       style={{ borderLeftColor: 'var(--warning)' }}>
 
       {/* Header */}
       <div className="flex items-start justify-between px-5 pt-5 pb-3 gap-3">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-11 h-11 rounded-xl bg-warning/15 flex items-center justify-center flex-shrink-0">
-            <User className="w-5 h-5 text-warning" style={{ color: 'var(--warning)' }} />
+            <User className="w-5 h-5" style={{ color: 'var(--warning)' }} />
           </div>
           <div className="min-w-0">
             <p className="text-sm font-bold text-base-content truncate">{patientName}</p>
@@ -180,11 +309,16 @@ function PendingBookingCard({ booking, onAccept, onReject, onView, isAccepting, 
             </div>
           </div>
         </div>
-        <button onClick={() => onView(booking._id)}
-          className="btn btn-ghost btn-xs flex-shrink-0 gap-1">
-          <Eye className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Details</span>
-        </button>
+
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {/* Track button — only shown if ride already assigned pre-accept (rare but possible) */}
+          <TrackRideButton booking={booking} />
+          <button onClick={() => onView(booking._id)}
+            className="btn btn-ghost btn-xs gap-1">
+            <Eye className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Details</span>
+          </button>
+        </div>
       </div>
 
       {/* Body */}
@@ -287,8 +421,9 @@ function PendingBookingCard({ booking, onAccept, onReject, onView, isAccepting, 
 
 function BookingRow({ booking, onView }) {
   const patientName = booking.patientInfo?.name || booking.customer?.name || 'Unknown';
-  const phone       = booking.customer?.phone || '—';
+  const phone       = booking.customer?.phone   || '—';
   const scheduled   = booking.scheduledAt ? new Date(booking.scheduledAt) : null;
+  const trackable   = canTrack(booking);
 
   return (
     <motion.tr variants={fadeUp}
@@ -326,10 +461,14 @@ function BookingRow({ booking, onView }) {
       </td>
       <td><StatusBadge status={booking.status} /></td>
       <td>
-        <button className="btn btn-ghost btn-xs gap-1">
-          <Eye className="w-3.5 h-3.5" />
-          View
-        </button>
+        <div className="flex items-center gap-1.5">
+          {/* Track button stops row-click propagation internally */}
+          {trackable && <TrackRideButton booking={booking} />}
+          <button className="btn btn-ghost btn-xs gap-1" onClick={e => { e.stopPropagation(); onView(booking._id); }}>
+            <Eye className="w-3.5 h-3.5" />
+            View
+          </button>
+        </div>
       </td>
     </motion.tr>
   );
@@ -343,6 +482,8 @@ function BookingDetailPanel({ booking, onClose }) {
   const patientName = booking.patientInfo?.name || booking.customer?.name || 'Unknown Patient';
   const scheduled   = booking.scheduledAt ? new Date(booking.scheduledAt) : null;
   const fareTotal   = booking.fareBreakdown?.totalAmount;
+  const trackable   = canTrack(booking);
+  const rideId      = getRideId(booking);
 
   return (
     <motion.div variants={slideIn} initial="hidden" animate="visible" exit="exit"
@@ -371,7 +512,7 @@ function BookingDetailPanel({ booking, onClose }) {
         <div className="flex-1 overflow-y-auto scrollbar-thin px-6 py-5 space-y-5">
 
           {/* Status Row */}
-          <div className="flex items-center gap-3 p-4 rounded-xl bg-base-200">
+          <div className="flex items-center gap-3 p-4 rounded-xl bg-base-200 flex-wrap">
             <StatusBadge status={booking.status} />
             <BookingTypePill type={booking.bookingType} />
             {booking.consultationType && (
@@ -379,14 +520,38 @@ function BookingDetailPanel({ booking, onClose }) {
             )}
           </div>
 
+          {/* ── TRACK RIDE BUTTON (panel variant) ── */}
+          {trackable && (
+            <div>
+              <TrackRideButton booking={booking} variant="panel" />
+              {rideId && (
+                <FieldNote>
+                  Ride ID: {rideId} · Tap to open live map
+                </FieldNote>
+              )}
+            </div>
+          )}
+
+          {/* Ride info row when ride exists but not trackable (completed/cancelled) */}
+          {!trackable && rideId && (
+            <div className="flex items-center gap-3 p-4 rounded-xl bg-base-200">
+              <Navigation className="w-4 h-4 text-base-content/40 flex-shrink-0" />
+              <div>
+                <p className="text-xs font-semibold text-base-content/60">Ride Assigned</p>
+                <p className="text-xs text-base-content/40 mt-0.5 font-mono">{rideId}</p>
+                <FieldNote>Ride tracking unavailable — booking {booking.status}</FieldNote>
+              </div>
+            </div>
+          )}
+
           {/* Patient Info */}
           <div className="card p-4 space-y-1">
             <p className="text-xs font-bold text-base-content/40 uppercase tracking-widest mb-3 flex items-center gap-2">
               <User className="w-3.5 h-3.5" /> Patient Information
             </p>
-            <InfoRow icon={User}    label="Full Name"  value={patientName}                      note="Patient's full name from booking" />
-            <InfoRow icon={Phone}   label="Phone"      value={booking.customer?.phone || '—'}    note="Primary contact registered" />
-            <InfoRow icon={Shield}  label="Blood Group" value={booking.patientInfo?.bloodGroup || '—'} note="Blood group from patient profile" />
+            <InfoRow icon={User}    label="Full Name"   value={patientName}                               note="Patient's full name from booking" />
+            <InfoRow icon={Phone}   label="Phone"       value={booking.customer?.phone || '—'}            note="Primary contact registered" />
+            <InfoRow icon={Shield}  label="Blood Group" value={booking.patientInfo?.bloodGroup || '—'}    note="Blood group from patient profile" />
             {booking.patientInfo?.age && (
               <InfoRow icon={Heart} label="Age / Gender"
                 value={`${booking.patientInfo.age} yrs · ${booking.patientInfo.gender || '—'}`}
@@ -399,13 +564,13 @@ function BookingDetailPanel({ booking, onClose }) {
             <p className="text-xs font-bold text-base-content/40 uppercase tracking-widest mb-3 flex items-center gap-2">
               <ClipboardList className="w-3.5 h-3.5" /> Booking Details
             </p>
-            <InfoRow icon={FileText}    label="Booking Code"  value={booking.bookingCode}             note="Unique reference for this booking" />
+            <InfoRow icon={FileText}  label="Booking Code" value={booking.bookingCode}                      note="Unique reference for this booking" />
             {scheduled && (
-              <InfoRow icon={Calendar}  label="Scheduled At"
+              <InfoRow icon={Calendar} label="Scheduled At"
                 value={`${scheduled.toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })} · ${scheduled.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`}
                 note="Confirmed appointment date and time" />
             )}
-            <InfoRow icon={Activity}    label="Booking Type"  value={BOOKING_TYPE_LABELS[booking.bookingType]} note="Service type requested" />
+            <InfoRow icon={Activity}  label="Booking Type" value={BOOKING_TYPE_LABELS[booking.bookingType]} note="Service type requested" />
           </div>
 
           {/* Location */}
@@ -415,7 +580,7 @@ function BookingDetailPanel({ booking, onClose }) {
                 <MapPin className="w-3.5 h-3.5" /> Location
               </p>
               {booking.patientLocation?.address && (
-                <InfoRow icon={MapPin} label="Pickup / Care Location"
+                <InfoRow icon={MapPin}     label="Pickup / Care Location"
                   value={booking.patientLocation.address}
                   note="Where care assistant should report" />
               )}
@@ -434,12 +599,12 @@ function BookingDetailPanel({ booking, onClose }) {
                 <FileText className="w-3.5 h-3.5" /> Fare Breakdown
               </p>
               {[
-                { label: 'Consultation Fee', key: 'consultationFee', note: 'Doctor consultation charge' },
-                { label: 'Care Assistant Fee', key: 'careAssistantFee', note: 'CA service charge' },
-                { label: 'Transport Fee', key: 'transportFee', note: 'Ambulance / vehicle charge' },
-                { label: 'Platform Fee', key: 'platformFee', note: 'Likeson service fee' },
-                { label: 'Taxes', key: 'taxes', note: 'GST and applicable taxes' },
-                { label: 'Discount', key: 'discount', note: 'Promo / coupon discount applied' },
+                { label: 'Consultation Fee',    key: 'consultationFee',  note: 'Doctor consultation charge' },
+                { label: 'Care Assistant Fee',  key: 'careAssistantFee', note: 'CA service charge' },
+                { label: 'Transport Fee',       key: 'transportFee',     note: 'Ambulance / vehicle charge' },
+                { label: 'Platform Fee',        key: 'platformFee',      note: 'Likeson service fee' },
+                { label: 'Taxes',               key: 'taxes',            note: 'GST and applicable taxes' },
+                { label: 'Discount',            key: 'discount',         note: 'Promo / coupon discount applied' },
               ].filter(f => booking.fareBreakdown[f.key]).map(f => (
                 <div key={f.key} className="flex justify-between items-start py-1.5 border-b border-base-300/50 last:border-0">
                   <div>
@@ -462,8 +627,11 @@ function BookingDetailPanel({ booking, onClose }) {
           {/* Care Record Link */}
           {booking.careRecord && (
             <div className="flex items-center gap-3 p-4 rounded-xl"
-              style={{ background: 'color-mix(in srgb, var(--success), transparent 91%)', borderLeft: '4px solid var(--success)' }}>
-              <Activity className="w-5 h-5 text-success" style={{ color: 'var(--success)' }} />
+              style={{
+                background:  'color-mix(in srgb, var(--success), transparent 91%)',
+                borderLeft:  '4px solid var(--success)',
+              }}>
+              <Activity className="w-5 h-5" style={{ color: 'var(--success)' }} />
               <div className="flex-1">
                 <p className="text-sm font-bold text-base-content">Care Record Active</p>
                 <p className="text-xs text-base-content/50 mt-0.5">Status: {booking.careRecord.status}</p>
@@ -476,8 +644,11 @@ function BookingDetailPanel({ booking, onClose }) {
           {/* OP Record */}
           {booking.opRecord && (
             <div className="flex items-center gap-3 p-4 rounded-xl"
-              style={{ background: 'color-mix(in srgb, var(--info), transparent 91%)', borderLeft: '4px solid var(--info)' }}>
-              <Stethoscope className="w-5 h-5 text-info" style={{ color: 'var(--info)' }} />
+              style={{
+                background: 'color-mix(in srgb, var(--info), transparent 91%)',
+                borderLeft: '4px solid var(--info)',
+              }}>
+              <Stethoscope className="w-5 h-5" style={{ color: 'var(--info)' }} />
               <div className="flex-1">
                 <p className="text-sm font-bold text-base-content">OP Record #{booking.opRecord.opNumber}</p>
                 {booking.opRecord.diagnosisCode && (
@@ -496,10 +667,8 @@ function BookingDetailPanel({ booking, onClose }) {
 // ─── Filter Bar ───────────────────────────────────────────────────────────────
 
 function FilterBar({ status, onStatus, search, onSearch, onRefresh, isLoading }) {
-  const statuses = ['', 'pending', 'confirmed', 'in_progress', 'completed', 'cancelled'];
   return (
     <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
-      {/* Search */}
       <div className="relative flex-1">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-base-content/30" />
         <input
@@ -508,10 +677,9 @@ function FilterBar({ status, onStatus, search, onSearch, onRefresh, isLoading })
           placeholder="Search patient name or booking code…"
           className="input-field pl-9 text-sm"
         />
-        <FieldNote>Filter bookings by patient name or booking reference code</FieldNote>
+        <FieldNote>Filter by patient name or booking reference code</FieldNote>
       </div>
 
-      {/* Status filter */}
       <div className="relative">
         <Filter className="absolute left-3 -mt-2 top-1/2 -translate-y-1/2 w-4 h-4 text-base-content/30" />
         <select
@@ -519,19 +687,16 @@ function FilterBar({ status, onStatus, search, onSearch, onRefresh, isLoading })
           onChange={e => onStatus(e.target.value)}
           className="input-field pl-9 pr-8 text-sm appearance-none min-w-[160px]">
           <option value="">All Statuses</option>
-          {statuses.slice(1).map(s => (
+          {['pending','confirmed','in_progress','completed','cancelled','no_show'].map(s => (
             <option key={s} value={s}>{STATUS_CONFIG[s]?.label || s}</option>
           ))}
         </select>
         <FieldNote>Filter by current booking status</FieldNote>
       </div>
 
-      {/* Refresh */}
       <button onClick={onRefresh} disabled={isLoading}
         className="btn btn-outline btn-sm gap-2 self-start sm:self-auto">
-        {isLoading
-          ? <Spinner size="xs" />
-          : <RefreshCw className="w-4 h-4" />}
+        {isLoading ? <Spinner size="xs" /> : <RefreshCw className="w-4 h-4" />}
         Refresh
       </button>
     </div>
@@ -543,32 +708,29 @@ function FilterBar({ status, onStatus, search, onSearch, onRefresh, isLoading })
 export default function BookingManagement() {
   const dispatch = useDispatch();
 
-  // ── Selectors ──
   const bookings        = useSelector(selectCABookings);
   const bookingsTotal   = useSelector(selectCABookingsTotal);
   const pendingBookings = useSelector(selectCAPendingBookings);
   const pendingCount    = useSelector(selectCAPendingCount);
   const selectedBooking = useSelector(selectSelectedCABooking);
 
-  const loadingBookings  = useSelector(selectClinicalLoading('fetchCABookings'));
-  const loadingPending   = useSelector(selectClinicalLoading('fetchCAPendingBookings'));
-  const loadingDetail    = useSelector(selectClinicalLoading('fetchCABookingById'));
-  const loadingAccept    = useSelector(selectClinicalLoading('acceptCABooking'));
-  const loadingReject    = useSelector(selectClinicalLoading('rejectCABooking'));
+  const loadingBookings = useSelector(selectClinicalLoading('fetchCABookings'));
+  const loadingPending  = useSelector(selectClinicalLoading('fetchCAPendingBookings'));
+  const loadingDetail   = useSelector(selectClinicalLoading('fetchCABookingById'));
+  const loadingAccept   = useSelector(selectClinicalLoading('acceptCABooking'));
+  const loadingReject   = useSelector(selectClinicalLoading('rejectCABooking'));
 
-  const errorBookings    = useSelector(selectClinicalError('fetchCABookings'));
-  const errorPending     = useSelector(selectClinicalError('fetchCAPendingBookings'));
+  const errorBookings = useSelector(selectClinicalError('fetchCABookings'));
+  const errorPending  = useSelector(selectClinicalError('fetchCAPendingBookings'));
 
-  // ── Local state ──
-  const [tab, setTab]           = useState('pending');   // 'pending' | 'all'
-  const [page, setPage]         = useState(1);
-  const [status, setStatus]     = useState('');
-  const [search, setSearch]     = useState('');
-  const [detailOpen, setDetailOpen] = useState(false);
+  const [tab,         setTab]         = useState('pending');
+  const [page,        setPage]        = useState(1);
+  const [status,      setStatus]      = useState('');
+  const [search,      setSearch]      = useState('');
+  const [detailOpen,  setDetailOpen]  = useState(false);
   const [acceptingId, setAcceptingId] = useState(null);
   const [rejectingId, setRejectingId] = useState(null);
 
-  // ── Fetch on mount + deps ──
   const loadPending = useCallback(() => {
     dispatch(fetchCAPendingBookings());
   }, [dispatch]);
@@ -576,6 +738,7 @@ export default function BookingManagement() {
   const loadAll = useCallback(() => {
     const params = { page, limit: PAGE_LIMIT };
     if (status) params.status = status;
+    // Include rides + primaryRide in projection — router returns these from Booking model
     dispatch(fetchCABookings(params));
   }, [dispatch, page, status]);
 
@@ -584,7 +747,6 @@ export default function BookingManagement() {
     if (tab === 'all') loadAll();
   }, [tab, loadAll]);
 
-  // ── Actions ──
   async function handleAccept(bookingId) {
     setAcceptingId(bookingId);
     await dispatch(acceptCABooking({ bookingId, patientSnapshot: null }));
@@ -609,31 +771,30 @@ export default function BookingManagement() {
     dispatch(clearSelectedCABooking());
   }
 
-  // ── Client-side search filter ──
   const filteredBookings = bookings.filter(b => {
     if (!search) return true;
-    const q = search.toLowerCase();
-    const name  = (b.patientInfo?.name || b.customer?.name || '').toLowerCase();
-    const code  = (b.bookingCode || '').toLowerCase();
+    const q    = search.toLowerCase();
+    const name = (b.patientInfo?.name || b.customer?.name || '').toLowerCase();
+    const code = (b.bookingCode || '').toLowerCase();
     return name.includes(q) || code.includes(q);
   });
 
   const totalPages = Math.ceil(bookingsTotal / PAGE_LIMIT);
 
-  // ─────────────────────────────────────────────────────────────────────────────
-
   return (
     <div data-theme="care-assistant" className="min-h-screen bg-base-100">
-      {/* ── Background texture ── */}
+      {/* Background texture */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden opacity-30"
         style={{
-          backgroundImage: `radial-gradient(ellipse 80% 50% at 20% -10%, color-mix(in srgb, var(--primary), transparent 85%), transparent),
-                            radial-gradient(ellipse 60% 40% at 80% 110%, color-mix(in srgb, var(--secondary), transparent 88%), transparent)`,
+          backgroundImage: `
+            radial-gradient(ellipse 80% 50% at 20% -10%, color-mix(in srgb, var(--primary), transparent 85%), transparent),
+            radial-gradient(ellipse 60% 40% at 80% 110%, color-mix(in srgb, var(--secondary), transparent 88%), transparent)
+          `,
         }} />
 
       <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
 
-        {/* ── Page Header ── */}
+        {/* Page Header */}
         <motion.div variants={fadeUp} initial="hidden" animate="visible"
           className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
           <div>
@@ -651,10 +812,9 @@ export default function BookingManagement() {
             </div>
           </div>
 
-          {/* Stats strip */}
           <div className="flex items-center gap-3">
             <div className="stat-card px-4 py-3 flex items-center gap-3 min-w-[140px]">
-              <Bell className="w-5 h-5 text-warning" style={{ color: 'var(--warning)' }} />
+              <Bell className="w-5 h-5" style={{ color: 'var(--warning)' }} />
               <div>
                 <p className="stat-card-value text-xl">{pendingCount}</p>
                 <p className="stat-card-label text-[0.65rem]">Pending Acceptance</p>
@@ -670,7 +830,7 @@ export default function BookingManagement() {
           </div>
         </motion.div>
 
-        {/* ── Alert if pending ── */}
+        {/* Pending alert */}
         <AnimatePresence>
           {pendingCount > 0 && (
             <motion.div variants={fadeUp} initial="hidden" animate="visible" exit="exit">
@@ -689,11 +849,11 @@ export default function BookingManagement() {
           )}
         </AnimatePresence>
 
-        {/* ── Tabs ── */}
+        {/* Tabs */}
         <motion.div variants={fadeUp} initial="hidden" animate="visible" transition={{ delay: 0.08 }}>
           <div className="flex gap-1 p-1 rounded-xl bg-base-200 w-fit">
             {[
-              { key: 'pending', label: 'Pending Actions', icon: Bell,        badge: pendingCount },
+              { key: 'pending', label: 'Pending Actions', icon: Bell,         badge: pendingCount },
               { key: 'all',     label: 'All Bookings',    icon: ClipboardList, badge: null },
             ].map(t => (
               <button key={t.key}
@@ -705,7 +865,7 @@ export default function BookingManagement() {
                 <t.icon className="w-4 h-4" />
                 {t.label}
                 {t.badge > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-warning text-white text-[0.6rem] font-black flex items-center justify-center"
+                  <span className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full text-white text-[0.6rem] font-black flex items-center justify-center"
                     style={{ background: 'var(--warning)', color: 'var(--warning-content)' }}>
                     {t.badge}
                   </span>
@@ -715,18 +875,17 @@ export default function BookingManagement() {
           </div>
         </motion.div>
 
-        {/* ── TAB: PENDING ── */}
+        {/* TAB: PENDING */}
         <AnimatePresence mode="wait">
           {tab === 'pending' && (
             <motion.div key="pending" variants={stagger} initial="hidden" animate="visible" exit="exit">
-
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <p className="text-base font-bold text-base-content">Awaiting Your Response</p>
                   <p className="text-xs text-base-content/40 mt-0.5">
                     Accept to create a care record, or reject to release back to admin.
                   </p>
-                  <FieldNote>These are confirmed bookings assigned to you that have no active care record yet</FieldNote>
+                  <FieldNote>Confirmed bookings assigned to you with no active care record yet</FieldNote>
                 </div>
                 <button onClick={loadPending} disabled={loadingPending}
                   className="btn btn-ghost btn-sm gap-1.5">
@@ -743,9 +902,7 @@ export default function BookingManagement() {
               )}
 
               {loadingPending ? (
-                <div className="flex justify-center py-12">
-                  <Spinner />
-                </div>
+                <div className="flex justify-center py-12"><Spinner /></div>
               ) : pendingBookings.length === 0 ? (
                 <EmptyState
                   icon={Inbox}
@@ -769,7 +926,7 @@ export default function BookingManagement() {
             </motion.div>
           )}
 
-          {/* ── TAB: ALL BOOKINGS ── */}
+          {/* TAB: ALL BOOKINGS */}
           {tab === 'all' && (
             <motion.div key="all" variants={fadeUp} initial="hidden" animate="visible" exit="exit"
               className="space-y-4">
@@ -803,27 +960,12 @@ export default function BookingManagement() {
                     <table className="table">
                       <thead>
                         <tr>
-                          <th>
-                            Patient
-                            <FieldNote>Name and contact</FieldNote>
-                          </th>
-                          <th>
-                            Booking Code
-                            <FieldNote>Unique reference</FieldNote>
-                          </th>
-                          <th>
-                            Type
-                            <FieldNote>Service category</FieldNote>
-                          </th>
-                          <th>
-                            Scheduled
-                            <FieldNote>Date and time</FieldNote>
-                          </th>
-                          <th>
-                            Status
-                            <FieldNote>Current state</FieldNote>
-                          </th>
-                          <th>Action</th>
+                          <th>Patient<FieldNote>Name and contact</FieldNote></th>
+                          <th>Booking Code<FieldNote>Unique reference</FieldNote></th>
+                          <th>Type<FieldNote>Service category</FieldNote></th>
+                          <th>Scheduled<FieldNote>Date and time</FieldNote></th>
+                          <th>Status<FieldNote>Current state</FieldNote></th>
+                          <th>Actions</th>
                         </tr>
                       </thead>
                       <motion.tbody variants={stagger} initial="hidden" animate="visible">
@@ -835,7 +977,6 @@ export default function BookingManagement() {
                   </div>
                 )}
 
-                {/* Pagination */}
                 {totalPages > 1 && (
                   <div className="flex items-center justify-between px-5 py-4 border-t border-base-300">
                     <p className="text-xs text-base-content/40">
@@ -862,12 +1003,13 @@ export default function BookingManagement() {
           )}
         </AnimatePresence>
 
-        {/* ── Detail panel overlay ── */}
+        {/* Detail panel overlay */}
         <AnimatePresence>
           {detailOpen && (
             loadingDetail
               ? (
-                <motion.div key="loading-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                <motion.div key="loading-overlay"
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                   className="fixed inset-0 z-50 flex items-center justify-center"
                   style={{ background: 'rgba(0,0,0,0.25)', backdropFilter: 'blur(4px)' }}>
                   <div className="bg-base-100 rounded-2xl p-8 flex flex-col items-center gap-4 shadow-depth-lg">

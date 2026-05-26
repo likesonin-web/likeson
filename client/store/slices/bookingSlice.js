@@ -1,4 +1,3 @@
- 
 
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import toast                              from 'react-hot-toast';
@@ -96,6 +95,10 @@ const initialState = {
   createBookingError:   null,
   /** 'idle' | 'loading' | 'succeeded' | 'failed' */
   createBookingStatus:  'idle',
+
+  allDoctors:     [],
+allDoctorsMeta: { total: 0, page: 1, limit: 20 },
+deleteFailedBookingResult: null,
 
   subscriptionBenefitConsultations: null,
 subscriptionBenefitCareAssistant: null,
@@ -668,6 +671,32 @@ export const fetchSubscriptionBenefitCareAssistant = mkThunk(
   }
 );
 
+
+// Add thunk
+export const fetchAllDoctors = mkThunk(
+  'booking/fetchAllDoctors',
+  async ({ specialization, consultationType, city, isOnline, page = 1, limit = 20 } = {}) => {
+    const { data } = await API.get(`${BASE}/doctors`, {
+      params: { specialization, consultationType, city, isOnline, page, limit },
+    });
+    return data; // { data, total, page, limit, count }
+  }
+);
+
+// ── ADD this thunk (after verifyRazorpayPayment thunk) ──────────────────────
+
+export const deleteFailedBooking = mkThunk(
+  'booking/deleteFailedBooking',
+  async ({ bookingId, walletApplied = 0 }) => {
+    const { data } = await API.post(`${BASE}/delete-failed-booking`, {
+      bookingId,
+      walletApplied,
+    });
+    toast.success(`Booking deleted. Wallet refunded: ₹${data.data?.walletRefunded ?? 0}`);
+    return data.data; // { bookingId, walletRefunded }
+  }
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SLICE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -725,6 +754,11 @@ const bookingSlice = createSlice({
       delete state.loading.fetchHospitalDoctors;
       delete state.errors.fetchHospitalDoctors;
     },
+    resetDeleteFailedBooking(state) {
+  state.deleteFailedBookingResult = null;
+  delete state.loading.deleteFailedBooking;
+  delete state.errors.deleteFailedBooking;
+},
 
     resetHospitalAvailability(state) {
       state.hospitalAvailability = null;
@@ -813,6 +847,13 @@ resetSubscriptionBenefitCareAssistant(state) {
     clearErrors(state) {
       state.errors = {};
     },
+
+    resetAllDoctors(state) {
+  state.allDoctors     = [];
+  state.allDoctorsMeta = { total: 0, page: 1, limit: 20 };
+  delete state.loading.fetchAllDoctors;
+  delete state.errors.fetchAllDoctors;
+},
   },
 
   extraReducers: (builder) => {
@@ -841,6 +882,8 @@ resetSubscriptionBenefitCareAssistant(state) {
         })
         .addCase(thunk.rejected, rejected);
     };
+
+    
 
     /**
      * wireCreate — variant for booking creation thunks.
@@ -894,6 +937,35 @@ resetSubscriptionBenefitCareAssistant(state) {
     wire(fetchLabById, (state, { payload }) => {
       state.selectedLab = payload ?? null;
     });
+    wire(deleteFailedBooking, (state, { payload }) => {
+  state.deleteFailedBookingResult = payload ?? null;
+  // Remove from myBookings list
+  if (payload?.bookingId) {
+    state.myBookings = state.myBookings.filter(
+      (b) => String(b._id) !== String(payload.bookingId)
+    );
+    if (
+      state.selectedBooking &&
+      String(state.selectedBooking._id) === String(payload.bookingId)
+    ) {
+      state.selectedBooking = null;
+    }
+    if (
+      state.createdBooking &&
+      String(state.createdBooking.bookingId) === String(payload.bookingId)
+    ) {
+      state.createdBooking = null;
+    }
+  }
+});
+    wire(fetchAllDoctors, (state, { payload }) => {
+  state.allDoctors     = Array.isArray(payload?.data) ? payload.data : [];
+  state.allDoctorsMeta = {
+    total: payload?.total ?? 0,
+    page:  payload?.page  ?? 1,
+    limit: payload?.limit ?? 20,
+  };
+});
 
     wire(fetchBookingOptions, (state, { payload }) => {
       state.bookingOptions = payload ?? null;
@@ -1088,6 +1160,8 @@ export const {
 resetSubscriptionBenefitCareAssistant,
   // Global
   clearErrors,
+  resetAllDoctors,
+  resetDeleteFailedBooking,
 } = bookingSlice.actions;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1241,6 +1315,20 @@ export const selectSubCareAssistantAllTiers  = (s) => s.booking.subscriptionBene
 export const selectSubCareAssistantActiveTier = (s) => s.booking.subscriptionBenefitCareAssistant?.careAssistant?.activeTier ?? null;
 export const selectSubCareAssistantIncluded  = (s) => s.booking.subscriptionBenefitCareAssistant?.included ?? false;
 
+
+export const selectAllDoctors         = (s) => s.booking.allDoctors;
+export const selectAllDoctorsMeta     = (s) => s.booking.allDoctorsMeta;
+export const selectAllDoctorsLoading  = (s) => s.booking.loading.fetchAllDoctors  ?? false;
+export const selectAllDoctorsError    = (s) => s.booking.errors.fetchAllDoctors   ?? null;
+
+
+// ── deleteFailedBooking ───────────────────────────────────────────────────────
+export const selectDeleteFailedBookingResult  = (s) => s.booking.deleteFailedBookingResult;
+export const selectDeleteFailedBookingLoading = (s) => s.booking.loading.deleteFailedBooking ?? false;
+export const selectDeleteFailedBookingError   = (s) => s.booking.errors.deleteFailedBooking  ?? null;
+
+// ── consultationSession from doctor-online createdBooking ─────────────────────
+export const selectCreatedConsultationSession = (s) => s.booking.createdBooking?.consultationSession ?? null;
 // ─────────────────────────────────────────────────────────────────────────────
 // RE-EXPORTS
 // ─────────────────────────────────────────────────────────────────────────────

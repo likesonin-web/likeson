@@ -69,6 +69,8 @@ import {
   buildRidePayload,
   resolveCareRideKmRate,
   calculateCanonicalRoute,
+  findNearestHospital,
+calculateEtaMinutes,
   CARE_RIDE_RADIUS_M,
   RIDE_STATUSES_ACTIVE,
 } from './bookingRouterShared.js';
@@ -156,29 +158,152 @@ const getCustomerFromRide = async (ride) => {
   return booking?.customer || null;
 };
 
+const resolveRideWaypoints = async ({
+  pickupGeo,
+  dropoffGeo,
+  careAssistantProfile,
+}) => {
+
+  const waypoints = [];
+
+  if (
+    careAssistantProfile?.currentLocation?.coordinates?.length
+  ) {
+
+    const caCoords =
+      careAssistantProfile.currentLocation.coordinates;
+
+    const patientDistance = haversineKm(
+      caCoords,
+      pickupGeo.coordinates
+    );
+
+    const hospitalDistance = haversineKm(
+      caCoords,
+      dropoffGeo.coordinates
+    );
+
+    const shouldPickupCAFirst =
+      patientDistance < hospitalDistance;
+
+    waypoints.push({
+      type: 'care_assistant_join',
+      pickupFirst: shouldPickupCAFirst,
+
+      location: {
+        type: 'Point',
+        coordinates: caCoords,
+        address:
+          careAssistantProfile.currentLocation.address || '',
+      },
+    });
+  }
+
+  return waypoints;
+};
+
 /**
  * FIX: createRideRequest — was called in both POST /customer and POST /care-assistant
  * but never defined, causing ReferenceError on every ride creation.
  * Creates a minimal Ride doc with status:'searching'.
  */
-const createRideRequest = async ({ pickupGeo, dropoffGeo, scheduledAt, bookingId, createdBy }) => {
+const createRideRequest = async ({
+  pickupGeo,
+  dropoffGeo,
+  scheduledAt,
+  bookingId,
+  createdBy,
+  careAssistantId = null,
+}) => {
+
+  let nearestHospitalData = null;
+
+  try {
+    nearestHospitalData = await findNearestHospital(
+      dropoffGeo.coordinates
+    );
+  } catch (e) {
+    console.error('[nearestHospital]', e.message);
+  }
+
   const ride = await Ride.create({
     ...buildRidePayload({
       bookingId,
-      rideType:      'patient',
-      vehicleClass:  'four_wheeler',
-      pickupCoords:  pickupGeo.coordinates,
-      pickupAddress: pickupGeo.address  || '',
-      pickupCity:    pickupGeo.city     || '',
+      rideType: 'patient',
+      vehicleClass: 'four_wheeler',
+
+      pickupCoords: pickupGeo.coordinates,
+      pickupAddress: pickupGeo.address || '',
+      pickupCity: pickupGeo.city || '',
+
       dropoffCoords: dropoffGeo.coordinates,
       dropoffAddress: dropoffGeo.address || '',
-      dropoffCity:    dropoffGeo.city    || '',
+      dropoffCity: dropoffGeo.city || '',
+      waypoints: dynamicWaypoints,
+
+activeNavigationTarget:
+  dynamicWaypoints.length
+    ? 'pickup_care_assistant'
+    : 'pickup_patient',
+
       scheduledPickupAt: scheduledAt || null,
       createdBy,
     }),
-    status: 'searching', // override buildRidePayload default of 'requested'
+
+    status: 'searching',
   });
-  return { ride };
+
+  const careAssistantProfileDoc =
+  careAssistantId
+    ? await CareAssistantProfile.findById(
+        careAssistantId
+      ).lean()
+    : null;
+
+const dynamicWaypoints =
+  await resolveRideWaypoints({
+    pickupGeo,
+    dropoffGeo,
+    careAssistantProfile:
+      careAssistantProfileDoc,
+  });
+
+  await RideTracking.findOneAndUpdate(
+    { ride: ride._id },
+    {
+      $set: {
+        booking: bookingId,
+
+        ride: ride._id,
+
+        careAssistant: careAssistantId,
+
+        hospital: nearestHospitalData?.hospital?._id || null,
+
+        activeTarget: careAssistantId
+          ? 'pickup_care_assistant'
+          : 'pickup_patient',
+
+        'liveRouteContext.nearestHospitalDistanceKm':
+          nearestHospitalData?.distanceKm || 0,
+
+        'liveRouteContext.currentLegEtaMinutes':
+          nearestHospitalData?.etaMinutes || 0,
+
+        'liveRouteContext.nearestHospitalCalculatedAt':
+          new Date(),
+      },
+    },
+    {
+      upsert: true,
+      new: true,
+    }
+  );
+
+  return {
+    ride,
+    nearestHospitalData,
+  };
 };
 
 /**
@@ -1697,6 +1822,63 @@ router.post('/:rideId/tracking/milestone',
       if (err.message?.startsWith('Unknown milestone name'))
         return res.status(400).json({ success: false, message: err.message });
       return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+router.get(
+  '/:rideId/care-assistant-live',
+
+  protect,
+
+  async (req, res) => {
+
+    try {
+
+      const ride =
+        await Ride.findById(
+          req.params.rideId
+        ).lean();
+
+      if (!ride) {
+
+        return res.status(404).json({
+          success: false,
+          message: 'Ride not found',
+        });
+      }
+
+      const tracking =
+        await RideTracking
+          .findOne({
+            ride: ride._id,
+          })
+          .populate('hospital')
+          .lean();
+
+      return res.json({
+        success: true,
+
+        data: {
+
+          activeTarget:
+            tracking?.activeTarget,
+
+          liveRouteContext:
+            tracking
+              ?.liveRouteContext || null,
+
+          hospital:
+            tracking?.hospital || null,
+        },
+      });
+
+    } catch (err) {
+
+      return res.status(500).json({
+        success: false,
+        message: err.message,
+      });
     }
   }
 );

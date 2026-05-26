@@ -640,7 +640,7 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false, co
     </div>
   );
 
-  // MOBILE version
+  // MOBILE version — no edit button
   if (isMobile) {
     return (
       <div className="rounded-2xl border overflow-hidden"
@@ -654,12 +654,7 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false, co
             {regionLabel && <p className="text-[10px] opacity-40 truncate leading-tight">{regionLabel}</p>}
             {savedAddress && savedAddress.includes(',') && <p className="text-[9px] opacity-30 truncate leading-tight mt-0.5">{savedAddress}</p>}
           </div>
-          <button aria-label="Edit location"
-            className="w-8 h-8 rounded-lg flex items-center justify-center transition-all active:scale-90"
-            style={{ background: `color-mix(in srgb, ${accent} 15%, transparent)`, color: accent }}
-            onClick={() => setTimeout(() => inputRef.current?.focus(), 100)}>
-            <Pencil size={13} strokeWidth={2.5} />
-          </button>
+          {/* Edit button REMOVED — no Pencil button here */}
         </div>
         <div className="p-3 flex flex-col gap-2 bg-base-100">
           <button type="button" onClick={handleUseCurrentLocation} disabled={gpsLoading} aria-label="Use current GPS location"
@@ -685,7 +680,7 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false, co
     );
   }
 
-  // COMPACT mobile trigger (inline in header top bar)
+  // COMPACT mobile trigger (inline in header top bar) — desktop/tablet only via lg:hidden
   if (compact) {
     return (
       <div className="relative" ref={wrapperRef}>
@@ -983,6 +978,100 @@ const BottomNav = memo(function BottomNav({ links, palette, pathname, dataTheme 
   );
 });
 
+// ── MobileSubBar — standalone component so it can use useState ───────────────
+function MobileSubBarContent({ isCustomer, rolePalette, RoleIcon, user, accentColor, mood, walletBalance }) {
+  const [mobileLocationOpen, setMobileLocationOpen] = useState(false);
+
+  if (!isCustomer && rolePalette) {
+    // Role user sub-bar
+    return (
+      <div className="flex md:hidden items-center justify-between px-4 py-2 border-t"
+        style={{ borderColor: `color-mix(in srgb, ${rolePalette.accent} 20%, transparent)`, background: rolePalette.bg }}>
+        <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest"
+          style={{ color: rolePalette.pillText }}>
+          {RoleIcon && <RoleIcon size={13} aria-hidden="true" />}
+          <span>{rolePalette.label} Portal</span>
+        </div>
+        <Link href="/wallet"
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-black"
+          style={{ borderColor: `color-mix(in srgb, var(--warning) 30%, transparent)`, background: 'color-mix(in srgb, var(--warning) 8%, transparent)', color: 'var(--warning)' }}>
+          <WalletIcon size={11} strokeWidth={2.5} aria-hidden="true" />
+          ₹{(walletBalance ?? 0).toLocaleString('en-IN')}
+        </Link>
+      </div>
+    );
+  }
+
+  // Customer / guest sub-bar
+  return (
+    <>
+      <div className="flex md:hidden items-center gap-2 px-4 py-2 border-t border-base-300"
+        style={{ background: 'color-mix(in srgb, var(--base-100) 95%, transparent)' }}>
+
+        {/* Search bar */}
+        <Link href="/search" aria-label="Open search"
+          className="flex flex-1 relative items-center rounded-xl bg-base-200/70 border border-base-300 px-3 py-2 gap-2 active:scale-[0.99] transition-transform">
+          <Search size={14} style={{ color: accentColor, opacity: 0.5 }} aria-hidden="true" />
+          <span className="text-[12px] text-base-content/40 font-medium flex-1 truncate">
+            Search medicines, doctors…
+          </span>
+        </Link>
+
+        {/* Location icon button — toggles location panel */}
+        <button
+          type="button"
+          onClick={() => setMobileLocationOpen((p) => !p)}
+          aria-label="Set location"
+          aria-expanded={mobileLocationOpen}
+          className="flex items-center justify-center w-10 h-10 rounded-xl flex-shrink-0 border transition-all"
+          style={{
+            background: mobileLocationOpen
+              ? `color-mix(in srgb, ${accentColor} 15%, transparent)`
+              : 'var(--base-200)',
+            borderColor: mobileLocationOpen
+              ? `color-mix(in srgb, ${accentColor} 40%, transparent)`
+              : 'var(--base-300)',
+            color: accentColor,
+          }}>
+          <MapPin size={16} strokeWidth={2.5} />
+        </button>
+
+        {/* Guest: Login button */}
+        {!user && (
+          <Link href="/login" aria-label="Sign in">
+            <button
+              className="flex items-center gap-1.5 h-9 px-3.5 rounded-xl text-[11px] font-black uppercase tracking-wide text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2"
+              style={{ background: mood?.barGradient ?? 'var(--primary)' }}>
+              <User size={13} aria-hidden="true" />
+              Login
+            </button>
+          </Link>
+        )}
+
+        {/* Logged-in customer: wallet compact */}
+        {user && isCustomer && (
+          <Link href="/wallet"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-[10px] font-black whitespace-nowrap"
+            style={{ borderColor: 'color-mix(in srgb, var(--warning) 30%, transparent)', background: 'color-mix(in srgb, var(--warning) 8%, transparent)', color: 'var(--warning)' }}>
+            <WalletIcon size={11} strokeWidth={2.5} aria-hidden="true" />
+            ₹{(walletBalance ?? 0).toLocaleString('en-IN')}
+          </Link>
+        )}
+      </div>
+
+      {/* Collapsible location panel — slides in below sub-bar */}
+      {mobileLocationOpen && (
+        <div className="flex md:hidden px-4 pb-3 pt-1 border-b border-base-300"
+          style={{ background: 'color-mix(in srgb, var(--base-100) 97%, transparent)' }}>
+          <div className="w-full">
+            <LocationWidget mood={mood} isMobile />
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN HEADER
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1109,71 +1198,9 @@ const Header = () => {
   const RoleIcon = mood?.icon ?? null;
   const accentColor = mood?.accent ?? 'var(--primary)';
 
-  // ── Mobile sub-bar content ─────────────────────────────────────────────────
-  // Customer + logged in: search bar
-  // Customer + guest:     search bar + login button
-  // Role user:            role title pill (no search)
-  const MobileSubBar = useMemo(() => {
-    if (!isCustomer && rolePalette) {
-      return (
-        <div className="flex md:hidden items-center justify-between px-4 py-2 border-t"
-          style={{ borderColor: `color-mix(in srgb, ${rolePalette.accent} 20%, transparent)`, background: rolePalette.bg }}>
-          <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest"
-            style={{ color: rolePalette.pillText }}>
-            {RoleIcon && <RoleIcon size={13} aria-hidden="true" />}
-            <span>{rolePalette.label} Portal</span>
-          </div>
-          {/* Wallet pill for role users on mobile sub-bar */}
-          <Link href="/wallet"
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-black"
-            style={{ borderColor: `color-mix(in srgb, var(--warning) 30%, transparent)`, background: 'color-mix(in srgb, var(--warning) 8%, transparent)', color: 'var(--warning)' }}>
-            <WalletIcon size={11} strokeWidth={2.5} aria-hidden="true" />
-            ₹{(walletBalance ?? 0).toLocaleString('en-IN')}
-          </Link>
-        </div>
-      );
-    }
-
-    // Customer / guest sub-bar
-    return (
-      <div className="flex md:hidden items-center gap-2 px-4 py-2 border-t border-base-300"
-        style={{ background: 'color-mix(in srgb, var(--base-100) 95%, transparent)' }}>
-        {/* Search bar */}
-        <Link href="/search" aria-label="Open search"
-          className="flex flex-1 relative items-center rounded-xl bg-base-200/70 border border-base-300 px-3 py-2 gap-2 active:scale-[0.99] transition-transform">
-          <Search size={14} style={{ color: accentColor, opacity: 0.5 }} aria-hidden="true" />
-          <span className="text-[12px] text-base-content/40 font-medium flex-1 truncate">
-            Search medicines, doctors…
-          </span>
-          <span className="text-[9px] font-black uppercase tracking-widest opacity-30 hidden xs:block">
-            Search
-          </span>
-        </Link>
-
-        {/* Guest: Login button */}
-        {!user && (
-          <Link href="/login" aria-label="Sign in">
-            <MotionButton whileTap={{ scale: 0.95 }}
-              className="flex items-center gap-1.5 h-9 px-3.5 rounded-xl text-[11px] font-black uppercase tracking-wide text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2"
-              style={{ background: mood?.barGradient ?? 'var(--primary)' }}>
-              <User size={13} aria-hidden="true" />
-              Login
-            </MotionButton>
-          </Link>
-        )}
-
-        {/* Logged in customer: wallet compact */}
-        {user && isCustomer && (
-          <Link href="/wallet"
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-[10px] font-black whitespace-nowrap"
-            style={{ borderColor: 'color-mix(in srgb, var(--warning) 30%, transparent)', background: 'color-mix(in srgb, var(--warning) 8%, transparent)', color: 'var(--warning)' }}>
-            <WalletIcon size={11} strokeWidth={2.5} aria-hidden="true" />
-            ₹{(walletBalance ?? 0).toLocaleString('en-IN')}
-          </Link>
-        )}
-      </div>
-    );
-  }, [isCustomer, rolePalette, RoleIcon, user, accentColor, mood, walletBalance]);
+  const isTrackingPage = pathname === '/search' ||
+    (pathname.startsWith('/rides/') && pathname.endsWith('/tracking')) ||
+    pathname.startsWith('/driver/tracking');
 
   return (
     <>
@@ -1185,7 +1212,7 @@ const Header = () => {
 
       <header ref={headerRef} data-theme={headerDataTheme}
         className={cn(
-          (pathname === '/search' || pathname.startsWith('/rides/') && pathname.endsWith('/tracking') ||  pathname.startsWith('/driver/tracking')  ) ? 'hidden' : 'sticky top-0 z-[100]  w-full backdrop-blur-md border-b border-base-300 transition-all duration-300',
+          isTrackingPage ? 'hidden' : 'sticky top-0 z-[100] w-full backdrop-blur-md border-b border-base-300 transition-all duration-300',
           !isCustomer && roleBottomNavLinks && 'mb-0'
         )}
         style={{ background: 'color-mix(in srgb, var(--base-100) 88%, transparent)' }}
@@ -1195,12 +1222,10 @@ const Header = () => {
         <MotionDiv className="h-0.5 w-full relative z-[101]" style={accentStripeStyle} layout aria-hidden="true" />
 
         {/* ── TOP BAR ─────────────────────────────────────────────────────── */}
-        {/* MOBILE: Logo+Location LEFT | Cart+Notif+Book+Menu RIGHT */}
-        {/* DESKTOP: Logo+Location LEFT | Search CENTER | Actions RIGHT */}
         <div className="py-2 md:py-3 relative z-[101]">
           <Container className="flex items-center justify-between gap-3">
 
-            {/* ── LEFT: Logo + Location ── */}
+            {/* ── LEFT: Logo + Location (desktop/tablet only) ── */}
             <div className="flex items-center gap-2 md:gap-3 flex-shrink-0 min-w-0">
               <Link href="/" className="flex-shrink-0 group transition-transform active:scale-95" aria-label="Likeson — go to homepage">
                 <span className="text-xl md:text-2xl font-black tracking-tighter transition-colors duration-300 block"
@@ -1209,15 +1234,17 @@ const Header = () => {
                 </span>
               </Link>
 
-              {/* Desktop: full location widget */}
+              {/* Desktop: full location widget — lg and above only */}
               <div className="hidden lg:flex items-center">
                 <LocationWidget mood={mood} isMobile={false} />
               </div>
 
-              {/* Mobile: compact location trigger */}
-              <div className="flex lg:hidden items-center">
+              {/* md only (tablet): compact location widget — hidden on mobile, location goes to sub-bar */}
+              <div className="hidden md:flex lg:hidden items-center">
                 <LocationWidget mood={mood} isMobile={false} compact />
               </div>
+
+              {/* Mobile: NO location widget here — it lives in the sub-bar MapPin button */}
             </div>
 
             {/* ── CENTER: Desktop search (customer/guest) or role title ── */}
@@ -1321,7 +1348,7 @@ const Header = () => {
                     </MotionDiv>
                   </Link>
 
-                  {/* Theme toggle — desktop visible + mobile too */}
+                  {/* Theme toggle */}
                   <ThemeToggle compact />
 
                   {/* Book Now — mobile visible, customer only */}
@@ -1410,9 +1437,16 @@ const Header = () => {
           </Container>
         </div>
 
-        {/* ── MOBILE SUB-BAR (part 2) ──────────────────────────────────── */}
-        {/* Visible only on mobile. Contains search or role info. */}
-        {MobileSubBar}
+        {/* ── MOBILE SUB-BAR ───────────────────────────────────────────── */}
+        <MobileSubBarContent
+          isCustomer={isCustomer}
+          rolePalette={rolePalette}
+          RoleIcon={RoleIcon}
+          user={user}
+          accentColor={accentColor}
+          mood={mood}
+          walletBalance={walletBalance}
+        />
 
         {/* ── DESKTOP NAV — Customer only ─────────────────────────────── */}
         {isCustomer && (
@@ -1427,31 +1461,23 @@ const Header = () => {
         )}
       </header>
 
-     {!isCustomer && user && roleBottomNavLinks && 
-  // Add the path check here to hide it on tracking pages
-  !(pathname === '/search' || 
-    (pathname.startsWith('/rides/') && pathname.endsWith('/tracking')) || 
-    pathname.startsWith('/driver/tracking')) && (
-  <BottomNav 
-    links={roleBottomNavLinks} 
-    palette={rolePalette} 
-    pathname={pathname} 
-    dataTheme={headerDataTheme} 
-  />
-)}
+      {/* ── ROLE BOTTOM NAV ─────────────────────────────────────────────── */}
+      {!isCustomer && user && roleBottomNavLinks && !isTrackingPage && (
+        <BottomNav
+          links={roleBottomNavLinks}
+          palette={rolePalette}
+          pathname={pathname}
+          dataTheme={headerDataTheme}
+        />
+      )}
 
       {/* ── CUSTOMER MOBILE BOTTOM NAV ───────────────────────────────── */}
-      {/* ── CUSTOMER MOBILE BOTTOM NAV ───────────────────────────────── */}
-{isCustomer && !(
-  pathname === '/search' || 
-  (pathname.startsWith('/rides/') && pathname.endsWith('/tracking')) || 
-  pathname.startsWith('/driver/tracking')
-) && (
-  <div className="fixed bottom-0 left-0 right-0 z-[99] flex md:hidden items-center justify-around border-t safe-bottom"
-    style={{ background: 'color-mix(in srgb, var(--base-100) 93%, transparent)', borderColor: 'var(--base-300)', backdropFilter: 'blur(12px)' }}>
-    {/* ... rest of your map code ... */}
-  </div>
-)}
+      {isCustomer && !isTrackingPage && (
+        <div className="fixed bottom-0 left-0 right-0 z-[99] flex md:hidden items-center justify-around border-t safe-bottom"
+          style={{ background: 'color-mix(in srgb, var(--base-100) 93%, transparent)', borderColor: 'var(--base-300)', backdropFilter: 'blur(12px)' }}>
+          {/* Customer bottom nav items go here */}
+        </div>
+      )}
 
       {/* ── MOBILE FULLSCREEN MENU ───────────────────────────────────── */}
       <AnimatePresence>
