@@ -4,7 +4,7 @@ import React, {
   useEffect, useRef, useCallback, useState, useMemo, memo,
 } from 'react';
 import { useParams, useRouter }   from 'next/navigation';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useMotionValue, useTransform } from 'framer-motion';
 import { GoogleMap }               from '@react-google-maps/api';
 import {
   Navigation, MapPin, Phone, User,
@@ -566,6 +566,96 @@ const LoadingSkeleton = memo(function LoadingSkeleton() {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SWIPE ACTION BUTTON
+// ─────────────────────────────────────────────────────────────────────────────
+ 
+
+const SwipeActionButton = memo(function SwipeActionButton({ buttonConfig }) {
+  const { label, icon, color, shadow, action } = buttonConfig;
+  const [isTriggered, setIsTriggered] = useState(false);
+  const containerRef = useRef(null);
+  const [constraints, setConstraints] = useState(0);
+
+  const x = useMotionValue(0);
+
+  // Calculate dynamic drag constraints based on screen/container size
+  useEffect(() => {
+    if (containerRef.current) {
+      const containerWidth = containerRef.current.offsetWidth;
+      const thumbWidth = 40; // w-10 = 40px
+      const padding = 8;     // 4px margin on each side (left-1 = 4px)
+      setConstraints(containerWidth - thumbWidth - padding);
+    }
+  }, []);
+
+  const handleDragEnd = (event, info) => {
+    if (isTriggered) return;
+    
+    // If swiped 75% of the way, trigger action
+    if (info.offset.x >= constraints * 0.75) {
+      setIsTriggered(true);
+      action();
+    }
+  };
+
+  // Dynamic animations based on swipe progress
+  const textOpacity = useTransform(x, [0, constraints * 0.5], [1, 0]);
+  const fillWidth = useTransform(x, [0, constraints], [40 + 8, constraints + 40 + 8]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative flex items-center h-[48px] rounded-full w-full max-w-[300px] overflow-hidden bg-base-300/80 border border-base-content/10"
+      style={{ 
+        boxShadow: '0 8px 32px rgba(0,0,0,0.3)', 
+        backdropFilter: 'blur(12px)',
+        transform: 'translateZ(0)' // Hardware acceleration
+      }}
+    >
+      {/* Dynamic Progress Fill */}
+      <motion.div
+        className="absolute left-0 top-0 bottom-0 rounded-full opacity-20 pointer-events-none"
+        style={{ width: fillWidth, background: color }}
+      />
+
+      {/* Swipe Text Instruction */}
+      <motion.div
+        className="absolute w-full text-center pointer-events-none font-bold text-xs tracking-wide text-base-content/80 flex items-center justify-center gap-2"
+        style={{ opacity: textOpacity }}
+      >
+        Slide to {label}
+        <motion.div
+          animate={{ x: [0, 4, 0] }}
+          transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
+          className="flex opacity-60"
+        >
+          <ArrowRight size={14} />
+        </motion.div>
+      </motion.div>
+
+      {/* Draggable Thumb */}
+      <motion.div
+        drag="x"
+        dragConstraints={{ left: 0, right: constraints }}
+        dragElastic={0.05}
+        dragSnapToOrigin={!isTriggered}
+        onDragEnd={handleDragEnd}
+        whileTap={{ scale: 0.95 }}
+        className="absolute left-1 flex items-center justify-center w-10 h-10 rounded-full cursor-grab active:cursor-grabbing z-10"
+        style={{ 
+          x, 
+          background: color, 
+          boxShadow: `0 4px 16px ${shadow}`, 
+          color: '#fff' 
+        }}
+      >
+        {isTriggered ? <Loader2 size={16} className="animate-spin" /> : React.cloneElement(icon, { size: 16 })}
+      </motion.div>
+    </div>
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -646,11 +736,16 @@ export default function RideLiveTracking() {
   const bk = rd?.booking || null;
 
   const navTargetType = useMemo(() => {
-    if (!rideStatus) return 'pickup';
-    return ['otp_verified', 'in_progress', 'at_stop', 'completed'].includes(rideStatus)
-      ? 'dropoff'
-      : 'pickup';
-  }, [rideStatus]);
+  // Prefer server-authoritative activeNavigationTarget
+  const nat = socketLive?.activeNavigationTarget;
+  if (nat === 'dropoff_hospital' || nat === 'dropoff_destination') return 'dropoff';
+  if (nat === 'pickup_care_assistant' || nat === 'pickup_patient')  return 'pickup';
+  // Fallback: derive from status
+  if (!rideStatus) return 'pickup';
+  return ['otp_verified', 'in_progress', 'at_stop', 'completed'].includes(rideStatus)
+    ? 'dropoff'
+    : 'pickup';
+}, [rideStatus, socketLive?.activeNavigationTarget]);
 
   const pickupCoords = useMemo(() => {
     const c = rd?.pickup?.coordinates;
@@ -1299,44 +1394,22 @@ export default function RideLiveTracking() {
         </div>
 
         {/* ── PRIMARY ACTION BUTTON ────────────────────────────────────── */}
-        <AnimatePresence>
+       
+        <AnimatePresence mode="wait">
           {actionButton && !['completed', 'cancelled'].includes(rideStatus) && (
             <motion.div
+              // Using rideStatus as key forces the component to reset its internal swipe state on step changes
+              key={rideStatus} 
               initial={{ y: 100, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 100, opacity: 0 }}
               transition={{ type: 'spring', damping: 26, stiffness: 320 }}
-              className="absolute z-30 flex justify-center"
+              className="absolute z-30 flex justify-center w-full px-4"
               style={{
                 bottom: `calc(88px + env(safe-area-inset-bottom, 0px))`,
-                left: 16, right: 16,
               }}
             >
-              <motion.button
-                whileTap={{ scale: 0.96 }}
-                onClick={actionButton.action}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '12px 28px',
-                  borderRadius: 999,
-                  border: 'none',
-                  background: actionButton.color,
-                  boxShadow: `0 8px 28px ${actionButton.shadow}, 0 2px 8px rgba(0,0,0,0.3)`,
-                  color: '#fff',
-                  fontSize: 14,
-                  fontWeight: 800,
-                  cursor: 'pointer',
-                  fontFamily: 'inherit',
-                  letterSpacing: '0.02em',
-                  minWidth: 200,
-                  justifyContent: 'center',
-                }}
-              >
-                {actionButton.icon}
-                {actionButton.label}
-              </motion.button>
+              <SwipeActionButton buttonConfig={actionButton} />
             </motion.div>
           )}
         </AnimatePresence>

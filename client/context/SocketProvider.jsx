@@ -206,16 +206,19 @@ export function useBookingRoom(bookingId) {
     joinBookingRoom(bookingId);
 
     const unsubs = [
-      on(EV.JOINED_ROOM,             (d) => { if (d.bookingId === bookingId) setJoined(true); }),
-      on(EV.LOCATION_UPDATE,         setLocationUpdate),
-      on(EV.ETA_UPDATE,              setEtaUpdate),
-      on(EV.RIDE_STATUS_CHANGED,     setRideStatus),
-      on(EV.BOOKING_STATUS_CHANGE,   setBookingStatus),
-      on(EV.NAVIGATION_TARGET_CHANGED, setNavTarget),
-      on(EV.SOS_ALERT,               setSosAlert),
-      on(EV.ROUTE_DEVIATION_ALERT,   setRouteDeviation),
-      on(EV.BOOKING_STATE_SNAPSHOT,  setSnapshot),
-    ];
+  on(EV.JOINED_ROOM,               (d) => { if (d.bookingId === bookingId) setJoined(true); }),
+  on(EV.LOCATION_UPDATE,           setLocationUpdate),
+  on(EV.ETA_UPDATE,                setEtaUpdate),
+  on(EV.RIDE_STATUS_CHANGED,       setRideStatus),
+  on(EV.BOOKING_STATUS_CHANGE,     setBookingStatus),
+  on(EV.NAVIGATION_TARGET_CHANGED, setNavTarget),
+  on(EV.SOS_ALERT,                 setSosAlert),
+  on(EV.ROUTE_DEVIATION_ALERT,     setRouteDeviation),
+  on(EV.BOOKING_STATE_SNAPSHOT,    setSnapshot),
+  // ADD these:
+  on('hospital_eta_update',        (d) => setSnapshot(prev => ({ ...prev, hospitalEta: d }))),
+  on('hospital:eta:update',        (d) => setSnapshot(prev => ({ ...prev, hospitalEta: d }))),
+];
 
     // Request state snapshot on join (for reconnects)
     requestBookingState(bookingId);
@@ -227,11 +230,13 @@ export function useBookingRoom(bookingId) {
     };
   }, [bookingId, connected]); // eslint-disable-line
 
-  return {
-    joined, locationUpdate, etaUpdate,
-    rideStatus, bookingStatus, navigationTarget,
-    sosAlert, routeDeviation, snapshot,
-  };
+ return {
+  joined, locationUpdate, etaUpdate,
+  rideStatus, bookingStatus, navigationTarget,
+  sosAlert, routeDeviation, snapshot,
+  // ADD:
+  hospitalEta: snapshot?.hospitalEta ?? null,
+};
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

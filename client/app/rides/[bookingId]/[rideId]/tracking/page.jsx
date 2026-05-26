@@ -1,38 +1,5 @@
 'use client';
 
-/**
- * CustomerRideLiveTracking.jsx — Likeson.in
- *
- * Customer-side live ride tracking page.
- *
- * Route params (Next.js App Router):
- *   /bookings/[bookingId]/tracking   — preferred (bookingId in URL)
- *   /rides/[rideId]/tracking         — fallback (rideId only)
- *
- * What this page does:
- *  - Joins booking socket room → receives live driver location, ETA, status
- *  - Shows Google Map with animated driver marker moving toward pickup / dropoff
- *  - Displays OTP to customer (customer SHOWS it to driver — does NOT type it)
- *  - Shows driver info card, booking summary, ETA badge
- *  - SOS button for customer safety
- *  - Handles all ride status transitions gracefully
- *  - Polling fallback (fetchRideLive every 5s) when socket offline
- *
- * Redux slices used:
- *  - rideRequestSlice  → currentRide, socketLive, liveData, trackingData
- *  - operationsSlice   → selectedBooking, liveLocation (set via setLiveLocation etc)
- *
- * Socket hooks used (from SocketProvider.jsx):
- *  - useBookingRoom(bookingId)
- *  - useSos(bookingId, rideId)
- *
- * Key design decisions:
- *  - OTP is DISPLAYED (big bold digits), not typed — customer shows phone to driver
- *  - Driver marker animates with smooth interpolation
- *  - Map follows driver in pickup phase, then auto-zooms to show full route in ride phase
- *  - No editing, no forms — pure read-only live view
- */
-
 import React, {
   useEffect, useRef, useCallback, useState, useMemo, memo,
 } from 'react';
@@ -42,18 +9,17 @@ import { motion, AnimatePresence }  from 'framer-motion';
 import {
   GoogleMap, DirectionsRenderer,
 } from '@react-google-maps/api';
-import { useGoogleMaps } from '@/context/GoogleMapsProvider'; 
+import { useGoogleMaps } from '@/context/GoogleMapsProvider';
 import {
-  Phone, User, MapPin, Navigation, Clock, Shield,
+  Phone, User, Navigation, Clock, Shield,
   ShieldAlert, WifiOff, ChevronDown, ChevronLeft,
   CheckCircle, Loader2, X, Star, Car, RefreshCw,
   AlertTriangle, Zap, Copy, Check, ArrowUpRight,
-  MessageCircle, Info,
+  Maximize2, Minimize2, Plus, Minus,
 } from 'lucide-react';
 
 // Redux
 import {
-  fetchRide,
   fetchRideLive,
   fetchRideTracking,
   selectCurrentRide,
@@ -80,38 +46,35 @@ import {
   selectSelectedBooking,
 } from '@/store/slices/bookingSlice';
 
-// Socket context
 import {
   useSocket,
   useBookingRoom,
   useSos,
-  SOCKET_EVENTS,
 } from '@/context/SocketProvider';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const GOOGLE_MAPS_LIBRARIES = ['geometry', 'marker'];
-const MAP_ID      = process.env.NEXT_PUBLIC_MAP_ID          || '33a293614af186975a18525f';
-const MAPS_KEY    = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || '';
-const POLL_MS     = 5000; // 5 s polling fallback
+const MAP_ID  = process.env.NEXT_PUBLIC_MAP_ID || '33a293614af186975a18525f';
+const POLL_MS = 5000;
 
-/** Ride status → human label + theme color */
+// 3-D car image — rotates with heading
+const CAR_IMG_URL = 'https://ik.imagekit.io/zxxzgk3iq/car.png?updatedAt=1779446267383';
+
 const STATUS_CONFIG = {
-  searching:       { label: 'Finding Driver',  color: '#f59e0b', bg: 'rgba(245,158,11,0.12)',  border: 'rgba(245,158,11,0.30)', icon: '🔍' },
-  driver_assigned: { label: 'Driver Assigned', color: '#3b82f6', bg: 'rgba(59,130,246,0.12)',  border: 'rgba(59,130,246,0.30)', icon: '👤' },
-  driver_accepted: { label: 'Driver On Way',   color: '#06b6d4', bg: 'rgba(6,182,212,0.12)',   border: 'rgba(6,182,212,0.30)',  icon: '🚗' },
-  driver_en_route: { label: 'Driver En Route', color: '#06b6d4', bg: 'rgba(6,182,212,0.12)',   border: 'rgba(6,182,212,0.30)',  icon: '🚗' },
-  driver_arrived:  { label: 'Driver Arrived!', color: '#8b5cf6', bg: 'rgba(139,92,246,0.15)',  border: 'rgba(139,92,246,0.40)', icon: '📍' },
-  otp_verified:    { label: 'Starting Ride',   color: '#10b981', bg: 'rgba(16,185,129,0.12)',  border: 'rgba(16,185,129,0.30)', icon: '✅' },
-  in_progress:     { label: 'Ride In Progress',color: '#22c55e', bg: 'rgba(34,197,94,0.12)',   border: 'rgba(34,197,94,0.30)',  icon: '🏥' },
-  at_stop:         { label: 'Stopped',         color: '#f97316', bg: 'rgba(249,115,22,0.12)',  border: 'rgba(249,115,22,0.30)', icon: '⏸️' },
-  completed:       { label: 'Ride Completed',  color: '#64748b', bg: 'rgba(100,116,139,0.12)', border: 'rgba(100,116,139,0.30)',icon: '🎉' },
-  cancelled:       { label: 'Ride Cancelled',  color: '#ef4444', bg: 'rgba(239,68,68,0.12)',   border: 'rgba(239,68,68,0.30)',  icon: '❌' },
+  searching:       { label: 'Finding Driver',   color: '#f59e0b', bg: 'rgba(245,158,11,0.12)',  border: 'rgba(245,158,11,0.30)',  icon: '🔍' },
+  driver_assigned: { label: 'Driver Assigned',  color: '#3b82f6', bg: 'rgba(59,130,246,0.12)',  border: 'rgba(59,130,246,0.30)',  icon: '👤' },
+  driver_accepted: { label: 'Driver On Way',    color: '#06b6d4', bg: 'rgba(6,182,212,0.12)',   border: 'rgba(6,182,212,0.30)',   icon: '🚗' },
+  driver_en_route: { label: 'Driver En Route',  color: '#06b6d4', bg: 'rgba(6,182,212,0.12)',   border: 'rgba(6,182,212,0.30)',   icon: '🚗' },
+  driver_arrived:  { label: 'Driver Arrived!',  color: '#8b5cf6', bg: 'rgba(139,92,246,0.15)',  border: 'rgba(139,92,246,0.40)',  icon: '📍' },
+  otp_verified:    { label: 'Starting Ride',    color: '#10b981', bg: 'rgba(16,185,129,0.12)',  border: 'rgba(16,185,129,0.30)',  icon: '✅' },
+  in_progress:     { label: 'Ride In Progress', color: '#22c55e', bg: 'rgba(34,197,94,0.12)',   border: 'rgba(34,197,94,0.30)',   icon: '🏥' },
+  at_stop:         { label: 'Stopped',          color: '#f97316', bg: 'rgba(249,115,22,0.12)',  border: 'rgba(249,115,22,0.30)',  icon: '⏸️' },
+  completed:       { label: 'Ride Completed',   color: '#64748b', bg: 'rgba(100,116,139,0.12)', border: 'rgba(100,116,139,0.30)', icon: '🎉' },
+  cancelled:       { label: 'Ride Cancelled',   color: '#ef4444', bg: 'rgba(239,68,68,0.12)',   border: 'rgba(239,68,68,0.30)',   icon: '❌' },
 };
 
-/** Steps shown in timeline (in order) */
 const TIMELINE_STEPS = [
   { key: 'searching',       label: 'Booking Confirmed' },
   { key: 'driver_assigned', label: 'Driver Assigned'   },
@@ -127,24 +90,10 @@ const STEP_ORDER = TIMELINE_STEPS.map(s => s.key);
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Linearly interpolate between two LatLng positions for smooth marker animation */
-const lerp = (a, b, t) => a + (b - a) * t;
+const lerp   = (a, b, t) => a + (b - a) * t;
+const fmtEta = (min) => { if (min == null) return null; if (min < 1) return '< 1 min'; return `${Math.round(min)} min`; };
+const fmtKm  = (km)  => { if (km  == null) return null; if (km < 1) return `${Math.round(km * 1000)} m`; return `${km.toFixed(1)} km`; };
 
-/** Format minutes as "X min" or "< 1 min" */
-const fmtEta = (min) => {
-  if (min == null) return null;
-  if (min < 1) return '< 1 min';
-  return `${Math.round(min)} min`;
-};
-
-/** Format km distance */
-const fmtKm = (km) => {
-  if (km == null) return null;
-  if (km < 1) return `${Math.round(km * 1000)} m`;
-  return `${km.toFixed(1)} km`;
-};
-
-/** Step index for given status */
 const getStepIdx = (status) => {
   if (['driver_accepted', 'driver_en_route'].includes(status)) return STEP_ORDER.indexOf('driver_en_route');
   if (status === 'otp_verified') return STEP_ORDER.indexOf('driver_arrived');
@@ -156,16 +105,55 @@ const getStepIdx = (status) => {
 // MARKER HTML BUILDERS
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * 3-D car image marker.
+ * Shadow ellipse beneath, pulse ring, car image rotates with heading.
+ * The car PNG faces "up" (north = 0°), so we rotate by heading degrees.
+ */
 const createDriverMarkerHtml = (heading = 0) => `
   <div style="position:absolute;width:0;height:0;pointer-events:none;">
-    <div style="position:absolute;width:56px;height:56px;left:-28px;top:-28px;display:flex;align-items:center;justify-content:center;">
-      <div style="position:absolute;width:52px;height:52px;border-radius:50%;background:rgba(34,197,94,0.22);animation:custPulse 2s infinite ease-out;"></div>
-      <div style="position:relative;width:42px;height:42px;background:linear-gradient(135deg,#22c55e,#16a34a);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(34,197,94,0.55);transform:rotate(${heading}deg);transition:transform 0.4s ease-out;z-index:2;">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M5 17H3a2 2 0 01-2-2V5a2 2 0 012-2h11a2 2 0 012 2v3m-4 0h7l2 3v4h-2m-5 0H9m0 0a2 2 0 100 4 2 2 0 000-4zm9 0a2 2 0 100 4 2 2 0 000-4z"/></svg>
-      </div>
+    <div style="position:absolute;width:72px;height:72px;left:-36px;top:-36px;display:flex;align-items:center;justify-content:center;">
+
+      <!-- outer pulse ring -->
+      <div style="
+        position:absolute;width:68px;height:68px;border-radius:50%;
+        background:radial-gradient(circle,rgba(34,197,94,0.18) 0%,rgba(34,197,94,0) 70%);
+        animation:driverPulse 2.2s infinite ease-out;
+        pointer-events:none;
+      "></div>
+
+      <!-- soft shadow ellipse -->
+      <div style="
+        position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);
+        width:44px;height:10px;border-radius:50%;
+        background:rgba(0,0,0,0.22);filter:blur(4px);
+        pointer-events:none;
+      "></div>
+
+      <!-- car image — rotates with heading -->
+      <img
+        id="driverCarImg"
+        src="${CAR_IMG_URL}"
+        alt="driver"
+        style="
+          position:relative;
+          width:54px;height:54px;
+          object-fit:contain;
+          transform:rotate(${heading}deg);
+          transition:transform 0.35s cubic-bezier(0.34,1.56,0.64,1);
+          filter:drop-shadow(0 6px 12px rgba(0,0,0,0.45));
+          z-index:2;
+          pointer-events:none;
+        "
+      />
     </div>
   </div>
-  <style>@keyframes custPulse{0%{transform:scale(0.9);opacity:0.8}100%{transform:scale(2.4);opacity:0}}</style>
+  <style>
+    @keyframes driverPulse {
+      0%   { transform:scale(0.85); opacity:0.9; }
+      100% { transform:scale(2.2);  opacity:0; }
+    }
+  </style>
 `;
 
 const createPickupMarkerHtml = () => `
@@ -189,7 +177,30 @@ const createDestMarkerHtml = () => `
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OTP DISPLAY MODAL (customer SHOWS this to driver)
+// FAB BUTTON — shared style
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FabBtn = memo(function FabBtn({ onClick, active, danger, children, title }) {
+  return (
+    <motion.button
+      whileTap={{ scale: 0.86 }}
+      onClick={onClick}
+      title={title}
+      className={[
+        'w-11 h-11 rounded-[13px] flex items-center justify-center cursor-pointer border',
+        'shadow-[0_4px_20px_rgba(0,0,0,0.38)] transition-colors',
+        danger
+          ? (active ? 'bg-error border-error text-error-content animate-pulse' : 'bg-error/10 border-error/30 text-error')
+          : (active ? 'bg-primary text-primary-content border-primary' : 'bg-base-200/90 text-base-content/60 border-base-300 hover:text-base-content'),
+      ].join(' ')}
+    >
+      {children}
+    </motion.button>
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OTP DISPLAY MODAL
 // ─────────────────────────────────────────────────────────────────────────────
 
 const OtpDisplay = memo(function OtpDisplay({ otp, onClose }) {
@@ -202,16 +213,13 @@ const OtpDisplay = memo(function OtpDisplay({ otp, onClose }) {
   }, [otp]);
 
   if (!otp) return null;
-
   const digits = String(otp).split('');
 
   return (
     <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 z-[60] flex items-center justify-center px-4"
-      style={{ background: 'rgba(0,0,0,0.70)', backdropFilter: 'blur(8px)' }}
+      style={{ background: 'rgba(0,0,0,0.72)', backdropFilter: 'blur(8px)' }}
       onClick={onClose}
     >
       <motion.div
@@ -222,21 +230,16 @@ const OtpDisplay = memo(function OtpDisplay({ otp, onClose }) {
         className="w-full max-w-sm rounded-3xl p-7 bg-base-200 border border-base-300 shadow-[0_24px_64px_rgba(0,0,0,0.7)]"
         onClick={e => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="flex items-start justify-between mb-2">
           <div>
             <h3 className="text-lg font-black text-base-content m-0">Your Ride OTP</h3>
             <p className="text-xs text-base-content/50 mt-1 m-0">Show this to your driver</p>
           </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-xl bg-base-300 flex items-center justify-center text-base-content/50 hover:text-base-content transition-colors cursor-pointer border border-base-300"
-          >
+          <button onClick={onClose} className="w-8 h-8 rounded-xl bg-base-300 flex items-center justify-center text-base-content/50 hover:text-base-content transition-colors cursor-pointer border border-base-300">
             <X size={14} />
           </button>
         </div>
 
-        {/* Pulsing notice */}
         <motion.div
           animate={{ opacity: [0.7, 1, 0.7] }}
           transition={{ repeat: Infinity, duration: 2 }}
@@ -246,28 +249,20 @@ const OtpDisplay = memo(function OtpDisplay({ otp, onClose }) {
           <p className="text-xs font-semibold text-warning m-0">Driver will ask for this — do NOT share elsewhere</p>
         </motion.div>
 
-        {/* Big OTP digits */}
         <div className="flex gap-3 justify-center mb-5">
           {digits.map((d, i) => (
             <motion.div
               key={i}
-              initial={{ scale: 0 }}
-              animate={{ scale: 1 }}
+              initial={{ scale: 0 }} animate={{ scale: 1 }}
               transition={{ delay: i * 0.08, type: 'spring', stiffness: 400 }}
               className="w-[58px] h-[66px] rounded-2xl flex items-center justify-center font-black text-3xl border-2"
-              style={{
-                background: 'linear-gradient(135deg, var(--primary)/0.15, var(--secondary)/0.08)',
-                borderColor: 'var(--primary)',
-                color: 'var(--primary)',
-                backgroundColor: 'rgba(59,130,246,0.12)',
-              }}
+              style={{ background: 'rgba(59,130,246,0.12)', borderColor: 'var(--primary)', color: 'var(--primary)' }}
             >
               {d}
             </motion.div>
           ))}
         </div>
 
-        {/* Copy button */}
         <button
           onClick={handleCopy}
           className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border border-base-300 text-sm font-semibold text-base-content/60 hover:text-base-content hover:border-primary/40 transition-all cursor-pointer bg-transparent"
@@ -280,12 +275,11 @@ const OtpDisplay = memo(function OtpDisplay({ otp, onClose }) {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DRIVER INFO CARD
+// DRIVER CARD
 // ─────────────────────────────────────────────────────────────────────────────
 
-const DriverCard = memo(function DriverCard({ driverSnapshot, vehicleSnapshot, onCall }) {
+const DriverCard = memo(function DriverCard({ driverSnapshot, vehicleSnapshot }) {
   if (!driverSnapshot?.name && !driverSnapshot?.legalName) return null;
-
   const name    = driverSnapshot.legalName || driverSnapshot.name || 'Driver';
   const phone   = driverSnapshot.phone;
   const rating  = driverSnapshot.rating;
@@ -294,22 +288,12 @@ const DriverCard = memo(function DriverCard({ driverSnapshot, vehicleSnapshot, o
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
+      initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
       className="flex items-center gap-3 p-3 rounded-2xl bg-base-300/60 border border-base-300"
     >
-      {/* Avatar */}
-      <div
-        className="w-12 h-12 rounded-xl flex-shrink-0 overflow-hidden flex items-center justify-center"
-        style={{ background: 'linear-gradient(135deg, var(--success)/0.2, var(--success)/0.08)' }}
-      >
-        {photo
-          ? <img src={photo} alt={name} className="w-full h-full object-cover" />
-          : <User size={20} className="text-success" />
-        }
+      <div className="w-12 h-12 rounded-xl flex-shrink-0 overflow-hidden flex items-center justify-center" style={{ background: 'linear-gradient(135deg,rgba(34,197,94,0.2),rgba(34,197,94,0.08))' }}>
+        {photo ? <img src={photo} alt={name} className="w-full h-full object-cover" /> : <User size={20} className="text-success" />}
       </div>
-
-      {/* Info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <p className="text-sm font-bold text-base-content m-0 truncate">{name}</p>
@@ -330,14 +314,8 @@ const DriverCard = memo(function DriverCard({ driverSnapshot, vehicleSnapshot, o
           </div>
         )}
       </div>
-
-      {/* Call button */}
       {phone && (
-        <a
-          href={`tel:${phone}`}
-          onClick={onCall}
-          className="w-10 h-10 rounded-xl flex items-center justify-center text-success bg-success/10 border border-success/25 no-underline flex-shrink-0 hover:bg-success/20 transition-colors"
-        >
+        <a href={`tel:${phone}`} className="w-10 h-10 rounded-xl flex items-center justify-center text-success bg-success/10 border border-success/25 no-underline flex-shrink-0 hover:bg-success/20 transition-colors">
           <Phone size={16} />
         </a>
       )}
@@ -351,43 +329,28 @@ const DriverCard = memo(function DriverCard({ driverSnapshot, vehicleSnapshot, o
 
 const RideTimeline = memo(function RideTimeline({ status }) {
   const activeIdx = getStepIdx(status || 'searching');
-
   return (
     <div className="px-4 py-3">
       <div className="flex items-start justify-between relative">
-        {/* Connector line */}
-        <div
-          className="absolute top-3 h-0.5 bg-base-300"
-          style={{ left: '5%', right: '5%', zIndex: 0 }}
-        />
-        {/* Progress fill */}
+        <div className="absolute top-3 h-0.5 bg-base-300" style={{ left: '5%', right: '5%', zIndex: 0 }} />
         <motion.div
           className="absolute top-3 h-0.5 bg-primary"
           style={{ left: '5%', zIndex: 1 }}
           animate={{ width: `${(activeIdx / (TIMELINE_STEPS.length - 1)) * 90}%` }}
           transition={{ duration: 0.6, ease: 'easeInOut' }}
         />
-
         {TIMELINE_STEPS.map((step, i) => {
-          const done   = i <= activeIdx;
-          const active = i === activeIdx;
+          const done = i <= activeIdx, active = i === activeIdx;
           return (
             <div key={step.key} className="flex flex-col items-center gap-1 relative z-10 flex-1">
               <motion.div
                 className="w-6 h-6 rounded-full flex items-center justify-center border-2 flex-shrink-0"
-                animate={{
-                  backgroundColor: done ? 'var(--primary)' : 'var(--base-200)',
-                  borderColor: done ? 'var(--primary)' : 'var(--base-300)',
-                  scale: active ? 1.25 : 1,
-                }}
+                animate={{ backgroundColor: done ? 'var(--primary)' : 'var(--base-200)', borderColor: done ? 'var(--primary)' : 'var(--base-300)', scale: active ? 1.25 : 1 }}
                 transition={{ duration: 0.3 }}
               >
                 {done && <Check size={10} color="white" strokeWidth={3} />}
               </motion.div>
-              <p
-                className="text-[9px] text-center leading-tight font-semibold"
-                style={{ color: done ? 'var(--primary)' : 'var(--base-content)', opacity: done ? 1 : 0.4 }}
-              >
+              <p className="text-[9px] text-center leading-tight font-semibold" style={{ color: done ? 'var(--primary)' : 'var(--base-content)', opacity: done ? 1 : 0.4 }}>
                 {step.label}
               </p>
             </div>
@@ -406,7 +369,7 @@ const BottomSheet = memo(function BottomSheet({
   open, onToggle, rideStatus, rideCode, booking, otp, onShowOtp,
   driverSnapshot, vehicleSnapshot, etaMinutes, distanceKm,
 }) {
-  const statusCfg = STATUS_CONFIG[rideStatus] || STATUS_CONFIG.searching;
+  const statusCfg  = STATUS_CONFIG[rideStatus] || STATUS_CONFIG.searching;
   const showOtpBtn = rideStatus === 'driver_arrived' || rideStatus === 'otp_verified';
 
   return (
@@ -417,36 +380,16 @@ const BottomSheet = memo(function BottomSheet({
       className="fixed bottom-0 left-0 right-0 z-30 rounded-t-3xl bg-base-200 border border-base-300 border-b-0 shadow-[0_-8px_40px_rgba(0,0,0,0.35)]"
       style={{ maxHeight: '80vh' }}
     >
-      {/* Drag handle */}
-      <button
-        onClick={onToggle}
-        className="w-full bg-transparent border-none cursor-pointer px-4 pt-3 pb-1 flex flex-col items-center"
-      >
+      <button onClick={onToggle} className="w-full bg-transparent border-none cursor-pointer px-4 pt-3 pb-1 flex flex-col items-center">
         <div className="w-9 h-1 rounded-full bg-base-300 mb-3" />
-
-        {/* Status + ETA row */}
         <div className="flex items-center justify-between w-full mb-1">
-          <span
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest border"
-            style={{ background: statusCfg.bg, borderColor: statusCfg.border, color: statusCfg.color }}
-          >
-            <span>{statusCfg.icon}</span>
-            {statusCfg.label}
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest border"
+            style={{ background: statusCfg.bg, borderColor: statusCfg.border, color: statusCfg.color }}>
+            <span>{statusCfg.icon}</span>{statusCfg.label}
           </span>
-
           <div className="flex items-center gap-3">
-            {etaMinutes != null && (
-              <div className="flex items-center gap-1">
-                <Clock size={11} className="text-primary" />
-                <span className="text-xs font-bold text-primary">{fmtEta(etaMinutes)}</span>
-              </div>
-            )}
-            {distanceKm != null && (
-              <div className="flex items-center gap-1">
-                <Navigation size={11} className="text-base-content/50" />
-                <span className="text-xs font-semibold text-base-content/60">{fmtKm(distanceKm)}</span>
-              </div>
-            )}
+            {etaMinutes != null && <div className="flex items-center gap-1"><Clock size={11} className="text-primary" /><span className="text-xs font-bold text-primary">{fmtEta(etaMinutes)}</span></div>}
+            {distanceKm != null && <div className="flex items-center gap-1"><Navigation size={11} className="text-base-content/50" /><span className="text-xs font-semibold text-base-content/60">{fmtKm(distanceKm)}</span></div>}
             <motion.div animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.2 }}>
               <ChevronDown size={15} className="text-base-content/40" />
             </motion.div>
@@ -454,26 +397,17 @@ const BottomSheet = memo(function BottomSheet({
         </div>
       </button>
 
-      {/* Scrollable content */}
       <div className="overflow-y-auto px-4 pb-8" style={{ maxHeight: 'calc(80vh - 80px)' }}>
-
-        {/* OTP section — prominent when driver arrived */}
         <AnimatePresence>
           {showOtpBtn && otp && (
             <motion.button
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
+              initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
               onClick={onShowOtp}
               className="w-full flex items-center justify-between p-4 rounded-2xl mb-3 border-2 cursor-pointer"
-              style={{
-                background: 'rgba(139,92,246,0.10)',
-                borderColor: 'rgba(139,92,246,0.40)',
-              }}
+              style={{ background: 'rgba(139,92,246,0.10)', borderColor: 'rgba(139,92,246,0.40)' }}
             >
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center"
-                  style={{ background: 'rgba(139,92,246,0.15)' }}>
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'rgba(139,92,246,0.15)' }}>
                   <span className="text-xl">🔑</span>
                 </div>
                 <div className="text-left">
@@ -486,24 +420,18 @@ const BottomSheet = memo(function BottomSheet({
           )}
         </AnimatePresence>
 
-        {/* Driver card */}
-        <DriverCard
-          driverSnapshot={driverSnapshot}
-          vehicleSnapshot={vehicleSnapshot}
-        />
+        <DriverCard driverSnapshot={driverSnapshot} vehicleSnapshot={vehicleSnapshot} />
 
-        {/* Booking summary */}
         {booking && (
           <div className="mt-3 p-3 rounded-2xl bg-base-300/60 border border-base-300">
             <p className="text-[10px] text-base-content/40 font-bold uppercase tracking-widest m-0 mb-2">Booking</p>
-
             {[
-              ['Code',        booking.bookingCode],
-              ['Ride Code',   rideCode],
-              ['Type',        booking.bookingType?.replace(/_/g, ' ')],
-              ['Scheduled',   booking.scheduledAt ? new Date(booking.scheduledAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : null],
-              ['Payment',     booking.paymentStatus],
-              ['Total Fare',  booking.fareBreakdown?.totalAmount ? `₹${booking.fareBreakdown.totalAmount}` : null],
+              ['Code',       booking.bookingCode],
+              ['Ride Code',  rideCode],
+              ['Type',       booking.bookingType?.replace(/_/g, ' ')],
+              ['Scheduled',  booking.scheduledAt ? new Date(booking.scheduledAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : null],
+              ['Payment',    booking.paymentStatus],
+              ['Total Fare', booking.fareBreakdown?.totalAmount ? `₹${booking.fareBreakdown.totalAmount}` : null],
             ].map(([label, val]) => val ? (
               <div key={label} className="flex justify-between py-1.5 border-b border-base-300/60 last:border-b-0">
                 <span className="text-[11px] text-base-content/40 font-semibold uppercase tracking-wide">{label}</span>
@@ -513,7 +441,6 @@ const BottomSheet = memo(function BottomSheet({
           </div>
         )}
 
-        {/* Route */}
         {(booking?.patientLocation || booking?.destinationLocation) && (
           <div className="mt-3 p-3 rounded-2xl bg-base-300/60 border border-base-300">
             <p className="text-[10px] text-base-content/40 font-bold uppercase tracking-widest m-0 mb-3">Route</p>
@@ -542,79 +469,38 @@ const BottomSheet = memo(function BottomSheet({
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COMPLETED SCREEN
+// COMPLETED / CANCELLED / LOADING / SEARCHING screens
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CompletedScreen = memo(function CompletedScreen({ booking, onBack, onRate }) {
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className="fixed inset-0 z-[70] bg-base-100 flex flex-col items-center justify-center px-6 font-poppins"
-    >
-      {/* Confetti-like rings */}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+      className="fixed inset-0 z-[70] bg-base-100 flex flex-col items-center justify-center px-6 font-poppins">
       <div className="relative mb-8">
         {[72, 52, 36].map((sz, i) => (
-          <motion.div
-            key={i}
-            initial={{ scale: 0, opacity: 0 }}
-            animate={{ scale: 1, opacity: 0.15 }}
+          <motion.div key={i} initial={{ scale: 0, opacity: 0 }} animate={{ scale: 1, opacity: 0.15 }}
             transition={{ delay: i * 0.12, type: 'spring', stiffness: 200 }}
             className="absolute rounded-full border-2 border-success"
-            style={{ width: sz, height: sz, top: `${(72 - sz) / 2}px`, left: `${(72 - sz) / 2}px` }}
-          />
+            style={{ width: sz, height: sz, top: `${(72 - sz) / 2}px`, left: `${(72 - sz) / 2}px` }} />
         ))}
-        <motion.div
-          initial={{ scale: 0 }}
-          animate={{ scale: 1 }}
-          transition={{ delay: 0.18, type: 'spring', damping: 14 }}
-          className="w-[72px] h-[72px] rounded-full flex items-center justify-center bg-success/15 border-2 border-success/40"
-        >
+        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.18, type: 'spring', damping: 14 }}
+          className="w-[72px] h-[72px] rounded-full flex items-center justify-center bg-success/15 border-2 border-success/40">
           <CheckCircle size={38} className="text-success" />
         </motion.div>
       </div>
-
-      <motion.h2
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.30 }}
-        className="text-2xl font-black text-base-content text-center m-0 mb-2"
-      >
-        Ride Completed!
-      </motion.h2>
-      <motion.p
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.40 }}
-        className="text-sm text-base-content/50 text-center m-0 mb-8"
-      >
+      <motion.h2 initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.30 }}
+        className="text-2xl font-black text-base-content text-center m-0 mb-2">Ride Completed!</motion.h2>
+      <motion.p initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.40 }}
+        className="text-sm text-base-content/50 text-center m-0 mb-8">
         Hope you had a comfortable journey.
-        {booking?.fareBreakdown?.totalAmount && (
-          <> Total fare: <span className="font-bold text-primary">₹{booking.fareBreakdown.totalAmount}</span></>
-        )}
+        {booking?.fareBreakdown?.totalAmount && <> Total fare: <span className="font-bold text-primary">₹{booking.fareBreakdown.totalAmount}</span></>}
       </motion.p>
-
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.50 }}
-        className="flex flex-col gap-3 w-full max-w-xs"
-      >
-        <motion.button
-          whileTap={{ scale: 0.97 }}
-          onClick={onRate}
-          className="btn btn-primary btn-lg rounded-2xl font-bold"
-          style={{ fontFamily: 'inherit' }}
-        >
-          <Star size={16} />
-          Rate Your Experience
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.50 }}
+        className="flex flex-col gap-3 w-full max-w-xs">
+        <motion.button whileTap={{ scale: 0.97 }} onClick={onRate} className="btn btn-primary btn-lg rounded-2xl font-bold" style={{ fontFamily: 'inherit' }}>
+          <Star size={16} /> Rate Your Experience
         </motion.button>
-        <motion.button
-          whileTap={{ scale: 0.97 }}
-          onClick={onBack}
-          className="btn btn-ghost btn-lg rounded-2xl font-semibold text-base-content/60"
-          style={{ fontFamily: 'inherit' }}
-        >
+        <motion.button whileTap={{ scale: 0.97 }} onClick={onBack} className="btn btn-ghost btn-lg rounded-2xl font-semibold text-base-content/60" style={{ fontFamily: 'inherit' }}>
           Back to Bookings
         </motion.button>
       </motion.div>
@@ -622,47 +508,25 @@ const CompletedScreen = memo(function CompletedScreen({ booking, onBack, onRate 
   );
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CANCELLED SCREEN
-// ─────────────────────────────────────────────────────────────────────────────
-
 const CancelledScreen = memo(function CancelledScreen({ onBack }) {
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className="fixed inset-0 z-[70] bg-base-100 flex flex-col items-center justify-center px-6 font-poppins"
-    >
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+      className="fixed inset-0 z-[70] bg-base-100 flex flex-col items-center justify-center px-6 font-poppins">
       <div className="w-[72px] h-[72px] rounded-full flex items-center justify-center bg-error/10 border-2 border-error/30 mb-6">
         <X size={36} className="text-error" />
       </div>
       <h2 className="text-2xl font-black text-base-content text-center m-0 mb-2">Ride Cancelled</h2>
-      <p className="text-sm text-base-content/50 text-center m-0 mb-8">
-        Your ride was cancelled. Please book again or contact support.
-      </p>
-      <button
-        onClick={onBack}
-        className="btn btn-primary btn-lg rounded-2xl px-8 font-bold"
-        style={{ fontFamily: 'inherit' }}
-      >
-        Back to Bookings
-      </button>
+      <p className="text-sm text-base-content/50 text-center m-0 mb-8">Your ride was cancelled. Please book again or contact support.</p>
+      <button onClick={onBack} className="btn btn-primary btn-lg rounded-2xl px-8 font-bold" style={{ fontFamily: 'inherit' }}>Back to Bookings</button>
     </motion.div>
   );
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LOADING SKELETON
-// ─────────────────────────────────────────────────────────────────────────────
-
 const LoadingSkeleton = memo(function LoadingSkeleton() {
   return (
     <div className="fixed inset-0 bg-base-100 flex flex-col items-center justify-center gap-4 font-poppins">
-      <motion.div
-        animate={{ scale: [1, 1.12, 1], opacity: [0.6, 1, 0.6] }}
-        transition={{ repeat: Infinity, duration: 1.8 }}
-        className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center"
-      >
+      <motion.div animate={{ scale: [1, 1.12, 1], opacity: [0.6, 1, 0.6] }} transition={{ repeat: Infinity, duration: 1.8 }}
+        className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
         <Loader2 size={28} className="text-primary animate-spin" />
       </motion.div>
       <p className="text-sm text-base-content/50 font-semibold">Loading your ride...</p>
@@ -670,30 +534,16 @@ const LoadingSkeleton = memo(function LoadingSkeleton() {
   );
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SEARCHING SCREEN (no driver yet)
-// ─────────────────────────────────────────────────────────────────────────────
-
 const SearchingScreen = memo(function SearchingScreen({ bookingCode }) {
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center z-10 bg-base-100 px-6">
-      <motion.div
-        animate={{ rotate: 360 }}
-        transition={{ repeat: Infinity, duration: 3, ease: 'linear' }}
-        className="w-20 h-20 rounded-full border-4 border-primary/20 border-t-primary mb-6"
-      />
+      <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 3, ease: 'linear' }}
+        className="w-20 h-20 rounded-full border-4 border-primary/20 border-t-primary mb-6" />
       <h3 className="text-xl font-black text-base-content m-0 mb-2 text-center">Finding Your Driver</h3>
       <p className="text-sm text-base-content/50 text-center m-0 mb-1">We're matching you with the best available driver.</p>
-      {bookingCode && (
-        <p className="text-xs text-base-content/30 font-mono m-0 mt-2">#{bookingCode}</p>
-      )}
-      <motion.p
-        animate={{ opacity: [0.4, 1, 0.4] }}
-        transition={{ repeat: Infinity, duration: 2 }}
-        className="text-xs text-primary font-semibold mt-6 m-0"
-      >
-        You'll be notified when a driver accepts
-      </motion.p>
+      {bookingCode && <p className="text-xs text-base-content/30 font-mono m-0 mt-2">#{bookingCode}</p>}
+      <motion.p animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 2 }}
+        className="text-xs text-primary font-semibold mt-6 m-0">You'll be notified when a driver accepts</motion.p>
     </div>
   );
 });
@@ -703,51 +553,47 @@ const SearchingScreen = memo(function SearchingScreen({ bookingCode }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function CustomerRideLiveTracking() {
-  const params    = useParams();
-  const router    = useRouter();
-  const dispatch  = useDispatch();
+  const params   = useParams();
+  const router   = useRouter();
+  const dispatch = useDispatch();
 
-  // Resolve IDs from URL
   const bookingId = params?.bookingId || null;
   const rideId    = params?.rideId    || null;
 
-  // ── Redux state ─────────────────────────────────────────────
-  const currentRide   = useSelector(selectCurrentRide);
-  const socketLive    = useSelector(selectSocketLive);
-  const liveData      = useSelector(selectLiveData);
-  const trackingData  = useSelector(selectTrackingData);
-  const rideLoading   = useSelector(selectRideLoading);
-  const booking       = useSelector(selectSelectedBooking);
+  // ── Redux ────────────────────────────────────────────────────
+  const currentRide  = useSelector(selectCurrentRide);
+  const socketLive   = useSelector(selectSocketLive);
+  const liveData     = useSelector(selectLiveData);
+  const booking      = useSelector(selectSelectedBooking);
 
-  // ── Socket hooks ─────────────────────────────────────────────
+  // ── Socket ───────────────────────────────────────────────────
   const { on, connected, SOCKET_EVENTS: EV } = useSocket();
-  const { locationUpdate, etaUpdate: etaEvt, rideStatus: rideStatusEvt, snapshot } = useBookingRoom(bookingId);
+  const { locationUpdate, etaUpdate: etaEvt } = useBookingRoom(bookingId);
 
-  // Resolve active rideId (from URL or from ride data)
   const activeRideId = rideId || currentRide?._id || liveData?.rideId;
   const { trigger: triggerSos, sosActive, dismiss: dismissSos } = useSos(bookingId, activeRideId);
 
   // ── Refs ─────────────────────────────────────────────────────
   const mapRef            = useRef(null);
+  const mapContainerRef   = useRef(null);
   const dirServiceRef     = useRef(null);
   const driverMarkerRef   = useRef(null);
   const pickupMarkerRef   = useRef(null);
   const destMarkerRef     = useRef(null);
   const staticMarkersInit = useRef(false);
-  const driverPosRef      = useRef(null);    // current interpolated position
-  const driverTargetRef   = useRef(null);    // target position from socket
+  const driverPosRef      = useRef(null);
+  const driverTargetRef   = useRef(null);
   const animFrameRef      = useRef(null);
   const pollTimerRef      = useRef(null);
   const smoothHeadRef     = useRef(0);
-  const otpRef            = useRef(null);    // store otp from ride/notifications
+  const otpRef            = useRef(null);
+  const lastRouteCalcRef  = useRef(null);
 
-  // ── Local state ──────────────────────────────────────────────
-  const [mapLoaded,          setMapLoaded]          = useState(false);
-  // driverRoute  = driver current pos → pickup  (dashed blue, pickup phase only)
-  // overviewRoute = pickup → dropoff             (solid muted, always visible)
-  const [driverRoute,        setDriverRoute]        = useState(null);
-  const [overviewRoute,      setOverviewRoute]      = useState(null);
-  const [rideStatus,         setRideStatus]         = useState(null);
+  // ── State ────────────────────────────────────────────────────
+  const [mapLoaded,     setMapLoaded]     = useState(false);
+  const [driverRoute,   setDriverRoute]   = useState(null);
+  const [overviewRoute, setOverviewRoute] = useState(null);
+  const [rideStatus,    setRideStatus]    = useState(null);
   const [sheetOpen,     setSheetOpen]     = useState(false);
   const [showOtpModal,  setShowOtpModal]  = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
@@ -757,19 +603,18 @@ export default function CustomerRideLiveTracking() {
   const [remainingKm,   setRemainingKm]   = useState(null);
   const [isInitLoading, setIsInitLoading] = useState(true);
   const [followDriver,  setFollowDriver]  = useState(true);
-  const [driverPos,     setDriverPos]     = useState(null);   // for UI updates
+  const [driverPos,     setDriverPos]     = useState(null);
   const [headingDeg,    setHeadingDeg]    = useState(0);
+  const [isFullscreen,  setIsFullscreen]  = useState(false);
+  const [mapZoom,       setMapZoom]       = useState(15);
 
   const { isLoaded } = useGoogleMaps();
 
-  // ── Derived data ─────────────────────────────────────────────
+  // ── Derived ──────────────────────────────────────────────────
   const rd = currentRide || liveData;
 
-  const driverSnapshot  = useMemo(() =>
-    socketLive?.driverSnapshot || rd?.driverSnapshot, [socketLive, rd]);
-
-  const vehicleSnapshot = useMemo(() =>
-    socketLive?.vehicleSnapshot || rd?.vehicleSnapshot, [socketLive, rd]);
+  const driverSnapshot  = useMemo(() => socketLive?.driverSnapshot  || rd?.driverSnapshot,  [socketLive, rd]);
+  const vehicleSnapshot = useMemo(() => socketLive?.vehicleSnapshot || rd?.vehicleSnapshot, [socketLive, rd]);
 
   const pickupCoords = useMemo(() => {
     const c = rd?.pickup?.coordinates || booking?.patientLocation?.coordinates;
@@ -787,189 +632,8 @@ export default function CustomerRideLiveTracking() {
   const isSearching  = ['searching', 'requested'].includes(activeStatus);
   const isPostOtp    = ['otp_verified', 'in_progress', 'at_stop'].includes(activeStatus);
 
-  // ── Initial data fetch ───────────────────────────────────────
-  useEffect(() => {
-    const load = async () => {
-      setIsInitLoading(true);
-      try {
-        const tasks = [];
-        if (rideId) {
-          tasks.push(dispatch(fetchRideTracking({ rideId })));
-          tasks.push(dispatch(fetchRideLive(rideId)));
-        }
-        if (bookingId) {
-          tasks.push(dispatch(fetchMyBookingById({ bookingId })));
-        }
-        await Promise.all(tasks);
-      } catch (e) {
-        console.error('[CustomerTracking] init fetch:', e);
-      } finally {
-        setIsInitLoading(false);
-      }
-    };
-    load();
-  }, [rideId, bookingId]); // eslint-disable-line
+  // ── Route helpers — declared BEFORE effects ───────────────────
 
-  // ── Sync rideStatus from redux ────────────────────────────────
-  useEffect(() => {
-    const s = socketLive?.status || rd?.status;
-    if (s) setRideStatus(s);
-  }, [socketLive?.status, rd?.status]);
-
-  // ── Sync ETA from various sources ────────────────────────────
-  useEffect(() => {
-    const eta = etaEvt?.etaMinutes ?? socketLive?.etaMinutes ?? liveData?.currentEtaMinutes;
-    if (eta != null) setEtaMinutes(eta);
-    const km = etaEvt?.distanceRemainingKm;
-    if (km != null) setRemainingKm(km);
-  }, [etaEvt, socketLive?.etaMinutes, liveData?.currentEtaMinutes]);
-
-  // ── Socket: fine-grained status events ──────────────────────
-  useEffect(() => {
-    const unsubs = [
-      on(EV.RIDE_STATUS_CHANGED,     (d) => { dispatch(socketRideStatusChanged(d)); setRideStatus(d.status); }),
-      on('driver_accepted',          (d) => { dispatch(socketDriverAccepted(d));    setRideStatus('driver_accepted'); }),
-      on('driver_en_route',          (d) => { dispatch(socketDriverEnRoute(d));     setRideStatus('driver_en_route'); }),
-      on('driver_arrived',           (d) => { dispatch(socketDriverArrived(d));     setRideStatus('driver_arrived'); setSheetOpen(true); }),
-      on('otp_verified',             (d) => { dispatch(socketOtpVerified(d));       setRideStatus('otp_verified'); setShowOtpModal(false); }),
-      on('ride_started',             (d) => { dispatch(socketRideStarted(d));       setRideStatus('in_progress'); }),
-      on('ride_completed',           (d) => { dispatch(socketRideCompleted(d));     setRideStatus('completed'); }),
-      on('ride_cancelled',           (d) => { dispatch(socketRideCancelled(d));     setRideStatus('cancelled'); }),
-      on('ride_assigned',            (d) => { dispatch(socketRideAssigned(d));      setRideStatus(d.status); }),
-      on(EV.NAVIGATION_TARGET_CHANGED,(d) => { dispatch(socketNavigationTargetChanged(d)); }),
-
-      // OTP arrives via otp_required socket event (sent to customer)
-      on('otp_required', (d) => {
-        if (d.otp) {
-          setOtp(String(d.otp));
-          otpRef.current = String(d.otp);
-        }
-        setRideStatus('driver_arrived');
-        setSheetOpen(true);
-      }),
-    ];
-    return () => unsubs.forEach(fn => fn?.());
-  }, []); // eslint-disable-line
-
-  // ── Socket: location_update ───────────────────────────────────
-  useEffect(() => {
-    if (!locationUpdate) return;
-    dispatch(socketLocationUpdate(locationUpdate));
-    const { lat, lng, heading = 0 } = locationUpdate;
-    driverTargetRef.current = { lat, lng };
-    // Smooth heading (simple weighted avg)
-    smoothHeadRef.current = smoothHeadRef.current * 0.75 + heading * 0.25;
-    setHeadingDeg(smoothHeadRef.current);
-  }, [locationUpdate, dispatch]);
-
-  // ── ETA update from useBookingRoom ────────────────────────────
-  useEffect(() => {
-    if (!etaEvt) return;
-    dispatch(socketEtaUpdate(etaEvt));
-    if (etaEvt.etaMinutes != null) setEtaMinutes(etaEvt.etaMinutes);
-    if (etaEvt.distanceRemainingKm != null) setRemainingKm(etaEvt.distanceRemainingKm);
-  }, [etaEvt, dispatch]);
-
-  // ── Completed / cancelled triggers ───────────────────────────
-  useEffect(() => {
-    if (activeStatus === 'completed') {
-      const t = setTimeout(() => setShowCompleted(true), 2200);
-      return () => clearTimeout(t);
-    }
-    if (activeStatus === 'cancelled') {
-      const t = setTimeout(() => setShowCancelled(true), 1200);
-      return () => clearTimeout(t);
-    }
-  }, [activeStatus]);
-
-  // ── Polling fallback when socket offline ─────────────────────
-  useEffect(() => {
-    if (connected) {
-      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-      return;
-    }
-    if (!activeRideId) return;
-    pollTimerRef.current = setInterval(() => {
-      dispatch(fetchRideLive(activeRideId));
-    }, POLL_MS);
-    return () => clearInterval(pollTimerRef.current);
-  }, [connected, activeRideId, dispatch]);
-
-  // ── Animate driver marker (smooth interpolation) ─────────────
-  useEffect(() => {
-    const animate = () => {
-      const target = driverTargetRef.current;
-      if (!target) { animFrameRef.current = requestAnimationFrame(animate); return; }
-
-      const current = driverPosRef.current || { ...target };
-      const newLat = lerp(current.lat, target.lat, 0.12);
-      const newLng = lerp(current.lng, target.lng, 0.12);
-      driverPosRef.current = { lat: newLat, lng: newLng };
-
-      setDriverPos({ lat: newLat, lng: newLng });
-      animFrameRef.current = requestAnimationFrame(animate);
-    };
-    animFrameRef.current = requestAnimationFrame(animate);
-    return () => { if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); };
-  }, []);
-
-  // ── Update driver AdvancedMarker ──────────────────────────────
-  useEffect(() => {
-    if (!mapLoaded || !driverPos) return;
-    if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
-
-    if (!driverMarkerRef.current) {
-      const el = document.createElement('div');
-      el.style.position = 'relative';
-      el.style.width = '0'; el.style.height = '0';
-      el.innerHTML = createDriverMarkerHtml(headingDeg);
-      driverMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
-        map: mapRef.current, content: el, position: driverPos, zIndex: 10,
-      });
-    } else {
-      driverMarkerRef.current.position = driverPos;
-      if (driverMarkerRef.current.content) {
-        driverMarkerRef.current.content.innerHTML = createDriverMarkerHtml(headingDeg);
-      }
-    }
-
-    // Follow driver on map in pickup phase
-    if (followDriver && mapRef.current) {
-      mapRef.current.panTo(driverPos);
-    }
-  }, [driverPos, headingDeg, mapLoaded, followDriver]);
-
-  // ── Static markers (pickup + destination) ────────────────────
-  useEffect(() => {
-    if (!mapLoaded || staticMarkersInit.current) return;
-    if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
-
-    let created = false;
-
-    if (pickupCoords && !pickupMarkerRef.current) {
-      const el = document.createElement('div');
-      el.style.position = 'relative'; el.style.width = '0'; el.style.height = '0';
-      el.innerHTML = createPickupMarkerHtml();
-      pickupMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
-        map: mapRef.current, content: el, position: pickupCoords, zIndex: 5,
-      });
-      created = true;
-    }
-
-    if (dropoffCoords && !destMarkerRef.current) {
-      const el = document.createElement('div');
-      el.style.position = 'relative'; el.style.width = '0'; el.style.height = '0';
-      el.innerHTML = createDestMarkerHtml();
-      destMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
-        map: mapRef.current, content: el, position: dropoffCoords, zIndex: 5,
-      });
-      created = true;
-    }
-
-    if (created) staticMarkersInit.current = true;
-  }, [mapLoaded, pickupCoords, dropoffCoords]);
-
-  // ── Route helpers ─────────────────────────────────────────────
   const routeOnce = useCallback(async (origin, destination) => {
     if (!dirServiceRef.current || !origin || !destination) return null;
     try {
@@ -982,57 +646,207 @@ export default function CustomerRideLiveTracking() {
     } catch { return null; }
   }, []);
 
-  /**
-   * calcBothRoutes — always draws TWO lines:
-   *  1. driverRoute   : driver current pos → pickup  (dashed, pickup phase)
-   *                     driver current pos → dropoff (solid, ride phase)
-   *  2. overviewRoute : pickup → dropoff             (faint dashed, always)
-   *
-   * In pickup phase  : driverRoute = driver→pickup (dashed blue)
-   *                    overviewRoute = pickup→dropoff (faint teal dashes)
-   * In ride phase    : driverRoute = driver→dropoff (solid green)
-   *                    overviewRoute = pickup→dropoff (faint dashed, context)
-   */
   const calcBothRoutes = useCallback(async (driverPosition) => {
-    if (!mapLoaded || !pickupCoords) return;
-
+    if (!mapLoaded || !pickupCoords || !dropoffCoords) return;
     const origin = driverPosition || driverPosRef.current;
-
-    // Overview route pickup→dropoff (always, if we have dropoff)
-    if (pickupCoords && dropoffCoords) {
-      const ovr = await routeOnce(pickupCoords, dropoffCoords);
-      if (ovr) setOverviewRoute(ovr);
-    }
-
-    // Driver route: driver→pickup (pre-otp) or driver→dropoff (post-otp)
+    const ovr = await routeOnce(pickupCoords, dropoffCoords);
+    if (ovr) setOverviewRoute(ovr);
     if (origin) {
       const dest = isPostOtp ? dropoffCoords : pickupCoords;
-      if (dest) {
-        const dr = await routeOnce(origin, dest);
-        if (dr) setDriverRoute(dr);
-      }
+      if (dest) { const dr = await routeOnce(origin, dest); if (dr) setDriverRoute(dr); }
     }
   }, [mapLoaded, pickupCoords, dropoffCoords, isPostOtp, routeOnce]);
 
-  // Recalc driver route when driver position updates significantly
-  const lastRouteCalcRef = useRef(null);
+  // ── Effects ───────────────────────────────────────────────────
+
+  // Sync initial driver position
+  useEffect(() => {
+    const loc = socketLive?.liveLocation || liveData?.liveLocation;
+    let lat = null, lng = null;
+    if (loc?.lat && loc?.lng) { lat = loc.lat; lng = loc.lng; }
+    else if (currentRide?.liveLocation?.coordinates?.length === 2) {
+      lng = currentRide.liveLocation.coordinates[0];
+      lat = currentRide.liveLocation.coordinates[1];
+    }
+    if (lat && lng && !driverTargetRef.current) {
+      const pos = { lat, lng };
+      driverTargetRef.current = pos;
+      driverPosRef.current    = pos;
+      setDriverPos(pos);
+      const h = loc?.heading || 0;
+      setHeadingDeg(h);
+      smoothHeadRef.current = h;
+    }
+  }, [socketLive?.liveLocation, liveData?.liveLocation, currentRide?.liveLocation]);
+
+  // Initial data fetch
+  useEffect(() => {
+    const load = async () => {
+      setIsInitLoading(true);
+      try {
+        const tasks = [];
+        if (rideId)    { tasks.push(dispatch(fetchRideTracking({ rideId }))); tasks.push(dispatch(fetchRideLive(rideId))); }
+        if (bookingId) { tasks.push(dispatch(fetchMyBookingById({ bookingId }))); }
+        await Promise.all(tasks);
+      } catch (e) { console.error('[CustomerTracking] init fetch:', e); }
+      finally { setIsInitLoading(false); }
+    };
+    load();
+  }, [rideId, bookingId]); // eslint-disable-line
+
+  // Sync rideStatus from redux
+  useEffect(() => {
+    const s = socketLive?.status || rd?.status;
+    if (s) setRideStatus(s);
+  }, [socketLive?.status, rd?.status]);
+
+  // Sync ETA
+  useEffect(() => {
+    const eta = etaEvt?.etaMinutes ?? socketLive?.etaMinutes ?? liveData?.currentEtaMinutes;
+    if (eta != null) setEtaMinutes(eta);
+    const km = etaEvt?.distanceRemainingKm;
+    if (km != null) setRemainingKm(km);
+  }, [etaEvt, socketLive?.etaMinutes, liveData?.currentEtaMinutes]);
+
+  // Socket: status events
+  useEffect(() => {
+    const unsubs = [
+      on(EV.RIDE_STATUS_CHANGED, (d) => {
+        dispatch(socketRideStatusChanged(d));
+        setRideStatus(d.status);
+        if (d.activeNavigationTarget) dispatch(socketNavigationTargetChanged({ currentTarget: d.activeNavigationTarget, bookingId: d.bookingId, rideId: d.rideId }));
+      }),
+      on('driver_accepted',            (d) => { dispatch(socketDriverAccepted(d));  setRideStatus('driver_accepted'); }),
+      on('driver_en_route',            (d) => { dispatch(socketDriverEnRoute(d));   setRideStatus('driver_en_route'); }),
+      on('driver_arrived',             (d) => { dispatch(socketDriverArrived(d));   setRideStatus('driver_arrived'); setSheetOpen(true); }),
+      on('otp_verified',               (d) => { dispatch(socketOtpVerified(d));     setRideStatus('otp_verified');   setShowOtpModal(false); }),
+      on('ride_started',               (d) => { dispatch(socketRideStarted(d));     setRideStatus('in_progress'); }),
+      on('ride_completed',             (d) => { dispatch(socketRideCompleted(d));   setRideStatus('completed'); }),
+      on('ride_cancelled',             (d) => { dispatch(socketRideCancelled(d));   setRideStatus('cancelled'); }),
+      on('ride_assigned',              (d) => { dispatch(socketRideAssigned(d));    setRideStatus(d.status); }),
+      on(EV.NAVIGATION_TARGET_CHANGED, (d) => { dispatch(socketNavigationTargetChanged(d)); }),
+      on('otp_required', (d) => {
+        if (d.otp) { setOtp(String(d.otp)); otpRef.current = String(d.otp); }
+        setRideStatus('driver_arrived');
+        setSheetOpen(true);
+      }),
+    ];
+    return () => unsubs.forEach(fn => fn?.());
+  }, []); // eslint-disable-line
+
+  // Socket: location update
+  useEffect(() => {
+    if (!locationUpdate) return;
+    dispatch(socketLocationUpdate(locationUpdate));
+    const { lat, lng, heading = 0 } = locationUpdate;
+    driverTargetRef.current = { lat, lng };
+    smoothHeadRef.current   = smoothHeadRef.current * 0.75 + heading * 0.25;
+    setHeadingDeg(smoothHeadRef.current);
+  }, [locationUpdate, dispatch]);
+
+  // ETA from booking room
+  useEffect(() => {
+    if (!etaEvt) return;
+    dispatch(socketEtaUpdate(etaEvt));
+    if (etaEvt.etaMinutes          != null) setEtaMinutes(etaEvt.etaMinutes);
+    if (etaEvt.distanceRemainingKm != null) setRemainingKm(etaEvt.distanceRemainingKm);
+  }, [etaEvt, dispatch]);
+
+  // Completed / cancelled
+  useEffect(() => {
+    if (activeStatus === 'completed') { const t = setTimeout(() => setShowCompleted(true), 2200); return () => clearTimeout(t); }
+    if (activeStatus === 'cancelled') { const t = setTimeout(() => setShowCancelled(true), 1200); return () => clearTimeout(t); }
+  }, [activeStatus]);
+
+  // Polling fallback
+  useEffect(() => {
+    if (connected) { if (pollTimerRef.current) clearInterval(pollTimerRef.current); return; }
+    if (!activeRideId) return;
+    pollTimerRef.current = setInterval(() => dispatch(fetchRideLive(activeRideId)), POLL_MS);
+    return () => clearInterval(pollTimerRef.current);
+  }, [connected, activeRideId, dispatch]);
+
+  // Smooth driver animation
+  useEffect(() => {
+    const animate = () => {
+      const target = driverTargetRef.current;
+      if (!target) { animFrameRef.current = requestAnimationFrame(animate); return; }
+      const cur    = driverPosRef.current || { ...target };
+      const newLat = lerp(cur.lat, target.lat, 0.12);
+      const newLng = lerp(cur.lng, target.lng, 0.12);
+      driverPosRef.current = { lat: newLat, lng: newLng };
+      setDriverPos({ lat: newLat, lng: newLng });
+      animFrameRef.current = requestAnimationFrame(animate);
+    };
+    animFrameRef.current = requestAnimationFrame(animate);
+    return () => { if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); };
+  }, []);
+
+  // Recalc route on position update (throttled 30 s)
   useEffect(() => {
     if (!mapLoaded || !driverPos) return;
     const now = Date.now();
-    // Recalc at most every 30s or on phase change
     if (lastRouteCalcRef.current && now - lastRouteCalcRef.current < 30_000) return;
     lastRouteCalcRef.current = now;
     calcBothRoutes(driverPos);
-  }, [driverPos, mapLoaded]); // eslint-disable-line
+  }, [driverPos, mapLoaded, calcBothRoutes]);
 
-  // Recalc when map first loads or phase changes
+  // Recalc on map load or phase change
   useEffect(() => {
-    if (!mapLoaded || !pickupCoords) return;
-    lastRouteCalcRef.current = null; // force recalc
+    if (!mapLoaded || !pickupCoords || !dropoffCoords) return;
+    lastRouteCalcRef.current = null;
     calcBothRoutes(driverPosRef.current || pickupCoords);
-  }, [mapLoaded, isPostOtp]); // eslint-disable-line
+  }, [mapLoaded, isPostOtp, pickupCoords, dropoffCoords, calcBothRoutes]);
 
-  // ── Fit map to show driver + target on first load ─────────────
+  // Update driver AdvancedMarker — 3D car image + heading rotation
+  useEffect(() => {
+    if (!mapLoaded || !driverPos) return;
+    if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
+
+    if (!driverMarkerRef.current) {
+      // Create marker with car image
+      const el = document.createElement('div');
+      el.style.position = 'relative';
+      el.style.width    = '0';
+      el.style.height   = '0';
+      el.innerHTML      = createDriverMarkerHtml(headingDeg);
+      driverMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
+        map: mapRef.current, content: el, position: driverPos, zIndex: 10,
+      });
+    } else {
+      // Update position
+      driverMarkerRef.current.position = driverPos;
+      // Update heading — rotate the <img> element directly for silky animation
+      const img = driverMarkerRef.current.content?.querySelector('#driverCarImg');
+      if (img) img.style.transform = `rotate(${headingDeg}deg)`;
+    }
+
+    if (followDriver && mapRef.current) mapRef.current.panTo(driverPos);
+  }, [driverPos, mapLoaded, headingDeg, followDriver]);
+
+  // Static markers
+  useEffect(() => {
+    if (!mapLoaded || staticMarkersInit.current) return;
+    if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
+    let created = false;
+    if (pickupCoords && !pickupMarkerRef.current) {
+      const el = document.createElement('div');
+      el.style.position = 'relative'; el.style.width = '0'; el.style.height = '0';
+      el.innerHTML = createPickupMarkerHtml();
+      pickupMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({ map: mapRef.current, content: el, position: pickupCoords, zIndex: 5 });
+      created = true;
+    }
+    if (dropoffCoords && !destMarkerRef.current) {
+      const el = document.createElement('div');
+      el.style.position = 'relative'; el.style.width = '0'; el.style.height = '0';
+      el.innerHTML = createDestMarkerHtml();
+      destMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({ map: mapRef.current, content: el, position: dropoffCoords, zIndex: 5 });
+      created = true;
+    }
+    if (created) staticMarkersInit.current = true;
+  }, [mapLoaded, pickupCoords, dropoffCoords]);
+
+  // Fit bounds on first map load
   useEffect(() => {
     if (!mapLoaded || !mapRef.current) return;
     if (!pickupCoords && !dropoffCoords) return;
@@ -1043,7 +857,14 @@ export default function CustomerRideLiveTracking() {
     mapRef.current.fitBounds(bounds, { top: 80, bottom: 200, left: 40, right: 40 });
   }, [mapLoaded]); // eslint-disable-line
 
-  // ── Cleanup markers on unmount ────────────────────────────────
+  // Fullscreen API listener
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
+  // Cleanup
   useEffect(() => {
     return () => {
       [driverMarkerRef, pickupMarkerRef, destMarkerRef].forEach(ref => {
@@ -1056,10 +877,13 @@ export default function CustomerRideLiveTracking() {
   }, []);
 
   // ── Handlers ─────────────────────────────────────────────────
+
   const onMapLoad = useCallback((map) => {
-    mapRef.current = map;
+    mapRef.current        = map;
     dirServiceRef.current = new window.google.maps.DirectionsService();
     setMapLoaded(true);
+    setMapZoom(map.getZoom());
+    map.addListener('zoom_changed', () => setMapZoom(map.getZoom()));
   }, []);
 
   const handleBack = useCallback(() => {
@@ -1074,13 +898,30 @@ export default function CustomerRideLiveTracking() {
 
   const handleRecenter = useCallback(() => {
     setFollowDriver(true);
-    if (driverPos && mapRef.current) {
-      mapRef.current.panTo(driverPos);
-      mapRef.current.setZoom(16);
-    } else if (pickupCoords && mapRef.current) {
-      mapRef.current.panTo(pickupCoords);
-    }
+    if (driverPos && mapRef.current) { mapRef.current.panTo(driverPos); mapRef.current.setZoom(16); }
+    else if (pickupCoords && mapRef.current) mapRef.current.panTo(pickupCoords);
   }, [driverPos, pickupCoords]);
+
+  const handleZoomIn = useCallback(() => {
+    if (!mapRef.current) return;
+    const z = mapRef.current.getZoom();
+    mapRef.current.setZoom(Math.min(z + 1, 21));
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    if (!mapRef.current) return;
+    const z = mapRef.current.getZoom();
+    mapRef.current.setZoom(Math.max(z - 1, 3));
+  }, []);
+
+  const handleFullscreen = useCallback(() => {
+    const el = mapContainerRef.current || document.documentElement;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  }, []);
 
   const handleSos = useCallback(() => {
     if (sosActive) { dismissSos(); return; }
@@ -1098,10 +939,13 @@ export default function CustomerRideLiveTracking() {
   return (
     <>
       <style>{`
-        @keyframes custPulse { 0%{transform:scale(0.9);opacity:0.8} 100%{transform:scale(2.4);opacity:0} }
+        @keyframes driverPulse {
+          0%   { transform:scale(0.85); opacity:0.9; }
+          100% { transform:scale(2.2);  opacity:0; }
+        }
       `}</style>
 
-      <div className="fixed inset-0 overflow-hidden font-poppins">
+      <div ref={mapContainerRef} className="fixed inset-0 overflow-hidden font-poppins">
 
         {/* ── MAP ──────────────────────────────────── */}
         <div className="absolute inset-0">
@@ -1122,7 +966,7 @@ export default function CustomerRideLiveTracking() {
               onLoad={onMapLoad}
               onDragStart={() => setFollowDriver(false)}
             >
-              {/* Overview route: pickup → dropoff (always visible, faint dashes) */}
+              {/* Overview route: pickup → dropoff */}
               {overviewRoute && (
                 <DirectionsRenderer
                   directions={overviewRoute}
@@ -1132,39 +976,23 @@ export default function CustomerRideLiveTracking() {
                       strokeColor:   isPostOtp ? 'rgba(34,197,94,0.30)' : 'rgba(6,182,212,0.28)',
                       strokeWeight:  4,
                       strokeOpacity: 1,
-                      icons: [{
-                        icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 },
-                        offset: '0',
-                        repeat: '14px',
-                      }],
+                      icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 }, offset: '0', repeat: '14px' }],
                     },
                   }}
                 />
               )}
 
-              {/* Driver route: driver→pickup (pickup phase) or driver→dropoff (ride phase) */}
+              {/* Driver route */}
               {driverRoute && (
                 <DirectionsRenderer
                   directions={driverRoute}
                   options={{
                     suppressMarkers: true,
                     polylineOptions: isPostOtp
-                      ? {
-                          // Ride phase: solid green — heading to hospital
-                          strokeColor:   '#22c55e',
-                          strokeWeight:  6,
-                          strokeOpacity: 0.92,
-                        }
+                      ? { strokeColor: '#22c55e', strokeWeight: 6, strokeOpacity: 0.92 }
                       : {
-                          // Pickup phase: dashed blue — driver coming to you
-                          strokeColor:   '#3b82f6',
-                          strokeWeight:  5,
-                          strokeOpacity: 1,
-                          icons: [{
-                            icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 4 },
-                            offset: '0',
-                            repeat: '12px',
-                          }],
+                          strokeColor: '#3b82f6', strokeWeight: 5, strokeOpacity: 1,
+                          icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 4 }, offset: '0', repeat: '12px' }],
                         },
                   }}
                 />
@@ -1189,38 +1017,23 @@ export default function CustomerRideLiveTracking() {
         {/* ── TOP BAR ───────────────────────────── */}
         <div className="absolute top-0 left-0 right-0 z-20 pt-1">
           <motion.div
-            initial={{ opacity: 0, y: -16 }}
-            animate={{ opacity: 1, y: 0 }}
+            initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }}
             className="flex items-center gap-2 px-3.5 py-2.5 bg-base-200/96 border-b border-base-300"
             style={{ backdropFilter: 'blur(12px)' }}
           >
-            {/* Back */}
-            <motion.button
-              whileTap={{ scale: 0.9 }}
-              onClick={handleBack}
-              className="w-8 h-8 rounded-xl flex-shrink-0 flex items-center justify-center cursor-pointer text-base-content/60 bg-base-300 border border-base-300 hover:text-base-content transition-colors"
-            >
+            <motion.button whileTap={{ scale: 0.9 }} onClick={handleBack}
+              className="w-8 h-8 rounded-xl flex-shrink-0 flex items-center justify-center cursor-pointer text-base-content/60 bg-base-300 border border-base-300 hover:text-base-content transition-colors">
               <ChevronLeft size={18} />
             </motion.button>
 
-            {/* Socket dot */}
-            <div
-              className="w-2 h-2 rounded-full flex-shrink-0"
-              style={{
-                background:  connected ? 'var(--success)' : 'var(--warning)',
-                boxShadow:   connected ? '0 0 6px var(--success)' : 'none',
-              }}
-            />
+            <div className="w-2 h-2 rounded-full flex-shrink-0"
+              style={{ background: connected ? 'var(--success)' : 'var(--warning)', boxShadow: connected ? '0 0 6px var(--success)' : 'none' }} />
 
-            {/* Status chip */}
-            <span
-              className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest border flex-shrink-0"
-              style={{ background: statusCfg.bg, borderColor: statusCfg.border, color: statusCfg.color }}
-            >
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest border flex-shrink-0"
+              style={{ background: statusCfg.bg, borderColor: statusCfg.border, color: statusCfg.color }}>
               {statusCfg.icon} {statusCfg.label}
             </span>
 
-            {/* ETA */}
             {etaMinutes != null && (
               <div className="flex items-center gap-1 flex-shrink-0 ml-auto">
                 <Clock size={11} className="text-primary" />
@@ -1239,21 +1052,13 @@ export default function CustomerRideLiveTracking() {
           <AnimatePresence>
             {activeStatus === 'driver_arrived' && (
               <motion.button
-                initial={{ opacity: 0, y: -12 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -12 }}
-                onClick={() => { setShowOtpModal(true); }}
+                initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}
+                onClick={() => setShowOtpModal(true)}
                 className="w-full flex items-center justify-between px-4 py-2.5 cursor-pointer border-b border-purple-500/30"
                 style={{ background: 'rgba(139,92,246,0.18)', backdropFilter: 'blur(12px)' }}
               >
                 <div className="flex items-center gap-2">
-                  <motion.div
-                    animate={{ scale: [1, 1.2, 1] }}
-                    transition={{ repeat: Infinity, duration: 1.5 }}
-                    className="text-base"
-                  >
-                    📍
-                  </motion.div>
+                  <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1.5 }} className="text-base">📍</motion.div>
                   <span className="text-xs font-bold text-purple-300">Driver has arrived at your location!</span>
                 </div>
                 <div className="flex items-center gap-1">
@@ -1269,9 +1074,7 @@ export default function CustomerRideLiveTracking() {
         <AnimatePresence>
           {activeStatus === 'in_progress' && (
             <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="absolute top-[52px] left-3 right-3 z-20 flex items-center gap-2 px-3.5 py-2 rounded-xl border border-success/30 text-xs font-bold text-success"
               style={{ background: 'rgba(34,197,94,0.10)', backdropFilter: 'blur(12px)' }}
             >
@@ -1281,37 +1084,50 @@ export default function CustomerRideLiveTracking() {
           )}
         </AnimatePresence>
 
-        {/* ── FABs ──────────────────────────────── */}
+        {/* ── FABs (right column) ────────────────── */}
         <div className="absolute top-[110px] right-3 z-20 flex flex-col gap-2">
+
           {/* Recenter */}
-          <motion.button
-            whileTap={{ scale: 0.88 }}
-            onClick={handleRecenter}
-            className={`w-11 h-11 rounded-[13px] flex items-center justify-center cursor-pointer border shadow-[0_4px_16px_rgba(0,0,0,0.35)] transition-colors ${followDriver ? 'bg-primary text-primary-content border-primary' : 'bg-base-200/90 text-base-content/60 border-base-300'}`}
-          >
+          <FabBtn onClick={handleRecenter} active={followDriver} title="Recenter on driver">
             <Navigation size={16} />
-          </motion.button>
+          </FabBtn>
+
+          {/* Zoom in */}
+          <FabBtn onClick={handleZoomIn} title="Zoom in">
+            <Plus size={17} strokeWidth={2.5} />
+          </FabBtn>
+
+          {/* Zoom out */}
+          <FabBtn onClick={handleZoomOut} title="Zoom out">
+            <Minus size={17} strokeWidth={2.5} />
+          </FabBtn>
+
+          {/* Fullscreen */}
+          <FabBtn onClick={handleFullscreen} active={isFullscreen} title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+            {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </FabBtn>
 
           {/* SOS */}
-          <motion.button
-            whileTap={{ scale: 0.88 }}
-            onClick={handleSos}
-            className={`w-11 h-11 rounded-[13px] flex items-center justify-center cursor-pointer border shadow-[0_4px_16px_rgba(0,0,0,0.35)] transition-colors ${sosActive ? 'bg-error border-error text-error-content animate-pulse' : 'bg-error/10 border-error/30 text-error'}`}
-          >
+          <FabBtn onClick={handleSos} danger active={sosActive} title="SOS">
             {sosActive ? <ShieldAlert size={16} /> : <Shield size={16} />}
-          </motion.button>
+          </FabBtn>
 
-          {/* Refresh */}
+          {/* Refresh (offline only) */}
           {!connected && (
-            <motion.button
-              whileTap={{ scale: 0.88 }}
-              onClick={() => { if (activeRideId) dispatch(fetchRideLive(activeRideId)); }}
-              className="w-11 h-11 rounded-[13px] flex items-center justify-center cursor-pointer bg-base-200/90 border border-base-300 text-base-content/60 shadow-[0_4px_16px_rgba(0,0,0,0.35)] hover:text-base-content transition-colors"
-            >
+            <FabBtn onClick={() => { if (activeRideId) dispatch(fetchRideLive(activeRideId)); }} title="Refresh">
               <RefreshCw size={15} />
-            </motion.button>
+            </FabBtn>
           )}
         </div>
+
+        {/* ── ZOOM LEVEL INDICATOR ──────────────── */}
+        {mapLoaded && !isSearching && (
+          <div className="absolute bottom-[88px] left-3 z-20">
+            <div className="px-2.5 py-1 rounded-xl bg-base-200/80 border border-base-300 text-[10px] font-bold text-base-content/40 font-mono backdrop-blur-sm">
+              z{mapZoom}
+            </div>
+          </div>
+        )}
 
         {/* ── BOTTOM SHEET ──────────────────────── */}
         <BottomSheet
@@ -1330,21 +1146,14 @@ export default function CustomerRideLiveTracking() {
 
         {/* ── OTP MODAL ─────────────────────────── */}
         <AnimatePresence>
-          {showOtpModal && otp && (
-            <OtpDisplay
-              otp={otp}
-              onClose={() => setShowOtpModal(false)}
-            />
-          )}
+          {showOtpModal && otp && <OtpDisplay otp={otp} onClose={() => setShowOtpModal(false)} />}
         </AnimatePresence>
 
         {/* ── SOS ACTIVE BANNER ─────────────────── */}
         <AnimatePresence>
           {sosActive && (
             <motion.div
-              initial={{ y: 100, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 100, opacity: 0 }}
+              initial={{ y: 100, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 100, opacity: 0 }}
               className="fixed bottom-[88px] left-4 right-4 z-40 flex items-center gap-3 p-4 rounded-2xl bg-error border border-error/70 shadow-[0_8px_32px_rgba(239,68,68,0.55)]"
             >
               <ShieldAlert size={20} className="text-error-content flex-shrink-0" />
@@ -1352,10 +1161,7 @@ export default function CustomerRideLiveTracking() {
                 <p className="text-sm font-black text-error-content m-0">SOS Alert Sent!</p>
                 <p className="text-xs text-error-content/80 m-0">Help is on the way. Stay calm.</p>
               </div>
-              <button
-                onClick={dismissSos}
-                className="text-error-content/70 hover:text-error-content transition-colors cursor-pointer bg-transparent border-none"
-              >
+              <button onClick={dismissSos} className="text-error-content/70 hover:text-error-content transition-colors cursor-pointer bg-transparent border-none">
                 <X size={16} />
               </button>
             </motion.div>

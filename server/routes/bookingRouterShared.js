@@ -293,16 +293,22 @@ export const buildRidePayload = ({
   pickupCoords, pickupAddress = '', pickupCity = '',
   dropoffCoords, dropoffAddress = '', dropoffCity = '',
   scheduledPickupAt, isReturnRide = false, createdBy,
+  waypoints = [],
+  activeNavigationTarget = 'pickup_patient',
+  rideStage = 'searching_driver',
 }) => ({
-  booking:      bookingId,
+  booking:               bookingId,
   rideType,
   vehicleClass,
   isReturnRide,
   pickup:  { type: 'Point', coordinates: pickupCoords,  address: pickupAddress,  city: pickupCity  },
   dropoff: { type: 'Point', coordinates: dropoffCoords, address: dropoffAddress, city: dropoffCity },
   scheduledPickupAt,
-  status:    'requested',
+  status:                'requested',
   createdBy,
+  waypoints,
+  activeNavigationTarget,
+  rideStage,
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,50 +1,4 @@
-/**
- * ═══════════════════════════════════════════════════════════════════════════
- * RIDE REQUEST ROUTER — Likeson.in
- * routes/rideRequestRouter.js
- *
- * Standalone ride request (NOT tied to booking creation).
- * Customer or care assistant requests transport only.
- *
- * FLOW:
- *   Customer/CA → POST /customer           → creates Ride (status: searching)
- *   Customer/CA → POST /care-assistant     → CA requests ride for patient
- *   Admin       → GET  /admin/all          → list pending requests
- *   Admin       → GET  /admin/:id/nearby   → 30km driver/TP search
- *   Admin       → POST /admin/:id/assign   → assign TP or SoloDriver
- *   TP          → PATCH /tp/:id/assign-driver → TP assigns driver
- *
- * DRIVER STATE MACHINE (Uber/Rapido pattern):
- *   PATCH /:rideId/status { action }
- *     accept       → driver_accepted
- *     start_route  → driver_en_route
- *     arrived      → driver_arrived  (generates + sends OTP to customer + admin)
- *     verify_otp   → otp_verified    (RAW string compare — matches 'arrived' storage)
- *     start_ride   → in_progress     (map switches to dropoff for ALL roles)
- *     at_stop      → at_stop
- *     resume       → in_progress
- *     complete     → completed
- *     cancel       → cancelled
- *
- * LIVE TRACKING:
- *   GET  /:rideId/live            → lightweight position + ETA (polling fallback)
- *   GET  /:rideId/tracking        → full snapshot (breadcrumbs, milestones, polyline)
- *   POST /:rideId/tracking/milestone → HTTP milestone write (offline retry)
- *
- * FIXES IN THIS VERSION:
- *   - createRideRequest() helper defined (was called but never declared → ReferenceError)
- *   - ensureRideTracking() uses upsert → no duplicate RideTracking docs
- *   - verify_otp: RAW string compare (pickupOtp stored raw in 'arrived' case)
- *   - Socket bookingSocketService.js must also use raw compare (not hashOtp)
- *   - Ride.driver = Driver._id (NOT User._id) — consistent throughout
- *   - role strings: 'care_assistant' (underscore, NOT space)
- *   - OTP generated on 'arrived' action only. Sent to customer + admin:ops
- *   - Socket is primary for live events; HTTP is initial load + fallback
- *   - Canonical route locked at driver assignment (async, non-blocking)
- *
- * MOUNT: /api/ride-requests
- * ═══════════════════════════════════════════════════════════════════════════
- */
+ 
 
 import express  from 'express';
 import mongoose from 'mongoose';
@@ -74,6 +28,8 @@ calculateEtaMinutes,
   CARE_RIDE_RADIUS_M,
   RIDE_STATUSES_ACTIVE,
 } from './bookingRouterShared.js';
+import { hashOtp } from './bookingRouterShared.js';
+ 
 
 const router = express.Router();
 
@@ -202,11 +158,7 @@ const resolveRideWaypoints = async ({
   return waypoints;
 };
 
-/**
- * FIX: createRideRequest — was called in both POST /customer and POST /care-assistant
- * but never defined, causing ReferenceError on every ride creation.
- * Creates a minimal Ride doc with status:'searching'.
- */
+ 
 const createRideRequest = async ({
   pickupGeo,
   dropoffGeo,
@@ -216,94 +168,80 @@ const createRideRequest = async ({
   careAssistantId = null,
 }) => {
 
-  let nearestHospitalData = null;
+  // Step 1: resolve CA profile for waypoint calculation
+  const careAssistantProfileDoc = careAssistantId
+    ? await CareAssistantProfile.findById(careAssistantId).lean()
+    : null;
 
+  // Step 2: resolve dynamic waypoints BEFORE ride creation
+  const dynamicWaypoints = await resolveRideWaypoints({
+    pickupGeo,
+    dropoffGeo,
+    careAssistantProfile: careAssistantProfileDoc,
+  });
+
+  // Step 3: determine initial navigation target
+  let activeNavigationTarget = 'pickup_patient';
+  let rideStage = 'driver_to_patient';
+
+  if (dynamicWaypoints.length) {
+    const caWaypoint = dynamicWaypoints.find(wp => wp.type === 'care_assistant_join');
+    if (caWaypoint?.pickupFirst) {
+      activeNavigationTarget = 'pickup_care_assistant';
+      rideStage = 'driver_to_care_assistant';
+    }
+  }
+
+  // Step 4: find nearest hospital for tracking context
+  let nearestHospitalData = null;
   try {
-    nearestHospitalData = await findNearestHospital(
-      dropoffGeo.coordinates
-    );
+    nearestHospitalData = await findNearestHospital(dropoffGeo.coordinates);
   } catch (e) {
     console.error('[nearestHospital]', e.message);
   }
 
+  // Step 5: create ride with correct payload
   const ride = await Ride.create({
     ...buildRidePayload({
       bookingId,
       rideType: 'patient',
       vehicleClass: 'four_wheeler',
-
-      pickupCoords: pickupGeo.coordinates,
+      pickupCoords:  pickupGeo.coordinates,
       pickupAddress: pickupGeo.address || '',
-      pickupCity: pickupGeo.city || '',
-
-      dropoffCoords: dropoffGeo.coordinates,
+      pickupCity:    pickupGeo.city || '',
+      dropoffCoords:  dropoffGeo.coordinates,
       dropoffAddress: dropoffGeo.address || '',
-      dropoffCity: dropoffGeo.city || '',
-      waypoints: dynamicWaypoints,
-
-activeNavigationTarget:
-  dynamicWaypoints.length
-    ? 'pickup_care_assistant'
-    : 'pickup_patient',
-
-      scheduledPickupAt: scheduledAt || null,
+      dropoffCity:    dropoffGeo.city || '',
+      scheduledPickupAt:     scheduledAt || null,
       createdBy,
+      waypoints:             dynamicWaypoints,
+      activeNavigationTarget,
+      rideStage,
     }),
-
     status: 'searching',
   });
 
-  const careAssistantProfileDoc =
-  careAssistantId
-    ? await CareAssistantProfile.findById(
-        careAssistantId
-      ).lean()
-    : null;
-
-const dynamicWaypoints =
-  await resolveRideWaypoints({
-    pickupGeo,
-    dropoffGeo,
-    careAssistantProfile:
-      careAssistantProfileDoc,
-  });
-
+  // Step 6: upsert RideTracking with full context
   await RideTracking.findOneAndUpdate(
     { ride: ride._id },
     {
-      $set: {
-        booking: bookingId,
-
-        ride: ride._id,
-
-        careAssistant: careAssistantId,
-
-        hospital: nearestHospitalData?.hospital?._id || null,
-
-        activeTarget: careAssistantId
-          ? 'pickup_care_assistant'
-          : 'pickup_patient',
-
+      $setOnInsert: {
+        ride:        ride._id,
+        booking:     bookingId,
+        careAssistant: careAssistantId || null,
+        hospital:    nearestHospitalData?.hospital?._id || null,
+        activeTarget: activeNavigationTarget,
         'liveRouteContext.nearestHospitalDistanceKm':
           nearestHospitalData?.distanceKm || 0,
-
         'liveRouteContext.currentLegEtaMinutes':
           nearestHospitalData?.etaMinutes || 0,
-
-        'liveRouteContext.nearestHospitalCalculatedAt':
-          new Date(),
+        'liveRouteContext.nearestHospitalCalculatedAt': new Date(),
       },
     },
-    {
-      upsert: true,
-      new: true,
-    }
+    { upsert: true, new: true }
   );
 
-  return {
-    ride,
-    nearestHospitalData,
-  };
+  return { ride, nearestHospitalData };
 };
 
 /**
@@ -1190,9 +1128,7 @@ router.patch('/:rideId/status',
           ride.status          = 'driver_arrived';
           ride.driverArrivedAt = new Date();
           
-          // ❌ OLD CODE: ride.pickupOtp = hashOtp(otpCode);
-          // ✅ NEW CODE: Store the raw string directly so verify_otp can match it
-          ride.pickupOtp = otpCode; 
+          ride.pickupOtp = hashOtp(otpCode);
 
           await ride.save();
 
@@ -1280,7 +1216,7 @@ router.patch('/:rideId/status',
             return res.status(400).json({ success: false, message: 'OTP not set for this ride' });
 
           // RAW string compare — matches how 'arrived' stores it
-          if (String(otp).trim() !== String(rideWithOtp.pickupOtp).trim()) {
+          if (hashOtp(String(otp).trim()) !== String(rideWithOtp.pickupOtp).trim()) {
             socketService?.emitToAdminOps('otp_failed_attempt', {
               rideId, bookingId: ride.booking ? String(ride.booking) : null,
               timestamp: new Date().toISOString(),

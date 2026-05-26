@@ -1,25 +1,5 @@
 'use client';
-
-/**
- * CareAssistantRideLiveTracking — Likeson Healthcare
- * Enterprise medical transport operations dashboard.
- *
- * Architecture:
- * - TrackingSocketManager  → single socket subscription hub
- * - TrackingMap            → Google Maps, markers, polyline, RAF animation
- * - TrackingHeader         → sticky ops bar
- * - TrackingTimeline       → ride milestone strip
- * - TrackingSidebar        → desktop left panel
- * - TrackingBottomSheet    → mobile swipeable panel
- * - TrackingDriverCard     → driver + vehicle info
- * - TrackingPatientCard    → patient + booking info
- * - TrackingHospitalCard   → nearest hospital + ETA
- * - TrackingMetrics        → live speed / distance / route state
- * - TrackingEmergencyPanel → SOS + active alert
- * - TrackingDiagnostics    → socket / GPS health
- * - TrackingActionBar      → call, SOS, center, refresh
- */
-
+ 
 import React, {
   useCallback,
   useEffect,
@@ -146,8 +126,10 @@ const useTracking = () => useContext(TrackingCtx);
 // ─────────────────────────────────────────────────────────────────────────────
 
 const INIT_TRACKING = {
-  rideStatus:     null,
-  etaMinutes:     null,
+    rideStatus:    null,
+  rideStage:     null,      // ← ADD
+  etaMinutes:    null,
+  
   distKm:         null,
   driverLat:      null,
   driverLng:      null,
@@ -163,8 +145,13 @@ const INIT_TRACKING = {
 
 function trackingReducer(state, action) {
   switch (action.type) {
-    case 'STATUS':
-      return { ...state, rideStatus: action.status, lastEventAt: Date.now() };
+   case 'STATUS':
+  return { 
+    ...state, 
+    rideStatus:  action.status, 
+    rideStage:   action.rideStage ?? state.rideStage,  // ← ADD
+    lastEventAt: Date.now() 
+  };
     case 'ETA':
       return { ...state, etaMinutes: action.eta, distKm: action.distKm ?? state.distKm, lastEventAt: Date.now() };
     case 'LOCATION':
@@ -186,15 +173,16 @@ function trackingReducer(state, action) {
     case 'SOS':
       return { ...state, sosActive: action.value, lastEventAt: Date.now() };
     case 'SEED':
-      return {
-        ...state,
-        rideStatus:    action.status    ?? state.rideStatus,
-        etaMinutes:    action.eta       ?? state.etaMinutes,
-        driverLat:     action.lat       ?? state.driverLat,
-        driverLng:     action.lng       ?? state.driverLng,
-        driverHeading: action.heading   ?? state.driverHeading,
-        activeTarget:  action.target    ?? state.activeTarget,
-      };
+  return {
+    ...state,
+    rideStatus:    action.status    ?? state.rideStatus,
+    rideStage:     action.rideStage ?? state.rideStage,    // ← ADD
+    etaMinutes:    action.eta       ?? state.etaMinutes,
+    driverLat:     action.lat       ?? state.driverLat,
+    driverLng:     action.lng       ?? state.driverLng,
+    driverHeading: action.heading   ?? state.driverHeading,
+    activeTarget:  action.target    ?? state.activeTarget,
+  };
     default:
       return state;
   }
@@ -559,9 +547,18 @@ function TrackingSocketManager({ bookingId, rideId, dispatch, trackingDispatch }
 
     const unsubs = [
       on('ride_status_changed', safe((d) => {
-        trackingDispatch({ type: 'STATUS', status: d.status });
-        dispatch(socketRideStatusChanged(d));
-      })),
+  trackingDispatch({ type: 'STATUS', status: d.status });
+  dispatch(socketRideStatusChanged(d));
+  if (d.activeNavigationTarget) {
+    trackingDispatch({ type: 'TARGET', target: d.activeNavigationTarget });
+  }
+  if (d.rideStage) {
+    dispatch(setCareRideWorkflow({
+      rideStage:             d.rideStage,
+      activeNavigationTarget: d.activeNavigationTarget || null,
+    }));
+  }
+})),
       on('driver_accepted',    safe((d) => { trackingDispatch({ type: 'STATUS', status: 'driver_accepted' }); dispatch(socketDriverAccepted(d)); })),
       on('driver_en_route',    safe((d) => { trackingDispatch({ type: 'STATUS', status: 'driver_en_route' }); dispatch(socketDriverEnRoute(d)); })),
       on('driver_arrived',     safe((d) => { trackingDispatch({ type: 'STATUS', status: 'driver_arrived' }); dispatch(socketDriverArrived(d)); })),
@@ -587,9 +584,21 @@ function TrackingSocketManager({ bookingId, rideId, dispatch, trackingDispatch }
         dispatch(socketNavigationTargetChanged(d));
       })),
 
-      on('hospital:eta:update', safe((d) => {
-        dispatch(socketHospitalEtaUpdate(d));
-      })),
+      on('hospital_eta_update', safe((d) => { dispatch(socketHospitalEtaUpdate(d)); })),
+on('hospital:eta:update', safe((d) => { dispatch(socketHospitalEtaUpdate(d)); })), 
+      // ADD: handle new rideStage + activeNavigationTarget from ride_status_changed
+on('ride_status_changed', safe((d) => {
+  trackingDispatch({ type: 'STATUS', status: d.status });
+  dispatch(socketRideStatusChanged(d));
+  // NEW: sync navigation target from status event
+  if (d.activeNavigationTarget) {
+    trackingDispatch({ type: 'TARGET', target: d.activeNavigationTarget });
+    dispatch(setCareRideWorkflow({ 
+      rideStage: d.rideStage,
+      activeNavigationTarget: d.activeNavigationTarget,
+    }));
+  }
+})),
 
       on('care-assistant:ride:tracking', safe((d) => {
         trackingDispatch({ type: 'TARGET', target: d.activeTarget });

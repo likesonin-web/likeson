@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const { Schema } = mongoose;
 
@@ -9,44 +9,44 @@ const { Schema } = mongoose;
 // ONE RideTracking document per Ride (1:1, enforced by unique index).
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const MAX_BREADCRUMBS  = 2000;
-const        MAX_ETA_UPDATES  = 100;  // FIX #14: enforced in $push $slice, not just pre-save
+export const MAX_BREADCRUMBS = 2000;
+const MAX_ETA_UPDATES = 100; // FIX #14: enforced in $push $slice, not just pre-save
 
 // ── Milestone Names ───────────────────────────────────────────────────────────
 
 export const MILESTONE_NAMES = [
-  'ride_created',
-  'driver_search_started',
-  'driver_assigned',
-  'driver_accepted',
-  'driver_en_route',
-  'driver_arrived',
-  'otp_verified',
-  'ride_started',
-  'stop_reached',
-  'stop_departed',
-  'hospital_arrived',
-  'patient_handed_over',
-  'care_assistant_joined',
-  'consultation_started',
-  'consultation_completed',
-  'pharmacy_collected',
-  'break_taken',
-  'diagnosis_completed',
-  'return_ride_started',
-  'patient_home_reached',
-  'pickup_collected',
-  'delivery_attempted',
-  'delivered',
-  'delivery_otp_verified',
-  'vehicle_breakdown',
-  'driver_replaced',
-  'route_deviated',
-  'sos_triggered',
-  'ride_paused',
-  'ride_resumed',
-  'ride_completed',
-  'ride_cancelled',
+  "ride_created",
+  "driver_search_started",
+  "driver_assigned",
+  "driver_accepted",
+  "driver_en_route",
+  "driver_arrived",
+  "otp_verified",
+  "ride_started",
+  "stop_reached",
+  "stop_departed",
+  "hospital_arrived",
+  "patient_handed_over",
+  "care_assistant_joined",
+  "consultation_started",
+  "consultation_completed",
+  "pharmacy_collected",
+  "break_taken",
+  "diagnosis_completed",
+  "return_ride_started",
+  "patient_home_reached",
+  "pickup_collected",
+  "delivery_attempted",
+  "delivered",
+  "delivery_otp_verified",
+  "vehicle_breakdown",
+  "driver_replaced",
+  "route_deviated",
+  "sos_triggered",
+  "ride_paused",
+  "ride_resumed",
+  "ride_completed",
+  "ride_cancelled",
 ];
 
 // ── Sub-Schemas ───────────────────────────────────────────────────────────────
@@ -54,81 +54,92 @@ export const MILESTONE_NAMES = [
 const breadcrumbSchema = new Schema(
   {
     coordinates: { type: [Number], required: true },
-    heading:     { type: Number, min: 0, max: 360 },
-    speedKmh:    { type: Number, min: 0 },
-    accuracyM:   { type: Number, min: 0 },
-    timestamp:   { type: Date, required: true, default: Date.now },
-    source:      { type: String, enum: ['gps', 'network', 'fused'], default: 'fused' },
+    heading: { type: Number, min: 0, max: 360 },
+    speedKmh: { type: Number, min: 0 },
+    accuracyM: { type: Number, min: 0 },
+    timestamp: { type: Date, required: true, default: Date.now },
+    source: {
+      type: String,
+      enum: ["gps", "network", "fused"],
+      default: "fused",
+    },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const milestoneSchema = new Schema(
   {
     name: {
-      type:     String,
+      type: String,
       required: true,
-      enum:     MILESTONE_NAMES,
+      enum: MILESTONE_NAMES,
     },
     occurredAt: {
-      type:     Date,
+      type: Date,
       required: true,
-      default:  Date.now,
+      default: Date.now,
     },
-    coordinates:  { type: [Number], default: null },
-    stopSequence: { type: Number,   default: null },
-    meta:         { type: Schema.Types.Mixed, default: null },
+    coordinates: { type: [Number], default: null },
+    stopSequence: { type: Number, default: null },
+    meta: { type: Schema.Types.Mixed, default: null },
     recordedBy: {
-      type:    String,
-      enum:    ['driver', 'system', 'admin', 'customer'],
-      default: 'system',
+      type: String,
+      enum: ["driver", "system", "admin", "customer"],
+      default: "system",
     },
     recordedByUserId: {
-      type:    Schema.Types.ObjectId,
-      ref:     'User',
+      type: Schema.Types.ObjectId,
+      ref: "User",
       default: null,
     },
   },
-  { _id: true }
+  { _id: true },
 );
 
 const etaUpdateSchema = new Schema(
   {
-    toWaypoint:          { type: String },
-    etaMinutes:          { type: Number },
+    toWaypoint: { type: String },
+    etaMinutes: { type: Number },
     distanceRemainingKm: { type: Number },
-    calculatedAt:        { type: Date, default: Date.now },
-    source:              { type: String, enum: ['google_maps', 'osrm', 'estimate'], default: 'estimate' },
+    calculatedAt: { type: Date, default: Date.now },
+    source: {
+      type: String,
+      enum: ["google_maps", "osrm", "estimate"],
+      default: "estimate",
+    },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const sosEventSchema = new Schema(
   {
-    triggeredBy:       { type: String, enum: ['driver', 'customer', 'care_assistant', 'system'] },
-    triggeredByUserId: { type: Schema.Types.ObjectId, ref: 'User' },
-    sosType:           { type: String, enum: ['medical', 'safety', 'accident', 'other'] },
-    coordinates:       { type: [Number] },
-    description:       { type: String },
-    resolvedAt:        { type: Date },
-    resolvedBy:        { type: Schema.Types.ObjectId, ref: 'User' },
-    resolutionNotes:   { type: String },
-    triggeredAt:       { type: Date, default: Date.now },
-    isResolved:        { type: Boolean, default: false },
+    triggeredBy: {
+      type: String,
+      enum: ["driver", "customer", "care_assistant", "system"],
+    },
+    triggeredByUserId: { type: Schema.Types.ObjectId, ref: "User" },
+    sosType: { type: String, enum: ["medical", "safety", "accident", "other"] },
+    coordinates: { type: [Number] },
+    description: { type: String },
+    resolvedAt: { type: Date },
+    resolvedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    resolutionNotes: { type: String },
+    triggeredAt: { type: Date, default: Date.now },
+    isResolved: { type: Boolean, default: false },
   },
-  { _id: true }
+  { _id: true },
 );
 
 const routeDeviationSchema = new Schema(
   {
-    detectedAt:      { type: Date, default: Date.now },
-    coordinates:     { type: [Number] },
-    deviationKm:     { type: Number },
+    detectedAt: { type: Date, default: Date.now },
+    coordinates: { type: [Number] },
+    deviationKm: { type: Number },
     wasAcknowledged: { type: Boolean, default: false },
-    acknowledgedAt:  { type: Date },
-    driverReason:    { type: String },
+    acknowledgedAt: { type: Date },
+    driverReason: { type: String },
   },
-  { _id: true }
+  { _id: true },
 );
 
 // ── Main Schema ───────────────────────────────────────────────────────────────
@@ -136,186 +147,195 @@ const routeDeviationSchema = new Schema(
 const rideTrackingSchema = new Schema(
   {
     ride: {
-      type:     Schema.Types.ObjectId,
-      ref:      'Ride',
+      type: Schema.Types.ObjectId,
+      ref: "Ride",
       required: true,
-      unique:   true,
-      index:    true,
+      unique: true,
+      index: true,
     },
 
     booking: {
-      type:     Schema.Types.ObjectId,
-      ref:      'Booking',
+      type: Schema.Types.ObjectId,
+      ref: "Booking",
       required: true,
-      index:    true,
+      index: true,
     },
 
     driver: {
-      type:    Schema.Types.ObjectId,
-      ref:     'Driver',
+      type: Schema.Types.ObjectId,
+      ref: "Driver",
       default: null,
-      index:   true,
+      index: true,
     },
 
-        careAssistant: {
-      type:    Schema.Types.ObjectId,
-      ref:     'CareAssistantProfile',
+    careAssistant: {
+      type: Schema.Types.ObjectId,
+      ref: "CareAssistantProfile",
       default: null,
-      index:   true,
+      index: true,
+    },
+    careAssistantJoinedAt: { type: Date, default: null },
+    careAssistantBreadcrumbCount: { type: Number, default: 0, min: 0 },
+    careAssistantStatus: {
+      type: String,
+      enum: [
+        "not_joined",
+        "en_route_to_pickup",
+        "at_pickup",
+        "in_ride",
+        "departed",
+      ],
+      default: "not_joined",
+    },
+    careAssistantLiveLocation: {
+      type: new Schema(
+        {
+          type: { type: String, enum: ["Point"], default: "Point" },
+          coordinates: { type: [Number], default: [80.648, 16.506] },
+          heading: { type: Number, min: 0, max: 360 },
+          speedKmh: { type: Number, min: 0 },
+          updatedAt: { type: Date, default: Date.now },
+        },
+        { _id: false },
+      ),
+      default: null,
+    },
+    careAssistantBreadcrumbs: {
+      type: [breadcrumbSchema],
+      default: [],
     },
 
     hospital: {
-      type:    Schema.Types.ObjectId,
-      ref:     'Hospital',
+      type: Schema.Types.ObjectId,
+      ref: "Hospital",
       default: null,
-      index:   true,
+      index: true,
     },
 
     activeTarget: {
       type: String,
       enum: [
-        'pickup_patient',
-        'pickup_care_assistant',
-        'hospital_drop',
-        'patient_drop',
+        "pickup_care_assistant",
+        "pickup_patient",
+        "dropoff_hospital",
+        "dropoff_destination",
+        "return_pickup",
       ],
-      default: 'pickup_patient',
+      default: "pickup_patient",
     },
 
     liveRouteContext: {
       currentLegDistanceKm: { type: Number, default: 0 },
       currentLegEtaMinutes: { type: Number, default: 0 },
-
-      patientPickupReachedAt: Date,
-      careAssistantPickupReachedAt: Date,
-      hospitalReachedAt: Date,
-      patientDroppedAt: Date,
-
+      hospitalEtaMinutes: { type: Number, default: 0 },
+      hospitalDistanceKm: { type: Number, default: 0 },
       nearestHospitalDistanceKm: { type: Number, default: 0 },
-
-      nearestHospitalCalculatedAt: Date,
-      activeTarget: {
-
-  type: String,
-
-  default:
-    'patient_pickup',
-},
-
-hospitalEtaMinutes: {
-  type: Number,
-  default: 0,
-},
-
-hospitalDistanceKm: {
-  type: Number,
-  default: 0,
-},
-
-careAssistantJoinedAt: {
-  type: Date,
-},
-
-patientPickedUpAt: {
-  type: Date,
-},
-
-hospitalReachedAt: {
-  type: Date,
-},
+      nearestHospitalCalculatedAt: { type: Date },
+      patientPickupReachedAt: { type: Date },
+      careAssistantPickupReachedAt: { type: Date },
+      hospitalReachedAt: { type: Date },
+      patientDroppedAt: { type: Date },
+      careAssistantJoinedAt: { type: Date },
+      patientPickedUpAt: { type: Date },
     },
 
     // ── GPS Breadcrumbs ───────────────────────────────────────────────────────
     breadcrumbs: {
-      type:    [breadcrumbSchema],
+      type: [breadcrumbSchema],
       default: [],
     },
 
     breadcrumbCount: {
-      type:    Number,
+      type: Number,
       default: 0,
-      min:     0,
+      min: 0,
     },
 
     // ── Milestones ────────────────────────────────────────────────────────────
     milestones: {
-      type:    [milestoneSchema],
+      type: [milestoneSchema],
       default: [],
     },
 
     // ── ETA ───────────────────────────────────────────────────────────────────
     currentEtaMinutes: { type: Number, default: null },
-    currentEtaTarget:  { type: String, default: null },
+    currentEtaTarget: { type: String, default: null },
 
     // FIX #14: etaUpdates cap enforced at DB level via $slice in addEtaUpdate static.
     // pre-save cap remains as safety net but $push $slice is the primary guard.
     etaUpdates: {
-      type:    [etaUpdateSchema],
+      type: [etaUpdateSchema],
       default: [],
     },
 
     // ── Care Assistant Participant ─────────────────────────────────────────────
-careAssistant: {
-  type:    Schema.Types.ObjectId,
-  ref:     'CareAssistantProfile',
-  default: null,
-  index:   true,
-},
-
-careAssistantJoinedAt: { type: Date, default: null },
-
-careAssistantStatus: {
-  type:    String,
-  enum:    ['not_joined', 'en_route_to_pickup', 'at_pickup', 'in_ride', 'departed'],
-  default: 'not_joined',
-},
-
-careAssistantLiveLocation: {
-  type: new Schema(
-    {
-      type:        { type: String, enum: ['Point'], default: 'Point' },
-      coordinates: { type: [Number], default: [80.648, 16.506] },
-      heading:     { type: Number, min: 0, max: 360 },
-      speedKmh:    { type: Number, min: 0 },
-      updatedAt:   { type: Date, default: Date.now },
+    careAssistant: {
+      type: Schema.Types.ObjectId,
+      ref: "CareAssistantProfile",
+      default: null,
+      index: true,
     },
-    { _id: false }
-  ),
-  default: null,
-},
 
-// Ring-buffered CA breadcrumbs (separate from driver breadcrumbs)
-careAssistantBreadcrumbs: {
-  type:    [breadcrumbSchema],  // reuse existing breadcrumbSchema
-  default: [],
-},
+    careAssistantJoinedAt: { type: Date, default: null },
 
-careAssistantBreadcrumbCount: { type: Number, default: 0, min: 0 },
+    careAssistantStatus: {
+      type: String,
+      enum: [
+        "not_joined",
+        "en_route_to_pickup",
+        "at_pickup",
+        "in_ride",
+        "departed",
+      ],
+      default: "not_joined",
+    },
+
+    careAssistantLiveLocation: {
+      type: new Schema(
+        {
+          type: { type: String, enum: ["Point"], default: "Point" },
+          coordinates: { type: [Number], default: [80.648, 16.506] },
+          heading: { type: Number, min: 0, max: 360 },
+          speedKmh: { type: Number, min: 0 },
+          updatedAt: { type: Date, default: Date.now },
+        },
+        { _id: false },
+      ),
+      default: null,
+    },
+
+    // Ring-buffered CA breadcrumbs (separate from driver breadcrumbs)
+    careAssistantBreadcrumbs: {
+      type: [breadcrumbSchema], // reuse existing breadcrumbSchema
+      default: [],
+    },
+
+    careAssistantBreadcrumbCount: { type: Number, default: 0, min: 0 },
 
     // ── Route Summary ─────────────────────────────────────────────────────────
-    totalDistanceKm:       { type: Number, default: 0, min: 0 },
+    totalDistanceKm: { type: Number, default: 0, min: 0 },
     expectedRoutePolyline: { type: String, default: null },
-    actualRoutePolyline:   { type: String, default: null },
+    actualRoutePolyline: { type: String, default: null },
 
     // ── SOS ───────────────────────────────────────────────────────────────────
-    sosEvents:    { type: [sosEventSchema], default: [] },
+    sosEvents: { type: [sosEventSchema], default: [] },
     hasActiveSos: { type: Boolean, default: false, index: true },
 
     // ── Route Deviations ──────────────────────────────────────────────────────
-    routeDeviations:            { type: [routeDeviationSchema], default: [] },
+    routeDeviations: { type: [routeDeviationSchema], default: [] },
     hasUnacknowledgedDeviation: { type: Boolean, default: false, index: true },
 
     // ── Summary (populated at ride completion) ────────────────────────────────
     summary: {
-      totalDistanceKm:    { type: Number },
-      totalDurationMin:   { type: Number },  // FIX #12: now computed in computeSummary
-      avgSpeedKmh:        { type: Number },
-      maxSpeedKmh:        { type: Number },
-      pickupWaitMin:      { type: Number },
-      totalStopWaitMin:   { type: Number },
+      totalDistanceKm: { type: Number },
+      totalDurationMin: { type: Number }, // FIX #12: now computed in computeSummary
+      avgSpeedKmh: { type: Number },
+      maxSpeedKmh: { type: Number },
+      pickupWaitMin: { type: Number },
+      totalStopWaitMin: { type: Number },
       totalPingsReceived: { type: Number },
-      isCompleted:        { type: Boolean, default: false },
-      completedAt:        { type: Date },
+      isCompleted: { type: Boolean, default: false },
+      completedAt: { type: Date },
     },
 
     isArchived: { type: Boolean, default: false, index: true },
@@ -323,28 +343,28 @@ careAssistantBreadcrumbCount: { type: Number, default: 0, min: 0 },
   },
   {
     timestamps: true,
-    toJSON:   { virtuals: true },
+    toJSON: { virtuals: true },
     toObject: { virtuals: true },
-  }
+  },
 );
 
 // ── Virtuals ──────────────────────────────────────────────────────────────────
 
-rideTrackingSchema.virtual('latestPosition').get(function () {
+rideTrackingSchema.virtual("latestPosition").get(function () {
   if (!this.breadcrumbs?.length) return null;
   return this.breadcrumbs[this.breadcrumbs.length - 1];
 });
 
-rideTrackingSchema.virtual('lastMilestone').get(function () {
+rideTrackingSchema.virtual("lastMilestone").get(function () {
   if (!this.milestones?.length) return null;
   return this.milestones[this.milestones.length - 1];
 });
 
-rideTrackingSchema.virtual('milestoneCount').get(function () {
+rideTrackingSchema.virtual("milestoneCount").get(function () {
   return this.milestones?.length ?? 0;
 });
 
-rideTrackingSchema.virtual('hasSosEvents').get(function () {
+rideTrackingSchema.virtual("hasSosEvents").get(function () {
   return this.sosEvents?.length > 0;
 });
 
@@ -369,15 +389,15 @@ rideTrackingSchema.statics.addBreadcrumb = async function (rideId, pingData) {
   const { coordinates, heading, speedKmh, accuracyM, source } = pingData;
 
   if (!coordinates || coordinates.length !== 2) {
-    throw new Error('addBreadcrumb: coordinates [lng, lat] required');
+    throw new Error("addBreadcrumb: coordinates [lng, lat] required");
   }
 
   const breadcrumb = {
     coordinates,
-    heading:   heading   ?? 0,
-    speedKmh:  speedKmh  ?? 0,
+    heading: heading ?? 0,
+    speedKmh: speedKmh ?? 0,
     accuracyM: accuracyM ?? null,
-    source:    source    ?? 'fused',
+    source: source ?? "fused",
     timestamp: new Date(),
   };
 
@@ -389,14 +409,14 @@ rideTrackingSchema.statics.addBreadcrumb = async function (rideId, pingData) {
     {
       $push: {
         breadcrumbs: {
-          $each:  [breadcrumb],
+          $each: [breadcrumb],
           $slice: -MAX_BREADCRUMBS,
         },
       },
       $inc: { breadcrumbCount: 1 },
     },
-    { new: true }
-  ).select('breadcrumbCount currentEtaMinutes totalDistanceKm');
+    { new: true },
+  ).select("breadcrumbCount currentEtaMinutes totalDistanceKm");
 };
 
 /**
@@ -409,7 +429,13 @@ rideTrackingSchema.statics.addBreadcrumb = async function (rideId, pingData) {
 rideTrackingSchema.statics.addMilestone = async function (
   rideId,
   name,
-  { coordinates = null, stopSequence = null, meta = null, recordedBy = 'system', recordedByUserId = null } = {}
+  {
+    coordinates = null,
+    stopSequence = null,
+    meta = null,
+    recordedBy = "system",
+    recordedByUserId = null,
+  } = {},
 ) {
   if (!MILESTONE_NAMES.includes(name)) {
     throw new Error(`Unknown milestone name: ${name}`);
@@ -428,8 +454,8 @@ rideTrackingSchema.statics.addMilestone = async function (
   return this.findOneAndUpdate(
     { ride: rideId },
     { $push: { milestones: milestone } },
-    { new: true }
-  ).select('milestones');
+    { new: true },
+  ).select("milestones");
 };
 
 /**
@@ -448,7 +474,7 @@ rideTrackingSchema.statics.addEtaUpdate = async function (rideId, etaData) {
     toWaypoint,
     etaMinutes,
     distanceRemainingKm,
-    source:       source ?? 'estimate',
+    source: source ?? "estimate",
     calculatedAt: new Date(),
   };
 
@@ -457,52 +483,60 @@ rideTrackingSchema.statics.addEtaUpdate = async function (rideId, etaData) {
     {
       $push: {
         etaUpdates: {
-          $each:  [entry],
-          $slice: -MAX_ETA_UPDATES,  // FIX #14: DB-level cap, not pre-save only
+          $each: [entry],
+          $slice: -MAX_ETA_UPDATES, // FIX #14: DB-level cap, not pre-save only
         },
       },
       $set: {
         currentEtaMinutes: etaMinutes,
-        currentEtaTarget:  toWaypoint,
+        currentEtaTarget: toWaypoint,
       },
     },
-    { new: true }
-  ).select('currentEtaMinutes currentEtaTarget');
+    { new: true },
+  ).select("currentEtaMinutes currentEtaTarget");
 };
 
 /**
  * attachCareAssistant — link CA to tracking doc when CA assigned to booking.
  * Called when admin assigns CA or CA accepts booking.
  */
-rideTrackingSchema.statics.attachCareAssistant = async function (rideId, careAssistantProfileId) {
+rideTrackingSchema.statics.attachCareAssistant = async function (
+  rideId,
+  careAssistantProfileId,
+) {
   return this.findOneAndUpdate(
     { ride: rideId },
     {
       $set: {
-        careAssistant:         careAssistantProfileId,
-        careAssistantStatus:   'en_route_to_pickup',
+        careAssistant: careAssistantProfileId,
+        careAssistantStatus: "en_route_to_pickup",
         careAssistantJoinedAt: new Date(),
       },
     },
-    { new: true }
-  ).select('careAssistant careAssistantStatus careAssistantJoinedAt');
+    { new: true },
+  ).select("careAssistant careAssistantStatus careAssistantJoinedAt");
 };
 
 /**
  * updateCareAssistantLocation — push CA GPS ping + update live location.
  * Returns lightweight select for socket broadcast.
  */
-rideTrackingSchema.statics.updateCareAssistantLocation = async function (rideId, pingData) {
+rideTrackingSchema.statics.updateCareAssistantLocation = async function (
+  rideId,
+  pingData,
+) {
   const { coordinates, heading, speedKmh, accuracyM, source } = pingData;
   if (!coordinates || coordinates.length !== 2)
-    throw new Error('updateCareAssistantLocation: coordinates [lng, lat] required');
+    throw new Error(
+      "updateCareAssistantLocation: coordinates [lng, lat] required",
+    );
 
   const breadcrumb = {
     coordinates,
-    heading:   heading   ?? 0,
-    speedKmh:  speedKmh  ?? 0,
+    heading: heading ?? 0,
+    speedKmh: speedKmh ?? 0,
     accuracyM: accuracyM ?? null,
-    source:    source    ?? 'gps',
+    source: source ?? "gps",
     timestamp: new Date(),
   };
 
@@ -511,36 +545,47 @@ rideTrackingSchema.statics.updateCareAssistantLocation = async function (rideId,
     {
       $set: {
         careAssistantLiveLocation: {
-          type:        'Point',
+          type: "Point",
           coordinates,
-          heading:     heading  ?? 0,
-          speedKmh:    speedKmh ?? 0,
-          updatedAt:   new Date(),
+          heading: heading ?? 0,
+          speedKmh: speedKmh ?? 0,
+          updatedAt: new Date(),
         },
       },
       $push: {
         careAssistantBreadcrumbs: {
-          $each:  [breadcrumb],
-          $slice: -MAX_BREADCRUMBS,   // reuse same constant
+          $each: [breadcrumb],
+          $slice: -MAX_BREADCRUMBS, // reuse same constant
         },
       },
       $inc: { careAssistantBreadcrumbCount: 1 },
     },
-    { new: true }
-  ).select('careAssistantLiveLocation careAssistantBreadcrumbCount careAssistantStatus');
+    { new: true },
+  ).select(
+    "careAssistantLiveLocation careAssistantBreadcrumbCount careAssistantStatus",
+  );
 };
 
 /**
  * updateCareAssistantStatus — transition CA status in ride.
  */
-rideTrackingSchema.statics.updateCareAssistantStatus = async function (rideId, status) {
-  const valid = ['not_joined', 'en_route_to_pickup', 'at_pickup', 'in_ride', 'departed'];
+rideTrackingSchema.statics.updateCareAssistantStatus = async function (
+  rideId,
+  status,
+) {
+  const valid = [
+    "not_joined",
+    "en_route_to_pickup",
+    "at_pickup",
+    "in_ride",
+    "departed",
+  ];
   if (!valid.includes(status)) throw new Error(`Invalid CA status: ${status}`);
   return this.findOneAndUpdate(
     { ride: rideId },
     { $set: { careAssistantStatus: status } },
-    { new: true }
-  ).select('careAssistantStatus');
+    { new: true },
+  ).select("careAssistantStatus");
 };
 
 /**
@@ -553,28 +598,33 @@ rideTrackingSchema.statics.triggerSos = async function (rideId, sosData) {
     { ride: rideId },
     {
       $push: { sosEvents: sosEvent },
-      $set:  { hasActiveSos: true },
+      $set: { hasActiveSos: true },
     },
-    { new: true }
-  ).select('sosEvents hasActiveSos');
+    { new: true },
+  ).select("sosEvents hasActiveSos");
 };
 
 /**
  * resolveSos — mark SOS resolved.
  */
-rideTrackingSchema.statics.resolveSos = async function (rideId, sosEventId, resolvedBy, resolutionNotes) {
+rideTrackingSchema.statics.resolveSos = async function (
+  rideId,
+  sosEventId,
+  resolvedBy,
+  resolutionNotes,
+) {
   return this.findOneAndUpdate(
-    { ride: rideId, 'sosEvents._id': sosEventId },
+    { ride: rideId, "sosEvents._id": sosEventId },
     {
       $set: {
-        'sosEvents.$.isResolved':      true,
-        'sosEvents.$.resolvedAt':      new Date(),
-        'sosEvents.$.resolvedBy':      resolvedBy,
-        'sosEvents.$.resolutionNotes': resolutionNotes,
-        hasActiveSos:                  false,
+        "sosEvents.$.isResolved": true,
+        "sosEvents.$.resolvedAt": new Date(),
+        "sosEvents.$.resolvedBy": resolvedBy,
+        "sosEvents.$.resolutionNotes": resolutionNotes,
+        hasActiveSos: false,
       },
     },
-    { new: true }
+    { new: true },
   );
 };
 
@@ -589,15 +639,19 @@ rideTrackingSchema.statics.resolveSos = async function (rideId, sosEventId, reso
 rideTrackingSchema.statics.computeSummary = async function (rideId) {
   const [tracking, ride] = await Promise.all([
     this.findOne({ ride: rideId }).lean(),
-    mongoose.model('Ride').findById(rideId)
-      .select('rideStartedAt rideCompletedAt')
+    mongoose
+      .model("Ride")
+      .findById(rideId)
+      .select("rideStartedAt rideCompletedAt")
       .lean(),
   ]);
 
   if (!tracking) return null;
 
   const crumbs = tracking.breadcrumbs ?? [];
-  const speeds = crumbs.map(c => c.speedKmh).filter(s => s != null && s >= 0);
+  const speeds = crumbs
+    .map((c) => c.speedKmh)
+    .filter((s) => s != null && s >= 0);
 
   const avgSpeed = speeds.length
     ? +(speeds.reduce((a, b) => a + b, 0) / speeds.length).toFixed(1)
@@ -608,69 +662,86 @@ rideTrackingSchema.statics.computeSummary = async function (rideId) {
   let totalDurationMin = null;
   if (ride?.rideStartedAt && ride?.rideCompletedAt) {
     totalDurationMin = Math.round(
-      (new Date(ride.rideCompletedAt) - new Date(ride.rideStartedAt)) / 60000
+      (new Date(ride.rideCompletedAt) - new Date(ride.rideStartedAt)) / 60000,
     );
   }
 
   // Pickup wait = driver_arrived → otp_verified
-  const arrivedMs  = tracking.milestones?.find(m => m.name === 'driver_arrived')?.occurredAt;
-  const otpMs      = tracking.milestones?.find(m => m.name === 'otp_verified')?.occurredAt;
-  const pickupWaitMin = arrivedMs && otpMs
-    ? Math.round((new Date(otpMs) - new Date(arrivedMs)) / 60000)
-    : 0;
+  const arrivedMs = tracking.milestones?.find(
+    (m) => m.name === "driver_arrived",
+  )?.occurredAt;
+  const otpMs = tracking.milestones?.find(
+    (m) => m.name === "otp_verified",
+  )?.occurredAt;
+  const pickupWaitMin =
+    arrivedMs && otpMs
+      ? Math.round((new Date(otpMs) - new Date(arrivedMs)) / 60000)
+      : 0;
 
   // Total stop wait
-  const stopArrived  = tracking.milestones?.filter(m => m.name === 'stop_reached')  ?? [];
-  const stopDeparted = tracking.milestones?.filter(m => m.name === 'stop_departed') ?? [];
+  const stopArrived =
+    tracking.milestones?.filter((m) => m.name === "stop_reached") ?? [];
+  const stopDeparted =
+    tracking.milestones?.filter((m) => m.name === "stop_departed") ?? [];
   let totalStopWaitMin = 0;
   for (let i = 0; i < Math.min(stopArrived.length, stopDeparted.length); i++) {
     totalStopWaitMin += Math.round(
-      (new Date(stopDeparted[i].occurredAt) - new Date(stopArrived[i].occurredAt)) / 60000
+      (new Date(stopDeparted[i].occurredAt) -
+        new Date(stopArrived[i].occurredAt)) /
+        60000,
     );
   }
 
   // Recompute totalDistanceKm from breadcrumbs using haversine
   let totalDistanceKm = 0;
   for (let i = 1; i < crumbs.length; i++) {
-    totalDistanceKm += haversineKm(crumbs[i - 1].coordinates, crumbs[i].coordinates);
+    totalDistanceKm += haversineKm(
+      crumbs[i - 1].coordinates,
+      crumbs[i].coordinates,
+    );
   }
   totalDistanceKm = +totalDistanceKm.toFixed(2);
 
   const summary = {
     totalDistanceKm,
-    totalDurationMin,   // FIX #12: no longer null
-    avgSpeedKmh:        avgSpeed,
-    maxSpeedKmh:        maxSpeed,
+    totalDurationMin, // FIX #12: no longer null
+    avgSpeedKmh: avgSpeed,
+    maxSpeedKmh: maxSpeed,
     pickupWaitMin,
     totalStopWaitMin,
     totalPingsReceived: tracking.breadcrumbCount,
-    isCompleted:        true,
-    completedAt:        new Date(),
+    isCompleted: true,
+    completedAt: new Date(),
   };
 
   return this.findOneAndUpdate(
     { ride: rideId },
     { $set: { summary, totalDistanceKm } },
-    { new: true }
-  ).select('summary');
+    { new: true },
+  ).select("summary");
 };
 
 // ── Pre-save ──────────────────────────────────────────────────────────────────
 
-rideTrackingSchema.pre('save', function () {
+rideTrackingSchema.pre("save", function () {
   // Safety net cap for etaUpdates (primary cap is $slice in addEtaUpdate)
-  if (this.isModified('etaUpdates') && this.etaUpdates.length > MAX_ETA_UPDATES) {
+  if (
+    this.isModified("etaUpdates") &&
+    this.etaUpdates.length > MAX_ETA_UPDATES
+  ) {
     this.etaUpdates = this.etaUpdates.slice(-MAX_ETA_UPDATES);
   }
 
   // Sync hasActiveSos
-  if (this.isModified('sosEvents')) {
-    this.hasActiveSos = this.sosEvents.some(e => !e.isResolved);
+  if (this.isModified("sosEvents")) {
+    this.hasActiveSos = this.sosEvents.some((e) => !e.isResolved);
   }
 
   // Sync hasUnacknowledgedDeviation
-  if (this.isModified('routeDeviations')) {
-    this.hasUnacknowledgedDeviation = this.routeDeviations.some(d => !d.wasAcknowledged);
+  if (this.isModified("routeDeviations")) {
+    this.hasUnacknowledgedDeviation = this.routeDeviations.some(
+      (d) => !d.wasAcknowledged,
+    );
   }
 });
 
@@ -686,7 +757,7 @@ rideTrackingSchema.index({ createdAt: -1 });
 // ── Utility — Haversine distance ──────────────────────────────────────────────
 
 function haversineKm([lng1, lat1], [lng2, lat2]) {
-  const R    = 6371;
+  const R = 6371;
   const dLat = toRad(lat2 - lat1);
   const dLng = toRad(lng2 - lng1);
   const a =
@@ -695,9 +766,11 @@ function haversineKm([lng1, lat1], [lng2, lat2]) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function toRad(deg) { return deg * (Math.PI / 180); }
+function toRad(deg) {
+  return deg * (Math.PI / 180);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 rideTrackingSchema.index({ ride: 1 }, { unique: true });
-const RideTracking = mongoose.model('RideTracking', rideTrackingSchema);
+const RideTracking = mongoose.model("RideTracking", rideTrackingSchema);
 export default RideTracking;

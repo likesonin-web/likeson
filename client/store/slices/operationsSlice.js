@@ -160,20 +160,15 @@ careAssistantLocation: null,   // from socket care_assistant_location_update
 careAssistantStatus:   null,   // from socket care_assistant_status_change
 careAssistantJoined:   null,   // from socket care_assistant_joined_ride
 careRideStatus: {
-
-  status: null,
-
-  activeTarget: null,
-
-  currentLeg: null,
-
-  patientPickedUp: false,
-
-  careAssistantJoined: false,
-
-  hospitalReached: false,
-
-  handoverCompleted: false,
+  status:                null,
+  activeTarget:          null,
+  activeNavigationTarget: null,   // ← ADD: canonical field
+  rideStage:             null,    // ← ADD: new field from backend
+  currentLeg:            null,
+  patientPickedUp:       false,
+  careAssistantJoined:   false,
+  hospitalReached:       false,
+  handoverCompleted:     false,
 },
 
   // ── Single-record ────────────────────────────────────────────────────────
@@ -882,17 +877,14 @@ const operationsSlice = createSlice({
   initialState,
 
   reducers: {
-    // ── Socket live-state setters (called from SocketProvider listeners) ─────
-    setCareRideWorkflow(
-  state,
-  action
-) {
-
+  setCareRideWorkflow(state, action) {
   state.careRideStatus = {
-
     ...state.careRideStatus,
-
     ...action.payload,
+    // map activeNavigationTarget → activeTarget for compat
+    ...(action.payload.activeNavigationTarget
+      ? { activeTarget: action.payload.activeNavigationTarget }
+      : {}),
   };
 },
     /** Call from useBookingRoom / location_update event */
@@ -905,10 +897,17 @@ const operationsSlice = createSlice({
       state.etaUpdate = payload;
     },
 
-    /** Call from useBookingRoom / ride_status_changed event */
-    setRideStatus(state, { payload }) {
-      state.rideStatus = payload;
-    },
+  setRideStatus(state, { payload }) {
+  state.bookingStatus = payload;
+  // Also sync careRideStatus if it has rideStage/activeNavigationTarget
+  if (payload?.rideStage) {
+    state.careRideStatus = {
+      ...state.careRideStatus,
+      rideStage:             payload.rideStage,
+      activeNavigationTarget: payload.activeNavigationTarget || state.careRideStatus.activeNavigationTarget,
+    };
+  }
+},
 
     /** Call from useBookingRoom / booking_status_change event */
     setBookingStatus(state, { payload }) {
@@ -1562,6 +1561,10 @@ export const selectCareAssistantLocation = (s) => s.operations.careAssistantLoca
 export const selectCareAssistantStatus   = (s) => s.operations.careAssistantStatus;
 export const selectCareAssistantJoined   = (s) => s.operations.careAssistantJoined;
 export const selectCareRideStatus        = (s) => s.operations.careRideStatus;
+
+
+export const selectRideStageOps           = (s) => s.operations.careRideStatus?.rideStage;
+export const selectActiveNavigationTarget = (s) => s.operations.careRideStatus?.activeNavigationTarget;
 
 export const selectCareTrackingLoading   = (s) =>
   s.operations.loading['fetchCareTrackingSnapshot'] ?? false;

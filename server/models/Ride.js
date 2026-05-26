@@ -1,49 +1,47 @@
-import mongoose from 'mongoose';
-import { customAlphabet } from 'nanoid';
+import mongoose from "mongoose";
+import { customAlphabet } from "nanoid";
 
 const { Schema } = mongoose;
 
-const generateRideCode = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 8);
+const generateRideCode = customAlphabet(
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+  8,
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RIDE MODEL — Likeson.in
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const RIDE_TYPES = [
-  'patient',
-  'care_assistant',
-  'diagnostic_tech',
-  'pharmacy_delivery',
-  'blood_bank',
+  "patient",
+  "care_assistant",
+  "diagnostic_tech",
+  "pharmacy_delivery",
+  "blood_bank",
 ];
 
 export const RIDE_STATUSES = [
-  'requested',
-  'searching',
-  'driver_assigned',
-  'driver_accepted',
-  'driver_en_route',
-  'driver_arrived',
-  'otp_verified',
-  'in_progress',
-  'at_stop',
-  'completed',
-  'cancelled',
-  'no_driver_found',
+  "requested",
+  "searching",
+  "driver_assigned",
+  "driver_accepted",
+  "driver_en_route",
+  "driver_arrived",
+  "otp_verified",
+  "in_progress",
+  "at_stop",
+  "completed",
+  "cancelled",
+  "no_driver_found",
 ];
 
 export const RIDE_VEHICLE_CLASSES = [
-  'two_wheeler',
-  'four_wheeler',
-  'ambulance',
+  "two_wheeler",
+  "four_wheeler",
+  "ambulance",
 ];
 
-export const RIDE_CANCEL_ACTORS = [
-  'customer',
-  'driver',
-  'admin',
-  'system',
-];
+export const RIDE_CANCEL_ACTORS = ["customer", "driver", "admin", "system"];
 
 // Max declined drivers stored per ride — prevents unbounded array growth (#11)
 const MAX_DECLINED_DRIVERS = 50;
@@ -52,116 +50,122 @@ const MAX_DECLINED_DRIVERS = 50;
 
 const rideGeoPointSchema = new Schema(
   {
-    type:        { type: String, enum: ['Point'], default: 'Point' },
+    type: { type: String, enum: ["Point"], default: "Point" },
     coordinates: { type: [Number], required: true },
-    label:       { type: String, trim: true },
-    address:     { type: String, trim: true },
-    city:        { type: String, trim: true },
-    pincode:     { type: String, trim: true },
-    arrivedAt:   { type: Date },
-    departedAt:  { type: Date },
+    label: { type: String, trim: true },
+    address: { type: String, trim: true },
+    city: { type: String, trim: true },
+    pincode: { type: String, trim: true },
+    arrivedAt: { type: Date },
+    departedAt: { type: Date },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const stopSchema = new Schema(
   {
-    sequence:    { type: Number, required: true },
-    location:    { type: rideGeoPointSchema, required: true },
-    purpose:     {
+    sequence: { type: Number, required: true },
+    location: { type: rideGeoPointSchema, required: true },
+    purpose: {
       type: String,
-      enum: ['pharmacy_pickup', 'hospital_gate', 'lab_collection', 'blood_bank', 'other'],
+      enum: [
+        "pharmacy_pickup",
+        "hospital_gate",
+        "lab_collection",
+        "blood_bank",
+        "other",
+      ],
     },
     waitMinutes: { type: Number, default: 0 },
     isCompleted: { type: Boolean, default: false },
   },
-  { _id: true }
+  { _id: true },
 );
 
 const vehicleSnapshotSchema = new Schema(
   {
-    vehicleCode:            { type: String },
-    registrationNumber:     { type: String },
-    make:                   { type: String },
-    model:                  { type: String },
-    color:                  { type: String },
-    vehicleType:            { type: String },
-    vehicleClass:           { type: String, enum: RIDE_VEHICLE_CLASSES },
-    seatingCapacity:        { type: Number },
+    vehicleCode: { type: String },
+    registrationNumber: { type: String },
+    make: { type: String },
+    model: { type: String },
+    color: { type: String },
+    vehicleType: { type: String },
+    vehicleClass: { type: String, enum: RIDE_VEHICLE_CLASSES },
+    seatingCapacity: { type: Number },
     isWheelchairAccessible: { type: Boolean },
-    hasStretcherSupport:    { type: Boolean },
-    hasOxygenSupport:       { type: Boolean },
-    hasAC:                  { type: Boolean },
+    hasStretcherSupport: { type: Boolean },
+    hasOxygenSupport: { type: Boolean },
+    hasAC: { type: Boolean },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const driverSnapshotSchema = new Schema(
   {
-    driverCode:   { type: String },
-    legalName:    { type: String },
-    phone:        { type: String },
-    photoUrl:     { type: String },
-    rating:       { type: Number },
+    driverCode: { type: String },
+    legalName: { type: String },
+    phone: { type: String },
+    photoUrl: { type: String },
+    rating: { type: Number },
     licenceClass: [{ type: String }],
   },
-  { _id: false }
+  { _id: false },
 );
 
 const rideFareBreakdownSchema = new Schema(
   {
-    baseFare:            { type: Number, default: 0, min: 0 },
-    distanceFare:        { type: Number, default: 0, min: 0 },
-    waitingCharge:       { type: Number, default: 0, min: 0 },
-    nightSurcharge:      { type: Number, default: 0, min: 0 },
+    baseFare: { type: Number, default: 0, min: 0 },
+    distanceFare: { type: Number, default: 0, min: 0 },
+    waitingCharge: { type: Number, default: 0, min: 0 },
+    nightSurcharge: { type: Number, default: 0, min: 0 },
     wheelchairSurcharge: { type: Number, default: 0, min: 0 },
-    stopCharges:         { type: Number, default: 0, min: 0 },
-    platformFee:         { type: Number, default: 0, min: 0 },
-    taxes:               { type: Number, default: 0, min: 0 },
-    discount:            { type: Number, default: 0, min: 0 },
-    totalFare:           { type: Number, default: 0, min: 0 },
-    driverEarnings:      { type: Number, default: 0, min: 0 },
-    agencyEarnings:      { type: Number, default: 0, min: 0 },
-    ratePerKm:           { type: Number, default: 0 },
-    minimumFare:         { type: Number, default: 0 },
-    waitingRatePerMin:   { type: Number, default: 0 },
-    currency:            { type: String, default: 'INR' },
-    platformFeeType:     { type: String, enum: ['fixed', 'percentage'] },
-    platformFeeValue:    { type: Number },
+    stopCharges: { type: Number, default: 0, min: 0 },
+    platformFee: { type: Number, default: 0, min: 0 },
+    taxes: { type: Number, default: 0, min: 0 },
+    discount: { type: Number, default: 0, min: 0 },
+    totalFare: { type: Number, default: 0, min: 0 },
+    driverEarnings: { type: Number, default: 0, min: 0 },
+    agencyEarnings: { type: Number, default: 0, min: 0 },
+    ratePerKm: { type: Number, default: 0 },
+    minimumFare: { type: Number, default: 0 },
+    waitingRatePerMin: { type: Number, default: 0 },
+    currency: { type: String, default: "INR" },
+    platformFeeType: { type: String, enum: ["fixed", "percentage"] },
+    platformFeeValue: { type: Number },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const liveLocationSchema = new Schema(
   {
-    type:        { type: String, enum: ['Point'], default: 'Point' },
+    type: { type: String, enum: ["Point"], default: "Point" },
     coordinates: { type: [Number], default: [80.648, 16.506] },
-    heading:     { type: Number, min: 0, max: 360 },
-    speedKmh:    { type: Number, min: 0 },
-    updatedAt:   { type: Date, default: Date.now },
+    heading: { type: Number, min: 0, max: 360 },
+    speedKmh: { type: Number, min: 0 },
+    updatedAt: { type: Date, default: Date.now },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const rideCancellationSchema = new Schema(
   {
-    cancelledBy:       { type: String, enum: RIDE_CANCEL_ACTORS },
-    cancelledByUserId: { type: Schema.Types.ObjectId, ref: 'User' },
-    reason:            { type: String, trim: true },
-    cancellationFee:   { type: Number, default: 0, min: 0 },
-    cancelledAt:       { type: Date, default: Date.now },
+    cancelledBy: { type: String, enum: RIDE_CANCEL_ACTORS },
+    cancelledByUserId: { type: Schema.Types.ObjectId, ref: "User" },
+    reason: { type: String, trim: true },
+    cancellationFee: { type: Number, default: 0, min: 0 },
+    cancelledAt: { type: Date, default: Date.now },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const rideRatingSchema = new Schema(
   {
-    rating:    { type: Number, min: 1, max: 5 },
-    comment:   { type: String, trim: true },
-    ratedAt:   { type: Date },
+    rating: { type: Number, min: 1, max: 5 },
+    comment: { type: String, trim: true },
+    ratedAt: { type: Date },
     isVisible: { type: Boolean, default: true },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // ── Main Schema ───────────────────────────────────────────────────────────────
@@ -170,19 +174,19 @@ const rideSchema = new Schema(
   {
     // ── Identity ──────────────────────────────────────────────────────────────
     rideCode: {
-      type:      String,
-      unique:    true,
-      sparse:    true,   // FIX #10: sparse prevents null duplicate key collision
+      type: String,
+      unique: true,
+      sparse: true, // FIX #10: sparse prevents null duplicate key collision
       uppercase: true,
-      trim:      true,
-      index:     true,
+      trim: true,
+      index: true,
     },
 
     rideType: {
-      type:     String,
+      type: String,
       required: true,
-      enum:     RIDE_TYPES,
-      index:    true,
+      enum: RIDE_TYPES,
+      index: true,
     },
 
     // FIX #8: vehicleClass NOT required at schema level.
@@ -195,98 +199,147 @@ const rideSchema = new Schema(
     },
 
     // ── Booking Link ──────────────────────────────────────────────────────────
-   booking: {
-  type:    Schema.Types.ObjectId,
-  ref:     'Booking',
-  default: null,
-  index:   true,
-},
+    booking: {
+      type: Schema.Types.ObjectId,
+      ref: "Booking",
+      default: null,
+      index: true,
+    },
 
     isReturnRide: { type: Boolean, default: false },
 
     activeNavigationTarget: {
-  type: String,
-  enum: [
-    'pickup_patient',
-    'pickup_care_assistant',
-    'hospital_drop',
-    'patient_drop',
-  ],
-  default: 'pickup_patient',
-},
+      type: String,
+      enum: [
+        "pickup_care_assistant",
+        "pickup_patient",
+        "dropoff_hospital",
+        "dropoff_destination",
+        "return_pickup",
+      ],
+      default: "pickup_patient",
+    },
+
+    rideStage: {
+      type: String,
+      enum: [
+        "searching_driver",
+        "driver_to_care_assistant",
+        "driver_to_patient",
+        "patient_onboard",
+        "care_assistant_joined",
+        "enroute_hospital",
+        "hospital_reached",
+        "return_trip",
+        "completed",
+        "cancelled",
+      ],
+      default: "searching_driver",
+      index: true,
+    },
+
+    waypoints: {
+      type: [
+        {
+          type: {
+            type: String,
+            enum: [
+              "care_assistant_join",
+              "pharmacy_pickup",
+              "hospital_gate",
+              "lab_collection",
+              "blood_bank",
+              "other",
+            ],
+            required: true,
+          },
+          location: {
+            type: { type: String, enum: ["Point"], default: "Point" },
+            coordinates: { type: [Number], required: true },
+            address: { type: String, default: "" },
+            label: { type: String, default: "" },
+          },
+          pickupFirst: { type: Boolean, default: false },
+          isCompleted: { type: Boolean, default: false },
+          completedAt: { type: Date, default: null },
+          meta: { type: Schema.Types.Mixed, default: null },
+        },
+      ],
+      default: [],
+    },
 
     // ── Driver & Vehicle ──────────────────────────────────────────────────────
     // Ride.driver → Driver._id (NOT User._id). See socket service for why this matters.
     driver: {
-      type:    Schema.Types.ObjectId,
-      ref:     'Driver',
+      type: Schema.Types.ObjectId,
+      ref: "Driver",
       default: null,
-      index:   true,
+      index: true,
     },
 
     transportPartner: {
-      type:    Schema.Types.ObjectId,
-      ref:     'TransportPartner',
+      type: Schema.Types.ObjectId,
+      ref: "TransportPartner",
       default: null,
-      index:   true,
+      index: true,
     },
 
     soloPartner: {
-      type:    Schema.Types.ObjectId,
-      ref:     'SoloDriverPartner',
+      type: Schema.Types.ObjectId,
+      ref: "SoloDriverPartner",
       default: null,
     },
 
     assignedVehicleId: {
-      type:    Schema.Types.ObjectId,
+      type: Schema.Types.ObjectId,
       default: null,
     },
 
     vehicleSnapshot: { type: vehicleSnapshotSchema, default: null },
-    driverSnapshot:  { type: driverSnapshotSchema,  default: null },
+    driverSnapshot: { type: driverSnapshotSchema, default: null },
 
     // ── Route ─────────────────────────────────────────────────────────────────
     pickup: {
-      type:     rideGeoPointSchema,
+      type: rideGeoPointSchema,
       required: true,
     },
 
     dropoff: {
-      type:     rideGeoPointSchema,
+      type: rideGeoPointSchema,
       required: true,
     },
 
     stops: {
-      type:    [stopSchema],
+      type: [stopSchema],
       default: [],
     },
 
     // ── Live Position ─────────────────────────────────────────────────────────
     liveLocation: {
-      type:    liveLocationSchema,
+      type: liveLocationSchema,
       default: () => ({}),
     },
 
     currentEtaMinutes: { type: Number, default: null },
 
     // ── Timing ────────────────────────────────────────────────────────────────
-    scheduledPickupAt:    { type: Date, required: true, index: true },
-    driverAssignedAt:     { type: Date },
-    driverAcceptedAt:     { type: Date },
-    driverArrivedAt:      { type: Date },
-    rideStartedAt:        { type: Date },
-    rideCompletedAt:      { type: Date },
-    driverEnRouteAt:      { type: Date },
+    scheduledPickupAt: { type: Date, required: true, index: true },
+    driverAssignedAt: { type: Date },
+    driverAcceptedAt: { type: Date },
+    driverArrivedAt: { type: Date },
+    rideStartedAt: { type: Date },
+    rideCompletedAt: { type: Date },
+    driverEnRouteAt: { type: Date },
 
     // ── Distance & Duration ───────────────────────────────────────────────────
-    estimatedDistanceKm:  { type: Number, default: 0 },
+    estimatedDistanceKm: { type: Number, default: 0 },
     estimatedDurationMin: { type: Number, default: 0 },
-    actualDistanceKm:     { type: Number, default: 0 },
-    actualDurationMin:    { type: Number, default: 0 },
+    actualDistanceKm: { type: Number, default: 0 },
+    actualDurationMin: { type: Number, default: 0 },
 
     // ── OTP ───────────────────────────────────────────────────────────────────
     pickupOtp: {
-      type:   String,
+      type: String,
       select: false,
     },
 
@@ -294,222 +347,181 @@ const rideSchema = new Schema(
 
     // ── Fare ─────────────────────────────────────────────────────────────────
     fare: {
-      type:    rideFareBreakdownSchema,
+      type: rideFareBreakdownSchema,
       default: () => ({}),
     },
-    activeTarget: {
 
-  type: String,
-
-  enum: [
-
-    'patient_pickup',
-
-    'care_assistant_pickup',
-
-    'hospital_drop',
-
-    'return_trip',
-
-  ],
-
-  default:
-    'patient_pickup',
-},
-
-currentLeg: {
-
-  type: String,
-
-  enum: [
-
-    'driver_to_patient',
-
-    'patient_to_care_assistant',
-
-    'to_hospital',
-
-    'return_trip',
-
-  ],
-
-  default:
-    'driver_to_patient',
-},
-
-hospitalEtaMinutes: {
-  type: Number,
-  default: 0,
-},
-
-hospitalDistanceKm: {
-  type: Number,
-  default: 0,
-},
-
-routeWorkflow: {
-  type: String,
-
-  enum: [
-    'driver_to_patient',
-    'driver_to_care_assistant',
-    'care_assistant_to_patient',
-    'patient_to_hospital',
-    'hospital_waiting',
-    'return_trip',
-    'completed',
-  ],
-
-  default: 'driver_to_patient',
-},
+    hospitalEtaMinutes: { type: Number, default: 0 },
+    hospitalDistanceKm: { type: Number, default: 0 },
 
     // ── Status ────────────────────────────────────────────────────────────────
     status: {
-      type:    String,
-      enum:    RIDE_STATUSES,
-      default: 'requested',
-      index:   true,
+      type: String,
+      enum: RIDE_STATUSES,
+      default: "requested",
+      index: true,
     },
 
     driverSearchAttempts: { type: Number, default: 0 },
 
     // FIX #11: declinedDrivers capped at MAX_DECLINED_DRIVERS in pre-save
-    declinedDrivers: [{ type: Schema.Types.ObjectId, ref: 'Driver' }],
+    declinedDrivers: [{ type: Schema.Types.ObjectId, ref: "Driver" }],
 
     cancellation: {
-      type:    rideCancellationSchema,
+      type: rideCancellationSchema,
       default: null,
     },
 
     // ── Rating ────────────────────────────────────────────────────────────────
-    rating:  { type: rideRatingSchema, default: null },
+    rating: { type: rideRatingSchema, default: null },
     isRated: { type: Boolean, default: false },
 
     // ── RideTracking Link ─────────────────────────────────────────────────────
     trackingId: {
-      type:    Schema.Types.ObjectId,
-      ref:     'RideTracking',
+      type: Schema.Types.ObjectId,
+      ref: "RideTracking",
       default: null,
-      index:   true,
+      index: true,
     },
 
     // ── Internal ──────────────────────────────────────────────────────────────
     internalNotes: { type: String, select: false },
-    createdBy:     { type: Schema.Types.ObjectId, ref: 'User' },
-    updatedBy:     { type: Schema.Types.ObjectId, ref: 'User' },
+    createdBy: { type: Schema.Types.ObjectId, ref: "User" },
+    updatedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   {
     timestamps: true,
-    toJSON:   { virtuals: true },
+    toJSON: { virtuals: true },
     toObject: { virtuals: true },
-  }
+  },
 );
 
 // ── Virtuals ──────────────────────────────────────────────────────────────────
 
-rideSchema.virtual('isActive').get(function () {
+rideSchema.virtual("isActive").get(function () {
   return [
-    'driver_assigned', 'driver_accepted', 'driver_en_route',
-    'driver_arrived', 'otp_verified', 'in_progress', 'at_stop',
+    "driver_assigned",
+    "driver_accepted",
+    "driver_en_route",
+    "driver_arrived",
+    "otp_verified",
+    "in_progress",
+    "at_stop",
   ].includes(this.status);
 });
 
-rideSchema.virtual('isCompleted').get(function () {
-  return this.status === 'completed';
+rideSchema.virtual("isCompleted").get(function () {
+  return this.status === "completed";
 });
 
-rideSchema.virtual('isCancelled').get(function () {
-  return this.status === 'cancelled';
+rideSchema.virtual("isCancelled").get(function () {
+  return this.status === "cancelled";
 });
 
-rideSchema.virtual('isPendingDriver').get(function () {
-  return ['requested', 'searching'].includes(this.status);
+rideSchema.virtual("isPendingDriver").get(function () {
+  return ["requested", "searching"].includes(this.status);
 });
 
-rideSchema.virtual('driverType').get(function () {
-  if (this.transportPartner) return 'agency';
-  if (this.soloPartner)      return 'solo';
+rideSchema.virtual("driverType").get(function () {
+  if (this.transportPartner) return "agency";
+  if (this.soloPartner) return "solo";
   return null;
 });
 
-rideSchema.virtual('waitingTimeMinutes').get(function () {
+rideSchema.virtual("waitingTimeMinutes").get(function () {
   if (!this.driverArrivedAt || !this.rideStartedAt) return 0;
   return Math.round((this.rideStartedAt - this.driverArrivedAt) / 60000);
 });
 
-rideSchema.virtual('actualDurationFromTimestamps').get(function () {
+rideSchema.virtual("actualDurationFromTimestamps").get(function () {
   if (!this.rideStartedAt || !this.rideCompletedAt) return null;
   return Math.round((this.rideCompletedAt - this.rideStartedAt) / 60000);
 });
 
 // ── Pre-validate ──────────────────────────────────────────────────────────────
 
-rideSchema.pre('validate', function () {
+rideSchema.pre("validate", function () {
   // pickup and dropoff cannot be same coordinates
   if (this.pickup?.coordinates && this.dropoff?.coordinates) {
     const [pLng, pLat] = this.pickup.coordinates;
     const [dLng, dLat] = this.dropoff.coordinates;
     if (pLng === dLng && pLat === dLat) {
-      throw new Error('Ride pickup and dropoff cannot be the same location');
+      throw new Error("Ride pickup and dropoff cannot be the same location");
     }
   }
 
   // stops must have unique sequence numbers
   if (this.stops?.length > 0) {
-    const seqs = this.stops.map(s => s.sequence);
+    const seqs = this.stops.map((s) => s.sequence);
     if (new Set(seqs).size !== seqs.length) {
-      throw new Error('Ride stops must have unique sequence numbers');
+      throw new Error("Ride stops must have unique sequence numbers");
     }
   }
 
   // Cannot have both transportPartner and soloPartner
   if (this.transportPartner && this.soloPartner) {
-    throw new Error('Ride cannot reference both a transportPartner and a soloPartner');
+    throw new Error(
+      "Ride cannot reference both a transportPartner and a soloPartner",
+    );
   }
 });
 
 // ── Pre-save ──────────────────────────────────────────────────────────────────
 
-rideSchema.pre('save', async function () {
+rideSchema.pre("save", async function () {
   // Auto-generate rideCode
   if (this.isNew && !this.rideCode) {
     let code, exists;
     let attempts = 0;
     do {
-      if (attempts++ > 10) throw new Error('rideCode generation failed');
-      code   = `RD-${generateRideCode()}`;
-      exists = await mongoose.model('Ride').exists({ rideCode: code });
+      if (attempts++ > 10) throw new Error("rideCode generation failed");
+      code = `RD-${generateRideCode()}`;
+      exists = await mongoose.model("Ride").exists({ rideCode: code });
     } while (exists);
     this.rideCode = code;
   }
 
   // Auto-set timing fields on status transitions
   const now = new Date();
-  if (this.isModified('status')) {
+  if (this.isModified("status")) {
     switch (this.status) {
-      case 'driver_assigned': this.driverAssignedAt = this.driverAssignedAt ?? now; break;
-      case 'driver_accepted': this.driverAcceptedAt = this.driverAcceptedAt ?? now; break;
-      case 'driver_en_route': this.driverEnRouteAt  = this.driverEnRouteAt  ?? now; break;
-      case 'driver_arrived':  this.driverArrivedAt  = this.driverArrivedAt  ?? now; break;
-      case 'otp_verified':    this.rideStartedAt    = this.rideStartedAt    ?? now; break;
-      case 'completed':       this.rideCompletedAt  = this.rideCompletedAt  ?? now; break;
+      case "driver_assigned":
+        this.driverAssignedAt = this.driverAssignedAt ?? now;
+        break;
+      case "driver_accepted":
+        this.driverAcceptedAt = this.driverAcceptedAt ?? now;
+        break;
+      case "driver_en_route":
+        this.driverEnRouteAt = this.driverEnRouteAt ?? now;
+        break;
+      case "driver_arrived":
+        this.driverArrivedAt = this.driverArrivedAt ?? now;
+        break;
+      case "otp_verified":
+        this.rideStartedAt = this.rideStartedAt ?? now;
+        break;
+      case "completed":
+        this.rideCompletedAt = this.rideCompletedAt ?? now;
+        break;
     }
   }
 
   // Sync isRated
-  if (this.isModified('rating') && this.rating?.rating) {
-    this.isRated          = true;
-    this.rating.ratedAt   = this.rating.ratedAt ?? now;
+  if (this.isModified("rating") && this.rating?.rating) {
+    this.isRated = true;
+    this.rating.ratedAt = this.rating.ratedAt ?? now;
   }
 
   // FIX #8: Derive vehicleClass from vehicleSnapshot if not already set.
   // Runs regardless of whether vehicleSnapshot was just modified —
   // so creation without vehicleClass but with vehicleSnapshot works.
   if (!this.vehicleClass && this.vehicleSnapshot?.vehicleType) {
-    const twoWheelerTypes = ['Bike', 'Scooter', 'Motorcycle'];
-    this.vehicleClass = twoWheelerTypes.includes(this.vehicleSnapshot.vehicleType)
-      ? 'two_wheeler'
-      : 'four_wheeler';
+    const twoWheelerTypes = ["Bike", "Scooter", "Motorcycle"];
+    this.vehicleClass = twoWheelerTypes.includes(
+      this.vehicleSnapshot.vehicleType,
+    )
+      ? "two_wheeler"
+      : "four_wheeler";
   }
 
   // Also sync vehicleClass from vehicleSnapshot.vehicleClass if present
@@ -518,25 +530,34 @@ rideSchema.pre('save', async function () {
   }
 
   // Driver snapshot on first assignment
-  if (this.isModified('driver') && this.driver && !this.driverSnapshot?.driverCode) {
-    const Driver = mongoose.model('Driver');
+  if (
+    this.isModified("driver") &&
+    this.driver &&
+    !this.driverSnapshot?.driverCode
+  ) {
+    const Driver = mongoose.model("Driver");
     const drv = await Driver.findById(this.driver)
-      .select('driverCode legalName phone photoUrl performance.rating kyc.licenceClass')
+      .select(
+        "driverCode legalName phone photoUrl performance.rating kyc.licenceClass",
+      )
       .lean();
     if (drv) {
       this.driverSnapshot = {
-        driverCode:   drv.driverCode,
-        legalName:    drv.legalName,
-        phone:        drv.phone,
-        photoUrl:     drv.photoUrl,
-        rating:       drv.performance?.rating,
+        driverCode: drv.driverCode,
+        legalName: drv.legalName,
+        phone: drv.phone,
+        photoUrl: drv.photoUrl,
+        rating: drv.performance?.rating,
         licenceClass: drv.kyc?.licenceClass,
       };
     }
   }
 
   // FIX #11: Cap declinedDrivers array to prevent unbounded growth
-  if (this.isModified('declinedDrivers') && this.declinedDrivers.length > MAX_DECLINED_DRIVERS) {
+  if (
+    this.isModified("declinedDrivers") &&
+    this.declinedDrivers.length > MAX_DECLINED_DRIVERS
+  ) {
     // Keep the most recent MAX_DECLINED_DRIVERS — oldest dropped
     this.declinedDrivers = this.declinedDrivers.slice(-MAX_DECLINED_DRIVERS);
   }
@@ -544,23 +565,23 @@ rideSchema.pre('save', async function () {
 
 // ── Post-save — update Driver status when ride starts/ends ───────────────────
 
-rideSchema.post('save', async function () {
+rideSchema.post("save", async function () {
   if (!this.driver) return;
 
   try {
-    if (['otp_verified', 'in_progress', 'at_stop'].includes(this.status)) {
-      await mongoose.model('Driver').findByIdAndUpdate(this.driver, {
-        status:      'On-Trip',
+    if (["otp_verified", "in_progress", "at_stop"].includes(this.status)) {
+      await mongoose.model("Driver").findByIdAndUpdate(this.driver, {
+        status: "On-Trip",
         currentRide: this._id,
       });
-    } else if (['completed', 'cancelled'].includes(this.status)) {
-      await mongoose.model('Driver').findByIdAndUpdate(this.driver, {
-        status:      'Available',
+    } else if (["completed", "cancelled"].includes(this.status)) {
+      await mongoose.model("Driver").findByIdAndUpdate(this.driver, {
+        status: "Available",
         currentRide: null,
       });
     }
   } catch (err) {
-    console.error('[Ride.post-save] driver status sync failed:', err.message);
+    console.error("[Ride.post-save] driver status sync failed:", err.message);
   }
 });
 
@@ -571,8 +592,13 @@ rideSchema.statics.findActiveByDriver = function (driverId) {
     driver: driverId,
     status: {
       $in: [
-        'driver_assigned', 'driver_accepted', 'driver_en_route',
-        'driver_arrived', 'otp_verified', 'in_progress', 'at_stop',
+        "driver_assigned",
+        "driver_accepted",
+        "driver_en_route",
+        "driver_arrived",
+        "otp_verified",
+        "in_progress",
+        "at_stop",
       ],
     },
   });
@@ -584,9 +610,9 @@ rideSchema.statics.findByBooking = function (bookingId) {
 
 // ── Indexes ───────────────────────────────────────────────────────────────────
 
-rideSchema.index({ pickup:  '2dsphere' }, { sparse: true });
-rideSchema.index({ dropoff: '2dsphere' }, { sparse: true });
-rideSchema.index({ liveLocation: '2dsphere' });
+rideSchema.index({ pickup: "2dsphere" }, { sparse: true });
+rideSchema.index({ dropoff: "2dsphere" }, { sparse: true });
+rideSchema.index({ liveLocation: "2dsphere" });
 rideSchema.index({ driver: 1, status: 1 });
 rideSchema.index({ booking: 1, rideType: 1 });
 rideSchema.index({ status: 1, scheduledPickupAt: 1 });
@@ -595,5 +621,5 @@ rideSchema.index({ soloPartner: 1, status: 1 });
 rideSchema.index({ scheduledPickupAt: 1 });
 rideSchema.index({ createdAt: -1 });
 
-const Ride = mongoose.model('Ride', rideSchema);
+const Ride = mongoose.model("Ride", rideSchema);
 export default Ride;

@@ -45,6 +45,7 @@ import {
   socketEtaUpdate,
   socketOtpVerified,
   socketRideCompleted,
+  selectActiveNavigationTarget,
 } from '@/store/slices/rideRequestSlice';
 
 // ── operationsSlice ──────────────────────────────────────────────────────────
@@ -140,12 +141,23 @@ export function useRideTracking({ rideId, bookingId }) {
       }),
 
       on(EV.RIDE_STATUS_CHANGED, (data) => {
-        dispatch(socketRideStatusChanged(data));
-        dispatch(setRideStatus(data));
-        // If completed, also update socketOtpVerified/socketRideCompleted reducers
-        if (data.status === 'completed')    dispatch(socketRideCompleted(data));
-        if (data.status === 'otp_verified') dispatch(socketOtpVerified(data));
-      }),
+  dispatch(socketRideStatusChanged(data));
+  dispatch(setRideStatus(data));
+  if (data.status === 'completed')    dispatch(socketRideCompleted(data));
+  if (data.status === 'otp_verified') dispatch(socketOtpVerified(data));
+  // NEW: sync activeNavigationTarget from status event
+  if (data.activeNavigationTarget) {
+    dispatch(setNavigationTarget({
+      currentTarget:          data.activeNavigationTarget,
+      activeNavigationTarget: data.activeNavigationTarget,
+      bookingId:              data.bookingId,
+      rideId:                 data.rideId,
+    }));
+    dispatch(socketNavigationTargetChanged({
+      currentTarget: data.activeNavigationTarget,
+    }));
+  }
+}),
 
       on(EV.NAVIGATION_TARGET_CHANGED, (data) => {
         dispatch(socketNavigationTargetChanged(data));
@@ -385,24 +397,24 @@ export function useRideTracking({ rideId, bookingId }) {
 
   // ─────────────────────────────────────────────────────────────────────────
   return {
-    // Data
-    ride:            currentRide,
-    tracking:        trackingData,
-    socketLive,
-    rideStatus:      rideStatus || currentRide?.status,
-    navigationTarget,
-    etaUpdate,
-    currentPosition,
-    isLoadingRide,
-    gpsError,
-    isOffline,
-    connected,
-    // Actions
-    sendStatusUpdate,
-    verifyOtp,
-    triggerSosAlert,
-    startTracking,
-    stopTracking,
-    DRIVER_STATUS,
-  };
+  ride:            currentRide,
+  tracking:        trackingData,
+  socketLive,
+  rideStatus:      rideStatus || currentRide?.status,
+  rideStage:       socketLive?.rideStage || currentRide?.rideStage,  // ← ADD
+  activeNavigationTarget: socketLive?.activeNavigationTarget || currentRide?.activeNavigationTarget,  // ← ADD
+  navigationTarget,
+  etaUpdate,
+  currentPosition,
+  isLoadingRide,
+  gpsError,
+  isOffline,
+  connected,
+  sendStatusUpdate,
+  verifyOtp,
+  triggerSosAlert,
+  startTracking,
+  stopTracking,
+  DRIVER_STATUS,
+};
 }

@@ -229,47 +229,35 @@ const initialState = {
   createdRide: null,
 
   // Socket-pushed live state (updated by socket actions below)
- socketLive: {
-
-  status: null,
-
+socketLive: {
+  status:    null,
+  rideStage: null,          // ← ADD: new field from backend
   liveLocation: null,
-
-  etaMinutes: null,
-
-  etaTarget: null,
-
+  etaMinutes:   null,
+  etaTarget:    null,
   navigationTarget: null,
-
-  driverSnapshot: null,
-
-  vehicleSnapshot: null,
-
-  otpResult: null,
-
+  activeNavigationTarget: null,  // ← ADD: canonical field name
+  driverSnapshot:   null,
+  vehicleSnapshot:  null,
+  otpResult:        null,
   wrongOtpAttempts: 0,
-
-  // NEW
-  activeTarget: null,
-
+  activeTarget:     null,        // keep for compat
   hospitalEta: {
-    hospitalId: null,
+    hospitalId:   null,
     hospitalName: null,
-    etaMinutes: null,
-    distanceKm: null,
-    coordinates: null,
+    etaMinutes:   null,
+    distanceKm:   null,
+    coordinates:  null,
   },
-
   careAssistantTracking: {
-    bookingId: null,
-    rideId: null,
+    bookingId:      null,
+    rideId:         null,
     driverLocation: null,
-    activeTarget: null,
-    etaMinutes: null,
-    distanceKm: null,
+    activeTarget:   null,
+    etaMinutes:     null,
+    distanceKm:     null,
   },
 },
-
   // Loading states per operation
   loading: {
     customerRequest:    false,
@@ -336,13 +324,18 @@ socketLocationUpdate(state, action) {
     },
 
     // ride_status_changed → SOCKET_EVENTS.RIDE_STATUS_CHANGED
-    socketRideStatusChanged(state, action) {
-      // payload: { rideId, bookingId, status, timestamp, … }
-      state.socketLive.status = action.payload.status;
-      if (state.currentRide?._id === action.payload.rideId) {
-        state.currentRide.status = action.payload.status;
-      }
-    },
+   socketRideStatusChanged(state, action) {
+  const p = action.payload;
+  state.socketLive.status = p.status;
+  // NEW: also capture rideStage + activeNavigationTarget
+  if (p.rideStage)             state.socketLive.rideStage             = p.rideStage;
+  if (p.activeNavigationTarget) state.socketLive.activeNavigationTarget = p.activeNavigationTarget;
+  if (p.activeNavigationTarget) state.socketLive.activeTarget          = p.activeNavigationTarget;
+  if (state.currentRide?._id === p.rideId) {
+    state.currentRide.status = p.status;
+    if (p.rideStage) state.currentRide.rideStage = p.rideStage;
+  }
+},
 
     // driver_accepted, driver_en_route, driver_arrived, otp_verified,
     // ride_started, at_stop, ride_completed, ride_cancelled
@@ -437,8 +430,11 @@ socketCareAssistantTracking(
     // navigation_target_changed → SOCKET_EVENTS.NAVIGATION_TARGET_CHANGED
     // payload: { currentTarget, coords, address, polyline, bookingId, rideId }
     socketNavigationTargetChanged(state, action) {
-      state.socketLive.navigationTarget = action.payload;
-    },
+  const p = action.payload;
+  state.socketLive.navigationTarget      = p;
+  state.socketLive.activeNavigationTarget = p.currentTarget || p.activeNavigationTarget;
+  state.socketLive.activeTarget          = p.currentTarget || p.activeNavigationTarget;
+},
 
     // otp_result → SOCKET_EVENTS.OTP_RESULT
     socketOtpResult(state, action) {
@@ -825,14 +821,11 @@ export function wireRideSocketEvents(on, SOCKET_EVENTS, dispatch) {
     on(EV.NAVIGATION_TARGET_CHANGED, (d) => dispatch(socketNavigationTargetChanged(d))),
     on(EV.OTP_RESULT,                (d) => dispatch(socketOtpResult(d))),
     on(EV.OTP_WRONG_ATTEMPT,         ()  => dispatch(socketOtpWrongAttempt())),
-    on(
-  'hospital:eta:update',
-
-  (d) =>
-    dispatch(
-      socketHospitalEtaUpdate(d)
-    )
-),
+   on('hospital_eta_update', (d) => dispatch(socketHospitalEtaUpdate(d))),
+   // ADD after existing on() calls:
+on('care_assistant_joined_ride',    (d) => dispatch(socketRideAssigned(d))),
+on('care_assistant_attached_to_ride', (d) => dispatch(socketRideAssigned(d))),
+on('hospital:eta:update', (d) => dispatch(socketHospitalEtaUpdate(d))),
 
 on(
   'care-assistant:ride:tracking',
@@ -859,3 +852,6 @@ on(
 }
 
 export default rideRequestSlice.reducer;
+
+export const selectRideStage              = (s) => s.rideRequest.socketLive.rideStage;
+export const selectActiveNavigationTarget = (s) => s.rideRequest.socketLive.activeNavigationTarget;
