@@ -114,6 +114,9 @@ export const protect = asyncHandler(async (req, res, next) => {
     }
   }
 
+
+  console.log('[SocketAuth] decoded.sessionId:', decoded.sessionId);
+console.log('[SocketAuth] user.auditSessions:', user.auditSessions?.map(s => s._id.toString()));
   // ── 5. Check block status ──────────────────────────────────────────────────
   if (user.isCurrentlyBlocked) {
     return res.status(401).json({

@@ -288,7 +288,7 @@ export default function LabHero() {
               <>
                 <Link
                   href="/lab-partner/dashboard"
-                  className="btn-primary-cta flex items-center justify-center gap-2 no-underline"
+                  className="btn-primary-cta btn flex items-center justify-center gap-2 no-underline"
                 >
                   <Activity size={15} strokeWidth={2.4} />
                   Go to Dashboard
@@ -296,7 +296,7 @@ export default function LabHero() {
                 </Link>
                 <Link
                   href="/lab-partner/tests"
-                  className="btn-secondary flex items-center justify-center gap-2 no-underline"
+                  className="btn-secondary btn flex items-center justify-center gap-2 no-underline"
                 >
                   <TestTube2 size={15} strokeWidth={2.2} />
                   Manage Tests

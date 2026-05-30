@@ -77,7 +77,7 @@ const initialState = {
   followUpEligibility:  null,
   platformPricing:      null,
   consultationCoverage: null,
-
+subscriptionBenefitLabs: null,
   // ── My bookings ───────────────────────────────────────────────────────────
   myBookings:          [],
   myBookingsMeta:      { total: 0, page: 1, limit: 10 },
@@ -697,6 +697,14 @@ export const deleteFailedBooking = mkThunk(
   }
 );
 
+export const fetchSubscriptionBenefitLabs = mkThunk(
+  'booking/fetchSubscriptionBenefitLabs',
+  async () => {
+    const { data } = await API.get(`${BASE}/subscription-benefits/labs`);
+    return data.data;
+  }
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SLICE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -801,6 +809,11 @@ const bookingSlice = createSlice({
       delete state.loading.fetchPlatformPricing;
       delete state.errors.fetchPlatformPricing;
     },
+    resetSubscriptionBenefitLabs(state) {
+  state.subscriptionBenefitLabs = null;
+  delete state.loading.fetchSubscriptionBenefitLabs;
+  delete state.errors.fetchSubscriptionBenefitLabs;
+},
 
     // ── Cancel / rate results ────────────────────────────────────────────────
 
@@ -929,6 +942,9 @@ resetSubscriptionBenefitCareAssistant(state) {
     wire(checkDoctorAvailability, (state, { payload }) => {
       state.doctorAvailability = payload ?? null;
     });
+    wire(fetchSubscriptionBenefitLabs, (state, { payload }) => {
+  state.subscriptionBenefitLabs = payload ?? null;
+});
 
     wire(fetchLabs, (state, { payload }) => {
       state.labs = Array.isArray(payload) ? payload : [];
@@ -1162,6 +1178,7 @@ resetSubscriptionBenefitCareAssistant,
   clearErrors,
   resetAllDoctors,
   resetDeleteFailedBooking,
+  resetSubscriptionBenefitLabs,
 } = bookingSlice.actions;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1329,6 +1346,19 @@ export const selectDeleteFailedBookingError   = (s) => s.booking.errors.deleteFa
 
 // ── consultationSession from doctor-online createdBooking ─────────────────────
 export const selectCreatedConsultationSession = (s) => s.booking.createdBooking?.consultationSession ?? null;
+
+// selectors
+export const selectSubBenefitLabs              = (s) => s.booking.subscriptionBenefitLabs;
+export const selectSubBenefitLabsLoading       = (s) => s.booking.loading.fetchSubscriptionBenefitLabs ?? false;
+export const selectSubBenefitLabsError         = (s) => s.booking.errors.fetchSubscriptionBenefitLabs  ?? null;
+
+// convenience sub-selectors
+export const selectSubLabsDiscountPercent      = (s) => s.booking.subscriptionBenefitLabs?.labs?.discountPercent ?? 0;
+export const selectSubLabsIncluded             = (s) => s.booking.subscriptionBenefitLabs?.included ?? false;
+export const selectSubHomeCollectionIncluded   = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.included ?? false;
+export const selectSubHomeCollectionRemaining  = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.homeVisitsRemaining ?? null;
+export const selectSubHomeCollectionUsed       = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.homeVisitsUsed ?? 0;
+export const selectSubHomeCollectionUnlimited  = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.homeVisitUnlimited ?? false;
 // ─────────────────────────────────────────────────────────────────────────────
 // RE-EXPORTS
 // ─────────────────────────────────────────────────────────────────────────────

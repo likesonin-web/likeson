@@ -1,7 +1,6 @@
 /**
  * LAB PARTNER NAVIGATION LINKS
  * Extracted from the Lab Partner Router — Likeson.in
- 
  *
  * Used by: LabPartnerDashboard, Sidebar, MobileNav
  */
@@ -32,6 +31,8 @@ import {
   Microscope,
   ScrollText,
   BadgeCheck,
+  CalendarCheck, // <-- Added for Bookings
+  Archive,       // <-- Added for Reports Archive
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -51,19 +52,49 @@ export const LAB_PARTNER_NAV = [
         href: "/lab-partner/dashboard",
         icon: LayoutDashboard,
         description: "High-level stats and recent activity",
-        api: "GET /api/labs/partner/me/dashboard",
+     
       },
       {
         name: "Review Analytics",
         href: "/lab-partner/analytics/reviews",
         icon: AreaChart,
         description: "Rating breakdown and 6-month trend",
-        api: "GET /api/labs/partner/me/analytics/reviews",
+       
       },
     ],
   },
 
-  // ── 2. Profile ────────────────────────────────────────────────────────────
+  // ── 2. Bookings & Reports (NEW) ───────────────────────────────────────────
+  // GET /api/lab-partner/bookings
+  // GET /api/lab-partner/bookings/reports/all
+  {
+    group: "Bookings",
+    links: [
+      {
+        name:"All Bookings",
+        href:"/lab-partner/bookings",
+        icon: Microscope,
+        description: "View all bookings with filters and search",
+    
+      },
+      {
+        name: "Manage Bookings",
+        href: "/lab-partner/bookings/manage",
+        icon: CalendarCheck,
+        description: "View pending, accept requests, and collect samples",
+         
+      },
+      {
+        name: "Reports Archive",
+        href: "/lab-partner/bookings/reports",
+        icon: Archive,
+        description: "Completed tests and dispatched PDF reports",
+       
+      },
+    ],
+  },
+
+  // ── 3. Profile ────────────────────────────────────────────────────────────
   // GET  /api/labs/partner/me
   // PATCH /api/labs/partner/me
   // PATCH /api/labs/partner/me/bank-details
@@ -75,19 +106,19 @@ export const LAB_PARTNER_NAV = [
         href: "/lab-partner/profile",
         icon: User,
         description: "View and update your lab profile",
-        api: "GET | PATCH /api/labs/partner/me",
+     
       },
       {
         name: "Bank Details",
         href: "/lab-partner/profile/bank-details",
         icon: CreditCard,
         description: "Payout bank account information",
-        api: "PATCH /api/labs/partner/me/bank-details",
+     
       },
     ],
   },
 
-  // ── 3. Tests & Packages ───────────────────────────────────────────────────
+  // ── 4. Tests & Packages ───────────────────────────────────────────────────
   // GET | POST          /api/labs/partner/me/tests
   // PATCH | DELETE      /api/labs/partner/me/tests/:testId
   // GET | POST          /api/labs/partner/me/packages
@@ -100,19 +131,19 @@ export const LAB_PARTNER_NAV = [
         href: "/lab-partner/tests",
         icon: FlaskConical,
         description: "Manage your diagnostic test catalogue",
-        api: "GET | POST | PATCH | DELETE /api/labs/partner/me/tests",
+ 
       },
       {
         name: "Packages",
         href: "/lab-partner/packages",
         icon: Package,
         description: "Health check-up bundles and offers",
-        api: "GET | POST | PATCH | DELETE /api/labs/partner/me/packages",
+     
       },
     ],
   },
 
-  // ── 4. Documents & Compliance ─────────────────────────────────────────────
+  // ── 5. Documents & Compliance ─────────────────────────────────────────────
   // GET  /api/labs/partner/me/accreditations
   // POST /api/labs/partner/me/accreditations
   // POST /api/labs/partner/me/compliance-docs
@@ -124,19 +155,19 @@ export const LAB_PARTNER_NAV = [
         href: "/lab-partner/accreditations",
         icon: BadgeCheck,
         description: "NABL, ISO and other certifications",
-        api: "GET | POST /api/labs/partner/me/accreditations",
+      
       },
       {
         name: "Compliance Docs",
         href: "/lab-partner/compliance-docs",
         icon: FileText,
         description: "Regulatory documents and licences",
-        api: "POST /api/labs/partner/me/compliance-docs",
+        
       },
     ],
   },
 
-  // ── 5. Reviews & Status ───────────────────────────────────────────────────
+  // ── 6. Reviews & Status ───────────────────────────────────────────────────
   // GET /api/labs/partner/me/reviews
   // GET /api/labs/partner/me/status-log
   {
@@ -147,19 +178,19 @@ export const LAB_PARTNER_NAV = [
         href: "/lab-partner/reviews",
         icon: Star,
         description: "Customer feedback and ratings",
-        api: "GET /api/labs/partner/me/reviews",
+        
       },
       {
         name: "Status Log",
         href: "/lab-partner/status-log",
         icon: ScrollText,
         description: "Account approval and suspension history",
-        api: "GET /api/labs/partner/me/status-log",
+        
       },
     ],
   },
 
-  // ── 6. Notifications ─────────────────────────────────────────────────────
+  // ── 7. Notifications ─────────────────────────────────────────────────────
   // GET    /api/labs/partner/me/notifications
   // PATCH  /api/labs/partner/me/notifications/:id/read
   // PATCH  /api/labs/partner/me/notifications/read-all
@@ -173,12 +204,12 @@ export const LAB_PARTNER_NAV = [
         href: "/lab-partner/notifications",
         icon: Bell,
         description: "In-app alerts and announcements",
-        api: "GET | PATCH | DELETE /api/labs/partner/me/notifications",
+       
       },
     ],
   },
 
-  // ── 7. Settings ───────────────────────────────────────────────────────────
+  // ── 8. Settings ───────────────────────────────────────────────────────────
   // GET   /api/labs/partner/me/settings
   // PATCH /api/labs/partner/me/settings/operational
   // PATCH /api/labs/partner/me/settings/display
@@ -194,54 +225,54 @@ export const LAB_PARTNER_NAV = [
         href: "/lab-partner/settings",
         icon: Settings,
         description: "All configurable preferences",
-        api: "GET /api/labs/partner/me/settings",
+        
       },
       {
         name: "Operational",
         href: "/lab-partner/settings/operational",
         icon: Sliders,
         description: "Collection mode, radius, TAT, payout",
-        api: "PATCH /api/labs/partner/me/settings/operational",
+   
       },
       {
         name: "Display",
         href: "/lab-partner/settings/display",
         icon: Monitor,
         description: "Description, website URL, tags",
-        api: "PATCH /api/labs/partner/me/settings/display",
+        
       },
       {
         name: "Notification Prefs",
         href: "/lab-partner/settings/notifications",
         icon: Bell,
         description: "Email and SMS preference toggles",
-        api: "PATCH /api/labs/partner/me/settings/notifications",
+      
       },
       {
         name: "Contact Persons",
         href: "/lab-partner/settings/contact-persons",
         icon: Users,
         description: "Lab director, ops head contacts",
-        api: "PATCH /api/labs/partner/me/settings/contact-persons",
+ 
       },
       {
         name: "Operating Hours",
         href: "/lab-partner/settings/timing",
         icon: Clock,
         description: "Daily open/close schedule",
-        api: "PATCH /api/labs/partner/me/settings/timing",
+        
       },
       {
         name: "Lab Images",
         href: "/lab-partner/settings/images",
         icon: Image,
         description: "Logo and cover photo",
-        api: "PATCH /api/labs/partner/me/settings/images",
+       
       },
     ],
   },
 
-  // ── 8. Security ───────────────────────────────────────────────────────────
+  // ── 9. Security ───────────────────────────────────────────────────────────
   // PATCH  /api/labs/partner/me/change-password
   // POST   /api/labs/partner/me/security/request-email-change
   // PATCH  /api/labs/partner/me/security/confirm-email-change
@@ -259,28 +290,28 @@ export const LAB_PARTNER_NAV = [
         href: "/lab-partner/security/change-password",
         icon: Lock,
         description: "Update your account password",
-        api: "PATCH /api/labs/partner/me/change-password",
+       
       },
       {
         name: "Email & Verification",
         href: "/lab-partner/security/email",
         icon: Mail,
         description: "Change or verify your email address",
-        api: "POST | PATCH /api/labs/partner/me/security/*-email*",
+       
       },
       {
         name: "Active Sessions",
         href: "/lab-partner/security/sessions",
         icon: Smartphone,
         description: "View and revoke logged-in devices",
-        api: "GET | DELETE /api/labs/partner/me/security/sessions",
+        
       },
       {
         name: "Login History",
         href: "/lab-partner/security/login-history",
         icon: History,
         description: "Recent login attempts and audit log",
-        api: "GET /api/labs/partner/me/security/login-history",
+         
       },
     ],
   },
@@ -300,10 +331,10 @@ export const LAB_PARTNER_ALL_LINKS = LAB_PARTNER_NAV.flatMap((group) =>
 
 export const LAB_PARTNER_QUICK_LINKS = [
   { name: "Dashboard",   href: "/lab-partner/dashboard",   icon: LayoutDashboard },
-  { name: "Tests",       href: "/lab-partner/tests",        icon: FlaskConical    },
-  { name: "Packages",   href: "/lab-partner/packages",     icon: Package         },
-  { name: "Reviews",    href: "/lab-partner/reviews",      icon: Star            },
-  { name: "Settings",   href: "/lab-partner/settings",     icon: Settings        },
+  { name: "Bookings",    href: "/lab-partner/bookings",    icon: CalendarCheck   }, // <-- Added Bookings to Quick Links
+  { name: "Tests",       href: "/lab-partner/tests",       icon: FlaskConical    },
+  { name: "Packages",    href: "/lab-partner/packages",    icon: Package         },
+  { name: "Settings",    href: "/lab-partner/settings",    icon: Settings        },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

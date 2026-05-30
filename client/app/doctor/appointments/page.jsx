@@ -3,6 +3,7 @@
 import {
   useEffect, useState, useCallback, useMemo, useRef, memo,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -13,12 +14,13 @@ import {
   FileText, Stethoscope, Video, Home, Search,
   CheckCircle2, AlertCircle, XCircle, Clock3, RefreshCw,
   Plus, Eye, Activity, CalendarDays, MoreVertical, Layers,
-  ClipboardList, PenLine, BadgeCheck, Radio,
+  ClipboardList, PenLine, BadgeCheck, Radio, UserCheck, XOctagon
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 
+// Import from your clinical slice
 import {
   fetchDoctorAppointments,
-  fetchDoctorTodayAppointments,
   fetchOPRecords,
   completeOPRecord,
   selectDoctorAppointments,
@@ -28,6 +30,13 @@ import {
   selectClinicalError,
 } from '@/store/slices/clinicalSlice';
 
+// Import the new actions from your consultation slice
+import {
+  acceptConsultation,
+  confirmConsultation,
+  cancelConsultation
+} from '@/store/slices/consultationSlice';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -35,8 +44,12 @@ import {
 const STATUSES = [
   { value: '',            label: 'All'         },
   { value: 'pending',     label: 'Pending'     },
+  { value: 'created',     label: 'Created'     },
+  { value: 'scheduled',   label: 'Scheduled'   },
   { value: 'confirmed',   label: 'Confirmed'   },
+  { value: 'waiting',     label: 'Waiting'     },
   { value: 'in_progress', label: 'In Progress' },
+  { value: 'active',      label: 'Active'      },
   { value: 'completed',   label: 'Completed'   },
   { value: 'cancelled',   label: 'Cancelled'   },
   { value: 'no_show',     label: 'No Show'     },
@@ -66,12 +79,16 @@ const SEARCH_DEBOUNCE_MS = 400;
 
 const statusConfig = (status) => {
   const map = {
-    pending:     { label: 'Pending',     bg: 'bg-warning\/10',  text: 'text-warning',  Icon: Clock3       },
-    confirmed:   { label: 'Confirmed',   bg: 'bg-info\/10',     text: 'text-info',     Icon: BadgeCheck   },
-    in_progress: { label: 'In Progress', bg: 'bg-primary\/10',  text: 'text-primary',  Icon: Activity     },
-    completed:   { label: 'Completed',   bg: 'bg-success\/10',  text: 'text-success',  Icon: CheckCircle2 },
-    cancelled:   { label: 'Cancelled',   bg: 'bg-error\/10',    text: 'text-error',    Icon: XCircle      },
-    no_show:     { label: 'No Show',     bg: 'bg-error\/10',    text: 'text-error',    Icon: AlertCircle  },
+    pending:     { label: 'Pending',     bg: 'bg-warning/10',  text: 'text-warning',  Icon: Clock3       },
+    created:     { label: 'Created',     bg: 'bg-warning/10',  text: 'text-warning',  Icon: Clock3       },
+    waiting:     { label: 'Waiting',     bg: 'bg-info/10',     text: 'text-info',     Icon: Clock        },
+    scheduled:   { label: 'Scheduled',   bg: 'bg-info/10',     text: 'text-info',     Icon: Calendar     },
+    confirmed:   { label: 'Confirmed',   bg: 'bg-info/10',     text: 'text-info',     Icon: BadgeCheck   },
+    active:      { label: 'Active',      bg: 'bg-primary/10',  text: 'text-primary',  Icon: Activity     },
+    in_progress: { label: 'In Progress', bg: 'bg-primary/10',  text: 'text-primary',  Icon: Activity     },
+    completed:   { label: 'Completed',   bg: 'bg-success/10',  text: 'text-success',  Icon: CheckCircle2 },
+    cancelled:   { label: 'Cancelled',   bg: 'bg-error/10',    text: 'text-error',    Icon: XCircle      },
+    no_show:     { label: 'No Show',     bg: 'bg-error/10',    text: 'text-error',    Icon: AlertCircle  },
   };
   return map[status] ?? { label: status, bg: 'bg-base-200', text: 'text-base-content', Icon: Clock3 };
 };
@@ -120,7 +137,9 @@ const isOnlineBooking = (b) =>
   b?.bookingType === 'doctor_online' || b?.consultationType === 'video';
 
 const canJoinConsult = (b) =>
-  isOnlineBooking(b) && ['confirmed', 'in_progress'].includes(b?.status);
+  isOnlineBooking(b) &&
+  ['confirmed', 'in_progress', 'scheduled', 'waiting', 'active'].includes(b?.status) &&
+  !!b?.consultationSessionId;
 
 const bookingIdFromOP = (op) => {
   if (!op?.booking) return null;
@@ -132,6 +151,18 @@ const bookingIdFromOP = (op) => {
 const getPatientName = (b) => b?.patientInfo?.name ?? b?.customer?.name ?? '—';
 const getPatientPhone = (b) => b?.patientInfo?.phone ?? b?.customer?.phone ?? '—';
 const getInitial = (b) => (getPatientName(b)?.[0] ?? '?').toUpperCase();
+
+// Bulletproof helper to extract Consultation ID strictly as a primitive string
+const getConsultationId = (b) => {
+  const rawId = b?.consultationSessionId || b?.consultationId || b?.consultation;
+  if (!rawId) return null;
+  if (typeof rawId === 'string') return rawId;
+  if (typeof rawId === 'object') {
+    if (rawId._id) return String(rawId._id);
+    return String(rawId);
+  }
+  return String(rawId);
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HOOKS
@@ -147,7 +178,7 @@ const useDebounce = (value, delay) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STAT CARD
+// COMPONENTS
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STAT_COLOR_MAP = {
@@ -164,20 +195,20 @@ const StatCard = memo(({ icon: Icon, label, value, sub, colorKey = 'primary', ch
     <motion.article
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
-      className="stat-card relative overflow-hidden flex flex-col gap-3"
+      className="stat-card relative overflow-hidden flex flex-col gap-3 p-4 bg-base-100 rounded-2xl border border-base-300"
       aria-label={`${label}: ${value}`}
     >
       {live && (
         <span className="absolute top-3 right-3 flex items-center gap-1.5 text-xs text-success font-semibold" aria-label="Live">
-          <span className="status-dot status-dot-success animate-pulse" aria-hidden="true" />
+          <span className="w-2 h-2 rounded-full bg-success animate-pulse" aria-hidden="true" />
           Live
         </span>
       )}
       <div className="flex items-start justify-between">
         <div>
-          <p className="label-text-alt uppercase tracking-widest mb-1">{label}</p>
-          <p className="stat-card-value">{value}</p>
-          {sub && <p className="label-text-alt mt-1">{sub}</p>}
+          <p className="text-xs uppercase tracking-widest text-base-content/60 mb-1">{label}</p>
+          <p className="text-2xl font-bold">{value}</p>
+          {sub && <p className="text-xs text-base-content/50 mt-1">{sub}</p>}
         </div>
         <div
           className="p-2.5 rounded-xl"
@@ -188,7 +219,7 @@ const StatCard = memo(({ icon: Icon, label, value, sub, colorKey = 'primary', ch
         </div>
       </div>
       {chartData && (
-        <div className="h-12 -mx-1">
+        <div className="h-12 -mx-1 mt-2">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={chartData} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
               <defs>
@@ -212,40 +243,28 @@ const StatCard = memo(({ icon: Icon, label, value, sub, colorKey = 'primary', ch
 });
 StatCard.displayName = 'StatCard';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// STATUS BADGE
-// ─────────────────────────────────────────────────────────────────────────────
-
 const StatusBadge = memo(({ status }) => {
   const { label, bg, text, Icon } = statusConfig(status);
   return (
     <span className={`badge badge-sm ${bg} ${text} border-0`}>
-      <Icon size={10} aria-hidden="true" />
+      <Icon size={10} className="mr-1" aria-hidden="true" />
       {label}
     </span>
   );
 });
 StatusBadge.displayName = 'StatusBadge';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CONSULT TYPE BADGE
-// ─────────────────────────────────────────────────────────────────────────────
-
 const ConsultTypeBadge = memo(({ type }) => (
-  <span className="inline-flex items-center gap-1 text-xs font-medium text-base-content\/60">
+  <span className="inline-flex items-center gap-1 text-xs font-medium text-base-content/60">
     {consultIcon(type)}
     {type ?? '—'}
   </span>
 ));
 ConsultTypeBadge.displayName = 'ConsultTypeBadge';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PATIENT AVATAR
-// ─────────────────────────────────────────────────────────────────────────────
-
 const PatientAvatar = memo(({ booking }) => (
   <div className="avatar placeholder" aria-hidden="true">
-    <div className="w-9 h-9 rounded-xl bg-primary\/10 text-primary font-bold text-sm">
+    <div className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center font-bold text-sm">
       <span>{getInitial(booking)}</span>
     </div>
   </div>
@@ -253,12 +272,12 @@ const PatientAvatar = memo(({ booking }) => (
 PatientAvatar.displayName = 'PatientAvatar';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ACTION MENU
+// ACTION MENU (PORTALED to fix clipping issues)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MenuItem = ({ icon, label, highlight = '', onClick }) => (
   <button
-    className={`flex w-full items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-primary\/5 text-base-content transition-colors ${highlight}`}
+    className={`flex w-full items-center gap-2.5 px-4 py-2.5 text-sm hover:bg-base-200 text-base-content transition-colors ${highlight}`}
     onClick={onClick}
     role="menuitem"
   >
@@ -267,35 +286,151 @@ const MenuItem = ({ icon, label, highlight = '', onClick }) => (
   </button>
 );
 
-const ActionMenu = memo(({ booking, opRecord, onComplete, router }) => {
+const ActionMenu = memo(({ booking, opRecord, onComplete, onAccept, onConfirm, onCancel, router }) => {
   const [open, setOpen] = useState(false);
-  const ref             = useRef(null);
-  const triggerRef      = useRef(null);
+  const [coords, setCoords] = useState({ top: 0, left: 0 });
+  const [mounted, setMounted] = useState(false);
+  
+  const ref = useRef(null);
+  const triggerRef = useRef(null);
 
-  const canComplete = ['in_progress', 'confirmed'].includes(booking?.status);
+  useEffect(() => { setMounted(true); }, []);
+
+  const canComplete = ['in_progress', 'confirmed', 'active'].includes(booking?.status);
   const showVideo   = canJoinConsult(booking);
+  
+  // Strict Extraction of ID
+  const consultationId = getConsultationId(booking);
+
+  const toggleMenu = (e) => {
+    e.stopPropagation();
+    if (!open && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setCoords({
+        top: rect.bottom + 4,
+        left: Math.max(10, rect.right - 224) 
+      });
+    }
+    setOpen((p) => !p);
+  };
 
   useEffect(() => {
     if (!open) return;
     const handler = (e) => {
-      if (e.key === 'Escape') { setOpen(false); triggerRef.current?.focus(); }
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+      if (e.key === 'Escape') setOpen(false);
+      if (ref.current && !ref.current.contains(e.target) && !triggerRef.current.contains(e.target)) {
+        setOpen(false);
+      }
     };
-    document.addEventListener('keydown',   handler);
+    document.addEventListener('keydown', handler);
     document.addEventListener('mousedown', handler);
+    window.addEventListener('scroll', handler, true);
     return () => {
-      document.removeEventListener('keydown',   handler);
+      document.removeEventListener('keydown', handler);
       document.removeEventListener('mousedown', handler);
+      window.removeEventListener('scroll', handler, true);
     };
   }, [open]);
 
   const close = useCallback(() => setOpen(false), []);
 
+  const dropdownContent = (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          ref={ref}
+          initial={{ opacity: 0, scale: 0.95, y: -4 }}
+          animate={{ opacity: 1, scale: 1,    y: 0  }}
+          exit={{ opacity: 0, scale: 0.95 }}
+          transition={{ duration: 0.12 }}
+          style={{ position: 'fixed', top: coords.top, left: coords.left, zIndex: 99999 }}
+          className="w-56 bg-base-100 border border-base-300 rounded-xl shadow-2xl py-1 overflow-hidden"
+          role="menu"
+        >
+          <MenuItem
+            icon={<Eye size={14} className="text-primary" />}
+            label="View Details"
+            onClick={() => { close(); router.push(`/doctor/appointments/${booking._id}`); }}
+          />
+         
+          {showVideo && (
+            <MenuItem
+              icon={<Video size={14} className="text-info" />}
+              label="Join Video Call"
+              highlight="text-info font-medium"
+              onClick={() => { close(); router.push(`/doctor/consultation/${booking._id}`); }}
+            />
+          )}
+
+          {/* Consultation Actions */}
+          {isOnlineBooking(booking) && (['confirmed', 'pending', 'in_progress'].includes(booking?.status)) && (
+             <MenuItem
+               icon={<UserCheck size={14} className="text-success" />}
+               label="Accept Consultation"
+               onClick={() => { close(); onAccept(consultationId); }}
+             />
+          )}
+
+          {isOnlineBooking(booking) && (['scheduled', 'confirmed', 'pending', 'in_progress'].includes(booking?.status)) && (
+             <MenuItem
+               icon={<BadgeCheck size={14} className="text-primary" />}
+               label="Confirm Consultation"
+               onClick={() => { close(); onConfirm(consultationId); }}
+             />
+          )}
+
+          <MenuItem
+            icon={<PenLine size={14} className="text-accent" />}
+            label="Write Prescription"
+            onClick={() => { close(); router.push(`/doctor/prescriptions/new?bookingId=${booking._id}`); }}
+          />
+          <MenuItem
+            icon={<ClipboardList size={14} className="text-secondary" />}
+            label="View Prescriptions"
+            onClick={() => { close(); router.push(`/doctor/prescriptions?bookingId=${booking._id}`); }}
+          />
+          {opRecord && (
+            <MenuItem
+              icon={<FileText size={14} className="text-info" />}
+              label={`OP: ${opRecord.opNumber || 'View Record'}`}
+              onClick={() => { close(); router.push(`/doctor/op-records/${opRecord._id}`); }}
+            />
+          )}
+
+          {canComplete && (
+            <>
+              <div className="border-t border-base-200 my-1 mx-3" role="separator" />
+              <MenuItem
+                icon={<CheckCircle2 size={14} className="text-success" />}
+                label="Mark Complete"
+                highlight="text-success hover:bg-success/10"
+                onClick={() => { close(); onComplete(booking._id, opRecord?._id ?? null); }}
+              />
+            </>
+          )}
+
+          {isOnlineBooking(booking) && !['completed', 'cancelled', 'failed'].includes(booking?.status) && (
+            <>
+              <div className="border-t border-base-200 my-1 mx-3" role="separator" />
+              <MenuItem
+                icon={<XOctagon size={14} className="text-error" />}
+                label="Cancel Consultation"
+                highlight="text-error hover:bg-error/10"
+                onClick={() => { close(); onCancel(consultationId); }}
+              />
+            </>
+          )}
+
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+
   return (
-    <div className="relative" ref={ref}>
+    <>
       <button
         ref={triggerRef}
-        onClick={() => setOpen((p) => !p)}
+        onClick={toggleMenu}
         className="btn btn-ghost btn-xs btn-circle"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -303,64 +438,8 @@ const ActionMenu = memo(({ booking, opRecord, onComplete, router }) => {
       >
         <MoreVertical size={15} aria-hidden="true" />
       </button>
-
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.93, y: -4 }}
-            animate={{ opacity: 1, scale: 1,    y: 0  }}
-            exit={{ opacity: 0, scale: 0.93 }}
-            transition={{ duration: 0.12 }}
-            className="absolute right-0 top-8 z-20 w-56 bg-base-100 border border-base-300 rounded-xl shadow-depth py-1 overflow-hidden"
-            role="menu"
-          >
-            <MenuItem
-              icon={<Eye size={14} className="text-primary" />}
-              label="View Details"
-              onClick={() => { close(); router.push(`/doctor/appointments/${booking._id}`); }}
-            />
-           
-              {showVideo && (
-              <MenuItem
-                icon={<Video size={14} className="text-info" />}
-                label="Join Video Call"
-                highlight="text-info"
-                // UPDATE THIS LINE BELOW
-               onClick={() => { close(); router.push(`/doctor/consultations/${booking.consultationSessionId?.consultationId ?? booking._id}`); }}
-              />
-            )}
-            <MenuItem
-              icon={<PenLine size={14} className="text-accent" />}
-              label="Write Prescription"
-              onClick={() => { close(); router.push(`/doctor/prescriptions/new?bookingId=${booking._id}`); }}
-            />
-            <MenuItem
-              icon={<ClipboardList size={14} className="text-secondary" />}
-              label="View Prescriptions"
-              onClick={() => { close(); router.push(`/doctor/prescriptions?bookingId=${booking._id}`); }}
-            />
-            {opRecord && (
-              <MenuItem
-                icon={<FileText size={14} className="text-info" />}
-                label={`OP: ${opRecord.opNumber || 'View Record'}`}
-                onClick={() => { close(); router.push(`/doctor/op-records/${opRecord._id}`); }}
-              />
-            )}
-            {canComplete && (
-              <>
-                <div className="divider my-1 mx-3" role="separator" />
-                <MenuItem
-                  icon={<CheckCircle2 size={14} className="text-success" />}
-                  label="Mark Complete"
-                  highlight="text-success hover:bg-success\/5"
-                  onClick={() => { close(); onComplete(booking._id, opRecord?._id ?? null); }}
-                />
-              </>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+      {mounted && createPortal(dropdownContent, document.body)}
+    </>
   );
 });
 ActionMenu.displayName = 'ActionMenu';
@@ -399,7 +478,7 @@ const CompleteModal = memo(({ open, onClose, onSubmit, loading }) => {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-soft"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
           onClick={onClose}
           role="dialog"
           aria-modal="true"
@@ -410,57 +489,57 @@ const CompleteModal = memo(({ open, onClose, onSubmit, loading }) => {
             animate={{ scale: 1,    opacity: 1, y: 0  }}
             exit={{ scale: 0.92, opacity: 0 }}
             transition={{ type: 'spring', damping: 24, stiffness: 300 }}
-            className="bg-base-100 border border-base-300 rounded-2xl shadow-depth-lg w-full max-w-md p-6"
+            className="bg-base-100 border border-base-300 rounded-2xl shadow-2xl w-full max-w-md p-6"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
             <div className="flex items-center gap-3 mb-6">
-              <div className="p-2.5 rounded-xl bg-success\/10" aria-hidden="true">
+              <div className="p-2.5 rounded-xl bg-success/10" aria-hidden="true">
                 <CheckCircle2 size={20} className="text-success" />
               </div>
               <div>
                 <h3 className="font-bold text-base-content text-lg leading-tight">
                   Complete Consultation
                 </h3>
-                <p className="label-text-alt mt-0.5">All fields optional — fill as needed</p>
+                <p className="text-xs text-base-content/60 mt-0.5">All fields optional — fill as needed</p>
               </div>
             </div>
 
             {/* Fields */}
             <div className="space-y-4">
               <div>
-                <label htmlFor="complete-reason" className="label-text block mb-1.5">
+                <label htmlFor="complete-reason" className="text-sm font-medium block mb-1.5">
                   Reason for Visit
                 </label>
                 <input
                   id="complete-reason"
                   ref={firstInputRef}
-                  className="input-field"
+                  className="input input-bordered w-full"
                   placeholder="Chief complaints / reason…"
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
                 />
               </div>
               <div>
-                <label htmlFor="complete-code" className="label-text block mb-1.5">
+                <label htmlFor="complete-code" className="text-sm font-medium block mb-1.5">
                   ICD-10 Code
-                  <span className="label-text-alt font-normal ml-1">(optional)</span>
+                  <span className="text-xs text-base-content/50 font-normal ml-1">(optional)</span>
                 </label>
                 <input
                   id="complete-code"
-                  className="input-field font-mono"
+                  className="input input-bordered w-full font-mono"
                   placeholder="e.g. J06.9"
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
                 />
               </div>
               <div>
-                <label htmlFor="complete-notes" className="label-text block mb-1.5">
+                <label htmlFor="complete-notes" className="text-sm font-medium block mb-1.5">
                   Doctor Notes
                 </label>
                 <textarea
                   id="complete-notes"
-                  className="input-field min-h-[96px] resize-none"
+                  className="textarea textarea-bordered w-full min-h-[96px] resize-none"
                   placeholder="Clinical findings, advice, observations…"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
@@ -498,13 +577,13 @@ const CompleteModal = memo(({ open, onClose, onSubmit, loading }) => {
 CompleteModal.displayName = 'CompleteModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EMPTY STATE
+// EMPTY / LOADING STATES
 // ─────────────────────────────────────────────────────────────────────────────
 
 const EmptyState = () => (
   <tr>
     <td colSpan={8} className="py-20 text-center">
-      <div className="flex flex-col items-center gap-3 text-base-content\/40">
+      <div className="flex flex-col items-center gap-3 text-base-content/40">
         <CalendarDays size={36} strokeWidth={1} aria-hidden="true" />
         <p className="font-semibold text-sm">No appointments found</p>
         <p className="text-xs">Try adjusting your filters</p>
@@ -513,16 +592,12 @@ const EmptyState = () => (
   </tr>
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LOADING STATE
-// ─────────────────────────────────────────────────────────────────────────────
-
 const LoadingRows = () => (
   <tr>
     <td colSpan={8} className="py-20 text-center">
       <div className="flex flex-col items-center gap-3" role="status" aria-live="polite">
         <span className="loading loading-md loading-spinner" aria-hidden="true" />
-        <span className="text-sm text-base-content\/40">Loading appointments…</span>
+        <span className="text-sm text-base-content/40">Loading appointments…</span>
       </div>
     </td>
   </tr>
@@ -532,7 +607,7 @@ const LoadingRows = () => (
 // APPOINTMENT TABLE ROW
 // ─────────────────────────────────────────────────────────────────────────────
 
-const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, router }) => {
+const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, onAccept, onConfirm, onCancel, router }) => {
   const op       = opByBooking[booking._id?.toString()];
   const joinable = canJoinConsult(booking);
 
@@ -543,10 +618,8 @@ const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, router }
       initial={{ opacity: 0, x: -8 }}
       animate={{ opacity: 1, x: 0, transition: { delay: Math.min(index * 0.03, 0.3) } }}
       exit={{ opacity: 0 }}
-      className="hover:bg-primary\/5 cursor-default group"
-      aria-label={`Appointment for ${getPatientName(booking)}`}
+      className="hover:bg-base-200 cursor-default group"
     >
-      {/* Patient */}
       <td>
         <div className="flex items-center gap-2.5">
           <PatientAvatar booking={booking} />
@@ -554,35 +627,19 @@ const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, router }
             <p className="font-semibold text-sm text-base-content leading-tight">
               {getPatientName(booking)}
             </p>
-            <p className="label-text-alt">{getPatientPhone(booking)}</p>
+            <p className="text-xs text-base-content/60">{getPatientPhone(booking)}</p>
           </div>
         </div>
       </td>
-
-      {/* Booking code */}
       <td>
         <p className="font-mono text-xs font-bold text-primary">{booking.bookingCode ?? '—'}</p>
-        <p className="label-text-alt">
+        <p className="text-xs text-base-content/60">
           {BOOKING_TYPE_LABEL[booking.bookingType] ?? booking.bookingType ?? '—'}
         </p>
       </td>
-
-      {/* Type */}
-      <td>
-        <ConsultTypeBadge type={booking.consultationType} />
-      </td>
-
-      {/* Scheduled */}
-      <td>
-        <p className="text-sm">{formatDate(booking.scheduledAt)}</p>
-      </td>
-
-      {/* Status */}
-      <td>
-        <StatusBadge status={booking.status} />
-      </td>
-
-      {/* Payment */}
+      <td><ConsultTypeBadge type={booking.consultationType} /></td>
+      <td><p className="text-sm">{formatDate(booking.scheduledAt)}</p></td>
+      <td><StatusBadge status={booking.status} /></td>
       <td>
         <span className={`text-xs font-semibold ${
           booking.paymentStatus === 'paid'   ? 'text-success' :
@@ -591,42 +648,31 @@ const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, router }
           {booking.paymentStatus ?? '—'}
         </span>
       </td>
-
-      {/* OP Record */}
       <td>
         {op ? (
           <button
             onClick={() => router.push(`/doctor/op-records/${op._id}`)}
             className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
-            aria-label={`View OP record ${op.opNumber ?? ''}`}
           >
             <FileText size={11} aria-hidden="true" />
             {op.opNumber ?? 'View'}
           </button>
-        ) : (
-          <span className="label-text-alt">—</span>
-        )}
+        ) : <span className="text-xs text-base-content/40">—</span>}
       </td>
-
-      {/* Actions */}
-   {/* Actions */}
       <td className="text-right">
         <div className="flex items-center justify-end gap-1">
           {joinable && (
             <button
               className="btn btn-info btn-xs gap-1"
-              // UPDATE THIS LINE BELOW
-            onClick={() => router.push(`/doctor/consultations/${booking.consultationSessionId?.consultationId ?? booking._id}`)}
-              aria-label="Join video consultation"
+             onClick={() => router.push(`/doctor/consultation/${booking._id}`)}
             >
               <Video size={12} aria-hidden="true" />
               <span className="hidden lg:inline">Join</span>
             </button>
           )}
           <button
-            className="btn btn-ghost btn-xs gap-1 text-accent hover:bg-accent\/10"
+            className="btn btn-ghost btn-xs gap-1 text-accent hover:bg-accent/10"
             onClick={() => router.push(`/doctor/prescriptions/new?bookingId=${booking._id}`)}
-            aria-label="Write prescription"
           >
             <PenLine size={13} aria-hidden="true" />
             <span className="hidden lg:inline text-xs">Prescribe</span>
@@ -635,6 +681,9 @@ const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, router }
             booking={booking}
             opRecord={op}
             onComplete={onComplete}
+            onAccept={onAccept}
+            onConfirm={onConfirm}
+            onCancel={onCancel}
             router={router}
           />
         </div>
@@ -648,7 +697,7 @@ AppointmentRow.displayName = 'AppointmentRow';
 // MOBILE CARD
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MobileCard = memo(({ booking, index, opByBooking, onComplete, router }) => {
+const MobileCard = memo(({ booking, index, opByBooking, onComplete, onAccept, onConfirm, onCancel, router }) => {
   const op       = opByBooking[booking._id?.toString()];
   const joinable = canJoinConsult(booking);
 
@@ -658,20 +707,14 @@ const MobileCard = memo(({ booking, index, opByBooking, onComplete, router }) =>
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0, transition: { delay: Math.min(index * 0.05, 0.3) } }}
       exit={{ opacity: 0 }}
-      className="p-4 space-y-3"
-      role="listitem"
-      aria-label={`Appointment for ${getPatientName(booking)}`}
+      className="p-4 space-y-3 bg-base-100 border-b border-base-200"
     >
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-2.5">
-          <div className="avatar placeholder" aria-hidden="true">
-            <div className="w-10 h-10 rounded-xl bg-primary\/10 text-primary font-bold">
-              <span>{getInitial(booking)}</span>
-            </div>
-          </div>
+          <PatientAvatar booking={booking} />
           <div>
             <p className="font-bold text-sm">{getPatientName(booking)}</p>
-            <p className="label-text-alt">{booking.bookingCode}</p>
+            <p className="text-xs text-base-content/60 font-mono">{booking.bookingCode}</p>
           </div>
         </div>
         <StatusBadge status={booking.status} />
@@ -679,29 +722,27 @@ const MobileCard = memo(({ booking, index, opByBooking, onComplete, router }) =>
 
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div>
-          <p className="label-text-alt uppercase tracking-wide mb-0.5">Scheduled</p>
+          <p className="text-[10px] uppercase tracking-wide text-base-content/50 mb-0.5">Scheduled</p>
           <p>{formatDate(booking.scheduledAt)}</p>
         </div>
         <div>
-          <p className="label-text-alt uppercase tracking-wide mb-0.5">Type</p>
+          <p className="text-[10px] uppercase tracking-wide text-base-content/50 mb-0.5">Type</p>
           <ConsultTypeBadge type={booking.consultationType} />
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2 pt-1">
         {joinable && (
-          <Link
-            href={`/doctor/consultations/${booking.consultationSessionId?.consultationId ?? booking._id}`}
+          <button
+           onClick={() => router.push(`/doctor/consultation/${booking._id}`)}
             className="btn btn-info btn-sm flex-1 gap-1 text-xs"
-            aria-label="Join video consultation"
           >
             <Video size={12} aria-hidden="true" /> Join Call
-          </Link>
+          </button>
         )}
         <button
           className="btn btn-primary btn-sm flex-1 gap-1 text-xs"
           onClick={() => router.push(`/doctor/prescriptions/new?bookingId=${booking._id}`)}
-          aria-label="Write prescription"
         >
           <PenLine size={12} aria-hidden="true" /> Prescribe
         </button>
@@ -709,17 +750,21 @@ const MobileCard = memo(({ booking, index, opByBooking, onComplete, router }) =>
           <button
             className="btn btn-outline btn-sm gap-1 text-xs"
             onClick={() => router.push(`/doctor/op-records/${op._id}`)}
-            aria-label={`View OP record ${op.opNumber ?? ''}`}
           >
             <FileText size={12} aria-hidden="true" /> OP
           </button>
         )}
-        <ActionMenu
-          booking={booking}
-          opRecord={op}
-          onComplete={onComplete}
-          router={router}
-        />
+        <div className="flex-none">
+          <ActionMenu
+            booking={booking}
+            opRecord={op}
+            onComplete={onComplete}
+            onAccept={onAccept}
+            onConfirm={onConfirm}
+            onCancel={onCancel}
+            router={router}
+          />
+        </div>
       </div>
     </motion.div>
   );
@@ -741,11 +786,8 @@ const Pagination = memo(({ page, totalPages, total, onPage }) => {
   if (totalPages <= 1) return null;
 
   return (
-    <nav
-      className="border-t border-base-300 px-6 py-4 flex items-center justify-between flex-wrap gap-3"
-      aria-label="Pagination"
-    >
-      <p className="text-sm text-base-content\/50" aria-live="polite">
+    <nav className="border-t border-base-300 px-6 py-4 flex items-center justify-between flex-wrap gap-3">
+      <p className="text-sm text-base-content/50">
         Page {page} of {totalPages} · {total} appointments
       </p>
       <div className="flex items-center gap-2">
@@ -753,17 +795,14 @@ const Pagination = memo(({ page, totalPages, total, onPage }) => {
           className="btn btn-ghost btn-sm"
           disabled={page === 1}
           onClick={() => onPage((p) => Math.max(1, p - 1))}
-          aria-label="Previous page"
         >
-          <ChevronLeft size={16} aria-hidden="true" />
+          <ChevronLeft size={16} />
         </button>
         {window_.map((n) => (
           <button
             key={n}
             className={`btn btn-sm ${n === page ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => onPage(n)}
-            aria-label={`Page ${n}`}
-            aria-current={n === page ? 'page' : undefined}
           >
             {n}
           </button>
@@ -772,9 +811,8 @@ const Pagination = memo(({ page, totalPages, total, onPage }) => {
           className="btn btn-ghost btn-sm"
           disabled={page === totalPages}
           onClick={() => onPage((p) => Math.min(totalPages, p + 1))}
-          aria-label="Next page"
         >
-          <ChevronRight size={16} aria-hidden="true" />
+          <ChevronRight size={16} />
         </button>
       </div>
     </nav>
@@ -794,24 +832,18 @@ const FilterBar = memo(({
   to, setTo,
   hasFilters, onClear,
 }) => (
-  <section
-    aria-label="Appointment filters"
-    className="bg-base-100 border border-base-300 rounded-2xl p-4 flex flex-wrap gap-3 items-center"
-  >
-    {/* Search */}
+  <section className="bg-base-100 border border-base-300 rounded-2xl p-4 flex flex-wrap gap-3 items-center">
     <div className="relative flex-1 min-w-[200px]">
-      <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content\/30" aria-hidden="true" />
+      <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
       <input
-        className="input-field pl-9 text-sm"
+        className="input input-sm input-bordered w-full pl-9"
         placeholder="Search patient, booking code, phone…"
         value={searchRaw}
         onChange={(e) => setSearchRaw(e.target.value)}
-        aria-label="Search appointments"
       />
     </div>
 
-    {/* Status pills */}
-    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Status filter">
+    <div className="flex flex-wrap gap-1.5">
       {STATUSES.map((s) => (
         <button
           key={s.value}
@@ -819,43 +851,37 @@ const FilterBar = memo(({
           className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
             statusFilter === s.value
               ? 'border-primary bg-primary text-primary-content'
-              : 'border-base-300 text-base-content\/60 hover:border-primary\/40'
+              : 'border-base-300 text-base-content/60 hover:border-primary/40'
           }`}
-          aria-pressed={statusFilter === s.value}
         >
           {s.label}
         </button>
       ))}
     </div>
 
-    {/* Type select */}
     <select
-      className="input-field text-sm w-auto min-w-[130px]"
+      className="select select-sm select-bordered w-auto min-w-[130px]"
       value={consType}
       onChange={(e) => setConsType(e.target.value)}
-      aria-label="Filter by consultation type"
     >
       {CONSULT_TYPES.map((t) => (
         <option key={t.value} value={t.value}>{t.label}</option>
       ))}
     </select>
 
-    {/* Date range */}
     <div className="flex flex-col sm:flex-row items-center gap-1.5">
       <input
         type="date"
-        className="input-field text-sm w-auto"
+        className="input input-sm input-bordered w-auto"
         value={from}
         onChange={(e) => setFrom(e.target.value)}
-        aria-label="From date"
       />
-      <span className="text-base-content\/30 text-sm" aria-hidden="true">→</span>
+      <span className="text-base-content/30 text-sm">→</span>
       <input
         type="date"
-        className="input-field text-sm w-auto"
+        className="input input-sm input-bordered w-auto"
         value={to}
         onChange={(e) => setTo(e.target.value)}
-        aria-label="To date"
       />
     </div>
 
@@ -863,9 +889,8 @@ const FilterBar = memo(({
       <button
         className="btn btn-ghost btn-sm text-error gap-1"
         onClick={onClear}
-        aria-label="Clear all filters"
       >
-        <XCircle size={13} aria-hidden="true" /> Clear
+        <XCircle size={13} /> Clear
       </button>
     )}
   </section>
@@ -913,7 +938,6 @@ export default function AppointmentsManagement() {
       page,
       limit: PAGE_LIMIT,
     }));
-    // Fetch OP records so we can link them against bookings in this page
     dispatch(fetchOPRecords({ page: 1, limit: 200 }));
   }, [dispatch, statusFilter, consType, search, from, to, page]);
 
@@ -930,7 +954,6 @@ export default function AppointmentsManagement() {
   }, [filtersKey]);
 
   // ── Derived data ───────────────────────────────────────────────────────────
-  // Map OP records by booking ID (handle both ObjectId and populated object shapes)
   const opByBooking = useMemo(() => {
     const map = {};
     (opRecords || []).forEach((op) => {
@@ -953,15 +976,15 @@ export default function AppointmentsManagement() {
       today:     appts.filter((a) => {
         try { return new Date(a.scheduledAt).toDateString() === today; } catch { return false; }
       }).length,
-      pending: appts.filter((a) => ['pending', 'confirmed'].includes(a.status)).length,
-      online:  appts.filter((a) => a.status === 'in_progress' && isOnlineBooking(a)).length,
+      pending: appts.filter((a) => ['pending', 'created', 'scheduled', 'confirmed'].includes(a.status)).length,
+      online:  appts.filter((a) => ['in_progress', 'active'].includes(a.status) && isOnlineBooking(a)).length,
     };
   }, [appointments, total]);
 
   const chartData  = useMemo(() => buildChartData(appointments || []), [appointments]);
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_LIMIT)), [total]);
 
-  // ── Handlers ───────────────────────────────────────────────────────────────
+  // ── Consultation Event Handlers ────────────────────────────────────────────
   const handleCompleteClick = useCallback((bookingId, opId) => {
     setCompleteTarget({ bookingId, opId });
     setShowComplete(true);
@@ -971,9 +994,7 @@ export default function AppointmentsManagement() {
     if (!completeTarget) return;
     const { opId } = completeTarget;
     if (!opId) {
-      // No linked OP record — cannot call the complete endpoint without an OP id.
-      // This is a data integrity issue that should be resolved by admin.
-      console.warn('[AppointmentsManagement] No OP record linked — cannot complete.');
+      toast.error('No OP record linked — cannot complete.');
       setShowComplete(false);
       return;
     }
@@ -982,6 +1003,28 @@ export default function AppointmentsManagement() {
     fetchData();
   }, [completeTarget, dispatch, fetchData]);
 
+  // Make sure string conversion is enforced right before dispatch
+  const handleAcceptConsultation = useCallback(async (consultationId) => {
+    if (!consultationId) return toast.error("Consultation ID not found for this booking.");
+    await dispatch(acceptConsultation(String(consultationId)));
+    fetchData(); 
+  }, [dispatch, fetchData]);
+
+  const handleConfirmConsultation = useCallback(async (consultationId) => {
+    if (!consultationId) return toast.error("Consultation ID not found for this booking.");
+    await dispatch(confirmConsultation({ id: String(consultationId), consentAccepted: true }));
+    fetchData(); 
+  }, [dispatch, fetchData]);
+
+  const handleCancelConsultation = useCallback(async (consultationId) => {
+    if (!consultationId) return toast.error("Consultation ID not found for this booking.");
+    const reason = window.prompt("Reason for cancellation:");
+    if (reason === null) return; // User pressed cancel on the prompt
+    await dispatch(cancelConsultation({ id: String(consultationId), reason: reason || 'Cancelled by doctor' }));
+    fetchData(); 
+  }, [dispatch, fetchData]);
+
+  // Filter clears
   const clearFilters = useCallback(() => {
     setStatusFilter(''); setConsType(''); setFrom(''); setTo(''); setSearchRaw('');
   }, []);
@@ -994,23 +1037,21 @@ export default function AppointmentsManagement() {
 
   return (
     <div data-theme="doctor" className="min-h-screen bg-base-100 text-base-content">
-
-      {/* ── Header ────────────────────────────────────────────────────────── */}
       <motion.header
         initial={{ opacity: 0, y: -16 }}
         animate={{ opacity: 1, y: 0 }}
-        className="sticky top-0 z-30 bg-base-100/90 backdrop-blur-strong border-b border-base-300 px-6 py-4"
+        className="sticky top-0 z-30 bg-base-100/90 backdrop-blur border-b border-base-300 px-6 py-4"
       >
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-primary\/10" aria-hidden="true">
+            <div className="p-2 rounded-xl bg-primary/10">
               <CalendarDays size={22} className="text-primary" />
             </div>
             <div>
               <h1 className="text-xl font-black text-base-content leading-tight">
                 Appointments
               </h1>
-              <p className="label-text-alt">
+              <p className="text-xs text-base-content/60">
                 {total} total
                 {stats.online > 0 && (
                   <span className="ml-2 text-success font-semibold">
@@ -1026,16 +1067,15 @@ export default function AppointmentsManagement() {
               onClick={fetchData}
               disabled={loadingAppts}
               className="btn btn-ghost btn-sm gap-1.5"
-              aria-label="Refresh appointments"
             >
-              <RefreshCw size={14} className={loadingAppts ? 'animate-spin' : ''} aria-hidden="true" />
+              <RefreshCw size={14} className={loadingAppts ? 'animate-spin' : ''} />
               Refresh
             </button>
             <button
               onClick={() => router.push('/doctor/prescriptions/new')}
               className="btn btn-primary btn-sm gap-1.5"
             >
-              <Plus size={14} aria-hidden="true" />
+              <Plus size={14} />
               New Prescription
             </button>
           </div>
@@ -1043,52 +1083,14 @@ export default function AppointmentsManagement() {
       </motion.header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-
-        {/* ── Stat Cards ──────────────────────────────────────────────────── */}
-        <section
-          aria-label="Appointment statistics"
-          className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4"
-        >
-          <StatCard
-            icon={Layers}
-            label="Total"
-            value={stats.total}
-            colorKey="primary"
-            sub="All time"
-            chartData={chartData}
-          />
-          <StatCard
-            icon={CalendarDays}
-            label="Today"
-            value={stats.today}
-            colorKey="info"
-            sub="Scheduled today"
-          />
-          <StatCard
-            icon={CheckCircle2}
-            label="Completed"
-            value={stats.completed}
-            colorKey="success"
-            sub="This page"
-          />
-          <StatCard
-            icon={Clock3}
-            label="Pending"
-            value={stats.pending}
-            colorKey="warning"
-            sub="Awaiting"
-          />
-          <StatCard
-            icon={Radio}
-            label="Live"
-            value={stats.online}
-            colorKey="success"
-            sub="In progress"
-            live={stats.online > 0}
-          />
+        <section className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+          <StatCard icon={Layers} label="Total" value={stats.total} colorKey="primary" sub="All time" chartData={chartData} />
+          <StatCard icon={CalendarDays} label="Today" value={stats.today} colorKey="info" sub="Scheduled today" />
+          <StatCard icon={CheckCircle2} label="Completed" value={stats.completed} colorKey="success" sub="This page" />
+          <StatCard icon={Clock3} label="Pending" value={stats.pending} colorKey="warning" sub="Awaiting" />
+          <StatCard icon={Radio} label="Live" value={stats.online} colorKey="success" sub="In progress" live={stats.online > 0} />
         </section>
 
-        {/* ── Filter Bar ──────────────────────────────────────────────────── */}
         <FilterBar
           searchRaw={searchRaw}  setSearchRaw={setSearchRaw}
           statusFilter={statusFilter} setStatusFilter={setStatusFilter}
@@ -1099,23 +1101,17 @@ export default function AppointmentsManagement() {
           onClear={clearFilters}
         />
 
-        {/* ── Error ────────────────────────────────────────────────────────── */}
         {error && (
-          <div className="alert alert-error" role="alert">
-            <AlertCircle size={16} aria-hidden="true" />
+          <div className="alert alert-error">
+            <AlertCircle size={16} />
             <span>{error}</span>
           </div>
         )}
 
-        {/* ── Table / Cards ────────────────────────────────────────────────── */}
-        <section
-          aria-label="Appointments list"
-          className="bg-base-100 border border-base-300 rounded-2xl overflow-hidden"
-        >
-          {/* Desktop table */}
-          <div className="overflow-x-auto hidden md:block">
-            <table className="table w-full" aria-label="Appointments">
-              <thead>
+        <section className="bg-base-100 border border-base-300 rounded-2xl overflow-visible shadow-sm">
+          <div className="overflow-x-auto hidden md:block rounded-t-2xl">
+            <table className="table table-zebra w-full" aria-label="Appointments">
+              <thead className="bg-base-200">
                 <tr>
                   <th scope="col">Patient</th>
                   <th scope="col">Booking</th>
@@ -1138,6 +1134,9 @@ export default function AppointmentsManagement() {
                       index={i}
                       opByBooking={opByBooking}
                       onComplete={handleCompleteClick}
+                      onAccept={handleAcceptConsultation}
+                      onConfirm={handleConfirmConsultation}
+                      onCancel={handleCancelConsultation}
                       router={router}
                     />
                   ))}
@@ -1146,11 +1145,10 @@ export default function AppointmentsManagement() {
             </table>
           </div>
 
-          {/* Mobile cards */}
-          <div className="md:hidden divide-y divide-base-300" role="list" aria-label="Appointments">
+          <div className="md:hidden divide-y divide-base-300">
             {loadingAppts && (
-              <div className="py-16 flex justify-center" role="status">
-                <span className="loading loading-md loading-spinner" aria-label="Loading appointments" />
+              <div className="py-16 flex justify-center">
+                <span className="loading loading-md loading-spinner" />
               </div>
             )}
             <AnimatePresence>
@@ -1161,23 +1159,19 @@ export default function AppointmentsManagement() {
                   index={i}
                   opByBooking={opByBooking}
                   onComplete={handleCompleteClick}
+                  onAccept={handleAcceptConsultation}
+                  onConfirm={handleConfirmConsultation}
+                  onCancel={handleCancelConsultation}
                   router={router}
                 />
               ))}
             </AnimatePresence>
           </div>
 
-          {/* Pagination */}
-          <Pagination
-            page={page}
-            totalPages={totalPages}
-            total={total}
-            onPage={setPage}
-          />
+          <Pagination page={page} totalPages={totalPages} total={total} onPage={setPage} />
         </section>
       </main>
 
-      {/* ── Complete Modal ───────────────────────────────────────────────── */}
       <CompleteModal
         open={showComplete}
         onClose={() => setShowComplete(false)}

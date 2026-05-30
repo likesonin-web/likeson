@@ -48,28 +48,31 @@ import {
   // Settings
   Settings2,
   LayoutDashboard,
-  // Added for booking routes
+  // Booking routes & State Machine
   CheckCircle2,
   XCircle,
   PlayCircle,
   StopCircle,
   RefreshCw,
   Activity,
+  Route,
+  Key,
+  PauseCircle,
+  CheckSquare
 } from "lucide-react";
 
 // =============================================================================
 // SOLO DRIVER PARTNER — role: 'solodriverpartner'
 //
-// Booking router routes (bookingRouter.js — non-customer):
-//   GET    /api/bookings/solo/available              — view assigned/active rides
-//   PATCH  /api/bookings/:id/solo/accept             — accept assigned ride
-//   PATCH  /api/bookings/:id/solo/reject             — reject assigned ride
-//   PATCH  /api/bookings/:id/solo/arrived            — mark arrived at pickup (sends OTP)
-//   POST   /api/bookings/:id/solo/start              — verify OTP + start ride
-//   POST   /api/bookings/:id/solo/end                — complete ride
-//   PATCH  /api/bookings/solo/location               — update live location (GPS fallback)
+// Booking router routes based on updated backend API:
+//   GET   /api/ride-requests/:rideId                     — view single ride details
+//   PATCH /api/ride-requests/:rideId/status              — Driver state machine mutations
+//         Actions: accept, start_route, arrived, verify_otp, start_ride, at_stop, resume, complete, cancel
+//   GET   /api/ride-requests/:rideId/live                — lightweight polling/live tracking
+//   GET   /api/ride-requests/:rideId/tracking            — full tracking snapshot (ETA, polyline, etc.)
+//   POST  /api/ride-requests/:rideId/tracking/milestone  — HTTP fallback for manual milestone logging
 //
-// Solo driver own routes (SoloDriverRoutes.js — not shown but referenced):
+// Solo driver own routes (SoloDriverRoutes.js):
 //   GET/PATCH /api/solo/profile
 //   PUT       /api/solo/kyc
 //   PATCH     /api/solo/vehicle
@@ -97,66 +100,87 @@ export const SOLO_DRIVER_PARTNER_LINKS = [
     ],
   },
 
-  // ── 2. Rides (booking router) ─────────────────────────────────────────────
-  // Routes: GET  /api/bookings/solo/available
-  //         PATCH /api/bookings/:id/solo/accept
-  //         PATCH /api/bookings/:id/solo/reject
-  //         PATCH /api/bookings/:id/solo/arrived
-  //         POST  /api/bookings/:id/solo/start
-  //         POST  /api/bookings/:id/solo/end
-  //         PATCH /api/bookings/solo/location
+  // ── 2. Rides (State Machine) ─────────────────────────────────────────────
+  // Route: PATCH /api/ride-requests/:rideId/status
   {
     title: "My Rides",
     icons: <ClipboardList />,
     links: [
       {
-        name: "Available / Assigned Rides",
-        href: "/partner/solo/rides",                    // → GET /api/bookings/solo/available
+        name: "Assigned Rides",
+        href: "/partner/solo/rides",
         icon: <ClipboardList size={18} />,
       },
       {
         name: "Accept Ride",
-        href: "/partner/solo/rides/accept",             // → PATCH /api/bookings/:id/solo/accept
+        href: "/partner/solo/rides/accept",             // action: 'accept'
         icon: <CheckCircle2 size={18} />,
       },
       {
-        name: "Reject Ride",
-        href: "/partner/solo/rides/reject",             // → PATCH /api/bookings/:id/solo/reject
-        icon: <XCircle size={18} />,
+        name: "Start Route (To Pickup)",
+        href: "/partner/solo/rides/start-route",        // action: 'start_route'
+        icon: <Route size={18} />,
       },
       {
         name: "Mark Arrived",
-        href: "/partner/solo/rides/arrived",            // → PATCH /api/bookings/:id/solo/arrived
+        href: "/partner/solo/rides/arrived",            // action: 'arrived'
         icon: <MapPin size={18} />,
       },
       {
-        name: "Start Ride (OTP)",
-        href: "/partner/solo/rides/start",              // → POST /api/bookings/:id/solo/start
+        name: "Verify OTP",
+        href: "/partner/solo/rides/verify-otp",         // action: 'verify_otp'
+        icon: <Key size={18} />,
+      },
+      {
+        name: "Start Ride (To Dropoff)",
+        href: "/partner/solo/rides/start-ride",         // action: 'start_ride'
         icon: <PlayCircle size={18} />,
       },
       {
-        name: "End Ride",
-        href: "/partner/solo/rides/end",                // → POST /api/bookings/:id/solo/end
-        icon: <StopCircle size={18} />,
+        name: "Mark At Stop",
+        href: "/partner/solo/rides/at-stop",            // action: 'at_stop'
+        icon: <PauseCircle size={18} />,
+      },
+      {
+        name: "Resume Ride",
+        href: "/partner/solo/rides/resume",             // action: 'resume'
+        icon: <RefreshCw size={18} />,
+      },
+      {
+        name: "Complete Ride",
+        href: "/partner/solo/rides/complete",           // action: 'complete'
+        icon: <CheckSquare size={18} />,
+      },
+      {
+        name: "Cancel Ride",
+        href: "/partner/solo/rides/cancel",             // action: 'cancel'
+        icon: <XCircle size={18} />,
       },
     ],
   },
 
-  // ── 3. Live Location (booking router) ────────────────────────────────────
-  // Route: PATCH /api/bookings/solo/location
+  // ── 3. Live Tracking & Milestones ────────────────────────────────────────
+  // Routes: GET /api/ride-requests/:rideId/live
+  //         GET /api/ride-requests/:rideId/tracking
+  //         POST /api/ride-requests/:rideId/tracking/milestone
   {
     title: "Live Tracking",
     icons: <Navigation />,
     links: [
       {
+        name: "Active Ride Status",
+        href: "/partner/solo/rides/active",             // View for /live & /tracking 
+        icon: <Activity size={18} />,
+      },
+      {
         name: "Update Location",
-        href: "/partner/solo/location",                 // → PATCH /api/bookings/solo/location
+        href: "/partner/solo/location",                 // Triggers location updates to backend/sockets
         icon: <Navigation size={18} />,
       },
       {
-        name: "Active Ride Status",
-        href: "/partner/solo/rides/active",             // current active ride view
-        icon: <Activity size={18} />,
+        name: "Log Milestone",
+        href: "/partner/solo/rides/milestone",          // POST tracking/milestone
+        icon: <MapPin size={18} />,
       },
     ],
   },
@@ -276,17 +300,17 @@ export const SOLO_DRIVER_PARTNER_TOP_RIGHT_LINKS = [
     links: [
       {
         name: "My Rides",
-        href: "/partner/solo/rides",                // → GET /api/bookings/solo/available
+        href: "/partner/solo/rides",                
         icon: <ClipboardList size={18} />,
       },
       {
         name: "Go Online",
-        href: "/partner/solo/availability",         // → PATCH /api/solo/availability
+        href: "/partner/solo/availability",         
         icon: <ToggleRight size={18} />,
       },
       {
         name: "Update Location",
-        href: "/partner/solo/location",             // → PATCH /api/bookings/solo/location
+        href: "/partner/solo/location",             
         icon: <Navigation size={18} />,
       },
       {
@@ -311,9 +335,9 @@ export const SOLO_DRIVER_PARTNER_SEARCH_LINKS = [
   // Frequently visited
   [
     { name: "Dashboard",             href: "/partner/solo/dashboard",               icon: <LayoutDashboard size={18} /> },
-    { name: "My Rides",              href: "/partner/solo/rides",                   icon: <ClipboardList size={18} /> },   // GET /api/bookings/solo/available
+    { name: "My Rides",              href: "/partner/solo/rides",                   icon: <ClipboardList size={18} /> },
     { name: "Active Ride",           href: "/partner/solo/rides/active",            icon: <Activity size={18} /> },
-    { name: "Update Location",       href: "/partner/solo/location",                icon: <Navigation size={18} /> },      // PATCH /api/bookings/solo/location
+    { name: "Update Location",       href: "/partner/solo/location",                icon: <Navigation size={18} /> },      
     { name: "KYC Status",            href: "/partner/solo/kyc",                     icon: <ScanLine size={18} /> },
     { name: "My Vehicle",            href: "/partner/solo/vehicle",                 icon: <Car size={18} /> },
     { name: "Availability",          href: "/partner/solo/availability",            icon: <ToggleRight size={18} /> },
@@ -321,11 +345,13 @@ export const SOLO_DRIVER_PARTNER_SEARCH_LINKS = [
     { name: "Settlement",            href: "/partner/solo/settlement",              icon: <ReceiptIndianRupee size={18} />},
     { name: "Notifications",         href: "/partner/solo/notifications",           icon: <Bell size={18} /> },
   ],
-  // Quick actions
+  // Quick actions mapped to backend status mutations
   [
-    { name: "Accept Ride",           href: "/partner/solo/rides/accept",            icon: <CheckCircle2 size={18} /> },    // PATCH /api/bookings/:id/solo/accept
-    { name: "Start Ride (OTP)",      href: "/partner/solo/rides/start",             icon: <PlayCircle size={18} /> },      // POST  /api/bookings/:id/solo/start
-    { name: "End Ride",              href: "/partner/solo/rides/end",               icon: <StopCircle size={18} /> },      // POST  /api/bookings/:id/solo/end
+    { name: "Accept Ride",           href: "/partner/solo/rides/accept",            icon: <CheckCircle2 size={18} /> },
+    { name: "Verify OTP",            href: "/partner/solo/rides/verify-otp",        icon: <Key size={18} /> }, 
+    { name: "Start Ride",            href: "/partner/solo/rides/start-ride",        icon: <PlayCircle size={18} /> }, 
+    { name: "Complete Ride",         href: "/partner/solo/rides/complete",          icon: <CheckSquare size={18} /> }, 
+    { name: "Cancel Ride",           href: "/partner/solo/rides/cancel",            icon: <XCircle size={18} /> }, 
     { name: "Add Service Zone",      href: "/partner/solo/service-zones/add",       icon: <Plus size={18} /> },
     { name: "Change Password",       href: "/partner/solo/security/change-password",icon: <KeyRound size={18} /> },
   ],

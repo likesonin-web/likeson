@@ -7,7 +7,9 @@ import LayoutConditionalWrapper from '@/components/ui/LayoutConditionalWrapper';
 import { ThemeProvider } from '@/components/theme-provider';
 import { Toaster } from 'react-hot-toast';
 import AuthSocketBridge from '@/context/AuthSocketBridge';
-import {GoogleMapsProvider} from '@/context/GoogleMapsProvider';
+import { GoogleMapsProvider } from '@/context/GoogleMapsProvider';
+ 
+
 const poppins = Poppins({
   subsets: ['latin'],
   weight: ['400', '500', '600', '700'],
@@ -40,19 +42,25 @@ export default function RootLayout({
       className={`${poppins.variable} ${montserrat.variable} scroll-smooth`}
       suppressHydrationWarning
     >
-      {/* Removed the invalid var(--font-montserrat) from the className string */}
       <body className="font-poppins antialiased" suppressHydrationWarning>
-        
         <StoreProvider>
           <ThemeProvider attribute="class" defaultTheme="light">
+            {/*
+              Order matters:
+              AuthSocketBridge — connects general booking socket (uses token from store)
+              ConsultationProvider — connects /consultations namespace socket (same token)
+              Both sit inside StoreProvider so they can read Redux state.
+            */}
             <AuthSocketBridge>
-               <GoogleMapsProvider>
-              <ConnectivityWrapper>
-                <LayoutConditionalWrapper>
-                  {children}
-                </LayoutConditionalWrapper>
-              </ConnectivityWrapper>
-            </GoogleMapsProvider>
+         
+                <GoogleMapsProvider>
+                  <ConnectivityWrapper>
+                    <LayoutConditionalWrapper>
+                      {children}
+                    </LayoutConditionalWrapper>
+                  </ConnectivityWrapper>
+                </GoogleMapsProvider>
+         
             </AuthSocketBridge>
 
             <Toaster

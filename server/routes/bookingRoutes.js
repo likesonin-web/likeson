@@ -626,7 +626,7 @@ router.patch('/consultations/:consultationId/start',
         consultationId: consultation._id,
         meetingId:      consultation.meetingId,
         roomId:         consultation.roomId,
-        meetingLink:    consultation.meetingLink,
+        consultationType: consultation.consultationType,
         timestamp:      new Date(),
       });
 
@@ -846,7 +846,7 @@ router.get('/consultations/:consultationId/join-token',
   async (req, res) => {
     try {
       const consultation = await Consultation.findById(req.params.consultationId)
-        .select('roomId meetingId meetingLink provider status patient doctor')
+        .select('roomId meetingId  provider status patient doctor')
         .lean();
       if (!consultation) return res.status(404).json({ success: false, message: 'Consultation not found' });
 
@@ -888,7 +888,7 @@ router.get('/consultations/:consultationId/join-token',
           channelName: consultation.roomId,
           roomId:      consultation.roomId,
           meetingId:   consultation.meetingId,
-          meetingLink: consultation.meetingLink,
+          consultationType: consultation.consultationType,
           provider:    consultation.provider ?? 'Agora',
           appId:       process.env.AGORAIO_APP_ID,
           expiresInSeconds: 7200,
@@ -2394,7 +2394,7 @@ router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadm
         const { createAgoraRoom, generateAgoraToken } = await import('../services/agoraService.js');
 
         const scheduledStartTime              = booking.scheduledAt;
-        const { roomId, meetingId, meetingLink } = createAgoraRoom(
+        const { roomId, meetingId,  } = createAgoraRoom(
           booking.bookingCode,
           booking._id.toString()
         );
@@ -2418,7 +2418,6 @@ router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadm
           provider:                 'Agora',
           roomId,
           meetingId,
-          meetingLink,
           hostToken,
           participantToken,
           status:    'scheduled',
@@ -2743,9 +2742,18 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
     if (!soloPartner.driverProfile)
       return res.status(400).json({ success: false, message: 'Solo partner has no linked Driver profile' });
 
-    await Ride.updateMany(
+   await Ride.updateMany(
       { booking: booking._id, status: { $in: ['requested', 'searching'] } },
-      { status: 'cancelled', 'cancellation.cancelledBy': 'admin', 'cancellation.cancelledAt': new Date() }
+      { 
+        $set: { 
+          status: 'cancelled',
+          cancellation: {
+            cancelledBy: 'admin',
+            cancelledAt: new Date(),
+            reason: 'Admin reassignment' // Add a reason if necessary
+          }
+        } 
+      }
     );
 
     const coords = getBookingCoords(booking);

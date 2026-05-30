@@ -1,26 +1,80 @@
 'use client';
- 
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useReducer,
-  useRef,
-  useState,
-  memo,
-  createContext,
-  useContext,
-} from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import { useDispatch, useSelector } from 'react-redux';
-import { GoogleMap } from '@react-google-maps/api';
-import { useGoogleMaps } from '@/context/GoogleMapsProvider';
 
-// ── Redux ─────────────────────────────────────────────────────────────────────
+/**
+ * CareAssistantRideLiveTracking.jsx — Likeson.in
+ *
+ * Dual-mode live tracking for Care Assistants:
+ *
+ * MODE A — full_care_ride
+ *   Phase 1: CA navigates from current location → driver waypoint (join-ride point)
+ *   Phase 2: After joining, mirrors driver live tracking (patient pickup → hospital)
+ *
+ * MODE B — care_assistant (only)
+ *   CA navigates from current location → patient pickup location
+ *   Shows own GPS trail + patient location pin. No driver involved.
+ *
+ * Socket events consumed:
+ *   location_update, eta_update, ride_status_changed, navigation_target_changed,
+ *   care_assistant_joined_ride, care_assistant_attached_to_ride,
+ *   ride_stage_changed, hospital_eta_update, care-assistant:ride:tracking
+ *
+ * Redux:
+ *   operationsSlice — careJoinRide, markCareArrived, markCareStart, markCareComplete,
+ *                     updateCareLocation, fetchCareTrackingSnapshot, fetchCareAssignedBookings
+ *   rideRequestSlice — fetchRideTracking, fetchRideLive, socketLocationUpdate, etc.
+ *
+ * API routes used:
+ *   GET  /bookings/:id/care/tracking-snapshot
+ *   POST /bookings/:id/care/join-ride
+ *   PATCH /bookings/:id/care/arrived
+ *   PATCH /bookings/:id/care/start
+ *   PATCH /bookings/:id/care/complete
+ *   PATCH /bookings/care/location
+ */
+
+import React, {
+  useEffect, useRef, useCallback, useState, useMemo, memo,
+} from 'react';
+import { useParams, useRouter }    from 'next/navigation';
+import { useDispatch, useSelector } from 'react-redux';
+import { motion, AnimatePresence }  from 'framer-motion';
+import { GoogleMap, DirectionsRenderer } from '@react-google-maps/api';
+import { useGoogleMaps }           from '@/context/GoogleMapsProvider';
+
+// Icons
 import {
-  fetchRide,
-  fetchRideLive,
+  Navigation, MapPin, Phone, User, Clock, Zap, Shield, ShieldAlert,
+  WifiOff, ChevronDown, ChevronLeft, CheckCircle, Loader2, X,
+  Star, Car, RefreshCw, AlertTriangle, Copy, Check, ArrowUpRight,
+  Maximize2, Minimize2, Plus, Minus, Heart, Activity, Route,
+  UserCheck, Truck, Hospital, Package, Play, Square,
+} from 'lucide-react';
+
+// Redux — Operations
+import {
+  careJoinRide,
+  markCareArrived,
+  markCareStart,
+  markCareComplete,
+  updateCareLocation,
+  fetchCareTrackingSnapshot,
+  fetchCareAssignedBookings,
+  selectCareTrackingSnapshot,
+  selectCareAssistantLocation,
+  selectCareAssistantStatus,
+  selectCareAssistantJoined,
+  selectCareRideStatus,
+  selectActiveNavigationTarget,
+  selectRideStageOps,
+  setCareAssistantLocation,
+  setCareAssistantJoined,
+  setCareRideWorkflow,
+} from '@/store/slices/operationsSlice';
+
+// Redux — Ride
+import {
   fetchRideTracking,
+  fetchRideLive,
   selectCurrentRide,
   selectSocketLive,
   selectLiveData,
@@ -28,1730 +82,1541 @@ import {
   socketLocationUpdate,
   socketEtaUpdate,
   socketRideStatusChanged,
-  socketDriverAccepted,
-  socketDriverEnRoute,
   socketDriverArrived,
   socketOtpVerified,
   socketRideStarted,
-  socketAtStop,
   socketRideCompleted,
   socketRideCancelled,
   socketNavigationTargetChanged,
   socketHospitalEtaUpdate,
   socketCareAssistantTracking,
-  socketRideAssigned,
 } from '@/store/slices/rideRequestSlice';
 
+// Redux — Clinical (Replaced bookingSlice imports)
 import {
-  fetchCareTrackingSnapshot,
-  careJoinRide,
-  selectCareTrackingSnapshot,
-  selectCareAssistantLocation,
-  selectCareRideStatus,
-  setCareAssistantLocation,
-  setCareAssistantStatus,
-  setCareAssistantJoined,
-  setCareRideWorkflow,
-} from '@/store/slices/operationsSlice';
+  fetchCABookingById,
+  selectSelectedCABooking,
+} from '@/store/slices/clinicalSlice';
 
-// ── Socket ────────────────────────────────────────────────────────────────────
-import { useSocket, useSos } from '@/context/SocketProvider';
+import { useSocket, useBookingRoom } from '@/context/SocketProvider';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MAP_ID     = process.env.NEXT_PUBLIC_MAP_ID || '33a293614af186975a18525f';
-const LERP_T     = 0.10;
-const POLL_MS    = 6_000;
-const GPS_STALE  = 30_000;          // ms before GPS considered stale
-const ROUTE_THROTTLE = 8_000;       // ms between DirectionsService calls
-const DEFAULT_CENTER = { lat: 16.506, lng: 80.648 };
-const MAP_LIBS   = ['places', 'geometry', 'marker'];
+const MAP_ID   = process.env.NEXT_PUBLIC_MAP_ID || '33a293614af186975a18525f';
+const POLL_MS  = 5000;
+const GPS_INTERVAL_MS = 3000; // push CA location every 3s
 
-export const RIDE_STATUSES = {
-  SEARCHING:       'searching',
-  ASSIGNED:        'driver_assigned',
-  ACCEPTED:        'driver_accepted',
-  EN_ROUTE:        'driver_en_route',
-  ARRIVED:         'driver_arrived',
-  OTP_VERIFIED:    'otp_verified',
-  IN_PROGRESS:     'in_progress',
-  AT_STOP:         'at_stop',
-  COMPLETED:       'completed',
-  CANCELLED:       'cancelled',
-  SOS:             'sos_triggered',
+// Care assistant journey phases
+const PHASE = {
+  LOADING:       'loading',
+  NAVIGATING_TO: 'navigating_to_waypoint',  // MODE A: going to join point / MODE B: going to patient
+  ARRIVED_AT:    'arrived_at_waypoint',      // Pressed "I've Arrived"
+  JOINED:        'joined_ride',              // MODE A: joined driver ride
+  IN_TASK:       'in_task',                  // task started
+  COMPLETED:     'completed',
 };
 
-const STATUS_META = {
-  searching:       { label: 'Searching Driver',  color: '#f59e0b', pulse: true  },
-  driver_assigned: { label: 'Driver Assigned',   color: '#3b82f6', pulse: false },
-  driver_accepted: { label: 'Driver Accepted',   color: '#3b82f6', pulse: false },
-  driver_en_route: { label: 'Driver En Route',   color: '#6366f1', pulse: true  },
-  driver_arrived:  { label: 'Driver Arrived',    color: '#f97316', pulse: true  },
-  otp_verified:    { label: 'OTP Verified',      color: '#10b981', pulse: false },
-  in_progress:     { label: 'Ride In Progress',  color: '#10b981', pulse: true  },
-  at_stop:         { label: 'At Stop',           color: '#f59e0b', pulse: false },
-  completed:       { label: 'Completed',         color: '#10b981', pulse: false },
-  cancelled:       { label: 'Cancelled',         color: '#ef4444', pulse: false },
-  sos_triggered:   { label: 'SOS ACTIVE',        color: '#ef4444', pulse: true  },
+// Booking types that involve a driver ride
+const FULL_CARE_TYPES = ['full_care_ride'];
+
+// Status display per phase
+const PHASE_CONFIG = {
+  [PHASE.LOADING]:       { label: 'Loading',         color: '#64748b', icon: '⏳' },
+  [PHASE.NAVIGATING_TO]: { label: 'En Route',        color: '#3b82f6', icon: '🚶' },
+  [PHASE.ARRIVED_AT]:    { label: 'Arrived',         color: '#8b5cf6', icon: '📍' },
+  [PHASE.JOINED]:        { label: 'Joined Ride',     color: '#06b6d4', icon: '🚗' },
+  [PHASE.IN_TASK]:       { label: 'Task In Progress',color: '#22c55e', icon: '💚' },
+  [PHASE.COMPLETED]:     { label: 'Completed',       color: '#64748b', icon: '✅' },
 };
 
-const TARGET_LABELS = {
-  pickup_patient:        'Patient Pickup',
-  pickup_care_assistant: 'CA Pickup',
-  hospital_drop:         'Hospital',
-  patient_drop:          'Patient Drop',
+// Driver ride status display
+const DRIVER_STATUS_CONFIG = {
+  searching:       { label: 'Searching Driver', color: '#f59e0b', icon: '🔍' },
+  driver_assigned: { label: 'Driver Assigned',  color: '#3b82f6', icon: '👤' },
+  driver_accepted: { label: 'Driver Coming',    color: '#06b6d4', icon: '🚗' },
+  driver_en_route: { label: 'Driver En Route',  color: '#06b6d4', icon: '🚗' },
+  driver_arrived:  { label: 'Driver Arrived',   color: '#8b5cf6', icon: '📍' },
+  otp_verified:    { label: 'Ride Starting',    color: '#10b981', icon: '✅' },
+  in_progress:     { label: 'Ride In Progress', color: '#22c55e', icon: '🏥' },
+  at_stop:         { label: 'At Stop',          color: '#f97316', icon: '⏸️' },
+  completed:       { label: 'Ride Completed',   color: '#64748b', icon: '🎉' },
+  cancelled:       { label: 'Cancelled',        color: '#ef4444', icon: '❌' },
 };
-
-const TIMELINE_NODES = [
-  { key: 'searching',       label: 'Search'    },
-  { key: 'driver_assigned', label: 'Assign'    },
-  { key: 'driver_en_route', label: 'En Route'  },
-  { key: 'driver_arrived',  label: 'Arrived'   },
-  { key: 'otp_verified',    label: 'OTP ✓'     },
-  { key: 'in_progress',     label: 'Moving'    },
-  { key: 'completed',       label: 'Done'      },
-];
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACKING STATE CONTEXT — avoids prop-drilling across all sub-components
-// ─────────────────────────────────────────────────────────────────────────────
-
-const TrackingCtx = createContext(null);
-const useTracking = () => useContext(TrackingCtx);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACKING STATE REDUCER — single source of truth for all live state
-// ─────────────────────────────────────────────────────────────────────────────
-
-const INIT_TRACKING = {
-    rideStatus:    null,
-  rideStage:     null,      // ← ADD
-  etaMinutes:    null,
-  
-  distKm:         null,
-  driverLat:      null,
-  driverLng:      null,
-  driverHeading:  0,
-  driverSpeed:    0,
-  activeTarget:   null,
-  hasDeviation:   false,
-  lastGpsAt:      null,
-  lastEventAt:    null,
-  joinLoading:    false,
-  sosActive:      false,
-};
-
-function trackingReducer(state, action) {
-  switch (action.type) {
-   case 'STATUS':
-  return { 
-    ...state, 
-    rideStatus:  action.status, 
-    rideStage:   action.rideStage ?? state.rideStage,  // ← ADD
-    lastEventAt: Date.now() 
-  };
-    case 'ETA':
-      return { ...state, etaMinutes: action.eta, distKm: action.distKm ?? state.distKm, lastEventAt: Date.now() };
-    case 'LOCATION':
-      return {
-        ...state,
-        driverLat:     action.lat,
-        driverLng:     action.lng,
-        driverHeading: action.heading ?? state.driverHeading,
-        driverSpeed:   action.speed   ?? state.driverSpeed,
-        lastGpsAt:     Date.now(),
-        lastEventAt:   Date.now(),
-      };
-    case 'TARGET':
-      return { ...state, activeTarget: action.target, lastEventAt: Date.now() };
-    case 'DEVIATION':
-      return { ...state, hasDeviation: action.value, lastEventAt: Date.now() };
-    case 'JOIN_LOADING':
-      return { ...state, joinLoading: action.value };
-    case 'SOS':
-      return { ...state, sosActive: action.value, lastEventAt: Date.now() };
-    case 'SEED':
-  return {
-    ...state,
-    rideStatus:    action.status    ?? state.rideStatus,
-    rideStage:     action.rideStage ?? state.rideStage,    // ← ADD
-    etaMinutes:    action.eta       ?? state.etaMinutes,
-    driverLat:     action.lat       ?? state.driverLat,
-    driverLng:     action.lng       ?? state.driverLng,
-    driverHeading: action.heading   ?? state.driverHeading,
-    activeTarget:  action.target    ?? state.activeTarget,
-  };
-    default:
-      return state;
-  }
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const lerp = (a, b, t) => a + (b - a) * t;
-
-const fmt = {
-  eta:   (m) => m == null ? '—' : m < 1 ? '<1 min' : `${Math.round(m)} min`,
-  km:    (k) => k == null ? '—' : k < 1 ? `${Math.round(k * 1000)} m` : `${k.toFixed(1)} km`,
-  speed: (s) => !s || s < 1 ? '0' : Math.round(s).toString(),
-  time:  (d) => !d ? '—' : new Date(d).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-  ago:   (ts) => !ts ? '—' : `${Math.round((Date.now() - ts) / 1000)}s ago`,
+const lerp    = (a, b, t) => a + (b - a) * t;
+const fmtEta  = (min) => {
+  if (min == null) return null;
+  if (min < 1) return '< 1 min';
+  return `${Math.round(min)} min`;
+};
+const fmtKm   = (km) => {
+  if (km == null) return null;
+  if (km < 1) return `${Math.round(km * 1000)} m`;
+  return `${km.toFixed(1)} km`;
+};
+const haversineKm = ([lng1, lat1], [lng2, lat2]) => {
+  const R    = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a    = Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+    Math.cos((lat2 * Math.PI) / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MARKER DOM FACTORIES
+// MARKER FACTORIES
 // ─────────────────────────────────────────────────────────────────────────────
 
-function makeDriverEl(heading = 0) {
-  const d = document.createElement('div');
-  d.className = 'lt-driver-wrap';
-  d.innerHTML = `
-    <div class="lt-driver-ring"></div>
-    <div class="lt-driver-body" style="transform:translate(-50%,-50%) rotate(${heading}deg)">
-      <div class="lt-driver-icon">🚑</div>
+const createCaMarkerHtml = (heading = 0) => `
+  <div style="position:absolute;width:0;height:0;pointer-events:none;">
+    <div style="position:absolute;width:68px;height:68px;left:-34px;top:-34px;display:flex;align-items:center;justify-content:center;">
+      <div style="position:absolute;width:64px;height:64px;border-radius:50%;
+        background:radial-gradient(circle,rgba(236,72,153,0.20) 0%,rgba(236,72,153,0) 70%);
+        animation:caPulse 2s infinite ease-out;pointer-events:none;"></div>
+      <div style="position:absolute;bottom:-5px;left:50%;transform:translateX(-50%);
+        width:40px;height:8px;border-radius:50%;
+        background:rgba(0,0,0,0.25);filter:blur(3px);pointer-events:none;"></div>
+      <div style="position:relative;width:48px;height:48px;border-radius:50%;
+        background:linear-gradient(135deg,#ec4899,#8b5cf6);
+        border:3px solid #fff;display:flex;align-items:center;justify-content:center;
+        box-shadow:0 6px 20px rgba(236,72,153,0.55);z-index:2;
+        transform:rotate(${heading}deg);
+        transition:transform 0.35s cubic-bezier(0.34,1.56,0.64,1);
+        pointer-events:none;">
+        <span style="font-size:22px;transform:rotate(-${heading}deg);">👩‍⚕️</span>
+      </div>
     </div>
-  `;
-  return d;
-}
-
-function makeStaticEl(emoji, label, color) {
-  const d = document.createElement('div');
-  d.className = 'lt-pin-wrap';
-  d.innerHTML = `
-    <div class="lt-pin-head" style="background:${color}">${emoji}</div>
-    <div class="lt-pin-tip" style="border-top-color:${color}"></div>
-    <div class="lt-pin-label" style="background:${color}">${label}</div>
-  `;
-  return d;
-}
-
-const MARKER_DEFS = {
-  patient:        { emoji: '🏠', label: 'PATIENT',   color: '#3b82f6' },
-  care_assistant: { emoji: '👤', label: 'CA PICKUP', color: '#8b5cf6' },
-  hospital:       { emoji: '🏥', label: 'HOSPITAL',  color: '#ef4444' },
-  dropoff:        { emoji: '📍', label: 'DROP',      color: '#10b981' },
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MARKER STYLES — injected once
-// ─────────────────────────────────────────────────────────────────────────────
-
-const MARKER_CSS = `
-  @keyframes lt-ring { 0%{transform:scale(.7);opacity:.9} 100%{transform:scale(3);opacity:0} }
-  @keyframes lt-sos   { 0%,100%{opacity:1} 50%{opacity:.3} }
-
-  .lt-driver-wrap   { position:relative;width:0;height:0;pointer-events:none }
-  .lt-driver-ring   {
-    position:absolute;width:52px;height:52px;left:-26px;top:-26px;
-    border-radius:50%;background:rgba(16,185,129,.35);
-    animation:lt-ring 2.2s ease-out infinite
-  }
-  .lt-driver-body   {
-    position:absolute;width:44px;height:44px;left:0;top:0;
-    display:flex;align-items:center;justify-content:center;
-    transition:transform .35s ease-out;z-index:2;pointer-events:none;
-    filter:drop-shadow(0 4px 10px rgba(16,185,129,.5))
-  }
-  .lt-driver-icon   {
-    width:38px;height:38px;background:linear-gradient(135deg,#10b981,#3b82f6);
-    border-radius:10px;display:flex;align-items:center;justify-content:center;
-    font-size:20px;border:2px solid rgba(255,255,255,.25);
-    box-shadow:0 4px 16px rgba(0,0,0,.4)
-  }
-  .lt-pin-wrap      { position:relative;width:0;height:0;pointer-events:none;display:flex;flex-direction:column;align-items:center }
-  .lt-pin-head      {
-    position:absolute;width:38px;height:38px;left:-19px;top:-54px;
-    border-radius:50%;display:flex;align-items:center;justify-content:center;
-    font-size:16px;border:2.5px solid #fff;box-shadow:0 4px 14px rgba(0,0,0,.3)
-  }
-  .lt-pin-tip       {
-    position:absolute;width:0;height:0;left:-6px;top:-17px;
-    border-left:6px solid transparent;border-right:6px solid transparent;
-    border-top-width:9px;border-top-style:solid
-  }
-  .lt-pin-label     {
-    position:absolute;top:-5px;left:50%;transform:translateX(-50%);
-    color:#fff;padding:1px 7px;border-radius:20px;font-size:9px;
-    font-weight:800;letter-spacing:.08em;white-space:nowrap;
-    box-shadow:0 2px 8px rgba(0,0,0,.25);font-family:monospace
-  }
-  .lt-sos-flash     { animation:lt-sos .7s infinite }
+  </div>
+  <style>
+    @keyframes caPulse {
+      0%   { transform:scale(0.80); opacity:0.85; }
+      100% { transform:scale(2.0);  opacity:0; }
+    }
+  </style>
 `;
 
-function injectStyles() {
-  if (document.getElementById('lt-styles')) return;
-  const s = document.createElement('style');
-  s.id = 'lt-styles';
-  s.textContent = MARKER_CSS;
-  document.head.appendChild(s);
-}
+const createDriverMarkerHtml = () => `
+  <div style="position:absolute;width:0;height:0;pointer-events:none;">
+    <div style="position:absolute;width:60px;height:60px;left:-30px;top:-30px;display:flex;align-items:center;justify-content:center;">
+      <div style="position:absolute;width:56px;height:56px;border-radius:50%;
+        background:radial-gradient(circle,rgba(34,197,94,0.18) 0%,rgba(34,197,94,0) 70%);
+        animation:drvPulse 2.2s infinite ease-out;pointer-events:none;"></div>
+      <div style="position:relative;width:44px;height:44px;border-radius:50%;
+        background:linear-gradient(135deg,#22c55e,#16a34a);
+        border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;
+        box-shadow:0 4px 16px rgba(34,197,94,0.55);z-index:2;pointer-events:none;">
+        <span style="font-size:20px;">🚗</span>
+      </div>
+    </div>
+  </div>
+  <style>
+    @keyframes drvPulse {
+      0%   { transform:scale(0.80); opacity:0.9; }
+      100% { transform:scale(2.0);  opacity:0; }
+    }
+  </style>
+`;
+
+const createPinHtml = (emoji, color, label) => `
+  <div style="position:absolute;left:-18px;top:-52px;display:flex;flex-direction:column;align-items:center;pointer-events:none;">
+    <div style="width:36px;height:36px;background:${color};border-radius:50%;
+      border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;
+      box-shadow:0 4px 14px rgba(0,0,0,0.30);font-size:18px;">${emoji}</div>
+    <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid ${color};margin-top:-1px;"></div>
+    <div style="background:${color};color:#fff;padding:2px 7px;border-radius:20px;
+      font-size:9px;font-weight:800;letter-spacing:0.07em;text-transform:uppercase;
+      white-space:nowrap;margin-top:2px;box-shadow:0 2px 8px rgba(0,0,0,0.22);">${label}</div>
+  </div>
+`;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRACKING MAP — isolated map + marker logic
-// GPS animation via RAF; no React state updates in animation loop
+// SUB-COMPONENTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const TrackingMap = memo(function TrackingMap({ onMapReady }) {
-  const { driverLat, driverLng, driverHeading, activeTarget, rideStatus, sosActive } = useTracking();
-  const redux      = useSelector(selectCurrentRide);
-  const trackData  = useSelector(selectTrackingData);
-  const careSnap   = useSelector(selectCareTrackingSnapshot);
-
-  // Refs — map + markers + animation
-  const mapRef      = useRef(null);
-  const markerRefs  = useRef({});     // driver, patient, ca, hospital, dropoff
-  const rafRef      = useRef(null);
-  const routeRef    = useRef(null);
-  const dirSvcRef   = useRef(null);
-  const lastRouteAt = useRef(0);
-
-  // Smoothed driver position — pure ref, no state
-  const smoothPos   = useRef({ lat: DEFAULT_CENTER.lat, lng: DEFAULT_CENTER.lng });
-  const targetPos   = useRef(null);
-
-  // Coords derived from redux (stable refs — update only when values change)
-  const coordsRef   = useRef({});
-
-  // Compute static coords from data
-  useMemo(() => {
-    const rd = redux;
-    const td = trackData?.ride;
-    const cs = careSnap;
-
-    const get = (arr) => arr?.length === 2 ? { lat: arr[1], lng: arr[0] } : null;
-
-    coordsRef.current = {
-      pickup:    get(rd?.pickup?.coordinates          || td?.pickup?.coordinates),
-      dropoff:   get(rd?.dropoff?.coordinates         || td?.dropoff?.coordinates),
-      hospital:  get(cs?.hospital?.location?.coordinates || td?.tracking?.liveRouteContext?.hospitalCoords),
-      caPickup:  get(cs?.liveRouteContext?.careAssistantPickupCoords),
-    };
-  }, [redux, trackData, careSnap]);
-
-  // ── Map init ────────────────────────────────────────────────────────────
-  const onMapLoad = useCallback((map) => {
-    mapRef.current = map;
-    dirSvcRef.current = new window.google.maps.DirectionsService();
-    injectStyles();
-    onMapReady?.(map);
-  }, [onMapReady]);
-
-  // ── Create / update driver marker ───────────────────────────────────────
-  const ensureDriverMarker = useCallback(() => {
-    if (!mapRef.current || !window.google?.maps?.marker?.AdvancedMarkerElement) return;
-    if (!markerRefs.current.driver) {
-      const el = makeDriverEl(driverHeading);
-      markerRefs.current.driver = new window.google.maps.marker.AdvancedMarkerElement({
-        map:          mapRef.current,
-        content:      el,
-        position:     smoothPos.current,
-        zIndex:       30,
-        gmpClickable: false,
-        title:        'Medical transport vehicle',
-      });
-    }
-  }, [driverHeading]);
-
-  // ── Create static markers ───────────────────────────────────────────────
-  useEffect(() => {
-    if (!mapRef.current || !window.google?.maps?.marker?.AdvancedMarkerElement) return;
-
-    const { pickup, dropoff, hospital, caPickup } = coordsRef.current;
-    const AME = window.google.maps.marker.AdvancedMarkerElement;
-
-    const make = (key, coords, def) => {
-      if (coords && !markerRefs.current[key]) {
-        markerRefs.current[key] = new AME({
-          map:          mapRef.current,
-          content:      makeStaticEl(def.emoji, def.label, def.color),
-          position:     coords,
-          zIndex:       10,
-          gmpClickable: false,
-          title:        def.label,
-        });
-      }
-    };
-
-    make('patient',   pickup,   MARKER_DEFS.patient);
-    make('ca',        caPickup, MARKER_DEFS.care_assistant);
-    make('hospital',  hospital, MARKER_DEFS.hospital);
-    make('dropoff',   dropoff,  MARKER_DEFS.dropoff);
-  }, [coordsRef.current.pickup, coordsRef.current.hospital]); // eslint-disable-line
-
-  // ── RAF animation loop ──────────────────────────────────────────────────
-  useEffect(() => {
-    let hidden = false;
-
-    const onVisChange = () => { hidden = document.hidden; };
-    document.addEventListener('visibilitychange', onVisChange);
-
-    const tick = () => {
-      rafRef.current = requestAnimationFrame(tick);
-      if (hidden) return;
-
-      const tgt = targetPos.current;
-      if (!tgt) return;
-
-      const s = smoothPos.current;
-      const nLat = lerp(s.lat, tgt.lat, LERP_T);
-      const nLng = lerp(s.lng, tgt.lng, LERP_T);
-      smoothPos.current = { lat: nLat, lng: nLng };
-
-      ensureDriverMarker();
-      const dm = markerRefs.current.driver;
-      if (dm) {
-        dm.position = smoothPos.current;
-        const body = dm.content?.querySelector('.lt-driver-body');
-        if (body) body.style.transform = `translate(-50%,-50%) rotate(${driverHeading}deg)`;
-      }
-    };
-
-    rafRef.current = requestAnimationFrame(tick);
-    return () => {
-      cancelAnimationFrame(rafRef.current);
-      document.removeEventListener('visibilitychange', onVisChange);
-    };
-  }, [ensureDriverMarker, driverHeading]);
-
-  // ── Update target position when live coords change ──────────────────────
-  useEffect(() => {
-    if (driverLat == null || driverLng == null) return;
-    targetPos.current = { lat: driverLat, lng: driverLng };
-  }, [driverLat, driverLng]);
-
-  // ── Draw / update route polyline (throttled) ────────────────────────────
-  const drawRoute = useCallback(async (origin, dest) => {
-    if (!dirSvcRef.current || !origin || !dest) return;
-    const now = Date.now();
-    if (now - lastRouteAt.current < ROUTE_THROTTLE) return;
-    lastRouteAt.current = now;
-
-    try {
-      const result = await dirSvcRef.current.route({
-        origin, destination: dest,
-        travelMode: window.google.maps.TravelMode.DRIVING,
-        provideRouteAlternatives: false,
-      });
-      if (result.status !== 'OK') return;
-
-      const pts = window.google.maps.geometry.encoding.decodePath(
-        result.routes?.[0]?.overview_polyline?.points || ''
-      );
-
-      if (!routeRef.current) {
-        routeRef.current = new window.google.maps.Polyline({
-          map:           mapRef.current,
-          strokeColor:   '#6366f1',
-          strokeWeight:  4,
-          strokeOpacity: 0.9,
-          icons: [{
-            icon:   { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 4 },
-            offset: '0', repeat: '16px',
-          }],
-        });
-      }
-      routeRef.current.setPath(pts);
-    } catch (e) { /* silent — DirectionsService quota */ }
-  }, []);
-
-  // Trigger route draw when activeTarget or driver position changes
-  useEffect(() => {
-    if (!mapRef.current || !driverLat || !driverLng) return;
-    const { pickup, hospital, caPickup, dropoff } = coordsRef.current;
-    const origin = { lat: driverLat, lng: driverLng };
-
-    let dest = null;
-    if (activeTarget === 'hospital_drop')         dest = hospital;
-    else if (activeTarget === 'pickup_care_assistant') dest = caPickup;
-    else if (activeTarget === 'patient_drop')      dest = dropoff;
-    else                                           dest = pickup;
-
-    if (dest) drawRoute(origin, dest);
-  }, [activeTarget, drawRoute, driverLat, driverLng]); // eslint-disable-line
-
-  // ── Dynamic map bounds — ONLY on activeTarget change, not every GPS tick
-  useEffect(() => {
-    if (!mapRef.current || !window.google) return;
-    const { pickup, hospital, caPickup, dropoff } = coordsRef.current;
-    const bounds = new window.google.maps.LatLngBounds();
-    let added = 0;
-
-    const add = (c) => { if (c) { bounds.extend(c); added++; } };
-
-    if (activeTarget === 'hospital_drop') {
-      add(hospital);
-      if (driverLat && driverLng) add({ lat: driverLat, lng: driverLng });
-    } else if (activeTarget === 'pickup_care_assistant') {
-      add(caPickup);
-      if (driverLat && driverLng) add({ lat: driverLat, lng: driverLng });
-    } else {
-      add(pickup);
-      if (driverLat && driverLng) add({ lat: driverLat, lng: driverLng });
-    }
-
-    if (added > 1) {
-      mapRef.current.fitBounds(bounds, { top: 80, bottom: 180, left: 40, right: 40 });
-    } else if (added === 1) {
-      mapRef.current.panTo(bounds.getCenter());
-    }
-  }, [activeTarget]); // only on target change, not GPS tick
-
-  // ── Cleanup ─────────────────────────────────────────────────────────────
-  useEffect(() => () => {
-    cancelAnimationFrame(rafRef.current);
-    Object.values(markerRefs.current).forEach(m => { if (m) m.map = null; });
-    markerRefs.current = {};
-    if (routeRef.current) routeRef.current.setMap(null);
-  }, []);
-
-  const initialCenter = useMemo(() => {
-    if (driverLat && driverLng) return { lat: driverLat, lng: driverLng };
-    return coordsRef.current.pickup || DEFAULT_CENTER;
-  }, []); // eslint-disable-line
-
+/** Pill badge */
+const StatusPill = memo(function StatusPill({ icon, label, color, bg, border, pulse }) {
   return (
-    <GoogleMap
-      mapContainerStyle={{ width: '100%', height: '100%' }}
-      center={initialCenter}
-      zoom={14}
-      options={{
-        mapId:             MAP_ID,
-        disableDefaultUI:  true,
-        gestureHandling:   'greedy',
-        clickableIcons:    false,
-        backgroundColor:   '#1a1f2e',
+    <motion.span
+      animate={pulse ? { opacity: [0.7, 1, 0.7] } : {}}
+      transition={pulse ? { repeat: Infinity, duration: 1.8 } : {}}
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest border flex-shrink-0"
+      style={{ background: bg, borderColor: border, color }}
+    >
+      <span>{icon}</span>{label}
+    </motion.span>
+  );
+});
+
+/** FAB button */
+const FabBtn = memo(function FabBtn({ onClick, active, danger, title, children }) {
+  return (
+    <motion.button
+      whileTap={{ scale: 0.85 }}
+      onClick={onClick}
+      title={title}
+      className={[
+        'w-11 h-11 rounded-[13px] flex items-center justify-center cursor-pointer border',
+        'shadow-[0_4px_20px_rgba(0,0,0,0.38)] transition-colors',
+        danger
+          ? (active
+            ? 'bg-error border-error text-error-content animate-pulse'
+            : 'bg-error/10 border-error/30 text-error')
+          : (active
+            ? 'bg-primary text-primary-content border-primary'
+            : 'bg-base-200/90 text-base-content/60 border-base-300 hover:text-base-content'),
+      ].join(' ')}
+    >
+      {children}
+    </motion.button>
+  );
+});
+
+/** ── ACTION BUTTON (primary CTA) ── */
+const ActionButton = memo(function ActionButton({ label, icon, color, onClick, loading, disabled }) {
+  return (
+    <motion.button
+      whileTap={{ scale: disabled || loading ? 1 : 0.97 }}
+      onClick={!disabled && !loading ? onClick : undefined}
+      disabled={disabled || loading}
+      className="flex items-center justify-center gap-2 w-full max-w-xs mx-auto py-3.5 rounded-2xl text-sm font-bold border-2 cursor-pointer transition-all"
+      style={{
+        background: disabled ? 'rgba(100,116,139,0.15)' : `${color}22`,
+        borderColor: disabled ? 'rgba(100,116,139,0.3)' : `${color}66`,
+        color: disabled ? '#64748b' : color,
+        boxShadow: disabled ? 'none' : `0 4px 20px ${color}44`,
       }}
-      onLoad={onMapLoad}
-    />
-  );
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACKING SOCKET MANAGER — single subscription hub, no duplicates
-// ─────────────────────────────────────────────────────────────────────────────
-
-function TrackingSocketManager({ bookingId, rideId, dispatch, trackingDispatch }) {
-  const { on, connected } = useSocket();
-  const mounted = useRef(true);
-
-  // Re-subscribe on bookingId change; cleanup on unmount
-  useEffect(() => {
-    mounted.current = true;
-    if (!bookingId) return;
-
-    const safe = (fn) => (...args) => { if (mounted.current) fn(...args); };
-
-    const unsubs = [
-      on('ride_status_changed', safe((d) => {
-  trackingDispatch({ type: 'STATUS', status: d.status });
-  dispatch(socketRideStatusChanged(d));
-  if (d.activeNavigationTarget) {
-    trackingDispatch({ type: 'TARGET', target: d.activeNavigationTarget });
-  }
-  if (d.rideStage) {
-    dispatch(setCareRideWorkflow({
-      rideStage:             d.rideStage,
-      activeNavigationTarget: d.activeNavigationTarget || null,
-    }));
-  }
-})),
-      on('driver_accepted',    safe((d) => { trackingDispatch({ type: 'STATUS', status: 'driver_accepted' }); dispatch(socketDriverAccepted(d)); })),
-      on('driver_en_route',    safe((d) => { trackingDispatch({ type: 'STATUS', status: 'driver_en_route' }); dispatch(socketDriverEnRoute(d)); })),
-      on('driver_arrived',     safe((d) => { trackingDispatch({ type: 'STATUS', status: 'driver_arrived' }); dispatch(socketDriverArrived(d)); })),
-      on('otp_verified',       safe((d) => { trackingDispatch({ type: 'STATUS', status: 'otp_verified' }); dispatch(socketOtpVerified(d)); })),
-      on('ride_started',       safe((d) => { trackingDispatch({ type: 'STATUS', status: 'in_progress' }); dispatch(socketRideStarted(d)); })),
-      on('at_stop',            safe((d) => { trackingDispatch({ type: 'STATUS', status: 'at_stop' }); dispatch(socketAtStop(d)); })),
-      on('ride_completed',     safe((d) => { trackingDispatch({ type: 'STATUS', status: 'completed' }); dispatch(socketRideCompleted(d)); })),
-      on('ride_cancelled',     safe((d) => { trackingDispatch({ type: 'STATUS', status: 'cancelled' }); dispatch(socketRideCancelled(d)); })),
-      on('ride_assigned',      safe((d) => { trackingDispatch({ type: 'STATUS', status: d.status }); dispatch(socketRideAssigned(d)); })),
-
-      on('location_update', safe((d) => {
-        trackingDispatch({ type: 'LOCATION', lat: d.lat, lng: d.lng, heading: d.heading, speed: d.speed });
-        dispatch(socketLocationUpdate(d));
-      })),
-
-      on('eta_update', safe((d) => {
-        trackingDispatch({ type: 'ETA', eta: d.etaMinutes, distKm: d.distanceRemainingKm });
-        dispatch(socketEtaUpdate(d));
-      })),
-
-      on('navigation_target_changed', safe((d) => {
-        trackingDispatch({ type: 'TARGET', target: d.currentTarget });
-        dispatch(socketNavigationTargetChanged(d));
-      })),
-
-      on('hospital_eta_update', safe((d) => { dispatch(socketHospitalEtaUpdate(d)); })),
-on('hospital:eta:update', safe((d) => { dispatch(socketHospitalEtaUpdate(d)); })), 
-      // ADD: handle new rideStage + activeNavigationTarget from ride_status_changed
-on('ride_status_changed', safe((d) => {
-  trackingDispatch({ type: 'STATUS', status: d.status });
-  dispatch(socketRideStatusChanged(d));
-  // NEW: sync navigation target from status event
-  if (d.activeNavigationTarget) {
-    trackingDispatch({ type: 'TARGET', target: d.activeNavigationTarget });
-    dispatch(setCareRideWorkflow({ 
-      rideStage: d.rideStage,
-      activeNavigationTarget: d.activeNavigationTarget,
-    }));
-  }
-})),
-
-      on('care-assistant:ride:tracking', safe((d) => {
-        trackingDispatch({ type: 'TARGET', target: d.activeTarget });
-        dispatch(socketCareAssistantTracking(d));
-      })),
-
-      on('care_assistant_location_update', safe((d) => {
-        dispatch(setCareAssistantLocation(d));
-      })),
-      on('care_assistant_status_change', safe((d) => {
-        dispatch(setCareAssistantStatus(d));
-      })),
-      on('care_assistant_joined_ride', safe((d) => {
-        dispatch(setCareAssistantJoined(d));
-        dispatch(setCareRideWorkflow({ careAssistantJoined: true }));
-      })),
-      on('care_assistant_attached_to_ride', safe((d) => {
-        dispatch(setCareAssistantJoined(d));
-      })),
-
-      on('route_deviation_alert', safe(() => {
-        trackingDispatch({ type: 'DEVIATION', value: true });
-        setTimeout(() => { if (mounted.current) trackingDispatch({ type: 'DEVIATION', value: false }); }, 60_000);
-      })),
-
-      on('sos_alert', safe(() => {
-        trackingDispatch({ type: 'SOS', value: true });
-      })),
-    ];
-
-    return () => {
-      mounted.current = false;
-      unsubs.forEach(fn => fn?.());
-    };
-  }, [bookingId, on, dispatch, trackingDispatch]);
-
-  return null; // render nothing
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACKING HEADER — sticky ops bar
-// ─────────────────────────────────────────────────────────────────────────────
-
-const TrackingHeader = memo(function TrackingHeader({ rideCode, bookingCode, onBack, onCenter, onRefresh, connected }) {
-  const { rideStatus, etaMinutes, distKm, activeTarget, driverLat, lastGpsAt, sosActive } = useTracking();
-  const meta = STATUS_META[rideStatus] || STATUS_META.searching;
-  const gpsStale = lastGpsAt && (Date.now() - lastGpsAt) > GPS_STALE;
-  const hasSignal = connected && driverLat != null;
-
-  return (
-    <header
-      className="lt-header"
-      role="banner"
-      aria-label="Transport operations header"
     >
-      {/* Back + identity */}
-      <div className="lt-header-left">
-        <button onClick={onBack} className="lt-icon-btn" aria-label="Back">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M19 12H5M12 19l-7-7 7-7"/>
-          </svg>
-        </button>
-        <div>
-          <div className="lt-header-codes">
-            {rideCode && <span className="lt-mono">{rideCode}</span>}
-            {bookingCode && <span className="lt-header-sep">/</span>}
-            {bookingCode && <span className="lt-mono lt-dim">{bookingCode}</span>}
-          </div>
-          <div className="lt-status-row" aria-live="polite">
-            {meta.pulse
-              ? <span className="lt-dot lt-dot-pulse" style={{ '--dot-color': meta.color }} />
-              : <span className="lt-dot" style={{ '--dot-color': meta.color }} />
-            }
-            <span className="lt-status-label" style={{ color: meta.color }}>{meta.label}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Center: ETA readout */}
-      <div className="lt-header-center" aria-label="ETA and distance">
-        <div className="lt-eta-block">
-          <span className="lt-eta-time">{fmt.eta(etaMinutes)}</span>
-          <span className="lt-eta-sub">{fmt.km(distKm)}</span>
-          {activeTarget && (
-            <span className="lt-eta-target">→ {TARGET_LABELS[activeTarget] || activeTarget}</span>
-          )}
-        </div>
-      </div>
-
-      {/* Right: signals + controls */}
-      <div className="lt-header-right">
-        {sosActive && (
-          <span className="lt-sos-badge lt-sos-flash" aria-live="assertive" role="alert">⚠ SOS</span>
-        )}
-        <div className="lt-signal-cluster">
-          <div className={`lt-sig lt-sig-${connected ? 'ok' : 'err'}`} title="Socket">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M1.5 8.9a14.6 14.6 0 0121 0l-1.6 1.7a12.3 12.3 0 00-17.8 0L1.5 8.9zm4.5 4.6a9 9 0 0112 0l-1.6 1.7a6.8 6.8 0 00-8.8 0L6 13.5zm4.6 4.6a4 4 0 015 0l-2.5 2.5-2.5-2.5z"/></svg>
-            <span>{connected ? 'LIVE' : 'OFF'}</span>
-          </div>
-          <div className={`lt-sig ${gpsStale ? 'lt-sig-warn' : hasSignal ? 'lt-sig-ok' : 'lt-sig-err'}`} title="GPS">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3"/><path d="M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>
-            <span>GPS</span>
-          </div>
-        </div>
-        <button onClick={onCenter} className="lt-icon-btn" aria-label="Center map on driver">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/></svg>
-        </button>
-        <button onClick={onRefresh} className="lt-icon-btn" aria-label="Refresh tracking data">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.5 9a9 9 0 0113.9-3.4L23 10M1 14l5.6 4.4A9 9 0 0020.5 15"/></svg>
-        </button>
-      </div>
-    </header>
+      {loading
+        ? <><Loader2 size={16} className="animate-spin" /> Processing…</>
+        : <>{icon}{label}</>
+      }
+    </motion.button>
   );
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACKING TIMELINE
-// ─────────────────────────────────────────────────────────────────────────────
+/** ── PHASE PROGRESS BAR ── */
+const PhaseProgress = memo(function PhaseProgress({ bookingType, phase }) {
+  const isFullCare = FULL_CARE_TYPES.includes(bookingType);
 
-const TrackingTimeline = memo(function TrackingTimeline() {
-  const { rideStatus } = useTracking();
+  const steps = isFullCare
+    ? [
+        { key: PHASE.NAVIGATING_TO, label: 'En Route to Join' },
+        { key: PHASE.ARRIVED_AT,    label: 'At Pickup Point'  },
+        { key: PHASE.JOINED,        label: 'Joined Ride'      },
+        { key: PHASE.IN_TASK,       label: 'In Task'          },
+        { key: PHASE.COMPLETED,     label: 'Done'             },
+      ]
+    : [
+        { key: PHASE.NAVIGATING_TO, label: 'En Route'       },
+        { key: PHASE.ARRIVED_AT,    label: 'Arrived'        },
+        { key: PHASE.IN_TASK,       label: 'Task Started'   },
+        { key: PHASE.COMPLETED,     label: 'Completed'      },
+      ];
 
-  const activeIdx = useMemo(() => {
-    if (!rideStatus) return 0;
-    // Normalize at_stop → in_progress for timeline
-    const s = rideStatus === 'at_stop' ? 'in_progress' : rideStatus;
-    const i = TIMELINE_NODES.findIndex(n => n.key === s);
-    return i >= 0 ? i : 0;
-  }, [rideStatus]);
-
-  const pct = (activeIdx / Math.max(TIMELINE_NODES.length - 1, 1)) * 100;
-
-  return (
-    <div className="lt-timeline" role="progressbar" aria-label="Ride progress" aria-valuenow={activeIdx} aria-valuemax={TIMELINE_NODES.length - 1}>
-      <div className="lt-timeline-track">
-        <div className="lt-timeline-fill" style={{ width: `${pct}%` }} />
-      </div>
-      {TIMELINE_NODES.map((n, i) => {
-        const done   = i <= activeIdx;
-        const active = i === activeIdx;
-        return (
-          <div key={n.key} className="lt-tl-node">
-            <div className={`lt-tl-dot ${done ? 'lt-tl-done' : ''} ${active ? 'lt-tl-active' : ''}`}>
-              {done && (
-                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round">
-                  <path d="M20 6L9 17l-5-5"/>
-                </svg>
-              )}
-            </div>
-            <span className={`lt-tl-label ${done ? 'lt-tl-label-done' : ''}`}>{n.label}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACKING DRIVER CARD
-// ─────────────────────────────────────────────────────────────────────────────
-
-const TrackingDriverCard = memo(function TrackingDriverCard({ driverSnapshot, vehicleSnapshot }) {
-  if (!driverSnapshot) {
-    return (
-      <section className="lt-card lt-card-skeleton" aria-label="Driver info loading">
-        <div className="lt-skel lt-skel-sm" />
-        <div className="lt-skel lt-skel-md" />
-        <div className="lt-skel lt-skel-sm" />
-      </section>
-    );
-  }
-
-  const name   = driverSnapshot.legalName || driverSnapshot.name || 'Driver';
-  const phone  = driverSnapshot.phone;
-  const rating = driverSnapshot.rating;
-  const photo  = driverSnapshot.photoUrl;
-  const veh    = vehicleSnapshot;
+  const activeIdx = steps.findIndex(s => s.key === phase);
 
   return (
-    <section className="lt-card" aria-label="Driver information">
-      <h3 className="lt-card-label">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="1" y="3" width="15" height="13"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
-        Driver
-      </h3>
-      <div className="lt-driver-info">
-        <div className="lt-avatar" aria-hidden="true">
-          {photo
-            ? <img src={photo} alt={name} />
-            : <span className="lt-avatar-init">{name.charAt(0).toUpperCase()}</span>
-          }
-        </div>
-        <div className="lt-driver-details">
-          <div className="lt-driver-name-row">
-            <span className="lt-driver-name">{name}</span>
-            {rating != null && <span className="lt-rating">★ {rating.toFixed(1)}</span>}
-          </div>
-          {veh && (
-            <p className="lt-vehicle-line">
-              {[veh.make, veh.model, veh.color].filter(Boolean).join(' · ')}
-              {veh.registrationNumber && ` · ${veh.registrationNumber}`}
-            </p>
-          )}
-        </div>
-        {phone && (
-          <a href={`tel:${phone}`} className="lt-call-btn" aria-label={`Call driver ${name}`}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/></svg>
-          </a>
-        )}
-      </div>
-    </section>
-  );
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACKING PATIENT CARD
-// ─────────────────────────────────────────────────────────────────────────────
-
-const TrackingPatientCard = memo(function TrackingPatientCard({ booking, patientInfo, bookingCode, bookingType, patientLocation }) {
-  return (
-    <section className="lt-card" aria-label="Patient information">
-      <h3 className="lt-card-label">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-        Patient
-      </h3>
-      {patientInfo ? (
-        <div className="lt-patient-grid">
-          <div className="lt-patient-row">
-            <span className="lt-field-label">Name</span>
-            <span className="lt-field-val">{patientInfo.name || '—'}</span>
-          </div>
-          {(patientInfo.age || patientInfo.gender) && (
-            <div className="lt-patient-row">
-              <span className="lt-field-label">Profile</span>
-              <span className="lt-field-val">
-                {[patientInfo.age && `${patientInfo.age}y`, patientInfo.gender, patientInfo.bloodGroup].filter(Boolean).join(' · ')}
-              </span>
-            </div>
-          )}
-          {bookingCode && (
-            <div className="lt-patient-row">
-              <span className="lt-field-label">Booking</span>
-              <span className="lt-field-val lt-mono">{bookingCode}</span>
-            </div>
-          )}
-          {bookingType && (
-            <div className="lt-patient-row">
-              <span className="lt-field-label">Type</span>
-              <span className="lt-field-val lt-capitalize">{bookingType.replace(/_/g, ' ')}</span>
-            </div>
-          )}
-          {patientLocation?.address && (
-            <div className="lt-patient-addr">
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style={{flexShrink:0,marginTop:2}}><path d="M12 2C8.1 2 5 5.1 5 9c0 5.3 7 13 7 13s7-7.7 7-13c0-3.9-3.1-7-7-7zm0 9.5c-1.4 0-2.5-1.1-2.5-2.5S10.6 6.5 12 6.5s2.5 1.1 2.5 2.5S13.4 11.5 12 11.5z"/></svg>
-              <span>{patientLocation.address}</span>
-            </div>
-          )}
-        </div>
-      ) : (
-        <>
-          <div className="lt-skel lt-skel-sm" />
-          <div className="lt-skel lt-skel-md" />
-        </>
-      )}
-    </section>
-  );
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACKING HOSPITAL CARD
-// ─────────────────────────────────────────────────────────────────────────────
-
-const TrackingHospitalCard = memo(function TrackingHospitalCard({ hospital, nearestDistKm, hospitalEta }) {
-  if (!hospital && nearestDistKm == null) return null;
-
-  const name = hospital?.name || 'Nearest Hospital';
-  const addr = hospital?.address?.line1 || hospital?.address?.city || '';
-
-  return (
-    <section className="lt-card lt-card-hospital" aria-label="Hospital routing">
-      <h3 className="lt-card-label">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H8v-4h4v4zm0-6H8V7h4v4zm4 6h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V7h2v2z"/></svg>
-        Hospital
-      </h3>
-      <div className="lt-hosp-body">
-        <span className="lt-hosp-name">{name}</span>
-        {addr && <span className="lt-hosp-addr">{addr}</span>}
-        <div className="lt-hosp-metrics">
-          {nearestDistKm != null && (
-            <div className="lt-hosp-metric">
-              <span className="lt-hosp-metric-val">{fmt.km(nearestDistKm)}</span>
-              <span className="lt-hosp-metric-lbl">Distance</span>
-            </div>
-          )}
-          {hospitalEta?.etaMinutes != null && (
-            <div className="lt-hosp-metric">
-              <span className="lt-hosp-metric-val lt-color-warn">{fmt.eta(hospitalEta.etaMinutes)}</span>
-              <span className="lt-hosp-metric-lbl">ETA</span>
-            </div>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACKING METRICS
-// ─────────────────────────────────────────────────────────────────────────────
-
-const TrackingMetrics = memo(function TrackingMetrics({ tracking }) {
-  const { driverSpeed, etaMinutes, distKm, hasDeviation, activeTarget } = useTracking();
-
-  const metrics = [
-    { id: 'speed', label: 'Speed',    val: `${fmt.speed(driverSpeed)} km/h`, color: 'var(--lt-cyan)' },
-    { id: 'eta',   label: 'ETA',      val: fmt.eta(etaMinutes),              color: 'var(--lt-violet)' },
-    { id: 'dist',  label: 'Distance', val: fmt.km(distKm),                   color: 'var(--lt-blue)' },
-    { id: 'route', label: 'Route',    val: hasDeviation ? 'Deviated' : 'On Track',
-      color: hasDeviation ? 'var(--lt-amber)' : 'var(--lt-green)' },
-  ];
-
-  return (
-    <section className="lt-card" aria-label="Live ride metrics">
-      <h3 className="lt-card-label">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        Live Metrics
-      </h3>
-      <div className="lt-metrics-grid">
-        {metrics.map(m => (
-          <div key={m.id} className="lt-metric-cell">
-            <span className="lt-metric-val" style={{ color: m.color }}>{m.val}</span>
-            <span className="lt-metric-lbl">{m.label}</span>
-          </div>
-        ))}
-      </div>
-      {activeTarget && (
-        <div className="lt-target-strip">
-          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>
-          <span>{TARGET_LABELS[activeTarget] || activeTarget.replace(/_/g, ' ')}</span>
-        </div>
-      )}
-    </section>
-  );
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACKING EMERGENCY PANEL
-// ─────────────────────────────────────────────────────────────────────────────
-
-const TrackingEmergencyPanel = memo(function TrackingEmergencyPanel({ sosEvents, hasActiveSos, bookingId, rideId }) {
-  const { trigger, dismiss } = useSos(bookingId, rideId);
-
-  const activeEv = sosEvents?.find(e => !e.isResolved);
-
-  return (
-    <section className="lt-card lt-card-emergency" aria-label="Emergency controls">
-      <h3 className="lt-card-label lt-label-emergency">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V5l-9-4z"/></svg>
-        Emergency
-      </h3>
-
-      {hasActiveSos && activeEv ? (
-        <div className="lt-sos-active" role="alert" aria-live="assertive">
-          <div className="lt-sos-header lt-sos-flash">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L1 21h22L12 2zm0 3.5L20.5 19h-17L12 5.5zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z"/></svg>
-            <span>SOS — {activeEv.sosType?.toUpperCase() || 'EMERGENCY'}</span>
-          </div>
-          {activeEv.triggeredAt && (
-            <div className="lt-sos-meta">Triggered {fmt.time(activeEv.triggeredAt)}</div>
-          )}
-          {activeEv.description && (
-            <div className="lt-sos-desc">{activeEv.description}</div>
-          )}
-          <button onClick={dismiss} className="lt-btn lt-btn-outline-err">Dismiss Alert</button>
-        </div>
-      ) : (
-        <div className="lt-sos-idle">
-          <div className="lt-secure-badge">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V5l-9-4zm-2 13l-3-3 1.4-1.4L10 11.2l5.6-5.6L17 7l-7 7z"/></svg>
-            <span>No Active Emergency</span>
-          </div>
-          <button
-            onClick={() => trigger({ sosType: 'safety' })}
-            className="lt-btn lt-btn-sos"
-            aria-label="Trigger emergency SOS alert"
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L1 21h22L12 2zm0 3.5L20.5 19h-17L12 5.5zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z"/></svg>
-            Trigger SOS
-          </button>
-        </div>
-      )}
-    </section>
-  );
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACKING DIAGNOSTICS
-// ─────────────────────────────────────────────────────────────────────────────
-
-const TrackingDiagnostics = memo(function TrackingDiagnostics({ connected }) {
-  const { lastGpsAt, lastEventAt, driverLat } = useTracking();
-
-  const gpsStale    = lastGpsAt && (Date.now() - lastGpsAt) > GPS_STALE;
-  const hasSignal   = connected && driverLat != null;
-
-  const rows = [
-    { label: 'Socket',     val: connected ? 'Connected'    : 'Disconnected', ok: connected },
-    { label: 'GPS Feed',   val: gpsStale  ? 'Stale >30s'  : hasSignal ? 'Live' : 'No signal', ok: !gpsStale && hasSignal },
-    { label: 'Last GPS',   val: fmt.ago(lastGpsAt),   ok: lastGpsAt && !gpsStale },
-    { label: 'Last Event', val: fmt.ago(lastEventAt), ok: lastEventAt && (Date.now() - lastEventAt) < 15_000 },
-  ];
-
-  return (
-    <section className="lt-card" aria-label="Connection diagnostics">
-      <h3 className="lt-card-label">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>
-        Diagnostics
-      </h3>
-      <div className="lt-diag-rows">
-        {rows.map(r => (
-          <div key={r.label} className="lt-diag-row">
-            <span className="lt-diag-label">{r.label}</span>
-            <div className="lt-diag-val-wrap">
-              <span className="lt-diag-dot" style={{ background: r.ok ? 'var(--lt-green)' : 'var(--lt-red)' }} />
-              <span className="lt-diag-val" style={{ color: r.ok ? 'var(--lt-green)' : 'var(--lt-red)' }}>{r.val}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACKING ACTION BAR — floating action buttons on mobile map
-// ─────────────────────────────────────────────────────────────────────────────
-
-const TrackingActionBar = memo(function TrackingActionBar({ onCenter, onRefresh, driverPhone }) {
-  return (
-    <div className="lt-fab-cluster" role="toolbar" aria-label="Map action controls">
-      {driverPhone && (
-        <a href={`tel:${driverPhone}`} className="lt-fab lt-fab-call" aria-label="Call driver">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/></svg>
-        </a>
-      )}
-      <button onClick={onCenter} className="lt-fab" aria-label="Center map">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/></svg>
-      </button>
-      <button onClick={onRefresh} className="lt-fab" aria-label="Refresh">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.5 9a9 9 0 0113.9-3.4L23 10M1 14l5.6 4.4A9 9 0 0020.5 15"/></svg>
-      </button>
-    </div>
-  );
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACKING SIDEBAR — desktop left operations panel
-// ─────────────────────────────────────────────────────────────────────────────
-
-function TrackingSidebar({ driverSnapshot, vehicleSnapshot, patientInfo, booking, bookingCode, bookingType, patientLocation, hospital, nearestDistKm, hospitalEta, tracking, sosEvents, hasActiveSos, bookingId, rideId, connected, rideCode, onJoinRide }) {
-  const { rideStatus, joinLoading } = useTracking();
-
-  const canJoin = ['driver_accepted', 'driver_en_route', 'driver_arrived', 'otp_verified', 'in_progress', 'at_stop'].includes(rideStatus);
-  const joined  = booking?.careAssistant || false;
-
-  return (
-    <aside className="lt-sidebar" aria-label="Operations panel">
-      <div className="lt-sidebar-inner">
-        {/* Ride code header in sidebar */}
-        {rideCode && (
-          <div className="lt-sidebar-rideheader">
-            <span className="lt-sidebar-ridecode lt-mono">{rideCode}</span>
-            <div className="lt-otp-status" aria-live="polite">
-              {rideStatus === 'driver_arrived' && (
-                <span className="lt-otp-pending">OTP Pending</span>
-              )}
-              {rideStatus === 'otp_verified' && (
-                <span className="lt-otp-done">
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6L9 17l-5-5"/></svg>
-                  OTP Verified
-                </span>
-              )}
-            </div>
-          </div>
-        )}
-
-        <TrackingTimeline />
-
-        {/* Join ride CTA */}
-        {canJoin && (
-          <div className="lt-join-panel">
-            <button
-              onClick={onJoinRide}
-              disabled={joinLoading}
-              className={`lt-btn lt-btn-join ${joinLoading ? 'lt-btn-loading' : ''}`}
-              aria-label="Join active ride session"
-            >
-              {joinLoading ? (
-                <>
-                  <span className="lt-spinner" />
-                  Joining Session…
-                </>
-              ) : (
-                <>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
-                  Join Ride Session
-                </>
-              )}
-            </button>
-          </div>
-        )}
-
-        <TrackingDriverCard driverSnapshot={driverSnapshot} vehicleSnapshot={vehicleSnapshot} />
-        <TrackingPatientCard
-          booking={booking}
-          patientInfo={patientInfo}
-          bookingCode={bookingCode}
-          bookingType={bookingType}
-          patientLocation={patientLocation}
+    <div className="px-4 py-2.5">
+      <div className="flex items-start justify-between relative">
+        <div className="absolute top-3 h-0.5 bg-base-300" style={{ left: '5%', right: '5%', zIndex: 0 }} />
+        <motion.div
+          className="absolute top-3 h-0.5"
+          style={{
+            left: '5%', zIndex: 1,
+            background: 'linear-gradient(90deg,#ec4899,#8b5cf6)',
+          }}
+          animate={{ width: `${(Math.max(0, activeIdx) / (steps.length - 1)) * 90}%` }}
+          transition={{ duration: 0.6, ease: 'easeInOut' }}
         />
-        <TrackingHospitalCard hospital={hospital} nearestDistKm={nearestDistKm} hospitalEta={hospitalEta} />
-        <TrackingMetrics tracking={tracking} />
-        <TrackingEmergencyPanel sosEvents={sosEvents} hasActiveSos={hasActiveSos} bookingId={bookingId} rideId={rideId} />
-        <TrackingDiagnostics connected={connected} />
+        {steps.map((step, i) => {
+          const done = i <= activeIdx, active = i === activeIdx;
+          return (
+            <div key={step.key} className="flex flex-col items-center gap-1 relative z-10 flex-1">
+              <motion.div
+                className="w-6 h-6 rounded-full flex items-center justify-center border-2 flex-shrink-0"
+                animate={{
+                  backgroundColor: done ? '#ec4899' : 'var(--base-200)',
+                  borderColor:     done ? '#ec4899' : 'var(--base-300)',
+                  scale:           active ? 1.25 : 1,
+                }}
+                transition={{ duration: 0.3 }}
+              >
+                {done && <Check size={10} color="white" strokeWidth={3} />}
+              </motion.div>
+              <p className="text-[8px] text-center leading-tight font-semibold"
+                style={{ color: done ? '#ec4899' : 'var(--base-content)', opacity: done ? 1 : 0.4 }}>
+                {step.label}
+              </p>
+            </div>
+          );
+        })}
       </div>
-    </aside>
+    </div>
   );
-}
+});
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACKING BOTTOM SHEET — mobile swipeable ops panel
-// Three snap points: collapsed (status bar only) / mid / full
-// ─────────────────────────────────────────────────────────────────────────────
+/** ── ETA CARD ── */
+const EtaCard = memo(function EtaCard({ etaMin, distKm, target }) {
+  if (etaMin == null && distKm == null) return null;
+  return (
+    <div className="flex items-center gap-4 px-4 py-2 bg-base-300/50 rounded-2xl border border-base-300 mx-4 mb-2">
+      {etaMin != null && (
+        <div className="flex items-center gap-1.5">
+          <Clock size={13} className="text-pink-400" />
+          <span className="text-sm font-black text-pink-400">{fmtEta(etaMin)}</span>
+          <span className="text-[10px] text-base-content/40 font-semibold uppercase tracking-wide">ETA</span>
+        </div>
+      )}
+      {distKm != null && (
+        <div className="flex items-center gap-1.5">
+          <Navigation size={13} className="text-base-content/50" />
+          <span className="text-sm font-semibold text-base-content/60">{fmtKm(distKm)}</span>
+          <span className="text-[10px] text-base-content/40 font-semibold uppercase tracking-wide">Away</span>
+        </div>
+      )}
+      {target && (
+        <div className="ml-auto flex items-center gap-1">
+          <Route size={11} className="text-purple-400" />
+          <span className="text-[10px] text-purple-400 font-bold capitalize">→ {target.replace(/_/g, ' ')}</span>
+        </div>
+      )}
+    </div>
+  );
+});
 
-const SNAP = { COLLAPSED: 0, MID: 1, FULL: 2 };
-const SNAP_HEIGHTS = { 0: 64, 1: '45vh', 2: '82vh' };
-
-function TrackingBottomSheet({ children, rideStatus, etaMinutes, sosActive }) {
-  const [snap, setSnap] = useState(SNAP.COLLAPSED);
-  const touchStart      = useRef(null);
-  const sheetRef        = useRef(null);
-  const meta            = STATUS_META[rideStatus] || STATUS_META.searching;
-
-  const handleTouchStart = (e) => { touchStart.current = e.touches[0].clientY; };
-  const handleTouchEnd   = (e) => {
-    if (!touchStart.current) return;
-    const dy = touchStart.current - e.changedTouches[0].clientY;
-    if (Math.abs(dy) < 12) return;
-    if (dy > 0) setSnap(s => Math.min(s + 1, SNAP.FULL));   // swipe up
-    else         setSnap(s => Math.max(s - 1, SNAP.COLLAPSED)); // swipe down
-    touchStart.current = null;
-  };
-
-  const h = SNAP_HEIGHTS[snap];
-  const heightVal = typeof h === 'number' ? `${h}px` : h;
+/** ── DRIVER TRACKING PANEL (shown when joined in full_care_ride) ── */
+const DriverTrackingPanel = memo(function DriverTrackingPanel({
+  rideStatus, driverSnapshot, vehicleSnapshot, etaMin, distKm,
+}) {
+  const cfg = DRIVER_STATUS_CONFIG[rideStatus] || DRIVER_STATUS_CONFIG.searching;
+  if (!rideStatus) return null;
 
   return (
-    <div
-      ref={sheetRef}
-      className="lt-sheet"
-      style={{ height: heightVal }}
-      onTouchStart={handleTouchStart}
-      onTouchEnd={handleTouchEnd}
-      role="complementary"
-      aria-label="Ride information panel"
-      aria-expanded={snap !== SNAP.COLLAPSED}
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mx-4 mb-3 p-3.5 rounded-2xl border bg-base-300/60 border-base-300"
     >
-      {/* Handle + compact status */}
-      <div
-        className="lt-sheet-handle-area"
-        onClick={() => setSnap(s => s === SNAP.FULL ? SNAP.COLLAPSED : s + 1)}
-        role="button"
-        tabIndex={0}
-        aria-label={snap === SNAP.FULL ? 'Collapse panel' : 'Expand panel'}
-        onKeyDown={e => e.key === 'Enter' && setSnap(s => s === SNAP.FULL ? SNAP.COLLAPSED : s + 1)}
-      >
-        <div className="lt-sheet-knob" />
-        <div className="lt-sheet-status-row">
-          <div className="lt-sheet-status-left">
-            {meta.pulse
-              ? <span className="lt-dot-sm lt-dot-pulse" style={{ '--dot-color': meta.color }} />
-              : <span className="lt-dot-sm" style={{ '--dot-color': meta.color }} />
-            }
-            <span className="lt-sheet-status-label">{meta.label}</span>
+      <div className="flex items-center gap-2 mb-3">
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest border"
+          style={{
+            background: `${cfg.color}18`,
+            borderColor: `${cfg.color}44`,
+            color: cfg.color,
+          }}>
+          {cfg.icon} {cfg.label}
+        </span>
+        <span className="text-[10px] text-base-content/40 ml-auto font-semibold uppercase tracking-wide">Driver Ride</span>
+      </div>
+
+      {(driverSnapshot?.legalName || driverSnapshot?.name) && (
+        <div className="flex items-center gap-3 mb-2.5">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-success/10 border border-success/25 flex-shrink-0">
+            <User size={16} className="text-success" />
           </div>
-          <div className="lt-sheet-status-right">
-            {etaMinutes != null && (
-              <span className="lt-sheet-eta">{fmt.eta(etaMinutes)}</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-base-content m-0 truncate">
+              {driverSnapshot.legalName || driverSnapshot.name}
+            </p>
+            {vehicleSnapshot?.registrationNumber && (
+              <p className="text-[10px] text-base-content/40 m-0 mt-0.5 font-mono">
+                {vehicleSnapshot.registrationNumber}
+                {vehicleSnapshot.make && ` · ${vehicleSnapshot.make} ${vehicleSnapshot.model || ''}`}
+              </p>
             )}
-            {sosActive && <span className="lt-sos-badge lt-sos-flash">SOS</span>}
-            <svg
-              width="14" height="14" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.5"
-              style={{ transform: snap === SNAP.FULL ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }}
-            >
-              <path d="M18 15l-6-6-6 6"/>
-            </svg>
+          </div>
+          {driverSnapshot?.phone && (
+            <a href={`tel:${driverSnapshot.phone}`}
+              className="w-9 h-9 rounded-xl flex items-center justify-center text-success bg-success/10 border border-success/25 no-underline flex-shrink-0">
+              <Phone size={15} />
+            </a>
+          )}
+        </div>
+      )}
+
+      {(etaMin != null || distKm != null) && (
+        <div className="flex gap-3 pt-2 border-t border-base-300">
+          {etaMin != null && (
+            <div className="flex items-center gap-1">
+              <Clock size={10} className="text-primary" />
+              <span className="text-xs font-bold text-primary">{fmtEta(etaMin)}</span>
+            </div>
+          )}
+          {distKm != null && (
+            <div className="flex items-center gap-1">
+              <Navigation size={10} className="text-base-content/40" />
+              <span className="text-xs text-base-content/50 font-semibold">{fmtKm(distKm)}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </motion.div>
+  );
+});
+
+/** ── BOOKING INFO PANEL ── */
+const BookingInfoPanel = memo(function BookingInfoPanel({ booking, bookingId }) {
+  if (!booking && !bookingId) return null;
+  const bk = booking;
+  return (
+    <div className="mx-4 mb-3 p-3.5 rounded-2xl bg-base-300/50 border border-base-300">
+      <p className="text-[10px] text-base-content/40 font-bold uppercase tracking-widest m-0 mb-2.5">Booking Details</p>
+      {[
+        ['Code',     bk?.bookingCode],
+        ['Type',     bk?.bookingType?.replace(/_/g, ' ')],
+        ['Patient',  bk?.patientInfo?.name],
+        ['Scheduled', bk?.scheduledAt
+          ? new Date(bk.scheduledAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })
+          : null],
+        ['Status',   bk?.status?.replace(/_/g, ' ')],
+      ].map(([label, val]) => val ? (
+        <div key={label} className="flex justify-between py-1.5 border-b border-base-300/60 last:border-b-0">
+          <span className="text-[11px] text-base-content/40 font-semibold uppercase tracking-wide">{label}</span>
+          <span className="text-xs text-base-content/70 font-semibold capitalize">{val}</span>
+        </div>
+      ) : null)}
+    </div>
+  );
+});
+
+/** ── BOTTOM SHEET ── */
+const BottomSheet = memo(function BottomSheet({
+  open, onToggle,
+  phase, bookingType, booking,
+  rideStatus, driverSnapshot, vehicleSnapshot,
+  etaMin, distKm,
+  patientPhone,
+  onAction, actionLabel, actionIcon, actionColor, actionLoading, actionDisabled,
+}) {
+  const phaseCfg = PHASE_CONFIG[phase] || PHASE_CONFIG[PHASE.LOADING];
+
+  return (
+    <motion.div
+      initial={{ y: '100%' }}
+      animate={{ y: open ? '0%' : 'calc(100% - 88px)' }}
+      transition={{ type: 'spring', damping: 26, stiffness: 280 }}
+      className="fixed bottom-0 left-0 right-0 z-30 rounded-t-3xl bg-base-200 border border-base-300 border-b-0 shadow-[0_-8px_40px_rgba(0,0,0,0.35)]"
+      style={{ maxHeight: '82vh' }}
+    >
+      {/* Handle row */}
+      <button onClick={onToggle}
+        className="w-full bg-transparent border-none cursor-pointer px-4 pt-3 pb-2 flex flex-col items-center">
+        <div className="w-9 h-1 rounded-full bg-base-300 mb-3" />
+        <div className="flex items-center justify-between w-full mb-1">
+          <StatusPill
+            icon={phaseCfg.icon}
+            label={phaseCfg.label}
+            color={phaseCfg.color}
+            bg={`${phaseCfg.color}18`}
+            border={`${phaseCfg.color}44`}
+            pulse={phase === PHASE.NAVIGATING_TO}
+          />
+          <div className="flex items-center gap-2">
+            {etaMin != null && (
+              <div className="flex items-center gap-1">
+                <Clock size={11} className="text-pink-400" />
+                <span className="text-xs font-black text-pink-400">{fmtEta(etaMin)}</span>
+              </div>
+            )}
+            {distKm != null && (
+              <div className="flex items-center gap-1">
+                <Navigation size={11} className="text-base-content/40" />
+                <span className="text-xs font-semibold text-base-content/50">{fmtKm(distKm)}</span>
+              </div>
+            )}
+            <motion.div animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.2 }}>
+              <ChevronDown size={15} className="text-base-content/40" />
+            </motion.div>
           </div>
         </div>
-      </div>
+      </button>
 
       {/* Scrollable content */}
-      {snap !== SNAP.COLLAPSED && (
-        <div className="lt-sheet-content">
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
+      <div className="overflow-y-auto pb-8" style={{ maxHeight: 'calc(82vh - 88px)' }}>
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SKELETON + ERROR STATES
-// ─────────────────────────────────────────────────────────────────────────────
+        {/* Phase progress */}
+        <PhaseProgress bookingType={bookingType} phase={phase} />
 
-function TrackingLoader() {
-  return (
-    <div className="lt-fullscreen lt-loader-bg">
-      <div className="lt-loader-inner">
-        <div className="lt-loader-icon">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="lt-spin-svg">
-            <path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/>
-          </svg>
-        </div>
-        <p className="lt-loader-label">Loading transport data</p>
-        <div className="lt-loader-dots">
-          {[0, 1, 2].map(i => <span key={i} className="lt-loader-dot" style={{ animationDelay: `${i * 0.2}s` }} />)}
-        </div>
+        {/* ETA card */}
+        <EtaCard etaMin={etaMin} distKm={distKm} />
+
+        {/* Primary action */}
+        {actionLabel && onAction && (
+          <div className="px-4 mb-3">
+            <ActionButton
+              label={actionLabel}
+              icon={actionIcon}
+              color={actionColor}
+              onClick={onAction}
+              loading={actionLoading}
+              disabled={actionDisabled}
+            />
+          </div>
+        )}
+
+        {/* Patient contact */}
+        {patientPhone && (
+          <div className="mx-4 mb-3 flex items-center gap-3 p-3 rounded-2xl bg-base-300/60 border border-base-300">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-pink-500/10 border border-pink-500/25">
+              <Heart size={14} className="text-pink-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-bold text-base-content m-0">Patient Contact</p>
+              <p className="text-[11px] text-base-content/50 m-0 mt-0.5">{patientPhone}</p>
+            </div>
+            <a href={`tel:${patientPhone}`}
+              className="w-9 h-9 rounded-xl flex items-center justify-center text-pink-400 bg-pink-500/10 border border-pink-500/25 no-underline">
+              <Phone size={14} />
+            </a>
+          </div>
+        )}
+
+        {/* Driver tracking (full_care only, after joined) */}
+        {FULL_CARE_TYPES.includes(bookingType) &&
+          [PHASE.JOINED, PHASE.IN_TASK].includes(phase) && (
+            <DriverTrackingPanel
+              rideStatus={rideStatus}
+              driverSnapshot={driverSnapshot}
+              vehicleSnapshot={vehicleSnapshot}
+              etaMin={etaMin}
+              distKm={distKm}
+            />
+          )}
+
+        {/* Booking info */}
+        <BookingInfoPanel booking={booking} />
       </div>
-    </div>
+    </motion.div>
   );
-}
+});
 
-function TrackingError({ message, onRetry }) {
+/** ── COMPLETED SCREEN ── */
+const CompletedScreen = memo(function CompletedScreen({ bookingType, onBack }) {
+  const isFullCare = FULL_CARE_TYPES.includes(bookingType);
   return (
-    <div className="lt-fullscreen lt-loader-bg">
-      <div className="lt-err-inner">
-        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--lt-red)" strokeWidth="1.5">
-          <path d="M12 2L1 21h22L12 2zm0 3.5L20.5 19h-17L12 5.5zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z"/>
-        </svg>
-        <h3 className="lt-err-title">Tracking Error</h3>
-        <p className="lt-err-msg">{message}</p>
-        <button onClick={onRetry} className="lt-btn lt-btn-primary">Retry</button>
-      </div>
-    </div>
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+      className="fixed inset-0 z-[70] bg-base-100 flex flex-col items-center justify-center px-6 font-poppins">
+      <motion.div
+        initial={{ scale: 0 }} animate={{ scale: 1 }}
+        transition={{ delay: 0.15, type: 'spring', damping: 14 }}
+        className="w-24 h-24 rounded-full flex items-center justify-center mb-6"
+        style={{ background: 'linear-gradient(135deg,#ec489918,#8b5cf618)', border: '2px solid #ec489944' }}
+      >
+        <span className="text-5xl">💚</span>
+      </motion.div>
+      <motion.h2 initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.30 }}
+        className="text-2xl font-black text-base-content text-center m-0 mb-2">
+        {isFullCare ? 'Care Completed!' : 'Task Completed!'}
+      </motion.h2>
+      <motion.p initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.40 }}
+        className="text-sm text-base-content/50 text-center m-0 mb-8">
+        {isFullCare
+          ? 'Patient has been safely escorted. Well done!'
+          : 'Care assistance task completed successfully.'}
+      </motion.p>
+      <motion.button
+        initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.50 }}
+        whileTap={{ scale: 0.97 }}
+        onClick={onBack}
+        className="btn btn-lg rounded-2xl px-10 font-bold"
+        style={{ background: 'linear-gradient(135deg,#ec4899,#8b5cf6)', color: '#fff', border: 'none' }}>
+        Back to Dashboard
+      </motion.button>
+    </motion.div>
   );
-}
+});
 
-function ReconnectBanner({ connected, onRetry }) {
-  if (connected) return null;
+/** ── LOADING SCREEN ── */
+const LoadingScreen = memo(function LoadingScreen() {
   return (
-    <div className="lt-reconnect-bar" role="alert" aria-live="polite">
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 1l22 22M16.7 16.7A7.5 7.5 0 013.6 8.6M6.3 3.8A7.5 7.5 0 0120.4 15.4"/></svg>
-      <span>Socket offline — GPS paused</span>
-      <button onClick={onRetry} className="lt-reconnect-btn">Retry</button>
+    <div className="fixed inset-0 bg-base-100 flex flex-col items-center justify-center gap-4">
+      <motion.div
+        animate={{ scale: [1, 1.12, 1], opacity: [0.6, 1, 0.6] }}
+        transition={{ repeat: Infinity, duration: 1.8 }}
+        className="w-16 h-16 rounded-full flex items-center justify-center"
+        style={{ background: 'linear-gradient(135deg,#ec489918,#8b5cf618)' }}>
+        <Loader2 size={28} className="text-pink-400 animate-spin" />
+      </motion.div>
+      <p className="text-sm font-semibold text-base-content/50">Loading your task…</p>
     </div>
   );
-}
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CSS — all styles scoped to lt- prefix
-// ─────────────────────────────────────────────────────────────────────────────
-
-const STYLES = `
-  :root {
-    --lt-bg:       #0d1117;
-    --lt-bg2:      #161b22;
-    --lt-bg3:      #1c2230;
-    --lt-border:   #21262d;
-    --lt-border2:  #30363d;
-    --lt-text:     #e6edf3;
-    --lt-text2:    #8b949e;
-    --lt-text3:    #484f58;
-    --lt-green:    #10b981;
-    --lt-blue:     #3b82f6;
-    --lt-violet:   #8b5cf6;
-    --lt-cyan:     #06b6d4;
-    --lt-amber:    #f59e0b;
-    --lt-red:      #ef4444;
-    --lt-orange:   #f97316;
-    --lt-font:     'DM Sans', ui-sans-serif, system-ui, sans-serif;
-    --lt-mono:     'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
-  }
-
-  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
-
-  @keyframes lt-pulse-dot { 0%,100%{opacity:1} 50%{opacity:.25} }
-  @keyframes lt-spin       { to{transform:rotate(360deg)} }
-  @keyframes lt-sos-blink  { 0%,100%{opacity:1} 50%{opacity:.2} }
-  @keyframes lt-loader-dot { 0%,80%,100%{opacity:.2;transform:scale(.7)} 40%{opacity:1;transform:scale(1)} }
-  @keyframes lt-slide-in   { from{transform:translateX(-100%);opacity:0} to{transform:translateX(0);opacity:1} }
-
-  .lt-fullscreen    { position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--lt-bg);z-index:100 }
-  .lt-loader-bg     { background:var(--lt-bg) }
-  .lt-loader-inner  { display:flex;flex-direction:column;align-items:center;gap:12px }
-  .lt-loader-icon   { width:64px;height:64px;border-radius:16px;background:rgba(99,102,241,.12);display:flex;align-items:center;justify-content:center;color:var(--lt-violet) }
-  .lt-spin-svg      { animation:lt-spin 1.2s linear infinite }
-  .lt-loader-label  { font-family:var(--lt-font);font-size:13px;font-weight:600;color:var(--lt-text2);letter-spacing:.06em;text-transform:uppercase }
-  .lt-loader-dots   { display:flex;gap:6px }
-  .lt-loader-dot    { width:7px;height:7px;border-radius:50%;background:var(--lt-violet);animation:lt-loader-dot 1.2s ease-in-out infinite }
-
-  .lt-err-inner  { display:flex;flex-direction:column;align-items:center;gap:14px;max-width:320px;text-align:center;padding:20px }
-  .lt-err-title  { font-family:var(--lt-font);font-size:16px;font-weight:700;color:var(--lt-text) }
-  .lt-err-msg    { font-family:var(--lt-font);font-size:13px;color:var(--lt-text2) }
-
-  /* LAYOUT */
-  .lt-root         { position:fixed;inset:0;background:var(--lt-bg);color:var(--lt-text);font-family:var(--lt-font);display:flex;flex-direction:column;overflow:hidden }
-  .lt-body-desktop { display:flex;flex:1;overflow:hidden }
-  .lt-map-container{ flex:1;position:relative;overflow:hidden }
-  .lt-body-mobile  { flex:1;position:relative;overflow:hidden }
-
-  /* HEADER */
-  .lt-header          { display:flex;align-items:center;gap:0;background:var(--lt-bg2);border-bottom:1px solid var(--lt-border);height:56px;flex-shrink:0;z-index:20 }
-  .lt-header-left     { display:flex;align-items:center;gap:12px;padding:0 16px;flex:1;min-width:0 }
-  .lt-header-center   { display:flex;flex-direction:column;align-items:center;padding:0 20px;border-left:1px solid var(--lt-border);border-right:1px solid var(--lt-border);min-width:160px }
-  .lt-header-right    { display:flex;align-items:center;gap:10px;padding:0 16px }
-  .lt-header-codes    { display:flex;align-items:center;gap:6px }
-  .lt-header-sep      { color:var(--lt-text3);font-size:12px }
-
-  .lt-status-row      { display:flex;align-items:center;gap:6px;margin-top:2px }
-  .lt-status-label    { font-family:var(--lt-mono);font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase }
-
-  .lt-eta-block       { display:flex;flex-direction:column;align-items:center;gap:1px }
-  .lt-eta-time        { font-family:var(--lt-mono);font-size:18px;font-weight:700;color:var(--lt-violet);letter-spacing:-.01em;line-height:1 }
-  .lt-eta-sub         { font-family:var(--lt-mono);font-size:10px;color:var(--lt-text2) }
-  .lt-eta-target      { font-size:9px;font-weight:600;color:var(--lt-text3);letter-spacing:.06em;text-transform:uppercase;margin-top:1px }
-
-  .lt-signal-cluster  { display:flex;gap:4px }
-  .lt-sig             { display:flex;align-items:center;gap:3px;padding:3px 6px;border-radius:4px;font-family:var(--lt-mono);font-size:9px;font-weight:700;letter-spacing:.05em;border:1px solid }
-  .lt-sig-ok   { color:var(--lt-green);border-color:rgba(16,185,129,.25);background:rgba(16,185,129,.08) }
-  .lt-sig-err  { color:var(--lt-red);  border-color:rgba(239,68,68,.25);  background:rgba(239,68,68,.08) }
-  .lt-sig-warn { color:var(--lt-amber);border-color:rgba(245,158,11,.25);background:rgba(245,158,11,.08) }
-
-  .lt-sos-badge { font-family:var(--lt-mono);font-size:9px;font-weight:800;letter-spacing:.1em;padding:3px 8px;border-radius:4px;background:var(--lt-red);color:#fff;text-transform:uppercase }
-  .lt-sos-flash { animation:lt-sos-blink .7s infinite }
-
-  /* SIDEBAR */
-  .lt-sidebar       { width:300px;flex-shrink:0;background:var(--lt-bg2);border-right:1px solid var(--lt-border);display:flex;flex-direction:column;overflow:hidden }
-  .lt-sidebar-inner { flex:1;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--lt-border2) transparent }
-  .lt-sidebar-rideheader { padding:12px 16px 0;display:flex;align-items:center;justify-content:space-between }
-  .lt-sidebar-ridecode   { font-family:var(--lt-mono);font-size:11px;font-weight:600;color:var(--lt-text2);letter-spacing:.06em }
-  .lt-otp-status  { display:flex;align-items:center }
-  .lt-otp-pending { font-family:var(--lt-mono);font-size:9px;font-weight:700;color:var(--lt-orange);letter-spacing:.06em;animation:lt-pulse-dot 1.5s infinite }
-  .lt-otp-done    { display:flex;align-items:center;gap:4px;font-family:var(--lt-mono);font-size:9px;font-weight:700;color:var(--lt-green);letter-spacing:.06em }
-
-  /* CARDS */
-  .lt-card         { padding:14px 16px;border-bottom:1px solid var(--lt-border) }
-  .lt-card-hospital{ background:linear-gradient(135deg,rgba(239,68,68,.04),transparent) }
-  .lt-card-emergency{background:linear-gradient(135deg,rgba(239,68,68,.05),transparent) }
-  .lt-card-skeleton{ opacity:.5 }
-
-  .lt-card-label   { font-family:var(--lt-mono);font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--lt-text3);margin:0 0 10px;display:flex;align-items:center;gap:6px }
-  .lt-label-emergency { color:rgba(239,68,68,.7) }
-
-  /* TIMELINE */
-  .lt-timeline       { padding:14px 16px;border-bottom:1px solid var(--lt-border);position:relative }
-  .lt-timeline-track { position:absolute;top:22px;left:28px;right:28px;height:1px;background:var(--lt-border2) }
-  .lt-timeline-fill  { height:100%;background:var(--lt-violet);transition:width .6s ease }
-  .lt-timeline       { display:flex;justify-content:space-between;align-items:flex-start }
-  .lt-tl-node        { position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:5px }
-  .lt-tl-dot         { width:20px;height:20px;border-radius:50%;border:2px solid var(--lt-border2);background:var(--lt-bg3);display:flex;align-items:center;justify-content:center;transition:all .3s }
-  .lt-tl-done        { background:var(--lt-violet);border-color:var(--lt-violet) }
-  .lt-tl-active      { transform:scale(1.25);box-shadow:0 0 0 4px rgba(99,102,241,.2) }
-  .lt-tl-label       { font-family:var(--lt-mono);font-size:8px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--lt-text3);white-space:nowrap }
-  .lt-tl-label-done  { color:var(--lt-violet) }
-
-  /* DRIVER CARD */
-  .lt-driver-info    { display:flex;align-items:center;gap:12px }
-  .lt-avatar         { width:40px;height:40px;border-radius:10px;background:rgba(99,102,241,.15);overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center }
-  .lt-avatar img     { width:100%;height:100%;object-fit:cover }
-  .lt-avatar-init    { font-size:16px;font-weight:700;color:var(--lt-violet) }
-  .lt-driver-details { flex:1;min-width:0 }
-  .lt-driver-name-row{ display:flex;align-items:center;gap:8px }
-  .lt-driver-name    { font-size:13px;font-weight:600;color:var(--lt-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis }
-  .lt-rating         { font-family:var(--lt-mono);font-size:10px;font-weight:700;color:var(--lt-amber);flex-shrink:0 }
-  .lt-vehicle-line   { font-size:11px;color:var(--lt-text2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }
-  .lt-call-btn       { width:36px;height:36px;border-radius:10px;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.25);display:flex;align-items:center;justify-content:center;color:var(--lt-green);flex-shrink:0;text-decoration:none;transition:background .2s }
-  .lt-call-btn:hover { background:rgba(16,185,129,.22) }
-
-  /* PATIENT CARD */
-  .lt-patient-grid   { display:flex;flex-direction:column;gap:5px }
-  .lt-patient-row    { display:flex;align-items:center;justify-content:space-between }
-  .lt-field-label    { font-family:var(--lt-mono);font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--lt-text3) }
-  .lt-field-val      { font-size:11px;font-weight:500;color:var(--lt-text) }
-  .lt-patient-addr   { display:flex;align-items:flex-start;gap:6px;margin-top:6px;padding-top:6px;border-top:1px solid var(--lt-border);font-size:11px;color:var(--lt-text2);line-height:1.4 }
-
-  /* HOSPITAL CARD */
-  .lt-hosp-body      { display:flex;flex-direction:column;gap:6px }
-  .lt-hosp-name      { font-size:13px;font-weight:700;color:var(--lt-red) }
-  .lt-hosp-addr      { font-size:11px;color:var(--lt-text2) }
-  .lt-hosp-metrics   { display:flex;gap:16px;margin-top:4px }
-  .lt-hosp-metric    { display:flex;flex-direction:column;gap:2px }
-  .lt-hosp-metric-val{ font-family:var(--lt-mono);font-size:14px;font-weight:700;color:var(--lt-text) }
-  .lt-hosp-metric-lbl{ font-family:var(--lt-mono);font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--lt-text3) }
-  .lt-color-warn     { color:var(--lt-amber) }
-
-  /* METRICS */
-  .lt-metrics-grid  { display:grid;grid-template-columns:1fr 1fr;gap:6px }
-  .lt-metric-cell   { background:var(--lt-bg3);border:1px solid var(--lt-border);border-radius:6px;padding:9px 10px;display:flex;flex-direction:column;gap:2px }
-  .lt-metric-val    { font-family:var(--lt-mono);font-size:14px;font-weight:700;line-height:1 }
-  .lt-metric-lbl    { font-family:var(--lt-mono);font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--lt-text3) }
-  .lt-target-strip  { display:flex;align-items:center;gap:6px;margin-top:8px;padding:6px 8px;background:rgba(99,102,241,.08);border-radius:5px;border:1px solid rgba(99,102,241,.15);font-family:var(--lt-mono);font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--lt-violet) }
-
-  /* EMERGENCY */
-  .lt-sos-active   { display:flex;flex-direction:column;gap:8px }
-  .lt-sos-header   { display:flex;align-items:center;gap:8px;font-family:var(--lt-mono);font-size:12px;font-weight:800;color:var(--lt-red);letter-spacing:.06em }
-  .lt-sos-meta     { font-family:var(--lt-mono);font-size:10px;color:rgba(239,68,68,.6) }
-  .lt-sos-desc     { font-size:12px;color:var(--lt-text2);line-height:1.5 }
-  .lt-sos-idle     { display:flex;align-items:center;justify-content:space-between;gap:8px }
-  .lt-secure-badge { display:flex;align-items:center;gap:6px;font-family:var(--lt-mono);font-size:10px;font-weight:700;letter-spacing:.05em;color:var(--lt-green) }
-
-  /* DIAGNOSTICS */
-  .lt-diag-rows    { display:flex;flex-direction:column;gap:5px }
-  .lt-diag-row     { display:flex;align-items:center;justify-content:space-between }
-  .lt-diag-label   { font-family:var(--lt-mono);font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--lt-text3) }
-  .lt-diag-val-wrap{ display:flex;align-items:center;gap:5px }
-  .lt-diag-dot     { width:6px;height:6px;border-radius:50%;flex-shrink:0 }
-  .lt-diag-val     { font-family:var(--lt-mono);font-size:10px;font-weight:700 }
-
-  /* BUTTONS */
-  .lt-btn          { display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:8px 14px;border-radius:6px;font-family:var(--lt-font);font-size:12px;font-weight:700;letter-spacing:.01em;border:none;cursor:pointer;transition:all .2s;width:100% }
-  .lt-btn-primary  { background:var(--lt-violet);color:#fff }
-  .lt-btn-primary:hover { filter:brightness(1.1) }
-  .lt-btn-join     { background:linear-gradient(135deg,rgba(99,102,241,.9),rgba(139,92,246,.9));color:#fff;border:1px solid rgba(99,102,241,.4) }
-  .lt-btn-join:hover { filter:brightness(1.1) }
-  .lt-btn-loading  { opacity:.7;cursor:wait }
-  .lt-btn-sos      { background:rgba(239,68,68,.12);color:var(--lt-red);border:1px solid rgba(239,68,68,.3);width:auto;padding:6px 12px }
-  .lt-btn-sos:hover{ background:rgba(239,68,68,.22) }
-  .lt-btn-outline-err { background:transparent;color:var(--lt-red);border:1px solid rgba(239,68,68,.4) }
-  .lt-btn-outline-err:hover { background:rgba(239,68,68,.1) }
-
-  .lt-icon-btn     { width:32px;height:32px;border-radius:6px;background:rgba(255,255,255,.04);border:1px solid var(--lt-border);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--lt-text2);transition:all .2s }
-  .lt-icon-btn:hover { background:rgba(255,255,255,.08);color:var(--lt-text) }
-
-  /* SPINNER */
-  .lt-spinner      { width:12px;height:12px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:lt-spin .8s linear infinite;flex-shrink:0 }
-
-  /* DOTS */
-  .lt-dot          { display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--dot-color,currentColor);flex-shrink:0 }
-  .lt-dot-sm       { display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dot-color,currentColor);flex-shrink:0 }
-  .lt-dot-pulse    { animation:lt-pulse-dot 1.6s ease-in-out infinite }
-
-  /* SKELETONS */
-  .lt-skel         { border-radius:4px;background:linear-gradient(90deg,var(--lt-bg3) 25%,var(--lt-border2) 50%,var(--lt-bg3) 75%);background-size:200% 100%;animation:lt-skel-wave 1.4s ease-in-out infinite }
-  @keyframes lt-skel-wave { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
-  .lt-skel-sm      { height:10px;width:60%;margin-bottom:6px }
-  .lt-skel-md      { height:10px;width:85% }
-
-  /* JOIN PANEL */
-  .lt-join-panel   { padding:10px 16px;border-bottom:1px solid var(--lt-border) }
-
-  /* FAB CLUSTER — mobile */
-  .lt-fab-cluster  { position:absolute;right:14px;bottom:80px;z-index:20;display:flex;flex-direction:column;gap:8px }
-  .lt-fab          { width:44px;height:44px;border-radius:12px;background:var(--lt-bg2);border:1px solid var(--lt-border2);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--lt-text2);box-shadow:0 4px 14px rgba(0,0,0,.5);transition:all .2s }
-  .lt-fab:hover    { background:var(--lt-bg3);color:var(--lt-text) }
-  .lt-fab-call     { color:var(--lt-green);border-color:rgba(16,185,129,.3);background:rgba(16,185,129,.1);text-decoration:none }
-  .lt-fab-call:hover { background:rgba(16,185,129,.2) }
-
-  /* BOTTOM SHEET */
-  .lt-sheet         { position:absolute;bottom:0;left:0;right:0;z-index:30;background:var(--lt-bg2);border-top:1px solid var(--lt-border);border-radius:16px 16px 0 0;transition:height .3s cubic-bezier(.4,0,.2,1);overflow:hidden;box-shadow:0 -8px 40px rgba(0,0,0,.5) }
-  .lt-sheet-handle-area { padding:10px 16px 8px;cursor:pointer }
-  .lt-sheet-knob    { width:36px;height:3px;border-radius:2px;background:var(--lt-border2);margin:0 auto 10px }
-  .lt-sheet-status-row   { display:flex;align-items:center;justify-content:space-between }
-  .lt-sheet-status-left  { display:flex;align-items:center;gap:8px }
-  .lt-sheet-status-right { display:flex;align-items:center;gap:10px }
-  .lt-sheet-status-label { font-family:var(--lt-mono);font-size:11px;font-weight:700;color:var(--lt-text);letter-spacing:.04em }
-  .lt-sheet-eta     { font-family:var(--lt-mono);font-size:14px;font-weight:800;color:var(--lt-violet) }
-  .lt-sheet-content { overflow-y:auto;max-height:calc(82vh - 64px);padding-bottom:env(safe-area-inset-bottom,0px) }
-
-  /* RECONNECT BAR */
-  .lt-reconnect-bar { display:flex;align-items:center;justify-content:center;gap:8px;padding:7px 16px;background:rgba(245,158,11,.1);border-bottom:1px solid rgba(245,158,11,.25);font-family:var(--lt-mono);font-size:10px;font-weight:700;letter-spacing:.05em;color:var(--lt-amber);flex-shrink:0 }
-  .lt-reconnect-btn { font-family:var(--lt-mono);font-size:9px;font-weight:800;letter-spacing:.06em;text-decoration:underline;background:none;border:none;color:var(--lt-amber);cursor:pointer;padding:0;margin-left:4px }
-
-  /* UTILS */
-  .lt-mono         { font-family:var(--lt-mono) }
-  .lt-dim          { opacity:.45 }
-  .lt-capitalize   { text-transform:capitalize }
-
-  /* RESPONSIVE */
-  @media (max-width:767px) {
-    .lt-header-center { min-width:130px;padding:0 12px }
-    .lt-eta-time      { font-size:15px }
-  }
-`;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ROOT COMPONENT
+// MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function CareAssistantRideLiveTracking() {
-  const params   = useParams();
-  const router   = useRouter();
-  const dispatch = useDispatch();
+  const params    = useParams();
+  const router    = useRouter();
+  const dispatch  = useDispatch();
 
   const bookingId = params?.bookingId || null;
   const rideId    = params?.rideId    || null;
 
-  const { isLoaded, loadError } = useGoogleMaps();
-  const { connected, joinBookingRoom } = useSocket();
+  // ── Redux ──────────────────────────────────────────────────────────────────
+  const currentRide     = useSelector(selectCurrentRide);
+  const socketLive      = useSelector(selectSocketLive);
+  const liveData        = useSelector(selectLiveData);
+  const trackingData    = useSelector(selectTrackingData);
+  const booking         = useSelector(selectSelectedCABooking);
+  const careSnapshot    = useSelector(selectCareTrackingSnapshot);
+  const careLocRedux    = useSelector(selectCareAssistantLocation);
+  const careStatusRedux = useSelector(selectCareAssistantStatus);
+  const careJoined      = useSelector(selectCareAssistantJoined);
+  const careRideStatus  = useSelector(selectCareRideStatus);
+  const navTargetRedux  = useSelector(selectActiveNavigationTarget);
+  const rideStageRedux  = useSelector(selectRideStageOps);
 
-  // Redux selectors
-  const redux      = useSelector(selectCurrentRide);
-  const liveData   = useSelector(selectLiveData);
-  const trackData  = useSelector(selectTrackingData);
-  const careSnap   = useSelector(selectCareTrackingSnapshot);
-  const socketLive = useSelector(selectSocketLive);
+  // ── Socket ─────────────────────────────────────────────────────────────────
+  const { on, connected, SOCKET_EVENTS: EV } = useSocket();
+  const { locationUpdate, etaUpdate: etaEvt } = useBookingRoom(bookingId);
 
-  // Local tracking state — reducer-driven
-  const [ts, trackingDispatch] = useReducer(trackingReducer, INIT_TRACKING);
+  // ── Booking type ────────────────────────────────────────────────────────────
+  const bookingType = booking?.bookingType || null;
+  const isFullCare  = FULL_CARE_TYPES.includes(bookingType);
 
-  // Init loading
-  const [initLoading, setInitLoading] = useState(true);
-  const [initError,   setInitError]   = useState(null);
-  const mapCenterRef = useRef(null);
+  // ── Refs ───────────────────────────────────────────────────────────────────
+  const mapRef             = useRef(null);
+  const dirServiceRef      = useRef(null);
+  const caMarkerRef        = useRef(null);       // CA self marker
+  const driverMarkerRef    = useRef(null);       // driver marker (full_care after join)
+  const pickupMarkerRef    = useRef(null);       // patient pickup pin
+  const dropoffMarkerRef   = useRef(null);       // hospital/destination pin
+  const waypointMarkerRef  = useRef(null);       // join-ride waypoint (full_care)
+  const staticMarkersInit  = useRef(false);
+  const caPosRef           = useRef(null);
+  const caTargetRef        = useRef(null);
+  const driverPosRef       = useRef(null);
+  const driverTargetRef    = useRef(null);
+  const animFrameRef       = useRef(null);
+  const gpsWatchRef        = useRef(null);
+  const gpsIntervalRef     = useRef(null);
+  const pollTimerRef       = useRef(null);
+  const smoothHeadRef      = useRef(0);
+  const driverSmoothHdRef  = useRef(0);
+  const lastRouteCalcRef   = useRef(null);
+  const routeCalcInFlight  = useRef(false);
 
-  // ── Initial data fetch ───────────────────────────────────────────────────
+  // ── State ──────────────────────────────────────────────────────────────────
+  const [mapLoaded,        setMapLoaded]       = useState(false);
+  const [caRoute,          setCaRoute]         = useState(null);   // CA → target route
+  const [driverRoute,      setDriverRoute]     = useState(null);   // driver → dest route (joined)
+  const [overviewRoute,    setOverviewRoute]   = useState(null);   // pickup → dropoff
+  const [phase,            setPhase]           = useState(PHASE.LOADING);
+  const [sheetOpen,        setSheetOpen]       = useState(true);
+  const [showCompleted,    setShowCompleted]   = useState(false);
+  const [sosActive,        setSosActive]       = useState(false);
+  const [caPos,            setCaPos]           = useState(null);
+  const [caHeading,        setCaHeading]       = useState(0);
+  const [driverPos,        setDriverPos]       = useState(null);
+  const [etaMinutes,       setEtaMinutes]      = useState(null);
+  const [remainingKm,      setRemainingKm]     = useState(null);
+  const [driverRideStatus, setDriverRideStatus] = useState(null);
+  const [actionLoading,    setActionLoading]   = useState(false);
+  const [isInitLoading,    setIsInitLoading]   = useState(true);
+  const [followMode,       setFollowMode]      = useState(true);
+  const [isFullscreen,     setIsFullscreen]    = useState(false);
+  const [mapZoom,          setMapZoom]         = useState(15);
+  const [gpsError,         setGpsError]        = useState(null);
+  const [gpsGranted,       setGpsGranted]      = useState(false);
+
+  const { isLoaded } = useGoogleMaps();
+
+  // ── Derived ────────────────────────────────────────────────────────────────
+  const rd = currentRide || liveData;
+
+  /** Waypoint coords for MODE A (care_assistant_join type in ride.waypoints) */
+  const waypointCoords = useMemo(() => {
+    const waypoints = rd?.waypoints || [];
+    const caWp = waypoints.find(w => w.type === 'care_assistant_join');
+    if (caWp?.location?.coordinates?.length === 2) {
+      return { lat: caWp.location.coordinates[1], lng: caWp.location.coordinates[0] };
+    }
+    // Fallback: use pickup
+    const c = rd?.pickup?.coordinates;
+    if (c?.length === 2) return { lat: c[1], lng: c[0] };
+    return null;
+  }, [rd]);
+
+  const pickupCoords = useMemo(() => {
+    const c = rd?.pickup?.coordinates || booking?.patientLocation?.coordinates;
+    if (!c || c.length < 2) return null;
+    return { lat: c[1], lng: c[0] };
+  }, [rd, booking]);
+
+  const dropoffCoords = useMemo(() => {
+    const c = rd?.dropoff?.coordinates || booking?.destinationLocation?.coordinates;
+    if (!c || c.length < 2) return null;
+    return { lat: c[1], lng: c[0] };
+  }, [rd, booking]);
+
+  // What the CA is currently navigating toward
+  const caTarget = useMemo(() => {
+    if (!isFullCare) {
+      // MODE B: always navigate to patient pickup
+      return pickupCoords;
+    }
+    // MODE A: before joined → go to waypoint; after joined → irrelevant (driver handles nav)
+    if ([PHASE.NAVIGATING_TO, PHASE.ARRIVED_AT].includes(phase)) {
+      return waypointCoords || pickupCoords;
+    }
+    return null;
+  }, [isFullCare, phase, waypointCoords, pickupCoords]);
+
+  const driverSnapshot  = socketLive?.driverSnapshot  || rd?.driverSnapshot;
+  const vehicleSnapshot = socketLive?.vehicleSnapshot || rd?.vehicleSnapshot;
+
+  const patientPhone = booking?.patientInfo?.phone
+    || booking?.customer?.phone
+    || null;
+
+  // ── Action button config ────────────────────────────────────────────────────
+  const { actionLabel, actionIcon, actionColor, onAction } = useMemo(() => {
+    switch (phase) {
+      case PHASE.NAVIGATING_TO:
+        return {
+          actionLabel: isFullCare ? "I've Reached the Join Point" : "I've Arrived at Patient",
+          actionIcon:  <MapPin size={15} />,
+          actionColor: '#8b5cf6',
+          onAction: async () => {
+            setActionLoading(true);
+            try {
+              await dispatch(markCareArrived({ bookingId })).unwrap();
+              setPhase(PHASE.ARRIVED_AT);
+            } catch (e) {
+              console.error('[CA] markCareArrived:', e);
+            } finally {
+              setActionLoading(false);
+            }
+          },
+        };
+
+      case PHASE.ARRIVED_AT:
+        return isFullCare
+          ? {
+              actionLabel: 'Join the Ride',
+              actionIcon:  <UserCheck size={15} />,
+              actionColor: '#06b6d4',
+              onAction: async () => {
+                setActionLoading(true);
+                try {
+                  const pos = caPosRef.current;
+                  await dispatch(careJoinRide({
+                    bookingId,
+                    currentLat: pos?.lat,
+                    currentLng: pos?.lng,
+                  })).unwrap();
+                  setPhase(PHASE.JOINED);
+                } catch (e) {
+                  console.error('[CA] careJoinRide:', e);
+                } finally {
+                  setActionLoading(false);
+                }
+              },
+            }
+          : {
+              actionLabel: 'Start Task',
+              actionIcon:  <Play size={15} />,
+              actionColor: '#22c55e',
+              onAction: async () => {
+                setActionLoading(true);
+                try {
+                  await dispatch(markCareStart({ bookingId })).unwrap();
+                  setPhase(PHASE.IN_TASK);
+                } catch (e) {
+                  console.error('[CA] markCareStart:', e);
+                } finally {
+                  setActionLoading(false);
+                }
+              },
+            };
+
+      case PHASE.JOINED:
+        return {
+          actionLabel: 'Start Task',
+          actionIcon:  <Activity size={15} />,
+          actionColor: '#22c55e',
+          onAction: async () => {
+            setActionLoading(true);
+            try {
+              await dispatch(markCareStart({ bookingId })).unwrap();
+              setPhase(PHASE.IN_TASK);
+            } catch (e) {
+              console.error('[CA] markCareStart:', e);
+            } finally {
+              setActionLoading(false);
+            }
+          },
+        };
+
+      case PHASE.IN_TASK:
+        return {
+          actionLabel: 'Complete Task',
+          actionIcon:  <CheckCircle size={15} />,
+          actionColor: '#64748b',
+          onAction: async () => {
+            setActionLoading(true);
+            try {
+              await dispatch(markCareComplete({ bookingId })).unwrap();
+              setPhase(PHASE.COMPLETED);
+            } catch (e) {
+              console.error('[CA] markCareComplete:', e);
+            } finally {
+              setActionLoading(false);
+            }
+          },
+        };
+
+      default:
+        return { actionLabel: null, actionIcon: null, actionColor: null, onAction: null };
+    }
+  }, [phase, isFullCare, bookingId, dispatch]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // EFFECTS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Initial data fetch
   useEffect(() => {
     const load = async () => {
-      setInitLoading(true);
-      setInitError(null);
+      setIsInitLoading(true);
       try {
         const tasks = [];
-        if (rideId)    tasks.push(dispatch(fetchRide(rideId)), dispatch(fetchRideLive(rideId)), dispatch(fetchRideTracking({ rideId, breadcrumbs: 80 })));
-        if (bookingId) tasks.push(dispatch(fetchCareTrackingSnapshot({ bookingId })));
-        await Promise.allSettled(tasks);
-      } catch (e) {
-        setInitError(e.message || 'Failed to load tracking data');
+        if (bookingId) {
+          tasks.push(dispatch(fetchCABookingById(bookingId)));
+          tasks.push(dispatch(fetchCareTrackingSnapshot({ bookingId })));
+        }
+        if (rideId) {
+          tasks.push(dispatch(fetchRideTracking({ rideId })));
+          tasks.push(dispatch(fetchRideLive(rideId)));
+        }
+        await Promise.all(tasks);
       } finally {
-        setInitLoading(false);
+        setIsInitLoading(false);
       }
     };
     load();
-  }, [rideId, bookingId, dispatch]);
+  }, [bookingId, rideId]); // eslint-disable-line
 
-  // ── Seed reducer from fetched data ───────────────────────────────────────
+  // Set initial phase after booking loads
   useEffect(() => {
-    const rd  = redux || liveData;
-    const ll  = liveData?.liveLocation;
-    if (!rd && !ll) return;
+    if (!booking) return;
+    if (booking.status === 'completed') { setPhase(PHASE.COMPLETED); setShowCompleted(true); return; }
+    setPhase(PHASE.NAVIGATING_TO);
+  }, [booking?.status]); // eslint-disable-line
 
-    trackingDispatch({
-      type:    'SEED',
-      status:  rd?.status || socketLive?.status,
-      eta:     liveData?.currentEtaMinutes ?? socketLive?.etaMinutes,
-      lat:     ll?.lat ?? ll?.coordinates?.[1],
-      lng:     ll?.lng ?? ll?.coordinates?.[0],
-      heading: ll?.heading,
-      target:  careSnap?.activeTarget || trackData?.tracking?.activeTarget,
-    });
-  }, [redux, liveData, careSnap, trackData, socketLive]);
-
-  // ── Socket room join ─────────────────────────────────────────────────────
- // ── Socket room join ─────────────────────────────────────────────────────
-useEffect(() => {
-  console.log("Checking Room Join Data:", { connected, bookingId }); 
-  if (connected && bookingId) joinBookingRoom(bookingId);
-}, [connected, bookingId, joinBookingRoom]);
-
-  // ── Polling fallback ─────────────────────────────────────────────────────
-  const pollRef = useRef(null);
+  // Sync driver ride status from socket
   useEffect(() => {
-    if (connected) { clearInterval(pollRef.current); return; }
-    if (!rideId)   return;
-    pollRef.current = setInterval(async () => {
-      await dispatch(fetchRideLive(rideId));
-      if (bookingId) await dispatch(fetchCareTrackingSnapshot({ bookingId }));
-    }, POLL_MS);
-    return () => clearInterval(pollRef.current);
-  }, [connected, rideId, bookingId, dispatch]);
+    const s = socketLive?.status || rd?.status;
+    if (s) setDriverRideStatus(s);
+  }, [socketLive?.status, rd?.status]);
 
-  // ── On reconnect: refetch + rejoin ───────────────────────────────────────
-  const wasConnected = useRef(false);
+  // If socket says ride completed
   useEffect(() => {
-    if (connected && !wasConnected.current) {
-      // Reconnected
-      if (rideId)    dispatch(fetchRideLive(rideId));
-      if (bookingId) { joinBookingRoom(bookingId); dispatch(fetchCareTrackingSnapshot({ bookingId })); }
+    if (driverRideStatus === 'completed' && isFullCare && phase === PHASE.IN_TASK) {
+      const t = setTimeout(() => {
+        setPhase(PHASE.COMPLETED);
+        setShowCompleted(true);
+      }, 3000);
+      return () => clearTimeout(t);
     }
-    wasConnected.current = connected;
-  }, [connected, rideId, bookingId, dispatch, joinBookingRoom]);
+  }, [driverRideStatus, isFullCare, phase]);
 
-  // ── Derived data ─────────────────────────────────────────────────────────
-  const rd = useMemo(() => redux || liveData || trackData?.ride || null, [redux, liveData, trackData]);
+  // Phase → completed screen
+  useEffect(() => {
+    if (phase === PHASE.COMPLETED) {
+      const t = setTimeout(() => setShowCompleted(true), 1500);
+      return () => clearTimeout(t);
+    }
+  }, [phase]);
 
-  const trackingDoc = useMemo(() => trackData?.tracking || null, [trackData]);
+  // Sync ETA from socket/poll
+  useEffect(() => {
+    const eta = etaEvt?.etaMinutes ?? socketLive?.etaMinutes ?? liveData?.currentEtaMinutes;
+    if (eta != null) setEtaMinutes(eta);
+    const km = etaEvt?.distanceRemainingKm;
+    if (km != null) setRemainingKm(km);
+  }, [etaEvt, socketLive?.etaMinutes, liveData?.currentEtaMinutes]);
 
-  const driverSnapshot  = rd?.driverSnapshot  || careSnap?.driver?.snapshot  || null;
-  const vehicleSnapshot = rd?.vehicleSnapshot || careSnap?.driver?.vehicleSnapshot || null;
-  const patientInfo     = rd?.booking?.patientInfo  || null;
-  const bookingCode     = rd?.booking?.bookingCode  || null;
-  const bookingType     = rd?.booking?.bookingType  || null;
-  const patientLocation = rd?.pickup || null;
-  const rideCode        = rd?.rideCode || null;
+  // Sync care-assistant-joined from redux/socket
+  useEffect(() => {
+    if (careJoined && phase === PHASE.ARRIVED_AT) {
+      setPhase(PHASE.JOINED);
+    }
+  }, [careJoined, phase]);
 
-  const hospital        = trackingDoc?.hospital || careSnap?.hospital || null;
-  const nearestDistKm   = trackingDoc?.liveRouteContext?.nearestHospitalDistanceKm || null;
-  const hospitalEta     = socketLive?.hospitalEta || null;
-  const sosEvents       = trackingDoc?.sosEvents || [];
-  const hasActiveSos    = trackingDoc?.hasActiveSos || ts.sosActive;
+  // ── GPS: watch CA's own position ──────────────────────────────────────────
+  useEffect(() => {
+    if (!navigator?.geolocation) {
+      setGpsError('GPS not supported on this device');
+      return;
+    }
 
-  // ── Map center ref (for "center map" button) ─────────────────────────────
-  const handleMapReady = useCallback((map) => { mapCenterRef.current = map; }, []);
+    gpsWatchRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        setGpsGranted(true);
+        setGpsError(null);
+        const { latitude: lat, longitude: lng, heading = 0, accuracy } = pos.coords;
+        caTargetRef.current  = { lat, lng };
+        smoothHeadRef.current = smoothHeadRef.current * 0.72 + (heading || 0) * 0.28;
+        setCaHeading(smoothHeadRef.current);
 
-  const handleCenter = useCallback(() => {
-    if (!mapCenterRef.current || (!ts.driverLat && !ts.driverLng)) return;
-    mapCenterRef.current.panTo({ lat: ts.driverLat, lng: ts.driverLng });
-    mapCenterRef.current.setZoom(15);
-  }, [ts.driverLat, ts.driverLng]);
+        // Compute ETA to target if not yet joined (MODE B or MODE A phase 1)
+        if (caTarget && phase === PHASE.NAVIGATING_TO) {
+          const dist = haversineKm(
+            [lng, lat],
+            [caTarget.lng, caTarget.lat],
+          );
+          setRemainingKm(+dist.toFixed(2));
+          // crude ETA at ~4 km/h walk speed
+          setEtaMinutes(Math.round((dist / 4) * 60));
+        }
+      },
+      (err) => {
+        console.error('[CA GPS]', err);
+        setGpsError('GPS unavailable — location cannot be shared');
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 },
+    );
 
-  const handleRefresh = useCallback(async () => {
-    if (rideId)    dispatch(fetchRideLive(rideId));
-    if (bookingId) dispatch(fetchCareTrackingSnapshot({ bookingId }));
-  }, [rideId, bookingId, dispatch]);
+    return () => {
+      if (gpsWatchRef.current != null) {
+        navigator.geolocation.clearWatch(gpsWatchRef.current);
+        gpsWatchRef.current = null;
+      }
+    };
+  }, [caTarget, phase]); // eslint-disable-line
+
+  // ── Push CA location to server every GPS_INTERVAL_MS ──────────────────────
+  useEffect(() => {
+    if (!bookingId) return;
+
+    gpsIntervalRef.current = setInterval(() => {
+      const pos = caTargetRef.current;
+      if (!pos) return;
+      dispatch(updateCareLocation({
+        lat:       pos.lat,
+        lng:       pos.lng,
+        bookingId,
+        status:    phase === PHASE.IN_TASK ? 'in_ride' : 'en_route_to_pickup',
+      }));
+    }, GPS_INTERVAL_MS);
+
+    return () => {
+      if (gpsIntervalRef.current) clearInterval(gpsIntervalRef.current);
+    };
+  }, [bookingId, phase, dispatch]);
+
+  // ── Smooth animation loop ─────────────────────────────────────────────────
+  useEffect(() => {
+    const animate = () => {
+      // CA
+      const caTarget_ = caTargetRef.current;
+      if (caTarget_) {
+        const cur = caPosRef.current || { ...caTarget_ };
+        const newLat = lerp(cur.lat, caTarget_.lat, 0.12);
+        const newLng = lerp(cur.lng, caTarget_.lng, 0.12);
+        caPosRef.current = { lat: newLat, lng: newLng };
+        setCaPos({ lat: newLat, lng: newLng });
+      }
+      // Driver (if joined)
+      const drTarget = driverTargetRef.current;
+      if (drTarget) {
+        const cur = driverPosRef.current || { ...drTarget };
+        const newLat = lerp(cur.lat, drTarget.lat, 0.10);
+        const newLng = lerp(cur.lng, drTarget.lng, 0.10);
+        driverPosRef.current = { lat: newLat, lng: newLng };
+        setDriverPos({ lat: newLat, lng: newLng });
+      }
+      animFrameRef.current = requestAnimationFrame(animate);
+    };
+    animFrameRef.current = requestAnimationFrame(animate);
+    return () => { if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); };
+  }, []);
+
+  // ── Socket: location_update (driver location, used after CA joined ride) ──
+  useEffect(() => {
+    if (!locationUpdate) return;
+    dispatch(socketLocationUpdate(locationUpdate));
+    const { lat, lng, heading = 0 } = locationUpdate;
+    driverTargetRef.current = { lat, lng };
+    driverSmoothHdRef.current = driverSmoothHdRef.current * 0.75 + heading * 0.25;
+  }, [locationUpdate, dispatch]);
+
+  // ── Socket: ETA ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!etaEvt) return;
+    dispatch(socketEtaUpdate(etaEvt));
+    if (etaEvt.etaMinutes          != null) setEtaMinutes(etaEvt.etaMinutes);
+    if (etaEvt.distanceRemainingKm != null) setRemainingKm(etaEvt.distanceRemainingKm);
+  }, [etaEvt, dispatch]);
+
+  // ── Socket: ride status events ────────────────────────────────────────────
+  useEffect(() => {
+    const unsubs = [
+      on(EV.RIDE_STATUS_CHANGED, (d) => {
+        dispatch(socketRideStatusChanged(d));
+        setDriverRideStatus(d.status);
+        if (d.rideStage) {
+          dispatch(setCareRideWorkflow({
+            rideStage: d.rideStage,
+            activeNavigationTarget: d.activeNavigationTarget,
+          }));
+        }
+      }),
+      on('driver_arrived',  (d) => { dispatch(socketDriverArrived(d));  setDriverRideStatus('driver_arrived'); }),
+      on('otp_verified',    (d) => { dispatch(socketOtpVerified(d));    setDriverRideStatus('otp_verified'); }),
+      on('ride_started',    (d) => { dispatch(socketRideStarted(d));    setDriverRideStatus('in_progress'); }),
+      on('ride_completed',  (d) => { dispatch(socketRideCompleted(d)); setDriverRideStatus('completed'); }),
+      on('ride_cancelled',  (d) => { dispatch(socketRideCancelled(d)); setDriverRideStatus('cancelled'); }),
+      on(EV.NAVIGATION_TARGET_CHANGED, (d) => { dispatch(socketNavigationTargetChanged(d)); }),
+      on('hospital_eta_update', (d) => { dispatch(socketHospitalEtaUpdate(d)); }),
+      on('care-assistant:ride:tracking', (d) => { dispatch(socketCareAssistantTracking(d)); }),
+      on('care_assistant_joined_ride', (d) => {
+        dispatch(setCareAssistantJoined(d));
+        setPhase(PHASE.JOINED);
+      }),
+      on('care_assistant_attached_to_ride', (d) => {
+        dispatch(setCareAssistantJoined(d));
+        setPhase(PHASE.JOINED);
+      }),
+    ];
+    return () => unsubs.forEach(fn => fn?.());
+  }, []); // eslint-disable-line
+
+  // ── Polling fallback ──────────────────────────────────────────────────────
+  useEffect(() => {
+    if (connected) { if (pollTimerRef.current) clearInterval(pollTimerRef.current); return; }
+    if (!rideId) return;
+    pollTimerRef.current = setInterval(() => dispatch(fetchRideLive(rideId)), POLL_MS);
+    return () => clearInterval(pollTimerRef.current);
+  }, [connected, rideId, dispatch]);
+
+  // ── Route calculation ─────────────────────────────────────────────────────
+  const calcRoute = useCallback(async (origin, destination, setter) => {
+    if (!dirServiceRef.current || !origin || !destination) return;
+    if (routeCalcInFlight.current) return;
+    routeCalcInFlight.current = true;
+    try {
+      const result = await dirServiceRef.current.route({
+        origin, destination,
+        travelMode:               window.google.maps.TravelMode.DRIVING,
+        provideRouteAlternatives: false,
+      });
+      if (result.status === 'OK') setter(result);
+    } catch (e) {
+      console.error('[CA Route]', e);
+    } finally {
+      routeCalcInFlight.current = false;
+    }
+  }, []);
+
+  // Recalc CA route when position or target changes
+  useEffect(() => {
+    if (!mapLoaded || !caPos || !caTarget) return;
+    const now = Date.now();
+    if (lastRouteCalcRef.current && now - lastRouteCalcRef.current < 30_000) return;
+    lastRouteCalcRef.current = now;
+    calcRoute(caPos, caTarget, setCaRoute);
+  }, [caPos, caTarget, mapLoaded, calcRoute]);
+
+  // Initial route + overview after map loads
+  useEffect(() => {
+    if (!mapLoaded) return;
+    if (caPos && caTarget) calcRoute(caPos, caTarget, setCaRoute);
+    if (pickupCoords && dropoffCoords) calcRoute(pickupCoords, dropoffCoords, setOverviewRoute);
+  }, [mapLoaded]); // eslint-disable-line
+
+  // Driver route after joining (MODE A)
+  useEffect(() => {
+    if (!mapLoaded || !isFullCare) return;
+    if (![PHASE.JOINED, PHASE.IN_TASK].includes(phase)) return;
+    if (!driverPos || !dropoffCoords) return;
+    calcRoute(driverPos, dropoffCoords, setDriverRoute);
+  }, [phase, driverPos, mapLoaded, isFullCare, dropoffCoords, calcRoute]);
+
+  // ── AdvancedMarker: CA self ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!mapLoaded || !caPos) return;
+    if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
+
+    if (!caMarkerRef.current) {
+      const el = document.createElement('div');
+      el.style.cssText = 'position:relative;width:0;height:0;';
+      el.innerHTML     = createCaMarkerHtml(caHeading);
+      caMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
+        map:      mapRef.current,
+        content:  el,
+        position: caPos,
+        zIndex:   10,
+        title:    'You (Care Assistant)',
+      });
+    } else {
+      caMarkerRef.current.position = caPos;
+      // Rotate the inner emoji-wrapper div
+      const inner = caMarkerRef.current.content?.querySelector('div > div:last-child');
+      if (inner) inner.style.transform = `rotate(${caHeading}deg)`;
+    }
+
+    if (followMode && mapRef.current) mapRef.current.panTo(caPos);
+  }, [caPos, mapLoaded, caHeading, followMode]);
+
+  // ── AdvancedMarker: Driver (after joining full_care) ──────────────────────
+  useEffect(() => {
+    if (!mapLoaded || !isFullCare) return;
+    if (![PHASE.JOINED, PHASE.IN_TASK].includes(phase)) return;
+    if (!driverPos) return;
+    if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
+
+    if (!driverMarkerRef.current) {
+      const el = document.createElement('div');
+      el.style.cssText = 'position:relative;width:0;height:0;';
+      el.innerHTML     = createDriverMarkerHtml();
+      driverMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
+        map:      mapRef.current,
+        content:  el,
+        position: driverPos,
+        zIndex:   9,
+        title:    'Driver',
+      });
+    } else {
+      driverMarkerRef.current.position = driverPos;
+    }
+  }, [driverPos, mapLoaded, isFullCare, phase]);
+
+  // ── Static markers (pickup, dropoff, waypoint) ────────────────────────────
+  useEffect(() => {
+    if (!mapLoaded || staticMarkersInit.current) return;
+    if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
+
+    let created = false;
+
+    // Patient pickup
+    if (pickupCoords && !pickupMarkerRef.current) {
+      const el = document.createElement('div');
+      el.style.cssText = 'position:absolute;width:0;height:0;';
+      el.innerHTML     = createPinHtml('🏠', '#3b82f6', 'Patient');
+      pickupMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
+        map: mapRef.current, content: el, position: pickupCoords, zIndex: 5,
+      });
+      created = true;
+    }
+
+    // Hospital / destination
+    if (dropoffCoords && !dropoffMarkerRef.current) {
+      const el = document.createElement('div');
+      el.style.cssText = 'position:absolute;width:0;height:0;';
+      el.innerHTML     = createPinHtml('🏥', '#ef4444', 'Hospital');
+      dropoffMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
+        map: mapRef.current, content: el, position: dropoffCoords, zIndex: 5,
+      });
+      created = true;
+    }
+
+    // Waypoint (MODE A only)
+    if (isFullCare && waypointCoords && !waypointMarkerRef.current) {
+      const el = document.createElement('div');
+      el.style.cssText = 'position:absolute;width:0;height:0;';
+      el.innerHTML     = createPinHtml('🤝', '#8b5cf6', 'Join Here');
+      waypointMarkerRef.current = new window.google.maps.marker.AdvancedMarkerElement({
+        map: mapRef.current, content: el, position: waypointCoords, zIndex: 6,
+      });
+      created = true;
+    }
+
+    if (created) staticMarkersInit.current = true;
+  }, [mapLoaded, pickupCoords, dropoffCoords, isFullCare, waypointCoords]);
+
+  // ── Fit bounds on first load ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!mapLoaded || !mapRef.current) return;
+    const bounds = new window.google.maps.LatLngBounds();
+    let count = 0;
+    [caPos, pickupCoords, dropoffCoords, isFullCare ? waypointCoords : null]
+      .filter(Boolean)
+      .forEach(c => { bounds.extend(c); count++; });
+    if (count > 0) mapRef.current.fitBounds(bounds, { top: 80, bottom: 200, left: 40, right: 40 });
+  }, [mapLoaded]); // eslint-disable-line
+
+  // ── Fullscreen listener ───────────────────────────────────────────────────
+  useEffect(() => {
+    const h = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', h);
+    return () => document.removeEventListener('fullscreenchange', h);
+  }, []);
+
+  // ── Cleanup ───────────────────────────────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      [caMarkerRef, driverMarkerRef, pickupMarkerRef, dropoffMarkerRef, waypointMarkerRef]
+        .forEach(ref => { if (ref.current) { ref.current.map = null; ref.current = null; } });
+      staticMarkersInit.current = false;
+      if (animFrameRef.current)  cancelAnimationFrame(animFrameRef.current);
+      if (pollTimerRef.current)  clearInterval(pollTimerRef.current);
+      if (gpsWatchRef.current != null) navigator.geolocation?.clearWatch(gpsWatchRef.current);
+      if (gpsIntervalRef.current) clearInterval(gpsIntervalRef.current);
+    };
+  }, []);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // HANDLERS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const onMapLoad = useCallback((map) => {
+    mapRef.current        = map;
+    dirServiceRef.current = new window.google.maps.DirectionsService();
+    setMapLoaded(true);
+    setMapZoom(map.getZoom());
+    map.addListener('zoom_changed', () => setMapZoom(map.getZoom()));
+  }, []);
 
   const handleBack = useCallback(() => {
-    if (typeof window !== 'undefined' && window.history?.length > 1) router.back();
+    if (window.history?.length > 1) router.back();
     else router.push('/care-assistant/bookings');
   }, [router]);
 
-  const handleJoinRide = useCallback(async () => {
-    if (!bookingId) return;
-    trackingDispatch({ type: 'JOIN_LOADING', value: true });
-    try {
-      await dispatch(careJoinRide({ bookingId })).unwrap();
-      dispatch(setCareRideWorkflow({ careAssistantJoined: true, status: 'en_route_to_pickup' }));
-    } catch (e) {
-      console.error('[TrackingJoin]', e.message);
-    } finally {
-      trackingDispatch({ type: 'JOIN_LOADING', value: false });
-    }
-  }, [bookingId, dispatch]);
+  const handleRecenter = useCallback(() => {
+    setFollowMode(true);
+    const pos = caPos || caPosRef.current;
+    if (pos && mapRef.current) { mapRef.current.panTo(pos); mapRef.current.setZoom(16); }
+  }, [caPos]);
+
+  const handleZoomIn  = useCallback(() => { if (mapRef.current) mapRef.current.setZoom(Math.min(mapRef.current.getZoom() + 1, 21)); }, []);
+  const handleZoomOut = useCallback(() => { if (mapRef.current) mapRef.current.setZoom(Math.max(mapRef.current.getZoom() - 1, 3)); }, []);
+
+  const handleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+    else document.exitFullscreen?.().catch(() => {});
+  }, []);
+
+  const handleSos = useCallback(() => {
+    setSosActive(p => !p);
+    // Would dispatch triggerSos in real implementation
+  }, []);
 
   // ─────────────────────────────────────────────────────────────────────────
   // RENDER GUARDS
   // ─────────────────────────────────────────────────────────────────────────
 
-  if (initLoading || !isLoaded) return <TrackingLoader />;
-  if (loadError)   return <TrackingError message="Google Maps failed to initialize." onRetry={handleRefresh} />;
-  if (initError)   return <TrackingError message={initError} onRetry={handleRefresh} />;
+  if (isInitLoading || !isLoaded) return <LoadingScreen />;
+  if (showCompleted) return <CompletedScreen bookingType={bookingType} onBack={handleBack} />;
+
+  const phaseCfg      = PHASE_CONFIG[phase]             || PHASE_CONFIG[PHASE.LOADING];
+  const drStatusCfg   = DRIVER_STATUS_CONFIG[driverRideStatus] || null;
+  const mapCenter     = caPos || pickupCoords || { lat: 16.506, lng: 80.648 };
+
+  // Determine which routes to show
+  const showCaRoute     = !!caRoute && [PHASE.NAVIGATING_TO, PHASE.ARRIVED_AT].includes(phase);
+  const showDriverRoute = !!driverRoute && isFullCare && [PHASE.JOINED, PHASE.IN_TASK].includes(phase);
+  const showOverview    = !!overviewRoute && [PHASE.JOINED, PHASE.IN_TASK].includes(phase);
 
   // ─────────────────────────────────────────────────────────────────────────
-  // PANEL CONTENT — shared between sidebar and bottom sheet
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const PanelContent = () => (
-    <>
-      <TrackingTimeline />
-      <div className="lt-join-panel" style={{ display: ['driver_accepted','driver_en_route','driver_arrived','otp_verified','in_progress','at_stop'].includes(ts.rideStatus) ? 'block' : 'none' }}>
-        <button onClick={handleJoinRide} disabled={ts.joinLoading} className={`lt-btn lt-btn-join ${ts.joinLoading ? 'lt-btn-loading' : ''}`}>
-          {ts.joinLoading ? <><span className="lt-spinner" />Joining…</> : <>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
-            Join Ride Session
-          </>}
-        </button>
-      </div>
-      <TrackingDriverCard driverSnapshot={driverSnapshot} vehicleSnapshot={vehicleSnapshot} />
-      <TrackingPatientCard patientInfo={patientInfo} bookingCode={bookingCode} bookingType={bookingType} patientLocation={patientLocation} />
-      <TrackingHospitalCard hospital={hospital} nearestDistKm={nearestDistKm} hospitalEta={hospitalEta} />
-      <TrackingMetrics tracking={trackingDoc} />
-      <TrackingEmergencyPanel sosEvents={sosEvents} hasActiveSos={hasActiveSos} bookingId={bookingId} rideId={rideId} />
-      <TrackingDiagnostics connected={connected} />
-    </>
-  );
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // FULL RENDER
+  // MAIN RENDER
   // ─────────────────────────────────────────────────────────────────────────
 
   return (
     <>
-      <style>{STYLES}</style>
+      <style>{`
+        @keyframes caPulse { 0% { transform:scale(0.80); opacity:0.85; } 100% { transform:scale(2.0); opacity:0; } }
+        @keyframes drvPulse { 0% { transform:scale(0.80); opacity:0.9; } 100% { transform:scale(2.0); opacity:0; } }
+      `}</style>
 
-      {/* Socket manager — renders nothing, manages all subscriptions */}
-      <TrackingSocketManager
-        bookingId={bookingId}
-        rideId={rideId}
-        dispatch={dispatch}
-        trackingDispatch={trackingDispatch}
-      />
+      <div className="fixed inset-0 overflow-hidden font-poppins">
 
-      <TrackingCtx.Provider value={ts}>
-        <div className="lt-root" data-theme="care-assistant">
+        {/* ── MAP ────────────────────────────────────────────────────────── */}
+        <div className="absolute inset-0">
+          <GoogleMap
+            mapContainerStyle={{ width: '100%', height: '100%' }}
+            center={mapCenter}
+            zoom={15}
+            options={{
+              mapId:            MAP_ID,
+              disableDefaultUI: true,
+              clickableIcons:   false,
+              gestureHandling:  'greedy',
+              mapTypeId:        'roadmap',
+            }}
+            onLoad={onMapLoad}
+            onDragStart={() => setFollowMode(false)}
+          >
+            {/* CA route: self → join point or patient pickup */}
+            {showCaRoute && (
+              <DirectionsRenderer
+                directions={caRoute}
+                options={{
+                  suppressMarkers: true,
+                  polylineOptions: {
+                    strokeColor:   '#ec4899',
+                    strokeWeight:  5,
+                    strokeOpacity: 0.9,
+                    icons: [{
+                      icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 4 },
+                      offset: '0', repeat: '12px',
+                    }],
+                  },
+                }}
+              />
+            )}
 
-          {/* Reconnect banner */}
-          <ReconnectBanner connected={connected} onRetry={handleRefresh} />
+            {/* Overview route: pickup → hospital */}
+            {showOverview && (
+              <DirectionsRenderer
+                directions={overviewRoute}
+                options={{
+                  suppressMarkers: true,
+                  polylineOptions: {
+                    strokeColor:   'rgba(34,197,94,0.32)',
+                    strokeWeight:  4,
+                    strokeOpacity: 1,
+                    icons: [{
+                      icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 },
+                      offset: '0', repeat: '14px',
+                    }],
+                  },
+                }}
+              />
+            )}
 
-          {/* Sticky header */}
-          <TrackingHeader
-            rideCode={rideCode}
-            bookingCode={bookingCode}
-            onBack={handleBack}
-            onCenter={handleCenter}
-            onRefresh={handleRefresh}
-            connected={connected}
-          />
+            {/* Driver route: driver → hospital (after CA joins) */}
+            {showDriverRoute && (
+              <DirectionsRenderer
+                directions={driverRoute}
+                options={{
+                  suppressMarkers: true,
+                  polylineOptions: {
+                    strokeColor:   '#22c55e',
+                    strokeWeight:  6,
+                    strokeOpacity: 0.88,
+                  },
+                }}
+              />
+            )}
+          </GoogleMap>
+        </div>
 
-          {/* ── DESKTOP: sidebar + map ────────────────────────────────── */}
-          <div className="lt-body-desktop" style={{ display: 'none' }} id="lt-desktop">
-            <TrackingSidebar
-              driverSnapshot={driverSnapshot}
-              vehicleSnapshot={vehicleSnapshot}
-              patientInfo={patientInfo}
-              booking={rd?.booking}
-              bookingCode={bookingCode}
-              bookingType={bookingType}
-              patientLocation={patientLocation}
-              hospital={hospital}
-              nearestDistKm={nearestDistKm}
-              hospitalEta={hospitalEta}
-              tracking={trackingDoc}
-              sosEvents={sosEvents}
-              hasActiveSos={hasActiveSos}
-              bookingId={bookingId}
-              rideId={rideId}
-              connected={connected}
-              rideCode={rideCode}
-              onJoinRide={handleJoinRide}
+        {/* ── OFFLINE BANNER ─────────────────────────────────────────────── */}
+        <AnimatePresence>
+          {!connected && (
+            <motion.div
+              initial={{ y: -48 }} animate={{ y: 0 }} exit={{ y: -48 }}
+              className="absolute top-0 left-0 right-0 z-[50] flex items-center justify-center gap-2 py-2.5 text-xs font-bold bg-warning/95 text-warning-content"
+            >
+              <WifiOff size={13} />
+              Reconnecting — location sharing may be delayed
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ── GPS ERROR ──────────────────────────────────────────────────── */}
+        <AnimatePresence>
+          {gpsError && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+              className="absolute top-[52px] left-3 right-3 z-40 flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold"
+              style={{ background: 'rgba(239,68,68,0.10)', borderColor: 'rgba(239,68,68,0.30)', color: '#ef4444' }}
+            >
+              <AlertTriangle size={13} />
+              {gpsError}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ── TOP BAR ────────────────────────────────────────────────────── */}
+        <div className="absolute top-0 left-0 right-0 z-20">
+          <motion.div
+            initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }}
+            className="flex items-center gap-2 px-3.5 py-2.5 bg-base-200/96 border-b border-base-300"
+            style={{ backdropFilter: 'blur(12px)' }}
+          >
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              onClick={handleBack}
+              className="w-8 h-8 rounded-xl flex-shrink-0 flex items-center justify-center cursor-pointer text-base-content/60 bg-base-300 border border-base-300"
+            >
+              <ChevronLeft size={18} />
+            </motion.button>
+
+            {/* Connected dot */}
+            <div className="w-2 h-2 rounded-full flex-shrink-0"
+              style={{
+                background: connected ? '#22c55e' : '#f59e0b',
+                boxShadow:  connected ? '0 0 6px #22c55e' : 'none',
+              }} />
+
+            {/* Phase status */}
+            <StatusPill
+              icon={phaseCfg.icon}
+              label={phaseCfg.label}
+              color={phaseCfg.color}
+              bg={`${phaseCfg.color}18`}
+              border={`${phaseCfg.color}44`}
+              pulse={phase === PHASE.NAVIGATING_TO}
             />
-            <div className="lt-map-container">
-              <TrackingMap onMapReady={handleMapReady} />
+
+            {/* Driver status (full_care after joined) */}
+            {isFullCare && drStatusCfg && [PHASE.JOINED, PHASE.IN_TASK].includes(phase) && (
+              <StatusPill
+                icon={drStatusCfg.icon}
+                label={drStatusCfg.label}
+                color={drStatusCfg.color}
+                bg={`${drStatusCfg.color}18`}
+                border={`${drStatusCfg.color}44`}
+              />
+            )}
+
+            {/* ETA */}
+            {etaMinutes != null && (
+              <div className="flex items-center gap-1 flex-shrink-0 ml-auto">
+                <Clock size={11} className="text-pink-400" />
+                <span className="text-xs font-black text-pink-400">{fmtEta(etaMinutes)}</span>
+              </div>
+            )}
+            {remainingKm != null && (
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <Navigation size={11} className="text-base-content/40" />
+                <span className="text-xs font-semibold text-base-content/50">{fmtKm(remainingKm)}</span>
+              </div>
+            )}
+          </motion.div>
+
+          {/* Mode label strip */}
+          <AnimatePresence>
+            {phase === PHASE.NAVIGATING_TO && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                className="flex items-center gap-2 px-4 py-2 border-b border-base-300"
+                style={{ background: 'rgba(139,92,246,0.08)', backdropFilter: 'blur(8px)' }}
+              >
+                <motion.div animate={{ x: [0, 3, 0] }} transition={{ repeat: Infinity, duration: 1.4 }}>
+                  <Navigation size={12} style={{ color: '#8b5cf6' }} />
+                </motion.div>
+                <span className="text-xs font-bold" style={{ color: '#8b5cf6' }}>
+                  {isFullCare
+                    ? 'Navigate to meet the driver at the join point'
+                    : 'Navigate to patient pickup location'}
+                </span>
+              </motion.div>
+            )}
+            {isFullCare && phase === PHASE.JOINED && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                className="flex items-center gap-2 px-4 py-2 border-b border-base-300"
+                style={{ background: 'rgba(6,182,212,0.08)', backdropFilter: 'blur(8px)' }}
+              >
+                <Truck size={12} style={{ color: '#06b6d4' }} />
+                <span className="text-xs font-bold" style={{ color: '#06b6d4' }}>
+                  Joined ride — tracking driver live
+                </span>
+              </motion.div>
+            )}
+            {phase === PHASE.IN_TASK && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                className="flex items-center gap-2 px-4 py-2 border-b border-base-300"
+                style={{ background: 'rgba(34,197,94,0.08)', backdropFilter: 'blur(8px)' }}
+              >
+                <motion.div animate={{ opacity: [0.6, 1, 0.6] }} transition={{ repeat: Infinity, duration: 1.5 }}>
+                  <Activity size={12} style={{ color: '#22c55e' }} />
+                </motion.div>
+                <span className="text-xs font-bold" style={{ color: '#22c55e' }}>
+                  Task in progress — care being provided
+                </span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* ── FABs ───────────────────────────────────────────────────────── */}
+        <div className="absolute top-[120px] right-3 z-20 flex flex-col gap-2">
+          <FabBtn onClick={handleRecenter} active={followMode} title="Re-center on me">
+            <Navigation size={16} />
+          </FabBtn>
+          <FabBtn onClick={handleZoomIn}   title="Zoom in">
+            <Plus  size={17} strokeWidth={2.5} />
+          </FabBtn>
+          <FabBtn onClick={handleZoomOut}  title="Zoom out">
+            <Minus size={17} strokeWidth={2.5} />
+          </FabBtn>
+          <FabBtn onClick={handleFullscreen} active={isFullscreen} title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+            {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </FabBtn>
+          <FabBtn onClick={handleSos} danger active={sosActive} title="SOS">
+            {sosActive ? <ShieldAlert size={16} /> : <Shield size={16} />}
+          </FabBtn>
+          {!connected && (
+            <FabBtn onClick={() => rideId && dispatch(fetchRideLive(rideId))} title="Refresh">
+              <RefreshCw size={15} />
+            </FabBtn>
+          )}
+        </div>
+
+        {/* ── MAP LEGEND ─────────────────────────────────────────────────── */}
+        {mapLoaded && (
+          <div className="absolute bottom-[96px] left-3 z-20 flex flex-col gap-1">
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-base-200/85 border border-base-300 text-[10px] font-bold text-pink-400 backdrop-blur-sm">
+              <span>👩‍⚕️</span> You
+            </div>
+            {isFullCare && [PHASE.JOINED, PHASE.IN_TASK].includes(phase) && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-base-200/85 border border-base-300 text-[10px] font-bold text-success backdrop-blur-sm">
+                <span>🚗</span> Driver
+              </div>
+            )}
+            <div className="px-2.5 py-1 rounded-xl bg-base-200/80 border border-base-300 text-[10px] font-bold text-base-content/40 font-mono backdrop-blur-sm">
+              z{mapZoom}
             </div>
           </div>
+        )}
 
-          {/* ── MOBILE: fullscreen map + bottom sheet ─────────────────── */}
-          <div className="lt-body-mobile" id="lt-mobile">
-            <TrackingMap onMapReady={handleMapReady} />
-            <TrackingActionBar
-              onCenter={handleCenter}
-              onRefresh={handleRefresh}
-              driverPhone={driverSnapshot?.phone}
-            />
-            <TrackingBottomSheet
-              rideStatus={ts.rideStatus}
-              etaMinutes={ts.etaMinutes}
-              sosActive={hasActiveSos}
+        {/* ── SOS ACTIVE BANNER ──────────────────────────────────────────── */}
+        <AnimatePresence>
+          {sosActive && (
+            <motion.div
+              initial={{ y: 100, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 100, opacity: 0 }}
+              className="fixed bottom-[92px] left-4 right-4 z-40 flex items-center gap-3 p-4 rounded-2xl bg-error border border-error/70 shadow-[0_8px_32px_rgba(239,68,68,0.55)]"
             >
-              <PanelContent />
-            </TrackingBottomSheet>
-          </div>
+              <ShieldAlert size={20} className="text-error-content flex-shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm font-black text-error-content m-0">SOS Alert Sent!</p>
+                <p className="text-xs text-error-content/80 m-0">Admin and emergency contacts notified.</p>
+              </div>
+              <button onClick={() => setSosActive(false)} className="text-error-content/70 hover:text-error-content cursor-pointer bg-transparent border-none">
+                <X size={16} />
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-        </div>
-      </TrackingCtx.Provider>
+        {/* ── BOTTOM SHEET ───────────────────────────────────────────────── */}
+        <BottomSheet
+          open={sheetOpen}
+          onToggle={() => setSheetOpen(p => !p)}
+          phase={phase}
+          bookingType={bookingType || 'care_assistant'}
+          booking={booking}
+          rideStatus={driverRideStatus}
+          driverSnapshot={driverSnapshot}
+          vehicleSnapshot={vehicleSnapshot}
+          etaMin={etaMinutes}
+          distKm={remainingKm}
+          patientPhone={patientPhone}
+          onAction={onAction}
+          actionLabel={actionLabel}
+          actionIcon={actionIcon}
+          actionColor={actionColor}
+          actionLoading={actionLoading}
+          actionDisabled={false}
+        />
 
-      {/* Responsive: show sidebar on md+ */}
-      <style>{`
-        @media (min-width: 768px) {
-          #lt-desktop { display: flex !important }
-          #lt-mobile  { display: none  !important }
-        }
-        @media (max-width: 767px) {
-          #lt-desktop { display: none  !important }
-          #lt-mobile  { display: flex  !important; flex-direction: column }
-        }
-      `}</style>
+      </div>
     </>
   );
 }

@@ -150,7 +150,7 @@ function NavItem({ link, collapsed, active }) {
               initial={{ opacity: 0, width: 0 }}
               animate={{ opacity: 1, width: "auto" }}
               exit={{ opacity: 0, width: 0 }}
-              className="text-sm font-semibold whitespace-nowrap overflow-hidden"
+              className="text-xs font-semibold whitespace-nowrap overflow-hidden"
             >
               {link.name}
             </motion.span>
@@ -181,7 +181,7 @@ function StarRow({ rating = 0 }) {
 function RatingBar({ star, count, total }) {
   const pct = total ? Math.round((count / total) * 100) : 0;
   return (
-    <div className="flex items-center gap-2 text-xs">
+    <div className="flex items-center gap-2 text-[10px]">
       <span className="w-4 text-right font-bold" style={{ color: "var(--base-content)" }}>{star}</span>
       <Star size={10} fill="var(--warning)" stroke="var(--warning)" />
       <div className="progress-bar flex-1">
@@ -210,24 +210,24 @@ function ReviewCard({ review, index }) {
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
           <div
-            className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+            className="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
             style={{ background: "var(--primary)", color: "var(--primary-content)" }}
           >
             {(review.user?.name ?? "U")[0].toUpperCase()}
           </div>
           <div>
-            <p className="text-sm font-semibold" style={{ color: "var(--base-content)" }}>
+            <p className="text-xs font-semibold" style={{ color: "var(--base-content)" }}>
               {review.user?.name ?? "Anonymous"}
             </p>
             <StarRow rating={review.rating} />
           </div>
         </div>
-        <span className="text-xs" style={{ color: "color-mix(in oklch,var(--base-content) 50%,transparent)" }}>
+        <span className="text-[10px]" style={{ color: "color-mix(in oklch,var(--base-content) 50%,transparent)" }}>
           {review.createdAt ? new Date(review.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : ""}
         </span>
       </div>
       {review.comment && (
-        <p className="mt-2 text-xs leading-relaxed line-clamp-2" style={{ color: "color-mix(in oklch,var(--base-content) 75%,transparent)" }}>
+        <p className="mt-2 text-[10px] leading-relaxed line-clamp-2" style={{ color: "color-mix(in oklch,var(--base-content) 75%,transparent)" }}>
           {review.comment}
         </p>
       )}
@@ -243,7 +243,7 @@ function QuickAction({ label, href, Icon, index }) {
         <motion.div
           whileHover={{ scale: 1.04 }}
           whileTap={{ scale: 0.96 }}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-2xl cursor-pointer font-semibold text-sm transition-shadow"
+          className="flex items-center gap-2 px-4 py-2.5 rounded-2xl cursor-pointer font-semibold text-xs transition-shadow"
           style={{
             background: "color-mix(in srgb,var(--primary),transparent 88%)",
             color: "var(--primary)",
@@ -292,10 +292,10 @@ function DesktopSidebar({ collapsed, setCollapsed }) {
               exit={{ opacity: 0, width: 0 }}
               className="overflow-hidden"
             >
-              <p className="font-extrabold text-sm tracking-tight font-montserrat" style={{ color: "var(--base-content)" }}>
+              <p className="font-extrabold text-xs tracking-tight font-montserrat" style={{ color: "var(--base-content)" }}>
                 LIKESON
               </p>
-              <p className="text-xs font-semibold" style={{ color: "color-mix(in oklch,var(--base-content) 50%,transparent)" }}>
+              <p className="text-[10px] font-semibold" style={{ color: "color-mix(in oklch,var(--base-content) 50%,transparent)" }}>
                 Lab Partner
               </p>
             </motion.div>
@@ -346,7 +346,7 @@ function DesktopSidebar({ collapsed, setCollapsed }) {
       <div className="p-3 border-t space-y-1" style={{ borderColor: "var(--base-300)" }}>
         <button
           onClick={() => setCollapsed((c) => !c)}
-          className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold transition-colors hover:bg-[color-mix(in_srgb,var(--primary),transparent_88%)]"
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold transition-colors hover:bg-[color-mix(in_srgb,var(--primary),transparent_88%)]"
           style={{ color: "var(--base-content)" }}
         >
           {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
@@ -359,7 +359,7 @@ function DesktopSidebar({ collapsed, setCollapsed }) {
           </AnimatePresence>
         </button>
         <button
-          className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold transition-colors hover:bg-[color-mix(in_srgb,var(--error),transparent_88%)]"
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold transition-colors hover:bg-[color-mix(in_srgb,var(--error),transparent_88%)]"
           style={{ color: "var(--error)" }}
         >
           <LogOut size={16} />
@@ -400,7 +400,7 @@ function MobileDrawer({ open, onClose }) {
             initial="hidden"
             animate="visible"
             exit="exit"
-            className="fixed inset-y-0 left-0 w-72 z-50 lg:hidden flex flex-col overflow-hidden"
+            className="fixed inset-y-0 left-0 w-72 z-[100] lg:hidden flex flex-col overflow-hidden"
             style={{ background: "var(--base-100)", borderRight: "1px solid var(--base-300)" }}
           >
             {/* Header */}
@@ -410,8 +410,8 @@ function MobileDrawer({ open, onClose }) {
                   <Microscope size={18} style={{ color: "var(--primary-content)" }} />
                 </div>
                 <div>
-                  <p className="font-extrabold text-sm font-montserrat" style={{ color: "var(--base-content)" }}>LIKESON</p>
-                  <p className="text-xs" style={{ color: "color-mix(in oklch,var(--base-content) 50%,transparent)" }}>Lab Partner</p>
+                  <p className="font-extrabold text-xs font-montserrat" style={{ color: "var(--base-content)" }}>LIKESON</p>
+                  <p className="text-[10px]" style={{ color: "color-mix(in oklch,var(--base-content) 50%,transparent)" }}>Lab Partner</p>
                 </div>
               </div>
               <button onClick={onClose} className="p-2 rounded-xl hover:bg-base-200 transition-colors">
@@ -441,7 +441,7 @@ function MobileDrawer({ open, onClose }) {
                           style={{ color: active ? "var(--primary-content)" : "var(--base-content)" }}
                         >
                           <Icon size={17} className="shrink-0" />
-                          <span className="text-sm font-semibold">{link.name}</span>
+                          <span className="text-xs font-semibold">{link.name}</span>
                           {link.name === "Notifications" && unread > 0 && (
                             <span className="ml-auto text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: "var(--error)", color: "var(--error-content)" }}>
                               {unread > 99 ? "99+" : unread}
@@ -456,7 +456,7 @@ function MobileDrawer({ open, onClose }) {
             </nav>
 
             <div className="p-4 border-t" style={{ borderColor: "var(--base-300)" }}>
-              <button className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-colors" style={{ color: "var(--error)", background: "color-mix(in srgb,var(--error),transparent 90%)" }}>
+              <button className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-semibold transition-colors" style={{ color: "var(--error)", background: "color-mix(in srgb,var(--error),transparent 90%)" }}>
                 <LogOut size={15} /> Sign Out
               </button>
             </div>
@@ -497,7 +497,7 @@ function Topbar({ onMenuClick, dashboard }) {
           </h1>
           <div className="flex items-center gap-1.5 mt-0.5">
             <StatusIcon size={12} className={info.color} />
-            <span className={`text-xs font-bold ${info.color}`}>{info.label}</span>
+            <span className={`text-[10px] font-bold ${info.color}`}>{info.label}</span>
           </div>
         </div>
       </div>
@@ -529,7 +529,7 @@ function Topbar({ onMenuClick, dashboard }) {
           <motion.div
             whileHover={{ scale: 1.06 }}
             whileTap={{ scale: 0.94 }}
-            className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold cursor-pointer shadow-sm"
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold cursor-pointer shadow-sm"
             style={{ background: "var(--primary)", color: "var(--primary-content)" }}
           >
             {(dashboard?.labName ?? "L")[0].toUpperCase()}
@@ -613,25 +613,25 @@ function DashboardContent({ dashboard, analytics, loading }) {
           <div>
             <div className="flex items-center gap-2 mb-2">
               <Zap size={16} style={{ color: "var(--accent)" }} />
-              <span className="text-xs font-bold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.7)" }}>
+              <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.7)" }}>
                 Lab Partner Portal
               </span>
             </div>
             <h2 className="text-2xl lg:text-3xl font-extrabold font-montserrat leading-tight text-white">
               Welcome back,<br className="lg:hidden" /> {dashboard?.labName ?? "Lab"}!
             </h2>
-            <p className="mt-1 text-sm" style={{ color: "rgba(255,255,255,0.75)" }}>
+            <p className="mt-1 text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>
               Member since {dashboard?.memberSince ? new Date(dashboard.memberSince).toLocaleDateString("en-IN", { month: "long", year: "numeric" }) : "—"}
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
             {dashboard?.isVerified && (
-              <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold" style={{ background: "rgba(255,255,255,0.15)", color: "#fff" }}>
+              <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-bold" style={{ background: "rgba(255,255,255,0.15)", color: "#fff" }}>
                 <BadgeCheck size={14} /> Verified
               </span>
             )}
             {dashboard?.isFeatured && (
-              <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold" style={{ background: "rgba(255,255,255,0.15)", color: "#fff" }}>
+              <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-bold" style={{ background: "rgba(255,255,255,0.15)", color: "#fff" }}>
                 <Star size={14} fill="#fff" /> Featured
               </span>
             )}
@@ -668,7 +668,7 @@ function DashboardContent({ dashboard, analytics, loading }) {
 
           {/* Quick actions */}
           <div className="card p-5">
-            <h3 className="text-sm font-black uppercase tracking-widest mb-4" style={{ color: "var(--base-content)" }}>
+            <h3 className="text-xs font-black uppercase tracking-widest mb-4" style={{ color: "var(--base-content)" }}>
               Quick Actions
             </h3>
             <div className="flex flex-wrap gap-2">
@@ -694,14 +694,14 @@ function DashboardContent({ dashboard, analytics, loading }) {
             >
               <AlertTriangle size={18} style={{ color: "var(--warning)", flexShrink: 0 }} className="mt-0.5" />
               <div>
-                <p className="text-sm font-bold" style={{ color: "var(--base-content)" }}>
+                <p className="text-xs font-bold" style={{ color: "var(--base-content)" }}>
                   {dashboard.documents.pending} document{dashboard.documents.pending > 1 ? "s" : ""} awaiting verification
                 </p>
-                <p className="text-xs mt-0.5" style={{ color: "color-mix(in oklch,var(--base-content) 60%,transparent)" }}>
+                <p className="text-[10px] mt-0.5" style={{ color: "color-mix(in oklch,var(--base-content) 60%,transparent)" }}>
                   Upload your accreditations and compliance docs to get verified faster.
                 </p>
                 <Link href="/lab-partner/accreditations">
-                  <span className="text-xs font-bold mt-1.5 inline-flex items-center gap-1" style={{ color: "var(--primary)" }}>
+                  <span className="text-[10px] font-bold mt-1.5 inline-flex items-center gap-1" style={{ color: "var(--primary)" }}>
                     Review docs <ChevronRight size={12} />
                   </span>
                 </Link>
@@ -711,7 +711,7 @@ function DashboardContent({ dashboard, analytics, loading }) {
 
           {/* Tests & packages summary */}
           <div className="card p-5 space-y-3">
-            <h3 className="text-sm font-black uppercase tracking-widest mb-1" style={{ color: "var(--base-content)" }}>
+            <h3 className="text-xs font-black uppercase tracking-widest mb-1" style={{ color: "var(--base-content)" }}>
               Catalogue Summary
             </h3>
             {[
@@ -721,14 +721,14 @@ function DashboardContent({ dashboard, analytics, loading }) {
               { label: "Total Packages", value: dashboard?.packages?.total ?? 0 },
               { label: "Active Packages",value: dashboard?.packages?.active?? 0 },
             ].map((row) => (
-              <div key={row.label} className="flex items-center justify-between text-sm">
+              <div key={row.label} className="flex items-center justify-between text-xs">
                 <span style={{ color: "color-mix(in oklch,var(--base-content) 65%,transparent)" }}>{row.label}</span>
                 <span className="font-bold" style={{ color: "var(--base-content)" }}>{row.value}</span>
               </div>
             ))}
             <div className="divider !my-2" />
             <Link href="/lab-partner/tests">
-              <span className="text-xs font-bold flex items-center gap-1" style={{ color: "var(--primary)" }}>
+              <span className="text-[10px] font-bold flex items-center gap-1" style={{ color: "var(--primary)" }}>
                 Manage Tests <ChevronRight size={12} />
               </span>
             </Link>
@@ -741,11 +741,11 @@ function DashboardContent({ dashboard, analytics, loading }) {
           {/* Rating overview */}
           <div className="card p-5">
             <div className="flex items-start justify-between mb-4">
-              <h3 className="text-sm font-black uppercase tracking-widest" style={{ color: "var(--base-content)" }}>
+              <h3 className="text-xs font-black uppercase tracking-widest" style={{ color: "var(--base-content)" }}>
                 Rating Overview
               </h3>
               <Link href="/lab-partner/analytics/reviews">
-                <span className="text-xs font-bold flex items-center gap-1" style={{ color: "var(--primary)" }}>
+                <span className="text-[10px] font-bold flex items-center gap-1" style={{ color: "var(--primary)" }}>
                   Full Analytics <ChevronRight size={12} />
                 </span>
               </Link>
@@ -760,7 +760,7 @@ function DashboardContent({ dashboard, analytics, loading }) {
                     : "—"}
                 </span>
                 <StarRow rating={analytics?.averageRating ?? 0} />
-                <span className="text-xs mt-1" style={{ color: "color-mix(in oklch,var(--base-content) 55%,transparent)" }}>
+                <span className="text-[10px] mt-1" style={{ color: "color-mix(in oklch,var(--base-content) 55%,transparent)" }}>
                   {analytics?.totalReviews ?? 0} reviews
                 </span>
               </div>
@@ -782,7 +782,7 @@ function DashboardContent({ dashboard, analytics, loading }) {
           {/* Monthly trend mini-chart */}
           {trend.length > 0 && (
             <div className="card p-5">
-              <h3 className="text-sm font-black uppercase tracking-widest mb-4" style={{ color: "var(--base-content)" }}>
+              <h3 className="text-xs font-black uppercase tracking-widest mb-4" style={{ color: "var(--base-content)" }}>
                 6-Month Review Trend
               </h3>
               <div className="flex items-end gap-2 h-24">
@@ -811,17 +811,17 @@ function DashboardContent({ dashboard, analytics, loading }) {
           {/* Recent reviews */}
           <div className="card p-5">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-black uppercase tracking-widest" style={{ color: "var(--base-content)" }}>
+              <h3 className="text-xs font-black uppercase tracking-widest" style={{ color: "var(--base-content)" }}>
                 Recent Reviews
               </h3>
               <Link href="/lab-partner/reviews">
-                <span className="text-xs font-bold flex items-center gap-1" style={{ color: "var(--primary)" }}>
+                <span className="text-[10px] font-bold flex items-center gap-1" style={{ color: "var(--primary)" }}>
                   See All <ChevronRight size={12} />
                 </span>
               </Link>
             </div>
             {(dashboard?.recentReviews ?? []).length === 0 ? (
-              <p className="text-sm text-center py-6" style={{ color: "color-mix(in oklch,var(--base-content) 45%,transparent)" }}>
+              <p className="text-xs text-center py-6" style={{ color: "color-mix(in oklch,var(--base-content) 45%,transparent)" }}>
                 No reviews yet. Great things are coming!
               </p>
             ) : (

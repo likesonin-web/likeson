@@ -96,6 +96,10 @@ import {
   selectLoading,
   selectError,
 } from '@/store/slices/operationsSlice';
+import {
+  createConsultation,
+  fetchJoinToken,
+} from '@/store/slices/consultationSlice';
 
 import { selectUser }    from '@/store/slices/userSlice';
 import LiveTrackingPanel from './LiveTrackingPanel';
@@ -891,6 +895,203 @@ function StatusPanel({ booking, dispatch }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────── */
+/* CONSULTATION PANEL                                                          */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+function ConsultationPanel({ booking, dispatch }) {
+  const [form, setForm] = useState({
+    consultationType:         'video',
+    scheduledStartTime:       '',
+    estimatedDurationMinutes: 30,
+    language:                 'English',
+    priority:                 'routine',
+    waitingRoomEnabled:       true,
+  });
+  const [tokenData, setTokenData]   = useState(null);
+  const [creating,  setCreating]    = useState(false);
+  const [fetching,  setFetching]    = useState(false);
+  const [localErr,  setLocalErr]    = useState(null);
+
+  const consultationId = booking?.consultationSessionId;
+
+  const upd = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+
+  const handleCreate = async () => {
+    if (!form.scheduledStartTime) { setLocalErr('scheduledStartTime required'); return; }
+    setCreating(true); setLocalErr(null);
+    try {
+      const result = await dispatch(createConsultation({
+        bookingId:                booking._id,
+        consultationType:         form.consultationType,
+        scheduledStartTime:       form.scheduledStartTime,
+        estimatedDurationMinutes: Number(form.estimatedDurationMinutes),
+        language:                 form.language,
+        priority:                 form.priority,
+        waitingRoomEnabled:       form.waitingRoomEnabled,
+      })).unwrap();
+      setLocalErr(null);
+    } catch (e) {
+      setLocalErr(String(e));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleFetchToken = async () => {
+    if (!consultationId) return;
+    setFetching(true); setLocalErr(null);
+    try {
+      const result = await dispatch(fetchJoinToken(String(consultationId))).unwrap();
+      setTokenData(result);
+    } catch (e) {
+      setLocalErr(String(e));
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  // Already linked
+  if (consultationId) {
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="rounded-xl border border-violet-300/30 bg-violet-50/10 p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-5 h-5 rounded-full bg-violet-400/15 flex items-center justify-center">
+              <Radio size={10} className="text-violet-400" />
+            </div>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-violet-400">Session Linked</span>
+          </div>
+          <p className="text-[11px] font-mono text-base-content/60 m-0 break-all">{String(consultationId)}</p>
+        </div>
+
+        {tokenData && (
+          <div className="rounded-xl border border-base-300 bg-base-200 p-3 flex flex-col gap-1.5">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-base-content/40 m-0">Join Info</p>
+            <InfoRow label="Role"    value={tokenData.role}        />
+            <InfoRow label="Channel" value={tokenData.channelName} mono />
+            <InfoRow label="App ID"  value={tokenData.appId}       mono />
+            <InfoRow label="Expires" value={tokenData.expiresInSeconds ? `${tokenData.expiresInSeconds / 60} min` : '—'} />
+            {tokenData.meetingLink && (
+              <a 
+                href={tokenData.meetingLink}
+                target="_blank"
+                rel="noreferrer"
+                className="btn btn-xs btn-primary gap-1.5 mt-1 w-full"
+              >
+                <ArrowRight size={9} /> Open Meeting Room
+              </a>
+            )}
+            <div className="rounded-lg border border-base-300 bg-base-100 p-2 mt-1">
+              <p className="text-[9px] text-base-content/40 m-0 mb-1">Token (copy for SDK)</p>
+              <p className="text-[10px] font-mono text-base-content/60 break-all m-0 select-all">{tokenData.token}</p>
+            </div>
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <button
+            disabled={fetching}
+            onClick={handleFetchToken}
+            className="btn btn-primary btn-sm flex-1 gap-1.5"
+          >
+            {fetching ? <Spinner size={10} /> : <Zap size={10} />}
+            {tokenData ? 'Refresh Token' : 'Get Join Token'}
+          </button>
+          {tokenData?.meetingLink && (
+            <a
+              href={tokenData.meetingLink}
+              target="_blank"
+              rel="noreferrer"
+              className="btn btn-sm gap-1.5 bg-base-300 text-base-content flex-1"
+            >
+              <Eye size={10} /> View Room
+            </a>
+          )}
+        </div>
+
+        {localErr && <p className="text-[10px] text-error m-0">{localErr}</p>}
+      </div>
+    );
+  }
+
+  // No session — create form
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="rounded-xl border border-warning/20 bg-warning/5 p-3 text-[10px] text-warning-content/70">
+        No consultation session linked. Create one to enable telemedicine.
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="label text-[10px] uppercase tracking-widest mb-1 block">Type</label>
+          <select value={form.consultationType} onChange={(e) => upd('consultationType', e.target.value)} className="input-field text-xs">
+            {['video', 'audio', 'chat'].map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label text-[10px] uppercase tracking-widest mb-1 block">Priority</label>
+          <select value={form.priority} onChange={(e) => upd('priority', e.target.value)} className="input-field text-xs">
+            {['routine', 'urgent', 'emergency'].map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <label className="label text-[10px] uppercase tracking-widest mb-1 block">
+          Scheduled Start <span className="text-error">*</span>
+        </label>
+        <input
+          type="datetime-local"
+          value={form.scheduledStartTime}
+          onChange={(e) => upd('scheduledStartTime', e.target.value)}
+          className="input-field text-xs"
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="label text-[10px] uppercase tracking-widest mb-1 block">Duration (min)</label>
+          <input
+            type="number"
+            value={form.estimatedDurationMinutes}
+            min={5} max={180}
+            onChange={(e) => upd('estimatedDurationMinutes', e.target.value)}
+            className="input-field text-xs"
+          />
+        </div>
+        <div>
+          <label className="label text-[10px] uppercase tracking-widest mb-1 block">Language</label>
+          <select value={form.language} onChange={(e) => upd('language', e.target.value)} className="input-field text-xs">
+            {['English', 'Hindi', 'Telugu', 'Tamil', 'Kannada'].map((l) => <option key={l} value={l}>{l}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={form.waitingRoomEnabled}
+          onChange={(e) => upd('waitingRoomEnabled', e.target.checked)}
+          className="checkbox checkbox-sm checkbox-primary"
+        />
+        <span className="text-xs text-base-content/70">Enable waiting room</span>
+      </label>
+
+      {localErr && <p className="text-[10px] text-error m-0">{localErr}</p>}
+
+      <button
+        disabled={creating || !form.scheduledStartTime}
+        onClick={handleCreate}
+        className="btn btn-primary w-full gap-2"
+      >
+        {creating ? <Spinner size={12} /> : <Plus size={12} />}
+        {creating ? 'Creating session…' : 'Create Consultation Room'}
+      </button>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
 /* BOOKING DETAIL PANEL                                                        */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
@@ -906,12 +1107,13 @@ function BookingDetailPanel({ bookingId, dispatch }) {
   }, [bookingId, dispatch]);
 
   const ACTION_TABS = [
-    { id: 'status',    label: 'Status',    icon: Edit2       },
-    { id: 'assign',    label: 'Assign',    icon: UserCheck   },
-    { id: 'refund',    label: 'Refund',    icon: Wallet      },
-    { id: 'op',        label: 'OP',        icon: Stethoscope },
-    { id: 'care_ride', label: 'Care Ride', icon: Heart       },
-    { id: 'tracking',  label: 'Tracking',  icon: Navigation  },
+    { id: 'status',       label: 'Status',    icon: Edit2       },
+    { id: 'assign',       label: 'Assign',    icon: UserCheck   },
+    { id: 'refund',       label: 'Refund',    icon: Wallet      },
+    { id: 'op',           label: 'OP',        icon: Stethoscope },
+    { id: 'care_ride',    label: 'Care Ride', icon: Heart       },
+    { id: 'tracking',     label: 'Tracking',  icon: Navigation  },
+    { id: 'consultation', label: 'Consult',   icon: Radio       },
   ];
 
   if (loading) {
@@ -986,7 +1188,8 @@ function BookingDetailPanel({ bookingId, dispatch }) {
             {actionTab === 'refund'    && <RefundPanel booking={booking} dispatch={dispatch} />}
             {actionTab === 'op'        && <OpPanel booking={booking} dispatch={dispatch} />}
             {actionTab === 'care_ride' && <CareRidePanel booking={booking} dispatch={dispatch} />}
-            {actionTab === 'tracking'  && <CareTrackingPanel booking={booking} dispatch={dispatch} />}
+            {actionTab === 'tracking'     && <CareTrackingPanel booking={booking} dispatch={dispatch} />}
+            {actionTab === 'consultation' && <ConsultationPanel booking={booking} dispatch={dispatch} />}
           </motion.div>
         </AnimatePresence>
       </div>

@@ -1200,7 +1200,8 @@ const Header = () => {
 
   const isTrackingPage = pathname === '/search' ||
     (pathname.startsWith('/rides/') && pathname.endsWith('/tracking')) ||
-    pathname.startsWith('/driver/tracking');
+    pathname.startsWith('/driver/tracking')||
+    pathname.includes('/tracking');
 
   return (
     <>

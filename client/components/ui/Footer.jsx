@@ -233,7 +233,9 @@ const Footer = () => {
 
   // Visibility Logic: Hide on search or ANY route containing 'tracking'
   const isHidden = useMemo(() => {
-    return pathname === '/search' || pathname.includes('tracking');
+    return (pathname.startsWith('/rides/') && pathname.endsWith('/tracking')) ||
+    pathname.startsWith('/driver/tracking')||
+    pathname.includes('/tracking');
   }, [pathname]);
 
   // Resolve role → theme + link config

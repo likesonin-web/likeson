@@ -40,6 +40,7 @@ import clinicalReducer from "./slices/clinicalSlice";
 import bloodbankReducer from "./slices/bloodbankSlice";
 import adminAnalysticsReducer from "./slices/adminAnalyticsSlice";
 import consulationReducer from "./slices/consultationSlice";
+import labPartnerBookingsReducer from "./slices/labPartnerBookingSlice";
  
 export const store = configureStore({
   reducer: {
@@ -85,6 +86,7 @@ export const store = configureStore({
     bloodBank: bloodbankReducer,
     adminAnalytics: adminAnalysticsReducer,
     consultation: consulationReducer,
+    labPartnerBookings:labPartnerBookingsReducer,
   },
   devTools: process.env.NODE_ENV !== "production",
 });

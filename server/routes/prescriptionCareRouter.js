@@ -1,18 +1,4 @@
-/**
- * prescriptionCareRouter.js
- * Likeson.in
- *
- * Covers:
- *  DOCTOR      — create / view / cancel prescriptions, OP records
- *  HOSPITAL    — view OPs + prescriptions under hospital
- *  CARE ASST   — bookings list, accept/reject, care record CRUD
- *  ADMIN/SUPER — full override access
- *
- * Mount at: /api/v1/clinical
- *
- * No separate controllers — all logic inline.
- */
-
+ 
 import express from 'express';
 import mongoose from 'mongoose';
 

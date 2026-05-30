@@ -15,8 +15,10 @@ import { createServer } from "http";
 import connectDB from "./config/DB.js";
 import "./config/passport.js";
 import redisClient from "./config/redis.js";
+// Add this around line 17 with your other socket imports
 import { initSocket } from "./services/socketService.js";
 import { initBookingSocket } from './services/bookingSocketService.js';
+import { initConsultationSocket } from './services/consultationSocketService.js'; // <-- ADD THIS
 
 // Route Imports
 import userRouter               from "./routes/userRoutes.js";
@@ -61,7 +63,8 @@ import prescriptionCareRouter   from './routes/prescriptionCareRouter.js';
 import bloodBankRouter          from './routes/bloodbankRouter.js';
 import adminAnalyticsRouter     from './routes/super-admin/adminanalyticsRouter.js';
 import consultationRouter       from './routes/consultationrouter.js';
- 
+import { protect , authorize } from "./middleware/authMiddleware.js";
+import labPartnerRoutes from './routes/labpartnerbookingRoutes.js';
 
 dotenv.config();
 
@@ -191,7 +194,7 @@ app.use("/api/clinical",           prescriptionCareRouter);
 app.use("/api/blood-banks",        bloodBankRouter);
 app.use("/api/admin/analytics",    adminAnalyticsRouter);
 app.use("/api/consultations",      consultationRouter);
-
+app.use('/api/lab-partner/bookings', protect, authorize('lab_partner'), labPartnerRoutes);
 
 // ⚠️ Warning: Three separate routers mounted to the exact same path
 app.use("/api/bookings", bookingRoutes);
@@ -229,6 +232,7 @@ async function startServer() {
     // Socket.io initialization
     const io = initSocket(server);
     initBookingSocket(io);           
+    initConsultationSocket(io); // <-- ADD THIS LINE
     
     // Attach io to Express app so routers (like Announcement) can emit events
     app.set("io", io);

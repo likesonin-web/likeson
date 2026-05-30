@@ -129,7 +129,7 @@ class SocketService {
 
     this._currentToken = token;
     this._socket = io(SOCKET_URL, {
-      auth: { token },
+      auth: (cb) => cb({ token: this._currentToken || '' }),
       transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionAttempts: 10,

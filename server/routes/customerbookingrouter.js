@@ -2137,11 +2137,11 @@ router.post('/diagnostic-center', protect, authorize('customer'), async (req, re
     const testNames = [], packageNames = [];
 
     for (const testId of tests) {
-      const t = lab.labTests.find(lt => lt._id.toString() === testId.toString());
+      const t = lab.labTests.find(lt => lt._id?.toString() === testId?.toString());
       if (t) { diagnosticFee += t.discountedPrice ?? t.mrpPrice; testNames.push(t.testName); }
     }
     for (const pkgId of packages) {
-      const p = lab.labPackages.find(lp => lp._id.toString() === pkgId.toString());
+      const p = lab.labPackages.find(lp => lp._id?.toString() === pkgId?.toString());
       if (p) { diagnosticFee += p.mrpPrice; packageNames.push(p.packageName); }
     }
 
@@ -2243,11 +2243,11 @@ router.post('/diagnostic-home', protect, authorize('customer'), async (req, res)
     const testNames = [], packageNames = [];
 
     for (const testId of tests) {
-      const t = lab.labTests.find(lt => lt._id.toString() === testId.toString());
+      const t = lab.labTests.find(lt => lt._id?.toString() === String(testId ?? ""));
       if (t && t.homeCollectionAvailable) { diagnosticFee += t.discountedPrice ?? t.mrpPrice; testNames.push(t.testName); }
     }
     for (const pkgId of packages) {
-      const p = lab.labPackages.find(lp => lp._id.toString() === pkgId.toString());
+      const p = lab.labPackages.find(lp => lp._id?.toString() === String(pkgId ?? ""));
       if (p) { diagnosticFee += p.mrpPrice; packageNames.push(p.packageName); }
     }
 
@@ -3043,6 +3043,116 @@ router.get('/subscription-benefits/care-assistant', protect, authorize('customer
     });
   } catch (err) {
     console.error('[GET /subscription-benefits/care-assistant]', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// GET /subscription-benefits/labs
+// ═══════════════════════════════════════════════════════════════════════
+router.get('/subscription-benefits/labs', protect, authorize('customer'), async (req, res) => {
+  try {
+    const sub = await UserSubscription.findOne({
+      user:       req.user._id,
+      status:     { $in: ['Active', 'Trial'] },
+      expiryDate: { $gt: new Date() },
+    }).populate('plan', 'name planType diagnostics customOptions fixedTier').lean();
+
+    if (!sub)
+      return res.status(404).json({ success: false, message: 'No active subscription found.' });
+
+    // ── Resolve discount % ───────────────────────────────────────────────────
+    let discountPercent      = sub.limits?.diagnosticsDiscountPercent ?? null;
+    let homeSampleCollection = sub.limits?.homeSampleCollection       ?? null;
+
+    if ((discountPercent == null || homeSampleCollection == null) && sub.plan) {
+      if (sub.plan.planType === 'custom' && Array.isArray(sub.plan.customOptions)) {
+        if (discountPercent == null) {
+          const diagOpt = sub.plan.customOptions.find(o => o.optionKey === 'diagnostics');
+          discountPercent = diagOpt?.quantity ?? 0;
+        }
+        if (homeSampleCollection == null) {
+          const hscOpt = sub.plan.customOptions.find(o => o.optionKey === 'homeSampleCollection');
+          homeSampleCollection = hscOpt ? hscOpt.quantity >= 1 : false;
+        }
+      } else if (sub.plan) {
+        if (discountPercent == null)
+          discountPercent = sub.plan.diagnostics?.discountPercent ?? 0;
+        if (homeSampleCollection == null)
+          homeSampleCollection = sub.plan.diagnostics?.homeSampleCollection ?? false;
+      }
+    }
+
+    discountPercent      = discountPercent      ?? 0;
+    homeSampleCollection = homeSampleCollection ?? false;
+
+    // ── Resolve home-visit usage (track via diagnosticBookingsMade for home) ─
+    // Home collection visits tracked in usageHistory.diagnosticBookingsMade
+    // Home visit limit: derive from plan or sub.limits
+    let homeVisitLimit = null;
+
+    if (sub.plan) {
+      if (sub.plan.planType === 'custom' && Array.isArray(sub.plan.customOptions)) {
+        const hscOpt = sub.plan.customOptions.find(o => o.optionKey === 'homeSampleCollection');
+        homeVisitLimit = hscOpt && hscOpt.quantity >= 1 ? (hscOpt.quantity === 1 ? 1 : hscOpt.quantity) : null;
+      } else {
+        homeVisitLimit = homeSampleCollection ? -1 : null; // fixed plan: unlimited if included
+      }
+    }
+
+    const now   = new Date();
+    const usage = sub.usageHistory?.find(
+      u => u.month === now.getMonth() + 1 && u.year === now.getFullYear()
+    );
+
+    const homeVisitsUsed      = usage?.diagnosticBookingsMade ?? 0;
+    const homeVisitUnlimited  = homeVisitLimit === -1;
+    const homeVisitsRemaining = !homeSampleCollection
+      ? 0
+      : homeVisitUnlimited
+        ? null   // null = unlimited
+        : Math.max(0, (homeVisitLimit ?? 0) - homeVisitsUsed);
+
+    const homeVisitPercentUsed = !homeSampleCollection
+      ? 100
+      : homeVisitUnlimited
+        ? null
+        : homeVisitLimit === 0
+          ? 100
+          : Math.min(100, Math.round((homeVisitsUsed / homeVisitLimit) * 100));
+
+    return res.json({
+      success: true,
+      data: {
+        planName:   sub.planName,
+        planType:   sub.planType,
+        fixedTier:  sub.fixedTier ?? null,
+        status:     sub.status,
+        expiryDate: sub.expiryDate,
+        included:   discountPercent > 0 || homeSampleCollection,
+        labs: {
+          discountPercent,
+          message: discountPercent > 0
+            ? `${discountPercent}% discount on all diagnostic tests & packages`
+            : 'No diagnostic discount in your plan — full price applies',
+        },
+        homeCollection: {
+          included:         homeSampleCollection,
+          homeVisitLimit,
+          homeVisitsUsed,
+          homeVisitsRemaining,
+          homeVisitUnlimited,
+          homeVisitPercentUsed,
+          message: homeSampleCollection
+            ? homeVisitUnlimited
+              ? 'Home sample collection included — unlimited'
+              : `Home collection: ${homeVisitsRemaining} visit(s) remaining this month`
+            : 'Home collection not in your plan — standard fee applies',
+        },
+      },
+    });
+  } catch (err) {
+    console.error('[GET /subscription-benefits/labs]', err);
     return res.status(500).json({ success: false, message: err.message });
   }
 });

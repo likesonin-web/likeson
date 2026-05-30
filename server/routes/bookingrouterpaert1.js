@@ -533,7 +533,7 @@ router.patch('/:id/ride/arrived',
 
       const otp      = genOtp();
       ride.status    = 'driver_arrived';
-      ride.pickupOtp = otp; // ← FIXED: store RAW (was hashOtp(otp))
+      ride.pickupOtp = hashOtp(otp);;  
       await ride.save();
 
       if (ride.trackingId) {

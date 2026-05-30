@@ -639,7 +639,7 @@ const attachLabProfile = asyncHandler(async (req, res, next) => {
 router.get(
   '/partner/me',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const lab = await LabPartnerProfile.findById(req.lab._id)
@@ -657,7 +657,7 @@ router.get(
 router.patch(
   '/partner/me',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   upload.fields([
     { name: 'logo',       maxCount: 1 },
@@ -705,7 +705,7 @@ router.patch(
 router.patch(
   '/partner/me/bank-details',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const lab = req.lab;
@@ -750,7 +750,7 @@ router.patch(
 router.get(
   '/partner/me/tests',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const { isActive, category, search } = req.query;
@@ -775,7 +775,7 @@ router.get(
 router.post(
   '/partner/me/tests',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   upload.single('reportTemplate'),
   asyncHandler(async (req, res) => {
@@ -825,7 +825,7 @@ router.post(
 router.patch(
   '/partner/me/tests/:testId',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   upload.single('reportTemplate'),
   asyncHandler(async (req, res) => {
@@ -863,7 +863,7 @@ router.patch(
 router.delete(
   '/partner/me/tests/:testId',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const lab  = req.lab;
@@ -888,7 +888,7 @@ router.delete(
 router.get(
   '/partner/me/packages',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const { isActive } = req.query;
@@ -906,7 +906,7 @@ router.get(
 router.post(
   '/partner/me/packages',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const lab = req.lab;
@@ -946,7 +946,7 @@ router.post(
 router.patch(
   '/partner/me/packages/:pkgId',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const lab = req.lab;
@@ -975,7 +975,7 @@ router.patch(
 router.delete(
   '/partner/me/packages/:pkgId',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const lab = req.lab;
@@ -1000,7 +1000,7 @@ router.delete(
 router.get(
   '/partner/me/accreditations',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     return res.status(200).json({
@@ -1018,7 +1018,7 @@ router.get(
 router.post(
   '/partner/me/accreditations',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   upload.single('certificate'),
   asyncHandler(async (req, res) => {
@@ -1063,7 +1063,7 @@ router.post(
 router.post(
   '/partner/me/compliance-docs',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   upload.single('document'),
   asyncHandler(async (req, res) => {
@@ -1110,7 +1110,7 @@ router.post(
 router.get(
   '/partner/me/status-log',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     return res.status(200).json({
@@ -1129,7 +1129,7 @@ router.get(
 router.get(
   '/partner/me/reviews',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const lab = await LabPartnerProfile.findById(req.lab._id)
@@ -1158,7 +1158,7 @@ router.get(
 router.get(
   '/partner/me/settings',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const lab = await LabPartnerProfile.findById(req.lab._id)
@@ -1213,7 +1213,7 @@ router.get(
 router.patch(
   '/partner/me/settings/operational',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const lab = req.lab;
@@ -1260,7 +1260,7 @@ router.patch(
 router.patch(
   '/partner/me/settings/display',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const lab = req.lab;
@@ -1294,7 +1294,7 @@ router.patch(
 router.patch(
   '/partner/me/settings/notifications',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const lab = req.lab;
@@ -1335,7 +1335,7 @@ router.patch(
 router.patch(
   '/partner/me/settings/contact-persons',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const lab = req.lab;
@@ -1365,7 +1365,7 @@ router.patch(
 router.patch(
   '/partner/me/settings/timing',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const lab = req.lab;
@@ -1395,7 +1395,7 @@ router.patch(
 router.patch(
   '/partner/me/settings/images',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   upload.fields([
     { name: 'logo',       maxCount: 1 },
@@ -1445,7 +1445,7 @@ router.patch(
 router.patch(
   '/partner/me/change-password',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   asyncHandler(async (req, res) => {
     const { currentPassword, newPassword } = req.body;
 
@@ -1509,7 +1509,7 @@ router.patch(
 router.post(
   '/partner/me/security/request-email-change',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   asyncHandler(async (req, res) => {
     const { newEmail } = req.body;
 
@@ -1560,7 +1560,7 @@ router.post(
 router.patch(
   '/partner/me/security/confirm-email-change',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   asyncHandler(async (req, res) => {
     const { newEmail, otp } = req.body;
 
@@ -1629,7 +1629,7 @@ router.patch(
 router.get(
   '/partner/me/security/sessions',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   asyncHandler(async (req, res) => {
     const user = await User.findById(req.user._id).select('auditSessions');
 
@@ -1648,7 +1648,7 @@ router.get(
 router.delete(
   '/partner/me/security/sessions/:sessionId',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   asyncHandler(async (req, res) => {
     const { sessionId } = req.params;
 
@@ -1693,7 +1693,7 @@ router.delete(
 router.delete(
   '/partner/me/security/sessions',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   asyncHandler(async (req, res) => {
     const user = await User.findById(req.user._id).select('auditSessions deviceTokens');
 
@@ -1738,7 +1738,7 @@ router.delete(
 router.get(
   '/partner/me/security/login-history',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   asyncHandler(async (req, res) => {
     const user = await User.findById(req.user._id)
       .select('auditSessions lastLoginAt lastLoginIp loginCount');
@@ -1767,7 +1767,7 @@ router.get(
 router.post(
   '/partner/me/security/send-verification-otp',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   asyncHandler(async (req, res) => {
     const user = await User.findById(req.user._id);
 
@@ -1809,7 +1809,7 @@ router.post(
 router.post(
   '/partner/me/security/verify-email',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   asyncHandler(async (req, res) => {
     const { otp } = req.body;
     if (!otp) return res.status(400).json({ success: false, message: 'otp is required.' });
@@ -1844,7 +1844,7 @@ router.post(
 router.get(
   '/partner/me/notifications',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   asyncHandler(async (req, res) => {
     const {
       page   = 1,
@@ -1890,7 +1890,7 @@ router.get(
 router.patch(
   '/partner/me/notifications/:notificationId/read',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   asyncHandler(async (req, res) => {
     const notification = await Notification.findOneAndUpdate(
       { _id: req.params.notificationId, recipient: req.user._id },
@@ -1913,7 +1913,7 @@ router.patch(
 router.patch(
   '/partner/me/notifications/read-all',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   asyncHandler(async (req, res) => {
     const result = await Notification.updateMany(
       { recipient: req.user._id, isRead: false },
@@ -1934,7 +1934,7 @@ router.patch(
 router.delete(
   '/partner/me/notifications/:notificationId',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   asyncHandler(async (req, res) => {
     const notification = await Notification.findOneAndDelete({
       _id:       req.params.notificationId,
@@ -1957,7 +1957,7 @@ router.delete(
 router.delete(
   '/partner/me/notifications',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   asyncHandler(async (req, res) => {
     const filter = { recipient: req.user._id };
     if (req.query.readOnly === 'true') filter.isRead = true;
@@ -1983,7 +1983,7 @@ router.delete(
 router.get(
   '/partner/me/dashboard',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   cache(30, (req) => `lab:${req.lab._id}:dashboard`),
   asyncHandler(async (req, res) => {
@@ -2048,7 +2048,7 @@ router.get(
 router.get(
   '/partner/me/analytics/reviews',
   protect,
-  authorize('lab partner'),
+  authorize('lab_partner'),
   attachLabProfile,
   asyncHandler(async (req, res) => {
     const lab = await LabPartnerProfile.findById(req.lab._id)

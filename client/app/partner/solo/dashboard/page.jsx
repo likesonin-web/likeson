@@ -38,7 +38,7 @@ import {
   Menu, X, UserRound, FileCheck2, HeartPulse,
   FileText, Wrench, ReceiptIndianRupee,
   Tag, CircleDollarSign, ShieldAlert,
-  CalendarClock, FileMinus,
+  CalendarClock, FileMinus,Route,Key,PlayCircle,PauseCircle,RefreshCw,CheckSquare
 } from 'lucide-react';
 
 // ── User selector (auth slice) ────────────────────────────────────────────────
@@ -62,15 +62,25 @@ const SIDEBAR_GROUPS = [
       { name: 'Performance', href: '/partner/solo/performance', icon: <TrendingUp size={14} />      },
     ],
   },
+  // ── Added: My Rides (State Machine) ──────────────────────────────────────
+  {
+    title: 'My Rides',
+    icon: <ClipboardList size={16} />,
+    links: [
+      { name: 'Assigned Rides',         href: '/partner/solo/rides',             icon: <ClipboardList size={14} /> },
+    ],
+  },
+ ,
+   
   {
     title: 'My Profile',
     icon: <UserRound size={16} />,
     links: [
       { name: 'Personal Details',  href: '/partner/solo/profile',               icon: <UserRound size={14} /> },
-      { name: 'Contact Info',      href: '/partner/solo/profile/contact',        icon: <Phone size={14} />     },
-      { name: 'Address',           href: '/partner/solo/profile/address',        icon: <MapPin size={14} />    },
-      { name: 'Professional Info', href: '/partner/solo/profile/professional',   icon: <Award size={14} />     },
-      { name: 'Emergency Contact', href: '/partner/solo/profile/emergency',      icon: <Shield size={14} />    },
+      { name: 'Contact Info',      href: '/partner/solo/profile/contact',       icon: <Phone size={14} />     },
+      { name: 'Address',           href: '/partner/solo/profile/address',       icon: <MapPin size={14} />    },
+      { name: 'Professional Info', href: '/partner/solo/profile/professional',  icon: <Award size={14} />     },
+      { name: 'Emergency Contact', href: '/partner/solo/profile/emergency',     icon: <Shield size={14} />    },
     ],
   },
   {
@@ -98,7 +108,7 @@ const SIDEBAR_GROUPS = [
     icon: <Landmark size={16} />,
     links: [
       { name: 'Bank Details',       href: '/partner/solo/bank',       icon: <Landmark size={14} />           },
-      { name: 'Settlement History', href: '/partner/solo/settlement', icon: <ReceiptIndianRupee size={14} />  },
+      { name: 'Settlement History', href: '/partner/solo/settlement', icon: <ReceiptIndianRupee size={14} /> },
       { name: 'Wallet',             href: '/partner/solo/wallet',     icon: <WalletCards size={14} />        },
       { name: 'Payouts',            href: '/partner/solo/payouts',    icon: <IndianRupee size={14} />        },
     ],

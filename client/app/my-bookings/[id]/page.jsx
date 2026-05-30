@@ -1,7 +1,5 @@
 'use client';
 
- 
-
 import {
   useEffect, useState, useRef, useCallback, memo,
 } from 'react';
@@ -9,8 +7,8 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
- import { GoogleMap, Marker, DirectionsRenderer, OverlayView } from '@react-google-maps/api';
- import { useGoogleMaps } from '@/context/GoogleMapsProvider'; // adjust path
+import { GoogleMap, Marker, DirectionsRenderer, OverlayView } from '@react-google-maps/api';
+import { useGoogleMaps } from '@/context/GoogleMapsProvider';
 import {
   ArrowLeft,
   Calendar,
@@ -55,12 +53,15 @@ import {
   Navigation,
   CheckCheck,
   TrendingUp,
+  Download,
+  Radio,
 } from 'lucide-react';
 
 import {
   fetchMyBookingById,
   cancelMyBooking,
   rateMyBooking,
+  downloadOpCard,
   clearSelectedBooking,
   resetCancelBooking,
   resetRateBooking,
@@ -71,14 +72,8 @@ import {
   selectCancelBookingLoading,
   selectRateBooking,
   selectRateBookingLoading,
+  selectDownloadOpCardLoading,
 } from '@/store/slices/bookingSlice';
-
-// ─── Google Maps library list ─────────────────────────────────────────────────
-// CRITICAL: must be a stable module-level constant — never defined inside a
-// component or hook body. If the array reference changes between renders the
-// @react-google-maps/api loader throws:
-//   "Loader must not be called again with different options"
-const MAPS_LIBRARIES = ['geometry', 'places'];
 
 // ─── Map Styles ───────────────────────────────────────────────────────────────
 
@@ -113,29 +108,68 @@ const BOOKING_TYPE_META = {
 };
 
 const STATUS_META = {
-  draft:          { label: 'Draft',           dotCls: 'bg-base-content/30',    textCls: 'text-base-content/50', bgCls: 'bg-base-300/50'  },
-  pending:        { label: 'Pending',          dotCls: 'bg-warning',            textCls: 'text-warning',          bgCls: 'bg-warning/10'   },
-  confirmed:      { label: 'Confirmed',        dotCls: 'bg-success',            textCls: 'text-success',          bgCls: 'bg-success/10'   },
-  in_progress:    { label: 'In Progress',      dotCls: 'bg-info animate-pulse', textCls: 'text-info',             bgCls: 'bg-info/10'      },
-  completed:      { label: 'Completed',        dotCls: 'bg-success',            textCls: 'text-success',          bgCls: 'bg-success/10'   },
-  cancelled:      { label: 'Cancelled',        dotCls: 'bg-error',              textCls: 'text-error',            bgCls: 'bg-error/5'      },
-  no_show:        { label: 'No Show',          dotCls: 'bg-error',              textCls: 'text-error',            bgCls: 'bg-error/5'      },
-  refund_pending: { label: 'Refund Pending',   dotCls: 'bg-warning',            textCls: 'text-warning',          bgCls: 'bg-warning/10'   },
-  refunded:       { label: 'Refunded',         dotCls: 'bg-base-content/30',    textCls: 'text-base-content/50', bgCls: 'bg-base-300/50'  },
+  draft:          { label: 'Draft',          dotCls: 'bg-base-content/30',    textCls: 'text-base-content/50', bgCls: 'bg-base-300/50'  },
+  pending:        { label: 'Pending',        dotCls: 'bg-warning',            textCls: 'text-warning',         bgCls: 'bg-warning/10'   },
+  confirmed:      { label: 'Confirmed',      dotCls: 'bg-success',            textCls: 'text-success',         bgCls: 'bg-success/10'   },
+  in_progress:    { label: 'In Progress',    dotCls: 'bg-info animate-pulse', textCls: 'text-info',            bgCls: 'bg-info/10'      },
+  completed:      { label: 'Completed',      dotCls: 'bg-success',            textCls: 'text-success',         bgCls: 'bg-success/10'   },
+  cancelled:      { label: 'Cancelled',      dotCls: 'bg-error',              textCls: 'text-error',           bgCls: 'bg-error/5'      },
+  no_show:        { label: 'No Show',        dotCls: 'bg-error',              textCls: 'text-error',           bgCls: 'bg-error/5'      },
+  refund_pending: { label: 'Refund Pending', dotCls: 'bg-warning',            textCls: 'text-warning',         bgCls: 'bg-warning/10'   },
+  refunded:       { label: 'Refunded',       dotCls: 'bg-base-content/30',    textCls: 'text-base-content/50', bgCls: 'bg-base-300/50'  },
 };
 
 const PAYMENT_STATUS_META = {
-  unpaid:             { label: 'Unpaid',              cls: 'text-error bg-error/10'     },
+  unpaid:             { label: 'Unpaid',               cls: 'text-error bg-error/10'      },
   pending:            { label: 'Payment Pending',      cls: 'text-warning bg-warning/10' },
-  paid:               { label: 'Paid',                cls: 'text-success bg-success/10' },
+  paid:               { label: 'Paid',                 cls: 'text-success bg-success/10' },
   partially_paid:     { label: 'Partially Paid',       cls: 'text-warning bg-warning/10' },
-  failed:             { label: 'Payment Failed',       cls: 'text-error bg-error/10'     },
-  refunded:           { label: 'Refunded',             cls: 'text-info bg-info/10'       },
-  partially_refunded: { label: 'Partially Refunded',   cls: 'text-info bg-info/10'       },
+  failed:             { label: 'Payment Failed',       cls: 'text-error bg-error/10'      },
+  refunded:           { label: 'Refunded',             cls: 'text-info bg-info/10'        },
+  partially_refunded: { label: 'Partially Refunded',   cls: 'text-info bg-info/10'        },
   waived:             { label: 'Waived',               cls: 'text-success bg-success/10' },
 };
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── ID Helpers ───────────────────────────────────────────────────────────────
+
+/**
+ * Resolve the MongoDB _id of the consultationSession.
+ * Booking.consultationSessionId can be:
+ * - null / undefined
+ * - string (ObjectId as string)
+ * - ObjectId (plain)
+ * - populated object { _id, consultationId, meetingLink, ... }
+ */
+const resolveConsultationId = (consultationSessionId) => {
+  if (!consultationSessionId) return null;
+  if (typeof consultationSessionId === 'string') return consultationSessionId;
+  if (typeof consultationSessionId === 'object') {
+    return consultationSessionId._id?.toString() ?? null;
+  }
+  return null;
+};
+
+/**
+ * Whether a booking has a linked consultation session.
+ */
+const hasConsultationSession = (booking) => {
+  return !!resolveConsultationId(booking?.consultationSessionId);
+};
+
+/**
+ * Whether the patient can join the consultation right now.
+ * Requires: doctor_online booking OR video consultationType,
+ * status confirmed or in_progress, and a linked consultationSessionId.
+ */
+const canJoinConsultation = (booking) => {
+  const isOnline =
+    booking?.bookingType === 'doctor_online' ||
+    booking?.consultationType === 'video';
+  const statusOk = ['confirmed', 'in_progress'].includes(booking?.status);
+  return isOnline && statusOk && hasConsultationSession(booking);
+};
+
+// ─── Misc Helpers ─────────────────────────────────────────────────────────────
 
 const fmtDate = (d) =>
   d ? new Date(d).toLocaleDateString('en-IN', {
@@ -277,9 +311,6 @@ const SectionCard = memo(function SectionCard({
 });
 
 // ─── Route Map ────────────────────────────────────────────────────────────────
-// FIX: `isLoaded` is now received as a prop from the page-level useJsApiLoader
-// call. This component no longer calls useJsApiLoader itself, eliminating the
-// "Loader must not be called again with different options" error.
 
 const RouteMap = memo(function RouteMap({ patientLocation, destinationLocation, isLoaded }) {
   const [directions, setDirections] = useState(null);
@@ -289,9 +320,6 @@ const RouteMap = memo(function RouteMap({ patientLocation, destinationLocation, 
   const pickupCoords  = patientLocation?.coordinates;
   const dropoffCoords = destinationLocation?.coordinates;
 
-  // Derive stable primitive values for use in dependency arrays.
-  // Object refs (pickupPos, dropoffPos) recreate on every render, so using
-  // them directly in useEffect/useCallback deps causes infinite loops.
   const pickupLat  = pickupCoords?.[1]  ?? null;
   const pickupLng  = pickupCoords?.[0]  ?? null;
   const dropoffLat = dropoffCoords?.[1] ?? null;
@@ -302,7 +330,6 @@ const RouteMap = memo(function RouteMap({ patientLocation, destinationLocation, 
 
   const center = pickupPos || dropoffPos || { lat: 16.5062, lng: 80.6480 };
 
-  // FIX: useCallback deps use primitive lat/lng values, not object refs.
   const onMapLoad = useCallback((map) => {
     mapRef.current = map;
     setMapReady(true);
@@ -314,7 +341,6 @@ const RouteMap = memo(function RouteMap({ patientLocation, destinationLocation, 
     }
   }, [pickupLat, pickupLng, dropoffLat, dropoffLng]);
 
-  // FIX: useEffect deps use primitive values — no spurious re-runs.
   useEffect(() => {
     if (!isLoaded || pickupLat == null || dropoffLat == null) return;
     const svc = new window.google.maps.DirectionsService();
@@ -414,16 +440,16 @@ const FareBreakdown = memo(function FareBreakdown({ fare }) {
   }
 
   const rows = [
-    { label: 'Consultation Fee',  note: 'Doctor / specialist visit charge',           key: 'consultationFee',   show: !!fare.consultationFee   },
+    { label: 'Consultation Fee',  note: 'Doctor / specialist visit charge',            key: 'consultationFee',   show: !!fare.consultationFee   },
     { label: 'Transport Fee',     note: 'Vehicle + driver cost for the trip',          key: 'transportFee',      show: !!fare.transportFee      },
     { label: 'Care Assistant',    note: 'Personal care companion service charge',      key: 'careAssistantFee',  show: !!fare.careAssistantFee  },
     { label: 'Diagnostic Fee',    note: 'Lab test or diagnostic procedure charges',    key: 'diagnosticFee',     show: !!fare.diagnosticFee     },
     { label: 'Home Collection',   note: 'Technician visit to collect sample',          key: 'homeCollectionFee', show: !!fare.homeCollectionFee },
     { label: 'Platform Fee',      note: 'Likeson service and coordination fee',        key: 'platformFee',       show: !!fare.platformFee       },
     { label: 'Taxes & GST',       note: 'Government-applicable statutory charges',     key: 'taxes',             show: !!fare.taxes             },
-    { label: 'Discount Applied',  note: 'Promotional or subscription discount',        key: 'discount',          show: !!fare.discount,         isDeduction: true },
-    { label: 'Coupon Savings',    note: 'Promo code discount applied at checkout',     key: 'couponDiscount',    show: !!fare.couponDiscount,   isDeduction: true },
-    { label: 'Wallet Deducted',   note: 'Likeson wallet credit used for this booking', key: 'walletApplied',     show: !!fare.walletApplied,    isDeduction: true },
+    { label: 'Discount Applied',  note: 'Promotional or subscription discount',        key: 'discount',          show: !!fare.discount,          isDeduction: true },
+    { label: 'Coupon Savings',    note: 'Promo code discount applied at checkout',     key: 'couponDiscount',    show: !!fare.couponDiscount,    isDeduction: true },
+    { label: 'Wallet Deducted',   note: 'Likeson wallet credit used for this booking', key: 'walletApplied',     show: !!fare.walletApplied,     isDeduction: true },
   ].filter(r => r.show);
 
   return (
@@ -652,8 +678,8 @@ const RATING_FIELDS_BY_TYPE = {
 };
 
 const RATING_META = {
-  overall:       { label: 'Overall Experience', note: 'How satisfied were you overall?',                    stateKey: 'overallRating',       commentKey: 'overallComment',      icon: Star        },
-  doctor:        { label: 'Doctor / Specialist', note: 'Quality of consultation and care',                  stateKey: 'doctorRating',        commentKey: 'doctorComment',        icon: Stethoscope },
+  overall:       { label: 'Overall Experience', note: 'How satisfied were you overall?',                   stateKey: 'overallRating',       commentKey: 'overallComment',       icon: Star        },
+  doctor:        { label: 'Doctor / Specialist', note: 'Quality of consultation and care',                 stateKey: 'doctorRating',        commentKey: 'doctorComment',        icon: Stethoscope },
   driver:        { label: 'Driver',              note: 'Punctuality, driving and vehicle condition',        stateKey: 'driverRating',        commentKey: 'driverComment',        icon: Car         },
   careAssistant: { label: 'Care Assistant',      note: 'Attentiveness and professionalism',                 stateKey: 'careAssistantRating', commentKey: 'careAssistantComment', icon: HeartPulse  },
   lab:           { label: 'Lab / Diagnostics',   note: 'Sample collection, report accuracy and turnaround', stateKey: 'labRating',           commentKey: 'labComment',           icon: FlaskConical},
@@ -792,9 +818,9 @@ const RatingModal = memo(function RatingModal({ booking, onClose }) {
 
 const STATUS_ORDER = [
   { key: 'pending',     label: 'Booking Received', note: 'Your booking request received'       },
-  { key: 'confirmed',   label: 'Confirmed',         note: 'Healthcare team confirmed your slot' },
-  { key: 'in_progress', label: 'In Progress',       note: 'Your care session is underway'       },
-  { key: 'completed',   label: 'Completed',          note: 'Service delivered successfully'      },
+  { key: 'confirmed',   label: 'Confirmed',        note: 'Healthcare team confirmed your slot' },
+  { key: 'in_progress', label: 'In Progress',      note: 'Your care session is underway'       },
+  { key: 'completed',   label: 'Completed',        note: 'Service delivered successfully'      },
 ];
 
 function BookingTimeline({ status }) {
@@ -856,6 +882,75 @@ function BookingTimeline({ status }) {
   );
 }
 
+// ─── Consultation Session Card ────────────────────────────────────────────────
+// Shows session info + join button when booking has consultationSessionId
+
+const ConsultationSessionCard = memo(function ConsultationSessionCard({ booking }) {
+  const consultationId  = resolveConsultationId(booking.consultationSessionId);
+  
+  const joinable        = canJoinConsultation(booking);
+
+  if (!consultationId) return null;
+
+  return (
+    <SectionCard
+      title="Telemedicine Session"
+      subtitle="Your online consultation details"
+      icon={Radio}
+      iconColor="text-accent"
+      iconBg="bg-accent/5"
+      delay={0.16}
+    >
+      <div className="py-2 space-y-3">
+        {/* Session info strip */}
+        <div className="flex items-center gap-3 p-3 rounded-xl bg-accent/5 border border-accent/20">
+          <div className="w-9 h-9 rounded-xl bg-accent/10 flex items-center justify-center flex-shrink-0">
+            <Video size={16} className="text-accent" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold text-base-content capitalize">
+              {booking.consultationType ?? 'video'} Consultation
+            </p>
+            
+          </div>
+          {joinable && (
+            <span className="flex items-center gap-1.5 text-[10px] text-success font-bold">
+              <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
+              Ready
+            </span>
+          )}
+        </div>
+
+        {/* Session ID row */}
+        <FieldRow
+          label="Session ID"
+          note="Reference for support"
+          value={String(consultationId)}
+          mono
+          icon={Radio}
+        />
+
+        {/* Join + external meeting link buttons */}
+        <div className="flex gap-2 pt-1">
+          <Link
+            href={`/consultation/${booking._id}`}
+            className={`btn flex-1 gap-2 ${joinable ? 'btn-accent' : 'btn-ghost border border-base-300'}`}
+          >
+            <Video size={14} />
+            {joinable ? 'Join Consultation' : 'View Session'}
+          </Link>
+        </div>
+
+        {!joinable && (
+          <p className="text-[10px] text-base-content/30 text-center">
+            Join button activates when booking is confirmed and consultation starts
+          </p>
+        )}
+      </div>
+    </SectionCard>
+  );
+});
+
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function BookingDetailsPage() {
@@ -863,12 +958,12 @@ export default function BookingDetailsPage() {
   const router   = useRouter();
   const params   = useParams();
 
-  // FIX: resolve id safely — matches the dynamic segment folder name exactly.
   const id = params?.bookingId ?? params?.id ?? null;
 
-  const booking = useSelector(selectActiveBooking);
-  const loading = useSelector(selectActiveBookingLoading);
-  const error   = useSelector(selectActiveBookingError);
+  const booking        = useSelector(selectActiveBooking);
+  const loading        = useSelector(selectActiveBookingLoading);
+  const error          = useSelector(selectActiveBookingError);
+  const downloadLoading = useSelector(selectDownloadOpCardLoading);
 
   const [showCancel, setShowCancel] = useState(false);
   const [showRating, setShowRating] = useState(false);
@@ -876,15 +971,12 @@ export default function BookingDetailsPage() {
 
   const { isLoaded: mapsLoaded } = useGoogleMaps();
 
-  // FIX: guard — never dispatch when id is falsy
   useEffect(() => {
     if (!id) return;
-    // FIX: pass { bookingId } object — thunk destructures { bookingId }
     dispatch(fetchMyBookingById({ bookingId: id }));
     return () => { dispatch(clearSelectedBooking()); };
   }, [id, dispatch]);
 
-  // FIX: same { bookingId } shape for refresh
   const handleRefresh = useCallback(() => {
     if (!id) return;
     dispatch(fetchMyBookingById({ bookingId: id }));
@@ -906,6 +998,18 @@ export default function BookingDetailsPage() {
     setShowRating(false);
     dispatch(resetRateBooking());
   }, [dispatch]);
+
+  /**
+   * Download OP card ZIP.
+   * Uses booking._id (not bookingCode) — thunk hits /my-bookings/:bookingId/op-download
+   */
+  const handleDownloadOp = useCallback(() => {
+    if (!booking?._id) return;
+    dispatch(downloadOpCard({
+      bookingId: booking._id,
+      filename:  `op-card-${booking.bookingCode ?? booking._id}.zip`,
+    }));
+  }, [dispatch, booking?._id, booking?.bookingCode]);
 
   // ── No id in URL ──
   if (!id) {
@@ -961,7 +1065,21 @@ export default function BookingDetailsPage() {
   const hasTransport = ['full_care_ride', 'patient_transport', 'diagnostic_home'].includes(booking.bookingType);
   const isLive       = hasTransport && ['confirmed', 'in_progress'].includes(booking.status);
 
-  const primaryRideId = booking.primaryRide?._id ?? booking.primaryRide ?? booking.rides?.[0]?._id ?? booking.rides?.[0];
+  // Resolve primary ride ID — could be ObjectId string or populated object
+  const primaryRideId = (() => {
+    const r = booking.primaryRide;
+    if (!r) return booking.rides?.[0]?._id ?? booking.rides?.[0] ?? null;
+    if (typeof r === 'string') return r;
+    if (typeof r === 'object') return r._id?.toString() ?? null;
+    return null;
+  })();
+
+  // Consultation join
+  const consultationId = resolveConsultationId(booking.consultationSessionId);
+  const joinable       = canJoinConsultation(booking);
+
+  // Has OP card to download (completed booking with a bookingCode = OP generated)
+  const hasOpCard = booking.status === 'completed' && !!booking.bookingCode;
 
   return (
     <>
@@ -999,7 +1117,9 @@ export default function BookingDetailsPage() {
                   </button>
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+
+              {/* Header action buttons */}
+              <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
                 <motion.button
                   whileTap={{ scale: 0.9 }}
                   onClick={handleRefresh}
@@ -1008,30 +1128,50 @@ export default function BookingDetailsPage() {
                 >
                   <RefreshCw size={14} />
                 </motion.button>
+
+                {/* Live tracking */}
                 {isLive && primaryRideId && (
                   <Link href={`/rides/${booking._id}/${primaryRideId}/tracking`} className="btn btn-info btn-sm gap-1.5">
                     <Navigation2 size={13} />
                     <span className="hidden sm:inline">Track Live</span>
                   </Link>
                 )}
-                
-            
 
-{booking.bookingType === 'doctor_online' && booking.consultationSessionId?.meetingLink && (
-  
-   <Link href={`/consultations/${booking.consultationSessionId.consultationId}`}
-    className="btn btn-accent btn-sm gap-1.5"
-  >
-    <Video size={13} />
-    <span className="hidden sm:inline">Join Call</span>
-  </Link>
-)}
+                {/* Join consultation — primary CTA when joinable */}
+                {joinable && consultationId && (
+                  <Link
+                    href={`/consultation/${booking._id}`}
+                    className="btn btn-accent btn-sm gap-1.5"
+                    aria-label="Join video consultation"
+                  >
+                    <Video size={13} />
+                    <span className="hidden sm:inline">Join Call</span>
+                  </Link>
+                )}
+
+                {/* Download OP card */}
+                {hasOpCard && (
+                  <button
+                    onClick={handleDownloadOp}
+                    disabled={downloadLoading}
+                    className="btn btn-ghost btn-sm gap-1.5"
+                    aria-label="Download OP card"
+                  >
+                    {downloadLoading
+                      ? <Loader2 size={13} className="animate-spin" />
+                      : <Download size={13} />
+                    }
+                    <span className="hidden sm:inline">OP Card</span>
+                  </button>
+                )}
+
                 {canRate && (
                   <button onClick={() => setShowRating(true)} className="btn btn-primary btn-sm gap-1.5">
                     <Star size={13} />
                     <span className="hidden sm:inline">Rate</span>
                   </button>
                 )}
+
                 {canCancel && (
                   <button
                     onClick={() => setShowCancel(true)}
@@ -1113,7 +1253,6 @@ export default function BookingDetailsPage() {
             {/* ════ Left Column ════ */}
             <div className="lg:col-span-2 space-y-5">
 
-              {/* FIX: isLoaded passed as prop — RouteMap no longer calls useJsApiLoader */}
               {hasMap && (
                 <motion.div variants={fadeUp} className="card overflow-hidden">
                   <div className="flex items-center justify-between px-5 py-3 border-b border-base-300">
@@ -1141,10 +1280,10 @@ export default function BookingDetailsPage() {
                 delay={0.05}
               >
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
-                  <FieldRow label="Full Name"     note="Legal name as on ID"                value={booking.patientInfo?.name}                                          icon={User}  highlight />
-                  <FieldRow label="Age"           note="Patient's age in years"              value={booking.patientInfo?.age ? `${booking.patientInfo.age} yrs` : null} icon={Clock} />
-                  <FieldRow label="Gender"        note="For medical records"                 value={booking.patientInfo?.gender}                                                     />
-                  <FieldRow label="Blood Group"   note="For emergency preparedness"          value={booking.patientInfo?.bloodGroup}                                                 />
+                  <FieldRow label="Full Name"  note="Legal name as on ID"                value={booking.patientInfo?.name}                                         icon={User}  highlight />
+                  <FieldRow label="Age"        note="Patient's age in years"             value={booking.patientInfo?.age ? `${booking.patientInfo.age} yrs` : null} icon={Clock} />
+                  <FieldRow label="Gender"     note="For medical records"                value={booking.patientInfo?.gender}                                                                    />
+                  <FieldRow label="Blood Group"   note="For emergency preparedness"          value={booking.patientInfo?.bloodGroup}                                                                />
                   <FieldRow label="Contact Phone" note="For appointment-related calls"       value={booking.patientInfo?.phone}                                         icon={Phone} mono />
                   <FieldRow label="Self / Other"  note="Booking for yourself or another?"   value={booking.patientInfo?.isSelf ? 'For myself' : 'For another patient'}              />
                 </div>
@@ -1261,6 +1400,11 @@ export default function BookingDetailsPage() {
                 </SectionCard>
               )}
 
+              {/* ── Consultation Session Card (online bookings) ── */}
+              {hasConsultationSession(booking) && (
+                <ConsultationSessionCard booking={booking} />
+              )}
+
               {booking.diagnosticDetails && (
                 <SectionCard
                   title="Diagnostic Details"
@@ -1294,7 +1438,8 @@ export default function BookingDetailsPage() {
                 </SectionCard>
               )}
 
-              {booking.onlineConsultation?.meetingLink && (
+              {/* Legacy onlineConsultation.meetingLink (fallback if not using consultationSessionId) */}
+              {booking.onlineConsultation?.meetingLink && !hasConsultationSession(booking) && (
                 <SectionCard
                   title="Video Consultation"
                   subtitle="Join your online appointment"
@@ -1327,7 +1472,7 @@ export default function BookingDetailsPage() {
                 >
                   <ul className="space-y-2 py-1">
                     {booking.rides.map((ride, i) => {
-                      const rId = ride._id ?? ride;
+                      const rId = (typeof ride === 'object' ? ride._id : ride)?.toString() ?? null;
                       return (
                         <li key={rId ?? i}>
                           <div className="flex items-center gap-3 p-3 rounded-xl border border-base-300 bg-base-200 hover:border-primary/30 transition-colors">
@@ -1346,7 +1491,7 @@ export default function BookingDetailsPage() {
                               }`}>
                                 {(ride.status ?? 'pending').replace(/_/g, ' ')}
                               </span>
-                              {isLive && rId && (
+                              {isLive && rId && primaryRideId && (
                                 <Link href={`/rides/${booking._id}/${primaryRideId}/tracking`} className="btn btn-ghost btn-xs">
                                   <Navigation2 size={11} />
                                 </Link>
@@ -1401,13 +1546,13 @@ export default function BookingDetailsPage() {
                   delay={0.2}
                 >
                   <div className="p-3 rounded-xl bg-error/5 border border-error/20 my-1 space-y-0">
-                    <FieldRow label="Cancelled By"      note="Role that initiated cancellation"    value={booking.cancellation.cancelledBy}                                                                                              />
-                    <FieldRow label="Reason"            note="Reason at time of cancellation"      value={booking.cancellation.reason}                                                                                                   />
+                    <FieldRow label="Cancelled By"      note="Role that initiated cancellation"    value={booking.cancellation.cancelledBy}                                                                                                                                                                                                         />
+                    <FieldRow label="Reason"            note="Reason at time of cancellation"      value={booking.cancellation.reason}                                                                                                                                                                                                              />
                     <FieldRow label="Cancelled At"      note="When cancellation was processed"     value={`${fmtDate(booking.cancellation.cancelledAt)} ${fmtTime(booking.cancellation.cancelledAt)}`}              icon={Clock}          />
                     <FieldRow label="Refund Eligible"   note="Under our cancellation policy"       value={booking.cancellation.refundEligible ? 'Yes' : 'No'}
-                              badge={booking.cancellation.refundEligible ? 'text-success bg-success/10' : 'text-error bg-error/10'}                                                                                                         />
+                              badge={booking.cancellation.refundEligible ? 'text-success bg-success/10' : 'text-error bg-error/10'}                                                                                                                                                                                                                                     />
                     {booking.cancellation.refundPercent > 0 && (
-                      <FieldRow label="Refund Percentage" note="Percentage to be refunded"         value={`${booking.cancellation.refundPercent}%`}                                                                highlight             />
+                      <FieldRow label="Refund Percentage" note="Percentage to be refunded"         value={`${booking.cancellation.refundPercent}%`}                                                                                                                                                 highlight             />
                     )}
                   </div>
                 </SectionCard>
@@ -1510,17 +1655,27 @@ export default function BookingDetailsPage() {
                 delay={0.12}
               >
                 <div className="py-1">
-                  <FieldRow label="Booking Code"  note="Share with support"           value={booking.bookingCode}   mono highlight icon={CreditCard} />
-                  <FieldRow label="Booking Type"  note="Category of service"          value={meta.label}            icon={Icon}                      />
+                  <FieldRow label="Booking Code"  note="Share with support"            value={booking.bookingCode}  mono highlight icon={CreditCard} />
+                  <FieldRow label="Booking Type"  note="Category of service"           value={meta.label}             icon={Icon}                      />
                   {booking.pricingSource && (
-                    <FieldRow label="Pricing Source" note="Who set the pricing"        value={booking.pricingSource}                                  />
+                    <FieldRow label="Pricing Source" note="Who set the pricing"        value={booking.pricingSource}                                 />
                   )}
-                  <FieldRow label="Created On"    note="When booking was created"     value={`${fmtDate(booking.createdAt)}, ${fmtTime(booking.createdAt)}`} icon={Calendar} />
+                  <FieldRow label="Created On"    note="When booking was created"      value={`${fmtDate(booking.createdAt)}, ${fmtTime(booking.createdAt)}`} icon={Calendar} />
                   {booking.completedAt && (
                     <FieldRow label="Completed On" note="When service was delivered"  value={`${fmtDate(booking.completedAt)}, ${fmtTime(booking.completedAt)}`} icon={CheckCircle2} />
                   )}
                   {booking.slotId && (
                     <FieldRow label="Slot ID"     note="Doctor's slot reference"       value={String(booking.slotId)} mono />
+                  )}
+                  {/* Consultation session reference */}
+                  {consultationId && (
+                    <FieldRow
+                      label="Consult Session"
+                      note="Telemedicine session ID"
+                      value={String(consultationId)}
+                      mono
+                      icon={Radio}
+                    />
                   )}
                 </div>
               </SectionCard>
@@ -1536,7 +1691,7 @@ export default function BookingDetailsPage() {
                 >
                   <div className="p-3 rounded-xl bg-info/5 border border-info/20 my-1">
                     <p className="text-[11px] font-black text-info uppercase tracking-wide mb-1">Parent Booking ID</p>
-                    <p className="text-xs font-mono text-base-content break-all">{booking.followUpParentBooking}</p>
+                    <p className="text-xs font-mono text-base-content break-all">{String(booking.followUpParentBooking)}</p>
                     <p className="text-[10px] text-base-content/30 mt-1.5">
                       Discount: {booking.followUpDiscountPercent || 0}% applied.
                     </p>
@@ -1551,11 +1706,49 @@ export default function BookingDetailsPage() {
                     <Navigation2 size={15} /> Track Live Location
                   </Link>
                 )}
+
+              {/* Join consultation — full-width CTA in sidebar */}
+                {joinable && consultationId && (
+                  <Link 
+                    href={`/consultation/${booking._id}`} 
+                    className="btn btn-accent w-full gap-2"
+                  >
+                    <Video size={15} /> Join Consultation
+                  </Link>
+                )}
+
+                {/* View session (not yet joinable) */}
+                {!joinable && consultationId && (
+                  <Link 
+                    href={`/consultation/${booking._id}`} 
+                    className="btn btn-ghost border border-base-300 w-full gap-2"
+                  >
+                    <Radio size={15} /> View Session
+                  </Link>
+                )}
+
+                {/* Download OP Card */}
+                {hasOpCard && (
+                  <button
+                    onClick={handleDownloadOp}
+                    disabled={downloadLoading}
+                    className="btn btn-ghost border border-base-300 w-full gap-2"
+                    aria-label="Download OP Card"
+                  >
+                    {downloadLoading
+                      ? <Loader2 size={15} className="animate-spin" />
+                      : <Download size={15} />
+                    }
+                    {downloadLoading ? 'Downloading…' : 'Download OP Card'}
+                  </button>
+                )}
+
                 {canRate && (
                   <button onClick={() => setShowRating(true)} className="btn btn-primary w-full gap-2">
                     <Star size={15} /> Rate Your Experience
                   </button>
                 )}
+
                 {canCancel && (
                   <div>
                     <button
@@ -1597,6 +1790,18 @@ export default function BookingDetailsPage() {
                   </div>
                   <ChevronRight size={13} className="text-base-content/30" />
                 </Link>
+                {consultationId && (
+                  <Link 
+                    href={`/consultation/${booking._id}`} 
+                    className="flex items-center justify-between gap-2 px-2 py-2 rounded-lg hover:bg-base-200 transition-colors group"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Radio size={13} className="text-accent" />
+                      <span className="text-sm text-base-content/70 group-hover:text-base-content">Consultation Session</span>
+                    </div>
+                    <ChevronRight size={13} className="text-base-content/30" />
+                  </Link>
+                )}
               </motion.nav>
             </div>
           </motion.div>

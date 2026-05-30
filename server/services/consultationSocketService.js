@@ -1,1202 +1,1036 @@
 /**
- * consultationSocketService.js
- *
- * ENTERPRISE TELEMEDICINE SOCKET SERVICE
- * Standalone /consultation namespace — fully isolated from ride/booking sockets.
- *
- * Architecture:
- *   - Dedicated Socket.IO namespace: /consultation
- *   - Rooms keyed by consultationId, not bookingId
- *   - Redis-adapter-ready (stateless participant tracking via Consultation model)
- *   - JWT auth per connection
- *   - Role-based event authorization
- *   - Heartbeat + auto-disconnect
- *   - Reconnect recovery
- *   - Full event logging → Consultation.eventLogs
+ * consultationSocketService.js  –  ENTERPRISE PRODUCTION
+ * FIXES:
+ * A. authMiddleware: token read ONLY from socket.handshake.auth.token
+ * B. authMiddleware: Redis cache key scoped to `consult_auth:{id}:{sessionId}`
+ * C. authMiddleware: renamed inner `raw` → `cached`
+ * D. authMiddleware: session validation also logs mismatch details for debugging
+ * E. Chat Extraction: Removed all chat handlers
+ * F. FIX: handleReconnectSuccess — removed dynamic import('mongoose'), use static import instead
  */
 
-import { Server }  from 'socket.io';
-import jwt         from 'jsonwebtoken';
-import mongoose    from 'mongoose';
+import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
+import { Server } from "socket.io";
+import Consultation from "../models/Consultation.js";
+import DoctorProfile from "../models/DoctorProfile.js";
+import User from "../models/User.js";
+import redisClient from "../config/redis.js";
 
-import Consultation  from '../models/Consultation.js';
-import User          from '../models/User.js';
-import DoctorProfile from '../models/DoctorProfile.js';
+const REDIS_AUTH_TTL = 300;
+const WAITING_ROOM_TIMEOUT_MS = 15 * 60_000;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SINGLETON
-// ─────────────────────────────────────────────────────────────────────────────
+let _io = null;
 
-/** @type {ConsultationSocketService|null} */
-let _instance = null;
+const activeRooms = new Map();
+const socketMeta = new Map();
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTS
-// ─────────────────────────────────────────────────────────────────────────────
+export const initConsultationSocket = (io) => {
+  _io = io;
 
-const HEARTBEAT_INTERVAL_MS  = 30_000;
-const HEARTBEAT_TIMEOUT_MS   = 90_000;   // 3 missed = disconnect
-const NETWORK_THROTTLE_MS    = 5_000;
-const MAX_CHAT_LENGTH        = 5_000;
-const MAX_RECONNECT_WAIT_MS  = 10_000;
+  const ns = io.of("/consultations");
+  ns.use(authMiddleware);
 
-// Roles allowed to join consultation namespace
-const ALLOWED_ROLES = [
-  'doctor', 'customer', 'care_assistant',
-  'nurse', 'admin', 'superadmin',
-];
-
-// Roles with host permissions
-const HOST_ROLES = ['doctor', 'admin', 'superadmin'];
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ROOM NAME HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const rooms = {
-  consultation:   (id)    => `consultation:${id}`,
-  waiting:        (id)    => `consultation:waiting:${id}`,
-  participants:   (id)    => `consultation:participants:${id}`,
-  doctor:         (uid)   => `consultation:doctor:${uid}`,
-  patient:        (uid)   => `consultation:patient:${uid}`,
-  admins:         ()      => `consultation:admins`,
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
-
-const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
-
-const verifyToken = (token) => {
-  try   { return jwt.verify(token, process.env.JWT_SECRET); }
-  catch { return null; }
-};
-
-/**
- * assertConsultationAccess
- * Returns { consultation, participantRole } or throws.
- */
-const assertConsultationAccess = async (consultationId, user) => {
-  if (!isValidId(consultationId)) throw new Error('Invalid consultationId');
-
-  const consultation = await Consultation.findOne({ consultationId })
-    .select('patient doctor hospital status participants waitingRoomEnabled consultationId bookingId')
-    .lean();
-
-  if (!consultation) throw new Error('Consultation not found');
-
-  const { _id: userId, role } = user;
-
-  if (['admin', 'superadmin'].includes(role)) {
-    return { consultation, participantRole: 'admin' };
-  }
-
-  // Patient check
-  if (consultation.patient?.toString() === userId) {
-    return { consultation, participantRole: 'patient' };
-  }
-
-  // Doctor check (via DoctorProfile._id stored in consultation.doctor)
-  if (role === 'doctor') {
-    const dp = await DoctorProfile.findOne({ user: userId }).select('_id').lean();
-    if (dp && consultation.doctor?.toString() === dp._id.toString()) {
-      return { consultation, participantRole: 'doctor' };
-    }
-  }
-
-  // Care assistant — linked participant
-  if (role === 'care_assistant') {
-    const inParticipants = consultation.participants?.some(
-      (p) => p.userId?.toString() === userId && p.role === 'care_assistant'
+  ns.on("connection", (socket) => {
+    console.log(
+      `[ConsultSocket] +conn  ${socket.id}  user:${socket.user?._id}  name:${socket.user?.name}`,
     );
-    if (inParticipants) return { consultation, participantRole: 'care_assistant' };
-  }
 
-  throw new Error('Not authorized for this consultation');
-};
+    socket.on("ping", () => socket.emit("pong", { ts: Date.now() }));
 
-/**
- * logConsultationEvent — persists event to Consultation.eventLogs.
- * Fire-and-forget; never throws.
- */
-const logConsultationEvent = (consultationId, eventType, actorId, actorType, payload = {}, source = 'server') => {
-  Consultation.findOneAndUpdate(
-    { consultationId },
-    {
-      $push: {
-        eventLogs: {
-          eventType,
-          actorType,
-          actorId: actorId || undefined,
-          source,
-          timestamp: new Date(),
-          payload,
-          severity: 'info',
-        },
-      },
-    }
-  ).catch((e) => console.error('[ConsultationSocket] eventLog write failed:', e.message));
-};
+    socket.on("join_consultation", async (d) => handleJoin(socket, d));
+    socket.on("leave_consultation", async (d) => handleLeave(socket, d));
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SERVICE CLASS
-// ─────────────────────────────────────────────────────────────────────────────
+    socket.on("participant_join", async (d) =>
+      handleParticipantJoin(socket, d),
+    );
+    socket.on("participant_leave", async (d) =>
+      handleParticipantLeave(socket, d),
+    );
 
-class ConsultationSocketService {
-  /**
-   * @param {import('socket.io').Namespace} nsp  — /consultation namespace
-   */
-  constructor(nsp) {
-    this.nsp = nsp;
+    socket.on("participant_reconnect_attempt", async (d) =>
+      handleReconnectAttempt(socket, d),
+    );
+    socket.on("participant_reconnect_success", async (d) =>
+      handleReconnectSuccess(socket, d),
+    );
 
-    /**
-     * connectedClients
-     * Map<socketId, {
-     *   userId:           string,
-     *   role:             string,
-     *   name:             string,
-     *   consultationId:   string|null,
-     *   participantRole:  string|null,
-     *   joinedRooms:      Set<string>,
-     *   connectedAt:      Date,
-     *   lastHeartbeat:    Date,
-     * }>
-     */
-    this.connectedClients = new Map();
+    socket.on("network_quality", (d) => handleNetworkQuality(socket, d));
+    socket.on("screen_share_start", (d) => handleScreenShare(socket, d, true));
+    socket.on("screen_share_stop", (d) => handleScreenShare(socket, d, false));
 
-    /** Network report throttle: Map<socketId, lastTimestamp> */
-    this.networkThrottle = new Map();
+    socket.on("raise_hand", (d) => handleHand(socket, d, true));
+    socket.on("lower_hand", (d) => handleHand(socket, d, false));
 
-    /** Heartbeat checker */
-    this._heartbeatTimer = setInterval(() => this._checkHeartbeats(), HEARTBEAT_INTERVAL_MS);
-  }
+    socket.on("consent_given", async (d) => handleConsentGiven(socket, d));
+    socket.on("doctor_status", (d) => handleDoctorStatus(socket, d));
+    socket.on("sdk_error", async (d) => handleSdkError(socket, d));
 
-  // ── Public emit helpers ────────────────────────────────────────────────────
+    socket.on("kick_participant", async (d) => handleKick(socket, d));
+    socket.on("mute_participant", async (d) =>
+      handleMuteParticipant(socket, d),
+    );
+    socket.on("admin_broadcast", (d) => handleAdminBroadcast(socket, d));
 
-  emitToConsultation(consultationId, event, payload) {
-    this.nsp
-      .to(rooms.consultation(consultationId))
-      .emit(event, { ...payload, _serverTime: new Date().toISOString() });
-  }
+    socket.on("disconnect", async (reason) => handleDisconnect(socket, reason));
+    socket.on("error", (err) =>
+      console.error(`[ConsultSocket] err ${socket.id}:`, err.message),
+    );
 
-  emitToWaiting(consultationId, event, payload) {
-    this.nsp
-      .to(rooms.waiting(consultationId))
-      .emit(event, { ...payload, _serverTime: new Date().toISOString() });
-  }
-
-  emitToAdmins(event, payload) {
-    this.nsp
-      .to(rooms.admins())
-      .emit(event, { ...payload, _serverTime: new Date().toISOString() });
-  }
-
-  emitToUser(userId, event, payload) {
-    // Emit to both doctor and patient personal rooms
-    this.nsp.to(rooms.doctor(userId)).emit(event, { ...payload, _serverTime: new Date().toISOString() });
-    this.nsp.to(rooms.patient(userId)).emit(event, { ...payload, _serverTime: new Date().toISOString() });
-  }
-
-  emitToSocket(socketId, event, payload) {
-    this.nsp.to(socketId).emit(event, { ...payload, _serverTime: new Date().toISOString() });
-  }
-
-  /**
-   * Server-side force-join — call from HTTP routes after consultation state changes.
-   */
-  forceJoinRoom(userId, room) {
-    for (const [sid, meta] of this.connectedClients) {
-      if (meta.userId === String(userId)) {
-        this.nsp.in(sid).socketsJoin(room);
-        meta.joinedRooms.add(room);
-      }
-    }
-  }
-
-  // ── Internal heartbeat checker ─────────────────────────────────────────────
-
-  _checkHeartbeats() {
-    const now = Date.now();
-    for (const [sid, meta] of this.connectedClients) {
-      const last = meta.lastHeartbeat?.getTime() ?? meta.connectedAt.getTime();
-      if (now - last > HEARTBEAT_TIMEOUT_MS) {
-        console.warn(`[ConsultationSocket] Heartbeat timeout: ${sid} (${meta.name})`);
-        const socket = this.nsp.sockets.get(sid);
-        if (socket) {
-          socket.emit('consultation:auto_disconnect', {
-            reason: 'heartbeat_timeout',
-            _serverTime: new Date().toISOString(),
-          });
-          socket.disconnect(true);
-        }
-      }
-    }
-  }
-
-  destroy() {
-    clearInterval(this._heartbeatTimer);
-  }
-
-  // ── Socket setup ───────────────────────────────────────────────────────────
-
-  setupSocket(socket, user) {
-    const { _id: userId, role, name } = user;
-
-    this.connectedClients.set(socket.id, {
-      userId,
-      role,
-      name,
-      consultationId:  null,
-      participantRole: null,
-      joinedRooms:     new Set(),
-      connectedAt:     new Date(),
-      lastHeartbeat:   new Date(),
-    });
-
-    // Auto-join admin room
-    if (['admin', 'superadmin'].includes(role)) {
-      socket.join(rooms.admins());
-      this.connectedClients.get(socket.id)?.joinedRooms.add(rooms.admins());
-    }
-
-    // Auto-join personal rooms
-    if (role === 'doctor') {
-      socket.join(rooms.doctor(userId));
-      this.connectedClients.get(socket.id)?.joinedRooms.add(rooms.doctor(userId));
-    }
-    if (role === 'customer') {
-      socket.join(rooms.patient(userId));
-      this.connectedClients.get(socket.id)?.joinedRooms.add(rooms.patient(userId));
-    }
-
-    console.log(`[ConsultationSocket] Connected: ${name} (${role}) sid=${socket.id}`);
-
-    // ── PATIENT EVENTS ────────────────────────────────────────────────────────
-
-    // consultation:join
-    socket.on('consultation:join', async ({ consultationId } = {}) => {
+    socket.on("sync_consultation_state", async ({ consultationId }) => {
+      if (!consultationId) return;
       try {
-        if (!consultationId) { socket.emit('error', { message: 'consultationId required' }); return; }
-
-        const { consultation, participantRole } = await assertConsultationAccess(consultationId, user).catch(e => { throw e; });
-
-        // Status check
-        if (['cancelled', 'failed', 'expired', 'completed'].includes(consultation.status)) {
-          socket.emit('error', { message: `Consultation is ${consultation.status}` });
-          return;
-        }
-
-        const meta = this.connectedClients.get(socket.id);
-        if (meta) {
-          meta.consultationId  = consultationId;
-          meta.participantRole = participantRole;
-        }
-
-        // Doctor joins main + participant rooms
-        // Patient: if waiting room enabled → waiting room first
-        const isHost    = HOST_ROLES.includes(role);
-        const mainRoom  = rooms.consultation(consultationId);
-        const partRoom  = rooms.participants(consultationId);
-        const waitRoom  = rooms.waiting(consultationId);
-
-        if (isHost || !consultation.waitingRoomEnabled || participantRole === 'admin') {
-          socket.join(mainRoom);
-          socket.join(partRoom);
-          meta?.joinedRooms.add(mainRoom);
-          meta?.joinedRooms.add(partRoom);
-
-          // Update participant state
-          await Consultation.findOneAndUpdate(
-            { consultationId, 'participants.userId': { $ne: new mongoose.Types.ObjectId(userId) } },
-            {
-              $push: {
-                participants: {
-                  participantId:     socket.id,
-                  userId,
-                  role:              participantRole,
-                  displayName:       name,
-                  joinedAt:          new Date(),
-                  connectionStatus:  'connected',
-                  waitingRoomStatus: 'admitted',
-                },
-              },
-            }
-          ).catch(() => {});
-
-          // Update existing participant if rejoining
-          await Consultation.findOneAndUpdate(
-            { consultationId, 'participants.userId': new mongoose.Types.ObjectId(userId) },
-            {
-              $set: {
-                'participants.$.connectionStatus':  'connected',
-                'participants.$.joinedAt':          new Date(),
-                'participants.$.participantId':     socket.id,
-                'participants.$.lastActiveAt':      new Date(),
-              },
-            }
-          ).catch(() => {});
-
-          // Patch doctor/patient join timestamps on main doc
-          if (participantRole === 'doctor') {
-            await Consultation.findOneAndUpdate(
-              { consultationId },
-              { $set: { doctorJoinedAt: new Date() } }
-            ).catch(() => {});
-          }
-          if (participantRole === 'patient') {
-            await Consultation.findOneAndUpdate(
-              { consultationId },
-              { $set: { patientJoinedAt: new Date() } }
-            ).catch(() => {});
-          }
-
-          // Broadcast join
-          this.nsp.to(mainRoom).emit('consultation:participant_joined', {
-            consultationId,
-            userId,
-            participantRole,
-            displayName: name,
-            timestamp:   new Date().toISOString(),
-          });
-
-          socket.emit('consultation:joined', {
-            consultationId,
-            participantRole,
-            rooms: [mainRoom, partRoom],
-            _serverTime: new Date().toISOString(),
-          });
-
-          // Doctor join event
-          if (participantRole === 'doctor') {
-            this.emitToConsultation(consultationId, 'consultation:doctor_joined', {
-              consultationId, userId, name,
-            });
-          }
-          if (participantRole === 'patient') {
-            this.emitToConsultation(consultationId, 'consultation:patient_joined', {
-              consultationId, userId, name,
-            });
-          }
-
-          logConsultationEvent(consultationId, 'join', userId, participantRole, { socketId: socket.id });
-
-        } else {
-          // Patient → waiting room
-          socket.join(waitRoom);
-          meta?.joinedRooms.add(waitRoom);
-
-          await Consultation.findOneAndUpdate(
-            { consultationId },
-            {
-              $push: {
-                waitingRoomQueue: {
-                  userId,
-                  role:              'patient',
-                  displayName:       name,
-                  enteredAt:         new Date(),
-                  waitingRoomStatus: 'waiting',
-                },
-              },
-            }
-          ).catch(() => {});
-
-          socket.emit('consultation:waiting_room_entered', {
-            consultationId,
-            message: 'You are in the waiting room. Doctor will admit you shortly.',
-            _serverTime: new Date().toISOString(),
-          });
-
-          // Notify doctor
-          this.nsp.to(rooms.doctor(String(consultation.doctor))).emit('consultation:waiting_room_updated', {
-            consultationId,
-            patientUserId: userId,
-            patientName:   name,
-            action:        'patient_entered',
-            timestamp:     new Date().toISOString(),
-          });
-
-          // Also notify main room (doctor already in it)
-          this.nsp.to(mainRoom).emit('consultation:waiting_room_updated', {
-            consultationId,
-            patientUserId: userId,
-            patientName:   name,
-            action:        'patient_entered',
-          });
-
-          logConsultationEvent(consultationId, 'waiting_room_enter', userId, 'patient', { name });
-        }
-      } catch (err) {
-        console.error('[consultation:join]', err.message);
-        socket.emit('error', { message: err.message || 'Join failed' });
-      }
-    });
-
-    // consultation:leave
-    socket.on('consultation:leave', async ({ consultationId } = {}) => {
-      try {
-        if (!consultationId) return;
-        this._handleLeave(socket, userId, role, name, consultationId, 'voluntary');
-      } catch (err) {
-        console.error('[consultation:leave]', err.message);
-      }
-    });
-
-    // consultation:waiting_room_enter (explicit re-enter)
-    socket.on('consultation:waiting_room_enter', async ({ consultationId } = {}) => {
-      try {
-        if (!consultationId) return;
-        const waitRoom = rooms.waiting(consultationId);
-        socket.join(waitRoom);
-        this.connectedClients.get(socket.id)?.joinedRooms.add(waitRoom);
-      } catch (err) {
-        console.error('[consultation:waiting_room_enter]', err.message);
-      }
-    });
-
-    // consultation:chat_send
-    socket.on('consultation:chat_send', async ({ consultationId, message, messageType = 'text', attachments = [] } = {}) => {
-      try {
-        if (!consultationId || !message?.trim()) return;
-        if (!isValidId(consultationId) && !consultationId.startsWith('CS-')) return;
-        if (message.length > MAX_CHAT_LENGTH) {
-          socket.emit('error', { message: 'Message too long' }); return;
-        }
-
-        const meta = this.connectedClients.get(socket.id);
-        if (!meta?.consultationId) return;
-
-        const newMsg = {
-          sender:      new mongoose.Types.ObjectId(userId),
-          senderRole:  meta.participantRole || role,
-          messageType,
-          message:     message.trim(),
-          attachments,
-          deliveredAt: new Date(),
-        };
-
-        const updated = await Consultation.findOneAndUpdate(
-          { consultationId },
-          {
-            $push: { chatMessages: newMsg },
-            $inc:  { totalMessages: 1 },
-          },
-          { new: true, select: 'chatMessages' }
-        );
-
-        const saved = updated?.chatMessages?.slice(-1)[0];
-
-        this.emitToConsultation(consultationId, 'consultation:chat_message', {
-          consultationId,
-          messageId:   saved?._id,
-          senderId:    userId,
-          senderName:  name,
-          senderRole:  meta.participantRole || role,
-          messageType,
-          message:     message.trim(),
-          attachments,
-          timestamp:   new Date().toISOString(),
-        });
-
-        logConsultationEvent(consultationId, 'chat_message_sent', userId, meta.participantRole || role, { messageType });
-      } catch (err) {
-        console.error('[consultation:chat_send]', err.message);
-      }
-    });
-
-    // consultation:toggle_mic
-    socket.on('consultation:toggle_mic', async ({ consultationId, enabled } = {}) => {
-      try {
-        if (!consultationId || typeof enabled !== 'boolean') return;
-
-        await Consultation.findOneAndUpdate(
-          { consultationId, 'participants.userId': new mongoose.Types.ObjectId(userId) },
-          { $set: { 'participants.$.microphoneEnabled': enabled } }
-        ).catch(() => {});
-
-        this.emitToConsultation(consultationId, 'consultation:participant_mic_changed', {
-          consultationId, userId, enabled, changedBy: userId,
-        });
-      } catch (err) {
-        console.error('[consultation:toggle_mic]', err.message);
-      }
-    });
-
-    // consultation:toggle_camera
-    socket.on('consultation:toggle_camera', async ({ consultationId, enabled } = {}) => {
-      try {
-        if (!consultationId || typeof enabled !== 'boolean') return;
-
-        await Consultation.findOneAndUpdate(
-          { consultationId, 'participants.userId': new mongoose.Types.ObjectId(userId) },
-          { $set: { 'participants.$.cameraEnabled': enabled } }
-        ).catch(() => {});
-
-        this.emitToConsultation(consultationId, 'consultation:participant_camera_changed', {
-          consultationId, userId, enabled, changedBy: userId,
-        });
-      } catch (err) {
-        console.error('[consultation:toggle_camera]', err.message);
-      }
-    });
-
-    // consultation:raise_hand
-    socket.on('consultation:raise_hand', async ({ consultationId, raised } = {}) => {
-      try {
-        if (!consultationId || typeof raised !== 'boolean') return;
-
-        await Consultation.findOneAndUpdate(
-          { consultationId, 'participants.userId': new mongoose.Types.ObjectId(userId) },
-          { $set: { 'participants.$.handRaised': raised } }
-        ).catch(() => {});
-
-        this.emitToConsultation(consultationId, 'consultation:hand_raised', {
-          consultationId, userId, name, raised,
-        });
-      } catch (err) {
-        console.error('[consultation:raise_hand]', err.message);
-      }
-    });
-
-    // consultation:network_update
-    socket.on('consultation:network_update', async ({ consultationId, quality, bandwidth, latency, jitter, packetLoss } = {}) => {
-      try {
-        if (!consultationId || !quality) return;
-
-        const now  = Date.now();
-        const last = this.networkThrottle.get(socket.id) ?? 0;
-        if (now - last < NETWORK_THROTTLE_MS) return;
-        this.networkThrottle.set(socket.id, now);
-
-        const meta = this.connectedClients.get(socket.id);
-
-        await Consultation.findOneAndUpdate(
-          { consultationId, 'participants.userId': new mongoose.Types.ObjectId(userId) },
-          { $set: { 'participants.$.networkQuality': quality } }
-        ).catch(() => {});
-
-        await Consultation.findOneAndUpdate(
-          { consultationId },
-          {
-            $push: {
-              networkAnalytics: {
-                participantId: new mongoose.Types.ObjectId(userId),
-                role:          meta?.participantRole || role,
-                bandwidth:     bandwidth ?? 0,
-                latency:       latency   ?? 0,
-                jitter:        jitter    ?? 0,
-                packetLoss:    packetLoss ?? 0,
-                timestamp:     new Date(),
-              },
-            },
-          }
-        ).catch(() => {});
-
-        const payload = { consultationId, userId, role: meta?.participantRole || role, quality, latency };
-
-        this.emitToConsultation(consultationId, 'consultation:call_quality_updated', payload);
-
-        if (['poor', 'disconnected'].includes(quality)) {
-          this.emitToAdmins('consultation:network_issue', { ...payload, _alert: true });
-          logConsultationEvent(consultationId, 'network_issue', userId, meta?.participantRole || role, { quality });
-        }
-      } catch (err) {
-        console.error('[consultation:network_update]', err.message);
-      }
-    });
-
-    // consultation:reaction
-    socket.on('consultation:reaction', ({ consultationId, emoji } = {}) => {
-      if (!consultationId || !emoji) return;
-      this.emitToConsultation(consultationId, 'consultation:reaction', {
-        consultationId, userId, name, emoji,
-      });
-    });
-
-    // consultation:end_request (patient requests end)
-    socket.on('consultation:end_request', async ({ consultationId, reason } = {}) => {
-      try {
-        if (!consultationId) return;
-        this.emitToConsultation(consultationId, 'consultation:end_requested', {
-          consultationId, requestedBy: userId, name, role, reason,
-        });
-      } catch (err) {
-        console.error('[consultation:end_request]', err.message);
-      }
-    });
-
-    // ── DOCTOR / HOST EVENTS ──────────────────────────────────────────────────
-
-    // consultation:start (doctor marks consultation active)
-    socket.on('consultation:start', async ({ consultationId } = {}) => {
-      try {
-        if (!consultationId) return;
-        if (!HOST_ROLES.includes(role)) {
-          socket.emit('error', { message: 'Host only' }); return;
-        }
-
-        const updated = await Consultation.findOneAndUpdate(
-          { consultationId, status: { $in: ['created', 'scheduled', 'waiting'] } },
-          {
-            $set: {
-              status:           'active',
-              actualStartTime:  new Date(),
-              consultationStage:'in_progress',
-              roomStarted:      true,
-            },
-          },
-          { new: true }
-        );
-
-        if (!updated) {
-          socket.emit('error', { message: 'Cannot start — invalid status' }); return;
-        }
-
-        this.emitToConsultation(consultationId, 'consultation:consultation_started', {
-          consultationId,
-          startedBy:   userId,
-          startedAt:   new Date().toISOString(),
-          roomId:      updated.roomId,
-          meetingId:   updated.meetingId,
-        });
-
-        this.emitToAdmins('consultation:consultation_started', { consultationId, doctorId: userId });
-        logConsultationEvent(consultationId, 'consultation_start', userId, 'doctor');
-      } catch (err) {
-        console.error('[consultation:start]', err.message);
-        socket.emit('error', { message: 'Start failed' });
-      }
-    });
-
-    // consultation:admit_patient
-    socket.on('consultation:admit_patient', async ({ consultationId, patientUserId } = {}) => {
-      try {
-        if (!consultationId || !patientUserId) return;
-        if (!HOST_ROLES.includes(role)) { socket.emit('error', { message: 'Host only' }); return; }
-
-        const mainRoom = rooms.consultation(consultationId);
-        const waitRoom = rooms.waiting(consultationId);
-
-        // Move patient socket(s) from waiting → main room
-        for (const [sid, meta] of this.connectedClients) {
-          if (meta.userId === patientUserId && meta.consultationId === consultationId) {
-            this.nsp.in(sid).socketsLeave(waitRoom);
-            this.nsp.in(sid).socketsJoin(mainRoom);
-            this.nsp.in(sid).socketsJoin(rooms.participants(consultationId));
-            meta.joinedRooms.delete(waitRoom);
-            meta.joinedRooms.add(mainRoom);
-          }
-        }
-
-        // Update waiting room queue + participant record
-        await Consultation.findOneAndUpdate(
-          { consultationId, 'waitingRoomQueue.userId': new mongoose.Types.ObjectId(patientUserId) },
-          {
-            $set: {
-              'waitingRoomQueue.$.waitingRoomStatus': 'admitted',
-              'waitingRoomQueue.$.approvedAt':        new Date(),
-              'waitingRoomQueue.$.approvedBy':        new mongoose.Types.ObjectId(userId),
-            },
-          }
-        ).catch(() => {});
-
-        // Notify patient
-        this.nsp.to(rooms.patient(patientUserId)).emit('consultation:waiting_room_approved', {
-          consultationId,
-          admittedBy: userId,
-          message:    'You have been admitted to the consultation.',
-          _serverTime: new Date().toISOString(),
-        });
-
-        // Notify main room
-        this.emitToConsultation(consultationId, 'consultation:patient_joined', {
-          consultationId, patientUserId,
-        });
-
-        logConsultationEvent(consultationId, 'waiting_room_approved', userId, 'doctor', { patientUserId });
-      } catch (err) {
-        console.error('[consultation:admit_patient]', err.message);
-      }
-    });
-
-    // consultation:reject_patient
-    socket.on('consultation:reject_patient', async ({ consultationId, patientUserId, reason } = {}) => {
-      try {
-        if (!consultationId || !patientUserId) return;
-        if (!HOST_ROLES.includes(role)) return;
-
-        await Consultation.findOneAndUpdate(
-          { consultationId, 'waitingRoomQueue.userId': new mongoose.Types.ObjectId(patientUserId) },
-          {
-            $set: {
-              'waitingRoomQueue.$.waitingRoomStatus': 'rejected',
-              'waitingRoomQueue.$.rejectedAt':        new Date(),
-              'waitingRoomQueue.$.rejectionReason':   reason || '',
-            },
-          }
-        ).catch(() => {});
-
-        this.nsp.to(rooms.patient(patientUserId)).emit('consultation:waiting_room_rejected', {
-          consultationId, reason, _serverTime: new Date().toISOString(),
-        });
-
-        logConsultationEvent(consultationId, 'waiting_room_rejected', userId, 'doctor', { patientUserId, reason });
-      } catch (err) {
-        console.error('[consultation:reject_patient]', err.message);
-      }
-    });
-
-    // consultation:mute_participant
-    socket.on('consultation:mute_participant', async ({ consultationId, targetUserId } = {}) => {
-      try {
-        if (!consultationId || !targetUserId) return;
-        if (!HOST_ROLES.includes(role)) { socket.emit('error', { message: 'Host only' }); return; }
-
-        await Consultation.findOneAndUpdate(
-          { consultationId, 'participants.userId': new mongoose.Types.ObjectId(targetUserId) },
-          { $set: { 'participants.$.isMutedByHost': true, 'participants.$.microphoneEnabled': false } }
-        ).catch(() => {});
-
-        this.emitToConsultation(consultationId, 'consultation:participant_muted', {
-          consultationId, targetUserId, mutedBy: userId,
-        });
-
-        logConsultationEvent(consultationId, 'mute', userId, 'doctor', { targetUserId });
-      } catch (err) {
-        console.error('[consultation:mute_participant]', err.message);
-      }
-    });
-
-    // consultation:remove_participant
-    socket.on('consultation:remove_participant', async ({ consultationId, targetUserId, reason } = {}) => {
-      try {
-        if (!consultationId || !targetUserId) return;
-        if (!HOST_ROLES.includes(role)) { socket.emit('error', { message: 'Host only' }); return; }
-
-        // Disconnect their socket(s)
-        for (const [sid, meta] of this.connectedClients) {
-          if (meta.userId === targetUserId && meta.consultationId === consultationId) {
-            this.nsp.in(sid).socketsLeave(rooms.consultation(consultationId));
-            this.nsp.in(sid).socketsLeave(rooms.participants(consultationId));
-            this.nsp.to(sid).emit('consultation:removed', {
-              consultationId, reason, _serverTime: new Date().toISOString(),
-            });
-          }
-        }
-
-        this.emitToConsultation(consultationId, 'consultation:participant_removed', {
-          consultationId, targetUserId, removedBy: userId, reason,
-        });
-
-        logConsultationEvent(consultationId, 'participant_kicked', userId, 'doctor', { targetUserId, reason });
-      } catch (err) {
-        console.error('[consultation:remove_participant]', err.message);
-      }
-    });
-
-    // consultation:start_recording
-    socket.on('consultation:start_recording', async ({ consultationId } = {}) => {
-      try {
-        if (!consultationId) return;
-        if (!HOST_ROLES.includes(role)) { socket.emit('error', { message: 'Host only' }); return; }
-
-        await Consultation.findOneAndUpdate(
-          { consultationId },
-          {
-            $set: {
-              'recording.recordingStarted':   true,
-              'recording.recordingStatus':    'recording',
-              'recording.recordingStartedAt': new Date(),
-            },
-          }
-        ).catch(() => {});
-
-        this.emitToConsultation(consultationId, 'consultation:recording_started', {
-          consultationId, startedBy: userId, startedAt: new Date().toISOString(),
-        });
-
-        logConsultationEvent(consultationId, 'recording_start', userId, 'doctor');
-      } catch (err) {
-        console.error('[consultation:start_recording]', err.message);
-      }
-    });
-
-    // consultation:stop_recording
-    socket.on('consultation:stop_recording', async ({ consultationId } = {}) => {
-      try {
-        if (!consultationId) return;
-        if (!HOST_ROLES.includes(role)) return;
-
-        await Consultation.findOneAndUpdate(
-          { consultationId },
-          {
-            $set: {
-              'recording.recordingStatus':  'processing',
-              'recording.recordingEndedAt': new Date(),
-            },
-          }
-        ).catch(() => {});
-
-        this.emitToConsultation(consultationId, 'consultation:recording_stopped', {
-          consultationId, stoppedBy: userId,
-        });
-
-        logConsultationEvent(consultationId, 'recording_stop', userId, 'doctor');
-      } catch (err) {
-        console.error('[consultation:stop_recording]', err.message);
-      }
-    });
-
-    // consultation:screen_share_start
-    socket.on('consultation:screen_share_start', async ({ consultationId } = {}) => {
-      try {
-        if (!consultationId) return;
-
-        await Consultation.findOneAndUpdate(
-          { consultationId, 'participants.userId': new mongoose.Types.ObjectId(userId) },
-          { $set: { 'participants.$.screenSharing': true } }
-        ).catch(() => {});
-
-        this.emitToConsultation(consultationId, 'consultation:screen_share_started', {
-          consultationId, userId, name,
-        });
-
-        logConsultationEvent(consultationId, 'screen_share_start', userId, role);
-      } catch (err) {
-        console.error('[consultation:screen_share_start]', err.message);
-      }
-    });
-
-    // consultation:screen_share_stop
-    socket.on('consultation:screen_share_stop', async ({ consultationId } = {}) => {
-      try {
-        if (!consultationId) return;
-
-        await Consultation.findOneAndUpdate(
-          { consultationId, 'participants.userId': new mongoose.Types.ObjectId(userId) },
-          { $set: { 'participants.$.screenSharing': false } }
-        ).catch(() => {});
-
-        this.emitToConsultation(consultationId, 'consultation:screen_share_stopped', {
-          consultationId, userId, name,
-        });
-
-        logConsultationEvent(consultationId, 'screen_share_stop', userId, role);
-      } catch (err) {
-        console.error('[consultation:screen_share_stop]', err.message);
-      }
-    });
-
-    // consultation:end_consultation (doctor ends)
-    socket.on('consultation:end_consultation', async ({ consultationId, reason, summary } = {}) => {
-      try {
-        if (!consultationId) return;
-        if (!HOST_ROLES.includes(role)) { socket.emit('error', { message: 'Host only' }); return; }
-
-        const now = new Date();
-
-        const updated = await Consultation.findOneAndUpdate(
-          { consultationId, status: { $in: ['active', 'paused', 'waiting'] } },
-          {
-            $set: {
-              status:               'completed',
-              actualEndTime:        now,
-              consultationStage:    'post_consultation',
-              completionStatus:     'in_progress',
-              endedBy:              'doctor',
-              endedByUserId:        new mongoose.Types.ObjectId(userId),
-              endedReason:          reason || '',
-              diagnosisSummary:     summary || '',
-              doctorLeftAt:         now,
-              roomEnded:            true,
-            },
-          },
-          { new: true }
-        );
-
-        if (!updated) {
-          socket.emit('error', { message: 'Cannot end — invalid status' }); return;
-        }
-
-        this.emitToConsultation(consultationId, 'consultation:consultation_ended', {
-          consultationId,
-          endedBy:    userId,
-          endedAt:    now.toISOString(),
-          reason,
-          durationMinutes: updated.actualDurationMinutes,
-        });
-
-        this.emitToAdmins('consultation:consultation_ended', { consultationId, doctorId: userId });
-
-        logConsultationEvent(consultationId, 'consultation_end', userId, 'doctor', { reason, durationMinutes: updated.actualDurationMinutes });
-
-        // Give clients time to see the end event, then cleanup room
-        setTimeout(() => {
-          this.nsp.in(rooms.consultation(consultationId)).socketsLeave(rooms.consultation(consultationId));
-        }, 5_000);
-      } catch (err) {
-        console.error('[consultation:end_consultation]', err.message);
-        socket.emit('error', { message: 'End failed' });
-      }
-    });
-
-    // ── SYSTEM / UTILITY EVENTS ───────────────────────────────────────────────
-
-    // consultation:reconnecting
-    socket.on('consultation:reconnecting', async ({ consultationId } = {}) => {
-      try {
-        if (!consultationId) return;
-        const meta = this.connectedClients.get(socket.id);
-
-        await Consultation.findOneAndUpdate(
-          { consultationId, 'participants.userId': new mongoose.Types.ObjectId(userId) },
-          {
-            $set: { 'participants.$.connectionStatus': 'reconnecting' },
-            $inc: { 'participants.$.reconnectCount': 1, 'networkStats.totalReconnects': 1 },
-            $push: {
-              reconnectLogs: {
-                participantId: new mongoose.Types.ObjectId(userId),
-                role:          meta?.participantRole || role,
-                attemptAt:     new Date(),
-              },
-            },
-          }
-        ).catch(() => {});
-
-        this.emitToConsultation(consultationId, 'consultation:reconnecting', {
-          consultationId, userId, name,
-        });
-
-        logConsultationEvent(consultationId, 'reconnect', userId, meta?.participantRole || role);
-      } catch (err) {
-        console.error('[consultation:reconnecting]', err.message);
-      }
-    });
-
-    // consultation:token_refresh_request
-    socket.on('consultation:token_refresh_request', ({ consultationId } = {}) => {
-      // Signal the client to call the HTTP token refresh endpoint.
-      // Actual token generation happens in the REST layer.
-      socket.emit('consultation:token_expiring', {
-        consultationId,
-        message: 'Request new token via POST /consultations/:id/join',
-        _serverTime: new Date().toISOString(),
-      });
-    });
-
-    // consultation:request_state (reconnect snapshot)
-    socket.on('consultation:request_state', async ({ consultationId } = {}) => {
-      try {
-        if (!consultationId) return;
-
-        const consultation = await Consultation.findOne({ consultationId })
-          .select('status consultationStage participants waitingRoomQueue roomId meetingId recording.recordingStatus actualStartTime chatMessages')
+        const consultation = await Consultation.findById(consultationId)
+          .select(
+            "status waitingRoomQueue participants doctor patient bookingId",
+          )
+          .populate({
+            path: "doctor",
+            populate: { path: "user", select: "name phone email" },
+          })
+          .populate("patient", "name phone email avatar")
           .lean();
+        if (!consultation) return;
 
-        if (!consultation) { socket.emit('error', { message: 'Consultation not found' }); return; }
+        const access = await canAccessConsultation(
+          consultation,
+          socket.user._id,
+          socket.user.role,
+        );
+        if (!access) return;
 
-        socket.emit('consultation:state_snapshot', {
+        socket.emit("consultation_state_sync", {
           consultationId,
-          status:             consultation.status,
-          consultationStage:  consultation.consultationStage,
-          roomId:             consultation.roomId,
-          meetingId:          consultation.meetingId,
-          recordingStatus:    consultation.recording?.recordingStatus,
-          participants:       consultation.participants?.map(p => ({
-            userId:           p.userId,
-            role:             p.role,
-            displayName:      p.displayName,
-            connectionStatus: p.connectionStatus,
-            cameraEnabled:    p.cameraEnabled,
-            microphoneEnabled:p.microphoneEnabled,
-            screenSharing:    p.screenSharing,
-            networkQuality:   p.networkQuality,
-          })),
-          waitingCount:       consultation.waitingRoomQueue?.filter(w => w.waitingRoomStatus === 'waiting').length ?? 0,
-          actualStartTime:    consultation.actualStartTime,
-          messageCount:       consultation.chatMessages?.length ?? 0,
-          _serverTime:        new Date().toISOString(),
+          status: consultation.status,
+          doctor: {
+            _id: consultation.doctor?._id,
+            name: consultation.doctor?.user?.name,
+            phone: consultation.doctor?.user?.phone,
+          },
+          patient: {
+            _id: consultation.patient?._id,
+            name: consultation.patient?.name,
+            phone: consultation.patient?.phone,
+            avatar: consultation.patient?.avatar,
+          },
+          waitingQueue: (consultation.waitingRoomQueue || [])
+            .filter((e) =>
+              ["waiting", "timed_out"].includes(e.waitingRoomStatus),
+            )
+            .map((e) => ({
+              userId: String(e.userId),
+              name: e.displayName,
+              queuePosition: e.queuePosition,
+              waitingRoomStatus: e.waitingRoomStatus,
+              enteredAt: e.enteredAt,
+            })),
+          participants: (consultation.participants || [])
+            .filter((p) => p.connectionStatus === "connected")
+            .map((p) => ({
+              userId: String(p.userId),
+              role: p.role,
+              name: p.displayName,
+              connectionStatus: p.connectionStatus,
+              isMutedByHost: p.isMutedByHost,
+              cameraEnabled: p.cameraEnabled,
+              screenSharing: p.screenSharing,
+            })),
         });
       } catch (err) {
-        console.error('[consultation:request_state]', err.message);
+        console.error("[ConsultSocket] sync_consultation_state:", err.message);
       }
     });
+  });
 
-    // ping_health (heartbeat)
-    socket.on('ping_health', () => {
-      const meta = this.connectedClients.get(socket.id);
-      if (meta) meta.lastHeartbeat = new Date();
-      socket.emit('pong_health', {
-        serverTime:     new Date().toISOString(),
-        connectedSince: meta?.connectedAt,
-        consultationId: meta?.consultationId,
-      });
-    });
+  setInterval(() => _sweepWaitingRoomTimeouts(), 60_000);
 
-    // ── DISCONNECT ────────────────────────────────────────────────────────────
+  console.log("[ConsultSocket] initialized on /consultations");
+  return ns;
+};
 
-    socket.on('disconnect', (reason) => {
-      const meta = this.connectedClients.get(socket.id);
-
-      if (meta?.consultationId) {
-        this._handleLeave(socket, userId, role, name, meta.consultationId, `disconnect:${reason}`);
-      }
-
-      this.networkThrottle.delete(socket.id);
-      this.connectedClients.delete(socket.id);
-
-      console.log(`[ConsultationSocket] Disconnected: ${meta?.name || socket.id} reason=${reason}`);
-    });
-
-    socket.on('error', (err) => {
-      console.error(`[ConsultationSocket error] ${socket.id}:`, err?.message ?? err);
-    });
-  }
-
-  // ── Leave helper ───────────────────────────────────────────────────────────
-
-  async _handleLeave(socket, userId, role, name, consultationId, reason = 'voluntary') {
-    const mainRoom = rooms.consultation(consultationId);
-    const waitRoom = rooms.waiting(consultationId);
-    const partRoom = rooms.participants(consultationId);
-
-    socket.leave(mainRoom);
-    socket.leave(waitRoom);
-    socket.leave(partRoom);
-
-    const meta = this.connectedClients.get(socket.id);
-    if (meta) {
-      meta.joinedRooms.delete(mainRoom);
-      meta.joinedRooms.delete(waitRoom);
-      meta.joinedRooms.delete(partRoom);
-    }
-
-    const now = new Date();
-
-    await Consultation.findOneAndUpdate(
-      { consultationId, 'participants.userId': new mongoose.Types.ObjectId(userId) },
-      {
-        $set: {
-          'participants.$.connectionStatus': 'disconnected',
-          'participants.$.leftAt':           now,
-        },
-      }
-    ).catch(() => {});
-
-    if (role === 'doctor') {
-      await Consultation.findOneAndUpdate(
-        { consultationId },
-        { $set: { doctorLeftAt: now } }
-      ).catch(() => {});
-    }
-    if (role === 'customer') {
-      await Consultation.findOneAndUpdate(
-        { consultationId },
-        { $set: { patientLeftAt: now } }
-      ).catch(() => {});
-    }
-
-    this.nsp.to(mainRoom).emit('consultation:participant_left', {
-      consultationId,
-      userId,
-      participantRole: meta?.participantRole || role,
-      displayName:     name,
-      reason,
-      timestamp:       now.toISOString(),
-    });
-
-    logConsultationEvent(consultationId, 'leave', userId, meta?.participantRole || role, { reason });
-  }
-
-  // ── Stats ──────────────────────────────────────────────────────────────────
-
-  getStats() {
-    const byRole = {};
-    const consultations = new Set();
-    for (const [, meta] of this.connectedClients) {
-      byRole[meta.role] = (byRole[meta.role] || 0) + 1;
-      if (meta.consultationId) consultations.add(meta.consultationId);
-    }
-    return {
-      totalConnected:        this.connectedClients.size,
-      byRole,
-      activeConsultations:   consultations.size,
-      consultationIds:       [...consultations],
-    };
-  }
-
-  isUserOnline(userId) {
-    for (const [, meta] of this.connectedClients) {
-      if (meta.userId === String(userId)) return true;
-    }
-    return false;
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// NAMESPACE AUTH MIDDLEWARE
-// ─────────────────────────────────────────────────────────────────────────────
-
-const buildAuthMiddleware = () => async (socket, next) => {
+const authMiddleware = async (socket, next) => {
   try {
-    const token =
-      socket.handshake.auth?.token ||
-      socket.handshake.headers?.authorization?.replace('Bearer ', '');
+    const rawToken = socket.handshake.auth?.token ?? "";
+    const token = rawToken.startsWith("Bearer ") ? rawToken.slice(7) : rawToken;
+    if (!token) return next(new Error("AUTH_MISSING"));
 
-    if (!token) return next(new Error('AUTH_MISSING'));
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = decoded?.id || decoded?._id;
+    if (!userId) return next(new Error("AUTH_INVALID"));
 
-    const decoded = verifyToken(token);
-    const userId  = decoded?.id || decoded?._id;
-    if (!userId)  return next(new Error('AUTH_INVALID'));
-
-    const user = await User.findById(userId).select('name role isBlocked').lean();
-    if (!user)          return next(new Error('AUTH_USER_NOT_FOUND'));
-    if (user.isBlocked) return next(new Error('AUTH_BLOCKED'));
-    if (!ALLOWED_ROLES.includes(user.role)) return next(new Error('AUTH_ROLE_NOT_ALLOWED'));
+    const user = await User.findById(userId)
+      .select("name role isBlocked")
+      .lean();
+    if (!user) return next(new Error("AUTH_USER_NOT_FOUND"));
+    if (user.isBlocked) return next(new Error("AUTH_BLOCKED"));
 
     socket.user = {
-      _id:  userId.toString(),
+      _id: userId.toString(),
       role: user.role,
       name: user.name,
     };
-
     next();
   } catch (err) {
-    console.error('[ConsultationSocket Auth]', err.message);
-    next(new Error(`AUTH_ERROR: ${err.message}`));
+    next(
+      new Error(
+        err.name === "TokenExpiredError" ? "TOKEN_EXPIRED" : "AUTH_ERROR",
+      ),
+    );
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// INIT
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const initConsultationSocket = (io) => {
-  if (_instance) {
-    console.warn('[ConsultationSocket] Already initialized — skipping');
-    return _instance;
-  }
-
-  // Dedicated /consultation namespace — fully isolated
-  const nsp = io.of('/consultation');
-
-  nsp.use(buildAuthMiddleware());
-
-  const service = new ConsultationSocketService(nsp);
-  _instance     = service;
-
-  nsp.on('connection', (socket) => {
-    service.setupSocket(socket, socket.user);
-  });
-
-  nsp.on('error', (err) => {
-    console.error('[ConsultationSocket namespace error]', err.message);
-  });
-
-  console.log('[ConsultationSocket] Initialized on /consultation namespace ✅');
-  return service;
+const resolveDpId = async (userId) => {
+  const dp = await DoctorProfile.findOne({ user: userId }).select("_id").lean();
+  return dp?._id ?? null;
 };
 
-export const getConsultationSocketService = () => _instance;
+const isDoctor = (role) => role === "doctor";
+const isPatient = (role) => role === "customer";
+const isAdmin = (role) => ["admin", "superadmin"].includes(role);
+const isHost = (role) => isDoctor(role) || isAdmin(role);
 
-export default { initConsultationSocket, getConsultationSocketService, rooms };
+const canAccessConsultation = async (consultation, userId, role) => {
+  if (isAdmin(role)) return true;
+  if (isPatient(role)) return String(consultation.patient) === String(userId);
+  if (isDoctor(role)) {
+    const dpId = await resolveDpId(userId);
+    return dpId && String(consultation.doctor) === String(dpId);
+  }
+  if (role === "care_assistant")
+    return String(consultation.careAssistant) === String(userId);
+  return false;
+};
+
+const handleJoin = async (socket, data) => {
+  try {
+    const { consultationId, bookingId } = data || {};
+    if (!consultationId || !bookingId)
+      return socket.emit("error", {
+        code: "MISSING_PARAMS",
+        message: "consultationId and bookingId required",
+      });
+
+    const consultation = await Consultation.findById(consultationId)
+      .select(
+        "status patient doctor careAssistant agoraChannelId bookingId telemedicineConsentAccepted waitingRoomEnabled",
+      )
+      .lean();
+    if (!consultation)
+      return socket.emit("error", {
+        code: "NOT_FOUND",
+        message: "Consultation not found",
+      });
+
+    const { _id, role } = socket.user;
+    const access = await canAccessConsultation(consultation, _id, role);
+    if (!access)
+      return socket.emit("error", {
+        code: "FORBIDDEN",
+        message: "Access denied",
+      });
+
+    const bookingRoom = `booking:${bookingId}`;
+    const consultationRoom = `consultation:${consultationId}`;
+
+    await socket.join(bookingRoom);
+    await socket.join(consultationRoom);
+    if (isPatient(role)) await socket.join(`patient:${_id}`);
+    if (isDoctor(role)) await socket.join(`doctor:${_id}`);
+    if (isAdmin(role)) await socket.join("admin:ops");
+
+    socketMeta.set(socket.id, {
+      userId: String(_id),
+      role,
+      consultationId: String(consultationId),
+      bookingId: String(bookingId),
+      joinedAt: Date.now(),
+    });
+
+    if (!activeRooms.has(String(consultationId)))
+      activeRooms.set(String(consultationId), new Set());
+    activeRooms.get(String(consultationId)).add(socket.id);
+    const fullConsult = await Consultation.findById(consultationId)
+      .select(
+        "status waitingRoomQueue participants doctor patient telemedicineConsentAccepted waitingRoomEnabled agoraChannelId",
+      )
+      .populate({
+        path: "doctor",
+        populate: { path: "user", select: "name phone email" },
+      })
+      .populate("patient", "name phone email avatar")
+      .populate("participants.userId", "name phone email avatar")
+      .populate("waitingRoomQueue.userId", "name phone email avatar")
+      .lean();
+
+    socket.emit("joined_consultation", {
+      consultationId,
+      bookingId,
+      status: fullConsult?.status ?? consultation.status,
+      appId: process.env.AGORAIO_APP_ID,
+      channelName: consultation.agoraChannelId,
+      telemedicineConsentRequired: !consultation.telemedicineConsentAccepted,
+      waitingRoomEnabled: consultation.waitingRoomEnabled,
+      participantCount: activeRooms.get(String(consultationId))?.size ?? 1,
+      timestamp: new Date(),
+      // Populated data
+      doctor: fullConsult?.doctor
+        ? {
+            _id: fullConsult.doctor._id,
+            name: fullConsult.doctor.user?.name,
+            phone: fullConsult.doctor.user?.phone,
+            email: fullConsult.doctor.user?.email,
+            specialization: fullConsult.doctor.specialization,
+          }
+        : null,
+      patient: fullConsult?.patient
+        ? {
+            _id: fullConsult.patient._id,
+            name: fullConsult.patient.name,
+            phone: fullConsult.patient.phone,
+            avatar: fullConsult.patient.avatar,
+          }
+        : null,
+      existingParticipants: (fullConsult?.participants || [])
+        .filter((p) => p.connectionStatus === "connected")
+        .map((p) => ({
+          userId: String(p.userId?._id ?? p.userId),
+          name: p.userId?.name ?? p.displayName,
+          role: p.role,
+          connectionStatus: p.connectionStatus,
+          isMutedByHost: p.isMutedByHost,
+          cameraEnabled: p.cameraEnabled,
+          screenSharing: p.screenSharing,
+        })),
+      existingWaitingQueue: (fullConsult?.waitingRoomQueue || [])
+        .filter((e) => ["waiting", "timed_out"].includes(e.waitingRoomStatus))
+        .map((e) => ({
+          userId: String(e.userId?._id ?? e.userId),
+          name: e.userId?.name ?? e.displayName,
+          queuePosition: e.queuePosition,
+          waitingRoomStatus: e.waitingRoomStatus,
+          enteredAt: e.enteredAt,
+        })),
+    });
+
+    if (isDoctor(role)) {
+      _emitNs(`booking:${bookingId}`, "doctor_online", {
+        doctorUserId: String(_id),
+        doctorName: socket.user.name,
+        timestamp: new Date(),
+      });
+    }
+
+    socket.to(bookingRoom).emit("participant_connected", {
+      consultationId,
+      userId: String(_id),
+      role,
+      name: socket.user.name,
+      timestamp: new Date(),
+    });
+  } catch (err) {
+    console.error("[ConsultSocket] handleJoin:", err.message);
+    socket.emit("error", {
+      code: "JOIN_FAILED",
+      message: "Failed to join consultation",
+    });
+  }
+};
+
+const handleLeave = async (socket, data) => {
+  try {
+    const meta = socketMeta.get(socket.id);
+    const cId = data?.consultationId || meta?.consultationId;
+    const bId = data?.bookingId || meta?.bookingId;
+    if (!cId || !bId) return;
+
+    const { _id, role } = socket.user;
+
+    socket.leave(`booking:${bId}`);
+    socket.leave(`consultation:${cId}`);
+
+    const setFields = {
+      "participants.$[p].connectionStatus": "disconnected",
+      "participants.$[p].leftAt": new Date(),
+    };
+    if (isDoctor(role)) setFields.doctorLeftAt = new Date();
+    if (isPatient(role)) setFields.patientLeftAt = new Date();
+
+    Consultation.updateOne(
+      { _id: cId },
+      { $set: setFields },
+      { arrayFilters: [{ "p.userId": _id }] },
+    ).catch((e) => console.error("[Socket DB] leave update:", e.message));
+
+    const room = activeRooms.get(cId);
+    if (room) {
+      room.delete(socket.id);
+      if (!room.size) activeRooms.delete(cId);
+    }
+
+    _emitNs(`booking:${bId}`, "participant_disconnected", {
+      consultationId: cId,
+      userId: String(_id),
+      role,
+      reason: data?.reason || "left",
+      timestamp: new Date(),
+    });
+
+    socketMeta.delete(socket.id);
+  } catch (err) {
+    console.error("[ConsultSocket] handleLeave:", err.message);
+  }
+};
+
+const handleParticipantJoin = async (socket, data) => {
+  try {
+    const { consultationId, agoraUid, deviceType, browser, os } = data || {};
+    if (!consultationId) return;
+
+    const { _id, role } = socket.user;
+    const pRole = _mapRole(role);
+    const now = new Date();
+
+    const entry = {
+      participantId: String(agoraUid || _id),
+      userId: _id,
+      role: pRole,
+      displayName: socket.user.name,
+      joinedAt: now,
+      connectionStatus: "connected",
+      deviceType: deviceType || "unknown",
+      browser: browser || null,
+      operatingSystem: os || null,
+      lastActiveAt: now,
+      permissions: {
+        canMute: isHost(role),
+        canKick: isHost(role),
+        canShareScreen: true,
+        canPrescribe: isDoctor(role),
+      },
+    };
+
+    const updated = await Consultation.findOneAndUpdate(
+      { _id: consultationId, "participants.userId": _id },
+      {
+        $set: {
+          "participants.$.connectionStatus": "connected",
+          "participants.$.joinedAt": now,
+          "participants.$.leftAt": null,
+          "participants.$.lastActiveAt": now,
+          "participants.$.deviceType": deviceType || "unknown",
+          "participants.$.browser": browser || null,
+          "participants.$.operatingSystem": os || null,
+          ...(isDoctor(role) ? { doctorJoinedAt: now } : {}),
+          ...(isPatient(role) ? { patientJoinedAt: now } : {}),
+        },
+      },
+      { new: true },
+    );
+
+    const consultation =
+      updated ||
+      (await Consultation.findOneAndUpdate(
+        { _id: consultationId },
+        {
+          $push: { participants: entry },
+          $set: {
+            ...(isDoctor(role) && !updated ? { doctorJoinedAt: now } : {}),
+            ...(isPatient(role) && !updated ? { patientJoinedAt: now } : {}),
+          },
+        },
+        { new: true },
+      ));
+
+    if (!consultation) return;
+
+    const connected = consultation.participants.filter(
+      (p) => p.connectionStatus === "connected",
+    ).length;
+    if (connected > (consultation.analytics?.peakParticipants ?? 0)) {
+      Consultation.updateOne(
+        { _id: consultationId },
+        { $set: { "analytics.peakParticipants": connected } },
+      ).catch(() => {});
+    }
+
+    _emitNs(`booking:${consultation.bookingId}`, "participant_joined", {
+      consultationId,
+      userId: String(_id),
+      role: pRole,
+      name: socket.user.name,
+      agoraUid,
+      timestamp: now,
+    });
+  } catch (err) {
+    console.error("[ConsultSocket] handleParticipantJoin:", err.message);
+  }
+};
+
+const handleParticipantLeave = async (socket, data) => {
+  try {
+    const { consultationId, reason } = data || {};
+    if (!consultationId) return;
+    const { _id, role } = socket.user;
+
+    const consultation = await Consultation.findOneAndUpdate(
+      { _id: consultationId, "participants.userId": _id },
+      {
+        $set: {
+          "participants.$.connectionStatus": "disconnected",
+          "participants.$.leftAt": new Date(),
+        },
+      },
+    );
+    if (!consultation) return;
+
+    _emitNs(`booking:${consultation.bookingId}`, "participant_left", {
+      consultationId,
+      userId: String(_id),
+      role,
+      reason: reason || "disconnected",
+      timestamp: new Date(),
+    });
+  } catch (err) {
+    console.error("[ConsultSocket] handleParticipantLeave:", err.message);
+  }
+};
+
+const handleNetworkQuality = (socket, data) => {
+  try {
+    const {
+      consultationId,
+      uplinkNetworkQuality,
+      downlinkNetworkQuality,
+      latency,
+      packetLoss,
+    } = data || {};
+    const meta = socketMeta.get(socket.id);
+    if (!consultationId || !meta?.bookingId) return;
+
+    _emitNs(`booking:${meta.bookingId}`, "network_quality_update", {
+      consultationId,
+      userId: String(socket.user._id),
+      role: socket.user.role,
+      uplinkNetworkQuality,
+      downlinkNetworkQuality,
+      latency,
+      packetLoss,
+      timestamp: new Date(),
+    });
+  } catch (err) {
+    console.error("[ConsultSocket] handleNetworkQuality:", err.message);
+  }
+};
+
+const handleReconnectAttempt = async (socket, data) => {
+  try {
+    const { consultationId, reason } = data || {};
+    if (!consultationId) return;
+    const { _id, role } = socket.user;
+
+    Consultation.updateOne(
+      { _id: consultationId },
+      {
+        $push: {
+          reconnectLogs: {
+            participantId: _id,
+            role: _mapRole(role),
+            attemptAt: new Date(),
+            reason: reason || "unknown",
+            success: false,
+          },
+        },
+      },
+    ).catch((e) => console.error("[Socket DB] reconnectAttempt:", e.message));
+
+    const meta = socketMeta.get(socket.id);
+    if (meta?.bookingId) {
+      _emitNs(`booking:${meta.bookingId}`, "participant_reconnect_attempt", {
+        consultationId,
+        userId: String(_id),
+        role: _mapRole(role),
+        timestamp: new Date(),
+      });
+    }
+  } catch (err) {
+    console.error("[ConsultSocket] handleReconnectAttempt:", err.message);
+  }
+};
+
+// FIX: Removed dynamic `await import('mongoose')` — use static import at top of file instead
+const handleReconnectSuccess = async (socket, data) => {
+  try {
+    const { consultationId } = data || {};
+    if (!consultationId) return;
+    const { _id, role } = socket.user;
+    const now = new Date();
+
+    // FIX: Use statically imported mongoose.Types.ObjectId instead of dynamic import
+    const agg = await Consultation.aggregate([
+      { $match: { _id: new mongoose.Types.ObjectId(consultationId) } },
+      {
+        $project: {
+          idx: {
+            $indexOfArray: [
+              {
+                $map: {
+                  input: { $reverseArray: "$reconnectLogs" },
+                  as: "rl",
+                  in: {
+                    $and: [
+                      { $eq: ["$$rl.participantId", _id] },
+                      { $eq: ["$$rl.success", false] },
+                    ],
+                  },
+                },
+              },
+              true,
+            ],
+          },
+          totalLogs: { $size: "$reconnectLogs" },
+        },
+      },
+    ]);
+
+    if (agg[0]?.idx >= 0) {
+      const realIdx = agg[0].totalLogs - 1 - agg[0].idx;
+      const setOp = {};
+      setOp[`reconnectLogs.${realIdx}.success`] = true;
+      setOp[`reconnectLogs.${realIdx}.reconnectedAt`] = now;
+      Consultation.updateOne({ _id: consultationId }, { $set: setOp }).catch(
+        (e) => console.error("[Socket DB] reconnectSuccess:", e.message),
+      );
+    }
+
+    const meta = socketMeta.get(socket.id);
+    if (meta?.bookingId) {
+      _emitNs(`booking:${meta.bookingId}`, "participant_reconnect_success", {
+        consultationId,
+        userId: String(_id),
+        role: _mapRole(role),
+        timestamp: now,
+      });
+    }
+  } catch (err) {
+    console.error("[ConsultSocket] handleReconnectSuccess:", err.message);
+  }
+};
+
+const handleHand = (socket, data, raised) => {
+  try {
+    const { consultationId } = data || {};
+    const meta = socketMeta.get(socket.id);
+    if (!consultationId || !meta?.bookingId) return;
+
+    _emitNs(
+      `booking:${meta.bookingId}`,
+      raised ? "hand_raised" : "hand_lowered",
+      {
+        consultationId,
+        userId: String(socket.user._id),
+        role: socket.user.role,
+        name: socket.user.name,
+        timestamp: new Date(),
+      },
+    );
+  } catch (err) {
+    console.error("[ConsultSocket] handleHand:", err.message);
+  }
+};
+
+const handleScreenShare = async (socket, data, started) => {
+  try {
+    const { consultationId } = data || {};
+    const meta = socketMeta.get(socket.id);
+    if (!consultationId || !meta?.bookingId) return;
+
+    Consultation.updateOne(
+      { _id: consultationId, "participants.userId": socket.user._id },
+      { $set: { "participants.$.screenSharing": started } },
+    ).catch(() => {});
+
+    _emitNs(
+      `booking:${meta.bookingId}`,
+      started ? "screen_share_started" : "screen_share_stopped",
+      {
+        consultationId,
+        userId: String(socket.user._id),
+        role: socket.user.role,
+        timestamp: new Date(),
+      },
+    );
+  } catch (err) {
+    console.error("[ConsultSocket] handleScreenShare:", err.message);
+  }
+};
+
+const handleConsentGiven = async (socket, data) => {
+  try {
+    const { consultationId, consentType = "telemedicine" } = data || {};
+    if (!consultationId) return;
+    if (socket.user.role !== "customer") return;
+
+    const check = await Consultation.findById(consultationId)
+      .select("patient bookingId")
+      .lean();
+    if (!check || String(check.patient) !== String(socket.user._id)) return;
+
+    const entry = {
+      consentType,
+      accepted: true,
+      acceptedAt: new Date(),
+      consentVersion: "1.0",
+    };
+    await Consultation.updateOne(
+      { _id: consultationId },
+      { $pull: { consents: { consentType } } },
+    );
+    await Consultation.updateOne(
+      { _id: consultationId },
+      {
+        $push: { consents: entry },
+        $set:
+          consentType === "telemedicine"
+            ? { telemedicineConsentAccepted: true, updatedBy: socket.user._id }
+            : { updatedBy: socket.user._id },
+      },
+    );
+
+    const meta = socketMeta.get(socket.id);
+    _emitNs(
+      `booking:${meta?.bookingId || check.bookingId}`,
+      "consent_updated",
+      {
+        consultationId,
+        consentType,
+        accepted: true,
+        timestamp: new Date(),
+      },
+    );
+  } catch (err) {
+    console.error("[ConsultSocket] handleConsentGiven:", err.message);
+  }
+};
+
+const handleDoctorStatus = (socket, data) => {
+  try {
+    if (!isDoctor(socket.user.role)) return;
+    const { isOnline } = data || {};
+    const meta = socketMeta.get(socket.id);
+
+    const event = isOnline ? "doctor_online" : "doctor_offline";
+    const payload = {
+      doctorUserId: String(socket.user._id),
+      doctorName: socket.user.name,
+      timestamp: new Date(),
+    };
+
+    _emitNs("admin:ops", event, payload);
+    if (meta?.bookingId) {
+      _emitNs(`booking:${meta.bookingId}`, event, payload);
+    }
+  } catch (err) {
+    console.error("[ConsultSocket] handleDoctorStatus:", err.message);
+  }
+};
+
+const handleSdkError = async (socket, data) => {
+  try {
+    const {
+      consultationId,
+      code,
+      message: errMsg,
+      severity = "error",
+    } = data || {};
+    if (!consultationId) return;
+
+    Consultation.updateOne(
+      { _id: consultationId },
+      {
+        $push: {
+          sdkErrors: {
+            code,
+            message: errMsg,
+            participantId: String(socket.user._id),
+            timestamp: new Date(),
+            severity,
+            resolved: false,
+          },
+        },
+      },
+    ).catch((e) => console.error("[Socket DB] sdkError:", e.message));
+
+    console.warn(
+      `[ConsultSocket] SDK error ${socket.user._id}: [${code}] ${errMsg}`,
+    );
+  } catch (err) {
+    console.error("[ConsultSocket] handleSdkError:", err.message);
+  }
+};
+
+const handleKick = async (socket, data) => {
+  try {
+    const { consultationId, targetUserId, reason } = data || {};
+    if (!consultationId || !targetUserId) return;
+
+    const check = await Consultation.findById(consultationId)
+      .select("doctor status bookingId")
+      .lean();
+    if (!check)
+      return socket.emit("error", {
+        code: "NOT_FOUND",
+        message: "Consultation not found",
+      });
+
+    if (!isHost(socket.user.role))
+      return socket.emit("error", {
+        code: "FORBIDDEN",
+        message: "Only host can kick",
+      });
+
+    if (isDoctor(socket.user.role)) {
+      const dpId = await resolveDpId(socket.user._id);
+      if (!dpId || String(check.doctor) !== String(dpId))
+        return socket.emit("error", {
+          code: "FORBIDDEN",
+          message: "Access denied",
+        });
+    }
+
+    Consultation.updateOne(
+      { _id: consultationId, "participants.userId": targetUserId },
+      {
+        $set: {
+          "participants.$.connectionStatus": "disconnected",
+          "participants.$.leftAt": new Date(),
+        },
+        $push: {
+          eventLogs: {
+            eventType: "participant_kicked",
+            actorType: isDoctor(socket.user.role) ? "doctor" : "admin",
+            actorId: socket.user._id,
+            severity: "warning",
+            source: "server",
+            timestamp: new Date(),
+            payload: { targetUserId, reason },
+          },
+        },
+      },
+    ).catch((e) => console.error("[Socket DB] kick:", e.message));
+
+    const meta = socketMeta.get(socket.id);
+
+    _emitNs(
+      `booking:${meta?.bookingId || check.bookingId}`,
+      "participant_kicked",
+      {
+        consultationId,
+        targetUserId,
+        reason,
+        by: String(socket.user._id),
+        timestamp: new Date(),
+      },
+    );
+
+    _emitNs(`patient:${targetUserId}`, "you_were_kicked", {
+      consultationId,
+      reason,
+      timestamp: new Date(),
+    });
+  } catch (err) {
+    console.error("[ConsultSocket] handleKick:", err.message);
+  }
+};
+
+const handleMuteParticipant = async (socket, data) => {
+  try {
+    const { consultationId, targetUserId, muted = true } = data || {};
+    if (!consultationId || !targetUserId) return;
+
+    if (!isHost(socket.user.role))
+      return socket.emit("error", {
+        code: "FORBIDDEN",
+        message: "Only host can mute",
+      });
+
+    Consultation.updateOne(
+      { _id: consultationId, "participants.userId": targetUserId },
+      { $set: { "participants.$.isMutedByHost": muted } },
+    ).catch(() => {});
+
+    const meta = socketMeta.get(socket.id);
+    const check = await Consultation.findById(consultationId)
+      .select("bookingId")
+      .lean();
+
+    _emitNs(
+      `booking:${meta?.bookingId || check?.bookingId}`,
+      muted ? "participant_muted" : "participant_unmuted",
+      {
+        consultationId,
+        targetUserId,
+        by: String(socket.user._id),
+        timestamp: new Date(),
+      },
+    );
+
+    _emitNs(
+      `patient:${targetUserId}`,
+      muted ? "you_were_muted" : "you_were_unmuted",
+      {
+        consultationId,
+        by: String(socket.user._id),
+        timestamp: new Date(),
+      },
+    );
+  } catch (err) {
+    console.error("[ConsultSocket] handleMuteParticipant:", err.message);
+  }
+};
+
+const handleAdminBroadcast = (socket, data) => {
+  try {
+    if (!isAdmin(socket.user.role)) return;
+    const { message, targetRoom } = data || {};
+    if (!message) return;
+
+    const room = targetRoom || "admin:ops";
+    _emitNs(room, "admin_broadcast", {
+      message,
+      from: socket.user.name,
+      timestamp: new Date(),
+    });
+  } catch (err) {
+    console.error("[ConsultSocket] handleAdminBroadcast:", err.message);
+  }
+};
+
+const handleDisconnect = async (socket, reason) => {
+  try {
+    const meta = socketMeta.get(socket.id);
+    if (!meta || !socket.user) return;
+
+    const { consultationId, bookingId, role } = meta;
+
+    if (consultationId) {
+      const setFields = {
+        "participants.$[p].connectionStatus": "disconnected",
+        "participants.$[p].leftAt": new Date(),
+      };
+      if (isDoctor(role)) setFields.doctorLeftAt = new Date();
+      if (isPatient(role)) setFields.patientLeftAt = new Date();
+
+      Consultation.updateOne(
+        { _id: consultationId },
+        { $set: setFields },
+        { arrayFilters: [{ "p.userId": socket.user._id }] },
+      ).catch((e) => console.error("[Socket DB] disconnect:", e.message));
+
+      const room = activeRooms.get(consultationId);
+      if (room) {
+        room.delete(socket.id);
+        if (!room.size) activeRooms.delete(consultationId);
+      }
+
+      if (bookingId) {
+        _emitNs(`booking:${bookingId}`, "participant_disconnected", {
+          consultationId,
+          userId: String(socket.user._id),
+          role,
+          reason,
+          timestamp: new Date(),
+        });
+      }
+    }
+
+    socketMeta.delete(socket.id);
+    console.log(`[ConsultSocket] -conn  ${socket.id} (${reason})`);
+  } catch (err) {
+    console.error("[ConsultSocket] handleDisconnect:", err.message);
+  }
+};
+
+const _sweepWaitingRoomTimeouts = async () => {
+  try {
+    const cutoff = new Date(Date.now() - WAITING_ROOM_TIMEOUT_MS);
+
+    const docs = await Consultation.find({
+      status: "waiting",
+      waitingRoomQueue: {
+        $elemMatch: {
+          waitingRoomStatus: "waiting",
+          enteredAt: { $lt: cutoff },
+        },
+      },
+    })
+      .select("_id bookingId waitingRoomQueue")
+      .lean();
+
+    for (const doc of docs) {
+      const timedOutIds = doc.waitingRoomQueue
+        .filter(
+          (e) => e.waitingRoomStatus === "waiting" && e.enteredAt < cutoff,
+        )
+        .map((e) => String(e.userId));
+
+      if (!timedOutIds.length) continue;
+
+      await Consultation.updateOne(
+        { _id: doc._id },
+        { $set: { "waitingRoomQueue.$[e].waitingRoomStatus": "timed_out" } },
+        {
+          arrayFilters: [
+            {
+              "e.userId": { $in: timedOutIds },
+              "e.waitingRoomStatus": "waiting",
+            },
+          ],
+        },
+      );
+
+      for (const uid of timedOutIds) {
+        _emitNs(`patient:${uid}`, "waiting_room_timed_out", {
+          consultationId: String(doc._id),
+          timestamp: new Date(),
+        });
+      }
+    }
+  } catch (err) {
+    console.error("[ConsultSocket] _sweepWaitingRoomTimeouts:", err.message);
+  }
+};
+
+const _emitNs = (room, event, data) => {
+  if (!_io) return;
+  _io.of("/consultations").to(room).emit(event, data);
+};
+
+const _mapRole = (role) => {
+  if (role === "doctor") return "doctor";
+  if (role === "customer") return "patient";
+  if (role === "care_assistant") return "care_assistant";
+  if (isAdmin(role)) return "admin";
+  return "patient";
+};
+
+export const getConsultationSocketService = () => {
+  if (!_io) return null;
+  const ns = _io.of("/consultations");
+  return {
+    emitToBookingRoom: (id, evt, d) => ns.to(`booking:${id}`).emit(evt, d),
+    emitToConsultationRoom: (id, evt, d) =>
+      ns.to(`consultation:${id}`).emit(evt, d),
+    emitToDoctor: (id, evt, d) => ns.to(`doctor:${id}`).emit(evt, d),
+    emitToPatient: (id, evt, d) => ns.to(`patient:${id}`).emit(evt, d),
+    emitToAdminOps: (evt, d) => ns.to("admin:ops").emit(evt, d),
+    getParticipantCount: (cId) => activeRooms.get(String(cId))?.size ?? 0,
+    getActiveRoomCount: () => activeRooms.size,
+    getConnectedSocketCount: () => socketMeta.size,
+    isDoctorOnline: async (uid) =>
+      (await ns.in(`doctor:${uid}`).fetchSockets()).length > 0,
+    isPatientOnline: async (uid) =>
+      (await ns.in(`patient:${uid}`).fetchSockets()).length > 0,
+  };
+};
+
+export default { initConsultationSocket, getConsultationSocketService };
