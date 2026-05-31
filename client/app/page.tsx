@@ -16,25 +16,8 @@ import HeroSoloDriver from "@/components/hero/HeroSoloDriver";
 import CareAssistant from "@/components/Careassistanthero";
 import HeroDriver from "@/components/hero/HeroDriver";
 import Hospital from "@/app/(page)/HospitalPage"
-
-/**
- * Home page — role-aware layout.
- *
- * AD PLACEMENT RULES:
- *   Hero_Banner   → inside content flow, full-width, directly below hero section.
- *                   Best impression slot — user just landed, attention is peak.
- *
- *   Native_Feed   → inside content flow, between two content sections.
- *                   Blends with surrounding cards — highest organic CTR.
- *                   Never place first or last; always sandwiched between content.
- *
- *   Popup         → OUTSIDE all layout containers. Renders as fixed overlay via
- *                   its own internal positioning. Placing inside Container breaks
- *                   stacking context and clips the overlay.
- *
- *   Sticky_Bottom → OUTSIDE all layout containers. Fixed to viewport bottom.
- *                   Must never be inside a flex/grid flow or it collapses inline.
- */
+import Faq from "@/components/Faq"
+ 
 const Home: React.FC = () => {
   const { user } = useSelector((state: RootState) => state.user);
 
@@ -70,7 +53,7 @@ const Home: React.FC = () => {
          
             {/* 6. Retention & subscription CTA */}
             <Subscription />
-
+            <Faq/>
           </Container>
 
           {/* 7. Popup ad — OUTSIDE Container. Renders as fixed full-screen

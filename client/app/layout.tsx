@@ -44,7 +44,7 @@ export default function RootLayout({
     >
       <body className="font-poppins antialiased" suppressHydrationWarning>
         <StoreProvider>
-          <ThemeProvider attribute="class" defaultTheme="light">
+          <ThemeProvider attribute="class" defaultTheme="dark">
             {/*
               Order matters:
               AuthSocketBridge — connects general booking socket (uses token from store)

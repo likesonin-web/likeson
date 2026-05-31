@@ -79,15 +79,14 @@ const SpotlightCard = memo(({ service, index }) => {
   const cardRef = useRef(null);
   const [hovered, setHovered] = useState(false);
 
-  // Spotlight only - removed tilt calculations
   const handleMouseMove = useCallback((e) => {
     const el = cardRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    el.style.setProperty("--spot-x", x + "px");
-    el.style.setProperty("--spot-y", y + "px");
+    el.style.setProperty("--spot-x", `${x}px`);
+    el.style.setProperty("--spot-y", `${y}px`);
   }, []);
 
   const handleMouseEnter = useCallback(() => setHovered(true), []);
@@ -105,31 +104,33 @@ const SpotlightCard = memo(({ service, index }) => {
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "-60px" }}
       transition={{ duration: 0.55, delay: index * 0.08, ease: [0.22, 1, 0.36, 1] }}
-      // Card remains static (scale only), no rotateX or rotateY
       animate={{ scale: hovered ? 1.015 : 1 }}
       style={{ listStyle: "none", "--spot-x": "50%", "--spot-y": "50%" }}
       className="relative rounded-2xl will-change-transform"
-      aria-labelledby={"svc-title-" + service.id}
+      aria-labelledby={`svc-title-${service.id}`}
     >
       {/* Glow border */}
       <motion.div
         className="absolute inset-0 rounded-2xl pointer-events-none"
         animate={{
           boxShadow: hovered
-            ? "0 0 0 1.5px " + palette.border + ", 0 20px 56px -10px " + palette.glow + ", 0 6px 18px -4px " + palette.glow
+            ? `0 0 0 1.5px ${palette.border}, 0 20px 56px -10px ${palette.glow}, 0 6px 18px -4px ${palette.glow}`
             : "0 0 0 1px var(--base-300), 0 4px 12px -4px rgba(0,0,0,0.06)",
         }}
         transition={{ duration: 0.3 }}
       />
 
-      <div className="relative h-full rounded-2xl overflow-hidden flex flex-col" style={{ background: "var(--base-100)" }}>
+      {/* Main Card Content */}
+      <div className="relative h-full rounded-2xl overflow-hidden flex flex-col bg-base-100">
+        
         {/* Spotlight overlay */}
         <div
-          className="absolute inset-0 rounded-2xl pointer-events-none transition-opacity duration-300"
+          className="absolute inset-0 rounded-2xl pointer-events-none transition-opacity duration-300 hidden sm:block"
           style={{
             opacity: hovered ? 1 : 0,
-            background: "radial-gradient(180px circle at var(--spot-x) var(--spot-y), " + palette.glow + ", transparent 80%)",
+            background: `radial-gradient(180px circle at var(--spot-x) var(--spot-y), ${palette.glow}, transparent 80%)`,
           }}
+          aria-hidden="true"
         />
 
         <div className="relative z-10 flex flex-col flex-1 p-7">
@@ -140,84 +141,86 @@ const SpotlightCard = memo(({ service, index }) => {
               transition={{ duration: 0.3 }}
               className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 transition-colors duration-300"
               style={{
-                background: hovered ? palette.light : "var(--base-200)",
-                boxShadow: hovered ? "0 0 16px " + palette.glow : "none",
+                backgroundColor: hovered ? palette.light : "var(--base-200)",
+                boxShadow: hovered ? `0 0 16px ${palette.glow}` : "none",
               }}
             >
-              <Icon size={26} style={{ color: palette.text }} strokeWidth={1.6} />
+              <Icon size={26} style={{ color: palette.text }} strokeWidth={1.6} aria-hidden="true" />
             </motion.div>
 
             <div className="flex items-center gap-2 flex-shrink-0">
               {service.badge && (
                 <span
-                  className="text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full"
-                  style={{ background: palette.light, color: palette.text, border: "1px solid " + palette.border, fontFamily: "'Poppins', sans-serif" }}
+                  className="font-poppins text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full"
+                  style={{ backgroundColor: palette.light, color: palette.text, border: `1px solid ${palette.border}` }}
                 >
                   {service.badge}
                 </span>
               )}
               <Link
                 href={service.storyHref}
-                className="w-9 h-9 rounded-full border flex items-center justify-center transition-all duration-300 hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
-                style={{ borderColor: "var(--base-300)", color: "var(--base-content)", opacity: 0.4 }}
-                aria-label={"How " + service.title + " works"}
+                className="w-9 h-9 rounded-full border border-base-300 text-base-content/40 flex items-center justify-center transition-all duration-300 hover:scale-110 hover:text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                aria-label={`See how ${service.title} works`}
               >
                 <ChevronRight size={16} />
               </Link>
             </div>
           </div>
 
-          {/* Text */}
+          {/* Text Content */}
           <div className="mb-6">
-            <p className="text-[10px] font-black uppercase tracking-[0.16em] mb-1.5"
-              style={{ color: palette.text, fontFamily: "'Poppins', sans-serif" }}>
+            <p 
+              className="font-poppins text-[10px] font-black uppercase tracking-[0.16em] mb-1.5"
+              style={{ color: palette.text }}
+            >
               {service.tagline}
             </p>
             <h2
-              id={"svc-title-" + service.id}
-              className="text-[1.3rem] font-black leading-tight tracking-tight mb-3"
-              style={{ fontFamily: "'Montserrat', sans-serif", color: "var(--base-content)" }}
+              id={`svc-title-${service.id}`}
+              className="font-montserrat text-[1.3rem] text-base-content font-black leading-tight tracking-tight mb-3"
             >
               {service.title}
             </h2>
-            <p className="text-sm leading-relaxed"
-              style={{ color: "var(--base-content)", opacity: 0.55, fontFamily: "'Poppins', sans-serif" }}>
+            <p className="font-poppins text-xs leading-relaxed text-base-content/50">
               {service.description}
             </p>
           </div>
 
-          {/* Feature pills */}
+          {/* Feature Pills */}
           <div className="flex flex-wrap gap-2 mb-7 mt-auto">
             {service.features.map((f) => (
               <span
                 key={f}
-                className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1 rounded-full transition-all duration-300"
+                className="font-poppins inline-flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1 rounded-full transition-all duration-300"
                 style={{
-                  background: hovered ? palette.light : "var(--base-200)",
+                  backgroundColor: hovered ? palette.light : "var(--base-200)",
                   color: hovered ? palette.text : "var(--base-content)",
-                  border: "1px solid " + (hovered ? palette.border : "var(--base-300)"),
-                  fontFamily: "'Poppins', sans-serif",
+                  borderColor: hovered ? palette.border : "var(--base-300)",
+                  borderWidth: "1px",
+                  borderStyle: "solid"
                 }}
               >
-                <CheckCircle2 size={10} style={{ flexShrink: 0 }} />
+                <CheckCircle2 size={10} className="shrink-0" aria-hidden="true" />
                 {f}
               </span>
             ))}
           </div>
 
-          {/* CTA */}
-          <Link href={service.href} aria-label={"Book " + service.title}>
+          {/* CTA Button */}
+          <Link href={service.href} aria-label={`Book ${service.title}`}>
             <motion.div
-              className="relative w-full flex items-center justify-between px-5 py-3.5 rounded-xl overflow-hidden font-black text-sm cursor-pointer"
-              style={{ fontFamily: "'Poppins', sans-serif" }}
-              animate={{ background: hovered ? palette.text : "var(--base-200)", color: hovered ? "#ffffff" : palette.text }}
+              className="font-poppins relative w-full flex items-center justify-between px-5 py-3.5 rounded-xl overflow-hidden font-black text-xs cursor-pointer"
+              animate={{ 
+                backgroundColor: hovered ? palette.text : "var(--base-200)", 
+                color: hovered ? "#ffffff" : palette.text 
+              }}
               transition={{ duration: 0.28 }}
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.97 }}
             >
               <span>Book Now</span>
               <motion.span animate={{ x: hovered ? 3 : 0 }} transition={{ duration: 0.22 }}>
-                <ArrowUpRight size={16} />
+                <ArrowUpRight size={16} aria-hidden="true" />
               </motion.span>
             </motion.div>
           </Link>
@@ -230,9 +233,9 @@ SpotlightCard.displayName = "SpotlightCard";
 
 const AmbientBG = memo(() => (
   <div className="absolute inset-0 pointer-events-none overflow-hidden" aria-hidden="true">
-    <div className="absolute top-[-15%] right-[-8%] w-[700px] h-[700px] rounded-full blur-[140px]" style={{ background: "rgba(14,165,233,0.05)" }} />
-    <div className="absolute bottom-[-10%] left-[-8%] w-[600px] h-[600px] rounded-full blur-[120px]" style={{ background: "rgba(16,185,129,0.05)" }} />
-    <div className="absolute top-[40%] left-[40%] w-[400px] h-[400px] rounded-full blur-[100px]" style={{ background: "rgba(139,92,246,0.04)" }} />
+    <div className="absolute top-[-15%] right-[-8%] w-[700px] h-[700px] rounded-full blur-[140px] bg-[#0ea5e9]/5" />
+    <div className="absolute bottom-[-10%] left-[-8%] w-[600px] h-[600px] rounded-full blur-[120px] bg-[#10b981]/5" />
+    <div className="absolute top-[40%] left-[40%] w-[400px] h-[400px] rounded-full blur-[100px] bg-[#8b5cf6]/5" />
   </div>
 ));
 AmbientBG.displayName = "AmbientBG";
@@ -246,30 +249,31 @@ const SectionHeader = memo(() => (
     transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
   >
     <div className="flex items-center gap-3 mb-6">
-      <div className="flex items-center gap-2 px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-[0.15em] border"
-        style={{ background: "rgba(14,165,233,0.08)", borderColor: "rgba(14,165,233,0.25)", color: "#0ea5e9", fontFamily: "'Poppins', sans-serif" }}>
-        <Sparkles size={11} />
+      <div className="font-poppins flex items-center gap-2 px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-[0.15em] bg-[#0ea5e9]/10 border border-[#0ea5e9]/25 text-[#0ea5e9]">
+        <Sparkles size={11} aria-hidden="true" />
         Our Services
       </div>
     </div>
-    <h2 className="text-4xl md:text-5xl lg:text-[3.5rem] font-black tracking-tight leading-[1.08] mb-6"
-      style={{ fontFamily: "'Montserrat', sans-serif", color: "var(--base-content)" }}>
+    
+    <h2 className="font-montserrat text-base-content text-4xl md:text-5xl lg:text-[3.5rem] font-black tracking-tight leading-[1.08] mb-6">
       Modern Healthcare,{" "}
       <br className="hidden sm:block" />
       <span className="text-gradient-primary">Right at Your Door.</span>
     </h2>
-    <p className="text-base md:text-lg leading-relaxed mb-8 max-w-xl"
-      style={{ color: "var(--base-content)", opacity: 0.6, fontFamily: "'Poppins', sans-serif" }}>
-      <strong style={{ color: "var(--base-content)", opacity: 1 }}>Likeson.in</strong> brings{" "}
-      <span style={{ color: "var(--primary)", fontWeight: 700 }}>expert doctors</span> and{" "}
-      <span style={{ color: "var(--primary)", fontWeight: 700 }}>essential medical services</span>{" "}
+    
+    <p className="font-poppins text-base-content/60 text-base md:text-md leading-relaxed mb-8 max-w-xl">
+      <strong className="text-base-content font-bold">Likeson.in</strong> brings{" "}
+      <span className="text-primary font-bold">expert doctors</span> and{" "}
+      <span className="text-primary font-bold">essential medical services</span>{" "}
       directly to your home. Skip the waiting rooms — book below.
     </p>
-    <Link href={HOW_IT_WORKS}
-      className="inline-flex items-center gap-2 text-sm font-bold transition-all duration-300 hover:gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg"
-      style={{ color: "var(--primary)", fontFamily: "'Poppins', sans-serif" }}>
+    
+    <Link 
+      href={HOW_IT_WORKS}
+      className="font-poppins text-primary inline-flex items-center gap-2 text-xs font-bold transition-all duration-300 hover:gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg"
+    >
       See how each service works
-      <ArrowUpRight size={15} />
+      <ArrowUpRight size={15} aria-hidden="true" />
     </Link>
   </motion.header>
 ));
@@ -282,26 +286,25 @@ const BottomCTA = memo(() => (
     whileInView={{ opacity: 1, y: 0 }}
     viewport={{ once: true }}
     transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
-    style={{ background: "linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%)" }}
+    style={{ backgroundImage: "var(--bg-gradient-primary)" }}
   >
     <div className="relative flex flex-col sm:flex-row items-center justify-between gap-6 px-8 py-10">
       <div>
-        <p className="text-white/60 text-sm font-semibold mb-1" style={{ fontFamily: "'Poppins', sans-serif" }}>
+        <p className="font-poppins text-white/70 text-xs font-semibold mb-1">
           Not sure which service you need?
         </p>
-        <p className="text-white text-xl font-black tracking-tight" style={{ fontFamily: "'Montserrat', sans-serif" }}>
-          Talk to our care team — we'll guide you.
+        <p className="font-montserrat text-white text-xl md:text-2xl font-black tracking-tight">
+          Talk to our care team — we&apos;ll guide you.
         </p>
       </div>
       <Link href="/contact" aria-label="Contact the Likeson.in team">
         <motion.div
-          whileHover={{ scale: 1.04 }}
+          whileHover={{ scale: 1.04, backgroundColor: "rgba(255,255,255,0.25)" }}
           whileTap={{ scale: 0.97 }}
-          className="flex items-center gap-2.5 px-7 py-3.5 rounded-2xl font-black text-sm whitespace-nowrap cursor-pointer"
-          style={{ background: "rgba(255,255,255,0.18)", color: "#ffffff", border: "1.5px solid rgba(255,255,255,0.35)", backdropFilter: "blur(12px)", fontFamily: "'Poppins', sans-serif" }}
+          className="font-poppins flex items-center gap-2.5 px-7 py-3.5 rounded-2xl font-black text-xs whitespace-nowrap cursor-pointer bg-white/20 text-white border-[1.5px] border-white/30 backdrop-blur-md transition-colors"
         >
           Talk to Our Team
-          <ChevronRight size={16} />
+          <ChevronRight size={16} aria-hidden="true" />
         </motion.div>
       </Link>
     </div>
@@ -324,4 +327,5 @@ const Services = memo(() => (
   </section>
 ));
 Services.displayName = "Services";
+
 export default Services;

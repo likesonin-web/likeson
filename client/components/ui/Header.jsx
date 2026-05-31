@@ -985,7 +985,7 @@ function MobileSubBarContent({ isCustomer, rolePalette, RoleIcon, user, accentCo
   if (!isCustomer && rolePalette) {
     // Role user sub-bar
     return (
-      <div className="flex md:hidden items-center justify-between px-4 py-2 border-t"
+      <div className="flex md:hidden items-center mr-2 justify-between px-4 py-2 border-t"
         style={{ borderColor: `color-mix(in srgb, ${rolePalette.accent} 20%, transparent)`, background: rolePalette.bg }}>
         <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest"
           style={{ color: rolePalette.pillText }}>

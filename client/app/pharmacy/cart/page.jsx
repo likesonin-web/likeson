@@ -1,7 +1,5 @@
 'use client';
 
- 
-
 import React, {
   useState,
   useEffect,
@@ -87,7 +85,7 @@ const PAYMENT_METHODS = [
 
 /** Delivery address fields shown in the address form step */
 const ADDRESS_FIELDS = [
-  { name: 'fullName', label: 'Full Name',     placeholder: 'Recipient name',        half: true,  note: 'Enter the name of the person receiving the order' },
+  { name: 'fullName', label: 'Full Name',      placeholder: 'Recipient name',        half: true,  note: 'Enter the name of the person receiving the order' },
   { name: 'phone',    label: 'Phone',          placeholder: '+91 XXXXX XXXXX',       half: true,  note: '10-digit mobile number for delivery updates' },
   { name: 'line1',    label: 'Address Line 1', placeholder: 'House / Flat / Street', half: false, note: 'Door number, building name, street name' },
   { name: 'landmark', label: 'Landmark',       placeholder: 'Near... (optional)',    half: true,  note: 'Helps delivery partner locate you faster' },
@@ -170,11 +168,6 @@ const slideVariants = {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── RxImagePreview ───────────────────────────────────────────────────────────
-/**
- * Small thumbnail of the uploaded prescription.
- * Clicking opens the lightbox.
- * Note: Shows a PDF badge for PDF prescriptions.
- */
 const RxImagePreview = React.memo(({ imageUrl, onView }) => {
   if (!imageUrl) return null;
   const isPdf = isPdfUrl(imageUrl);
@@ -201,7 +194,6 @@ const RxImagePreview = React.memo(({ imageUrl, onView }) => {
 RxImagePreview.displayName = 'RxImagePreview';
 
 // ─── RxLightbox ──────────────────────────────────────────────────────────────
-/** Full-screen lightbox to view the uploaded prescription. Press ESC or click outside to close. */
 const RxLightbox = React.memo(({ imageUrl, medicineName, onClose }) => {
   const isPdf = isPdfUrl(imageUrl);
   useEffect(() => {
@@ -265,11 +257,6 @@ const RxLightbox = React.memo(({ imageUrl, medicineName, onClose }) => {
 RxLightbox.displayName = 'RxLightbox';
 
 // ─── PrescriptionBadge ───────────────────────────────────────────────────────
-/**
- * Inline badge shown on each cart item row.
- * - Uploaded: shows thumbnail preview + View / Replace buttons
- * - Missing: shows "Upload Required" with Upload button
- */
 const PrescriptionBadge = React.memo(({ item, onUpload, onView, isUploading }) => {
   const rxStatus = getPrescriptionStatus(item);
   if (!rxStatus) return null;
@@ -324,21 +311,6 @@ const PrescriptionBadge = React.memo(({ item, onUpload, onView, isUploading }) =
 PrescriptionBadge.displayName = 'PrescriptionBadge';
 
 // ─── PrescriptionUploadModal ──────────────────────────────────────────────────
-/**
- * Modal for uploading a prescription file.
- *
- * Uses pharmacy slice thunks only:
- *   1. dispatch(uploadPrescriptionFile({ file }))
- *      → POSTs multipart to /upload/prescription → returns { imageUrl }
- *   2. Parent calls onConfirm(item, imageUrl)
- *      → dispatch(uploadCartItemPrescription({ medicineId, imageUrl }))
- *
- * Props:
- *   item        — the cart item being uploaded for
- *   onConfirm   — async (item, cdnUrl) => void   (called after CDN upload succeeds)
- *   onClose     — () => void
- *   isUploading — boolean (true while pharmacy thunk is in flight)
- */
 const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUploading }) => {
   const dispatch   = useDispatch();
   const medicine   = item?.medicine;
@@ -368,11 +340,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
     setLocalPreviewUrl(URL.createObjectURL(file));
   }, [localPreviewUrl]);
 
-  /**
-   * handleConfirm:
-   *  Step 1 — Upload file to CDN using uploadPrescriptionFile thunk (pharmacy slice)
-   *  Step 2 — Pass the returned imageUrl to parent via onConfirm
-   */
   const handleConfirm = useCallback(async () => {
     if (!selectedFile) { setUploadError('Please select a file first.'); return; }
     try {
@@ -410,7 +377,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
               <h3 className="text-sm font-black text-base-content">
                 {item?.prescription?.imageUrl ? 'Replace Prescription' : 'Upload Prescription'}
               </h3>
-              {/* Note: This medicine requires a valid doctor's prescription */}
               <p className="text-[10px] text-base-content/50 mt-0.5">
                 {medicine?.brandName ?? 'Medicine'} requires a valid Rx
               </p>
@@ -439,7 +405,7 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
         {item?.prescription?.imageUrl && !selectedFile && (
           <div className="space-y-1.5">
             <p className="text-[9px] font-black uppercase tracking-widest text-base-content/40">
-              Currently Uploaded {/* Note: This is your existing prescription on file */}
+              Currently Uploaded
             </p>
             <div className="relative w-full h-32 rounded-md overflow-hidden border border-success/40 bg-base-200">
               {isPdfUrl(item.prescription.imageUrl) ? (
@@ -465,7 +431,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
           <div className="space-y-1.5">
             <p className="text-[9px] font-black uppercase tracking-widest text-base-content/40">
               {item?.prescription?.imageUrl ? 'New Prescription (Preview)' : 'Selected File (Preview)'}
-              {/* Note: Preview of the file you are about to upload */}
             </p>
             <div className="relative w-full h-40 rounded-md overflow-hidden border-2 border-primary/40 bg-base-200">
               {isPdf ? (
@@ -500,7 +465,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
               <Upload className="w-6 h-6 text-primary" />
             </div>
             <div className="text-center">
-              {/* Note: Click anywhere in this box to open file picker */}
               <p className="text-xs font-black text-base-content">
                 {item?.prescription?.imageUrl ? 'Select new prescription file' : 'Click to select file'}
               </p>
@@ -526,7 +490,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
         {/* Warning note */}
         <div className="flex items-start gap-2 p-3 rounded-md bg-warning/10 border border-warning/30">
           <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />
-          {/* Note: Your prescription image will be reviewed by our licensed pharmacist */}
           <p className="text-[10px] text-base-content/60 leading-relaxed">
             Upload a clear photo or scan of the prescription issued by a registered medical practitioner.
             Orders without valid prescriptions may be held by our pharmacist.
@@ -565,7 +528,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
 PrescriptionUploadModal.displayName = 'PrescriptionUploadModal';
 
 // ─── PrescriptionStep ─────────────────────────────────────────────────────────
-/** Dedicated step showing all Rx-required items with upload/view controls. */
 const PrescriptionStep = React.memo(({ items, onUpload, onView, uploadingItemId }) => {
   const rxItems    = items.filter((i) => i.isPrescriptionRequired);
   const missingRx  = rxItems.filter((i) => !i.prescription?.imageUrl);
@@ -591,7 +553,7 @@ const PrescriptionStep = React.memo(({ items, onUpload, onView, uploadingItemId 
         </div>
       </div>
 
-      {/* Progress bar — shows how many Rx files uploaded vs total */}
+      {/* Progress bar */}
       <div>
         <div className="flex justify-between text-[9px] font-bold uppercase tracking-widest text-base-content/40 mb-1.5">
           <span>Upload Progress</span>
@@ -631,7 +593,6 @@ const PrescriptionStep = React.memo(({ items, onUpload, onView, uploadingItemId 
                 <div>
                   <h4 className="text-xs font-black text-base-content truncate">{medicine?.brandName ?? 'Medicine'}</h4>
                   {medicine?.genericName && <p className="text-[10px] text-base-content/50">{medicine.genericName}</p>}
-                  {/* Note: Quantity and unit price for this Rx item */}
                   <p className="text-[9px] text-base-content/30 mt-0.5">Qty: {item.quantity} · ₹{item.pricePerUnit}/unit</p>
                 </div>
                 {hasUploaded ? (
@@ -678,7 +639,6 @@ const PrescriptionStep = React.memo(({ items, onUpload, onView, uploadingItemId 
       {!allDone && (
         <div className="flex items-start gap-2 p-3 rounded-md bg-base-200 border border-base-300">
           <AlertCircle className="w-3.5 h-3.5 text-base-content/40 shrink-0 mt-0.5" />
-          {/* Note: You can skip now but your order may be held until verified */}
           <p className="text-[10px] text-base-content/50 leading-relaxed">
             You may proceed without uploading now, but our pharmacist may contact you
             or put your order on hold until a valid prescription is verified.
@@ -708,7 +668,6 @@ const CartItem = React.memo(({ item, onQuantityChange, onRemove, onUploadPrescri
           ? <img src={primaryImg} alt={medicine?.brandName ?? 'Medicine'} loading="lazy" className="w-full h-full object-contain p-2" />
           : <div className="w-full h-full flex items-center justify-center"><Package className="w-8 h-8 text-primary/20" /></div>}
         {item.isPrescriptionRequired && (
-          // Note: This medicine legally requires a prescription
           <div className="absolute bottom-0 inset-x-0 bg-error/80 text-white text-[8px] font-black text-center py-0.5 uppercase tracking-wider">
             Rx
           </div>
@@ -726,7 +685,6 @@ const CartItem = React.memo(({ item, onQuantityChange, onRemove, onUploadPrescri
           <span className="text-xs font-black text-primary">₹{item.pricePerUnit}</span>
           <span className="text-[9px] text-base-content/30 font-bold">/unit</span>
           {medicine?.gstPercentage > 0 && (
-            // Note: GST is added on top of the unit price
             <span className="text-[9px] text-base-content/30">+{medicine.gstPercentage}% GST</span>
           )}
         </div>
@@ -735,7 +693,7 @@ const CartItem = React.memo(({ item, onQuantityChange, onRemove, onUploadPrescri
 
       {/* Quantity + price + remove */}
       <div className="flex sm:flex-col items-center sm:items-end justify-between gap-3 shrink-0">
-        {/* Quantity stepper — tap +/- to change quantity */}
+        {/* Quantity stepper */}
         <div className="flex items-center gap-1 bg-base-200 rounded-lg border border-base-300 p-0.5"
           role="group" aria-label={`Quantity for ${medicine?.brandName}`}>
           <button onClick={() => onQuantityChange(item, item.quantity - 1)} disabled={item.quantity <= 1 || isUpdating}
@@ -753,7 +711,7 @@ const CartItem = React.memo(({ item, onQuantityChange, onRemove, onUploadPrescri
           </button>
         </div>
 
-        {/* Line total for this item */}
+        {/* Line total */}
         <span className="text-base font-black text-base-content">₹{lineTotal}</span>
 
         <button onClick={() => onRemove(item)} disabled={isUpdating} aria-label={`Remove ${medicine?.brandName ?? 'item'}`}
@@ -785,7 +743,6 @@ const AddressForm = React.memo(({ address, onChange, errors }) => (
           aria-invalid={!!errors?.[field.name]}
           className={`w-full px-3 py-2.5 bg-base-200 border border-base-300 rounded-xl text-sm focus:outline-none focus:border-primary placeholder-base-content/25 ${errors?.[field.name] ? 'ring-2 ring-error/50 border-error' : ''}`}
         />
-        {/* Field hint — describes what to enter */}
         <p className="text-[9px] text-base-content/30 mt-1">{field.note}</p>
         {errors?.[field.name] && (
           <p className="text-[10px] text-error font-bold mt-0.5" role="alert">{errors[field.name]}</p>
@@ -812,7 +769,6 @@ const CouponInput = React.memo(({ orderTotal, coupon, couponLoading, couponError
         <div className="flex items-center gap-2">
           <BadgePercent className="w-4 h-4 text-success shrink-0" />
           <div>
-            {/* Note: Coupon code currently applied to your order */}
             <p className="text-xs font-black text-success">{coupon.code}</p>
             <p className="text-[10px] text-base-content/50">You save ₹{coupon.discountAmount?.toFixed(2)}</p>
           </div>
@@ -829,7 +785,6 @@ const CouponInput = React.memo(({ orderTotal, coupon, couponLoading, couponError
       <div className="flex gap-2">
         <div className="flex-1 relative">
           <Tag className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-base-content/30" />
-          {/* Note: Enter promo/coupon code in UPPERCASE */}
           <input type="text" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())}
             onKeyDown={(e) => e.key === 'Enter' && handleApply()}
             placeholder="Enter coupon code" aria-label="Coupon code"
@@ -862,7 +817,7 @@ const BillSummary = React.memo(({ billSummary, subscriptionDiscount, coupon, pay
   const rows = [
     { label: 'Items Total',      value: `₹${subTotal.toFixed(2)}`,   highlight: false },
     { label: 'Estimated GST',    value: `₹${taxTotal.toFixed(2)}`,   highlight: false },
-    { label: 'Delivery Charges', value: 'FREE',                       highlight: true  },
+    { label: 'Delivery Charges', value: 'FREE',                      highlight: true  },
     ...(subSavings > 0 ? [{ label: `Plan Discount (${subscriptionDiscount}%)`, value: `-₹${subSavings.toFixed(2)}`, highlight: true, isDiscount: true }] : []),
     ...(couponSaving > 0 ? [{ label: `Coupon (${coupon.code})`, value: `-₹${couponSaving.toFixed(2)}`, highlight: true, isDiscount: true }] : []),
   ];
@@ -889,17 +844,150 @@ const BillSummary = React.memo(({ billSummary, subscriptionDiscount, coupon, pay
 });
 BillSummary.displayName = 'BillSummary';
 
-// ─── EmptyCart ────────────────────────────────────────────────────────────────
+// ─── 3D SVG Animation Variants ────────────────────────────────────────────────────
+const floatVariant = {
+  animate: { y: [0, -12, 0], transition: { duration: 3.5, ease: "easeInOut", repeat: Infinity } },
+};
+ 
+
+// ─── Cute & Lovable SVG Animation Variants ────────────────────────────────────
+const bounceVariant = {
+  animate: { 
+    y: [0, -12, 0], 
+    scaleY: [1, 1.02, 0.96, 1], // Gentle squash and stretch for a "soft/plush" feel
+    transition: { duration: 3, ease: "easeInOut", repeat: Infinity } 
+  },
+};
+
+const shadowVariant = {
+  animate: { 
+    scale: [1, 0.8, 1], 
+    opacity: [0.3, 0.1, 0.3], 
+    transition: { duration: 3, ease: "easeInOut", repeat: Infinity } 
+  },
+};
+
+const blinkVariant = {
+  animate: { 
+    scaleY: [1, 1, 0.1, 1, 1], 
+    transition: { duration: 4.5, times: [0, 0.45, 0.5, 0.55, 1], repeat: Infinity } 
+  },
+};
+
+const floatItemVariant = (delay, yOffset, rotate) => ({
+  animate: { 
+    y: [0, yOffset, 0], 
+    rotate: [0, rotate, 0], 
+    transition: { duration: 4, ease: "easeInOut", repeat: Infinity, delay: delay } 
+  },
+});
+
+// ─── EmptyCart (Lovable Pharmacy Bag) ─────────────────────────────────────────
 const EmptyCart = React.memo(({ onShop }) => (
-  <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
-    className="flex flex-col items-center justify-center py-24 text-center" role="status">
-    <div className="w-24 h-24 rounded-2xl bg-primary/5 border border-primary/10 flex items-center justify-center mb-6">
-      <ShoppingCart className="w-10 h-10 text-primary/30" />
+  <motion.div
+    initial={{ opacity: 0, scale: 0.95 }}
+    animate={{ opacity: 1, scale: 1 }}
+    className="flex flex-col items-center justify-center py-16 sm:py-24 text-center relative overflow-hidden"
+    role="status"
+  >
+    <div className="relative w-64 h-64 mb-6 flex flex-col items-center justify-center">
+      <svg width="250" height="250" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg" className="overflow-visible">
+        <defs>
+          <linearGradient id="bagGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="var(--base-100)" />
+            <stop offset="100%" stopColor="var(--base-200)" />
+          </linearGradient>
+          <linearGradient id="capsuleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="var(--accent)" />
+            <stop offset="100%" stopColor="#ffffff" />
+          </linearGradient>
+        </defs>
+
+        {/* Floor Shadow */}
+        <motion.ellipse
+          variants={shadowVariant}
+          animate="animate"
+          cx="100" cy="180" rx="55" ry="8" fill="currentColor" className="text-base-content/20"
+          style={{ transformOrigin: "100px 180px" }}
+        />
+
+        {/* Floating Background Items (Cute Health Elements) */}
+        {/* Sparkle Left */}
+        <motion.path 
+          variants={floatItemVariant(0.5, -15, 45)} animate="animate" 
+          d="M35 60 Q40 60 40 55 Q40 60 45 60 Q40 60 40 65 Q40 60 35 60 Z" 
+          fill="var(--warning)" opacity="0.8" style={{ transformOrigin: "40px 60px" }}
+        />
+        
+        {/* Floating Heart Right */}
+        <motion.path 
+          variants={floatItemVariant(1.2, -20, -10)} animate="animate" 
+          d="M165 55 C165 45, 150 45, 150 55 C150 70, 165 80, 165 80 C165 80, 180 70, 180 55 C180 45, 165 45, 165 55 Z" 
+          fill="var(--error)" opacity="0.8" style={{ transformOrigin: "165px 60px" }}
+        />
+
+        {/* Floating Capsule Bottom Left */}
+        <motion.g variants={floatItemVariant(0.8, 15, 20)} animate="animate" style={{ transformOrigin: "45px 145px" }}>
+          <rect x="35" y="135" width="20" height="10" rx="5" fill="url(#capsuleGrad)" opacity="0.9" />
+          <path d="M45 135 H50 V145 H45 Z" fill="var(--primary)" opacity="0.2" />
+        </motion.g>
+
+        {/* ─── Main Lovable Bag Character ─── */}
+        <motion.g variants={bounceVariant} animate="animate" style={{ transformOrigin: "100px 170px" }}>
+          
+          {/* Back Handle */}
+          <path d="M 70 75 C 70 40, 130 40, 130 75" fill="none" stroke="currentColor" strokeWidth="10" strokeLinecap="round" className="text-base-300" />
+          
+          {/* Main Bag Body (Squishy Squirrcle shape) */}
+          <rect x="45" y="70" width="110" height="100" rx="28" fill="url(#bagGrad)" stroke="currentColor" strokeWidth="4" className="text-base-300" />
+          
+          {/* Front Handle */}
+          <path d="M 70 75 C 70 50, 130 50, 130 75" fill="none" stroke="var(--primary)" strokeWidth="10" strokeLinecap="round" />
+
+          {/* Front Pocket / Medical Cross Patch */}
+          <rect x="80" y="130" width="40" height="28" rx="8" fill="currentColor" className="text-base-100" stroke="var(--primary)" strokeWidth="2" opacity="0.8" />
+          <path d="M96 138 h8 v-4 h4 v4 h4 v4 h-4 v4 h-4 v-4 h-8 z" fill="var(--success)" opacity="0.7" />
+
+          {/* ── Kawaii Face ── */}
+          {/* Blushes */}
+          <ellipse cx="68" cy="115" rx="9" ry="4" fill="var(--error)" opacity="0.25" />
+          <ellipse cx="132" cy="115" rx="9" ry="4" fill="var(--error)" opacity="0.25" />
+
+          {/* Eyes (with cute catchlights) */}
+          <motion.g variants={blinkVariant} animate="animate" style={{ transformOrigin: "70px 105px" }}>
+            <circle cx="70" cy="105" r="7" fill="#2d3748" />
+            <circle cx="72" cy="103" r="2.5" fill="#ffffff" />
+            <circle cx="67" cy="107" r="1" fill="#ffffff" />
+          </motion.g>
+
+          <motion.g variants={blinkVariant} animate="animate" style={{ transformOrigin: "130px 105px" }}>
+            <circle cx="130" cy="105" r="7" fill="#2d3748" />
+            <circle cx="128" cy="103" r="2.5" fill="#ffffff" />
+            <circle cx="133" cy="107" r="1" fill="#ffffff" />
+          </motion.g>
+
+          {/* Little Sad / Wobbly Mouth */}
+          <path d="M 94 115 Q 100 110 106 115" fill="none" stroke="#2d3748" strokeWidth="3" strokeLinecap="round" />
+          
+          {/* Tiny sweat drop to show it's worried/sad about being empty */}
+          <motion.path 
+            animate={{ y: [0, 4, 0], opacity: [0.4, 0.8, 0.4] }} 
+            transition={{ duration: 2, repeat: Infinity }}
+            d="M 145 85 C 145 80, 148 75, 148 75 C 148 75, 151 80, 151 85 C 151 88, 145 88, 145 85 Z" 
+            fill="var(--info)" 
+          />
+
+        </motion.g>
+      </svg>
     </div>
-    <h2 className="text-xl font-black text-base-content mb-2">Your cart is empty</h2>
-    <p className="text-sm text-base-content/40 max-w-xs mb-8">Add medicines from the pharmacy store to start your order.</p>
-    <button onClick={onShop} className="flex items-center gap-2 px-6 py-2.5 bg-primary text-white rounded-xl text-sm font-bold hover:bg-primary/80 transition-all">
-      <ShoppingCart className="w-4 h-4" /> Browse Medicines
+
+    <h2 className="text-xl md:text-2xl font-black text-base-content mb-2 tracking-tight">Your cart is feeling a bit lonely</h2>
+    <p className="text-sm text-base-content/50 max-w-sm mb-8 leading-relaxed">
+      Our little pharmacy bag is completely empty! Add some medicines or healthcare products to cheer it up.
+    </p>
+    
+    <button onClick={onShop} className="btn-primary-cta group flex items-center gap-2">
+      <ShoppingCart className="w-4 h-4 group-hover:-translate-x-1 transition-transform duration-300" /> Browse Medicines
     </button>
   </motion.div>
 ));
@@ -924,7 +1012,7 @@ const CartSkeleton = () => (
 // ─── StepIndicator ────────────────────────────────────────────────────────────
 const StepIndicator = React.memo(({ step, onBack, hasRxItems }) => {
   const STEPS = [
-    { key: 'cart',    label: 'Cart'    },
+    { key: 'cart',         label: 'Cart'     },
     ...(hasRxItems ? [{ key: 'prescription', label: 'Rx Docs' }] : []),
     { key: 'address', label: 'Address' },
     { key: 'payment', label: 'Payment' },
@@ -1072,15 +1160,6 @@ export default function CartPage() {
   const handleOpenRxModal = useCallback((item) => { setRxModalItem(item); }, []);
   const handleViewRx      = useCallback((item)  => { if (item?.prescription?.imageUrl) setLightboxItem(item); }, []);
 
-  /**
-   * handleConfirmRxUpload
-   * ────────────────────────────────────────────────────────────────────────────
-   * Called by PrescriptionUploadModal after uploadPrescriptionFile succeeds.
-   * cdnUrl comes from state.pharmacyOrder.prescriptionUpload.imageUrl via unwrap().
-   *
-   * We then dispatch uploadCartItemPrescription({ medicineId, imageUrl: cdnUrl })
-   * to attach the URL to the cart item on the server.
-   */
   const handleConfirmRxUpload = useCallback(async (item, cdnUrl) => {
     const medicineId = item.medicine?._id ?? item.medicine;
     setUploadingRxId(medicineId?.toString());
@@ -1361,13 +1440,11 @@ export default function CartPage() {
                               <div className="flex-1 min-w-0">
                                 <p className="text-sm font-black text-base-content">{pm.label}</p>
                                 <p className="text-[10px] text-base-content/50">
-                                  {/* Note: Wallet shows "inactive" if user hasn't set one up */}
                                   {pm.id === 'Wallet' && !walletData?.isActive ? 'Wallet is currently inactive' : pm.sub}
                                 </p>
                               </div>
                               {pm.id === 'Wallet' && walletData?.isActive && (
                                 <div className="text-right shrink-0">
-                                  {/* Note: Current wallet balance — must be ≥ order total */}
                                   <p className="text-[9px] text-base-content/40 font-bold uppercase">Balance</p>
                                   <p className={`text-xs font-black ${walletBalance >= finalPayable ? 'text-success' : 'text-error'}`}>₹{walletBalance.toFixed(2)}</p>
                                 </div>
