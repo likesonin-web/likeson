@@ -217,17 +217,21 @@ function EmptyState({ icon: Icon, title, subtitle }) {
  * Renders only when booking is trackable.
  * Navigates to /care-assistant/rides/[bookingId]/[rideId]/tracking
  */
+// ─── Track Ride Button ─────────────────────────────────────────────────────────
+
 function TrackRideButton({ booking, variant = 'default' }) {
   const router = useRouter();
 
   if (!canTrack(booking)) return null;
 
-  const bookingId = booking._id?.toString() ?? booking._id;
-  const rideId    = getRideId(booking);
+  // We only need the rideId to match your Next.js folder structure
+  const rideId = getRideId(booking);
 
   function handleTrack(e) {
     e.stopPropagation(); // prevent row click from firing
-    router.push(`/care-assistant/rides/${bookingId}/${rideId}/tracking`);
+    
+    // FIX: Updated to match app/care-assistant/rides/[rideId]/tracking/page.jsx
+    router.push(`/care-assistant/rides/${rideId}/tracking`);
   }
 
   if (variant === 'panel') {
