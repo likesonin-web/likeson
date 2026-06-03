@@ -43,127 +43,155 @@ import {
 const MAP_ID                  = process.env.NEXT_PUBLIC_MAP_ID          || '33a293614af186975a18525f';
 const MAPS_KEY                = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || '';
 
-// Navigation thresholds
-const STEP_ADVANCE_METERS     = 35;    // advance step when < 35m from step end
-const ARRIVAL_THRESHOLD_KM    = 0.05;  // 50m — announce arrival
-const OFF_ROUTE_THRESHOLD     = 0.7;   // confidence score → trigger reroute
-const REROUTE_COOLDOWN_MS     = 12000; // min 12s between reroutes
-const OFF_ROUTE_CONFIRM_COUNT = 3;     // consecutive off-route readings before reroute
+const STEP_ADVANCE_METERS     = 35;
+const ARRIVAL_THRESHOLD_KM    = 0.05;
+const OFF_ROUTE_THRESHOLD     = 0.7;
+const REROUTE_COOLDOWN_MS     = 12000;
+const OFF_ROUTE_CONFIRM_COUNT = 3;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STATUS CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STATUS_CFG = {
-  // ── CURRENT STATUSES ──
-  SEARCHING: { 
-    label: 'Searching',    
-    color: 'color-mix(in srgb, var(--base-content) 60%, transparent)', 
-    bg: 'color-mix(in srgb, var(--base-content), transparent 90%)', 
-    border: 'color-mix(in srgb, var(--base-content), transparent 75%)' 
-  },
-  ASSIGNED: { 
-    label: 'Assigned',     
-    color: 'var(--warning)', 
-    bg: 'color-mix(in srgb, var(--warning), transparent 85%)',  
-    border: 'color-mix(in srgb, var(--warning), transparent 65%)' 
-  },
-  ARRIVING: { 
-    label: 'Arriving',     
-    color: 'var(--info)', 
-    bg: 'color-mix(in srgb, var(--info), transparent 85%)',   
-    border: 'color-mix(in srgb, var(--info), transparent 65%)' 
-  },
-  ARRIVED: { 
-    label: 'Arrived',      
-    color: 'var(--accent)', 
-    bg: 'color-mix(in srgb, var(--accent), transparent 85%)',  
-    border: 'color-mix(in srgb, var(--accent), transparent 65%)' 
-  },
-  TRIP_STARTED: { 
-    label: 'In Trip',      
-    color: 'var(--success)', 
-    bg: 'color-mix(in srgb, var(--success), transparent 85%)',   
-    border: 'color-mix(in srgb, var(--success), transparent 65%)' 
-  },
-  TRIP_COMPLETED: { 
-    label: 'Completed',    
-    color: 'color-mix(in srgb, var(--base-content) 70%, transparent)', 
-    bg: 'color-mix(in srgb, var(--base-content), transparent 85%)', 
-    border: 'color-mix(in srgb, var(--base-content), transparent 65%)' 
-  },
-  CANCELLED: { 
-    label: 'Cancelled',    
-    color: 'var(--error)', 
-    bg: 'color-mix(in srgb, var(--error), transparent 85%)',   
-    border: 'color-mix(in srgb, var(--error), transparent 65%)' 
-  },
-
-  // ── LEGACY SOCKET STATUSES ──
-  driver_assigned: { 
-    label: 'Assigned',    
-    color: 'var(--warning)', 
-    bg: 'color-mix(in srgb, var(--warning), transparent 85%)',  
-    border: 'color-mix(in srgb, var(--warning), transparent 65%)' 
-  },
-  driver_accepted: { 
-    label: 'Accepted',    
-    color: 'var(--primary)', 
-    bg: 'color-mix(in srgb, var(--primary), transparent 85%)',  
-    border: 'color-mix(in srgb, var(--primary), transparent 65%)' 
-  },
-  driver_en_route: { 
-    label: 'En Route',    
-    color: 'var(--info)', 
-    bg: 'color-mix(in srgb, var(--info), transparent 85%)',   
-    border: 'color-mix(in srgb, var(--info), transparent 65%)' 
-  },
-  driver_arrived: { 
-    label: 'Arrived',     
-    color: 'var(--accent)', 
-    bg: 'color-mix(in srgb, var(--accent), transparent 85%)',  
-    border: 'color-mix(in srgb, var(--accent), transparent 65%)' 
-  },
-  otp_verified: { 
-    label: 'OTP ✓',       
-    color: 'var(--success)', 
-    bg: 'color-mix(in srgb, var(--success), transparent 85%)',  
-    border: 'color-mix(in srgb, var(--success), transparent 65%)' 
-  },
-  in_progress: { 
-    label: 'In Progress', 
-    color: 'var(--success)', 
-    bg: 'color-mix(in srgb, var(--success), transparent 85%)',   
-    border: 'color-mix(in srgb, var(--success), transparent 65%)' 
-  },
-  at_stop: { 
-    label: 'At Stop',     
-    color: 'var(--secondary)',
-    bg: 'color-mix(in srgb, var(--secondary), transparent 85%)',  
-    border: 'color-mix(in srgb, var(--secondary), transparent 65%)' 
-  },
-  completed: { 
-    label: 'Completed',   
-    color: 'color-mix(in srgb, var(--base-content) 70%, transparent)', 
-    bg: 'color-mix(in srgb, var(--base-content), transparent 85%)', 
-    border: 'color-mix(in srgb, var(--base-content), transparent 65%)' 
-  },
-  cancelled: { 
-    label: 'Cancelled',   
-    color: 'var(--error)', 
-    bg: 'color-mix(in srgb, var(--error), transparent 85%)',   
-    border: 'color-mix(in srgb, var(--error), transparent 65%)' 
-  },
+  SEARCHING:      { label: 'Searching',    color: 'color-mix(in srgb, var(--base-content) 60%, transparent)', bg: 'color-mix(in srgb, var(--base-content), transparent 90%)', border: 'color-mix(in srgb, var(--base-content), transparent 75%)' },
+  ASSIGNED:       { label: 'Assigned',     color: 'var(--warning)',   bg: 'color-mix(in srgb, var(--warning), transparent 85%)',   border: 'color-mix(in srgb, var(--warning), transparent 65%)' },
+  ARRIVING:       { label: 'Arriving',     color: 'var(--info)',      bg: 'color-mix(in srgb, var(--info), transparent 85%)',      border: 'color-mix(in srgb, var(--info), transparent 65%)' },
+  ARRIVED:        { label: 'Arrived',      color: 'var(--accent)',    bg: 'color-mix(in srgb, var(--accent), transparent 85%)',    border: 'color-mix(in srgb, var(--accent), transparent 65%)' },
+  TRIP_STARTED:   { label: 'In Trip',      color: 'var(--success)',   bg: 'color-mix(in srgb, var(--success), transparent 85%)',   border: 'color-mix(in srgb, var(--success), transparent 65%)' },
+  TRIP_COMPLETED: { label: 'Completed',    color: 'color-mix(in srgb, var(--base-content) 70%, transparent)', bg: 'color-mix(in srgb, var(--base-content), transparent 85%)', border: 'color-mix(in srgb, var(--base-content), transparent 65%)' },
+  CANCELLED:      { label: 'Cancelled',    color: 'var(--error)',     bg: 'color-mix(in srgb, var(--error), transparent 85%)',     border: 'color-mix(in srgb, var(--error), transparent 65%)' },
+  driver_assigned:{ label: 'Assigned',     color: 'var(--warning)',   bg: 'color-mix(in srgb, var(--warning), transparent 85%)',   border: 'color-mix(in srgb, var(--warning), transparent 65%)' },
+  driver_accepted:{ label: 'Accepted',     color: 'var(--primary)',   bg: 'color-mix(in srgb, var(--primary), transparent 85%)',   border: 'color-mix(in srgb, var(--primary), transparent 65%)' },
+  driver_en_route:{ label: 'En Route',     color: 'var(--info)',      bg: 'color-mix(in srgb, var(--info), transparent 85%)',      border: 'color-mix(in srgb, var(--info), transparent 65%)' },
+  driver_arrived: { label: 'Arrived',      color: 'var(--accent)',    bg: 'color-mix(in srgb, var(--accent), transparent 85%)',    border: 'color-mix(in srgb, var(--accent), transparent 65%)' },
+  otp_verified:   { label: 'OTP ✓',        color: 'var(--success)',   bg: 'color-mix(in srgb, var(--success), transparent 85%)',   border: 'color-mix(in srgb, var(--success), transparent 65%)' },
+  in_progress:    { label: 'In Progress',  color: 'var(--success)',   bg: 'color-mix(in srgb, var(--success), transparent 85%)',   border: 'color-mix(in srgb, var(--success), transparent 65%)' },
+  at_stop:        { label: 'At Stop',      color: 'var(--secondary)', bg: 'color-mix(in srgb, var(--secondary), transparent 85%)', border: 'color-mix(in srgb, var(--secondary), transparent 65%)' },
+  completed:      { label: 'Completed',    color: 'color-mix(in srgb, var(--base-content) 70%, transparent)', bg: 'color-mix(in srgb, var(--base-content), transparent 85%)', border: 'color-mix(in srgb, var(--base-content), transparent 65%)' },
+  cancelled:      { label: 'Cancelled',    color: 'var(--error)',     bg: 'color-mix(in srgb, var(--error), transparent 85%)',     border: 'color-mix(in srgb, var(--error), transparent 65%)' },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OTP MODAL — 6 digit, full a11y
+// MARKER HELPERS — creates AdvancedMarkerElement with custom HTML pin
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Create a custom AdvancedMarker with colored dot + label.
+ * type: 'pickup' | 'dropoff' | 'care_join' | 'care_live'
+ */
+function createCustomMarker(map, lat, lng, type) {
+  if (!window.google?.maps?.marker?.AdvancedMarkerElement) return null;
+
+  const configs = {
+    pickup: {
+      bg: '#22c55e',
+      border: '#16a34a',
+      size: 14,
+      pulse: true,
+      label: 'P',
+      zIndex: 10,
+    },
+    dropoff: {
+      bg: '#ef4444',
+      border: '#dc2626',
+      size: 14,
+      pulse: false,
+      label: 'D',
+      zIndex: 10,
+    },
+    care_join: {
+      bg: '#f59e0b',
+      border: '#d97706',
+      size: 12,
+      pulse: true,
+      label: 'J',
+      zIndex: 9,
+    },
+    care_live: {
+      bg: '#8b5cf6',
+      border: '#7c3aed',
+      size: 13,
+      pulse: true,
+      label: 'CA',
+      zIndex: 11,
+    },
+  };
+
+  const cfg = configs[type] || configs.pickup;
+
+  const container = document.createElement('div');
+  container.style.cssText = `
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    cursor: pointer;
+  `;
+
+  const dot = document.createElement('div');
+  dot.style.cssText = `
+    width: ${cfg.size * 2 + 4}px;
+    height: ${cfg.size * 2 + 4}px;
+    border-radius: 50%;
+    background: ${cfg.bg};
+    border: 2.5px solid ${cfg.border};
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: ${cfg.size <= 12 ? '8px' : '9px'};
+    font-weight: 800;
+    color: #fff;
+    font-family: system-ui, sans-serif;
+    letter-spacing: 0;
+    position: relative;
+  `;
+  dot.textContent = cfg.label;
+
+  // Pulse ring
+  if (cfg.pulse) {
+    const ring = document.createElement('div');
+    ring.style.cssText = `
+      position: absolute;
+      inset: -4px;
+      border-radius: 50%;
+      border: 2px solid ${cfg.bg};
+      opacity: 0.5;
+      animation: markerPulse 2s ease-out infinite;
+    `;
+    dot.appendChild(ring);
+  }
+
+  // Pin tail
+  const tail = document.createElement('div');
+  tail.style.cssText = `
+    width: 3px;
+    height: 8px;
+    background: ${cfg.border};
+    border-radius: 0 0 3px 3px;
+  `;
+
+  container.appendChild(dot);
+  container.appendChild(tail);
+
+  const marker = new window.google.maps.marker.AdvancedMarkerElement({
+    map,
+    position: { lat, lng },
+    content: container,
+    zIndex: cfg.zIndex,
+  });
+
+  return marker;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OTP MODAL
 // ─────────────────────────────────────────────────────────────────────────────
 
 const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
   const OTP_LEN  = 6;
   const [digits, setDigits] = useState(Array(OTP_LEN).fill(''));
-  // Dynamic refs for each input
   const inputRefs = useRef(Array.from({ length: OTP_LEN }, () => React.createRef()));
 
   const handleChange = useCallback((i, val) => {
@@ -210,7 +238,6 @@ const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       className="fixed inset-0 z-[60] bg-base-300 flex items-center justify-center px-4"
-   
       role="dialog"
       aria-modal="true"
       aria-label="OTP Verification"
@@ -236,7 +263,6 @@ const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
           </button>
         </div>
 
-        {/* 6 OTP boxes */}
         <div className="flex gap-2 justify-center my-6" onPaste={handlePaste}>
           {digits.map((d, i) => (
             <input
@@ -304,15 +330,15 @@ const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MANEUVER_ICONS = {
-  'turn-left':   (sz) => <ArrowLeft  size={sz} />,
-  'turn-right':  (sz) => <ArrowRight size={sz} />,
-  'keep-left':   (sz) => <ArrowLeft  size={sz} style={{ opacity: 0.75 }} />,
-  'keep-right':  (sz) => <ArrowRight size={sz} style={{ opacity: 0.75 }} />,
-  'u-turn':      (sz) => <RotateCcw  size={sz} />,
-  'roundabout':  (sz) => <RotateCcw  size={sz} />,
-  'straight':    (sz) => <ArrowUp    size={sz} />,
-  'merge':       (sz) => <ArrowUp    size={sz} />,
-  'ramp':        (sz) => <ArrowUp    size={sz} />,
+  'turn-left':  (sz) => <ArrowLeft  size={sz} />,
+  'turn-right': (sz) => <ArrowRight size={sz} />,
+  'keep-left':  (sz) => <ArrowLeft  size={sz} style={{ opacity: 0.75 }} />,
+  'keep-right': (sz) => <ArrowRight size={sz} style={{ opacity: 0.75 }} />,
+  'u-turn':     (sz) => <RotateCcw  size={sz} />,
+  'roundabout': (sz) => <RotateCcw  size={sz} />,
+  'straight':   (sz) => <ArrowUp    size={sz} />,
+  'merge':      (sz) => <ArrowUp    size={sz} />,
+  'ramp':       (sz) => <ArrowUp    size={sz} />,
 };
 
 const NavInstructionCard = memo(function NavInstructionCard({ step, stepIndex, distanceMeters }) {
@@ -320,10 +346,9 @@ const NavInstructionCard = memo(function NavInstructionCard({ step, stepIndex, d
   const type   = getManeuverIcon(step.maneuver || step.instruction || '');
   const IconFn = MANEUVER_ICONS[type] || MANEUVER_ICONS.straight;
 
-  // Distance color feedback
- const dist = (distanceMeters && distanceMeters > 0)
-  ? distanceMeters
-  : (step.distanceMeters ?? 0);
+  const dist = (distanceMeters && distanceMeters > 0)
+    ? distanceMeters
+    : (step.distanceMeters ?? 0);
   const distColor = dist < 50 ? 'bg-error' : dist < 200 ? 'bg-warning' : 'bg-success';
 
   return (
@@ -333,31 +358,59 @@ const NavInstructionCard = memo(function NavInstructionCard({ step, stepIndex, d
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -10, scale: 0.97 }}
       transition={{ duration: 0.2 }}
-      className="flex gap-3 items-center px-3 py-2.5 rounded-md    bg-base-100 border border-base-300/60"
-      style={{
-    
-        
-      }}
+      className="flex gap-3 items-center px-3 py-2.5 rounded-md bg-base-100 border border-base-300/60"
     >
-      {/* Direction icon bubble */}
-      <div
-        className={` w-11 h-11 rounded-xl flex-shrink-0 flex items-center justify-center ${distColor}`}
-        
-      >
+      <div className={`w-11 h-11 rounded-xl flex-shrink-0 flex items-center justify-center ${distColor}`}>
         <span className="text-white">{IconFn(20)}</span>
       </div>
-
       <div className="flex-1 min-w-0">
         <p className="text-sm font-bold text-base-content truncate m-0 leading-tight">
           {step.instruction}
         </p>
-        <p className="text-xs font-bold mt-0.5 m-0 text-base-content/60"  >
+        <p className="text-xs font-bold mt-0.5 m-0 text-base-content/60">
           {dist < 1000 ? `${Math.round(dist)}m` : `${(dist / 1000).toFixed(1)}km`}
         </p>
       </div>
+    </motion.div>
+  );
+});
 
-      {/* Next step preview */}
-      {/* Could add next step arrow here */}
+// ─────────────────────────────────────────────────────────────────────────────
+// MAP LEGEND — shows what each marker means (full_care_ride only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MapLegend = memo(function MapLegend({ bookingType, caName }) {
+  if (bookingType !== 'full_care_ride') return null;
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: -20 }}
+      animate={{ opacity: 1, x: 0 }}
+      className="absolute z-20 flex flex-col gap-1.5 px-3 py-2.5 rounded-2xl"
+      style={{
+        bottom: 'calc(104px + env(safe-area-inset-bottom, 0px))',
+        left: 12,
+        background: 'rgba(10,15,28,0.85)',
+        border: '1px solid rgba(255,255,255,0.1)',
+        backdropFilter: 'blur(12px)',
+        minWidth: 130,
+      }}
+    >
+      <p className="text-[9px] font-bold uppercase tracking-widest text-white/40 m-0 mb-1">Map Legend</p>
+      {[
+        { color: '#22c55e', label: 'Pickup' },
+        { color: '#ef4444', label: 'Drop-off' },
+        { color: '#f59e0b', label: 'CA Join Point' },
+        { color: '#8b5cf6', label: caName || 'Care Assistant' },
+      ].map(({ color, label }) => (
+        <div key={label} className="flex items-center gap-2">
+          <div style={{
+            width: 8, height: 8, borderRadius: '50%',
+            background: color, flexShrink: 0,
+            boxShadow: `0 0 4px ${color}80`,
+          }} />
+          <span className="text-[10px] font-semibold text-white/70">{label}</span>
+        </div>
+      ))}
     </motion.div>
   );
 });
@@ -394,7 +447,6 @@ const BottomSheet = memo(function BottomSheet({ ride, booking, open, onToggle, r
         paddingBottom: 'env(safe-area-inset-bottom, 0px)',
       }}
     >
-      {/* Handle + header */}
       <button
         onClick={onToggle}
         className="w-full bg-transparent border-none cursor-pointer px-4 pt-3.5 pb-2.5 flex flex-col items-center"
@@ -417,10 +469,7 @@ const BottomSheet = memo(function BottomSheet({ ride, booking, open, onToggle, r
         </div>
       </button>
 
-      {/* Scrollable content */}
       <div className="overflow-y-auto px-4 pb-8" style={{ maxHeight: 'calc(82vh - 82px)' }}>
-
-        {/* Customer card */}
         {(bk?.customer || bk?.patientInfo) && (
           <div className="flex items-center gap-3 p-3.5 rounded-2xl mb-3 bg-base-300/50 border border-base-300">
             <div
@@ -449,7 +498,6 @@ const BottomSheet = memo(function BottomSheet({ ride, booking, open, onToggle, r
           </div>
         )}
 
-        {/* Route */}
         <div className="p-3.5 rounded-2xl mb-3 bg-base-300/50 border border-base-300">
           <p className="text-[10px] text-base-content/40 font-bold uppercase tracking-widest m-0 mb-3">Route</p>
           <div className="flex gap-3">
@@ -475,7 +523,6 @@ const BottomSheet = memo(function BottomSheet({ ride, booking, open, onToggle, r
           </div>
         </div>
 
-        {/* Booking info */}
         <div className="p-3.5 rounded-2xl bg-base-300/50 border border-base-300">
           <p className="text-[10px] text-base-content/40 font-bold uppercase tracking-widest m-0 mb-2.5">Booking</p>
           <InfoRow label="Booking Code" value={bk?.bookingCode} mono />
@@ -568,7 +615,6 @@ const LoadingSkeleton = memo(function LoadingSkeleton() {
 // ─────────────────────────────────────────────────────────────────────────────
 // SWIPE ACTION BUTTON
 // ─────────────────────────────────────────────────────────────────────────────
- 
 
 const SwipeActionButton = memo(function SwipeActionButton({ buttonConfig }) {
   const { label, icon, color, shadow, action } = buttonConfig;
@@ -578,47 +624,36 @@ const SwipeActionButton = memo(function SwipeActionButton({ buttonConfig }) {
 
   const x = useMotionValue(0);
 
-  // Calculate dynamic drag constraints based on screen/container size
   useEffect(() => {
     if (containerRef.current) {
       const containerWidth = containerRef.current.offsetWidth;
-      const thumbWidth = 40; // w-10 = 40px
-      const padding = 8;     // 4px margin on each side (left-1 = 4px)
+      const thumbWidth = 40;
+      const padding = 8;
       setConstraints(containerWidth - thumbWidth - padding);
     }
   }, []);
 
   const handleDragEnd = (event, info) => {
     if (isTriggered) return;
-    
-    // If swiped 75% of the way, trigger action
     if (info.offset.x >= constraints * 0.75) {
       setIsTriggered(true);
       action();
     }
   };
 
-  // Dynamic animations based on swipe progress
   const textOpacity = useTransform(x, [0, constraints * 0.5], [1, 0]);
-  const fillWidth = useTransform(x, [0, constraints], [40 + 8, constraints + 40 + 8]);
+  const fillWidth   = useTransform(x, [0, constraints], [40 + 8, constraints + 40 + 8]);
 
   return (
     <div
       ref={containerRef}
       className="relative flex items-center h-[48px] rounded-full w-full max-w-[300px] overflow-hidden bg-base-300/80 border border-base-content/10"
-      style={{ 
-        boxShadow: '0 8px 32px rgba(0,0,0,0.3)', 
-        backdropFilter: 'blur(12px)',
-        transform: 'translateZ(0)' // Hardware acceleration
-      }}
+      style={{ boxShadow: '0 8px 32px rgba(0,0,0,0.3)', backdropFilter: 'blur(12px)', transform: 'translateZ(0)' }}
     >
-      {/* Dynamic Progress Fill */}
       <motion.div
         className="absolute left-0 top-0 bottom-0 rounded-full opacity-20 pointer-events-none"
         style={{ width: fillWidth, background: color }}
       />
-
-      {/* Swipe Text Instruction */}
       <motion.div
         className="absolute w-full text-center pointer-events-none font-bold text-xs tracking-wide text-base-content/80 flex items-center justify-center gap-2"
         style={{ opacity: textOpacity }}
@@ -626,14 +661,12 @@ const SwipeActionButton = memo(function SwipeActionButton({ buttonConfig }) {
         Slide to {label}
         <motion.div
           animate={{ x: [0, 4, 0] }}
-          transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
+          transition={{ repeat: Infinity, duration: 1.5, ease: 'easeInOut' }}
           className="flex opacity-60"
         >
           <ArrowRight size={14} />
         </motion.div>
       </motion.div>
-
-      {/* Draggable Thumb */}
       <motion.div
         drag="x"
         dragConstraints={{ left: 0, right: constraints }}
@@ -642,12 +675,7 @@ const SwipeActionButton = memo(function SwipeActionButton({ buttonConfig }) {
         onDragEnd={handleDragEnd}
         whileTap={{ scale: 0.95 }}
         className="absolute left-1 flex items-center justify-center w-10 h-10 rounded-full cursor-grab active:cursor-grabbing z-10"
-        style={{ 
-          x, 
-          background: color, 
-          boxShadow: `0 4px 16px ${shadow}`, 
-          color: '#fff' 
-        }}
+        style={{ x, background: color, boxShadow: `0 4px 16px ${shadow}`, color: '#fff' }}
       >
         {isTriggered ? <Loader2 size={16} className="animate-spin" /> : React.cloneElement(icon, { size: 16 })}
       </motion.div>
@@ -686,10 +714,13 @@ export default function RideLiveTracking() {
   const mapLoadedRef   = useRef(false);
   const dirServiceRef  = useRef(null);
 
-  // Pickup / dropoff AdvancedMarkers — created once
-  const pickupMarkerRef  = useRef(null);
-  const dropoffMarkerRef = useRef(null);
-  const staticMarkersRef = useRef(false);  // guard
+  // ── Static markers — pickup / dropoff / CA join / CA live ─────────────────
+  const pickupMarkerRef   = useRef(null);
+  const dropoffMarkerRef  = useRef(null);
+  const caJoinMarkerRef   = useRef(null);   // CA join point dot
+  const caLiveMarkerRef   = useRef(null);   // CA live position marker
+  const staticMarkersRef  = useRef(false);  // pickup+dropoff created guard
+  const caJoinMarkerSet   = useRef(false);  // join point created guard
 
   // ── Kalman filter ─────────────────────────────────────────────────────────
   const kalmanRef = useRef(createKalmanFilter());
@@ -720,33 +751,45 @@ export default function RideLiveTracking() {
   const [followMode,    setFollowMode]    = useState(true);
 
   // Off-route tracking
-  const offRouteCountRef      = useRef(0);
-  const lastRerouteTimeRef    = useRef(0);
+  const offRouteCountRef   = useRef(0);
+  const lastRerouteTimeRef = useRef(0);
 
-  // Step refs (avoid stale closures in GPS effect)
-  const navStepsRef    = useRef([]);
-  const stepIdxRef     = useRef(0);
-  const arrivedRef     = useRef(false);
-  navStepsRef.current  = navSteps;
-  stepIdxRef.current   = currentStepIdx;
-  arrivedRef.current   = arrivedSpoken;
+  // Step refs
+  const navStepsRef   = useRef([]);
+  const stepIdxRef    = useRef(0);
+  const arrivedRef    = useRef(false);
+  navStepsRef.current = navSteps;
+  stepIdxRef.current  = currentStepIdx;
+  arrivedRef.current  = arrivedSpoken;
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const rd = tracking?.ride || tracking?.tracking?.ride || ride;
   const bk = rd?.booking || null;
 
-  const navTargetType = useMemo(() => {
-  // Prefer server-authoritative activeNavigationTarget
-  const nat = socketLive?.activeNavigationTarget;
-  if (nat === 'dropoff_hospital' || nat === 'dropoff_destination') return 'dropoff';
-  if (nat === 'pickup_care_assistant' || nat === 'pickup_patient')  return 'pickup';
-  // Fallback: derive from status
-  if (!rideStatus) return 'pickup';
-  return ['otp_verified', 'in_progress', 'at_stop', 'completed'].includes(rideStatus)
-    ? 'dropoff'
-    : 'pickup';
-}, [rideStatus, socketLive?.activeNavigationTarget]);
+  // Booking type from multiple possible locations
+  const bookingType = useMemo(() => {
+    return bk?.bookingType
+      || rd?.bookingType
+      || tracking?.bookingType
+      || socketLive?.bookingType
+      || null;
+  }, [bk, rd, tracking, socketLive]);
 
+  const isFullCareRide     = bookingType === 'full_care_ride';
+  const isPatientTransport = bookingType === 'patient_transport';
+
+  // ── Navigation target type ────────────────────────────────────────────────
+  const navTargetType = useMemo(() => {
+    const nat = socketLive?.activeNavigationTarget;
+    if (nat === 'dropoff_hospital' || nat === 'dropoff_destination') return 'dropoff';
+    if (nat === 'pickup_care_assistant' || nat === 'pickup_patient')  return 'pickup';
+    if (!rideStatus) return 'pickup';
+    return ['otp_verified', 'in_progress', 'at_stop', 'completed'].includes(rideStatus)
+      ? 'dropoff'
+      : 'pickup';
+  }, [rideStatus, socketLive?.activeNavigationTarget]);
+
+  // ── Pickup / dropoff coords ───────────────────────────────────────────────
   const pickupCoords = useMemo(() => {
     const c = rd?.pickup?.coordinates;
     if (!c || c.length < 2) return null;
@@ -759,25 +802,77 @@ export default function RideLiveTracking() {
     return { lat: c[1], lng: c[0] };
   }, [rd]);
 
+  // ── CA join point coords (full_care_ride only) ────────────────────────────
+  // Pull from multiple sources: socketLive, tracking snapshot, bookingSnapshot
+  const caJoinCoords = useMemo(() => {
+    if (!isFullCareRide) return null;
+
+    // From socket live state
+    const socketJoin = socketLive?.caJoinPoint;
+    if (socketJoin?.coordinates && socketJoin.coordinates.length >= 2) {
+      return { lat: socketJoin.coordinates[1], lng: socketJoin.coordinates[0] };
+    }
+
+    // From ride waypoints (stored in rd.waypoints)
+    const waypoints = rd?.waypoints || [];
+    const joinWp = waypoints.find(w => w.type === 'care_assistant_join');
+    if (joinWp?.location?.coordinates?.length >= 2) {
+      return {
+        lat: joinWp.location.coordinates[1],
+        lng: joinWp.location.coordinates[0],
+      };
+    }
+
+    // From tracking snapshot route.caJoinWaypoint
+    const caJoinWp = tracking?.route?.caJoinWaypoint;
+    if (caJoinWp?.coordinates?.length >= 2) {
+      return { lat: caJoinWp.coordinates[1], lng: caJoinWp.coordinates[0] };
+    }
+
+    return null;
+  }, [isFullCareRide, rd?.waypoints, socketLive?.caJoinPoint, tracking?.route]);
+
+  // ── Care assistant live location (full_care_ride only) ────────────────────
+  const caLiveCoords = useMemo(() => {
+    if (!isFullCareRide) return null;
+
+    // From socketLive care_assistant_location_update event (populated by useRideTracking)
+    const socketCaLoc = socketLive?.careAssistantLiveLocation;
+    if (socketCaLoc?.lat && socketCaLoc?.lng) {
+      return { lat: socketCaLoc.lat, lng: socketCaLoc.lng };
+    }
+
+    // From tracking snapshot careAssistant.liveLocation
+    const snapLoc = tracking?.careAssistant?.liveLocation;
+    if (snapLoc?.lat && snapLoc?.lng) {
+      return { lat: snapLoc.lat, lng: snapLoc.lng };
+    }
+
+    return null;
+  }, [isFullCareRide, socketLive?.careAssistantLiveLocation, tracking?.careAssistant?.liveLocation]);
+
+  // CA name for legend
+  const caName = useMemo(() => {
+    return tracking?.careAssistant?.name
+      || socketLive?.careAssistantName
+      || rd?.careAssistantSnapshot?.name
+      || 'Care Assistant';
+  }, [tracking, socketLive, rd]);
+
   const targetCoords = navTargetType === 'dropoff' ? dropoffCoords : pickupCoords;
   const routeType    = navTargetType === 'dropoff' ? 'toDropoff' : 'toPickup';
 
   // ── Map load handler ──────────────────────────────────────────────────────
   const onMapLoad = useCallback((map) => {
-    mapRef.current        = map;
-    mapLoadedRef.current  = true;
+    mapRef.current       = map;
+    mapLoadedRef.current = true;
     dirServiceRef.current = new window.google.maps.DirectionsService();
-
     const cleanup = initCameraListeners(map);
     setMapLoaded(true);
-
-    // Sync followMode state with camera hook
-    const origDragStart = followModeRef;
     return cleanup;
-  }, [initCameraListeners, followModeRef]);
+  }, [initCameraListeners]);
 
-  // ── Sync followMode state from camera hook ────────────────────────────────
-  // Camera hook internally manages followMode; we mirror it for FAB UI
+  // ── Sync followMode ───────────────────────────────────────────────────────
   useEffect(() => {
     const interval = setInterval(() => {
       setFollowMode(followModeRef.current);
@@ -793,43 +888,112 @@ export default function RideLiveTracking() {
     }
   }, [rideStatus]);
 
-  // ── Auto-show OTP modal on arrived ────────────────────────────────────────
+  // ── Auto-show OTP modal ───────────────────────────────────────────────────
   useEffect(() => {
     if (rideStatus === 'driver_arrived' && !showOtpModal) {
       setShowOtpModal(true);
     }
   }, [rideStatus]); // eslint-disable-line
 
-  // ── Reset nav state on target change ─────────────────────────────────────
+  // ── Reset nav on target change ────────────────────────────────────────────
   useEffect(() => {
     setCurrentStepIdx(0);
     setArrivedSpoken(false);
     resetManeuverBands();
   }, [navTargetType, resetManeuverBands]);
 
-  // ── Create static markers once ───────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // CREATE STATIC MARKERS — pickup + dropoff
+  // Only created once. Works for ALL booking types.
+  // ─────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!mapLoaded || staticMarkersRef.current) return;
     if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
 
     let created = false;
+
     if (pickupCoords && !pickupMarkerRef.current) {
-      pickupMarkerRef.current  = createStaticMarker(mapRef.current, pickupCoords.lat, pickupCoords.lng, 'pickup');
+      pickupMarkerRef.current = createCustomMarker(
+        mapRef.current,
+        pickupCoords.lat,
+        pickupCoords.lng,
+        'pickup',
+      );
       created = true;
     }
+
     if (dropoffCoords && !dropoffMarkerRef.current) {
-      dropoffMarkerRef.current = createStaticMarker(mapRef.current, dropoffCoords.lat, dropoffCoords.lng, 'dropoff');
+      dropoffMarkerRef.current = createCustomMarker(
+        mapRef.current,
+        dropoffCoords.lat,
+        dropoffCoords.lng,
+        'dropoff',
+      );
       created = true;
     }
+
     if (created) staticMarkersRef.current = true;
   }, [mapLoaded, pickupCoords, dropoffCoords]);
 
-  // ── Cleanup markers on unmount ────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // CREATE CA JOIN POINT MARKER — full_care_ride only, created once
+  // ─────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!mapLoaded || !isFullCareRide || caJoinMarkerSet.current) return;
+    if (!caJoinCoords) return;
+    if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
+
+    // Remove old if re-created somehow
+    if (caJoinMarkerRef.current) {
+      caJoinMarkerRef.current.map = null;
+      caJoinMarkerRef.current = null;
+    }
+
+    caJoinMarkerRef.current = createCustomMarker(
+      mapRef.current,
+      caJoinCoords.lat,
+      caJoinCoords.lng,
+      'care_join',
+    );
+    caJoinMarkerSet.current = true;
+  }, [mapLoaded, isFullCareRide, caJoinCoords]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // UPDATE CA LIVE MARKER — full_care_ride only, updates on every new position
+  // ─────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!mapLoaded || !isFullCareRide) return;
+    if (!caLiveCoords) return;
+    if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
+
+    if (!caLiveMarkerRef.current) {
+      // First time: create marker
+      caLiveMarkerRef.current = createCustomMarker(
+        mapRef.current,
+        caLiveCoords.lat,
+        caLiveCoords.lng,
+        'care_live',
+      );
+    } else {
+      // Update existing marker position
+      caLiveMarkerRef.current.position = {
+        lat: caLiveCoords.lat,
+        lng: caLiveCoords.lng,
+      };
+    }
+  }, [mapLoaded, isFullCareRide, caLiveCoords]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CLEANUP all markers on unmount
+  // ─────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
       destroyMarker();
-      [pickupMarkerRef, dropoffMarkerRef].forEach(ref => {
-        if (ref.current) { ref.current.map = null; ref.current = null; }
+      [pickupMarkerRef, dropoffMarkerRef, caJoinMarkerRef, caLiveMarkerRef].forEach(ref => {
+        if (ref.current) {
+          ref.current.map = null;
+          ref.current = null;
+        }
       });
       clearRoute();
     };
@@ -847,13 +1011,10 @@ export default function RideLiveTracking() {
         provideRouteAlternatives: false,
       });
       if (result.status === 'OK') {
-        // Parse steps
         const steps = parseDirectionSteps(result.routes?.[0]?.legs);
         setNavSteps(steps);
         setCurrentStepIdx(0);
         resetManeuverBands();
-
-        // Render route polyline
         setRoute(result, type || routeType);
       }
     } catch (e) {
@@ -874,14 +1035,12 @@ export default function RideLiveTracking() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapLoaded, navTargetType]);
 
-  // ── Socket navigation target → reroute ────────────────────────────────────
+  // ── Socket navigation target → reroute ───────────────────────────────────
   useEffect(() => {
     if (!navigationTarget || !mapLoaded || !currentPosition) return;
-
     const dest = navigationTarget.coords
       ? { lat: navigationTarget.coords[1], lng: navigationTarget.coords[0] }
       : targetCoords;
-
     if (dest) {
       announceRerouting();
       calculateRoute(
@@ -893,7 +1052,7 @@ export default function RideLiveTracking() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigationTarget]);
 
-  // ── Pause updates when tab hidden ─────────────────────────────────────────
+  // ── Tab visibility pause ──────────────────────────────────────────────────
   const tabHiddenRef = useRef(false);
   useEffect(() => {
     const onVis = () => { tabHiddenRef.current = document.hidden; };
@@ -908,55 +1067,39 @@ export default function RideLiveTracking() {
     const rawLat  = currentPosition.lat;
     const rawLng  = currentPosition.lng;
     const heading = currentPosition.heading || 0;
-    const speed   = currentPosition.speed   || 0;           // km/h
+    const speed   = currentPosition.speed   || 0;
     const acc     = currentPosition.accuracy || 10;
 
-    // ── Kalman filter ──
     const filtered = kalmanRef.current.update(rawLat, rawLng, acc, Date.now());
     const { lat, lng } = filtered;
 
-    // ── Update driver marker ──
     updateMarker(lat, lng, heading, mapBearingRef.current, speed);
-
-    // ── Update camera ──
     updateCamera(lat, lng, heading, speed);
 
-    // ── Route progress animation ──
     if (routePointsRef.current?.length) {
       updateProgress(lat, lng);
     }
 
-    // ── Step advancement ──
     const steps = navStepsRef.current;
     if (steps.length) {
       let idx = stepIdxRef.current;
-
-      // Find correct step using polyline proximity
       const newIdx = findCurrentStepByPolyline(steps, lat, lng, Math.max(0, idx - 1));
       if (newIdx !== idx) {
         setCurrentStepIdx(newIdx);
         idx = newIdx;
       }
-
       const step = steps[idx];
       if (step) {
-        // Projected distance to step end
         const distM = distanceToStepEndMeters(step, lat, lng);
         setStepDistMeters(distM);
-
-        // Voice announcement
         announceManeuver(step.instruction, distM, idx, speed);
-
-        // Advance to next step
         if (distM < STEP_ADVANCE_METERS && idx < steps.length - 1) {
-          const nextIdx = idx + 1;
-          setCurrentStepIdx(nextIdx);
+          setCurrentStepIdx(idx + 1);
         }
       }
 
-      // ── Off-route detection ──
       if (routePointsRef.current?.length && speed > 5) {
-        const snap  = snapToPolyline(lat, lng, routePointsRef.current);
+        const snap = snapToPolyline(lat, lng, routePointsRef.current);
         const segBearing = (() => {
           const pts = routePointsRef.current;
           const si  = snap.segmentIndex;
@@ -965,9 +1108,7 @@ export default function RideLiveTracking() {
           }
           return heading;
         })();
-
         const score = offRouteScore(snap.distanceOffRouteKm, heading, segBearing, speed);
-
         if (score > OFF_ROUTE_THRESHOLD) {
           offRouteCountRef.current++;
           if (
@@ -975,7 +1116,7 @@ export default function RideLiveTracking() {
             Date.now() - lastRerouteTimeRef.current > REROUTE_COOLDOWN_MS &&
             targetCoords
           ) {
-            offRouteCountRef.current  = 0;
+            offRouteCountRef.current   = 0;
             lastRerouteTimeRef.current = Date.now();
             announceRerouting();
             calculateRoute({ lat, lng }, targetCoords, routeType);
@@ -986,7 +1127,6 @@ export default function RideLiveTracking() {
       }
     }
 
-    // ── Arrival detection ──
     if (targetCoords && !arrivedRef.current) {
       const distToTarget = distanceKm(lat, lng, targetCoords.lat, targetCoords.lng);
       if (distToTarget < ARRIVAL_THRESHOLD_KM) {
@@ -994,11 +1134,10 @@ export default function RideLiveTracking() {
         setArrivedSpoken(true);
       }
     }
-
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPosition, mapLoaded]);
 
-  // ── OTP handler ────────────────────────────────────────────────────────────
+  // ── OTP handler ───────────────────────────────────────────────────────────
   const handleOtpVerify = useCallback(async (otp) => {
     setOtpLoading(true);
     setOtpError(null);
@@ -1019,7 +1158,7 @@ export default function RideLiveTracking() {
     }
   }, [verifyOtp, speak]);
 
-  // ── Recenter button ───────────────────────────────────────────────────────
+  // ── Recenter ──────────────────────────────────────────────────────────────
   const handleRecenter = useCallback(() => {
     if (currentPosition) {
       recenter(currentPosition.lat, currentPosition.lng, currentPosition.heading);
@@ -1037,61 +1176,19 @@ export default function RideLiveTracking() {
   const actionButton = useMemo(() => {
     switch (rideStatus) {
       case 'driver_assigned':
-        return {
-          label: 'Accept Ride',
-          icon:  <CheckCircle size={17} />,
-          color: '#22c55e',
-          shadow: 'rgba(34,197,94,0.45)',
-          action: () => sendStatusUpdate(DRIVER_STATUS.ACCEPTED),
-        };
+        return { label: 'Accept Ride',         icon: <CheckCircle size={17} />, color: '#22c55e',          shadow: 'rgba(34,197,94,0.45)',   action: () => sendStatusUpdate(DRIVER_STATUS.ACCEPTED) };
       case 'driver_accepted':
-        return {
-          label: 'Navigate to Pickup',
-          icon:  <Navigation size={17} />,
-          color: 'var(--primary)',
-          shadow: 'rgba(59,130,246,0.45)',
-          action: () => sendStatusUpdate(DRIVER_STATUS.EN_ROUTE),
-        };
+        return { label: 'Navigate to Pickup',  icon: <Navigation size={17} />,  color: 'var(--primary)',   shadow: 'rgba(59,130,246,0.45)',  action: () => sendStatusUpdate(DRIVER_STATUS.EN_ROUTE) };
       case 'driver_en_route':
-        return {
-          label: 'I Have Arrived',
-          icon:  <MapPin size={17} />,
-          color: '#8b5cf6',
-          shadow: 'rgba(139,92,246,0.45)',
-          action: () => sendStatusUpdate(DRIVER_STATUS.ARRIVED),
-        };
+        return { label: 'I Have Arrived',      icon: <MapPin size={17} />,      color: '#8b5cf6',          shadow: 'rgba(139,92,246,0.45)', action: () => sendStatusUpdate(DRIVER_STATUS.ARRIVED) };
       case 'driver_arrived':
-        return {
-          label: 'Verify OTP',
-          icon:  <CheckSquare size={17} />,
-          color: '#f59e0b',
-          shadow: 'rgba(245,158,11,0.45)',
-          action: () => setShowOtpModal(true),
-        };
+        return { label: 'Verify OTP',          icon: <CheckSquare size={17} />, color: '#f59e0b',          shadow: 'rgba(245,158,11,0.45)', action: () => setShowOtpModal(true) };
       case 'otp_verified':
-        return {
-          label: 'Start Ride',
-          icon:  <Play size={17} />,
-          color: '#22c55e',
-          shadow: 'rgba(34,197,94,0.45)',
-          action: () => sendStatusUpdate(DRIVER_STATUS.RIDE_STARTED),
-        };
+        return { label: 'Start Ride',          icon: <Play size={17} />,        color: '#22c55e',          shadow: 'rgba(34,197,94,0.45)',  action: () => sendStatusUpdate(DRIVER_STATUS.RIDE_STARTED) };
       case 'in_progress':
-        return {
-          label: 'Complete Ride',
-          icon:  <Square size={17} />,
-          color: 'var(--primary)',
-          shadow: 'rgba(59,130,246,0.45)',
-          action: () => sendStatusUpdate(DRIVER_STATUS.COMPLETED),
-        };
+        return { label: 'Complete Ride',       icon: <Square size={17} />,      color: 'var(--primary)',   shadow: 'rgba(59,130,246,0.45)', action: () => sendStatusUpdate(DRIVER_STATUS.COMPLETED) };
       case 'at_stop':
-        return {
-          label: 'Resume Ride',
-          icon:  <Play size={17} />,
-          color: '#06b6d4',
-          shadow: 'rgba(6,182,212,0.45)',
-          action: () => sendStatusUpdate(DRIVER_STATUS.STOP_DEPARTED),
-        };
+        return { label: 'Resume Ride',         icon: <Play size={17} />,        color: '#06b6d4',          shadow: 'rgba(6,182,212,0.45)',  action: () => sendStatusUpdate(DRIVER_STATUS.STOP_DEPARTED) };
       default:
         return null;
     }
@@ -1113,7 +1210,6 @@ export default function RideLiveTracking() {
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <>
-      {/* Global keyframes — injected once */}
       <style>{`
         @keyframes drvPulse {
           0%   { transform: scale(0.85); opacity: 0.75; }
@@ -1123,6 +1219,11 @@ export default function RideLiveTracking() {
         @keyframes sosPulse {
           0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.7); }
           50%       { box-shadow: 0 0 0 10px rgba(239,68,68,0); }
+        }
+        @keyframes markerPulse {
+          0%   { transform: scale(0.9); opacity: 0.8; }
+          70%  { transform: scale(1.8); opacity: 0; }
+          100% { transform: scale(1.8); opacity: 0; }
         }
       `}</style>
 
@@ -1168,31 +1269,24 @@ export default function RideLiveTracking() {
           className="absolute top-0 left-0 right-0 z-20 flex flex-col"
           style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
         >
-          {/* Status row */}
           <motion.div
             initial={{ opacity: 0, y: -16 }}
             animate={{ opacity: 1, y: 0 }}
             className="flex items-center bg-base-100 gap-2 px-3 py-2"
-            
           >
-            {/* Back */}
             <motion.button
               whileTap={{ scale: 0.88 }}
               onClick={handleBack}
               className="w-8 h-8 rounded-xl bg-base-200 text-accent-content flex-shrink-0 flex items-center justify-center cursor-pointer"
-              
               aria-label="Go back"
             >
               <ChevronLeft size={17} />
             </motion.button>
 
-            {/* Live dot */}
             <div
               className={`w-2 h-2 rounded-full flex-shrink-0 ${socketLive ? 'bg-success/90 animate-pulse' : 'bg-error/80 animate-pulse'}`}
-               
             />
 
-            {/* Status badge */}
             {rideStatus && (
               <span
                 className="inline-flex items-center px-2.5 py-0.5 rounded-full flex-shrink-0 text-[10px] font-bold uppercase tracking-widest border"
@@ -1202,31 +1296,37 @@ export default function RideLiveTracking() {
               </span>
             )}
 
-            {/* ETA */}
+            {/* Booking type badge */}
+            {bookingType && (
+              <span
+                className="inline-flex items-center px-2 py-0.5 rounded-full flex-shrink-0 text-[9px] font-bold uppercase tracking-widest border border-base-300 bg-base-200 text-base-content/50"
+              >
+                {bookingType.replace(/_/g, ' ')}
+              </span>
+            )}
+
             {etaMinutes != null && (
               <div className="flex items-center gap-1 flex-shrink-0">
                 <Clock size={11} style={{ color: 'rgba(255,255,255,0.4)' }} />
-                <span className="text-xs font-bold text-base-content"  >
+                <span className="text-xs font-bold text-base-content">
                   {formatEta(etaMinutes)}
                 </span>
               </div>
             )}
 
-            {/* Distance */}
             {remainingKm != null && (
               <div className="flex items-center gap-1 flex-shrink-0">
                 <Navigation size={11} style={{ color: '#60a5fa' }} />
-                <span className="text-xs font-semibold text-base-content/70" >
+                <span className="text-xs font-semibold text-base-content/70">
                   {formatDistance(remainingKm)}
                 </span>
               </div>
             )}
 
-            {/* Speed — right aligned */}
             {speedKmh > 3 && (
               <div className="flex items-center gap-1 ml-auto flex-shrink-0">
                 <Zap size={11} style={{ color: '#facc15' }} />
-                <span className="text-[11px] font-bold tabular-nums text-base-content/80"  >
+                <span className="text-[11px] font-bold tabular-nums text-base-content/80">
                   {formatSpeed(speedKmh)}<span className="text-[9px] ml-0.5 opacity-60">km/h</span>
                 </span>
               </div>
@@ -1292,7 +1392,6 @@ export default function RideLiveTracking() {
 
         {/* ── LEFT FABs ────────────────────────────────────────────────── */}
         <div className="absolute z-20 flex flex-col gap-2.5" style={{ top: 160, left: 12 }}>
-          {/* Recenter / Follow */}
           <motion.button
             whileTap={{ scale: 0.88 }}
             onClick={handleRecenter}
@@ -1312,42 +1411,36 @@ export default function RideLiveTracking() {
             <Maximize2 size={16} />
           </motion.button>
 
-          {/* North-up */}
-         <motion.button
-  whileTap={{ scale: 0.88 }}
-  onClick={() => { 
-    resetToNorth(); 
-    setFollowMode(false); 
-  }}
-  aria-label="Reset map to north"
-  className="flex items-center justify-center w-11 h-11 rounded-[13px] bg-base-200/90 border-[1.5px] border-base-content/10 shadow-lg text-base-content/60 backdrop-blur-soft cursor-pointer hover:text-base-content hover:border-base-content/30 transition-all duration-200"
->
-  <Compass size={16} />
-</motion.button>
+          <motion.button
+            whileTap={{ scale: 0.88 }}
+            onClick={() => { resetToNorth(); setFollowMode(false); }}
+            aria-label="Reset map to north"
+            className="flex items-center justify-center w-11 h-11 rounded-[13px] bg-base-200/90 border-[1.5px] border-base-content/10 shadow-lg text-base-content/60 backdrop-blur-soft cursor-pointer hover:text-base-content hover:border-base-content/30 transition-all duration-200"
+          >
+            <Compass size={16} />
+          </motion.button>
 
           <motion.button
-  whileTap={{ scale: 0.88 }}
-  onClick={zoomIn}
-  aria-label="Zoom in"
-  className="flex items-center justify-center w-11 h-11 rounded-[13px] bg-base-200/90 border-[1.5px] border-base-content/10 shadow-lg text-base-content/60 backdrop-blur-soft cursor-pointer hover:text-base-content hover:border-base-content/30 transition-all duration-200"
->
-  <Plus size={16} />
-</motion.button>
+            whileTap={{ scale: 0.88 }}
+            onClick={zoomIn}
+            aria-label="Zoom in"
+            className="flex items-center justify-center w-11 h-11 rounded-[13px] bg-base-200/90 border-[1.5px] border-base-content/10 shadow-lg text-base-content/60 backdrop-blur-soft cursor-pointer hover:text-base-content hover:border-base-content/30 transition-all duration-200"
+          >
+            <Plus size={16} />
+          </motion.button>
 
-{/* Zoom out */}
-<motion.button
-  whileTap={{ scale: 0.88 }}
-  onClick={zoomOut}
-  aria-label="Zoom out"
-  className="flex items-center justify-center w-11 h-11 rounded-[13px] bg-base-200/90 border-[1.5px] border-base-content/10 shadow-lg text-base-content/60 backdrop-blur-soft cursor-pointer hover:text-base-content hover:border-base-content/30 transition-all duration-200"
->
-  <Minus size={16} />
-</motion.button>
+          <motion.button
+            whileTap={{ scale: 0.88 }}
+            onClick={zoomOut}
+            aria-label="Zoom out"
+            className="flex items-center justify-center w-11 h-11 rounded-[13px] bg-base-200/90 border-[1.5px] border-base-content/10 shadow-lg text-base-content/60 backdrop-blur-soft cursor-pointer hover:text-base-content hover:border-base-content/30 transition-all duration-200"
+          >
+            <Minus size={16} />
+          </motion.button>
         </div>
 
         {/* ── RIGHT FABs ───────────────────────────────────────────────── */}
         <div className="absolute z-20 flex flex-col gap-2.5" style={{ top: 160, right: 12 }}>
-          {/* Voice toggle */}
           <motion.button
             whileTap={{ scale: 0.88 }}
             onClick={toggleVoice}
@@ -1367,7 +1460,6 @@ export default function RideLiveTracking() {
             {voiceEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
           </motion.button>
 
-          {/* SOS */}
           <motion.button
             whileTap={{ scale: 0.88 }}
             onClick={() => {
@@ -1393,13 +1485,40 @@ export default function RideLiveTracking() {
           </motion.button>
         </div>
 
+        {/* ── MAP LEGEND (full_care_ride only) ─────────────────────────── */}
+        <MapLegend bookingType={bookingType} caName={caName} />
+
+        {/* ── CA STATUS CHIP (full_care_ride, when CA location known) ──── */}
+        {isFullCareRide && caLiveCoords && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="absolute z-20"
+            style={{
+              bottom: `calc(104px + env(safe-area-inset-bottom, 0px))`,
+              right: 12,
+            }}
+          >
+            <div
+              className="flex items-center gap-2 px-3 py-1.5 rounded-2xl text-xs font-bold"
+              style={{
+                background: 'rgba(139,92,246,0.15)',
+                border: '1px solid rgba(139,92,246,0.4)',
+                color: '#8b5cf6',
+                backdropFilter: 'blur(10px)',
+              }}
+            >
+              <div className="w-2 h-2 rounded-full bg-[#8b5cf6] animate-pulse" />
+              {caName} live
+            </div>
+          </motion.div>
+        )}
+
         {/* ── PRIMARY ACTION BUTTON ────────────────────────────────────── */}
-       
         <AnimatePresence mode="wait">
           {actionButton && !['completed', 'cancelled'].includes(rideStatus) && (
             <motion.div
-              // Using rideStatus as key forces the component to reset its internal swipe state on step changes
-              key={rideStatus} 
+              key={rideStatus}
               initial={{ y: 100, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 100, opacity: 0 }}

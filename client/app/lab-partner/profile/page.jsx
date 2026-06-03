@@ -85,24 +85,17 @@ function SectionCard({ title, subtitle, icon: Icon, children, className = "", ac
       animate="show"
       className={`card p-0 overflow-hidden ${className}`}
     >
-      <div
-        className="flex items-center justify-between px-6 py-4 border-b"
-        style={{ borderColor: "var(--base-300)", background: "var(--base-200)" }}
-      >
+      <div className="flex items-center justify-between px-6 py-4 border-b border-base-300 bg-base-200">
         <div className="flex items-center gap-3">
-          <div
-            className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
-            style={{ background: "color-mix(in oklch, var(--primary), transparent 84%)" }}
-          >
-            <Icon size={16} style={{ color: "var(--primary)" }} strokeWidth={2.2} />
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 bg-primary/15 text-primary">
+            <Icon size={16} strokeWidth={2.2} />
           </div>
           <div>
-            <h3 className="font-montserrat font-black text-sm tracking-tight"
-              style={{ color: "var(--base-content)", lineHeight: 1.2 }}>
+            <h3 className="font-montserrat font-black text-xs tracking-tight text-base-content leading-tight">
               {title}
             </h3>
             {subtitle && (
-              <p className="text-xs mt-0.5" style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+              <p className="text-[11px] mt-0.5 text-base-content/50">
                 {subtitle}
               </p>
             )}
@@ -118,32 +111,26 @@ function SectionCard({ title, subtitle, icon: Icon, children, className = "", ac
 function Field({ label, value, icon: Icon, editable = false, type = "text", onChange, placeholder }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-xs font-semibold uppercase tracking-wider"
-        style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+      <label className="text-[11px] font-semibold uppercase tracking-wider text-base-content/50">
         {label}
       </label>
       {editable ? (
         <div className="relative">
           {Icon && (
-            <Icon size={14} strokeWidth={2}
-              className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-              style={{ color: "color-mix(in oklch, var(--base-content) 40%, transparent)" }}
-            />
+            <Icon size={14} strokeWidth={2} className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-base-content/40" />
           )}
           <input
             type={type}
             value={value ?? ""}
             onChange={(e) => onChange(e.target.value)}
             placeholder={placeholder}
-            className={`input-field w-full text-sm ${Icon ? "pl-9" : ""}`}
+            className={`input-field w-full text-xs ${Icon ? "pl-9" : ""}`}
           />
         </div>
       ) : (
-        <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg"
-          style={{ background: "var(--base-200)", border: "1px solid var(--base-300)" }}>
-          {Icon && <Icon size={13} strokeWidth={2} style={{ color: "var(--primary)", flexShrink: 0 }} />}
-          <span className="text-sm truncate"
-            style={{ color: value ? "var(--base-content)" : "color-mix(in oklch, var(--base-content) 35%, transparent)" }}>
+        <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-base-200 border border-base-300">
+          {Icon && <Icon size={13} strokeWidth={2} className="text-primary flex-shrink-0" />}
+          <span className={`text-xs truncate ${value ? "text-base-content" : "text-base-content/40"}`}>
             {value || "—"}
           </span>
         </div>
@@ -161,17 +148,12 @@ function StatusBadge({ status }) {
     rejected:     { label: "Rejected",     cls: "badge-error"   },
     deactivated:  { label: "Deactivated",  cls: "badge-warning" },
   };
-  const { label, cls } = map[status] ?? { label: status, cls: "badge-primary" };
+  const { label, cls } = map[status?.toLowerCase()] ?? { label: status, cls: "badge-primary" };
   return <span className={`badge ${cls}`}>{label}</span>;
 }
 
 function Spinner({ size = 16 }) {
-  return (
-    <Loader2 size={size} strokeWidth={2.2}
-      className="animate-spin"
-      style={{ color: "var(--primary)" }}
-    />
-  );
+  return <Loader2 size={size} strokeWidth={2.2} className="animate-spin text-primary" />;
 }
 
 function CopyText({ text }) {
@@ -179,13 +161,9 @@ function CopyText({ text }) {
   return (
     <button
       onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
-      className="flex items-center gap-1.5 text-xs px-2 py-1 rounded transition-all"
-      style={{
-        background: copied
-          ? "color-mix(in oklch, var(--success), transparent 85%)"
-          : "color-mix(in oklch, var(--primary), transparent 90%)",
-        color: copied ? "var(--success)" : "var(--primary)",
-      }}
+      className={`flex items-center gap-1.5 text-[11px] px-2 py-1 rounded transition-all ${
+        copied ? "bg-success/15 text-success" : "bg-primary/10 text-primary hover:bg-primary/20"
+      }`}
     >
       {copied ? <Check size={11} /> : <Copy size={11} />}
       {copied ? "Copied" : "Copy"}
@@ -235,7 +213,7 @@ export default function MyProfile() {
   const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [showPasswords, setShowPasswords] = useState({ current: false, new: false, confirm: false });
   const [emailChangeForm, setEmailChangeForm] = useState({ newEmail: "", otp: "" });
-  const [emailChangeStep, setEmailChangeStep] = useState(0); // 0=idle 1=otp-sent 2=done
+  const [emailChangeStep, setEmailChangeStep] = useState(0); 
   const [verifyOtpInput, setVerifyOtpInput] = useState("");
   const [contactPersons, setContactPersons] = useState([]);
   const [notifPrefs, setNotifPrefs] = useState({});
@@ -368,7 +346,7 @@ export default function MyProfile() {
   };
 
   const handleRevokeSession = (sessionId) => dispatch(revokePartnerSession(sessionId));
-  const handleRevokeAll     = ()           => dispatch(revokeAllPartnerSessions());
+  const handleRevokeAll     = ()            => dispatch(revokeAllPartnerSessions());
 
   const addContactPerson = () =>
     setContactPersons((prev) => [...prev, { name: "", designation: "", phone: "", email: "", isPrimary: false }]);
@@ -387,19 +365,15 @@ export default function MyProfile() {
   const OverviewTab = () => (
     <div className="space-y-6">
       {/* Profile header card */}
-      <motion.div variants={fadeUp} initial="hidden" animate="show"
-        className="card p-0 overflow-hidden">
+      <motion.div variants={fadeUp} initial="hidden" animate="show" className="card p-0 overflow-hidden">
+        
         {/* Cover */}
-        <div className="relative h-36 sm:h-48 overflow-hidden group"
-          style={{ background: "var(--bg-gradient-primary)" }}>
+        <div className="relative h-36 sm:h-48 overflow-hidden group bg-[image:var(--bg-gradient-primary)]">
           {profile?.coverImageUrl && (
             <img src={profile.coverImageUrl} alt="Cover" className="w-full h-full object-cover" />
           )}
-          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ background: "rgba(0,0,0,0.35)" }}>
-            <button onClick={() => coverInputRef.current?.click()}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-xs font-bold"
-              style={{ background: "rgba(255,255,255,0.15)", backdropFilter: "blur(8px)", border: "1px solid rgba(255,255,255,0.3)" }}>
+          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
+            <button onClick={() => coverInputRef.current?.click()} className="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-[11px] font-bold bg-white/15 backdrop-blur-sm border border-white/30 hover:bg-white/20 transition-colors">
               <Camera size={13} /> Update Cover
             </button>
           </div>
@@ -408,26 +382,20 @@ export default function MyProfile() {
 
         {/* Avatar + info */}
         <div className="px-6 pb-6">
-          <div className="flex flex-col sm:flex-row sm:items-end gap-4 -mt-10 sm:-mt-12 mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-end gap-4 -mt-7   mb-4">
+            
             {/* Avatar */}
             <div className="relative group flex-shrink-0">
-              <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden border-4 shadow-lg"
-                style={{
-                  borderColor: "var(--base-100)",
-                  background: "var(--bg-gradient-primary)",
-                  boxShadow: "0 8px 24px color-mix(in oklch, var(--primary), transparent 55%)",
-                }}>
+              <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden border-4 border-base-100 bg-[image:var(--bg-gradient-primary)] shadow-primary">
                 {profile?.logoUrl || user?.avatar ? (
-                  <img src={profile?.logoUrl ?? user?.avatar} alt={profile?.labName} className="w-full h-full object-cover" />
+                  <img src={profile?.logoUrl ?? user?.avatar} alt={profile?.labName} className="w-full h-full object-cover bg-base-100" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center">
-                    <Microscope size={28} color="white" strokeWidth={1.5} />
+                    <Microscope size={28} className="text-primary-content" strokeWidth={1.5} />
                   </div>
                 )}
               </div>
-              <button onClick={() => logoInputRef.current?.click()}
-                className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full flex items-center justify-center shadow transition-transform hover:scale-110"
-                style={{ background: "var(--primary)", color: "var(--primary-content)" }}>
+              <button onClick={() => logoInputRef.current?.click()} className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full flex items-center justify-center shadow transition-transform hover:scale-110 bg-primary text-primary-content">
                 <Camera size={12} />
               </button>
               <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
@@ -436,12 +404,11 @@ export default function MyProfile() {
             {/* Name + badges */}
             <div className="flex-1 min-w-0 pt-2 sm:pt-0">
               <div className="flex flex-wrap items-center gap-2 mb-1">
-                <h2 className="font-montserrat font-black text-xl truncate"
-                  style={{ color: "var(--base-content)" }}>
+                <h2 className="font-montserrat font-black text-xl truncate text-base-content">
                   {profile?.labName ?? user?.name ?? "Lab Partner"}
                 </h2>
                 {profile?.isVerified && (
-                  <BadgeCheck size={18} style={{ color: "var(--primary)", flexShrink: 0 }} />
+                  <BadgeCheck size={18} className="text-primary flex-shrink-0" />
                 )}
               </div>
               <div className="flex flex-wrap gap-2 items-center">
@@ -453,11 +420,7 @@ export default function MyProfile() {
                   </div>
                 )}
                 {profile?.labType && (
-                  <span className="text-xs font-medium px-2 py-0.5 rounded-full"
-                    style={{
-                      background: "color-mix(in oklch, var(--secondary), transparent 85%)",
-                      color: "var(--secondary)",
-                    }}>
+                  <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-secondary/15 text-secondary">
                     {profile.labType}
                   </span>
                 )}
@@ -468,17 +431,15 @@ export default function MyProfile() {
           {/* Quick info row */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
             {[
-              { icon: Mail,    val: user?.email,                          label: "Email"    },
-              { icon: Phone,   val: user?.phone,                          label: "Phone"    },
-              { icon: MapPin,  val: profile?.registeredAddress?.city
+              { icon: Mail,  val: user?.email,                          label: "Email"    },
+              { icon: Phone, val: user?.phone,                          label: "Phone"    },
+              { icon: MapPin, val: profile?.registeredAddress?.city
                              ? `${profile.registeredAddress.city}, ${profile.registeredAddress.state}`
-                             : null,                                      label: "Location" },
+                             : null,                                    label: "Location" },
             ].map(({ icon: Icon, val, label }) => (
-              <div key={label} className="flex items-center gap-2 p-3 rounded-xl"
-                style={{ background: "var(--base-200)", border: "1px solid var(--base-300)" }}>
-                <Icon size={13} strokeWidth={2} style={{ color: "var(--primary)", flexShrink: 0 }} />
-                <span className="text-xs truncate"
-                  style={{ color: val ? "var(--base-content)" : "color-mix(in oklch, var(--base-content) 40%, transparent)" }}>
+              <div key={label} className="flex items-center gap-2 p-3 rounded-xl bg-base-200 border border-base-300">
+                <Icon size={13} strokeWidth={2} className="text-primary flex-shrink-0" />
+                <span className={`text-[11px] truncate ${val ? 'text-base-content' : 'text-base-content/40'}`}>
                   {val ?? `No ${label}`}
                 </span>
               </div>
@@ -491,18 +452,16 @@ export default function MyProfile() {
       {dashboard && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
-            { label: "Active Tests",    value: dashboard.tests?.active    ?? 0, icon: TestTube2,  },
-            { label: "Packages",        value: dashboard.packages?.active ?? 0, icon: Package,    },
-            { label: "Avg Rating",      value: dashboard.rating?.average  ?? "—", icon: Star,    },
-            { label: "Total Reviews",   value: dashboard.rating?.total    ?? 0, icon: TrendingUp, },
+            { label: "Active Tests",  value: dashboard.tests?.active   ?? 0, icon: TestTube2, },
+            { label: "Packages",      value: dashboard.packages?.active ?? 0, icon: Package,   },
+            { label: "Avg Rating",    value: dashboard.rating?.average  ?? "—", icon: Star,    },
+            { label: "Total Reviews", value: dashboard.rating?.total    ?? 0, icon: TrendingUp, },
           ].map(({ label, value, icon: Icon }, i) => (
-            <motion.div key={label} variants={fadeUp} custom={i} initial="hidden" animate="show"
-              className="stat-card flex flex-col gap-2">
+            <motion.div key={label} variants={fadeUp} custom={i} initial="hidden" animate="show" className="stat-card flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <span className="stat-card-label">{label}</span>
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center"
-                  style={{ background: "color-mix(in oklch, var(--primary), transparent 86%)" }}>
-                  <Icon size={14} style={{ color: "var(--primary)" }} strokeWidth={2} />
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-primary/15 text-primary">
+                  <Icon size={14} strokeWidth={2} />
                 </div>
               </div>
               <span className="stat-card-value">{value}</span>
@@ -513,18 +472,15 @@ export default function MyProfile() {
 
       {/* Email verification alert */}
       {user && !user.isEmailVerified && (
-        <motion.div variants={scaleIn} initial="hidden" animate="show"
-          className="alert alert-warning flex-col sm:flex-row items-start sm:items-center gap-3">
-          <AlertCircle size={16} style={{ color: "var(--warning)", flexShrink: 0 }} />
+        <motion.div variants={scaleIn} initial="hidden" animate="show" className="alert alert-warning flex-col sm:flex-row items-start sm:items-center gap-3">
+          <AlertCircle size={16} className="text-warning flex-shrink-0" />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold">Email not verified</p>
-            <p className="text-xs mt-0.5" style={{ color: "color-mix(in oklch, var(--base-content) 60%, transparent)" }}>
+            <p className="text-xs font-semibold">Email not verified</p>
+            <p className="text-[11px] mt-0.5 text-base-content/60">
               Verify your email to unlock full platform features.
             </p>
           </div>
-          <button onClick={handleSendVerifyOtp}
-            className="btn-primary-cta text-xs px-4 py-2 flex-shrink-0"
-            disabled={actionLoading}>
+          <button onClick={handleSendVerifyOtp} className="btn-primary-cta text-[11px] px-4 py-2 flex-shrink-0" disabled={actionLoading}>
             {actionLoading ? <Spinner size={13} /> : "Verify Now"}
           </button>
         </motion.div>
@@ -532,35 +488,31 @@ export default function MyProfile() {
 
       {/* Status log */}
       {statusLog?.length > 0 && (
-        <SectionCard title="Account Status History" icon={Activity}
-          subtitle={`${statusLog.length} status change${statusLog.length !== 1 ? "s" : ""}`}>
+        <SectionCard title="Account Status History" icon={Activity} subtitle={`${statusLog.length} status change${statusLog.length !== 1 ? "s" : ""}`}>
           <div className="space-y-2">
             {statusLog.slice().reverse().slice(0, 5).map((log, i) => (
               <div key={log._id ?? i}
-                className="flex items-center gap-3 p-3 rounded-xl transition-all cursor-pointer"
-                style={{ background: i === 0 ? "color-mix(in oklch, var(--primary), transparent 92%)" : "var(--base-200)" }}
+                className={`flex items-center gap-3 p-3 rounded-xl transition-all cursor-pointer border border-transparent hover:border-base-300 ${i === 0 ? "bg-primary/10" : "bg-base-200"}`}
                 onClick={() => setExpandedLog(expandedLog === i ? null : i)}>
-                <div className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                  style={{ background: i === 0 ? "var(--primary)" : "var(--base-300)" }} />
+                <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${i === 0 ? "bg-primary" : "bg-base-300"}`} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-bold" style={{ color: "var(--base-content)" }}>
+                    <span className="text-[11px] font-bold text-base-content">
                       {log.fromStatus} → {log.toStatus}
                     </span>
-                    {i === 0 && <span className="badge badge-primary text-[10px]">Latest</span>}
+                    {i === 0 && <span className="badge badge-primary text-[10px] px-1.5 py-0.5">Latest</span>}
                   </div>
                   {expandedLog === i && log.reason && (
-                    <p className="text-xs mt-1" style={{ color: "color-mix(in oklch, var(--base-content) 65%, transparent)" }}>
+                    <p className="text-[11px] mt-1 text-base-content/60">
                       {log.reason}
                     </p>
                   )}
                 </div>
-                <span className="text-xs flex-shrink-0"
-                  style={{ color: "color-mix(in oklch, var(--base-content) 45%, transparent)" }}>
+                <span className="text-[11px] flex-shrink-0 text-base-content/50">
                   {log.changedAt ? new Date(log.changedAt).toLocaleDateString("en-IN") : "—"}
                 </span>
                 {log.reason && (
-                  expandedLog === i ? <ChevronUp size={12} style={{ color: "var(--primary)" }} /> : <ChevronDown size={12} style={{ color: "var(--primary)" }} />
+                  expandedLog === i ? <ChevronUp size={12} className="text-primary" /> : <ChevronDown size={12} className="text-primary" />
                 )}
               </div>
             ))}
@@ -573,32 +525,26 @@ export default function MyProfile() {
   // ── LAB PROFILE EDIT ────────────────────────────────────────────────────
   const ProfileTab = () => (
     <div className="space-y-6">
-      <SectionCard title="Lab Information" icon={Building2}
-        subtitle="Update your public-facing lab details"
+      <SectionCard title="Lab Information" icon={Building2} subtitle="Update your public-facing lab details"
         action={
           editMode ? (
             <div className="flex gap-2">
-              <button onClick={() => setEditMode(false)}
-                className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5">
+              <button onClick={() => setEditMode(false)} className="btn-secondary text-[11px] px-3 py-1.5 flex items-center gap-1.5">
                 <X size={12} /> Cancel
               </button>
-              <button onClick={handleSaveProfile}
-                disabled={actionLoading}
-                className="btn-primary-cta text-xs px-3 py-1.5 flex items-center gap-1.5">
+              <button onClick={handleSaveProfile} disabled={actionLoading} className="btn-primary-cta text-[11px] px-3 py-1.5 flex items-center gap-1.5">
                 {actionLoading ? <Spinner size={12} /> : <Save size={12} />} Save
               </button>
             </div>
           ) : (
-            <button onClick={() => setEditMode(true)}
-              className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5">
+            <button onClick={() => setEditMode(true)} className="btn-secondary text-[11px] px-3 py-1.5 flex items-center gap-1.5">
               <Edit3 size={12} /> Edit
             </button>
           )
         }>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
           <div className="sm:col-span-2">
-            <label className="text-xs font-semibold uppercase tracking-wider block mb-1.5"
-              style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+            <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5 text-base-content/50">
               Description
             </label>
             {editMode ? (
@@ -606,54 +552,35 @@ export default function MyProfile() {
                 value={form.description}
                 onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
                 rows={3}
-                className="input-field w-full text-sm resize-none"
+                className="input-field w-full text-xs resize-none"
                 placeholder="Describe your laboratory..."
               />
             ) : (
-              <p className="text-sm leading-relaxed px-3 py-2.5 rounded-lg"
-                style={{ background: "var(--base-200)", border: "1px solid var(--base-300)", color: "var(--base-content)" }}>
+              <p className="text-xs leading-relaxed px-3 py-2.5 rounded-lg bg-base-200 border border-base-300 text-base-content">
                 {form.description || "No description provided."}
               </p>
             )}
           </div>
 
-          <Field label="Website URL" icon={Globe} value={form.websiteUrl}
-            editable={editMode} onChange={(v) => setForm((p) => ({ ...p, websiteUrl: v }))}
-            placeholder="https://yourlab.com" />
-
-          <Field label="Avg. Turnaround (hrs)" icon={Clock3} value={form.avgTurnaroundHours}
-            type="number" editable={editMode}
-            onChange={(v) => setForm((p) => ({ ...p, avgTurnaroundHours: v }))}
-            placeholder="24" />
-
-          <Field label="Home Collection Radius (km)" icon={MapPin} value={form.homeCollectionRadius}
-            type="number" editable={editMode}
-            onChange={(v) => setForm((p) => ({ ...p, homeCollectionRadius: v }))}
-            placeholder="10" />
-
-          <Field label="Home Collection Fee (₹)" icon={CreditCard} value={form.homeCollectionFee}
-            type="number" editable={editMode}
-            onChange={(v) => setForm((p) => ({ ...p, homeCollectionFee: v }))}
-            placeholder="0" />
+          <Field label="Website URL" icon={Globe} value={form.websiteUrl} editable={editMode} onChange={(v) => setForm((p) => ({ ...p, websiteUrl: v }))} placeholder="https://yourlab.com" />
+          <Field label="Avg. Turnaround (hrs)" icon={Clock3} value={form.avgTurnaroundHours} type="number" editable={editMode} onChange={(v) => setForm((p) => ({ ...p, avgTurnaroundHours: v }))} placeholder="24" />
+          <Field label="Home Collection Radius (km)" icon={MapPin} value={form.homeCollectionRadius} type="number" editable={editMode} onChange={(v) => setForm((p) => ({ ...p, homeCollectionRadius: v }))} placeholder="10" />
+          <Field label="Home Collection Fee (₹)" icon={CreditCard} value={form.homeCollectionFee} type="number" editable={editMode} onChange={(v) => setForm((p) => ({ ...p, homeCollectionFee: v }))} placeholder="0" />
 
           <div className="sm:col-span-2">
-            <label className="text-xs font-semibold uppercase tracking-wider block mb-1.5"
-              style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+            <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5 text-base-content/50">
               Sample Collection Mode
             </label>
             {editMode ? (
-              <select className="input-field w-full text-sm"
-                value={form.sampleCollectionMode}
-                onChange={(e) => setForm((p) => ({ ...p, sampleCollectionMode: e.target.value }))}>
+              <select className="input-field w-full text-xs" value={form.sampleCollectionMode} onChange={(e) => setForm((p) => ({ ...p, sampleCollectionMode: e.target.value }))}>
                 {["Walk-in", "Home Collection", "Both"].map((m) => (
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>
             ) : (
-              <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg"
-                style={{ background: "var(--base-200)", border: "1px solid var(--base-300)" }}>
-                <TestTube2 size={13} style={{ color: "var(--primary)" }} />
-                <span className="text-sm">{form.sampleCollectionMode || "—"}</span>
+              <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-base-200 border border-base-300">
+                <TestTube2 size={13} className="text-primary" />
+                <span className="text-xs">{form.sampleCollectionMode || "—"}</span>
               </div>
             )}
           </div>
@@ -677,59 +604,42 @@ export default function MyProfile() {
       </SectionCard>
 
       {/* Contact persons */}
-      <SectionCard title="Contact Persons" icon={User}
-        subtitle="Lab director, operations head, etc."
+      <SectionCard title="Contact Persons" icon={User} subtitle="Lab director, operations head, etc."
         action={
           <div className="flex gap-2">
-            <button onClick={addContactPerson}
-              className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1">
+            <button onClick={addContactPerson} className="btn-secondary text-[11px] px-3 py-1.5 flex items-center gap-1">
               + Add
             </button>
-            <button onClick={handleSaveContactPersons} disabled={actionLoading}
-              className="btn-primary-cta text-xs px-3 py-1.5 flex items-center gap-1.5">
+            <button onClick={handleSaveContactPersons} disabled={actionLoading} className="btn-primary-cta text-[11px] px-3 py-1.5 flex items-center gap-1.5">
               {actionLoading ? <Spinner size={12} /> : <Save size={12} />} Save
             </button>
           </div>
         }>
         {contactPersons.length === 0 ? (
-          <p className="text-sm text-center py-6"
-            style={{ color: "color-mix(in oklch, var(--base-content) 40%, transparent)" }}>
+          <p className="text-xs text-center py-6 text-base-content/40">
             No contact persons added yet.
           </p>
         ) : (
           <div className="space-y-4">
             {contactPersons.map((cp, i) => (
-              <motion.div key={i} variants={slideIn} initial="hidden" animate="show"
-                className="p-4 rounded-xl"
-                style={{ background: "var(--base-200)", border: "1px solid var(--base-300)" }}>
+              <motion.div key={i} variants={slideIn} initial="hidden" animate="show" className="p-4 rounded-xl bg-base-200 border border-base-300">
                 <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-bold uppercase tracking-wider"
-                    style={{ color: "var(--primary)" }}>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-primary">
                     Person {i + 1} {cp.isPrimary ? "• Primary" : ""}
                   </span>
                   <div className="flex items-center gap-2">
-                    <label className="flex items-center gap-1.5 text-xs cursor-pointer"
-                      style={{ color: "color-mix(in oklch, var(--base-content) 60%, transparent)" }}>
-                      <input type="checkbox" checked={cp.isPrimary}
-                        onChange={(e) => updateContactPerson(i, "isPrimary", e.target.checked)}
-                        className="w-3 h-3 accent-[var(--primary)]" />
+                    <label className="flex items-center gap-1.5 text-[11px] cursor-pointer text-base-content/60 hover:text-base-content transition-colors">
+                      <input type="checkbox" checked={cp.isPrimary} onChange={(e) => updateContactPerson(i, "isPrimary", e.target.checked)} className="w-3.5 h-3.5 accent-primary rounded-sm" />
                       Primary
                     </label>
-                    <button onClick={() => removeContactPerson(i)}
-                      className="w-6 h-6 rounded-md flex items-center justify-center transition-colors"
-                      style={{ background: "color-mix(in oklch, var(--error), transparent 85%)", color: "var(--error)" }}>
-                      <Trash2 size={11} />
+                    <button onClick={() => removeContactPerson(i)} className="w-7 h-7 rounded-md flex items-center justify-center transition-colors bg-error/15 text-error hover:bg-error hover:text-error-content">
+                      <Trash2 size={13} />
                     </button>
                   </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {["name", "designation", "phone", "email"].map((field) => (
-                    <input key={field} type={field === "email" ? "email" : "text"}
-                      className="input-field text-sm"
-                      placeholder={field.charAt(0).toUpperCase() + field.slice(1)}
-                      value={cp[field] ?? ""}
-                      onChange={(e) => updateContactPerson(i, field, e.target.value)}
-                    />
+                    <input key={field} type={field === "email" ? "email" : "text"} className="input-field text-xs" placeholder={field.charAt(0).toUpperCase() + field.slice(1)} value={cp[field] ?? ""} onChange={(e) => updateContactPerson(i, field, e.target.value)} />
                   ))}
                 </div>
               </motion.div>
@@ -742,23 +652,21 @@ export default function MyProfile() {
 
   // ── BANK & PAYOUT ────────────────────────────────────────────────────────
   const BankTab = () => (
-    <SectionCard title="Bank & Payout Details" icon={CreditCard}
-      subtitle="All financial information is encrypted and secure"
+    <SectionCard title="Bank & Payout Details" icon={CreditCard} subtitle="All financial information is encrypted and secure"
       action={
-        <button onClick={handleSaveBank} disabled={actionLoading}
-          className="btn-primary-cta text-xs px-4 py-2 flex items-center gap-1.5">
+        <button onClick={handleSaveBank} disabled={actionLoading} className="btn-primary-cta text-[11px] px-4 py-2 flex items-center gap-1.5">
           {actionLoading ? <Spinner size={12} /> : <Save size={12} />} Save
         </button>
       }>
       {profile?.bankDetails?.isVerified && (
-        <div className="alert alert-success mb-5 text-sm">
-          <CheckCircle2 size={14} style={{ color: "var(--success)", flexShrink: 0 }} />
+        <div className="alert alert-success mb-5 text-xs">
+          <CheckCircle2 size={14} className="text-success flex-shrink-0" />
           Bank details verified by admin.
         </div>
       )}
       {!profile?.bankDetails?.isVerified && profile?.bankDetails?.accountHolderName && (
-        <div className="alert alert-warning mb-5 text-sm">
-          <AlertCircle size={14} style={{ color: "var(--warning)", flexShrink: 0 }} />
+        <div className="alert alert-warning mb-5 text-xs">
+          <AlertCircle size={14} className="text-warning flex-shrink-0" />
           Bank details pending admin verification.
         </div>
       )}
@@ -770,28 +678,20 @@ export default function MyProfile() {
           { field: "branchName",        label: "Branch Name",             icon: MapPin,     placeholder: "Main Branch"       },
           { field: "upiId",             label: "UPI ID",                  icon: CreditCard, placeholder: "name@upi"          },
         ].map(({ field, label, icon, placeholder }) => (
-          <Field key={field} label={label} icon={icon}
-            value={bankForm[field]} editable
-            placeholder={placeholder}
-            onChange={(v) => setBankForm((p) => ({ ...p, [field]: v }))}
-          />
+          <Field key={field} label={label} icon={icon} value={bankForm[field]} editable placeholder={placeholder} onChange={(v) => setBankForm((p) => ({ ...p, [field]: v }))} />
         ))}
         <div>
-          <label className="text-xs font-semibold uppercase tracking-wider block mb-1.5"
-            style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+          <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5 text-base-content/50">
             Account Type
           </label>
-          <select className="input-field w-full text-sm"
-            value={bankForm.accountType ?? "Current"}
-            onChange={(e) => setBankForm((p) => ({ ...p, accountType: e.target.value }))}>
+          <select className="input-field w-full text-xs" value={bankForm.accountType ?? "Current"} onChange={(e) => setBankForm((p) => ({ ...p, accountType: e.target.value }))}>
             <option value="Savings">Savings</option>
             <option value="Current">Current</option>
           </select>
         </div>
       </div>
-      <div className="mt-4 p-3 rounded-xl text-xs flex items-start gap-2"
-        style={{ background: "color-mix(in oklch, var(--info), transparent 90%)", color: "var(--info)" }}>
-        <Info size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+      <div className="mt-4 p-3 rounded-xl text-[11px] flex items-start gap-2 bg-info/10 text-info">
+        <Info size={13} className="flex-shrink-0 mt-0.5" />
         Account number can only be set through admin for security reasons. Contact support to update.
       </div>
     </SectionCard>
@@ -801,33 +701,24 @@ export default function MyProfile() {
   const DocumentsTab = () => (
     <div className="space-y-6">
       {/* Accreditations list */}
-      <SectionCard title="Accreditations" icon={Award}
-        subtitle={`${accreditations?.length ?? 0} certificate${accreditations?.length !== 1 ? "s" : ""}`}>
+      <SectionCard title="Accreditations" icon={Award} subtitle={`${accreditations?.length ?? 0} certificate${accreditations?.length !== 1 ? "s" : ""}`}>
         {accreditations?.length === 0 || !accreditations ? (
-          <p className="text-sm text-center py-4"
-            style={{ color: "color-mix(in oklch, var(--base-content) 40%, transparent)" }}>
+          <p className="text-xs text-center py-4 text-base-content/40">
             No accreditations uploaded.
           </p>
         ) : (
           <div className="space-y-3">
             {accreditations.map((acc, i) => (
-              <div key={acc._id ?? i}
-                className="flex items-center justify-between p-3 rounded-xl"
-                style={{ background: "var(--base-200)", border: "1px solid var(--base-300)" }}>
+              <div key={acc._id ?? i} className="flex items-center justify-between p-3 rounded-xl bg-base-200 border border-base-300">
                 <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background: acc.isVerified
-                      ? "color-mix(in oklch, var(--success), transparent 85%)"
-                      : "color-mix(in oklch, var(--warning), transparent 85%)" }}>
-                    {acc.isVerified
-                      ? <CheckCircle2 size={14} style={{ color: "var(--success)" }} />
-                      : <Clock3 size={14} style={{ color: "var(--warning)" }} />}
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${acc.isVerified ? "bg-success/15" : "bg-warning/15"}`}>
+                    {acc.isVerified ? <CheckCircle2 size={14} className="text-success" /> : <Clock3 size={14} className="text-warning" />}
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm font-bold truncate" style={{ color: "var(--base-content)" }}>
+                    <p className="text-xs font-bold truncate text-base-content">
                       {acc.body}
                     </p>
-                    <p className="text-xs" style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+                    <p className="text-[11px] text-base-content/50">
                       {acc.certificateNo ? `No: ${acc.certificateNo}` : ""}
                       {acc.validUntil ? ` • Valid till ${new Date(acc.validUntil).toLocaleDateString("en-IN")}` : ""}
                     </p>
@@ -840,9 +731,7 @@ export default function MyProfile() {
                     <span className="badge badge-warning">Pending</span>
                   )}
                   {acc.documentUrl && (
-                    <a href={acc.documentUrl} target="_blank" rel="noopener noreferrer"
-                      className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
-                      style={{ background: "color-mix(in oklch, var(--primary), transparent 88%)", color: "var(--primary)" }}>
+                    <a href={acc.documentUrl} target="_blank" rel="noopener noreferrer" className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors bg-primary/10 text-primary hover:bg-primary/20">
                       <ExternalLink size={12} />
                     </a>
                   )}
@@ -853,65 +742,49 @@ export default function MyProfile() {
         )}
 
         {/* Add accreditation form */}
-        <div className="mt-5 pt-5 border-t" style={{ borderColor: "var(--base-300)" }}>
-          <h4 className="text-xs font-bold uppercase tracking-wider mb-4"
-            style={{ color: "var(--primary)" }}>
+        <div className="mt-5 pt-5 border-t border-base-300">
+          <h4 className="text-[11px] font-bold uppercase tracking-wider mb-4 text-primary">
             Add New Accreditation
           </h4>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-semibold uppercase tracking-wider block mb-1.5"
-                style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+              <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5 text-base-content/50">
                 Body *
               </label>
-              <select className="input-field w-full text-sm"
-                value={accForm.body}
-                onChange={(e) => setAccForm((p) => ({ ...p, body: e.target.value }))}>
+              <select className="input-field w-full text-xs" value={accForm.body} onChange={(e) => setAccForm((p) => ({ ...p, body: e.target.value }))}>
                 <option value="">Select body</option>
                 {["NABL", "CAP", "ISO", "NABH", "JCI", "Other"].map((b) => (
                   <option key={b} value={b}>{b}</option>
                 ))}
               </select>
             </div>
-            <input className="input-field text-sm" placeholder="Certificate No."
-              value={accForm.certificateNo}
-              onChange={(e) => setAccForm((p) => ({ ...p, certificateNo: e.target.value }))} />
+            <input className="input-field text-xs mt-6" placeholder="Certificate No." value={accForm.certificateNo} onChange={(e) => setAccForm((p) => ({ ...p, certificateNo: e.target.value }))} />
             <div>
-              <label className="text-xs font-semibold uppercase tracking-wider block mb-1.5"
-                style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+              <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5 text-base-content/50">
                 Issued On
               </label>
-              <input type="date" className="input-field w-full text-sm"
-                value={accForm.issuedOn}
-                onChange={(e) => setAccForm((p) => ({ ...p, issuedOn: e.target.value }))} />
+              <input type="date" className="input-field w-full text-xs" value={accForm.issuedOn} onChange={(e) => setAccForm((p) => ({ ...p, issuedOn: e.target.value }))} />
             </div>
             <div>
-              <label className="text-xs font-semibold uppercase tracking-wider block mb-1.5"
-                style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+              <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5 text-base-content/50">
                 Valid Until
               </label>
-              <input type="date" className="input-field w-full text-sm"
-                value={accForm.validUntil}
-                onChange={(e) => setAccForm((p) => ({ ...p, validUntil: e.target.value }))} />
+              <input type="date" className="input-field w-full text-xs" value={accForm.validUntil} onChange={(e) => setAccForm((p) => ({ ...p, validUntil: e.target.value }))} />
             </div>
             <div className="sm:col-span-2">
-              <label className="text-xs font-semibold uppercase tracking-wider block mb-1.5"
-                style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+              <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5 text-base-content/50">
                 Certificate File (PDF/Image)
               </label>
-              <label className="flex items-center gap-2 px-4 py-2.5 rounded-xl cursor-pointer border-2 border-dashed transition-colors hover:border-primary"
-                style={{ borderColor: "color-mix(in oklch, var(--primary), transparent 65%)" }}>
-                <Upload size={14} style={{ color: "var(--primary)" }} />
-                <span className="text-sm" style={{ color: accFile ? "var(--base-content)" : "color-mix(in oklch, var(--base-content) 45%, transparent)" }}>
+              <label className="flex items-center gap-2 px-4 py-2.5 rounded-xl cursor-pointer border-2 border-dashed border-primary/40 transition-colors hover:border-primary bg-base-200/50">
+                <Upload size={14} className="text-primary" />
+                <span className={`text-xs ${accFile ? "text-base-content" : "text-base-content/50"}`}>
                   {accFile ? accFile.name : "Upload certificate"}
                 </span>
-                <input type="file" accept="image/*,application/pdf" className="hidden"
-                  onChange={(e) => setAccFile(e.target.files?.[0] ?? null)} />
+                <input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => setAccFile(e.target.files?.[0] ?? null)} />
               </label>
             </div>
           </div>
-          <button onClick={handleAddAccreditation} disabled={!accForm.body || actionLoading}
-            className="btn-primary-cta mt-4 flex items-center gap-2 disabled:opacity-50">
+          <button onClick={handleAddAccreditation} disabled={!accForm.body || actionLoading} className="btn-primary-cta mt-4 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
             {actionLoading ? <Spinner size={13} /> : <Upload size={13} />}
             Submit Accreditation
           </button>
@@ -919,26 +792,22 @@ export default function MyProfile() {
       </SectionCard>
 
       {/* Compliance docs */}
-      <SectionCard title="Compliance Documents" icon={FileText}
-        subtitle={`${complianceDocs?.length ?? 0} document${complianceDocs?.length !== 1 ? "s" : ""}`}>
+      <SectionCard title="Compliance Documents" icon={FileText} subtitle={`${complianceDocs?.length ?? 0} document${complianceDocs?.length !== 1 ? "s" : ""}`}>
         {complianceDocs?.length === 0 || !complianceDocs ? (
-          <p className="text-sm text-center py-4"
-            style={{ color: "color-mix(in oklch, var(--base-content) 40%, transparent)" }}>
+          <p className="text-xs text-center py-4 text-base-content/40">
             No compliance documents uploaded.
           </p>
         ) : (
           <div className="space-y-3">
             {complianceDocs.map((doc, i) => (
-              <div key={doc._id ?? i}
-                className="flex items-center justify-between p-3 rounded-xl"
-                style={{ background: "var(--base-200)", border: "1px solid var(--base-300)" }}>
+              <div key={doc._id ?? i} className="flex items-center justify-between p-3 rounded-xl bg-base-200 border border-base-300">
                 <div className="flex items-center gap-3 min-w-0">
-                  <FileText size={14} style={{ color: "var(--primary)", flexShrink: 0 }} />
+                  <FileText size={14} className="text-primary flex-shrink-0" />
                   <div className="min-w-0">
-                    <p className="text-sm font-bold truncate" style={{ color: "var(--base-content)" }}>
+                    <p className="text-xs font-bold truncate text-base-content">
                       {doc.docType?.replace(/_/g, " ")}
                     </p>
-                    <p className="text-xs" style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+                    <p className="text-[11px] text-base-content/50">
                       {doc.docNumber ?? ""}
                     </p>
                   </div>
@@ -948,9 +817,7 @@ export default function MyProfile() {
                     ? <span className="badge badge-success">Verified</span>
                     : <span className="badge badge-warning">Pending</span>}
                   {doc.documentUrl && (
-                    <a href={doc.documentUrl} target="_blank" rel="noopener noreferrer"
-                      className="w-7 h-7 rounded-lg flex items-center justify-center"
-                      style={{ background: "color-mix(in oklch, var(--primary), transparent 88%)", color: "var(--primary)" }}>
+                    <a href={doc.documentUrl} target="_blank" rel="noopener noreferrer" className="w-7 h-7 rounded-lg flex items-center justify-center bg-primary/10 text-primary hover:bg-primary/20 transition-colors">
                       <ExternalLink size={12} />
                     </a>
                   )}
@@ -961,19 +828,16 @@ export default function MyProfile() {
         )}
 
         {/* Add compliance doc form */}
-        <div className="mt-5 pt-5 border-t" style={{ borderColor: "var(--base-300)" }}>
-          <h4 className="text-xs font-bold uppercase tracking-wider mb-4" style={{ color: "var(--primary)" }}>
+        <div className="mt-5 pt-5 border-t border-base-300">
+          <h4 className="text-[11px] font-bold uppercase tracking-wider mb-4 text-primary">
             Add Compliance Document
           </h4>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="sm:col-span-2">
-              <label className="text-xs font-semibold uppercase tracking-wider block mb-1.5"
-                style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+              <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5 text-base-content/50">
                 Document Type *
               </label>
-              <select className="input-field w-full text-sm"
-                value={compForm.docType}
-                onChange={(e) => setCompForm((p) => ({ ...p, docType: e.target.value }))}>
+              <select className="input-field w-full text-xs" value={compForm.docType} onChange={(e) => setCompForm((p) => ({ ...p, docType: e.target.value }))}>
                 <option value="">Select type</option>
                 {[
                   "Lab_Registration_Certificate","PCB_NOC","Bio_Medical_Waste_License",
@@ -983,44 +847,31 @@ export default function MyProfile() {
                 ))}
               </select>
             </div>
-            <input className="input-field text-sm" placeholder="Document Number"
-              value={compForm.docNumber}
-              onChange={(e) => setCompForm((p) => ({ ...p, docNumber: e.target.value }))} />
-            <input className="input-field text-sm" placeholder="Remarks (optional)"
-              value={compForm.remarks}
-              onChange={(e) => setCompForm((p) => ({ ...p, remarks: e.target.value }))} />
+            <input className="input-field text-xs" placeholder="Document Number" value={compForm.docNumber} onChange={(e) => setCompForm((p) => ({ ...p, docNumber: e.target.value }))} />
+            <input className="input-field text-xs" placeholder="Remarks (optional)" value={compForm.remarks} onChange={(e) => setCompForm((p) => ({ ...p, remarks: e.target.value }))} />
             <div>
-              <label className="text-xs font-semibold uppercase tracking-wider block mb-1.5"
-                style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+              <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5 text-base-content/50">
                 Issued On
               </label>
-              <input type="date" className="input-field w-full text-sm"
-                value={compForm.issuedOn}
-                onChange={(e) => setCompForm((p) => ({ ...p, issuedOn: e.target.value }))} />
+              <input type="date" className="input-field w-full text-xs" value={compForm.issuedOn} onChange={(e) => setCompForm((p) => ({ ...p, issuedOn: e.target.value }))} />
             </div>
             <div>
-              <label className="text-xs font-semibold uppercase tracking-wider block mb-1.5"
-                style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+              <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5 text-base-content/50">
                 Valid Until
               </label>
-              <input type="date" className="input-field w-full text-sm"
-                value={compForm.validUntil}
-                onChange={(e) => setCompForm((p) => ({ ...p, validUntil: e.target.value }))} />
+              <input type="date" className="input-field w-full text-xs" value={compForm.validUntil} onChange={(e) => setCompForm((p) => ({ ...p, validUntil: e.target.value }))} />
             </div>
             <div className="sm:col-span-2">
-              <label className="flex items-center gap-2 px-4 py-2.5 rounded-xl cursor-pointer border-2 border-dashed"
-                style={{ borderColor: "color-mix(in oklch, var(--primary), transparent 65%)" }}>
-                <Upload size={14} style={{ color: "var(--primary)" }} />
-                <span className="text-sm" style={{ color: compFile ? "var(--base-content)" : "color-mix(in oklch, var(--base-content) 45%, transparent)" }}>
+              <label className="flex items-center gap-2 px-4 py-2.5 rounded-xl cursor-pointer border-2 border-dashed border-primary/40 hover:border-primary transition-colors bg-base-200/50">
+                <Upload size={14} className="text-primary" />
+                <span className={`text-xs ${compFile ? "text-base-content" : "text-base-content/50"}`}>
                   {compFile ? compFile.name : "Upload document (PDF/Image)"}
                 </span>
-                <input type="file" accept="image/*,application/pdf" className="hidden"
-                  onChange={(e) => setCompFile(e.target.files?.[0] ?? null)} />
+                <input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => setCompFile(e.target.files?.[0] ?? null)} />
               </label>
             </div>
           </div>
-          <button onClick={handleAddComplianceDoc} disabled={!compForm.docType || actionLoading}
-            className="btn-primary-cta mt-4 flex items-center gap-2 disabled:opacity-50">
+          <button onClick={handleAddComplianceDoc} disabled={!compForm.docType || actionLoading} className="btn-primary-cta mt-4 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
             {actionLoading ? <Spinner size={13} /> : <Upload size={13} />}
             Submit Document
           </button>
@@ -1036,48 +887,31 @@ export default function MyProfile() {
       { key: "emailOnCancellation",  label: "Cancellation",    sub: "Alert when a booking is cancelled",                icon: BellOff },
       { key: "emailOnReview",        label: "New Review",      sub: "Notify when a customer leaves a review",           icon: Star    },
       { key: "emailOnStatusChange",  label: "Account Status",  sub: "Updates on your account approval or suspension",   icon: Activity},
-      { key: "smsOnNewBooking",      label: "SMS for Bookings",sub: "Receive SMS alerts for new bookings",               icon: Smartphone},
+      { key: "smsOnNewBooking",      label: "SMS for Bookings",sub: "Receive SMS alerts for new bookings",              icon: Smartphone},
     ];
     return (
-      <SectionCard title="Notification Preferences" icon={Bell}
-        subtitle="Control how and when you receive alerts"
+      <SectionCard title="Notification Preferences" icon={Bell} subtitle="Control how and when you receive alerts"
         action={
-          <button onClick={handleSaveNotifications} disabled={actionLoading}
-            className="btn-primary-cta text-xs px-4 py-2 flex items-center gap-1.5">
+          <button onClick={handleSaveNotifications} disabled={actionLoading} className="btn-primary-cta text-[11px] px-4 py-2 flex items-center gap-1.5">
             {actionLoading ? <Spinner size={12} /> : <Save size={12} />} Save
           </button>
         }>
         <div className="space-y-3">
           {prefs.map(({ key, label, sub, icon: Icon }) => (
             <div key={key}
-              className="flex items-center justify-between p-4 rounded-xl transition-all cursor-pointer"
-              style={{
-                background: notifPrefs[key]
-                  ? "color-mix(in oklch, var(--primary), transparent 92%)"
-                  : "var(--base-200)",
-                border: `1px solid ${notifPrefs[key]
-                  ? "color-mix(in oklch, var(--primary), transparent 72%)"
-                  : "var(--base-300)"}`,
-              }}
+              className={`flex items-center justify-between p-4 rounded-xl transition-all cursor-pointer border ${notifPrefs[key] ? "bg-primary/10 border-primary/40" : "bg-base-200 border-base-300 hover:border-primary/20"}`}
               onClick={() => setNotifPrefs((p) => ({ ...p, [key]: !p[key] }))}>
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-                  style={{
-                    background: notifPrefs[key]
-                      ? "color-mix(in oklch, var(--primary), transparent 80%)"
-                      : "var(--base-300)",
-                  }}>
-                  <Icon size={14} style={{ color: notifPrefs[key] ? "var(--primary)" : "color-mix(in oklch, var(--base-content) 45%, transparent)" }} />
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors ${notifPrefs[key] ? "bg-primary/20 text-primary" : "bg-base-300 text-base-content/50"}`}>
+                  <Icon size={14} />
                 </div>
                 <div>
-                  <p className="text-sm font-semibold" style={{ color: "var(--base-content)" }}>{label}</p>
-                  <p className="text-xs" style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>{sub}</p>
+                  <p className="text-xs font-semibold text-base-content">{label}</p>
+                  <p className="text-[11px] text-base-content/50">{sub}</p>
                 </div>
               </div>
-              <div className={`w-11 h-6 rounded-full transition-all relative flex-shrink-0`}
-                style={{ background: notifPrefs[key] ? "var(--primary)" : "var(--base-300)" }}>
-                <div className="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all"
-                  style={{ left: notifPrefs[key] ? "calc(100% - 1.35rem)" : "0.125rem" }} />
+              <div className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${notifPrefs[key] ? "bg-primary" : "bg-base-300"}`}>
+                <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all duration-300 ${notifPrefs[key] ? "left-[calc(100%-1.35rem)]" : "left-0.5"}`} />
               </div>
             </div>
           ))}
@@ -1098,39 +932,31 @@ export default function MyProfile() {
             { field: "confirmPassword",  label: "Confirm Password", key: "confirm" },
           ].map(({ field, label, key }) => (
             <div key={field}>
-              <label className="text-xs font-semibold uppercase tracking-wider block mb-1.5"
-                style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+              <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5 text-base-content/50">
                 {label}
               </label>
               <div className="relative">
-                <Lock size={13} strokeWidth={2}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-                  style={{ color: "color-mix(in oklch, var(--base-content) 40%, transparent)" }} />
+                <Lock size={13} strokeWidth={2} className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-base-content/40" />
                 <input
                   type={showPasswords[key] ? "text" : "password"}
-                  className="input-field w-full text-sm pl-9 pr-10"
+                  className="input-field w-full text-xs pl-9 pr-10"
                   value={passwordForm[field]}
                   onChange={(e) => setPasswordForm((p) => ({ ...p, [field]: e.target.value }))}
                   placeholder="••••••••"
                 />
-                <button type="button"
-                  className="absolute right-3 top-1/2 -translate-y-1/2"
-                  style={{ color: "color-mix(in oklch, var(--base-content) 45%, transparent)" }}
-                  onClick={() => setShowPasswords((p) => ({ ...p, [key]: !p[key] }))}>
+                <button type="button" className="absolute right-3 top-1/2 -translate-y-1/2 text-base-content/50 hover:text-base-content transition-colors" onClick={() => setShowPasswords((p) => ({ ...p, [key]: !p[key] }))}>
                   {showPasswords[key] ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
               </div>
             </div>
           ))}
-          {passwordForm.newPassword && passwordForm.confirmPassword &&
-            passwordForm.newPassword !== passwordForm.confirmPassword && (
-            <p className="text-xs" style={{ color: "var(--error)" }}>Passwords do not match.</p>
+          {passwordForm.newPassword && passwordForm.confirmPassword && passwordForm.newPassword !== passwordForm.confirmPassword && (
+            <p className="text-[11px] text-error">Passwords do not match.</p>
           )}
           <button
             onClick={handleChangePassword}
-            disabled={actionLoading || !passwordForm.currentPassword || !passwordForm.newPassword ||
-              passwordForm.newPassword !== passwordForm.confirmPassword}
-            className="btn-primary-cta flex items-center gap-2 disabled:opacity-50">
+            disabled={actionLoading || !passwordForm.currentPassword || !passwordForm.newPassword || passwordForm.newPassword !== passwordForm.confirmPassword}
+            className="btn-primary-cta flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
             {actionLoading ? <Spinner size={13} /> : <Lock size={13} />}
             Update Password
           </button>
@@ -1138,18 +964,12 @@ export default function MyProfile() {
       </SectionCard>
 
       {/* Email change */}
-      <SectionCard title="Change Email" icon={Mail}
-        subtitle={`Current: ${user?.email ?? "—"}`}>
+      <SectionCard title="Change Email" icon={Mail} subtitle={`Current: ${user?.email ?? "—"}`}>
         <div className="max-w-md space-y-4">
           {emailChangeStep === 0 && (
             <>
-              <Field label="New Email Address" icon={Mail}
-                value={emailChangeForm.newEmail} editable
-                placeholder="newemail@lab.com"
-                onChange={(v) => setEmailChangeForm((p) => ({ ...p, newEmail: v }))} />
-              <button onClick={handleRequestEmailChange}
-                disabled={!emailChangeForm.newEmail || actionLoading}
-                className="btn-primary-cta flex items-center gap-2 disabled:opacity-50">
+              <Field label="New Email Address" icon={Mail} value={emailChangeForm.newEmail} editable placeholder="newemail@lab.com" onChange={(v) => setEmailChangeForm((p) => ({ ...p, newEmail: v }))} />
+              <button onClick={handleRequestEmailChange} disabled={!emailChangeForm.newEmail || actionLoading} className="btn-primary-cta flex items-center gap-2 disabled:opacity-50">
                 {actionLoading ? <Spinner size={13} /> : <Mail size={13} />}
                 Send OTP to Current Email
               </button>
@@ -1157,18 +977,13 @@ export default function MyProfile() {
           )}
           {emailChangeStep === 1 && (
             <>
-              <div className="alert alert-info text-sm">
-                <Info size={14} style={{ color: "var(--info)", flexShrink: 0 }} />
+              <div className="alert alert-info text-xs">
+                <Info size={14} className="text-info flex-shrink-0" />
                 OTP sent to your current email. Enter it below to confirm.
               </div>
-              <Field label="Enter OTP" icon={ShieldCheck}
-                value={emailChangeForm.otp} editable
-                placeholder="6-digit OTP"
-                onChange={(v) => setEmailChangeForm((p) => ({ ...p, otp: v }))} />
+              <Field label="Enter OTP" icon={ShieldCheck} value={emailChangeForm.otp} editable placeholder="6-digit OTP" onChange={(v) => setEmailChangeForm((p) => ({ ...p, otp: v }))} />
               <div className="flex gap-2">
-                <button onClick={handleConfirmEmailChange}
-                  disabled={!emailChangeForm.otp || actionLoading}
-                  className="btn-primary-cta flex items-center gap-2 disabled:opacity-50">
+                <button onClick={handleConfirmEmailChange} disabled={!emailChangeForm.otp || actionLoading} className="btn-primary-cta flex items-center gap-2 disabled:opacity-50">
                   {actionLoading ? <Spinner size={13} /> : <CheckCircle2 size={13} />}
                   Confirm Change
                 </button>
@@ -1179,8 +994,8 @@ export default function MyProfile() {
             </>
           )}
           {emailChangeStep === 2 && (
-            <div className="alert alert-success text-sm">
-              <CheckCircle2 size={14} style={{ color: "var(--success)", flexShrink: 0 }} />
+            <div className="alert alert-success text-xs">
+              <CheckCircle2 size={14} className="text-success flex-shrink-0" />
               Email changed successfully! Please verify your new email.
             </div>
           )}
@@ -1191,22 +1006,19 @@ export default function MyProfile() {
       {user && !user.isEmailVerified && (
         <SectionCard title="Verify Email" icon={BadgeCheck} subtitle="Confirm your email address">
           <div className="max-w-md space-y-4">
-            <div className="alert alert-warning text-sm">
-              <AlertCircle size={14} style={{ color: "var(--warning)", flexShrink: 0 }} />
+            <div className="alert alert-warning text-xs">
+              <AlertCircle size={14} className="text-warning flex-shrink-0" />
               Your email is not verified. Verification is required for full platform access.
             </div>
-            <button onClick={handleSendVerifyOtp} disabled={actionLoading}
-              className="btn-secondary flex items-center gap-2">
+            <button onClick={handleSendVerifyOtp} disabled={actionLoading} className="btn-secondary flex items-center gap-2">
               {actionLoading ? <Spinner size={13} /> : <Mail size={13} />}
               Send Verification OTP
             </button>
             <div className="flex gap-3">
-              <Field label="Enter OTP" icon={ShieldCheck}
-                value={verifyOtpInput} editable
-                placeholder="6-digit OTP"
-                onChange={setVerifyOtpInput} />
-              <button onClick={handleVerifyEmail} disabled={!verifyOtpInput || actionLoading}
-                className="btn-primary-cta flex items-center gap-2 mt-5 disabled:opacity-50">
+              <div className="flex-1">
+                <Field label="Enter OTP" icon={ShieldCheck} value={verifyOtpInput} editable placeholder="6-digit OTP" onChange={setVerifyOtpInput} />
+              </div>
+              <button onClick={handleVerifyEmail} disabled={!verifyOtpInput || actionLoading} className="btn-primary-cta flex items-center gap-2 mt-5 disabled:opacity-50">
                 {actionLoading ? <Spinner size={13} /> : <CheckCircle2 size={13} />}
                 Verify
               </button>
@@ -1216,20 +1028,16 @@ export default function MyProfile() {
       )}
 
       {/* Active sessions */}
-      <SectionCard title="Active Sessions" icon={Smartphone}
-        subtitle={`${sessions?.length ?? 0} active session${sessions?.length !== 1 ? "s" : ""}`}
+      <SectionCard title="Active Sessions" icon={Smartphone} subtitle={`${sessions?.length ?? 0} active session${sessions?.length !== 1 ? "s" : ""}`}
         action={
           sessions?.length > 1 && (
-            <button onClick={handleRevokeAll} disabled={actionLoading}
-              className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5"
-              style={{ color: "var(--error)", borderColor: "var(--error)" }}>
+            <button onClick={handleRevokeAll} disabled={actionLoading} className="btn-secondary text-[11px] px-3 py-1.5 flex items-center gap-1.5 text-error border-error/50 hover:bg-error hover:text-error-content hover:border-error transition-all">
               <LogOut size={12} /> Revoke All Others
             </button>
           )
         }>
         {!sessions?.length ? (
-          <p className="text-sm text-center py-4"
-            style={{ color: "color-mix(in oklch, var(--base-content) 40%, transparent)" }}>
+          <p className="text-xs text-center py-4 text-base-content/40">
             No active sessions found.
           </p>
         ) : (
@@ -1239,31 +1047,22 @@ export default function MyProfile() {
                 ? Smartphone
                 : s.platform === "desktop" ? Monitor : Tablet;
               return (
-                <div key={s._id ?? i}
-                  className="flex items-center justify-between p-3 rounded-xl"
-                  style={{ background: "var(--base-200)", border: "1px solid var(--base-300)" }}>
+                <div key={s._id ?? i} className="flex items-center justify-between p-3 rounded-xl bg-base-200 border border-base-300">
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-                      style={{ background: "color-mix(in oklch, var(--primary), transparent 86%)" }}>
-                      <DeviceIcon size={14} style={{ color: "var(--primary)" }} />
+                    <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-primary/15 text-primary">
+                      <DeviceIcon size={14} />
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold truncate" style={{ color: "var(--base-content)" }}>
+                      <p className="text-xs font-semibold truncate text-base-content">
                         {s.deviceName ?? "Unknown Device"}
                       </p>
-                      <p className="text-xs" style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+                      <p className="text-[11px] text-base-content/50">
                         {s.ipAddress ?? "—"} · {s.platform}
                         {s.lastActiveAt ? ` · ${new Date(s.lastActiveAt).toLocaleDateString("en-IN")}` : ""}
                       </p>
                     </div>
                   </div>
-                  <button onClick={() => handleRevokeSession(s._id)}
-                    disabled={actionLoading}
-                    className="text-xs px-3 py-1.5 rounded-lg font-semibold transition-colors flex-shrink-0"
-                    style={{
-                      background: "color-mix(in oklch, var(--error), transparent 88%)",
-                      color: "var(--error)",
-                    }}>
+                  <button onClick={() => handleRevokeSession(s._id)} disabled={actionLoading} className="text-[11px] px-3 py-1.5 rounded-lg font-semibold transition-colors flex-shrink-0 bg-error/15 text-error hover:bg-error hover:text-error-content">
                     Revoke
                   </button>
                 </div>
@@ -1275,8 +1074,7 @@ export default function MyProfile() {
 
       {/* Login history */}
       {loginHistory && (
-        <SectionCard title="Login History" icon={Activity}
-          subtitle={`Last ${loginHistory.recentSessions?.length ?? 0} sessions`}>
+        <SectionCard title="Login History" icon={Activity} subtitle={`Last ${loginHistory.recentSessions?.length ?? 0} sessions`}>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
             {[
               { label: "Total Logins", val: loginHistory.loginCount ?? 0 },
@@ -1292,13 +1090,11 @@ export default function MyProfile() {
           {loginHistory.recentSessions?.length > 0 && (
             <div className="space-y-2">
               {loginHistory.recentSessions.slice(0, 8).map((s, i) => (
-                <div key={s._id ?? i}
-                  className="flex items-center justify-between px-3 py-2 rounded-lg"
-                  style={{ background: "var(--base-200)" }}>
-                  <span className="text-xs" style={{ color: "color-mix(in oklch, var(--base-content) 60%, transparent)" }}>
+                <div key={s._id ?? i} className="flex items-center justify-between px-3 py-2 rounded-lg bg-base-200">
+                  <span className="text-[11px] text-base-content/60">
                     {s.deviceName ?? "Unknown"} — {s.ipAddress ?? "—"}
                   </span>
-                  <span className="text-xs" style={{ color: "color-mix(in oklch, var(--base-content) 45%, transparent)" }}>
+                  <span className="text-[11px] text-base-content/40">
                     {s.createdAt ? new Date(s.createdAt).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" }) : "—"}
                   </span>
                 </div>
@@ -1324,21 +1120,20 @@ export default function MyProfile() {
   };
 
   return (
-    <div data-theme="lab" className="min-h-screen" style={{ background: "var(--base-100)" }}>
+    <div data-theme="lab" className="min-h-screen bg-base-100">
       <div className="container-custom max-w-7xl py-8">
 
         {/* Page title */}
         <motion.div variants={fadeUp} initial="hidden" animate="show" className="mb-8">
-          <div className="flex items-center gap-2 mb-1" style={{ color: "color-mix(in oklch, var(--base-content) 45%, transparent)" }}>
-            <Link href="/lab/dashboard" className="text-xs hover:underline no-underline">Dashboard</Link>
+          <div className="flex items-center gap-2 mb-1 text-base-content/50">
+            <Link href="/lab-partner/dashboard" className="text-[11px] hover:text-primary transition-colors hover:underline no-underline">Dashboard</Link>
             <ChevronRight size={12} />
-            <span className="text-xs">My Profile</span>
+            <span className="text-[11px]">My Profile</span>
           </div>
-          <h1 className="font-montserrat font-black text-2xl md:text-3xl"
-            style={{ color: "var(--base-content)" }}>
+          <h1 className="font-montserrat font-black text-2xl md:text-3xl text-base-content">
             My Profile
           </h1>
-          <p className="text-sm mt-1" style={{ color: "color-mix(in oklch, var(--base-content) 55%, transparent)" }}>
+          <p className="text-xs mt-1 text-base-content/60">
             Manage your lab account, documents, and security settings.
           </p>
         </motion.div>
@@ -1346,9 +1141,8 @@ export default function MyProfile() {
         {/* Error banner */}
         <AnimatePresence>
           {error && (
-            <motion.div variants={scaleIn} initial="hidden" animate="show" exit="hidden"
-              className="alert alert-error mb-6 text-sm">
-              <AlertCircle size={14} style={{ color: "var(--error)", flexShrink: 0 }} />
+            <motion.div variants={scaleIn} initial="hidden" animate="show" exit="hidden" className="alert alert-error mb-6 text-xs">
+              <AlertCircle size={14} className="text-error flex-shrink-0" />
               {error}
             </motion.div>
           )}
@@ -1357,20 +1151,14 @@ export default function MyProfile() {
         <div className="flex flex-col lg:flex-row gap-6">
 
           {/* Sidebar tabs — desktop */}
-          <motion.nav variants={fadeUp} custom={1} initial="hidden" animate="show"
-            className="hidden lg:flex flex-col gap-1 w-56 flex-shrink-0">
+          <motion.nav variants={fadeUp} custom={1} initial="hidden" animate="show" className="hidden lg:flex flex-col gap-1 w-56 flex-shrink-0">
             {TABS.map(({ id, label, icon: Icon }) => (
               <button key={id} onClick={() => setActiveTab(id)}
-                className="flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all font-medium text-sm"
-                style={{
-                  background: activeTab === id
-                    ? "color-mix(in oklch, var(--primary), transparent 86%)"
-                    : "transparent",
-                  color: activeTab === id
-                    ? "var(--primary)"
-                    : "color-mix(in oklch, var(--base-content) 65%, transparent)",
-                  borderLeft: activeTab === id ? "3px solid var(--primary)" : "3px solid transparent",
-                }}>
+                className={`flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all font-medium text-xs border-l-4 ${
+                  activeTab === id
+                    ? "bg-primary/15 text-primary border-primary"
+                    : "text-base-content/60 border-transparent hover:bg-base-200 hover:text-base-content"
+                }`}>
                 <Icon size={15} strokeWidth={activeTab === id ? 2.4 : 2} />
                 {label}
               </button>
@@ -1378,19 +1166,15 @@ export default function MyProfile() {
           </motion.nav>
 
           {/* Mobile tabs — horizontal scroll */}
-          <div className="lg:hidden overflow-x-auto pb-1">
+          <div className="lg:hidden overflow-x-auto pb-1 scrollbar-thin">
             <div className="flex gap-2 w-max">
               {TABS.map(({ id, label, icon: Icon }) => (
                 <button key={id} onClick={() => setActiveTab(id)}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold flex-shrink-0 transition-all"
-                  style={{
-                    background: activeTab === id
-                      ? "var(--primary)"
-                      : "color-mix(in oklch, var(--primary), transparent 90%)",
-                    color: activeTab === id
-                      ? "var(--primary-content)"
-                      : "var(--primary)",
-                  }}>
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-full text-xs font-semibold flex-shrink-0 transition-all ${
+                    activeTab === id
+                      ? "bg-primary text-primary-content shadow-md shadow-primary/30"
+                      : "bg-primary/10 text-primary hover:bg-primary/20"
+                  }`}>
                   <Icon size={13} strokeWidth={2.2} />
                   {label}
                 </button>
@@ -1402,8 +1186,8 @@ export default function MyProfile() {
           <div className="flex-1 min-w-0">
             {loading && !profile ? (
               <div className="flex flex-col items-center justify-center py-24 gap-4">
-                <div className="spinner w-10 h-10 animate-spin" />
-                <p className="text-sm" style={{ color: "color-mix(in oklch, var(--base-content) 50%, transparent)" }}>
+                <Spinner size={32} />
+                <p className="text-xs text-base-content/50">
                   Loading your profile…
                 </p>
               </div>

@@ -1675,6 +1675,7 @@ const userSlice = createSlice({
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 export const selectUser       = (s) => s.user.user;
+export const selectCurrentUser = (s) => s.user.user;
 export const selectToken      = (s) => s.user.token;
 export const selectProfile    = (s) => s.user.profile;
 export const selectIsLoggedIn = (s) => !!s.user.token;

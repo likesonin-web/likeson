@@ -1,410 +1,463 @@
-/**
- * consultation.model.js
- *
- * TELEMEDICINE CONSULTATION MODEL
- * Video / Audio consultations via Agora
- * Optimized for MongoDB (Unbounded arrays extracted)
- */
-
+// models/Consultation.model.js
 import mongoose from 'mongoose';
+import { customAlphabet } from 'nanoid';
 
 const { Schema } = mongoose;
 
-// ══════════════════════════════════════════════════════════════════════════════
-// ENUMS & CONSTANTS
-// ══════════════════════════════════════════════════════════════════════════════
+const generateConsultId = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 10);
 
-export const CONSULTATION_STATUSES = [
-  'created',
-  'scheduled',
-  'waiting',
-  'active',
-  'paused',
-  'reconnecting',
-  'completed',
-  'cancelled',
-  'failed',
-  'expired',
-];
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 export const CONSULTATION_TYPES = [
-  'video',
-  'audio',
+  'video',        // Agora RTC — primary
+  'audio',        // Agora voice-only
+  'chat',         // text chat (Agora RTM or internal)
+  'in_person',    // walk-in / clinic visit
+  'home_visit',   // doctor visits patient
 ];
 
-export const CONSULTATION_MODES = [
-  'scheduled',
-  'instant',
-  'follow_up',
-  'emergency',
+export const CONSULTATION_STATUSES = [
+  'scheduled',      // booked, not started
+  'waiting',        // patient in waiting room
+  'doctor_joined',  // doctor entered, patient not yet
+  'patient_joined', // patient entered, doctor not yet
+  'in_progress',    // both in session
+  'paused',         // reconnecting / temp break
+  'completed',      // session ended normally
+  'missed',         // neither joined in grace period
+  'cancelled',      // cancelled before start
+  'no_show_patient',
+  'no_show_doctor',
+  'technical_failure', // Agora/network failure
 ];
 
-export const CONSULTATION_STAGES = [
-  'pre_consultation',
-  'waiting_room',
-  'in_progress',
-  'prescription_phase',
-  'post_consultation',
-  'closed',
-];
+export const URGENCY_LEVELS = ['routine', 'urgent', 'emergency'];
 
-export const PRIORITY_LEVELS = [
-  'routine',
-  'urgent',
-  'emergency',
-  'critical',
-];
+export const PARTICIPANT_ROLES = ['doctor', 'patient', 'interpreter', 'observer', 'caregiver'];
 
-export const PARTICIPANT_ROLES = [
-  'doctor',
-  'patient',
-  'care_assistant',
-  'family_member',
-  'admin',
-];
+// ── Sub-schemas ───────────────────────────────────────────────────────────────
 
-export const CONSENT_TYPES = [
-  'telemedicine',
-  'prescription',
-];
-
-export const ATTACHMENT_TYPES = [
-  'prescription',
-  'lab_report',
-  'xray',
-  'scan',
-  'insurance',
-  'medical_document',
-  'image',
-  'video',
-];
-
-export const CANCELLATION_ACTORS = [
-  'patient',
-  'doctor',
-  'hospital',
-  'care_assistant',
-  'admin',
-  'system',
-];
-
-export const END_ACTORS = [
-  'doctor',
-  'patient',
-  'admin',
-  'system',
-];
-
-export const COMPLETION_STATUSES = [
-  'not_started',
-  'in_progress',
-  'completed_with_prescription',
-  'completed_without_prescription',
-  'incomplete',
-  'abandoned',
-];
-
-export const NETWORK_QUALITY_LEVELS = [
-  'excellent',
-  'good',
-  'fair',
-  'poor',
-  'disconnected',
-];
-
-export const WAITING_ROOM_STATUSES = [
-  'waiting',
-  'approved',
-  'rejected',
-  'admitted',
-  'timed_out',
-];
-
-// ══════════════════════════════════════════════════════════════════════════════
-// SUB-SCHEMAS (Safe to Embed - Strictly Bounded)
-// ══════════════════════════════════════════════════════════════════════════════
-
-// ── Agora SDK Configuration ───────────────────────────────────────────────────
-const sdkConfigurationSchema = new Schema(
+// Agora RTC / RTM token + channel info (server-generated, short-lived)
+const agoraSessionSchema = new Schema(
   {
-    quality:                  { type: String, enum: ['low', 'medium', 'high', 'hd', 'auto'], default: 'auto' },
-    codec:                    { type: String, enum: ['VP8', 'VP9', 'H264'], default: 'H264' },
-    micEnabled:               { type: Boolean, default: true },
-    cameraEnabled:            { type: Boolean, default: true },
-    screenShareEnabled:       { type: Boolean, default: false },
-    noiseSuppressionEnabled:  { type: Boolean, default: true },
-    echoCancellationEnabled:  { type: Boolean, default: true },
-    autoGainControlEnabled:   { type: Boolean, default: true },
-    maxVideoResolution:       { type: String, default: '720p' },
-    maxFrameRate:             { type: Number, default: 30 },
+    channelName:     { type: String, required: true },  // unique per consultation
+    appId:           { type: String },                  // Agora App ID (env-safe to store)
+
+    // Doctor tokens
+    doctorUid:       { type: Number },                  // Agora UID (uint32)
+    doctorRtcToken:  { type: String, select: false },   // RTC — expires
+    doctorRtmToken:  { type: String, select: false },   // RTM (chat/signalling) — expires
+
+    // Patient tokens
+    patientUid:      { type: Number },
+    patientRtcToken: { type: String, select: false },
+    patientRtmToken: { type: String, select: false },
+
+    // Additional participant tokens (interpreter, observer)
+    extraParticipants: [
+      {
+        uid:       { type: Number },
+        role:      { type: String, enum: PARTICIPANT_ROLES },
+        rtcToken:  { type: String, select: false },
+        rtmToken:  { type: String, select: false },
+      },
+    ],
+
+    tokenExpiresAt:  { type: Date },                    // when to refresh tokens
+    tokenRefreshCount: { type: Number, default: 0 },
+
+    // Recording (Agora Cloud Recording)
+    cloudRecordingResourceId: { type: String },
+    cloudRecordingSid:        { type: String },
+    cloudRecordingMode:       { type: String, enum: ['mix', 'individual', 'web'], default: 'mix' },
+    recordingStartedAt:       { type: Date },
+    recordingStoppedAt:       { type: Date },
+    recordingFileUrls:        [{ type: String }],       // S3 / OSS URLs after upload
+    isRecordingEnabled:       { type: Boolean, default: false },
+    recordingConsentDoctor:   { type: Boolean, default: false },
+    recordingConsentPatient:  { type: Boolean, default: false },
+
+    // RTM (in-session chat)
+    rtmChannelName:  { type: String },
   },
   { _id: false }
 );
 
-// ── Participant ───────────────────────────────────────────────────────────────
-const participantSchema = new Schema(
+// Who joined when — full audit trail
+const participantEventSchema = new Schema(
   {
-    participantId:    { type: String, trim: true, required: true },
-    userId:           { type: Schema.Types.ObjectId, ref: 'User', required: true },
-    role:             { type: String, enum: PARTICIPANT_ROLES, required: true },
-    displayName:      { type: String, trim: true },
-    joinedAt:         { type: Date },
-    leftAt:           { type: Date },
-    totalDurationMinutes: { type: Number, default: 0, min: 0 },
-
-    connectionStatus: { type: String, enum: ['connected', 'reconnecting', 'disconnected', 'never_joined'], default: 'never_joined' },
-    deviceType:       { type: String, enum: ['mobile', 'tablet', 'desktop', 'unknown'], default: 'unknown' },
-    browser:          { type: String, trim: true },
-    operatingSystem:  { type: String, trim: true },
-    ipAddress:        { type: String, select: false },
-
-    cameraEnabled:     { type: Boolean, default: true },
-    microphoneEnabled: { type: Boolean, default: true },
-    screenSharing:     { type: Boolean, default: false },
-    handRaised:        { type: Boolean, default: false },
-    isMutedByHost:     { type: Boolean, default: false },
-    speakingDuration:  { type: Number, default: 0 }, 
-    reconnectCount:    { type: Number, default: 0, min: 0 },
-    lastActiveAt:      { type: Date },
-
-    networkQuality: { type: String, enum: NETWORK_QUALITY_LEVELS, default: 'excellent' },
-    audioQuality:   { type: String, enum: NETWORK_QUALITY_LEVELS, default: 'excellent' },
-    videoQuality:   { type: String, enum: NETWORK_QUALITY_LEVELS, default: 'excellent' },
-
-    waitingRoomStatus: { type: String, enum: WAITING_ROOM_STATUSES, default: 'waiting' },
-
-    permissions: {
-      canMute:        { type: Boolean, default: false },
-      canKick:        { type: Boolean, default: false },
-      canShareScreen: { type: Boolean, default: true },
-      canPrescribe:   { type: Boolean, default: false },
+    userId:     { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    role:       { type: String, enum: PARTICIPANT_ROLES, required: true },
+    agoraUid:   { type: Number },
+    joinedAt:   { type: Date },
+    leftAt:     { type: Date },
+    durationSec:{ type: Number },   // auto-computed on leave
+    deviceInfo: {
+      platform:   { type: String },   // 'web' | 'android' | 'ios'
+      browser:    { type: String },
+      os:         { type: String },
+      sdkVersion: { type: String },
     },
+    networkQuality: { type: Number, min: 0, max: 6 }, // Agora quality probe (0=unknown,6=excellent)
+    rejoinCount:    { type: Number, default: 0 },
   },
   { _id: true, timestamps: false }
 );
 
-// ── Waiting Room ──────────────────────────────────────────────────────────────
-const waitingRoomEntrySchema = new Schema(
+// In-session chat messages (Agora RTM peer/channel messages mirrored server-side)
+const chatMessageSchema = new Schema(
   {
-    userId:            { type: Schema.Types.ObjectId, ref: 'User', required: true },
-    role:              { type: String, enum: PARTICIPANT_ROLES },
-    displayName:       { type: String, trim: true },
-    enteredAt:         { type: Date, default: Date.now },
-    approvedAt:        { type: Date },
-    approvedBy:        { type: Schema.Types.ObjectId, ref: 'User' },
-    rejectedAt:        { type: Date },
-    rejectionReason:   { type: String, trim: true },
-    queuePosition:     { type: Number, min: 1 },
-    waitingRoomStatus: { type: String, enum: WAITING_ROOM_STATUSES, default: 'waiting' },
-  },
-  { _id: true }
-);
-
-// ── File Attachments ──────────────────────────────────────────────────────────
-const fileAttachmentSchema = new Schema(
-  {
-    uploadedBy:     { type: Schema.Types.ObjectId, ref: 'User', required: true },
-    uploaderRole:   { type: String, enum: PARTICIPANT_ROLES },
-    attachmentType: { type: String, enum: ATTACHMENT_TYPES, required: true },
-    fileName:       { type: String, trim: true, required: true },
-    mimeType:       { type: String, trim: true },
-    fileSize:       { type: Number, min: 0 },
-    storageUrl:     { type: String, trim: true, select: false },
-    thumbnailUrl:   { type: String, trim: true },
-    encrypted:      { type: Boolean, default: true },
-    uploadedAt:     { type: Date, default: Date.now },
-    accessLevel:    { type: String, enum: ['private', 'doctor_only', 'patient_only', 'shared', 'admin'], default: 'shared' },
-    description:    { type: String, trim: true, maxlength: 500 },
+    senderUserId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    senderRole:   { type: String, enum: PARTICIPANT_ROLES },
+    content:      { type: String, trim: true, maxlength: 2000 },
+    messageType:  {
+      type: String,
+      enum: ['text', 'image', 'file', 'prescription_preview', 'lab_order', 'system'],
+      default: 'text',
+    },
+    attachmentUrl:  { type: String },
+    attachmentName: { type: String },
+    sentAt:         { type: Date, default: Date.now },
     isDeleted:      { type: Boolean, default: false },
   },
   { _id: true }
 );
 
-// ── Consent ───────────────────────────────────────────────────────────────────
-const consentSchema = new Schema(
+// Vitals captured during / before session
+const vitalsSchema = new Schema(
   {
-    consentType:      { type: String, enum: CONSENT_TYPES, required: true },
-    accepted:         { type: Boolean, required: true },
-    acceptedAt:       { type: Date },
-    ipAddress:        { type: String, select: false },
-    userAgent:        { type: String, select: false },
-    consentVersion:   { type: String, trim: true, default: '1.0' },
-    digitalSignature: { type: String, trim: true, select: false },
-    geoLocation: {
-      lat:  { type: Number },
-      long: { type: Number },
-    },
-    revokedAt: { type: Date },
-    isRevoked: { type: Boolean, default: false },
+    bloodPressureSystolic:  { type: Number },
+    bloodPressureDiastolic: { type: Number },
+    pulseRate:              { type: Number },
+    temperatureC:           { type: Number },
+    spO2:                   { type: Number, min: 0, max: 100 },
+    respiratoryRate:        { type: Number },
+    weightKg:               { type: Number },
+    heightCm:               { type: Number },
+    bloodGlucose:           { type: Number },
+    recordedAt:             { type: Date, default: Date.now },
+    recordedBy:             { type: String, enum: ['patient', 'doctor', 'care_assistant', 'device'] },
+    deviceSource:           { type: String },   // e.g. "Omron BP Monitor"
+  },
+  { _id: false }
+);
+
+// Doctor's clinical notes (SOAP format)
+const clinicalNotesSchema = new Schema(
+  {
+    chiefComplaint:   { type: String, trim: true, maxlength: 500 },
+    // SOAP
+    subjective:       { type: String, trim: true, maxlength: 2000 },  // patient history, symptoms
+    objective:        { type: String, trim: true, maxlength: 2000 },  // exam findings, vitals
+    assessment:       { type: String, trim: true, maxlength: 2000 },  // diagnosis, differential
+    plan:             { type: String, trim: true, maxlength: 2000 },  // treatment, referral, f/u
+    // ICD-10
+    diagnosisCodes:   [{ code: String, description: String }],
+    // Free advice
+    lifestyleAdvice:  { type: String, trim: true, maxlength: 1000 },
+    dietAdvice:       { type: String, trim: true, maxlength: 500 },
+    // Referral
+    referralTo:       { type: String, trim: true },
+    referralNote:     { type: String, trim: true, maxlength: 500 },
+    // Follow-up
+    followUpInDays:   { type: Number, min: 1 },
+    followUpNote:     { type: String, trim: true, maxlength: 300 },
+    // Internal
+    privateNotes:     { type: String, trim: true, maxlength: 1000, select: false }, // doctor-only
+    lastEditedAt:     { type: Date },
+  },
+  { _id: false }
+);
+
+// Waiting room events (Lybrate/Amwell style queue)
+const waitingRoomSchema = new Schema(
+  {
+    patientEnteredAt:  { type: Date },
+    doctorNotifiedAt:  { type: Date },
+    estimatedWaitMin:  { type: Number },
+    queuePosition:     { type: Number },
+    patientReadyAt:    { type: Date },     // patient clicked "I'm ready"
+    doctorReadyAt:     { type: Date },
+    patientLeft:       { type: Boolean, default: false },
+    patientLeftAt:     { type: Date },
+  },
+  { _id: false }
+);
+
+// Payment/fee at consultation level (may differ from booking-level fareBreakdown)
+const consultationFeeSchema = new Schema(
+  {
+    consultationFee:   { type: Number, default: 0, min: 0 },
+    platformFee:       { type: Number, default: 0, min: 0 },
+    taxes:             { type: Number, default: 0, min: 0 },
+    discount:          { type: Number, default: 0, min: 0 },
+    totalAmount:       { type: Number, default: 0, min: 0 },
+    currency:          { type: String, default: 'INR' },
+    isPaid:            { type: Boolean, default: false },
+    paidAt:            { type: Date },
+    paymentRef:        { type: String },   // link to booking payment
+  },
+  { _id: false }
+);
+
+// Cancellation
+const cancellationSchema = new Schema(
+  {
+    cancelledBy:   { type: String, enum: ['doctor', 'patient', 'admin', 'system'] },
+    cancelledById: { type: Schema.Types.ObjectId, ref: 'User' },
+    reason:        { type: String, trim: true },
+    cancelledAt:   { type: Date, default: Date.now },
+    refundable:    { type: Boolean, default: false },
+  },
+  { _id: false }
+);
+
+// Rating (both sides rate each other — Lybrate / HealthTap pattern)
+const ratingSchema = new Schema(
+  {
+    // Patient rates doctor
+    doctorRating:   { type: Number, min: 1, max: 5 },
+    doctorFeedback: { type: String, trim: true, maxlength: 500 },
+    // Doctor rates patient (for internal quality)
+    patientRating:   { type: Number, min: 1, max: 5 },
+    patientFeedback: { type: String, trim: true, maxlength: 200, select: false },
+    // Overall experience
+    overallRating:  { type: Number, min: 1, max: 5 },
+    tags:           [{ type: String, trim: true }], // "knowledgeable", "punctual", etc.
+    ratedAt:        { type: Date },
+    isPublic:       { type: Boolean, default: true },
+  },
+  { _id: false }
+);
+
+// Quality / session metrics (for analytics — Push Doctor / Doxy.me style)
+const sessionMetricsSchema = new Schema(
+  {
+    totalDurationSec:     { type: Number },
+    doctorTalkTimeSec:    { type: Number },
+    patientTalkTimeSec:   { type: Number },
+    avgNetworkQuality:    { type: Number },  // 1–6
+    reconnectCount:       { type: Number, default: 0 },
+    videoEnabled:         { type: Boolean },
+    audioEnabled:         { type: Boolean },
+    chatMessagesCount:    { type: Number, default: 0 },
+    prescriptionIssued:   { type: Boolean, default: false },
+    labOrderIssued:       { type: Boolean, default: false },
+    referralIssued:       { type: Boolean, default: false },
+    // Agora Quality of Service (QoS)
+    doctorAvgFrameRate:   { type: Number },
+    patientAvgFrameRate:  { type: Number },
+    doctorPacketLoss:     { type: Number },
+    patientPacketLoss:    { type: Number },
+  },
+  { _id: false }
+);
+
+// Status history log
+const statusLogSchema = new Schema(
+  {
+    fromStatus: { type: String },
+    toStatus:   { type: String, required: true },
+    changedBy:  { type: Schema.Types.ObjectId, ref: 'User' },
+    reason:     { type: String },
+    changedAt:  { type: Date, default: Date.now },
   },
   { _id: true }
 );
 
-// ══════════════════════════════════════════════════════════════════════════════
-// MAIN CONSULTATION SCHEMA
-// ══════════════════════════════════════════════════════════════════════════════
+// ── Main Schema ───────────────────────────────────────────────────────────────
 
 const consultationSchema = new Schema(
   {
-    // ── SECTION 1: CORE DETAILS ───────────────────────────────────────────────
-    bookingId: { type: Schema.Types.ObjectId, ref: 'Booking', required: true, index: true },
-    patient:   { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    doctor:    { type: Schema.Types.ObjectId, ref: 'DoctorProfile', required: true, index: true },
-    hospital:  { type: Schema.Types.ObjectId, ref: 'Hospital', default: null, index: true },
-    careAssistant: { type: Schema.Types.ObjectId, ref: 'CareAssistantProfile', default: null },
+    // ── Identity ──────────────────────────────────────────────────────────────
+    consultationCode: {
+      type:    String,
+      unique:  true,
+      sparse:  true,
+      index:   true,
+      uppercase: true,
+      trim:    true,
+    },   // e.g. CS-XXXXXXXX
 
-    consultationType: { type: String, enum: CONSULTATION_TYPES, required: true, index: true },
-    consultationMode: { type: String, enum: CONSULTATION_MODES, default: 'scheduled' },
-    specialty:        { type: String, trim: true, index: true },
-    language:         { type: String, trim: true, default: 'English' },
+    consultationType: {
+      type:     String,
+      required: true,
+      enum:     CONSULTATION_TYPES,
+      index:    true,
+    },
 
-    symptoms:           [{ type: String, trim: true }],
-    chiefComplaint:     { type: String, trim: true, maxlength: 2000 },
-    consultationReason: { type: String, trim: true, maxlength: 2000 },
-    diagnosisSummary:   { type: String, trim: true, maxlength: 5000 },
-    treatmentPlan:      { type: String, trim: true, maxlength: 5000 },
-    followUpAdvice:     { type: String, trim: true, maxlength: 2000 },
-    tags:               [{ type: String, trim: true, lowercase: true }],
+    // ── Linkage ───────────────────────────────────────────────────────────────
+    booking: {
+      type:  Schema.Types.ObjectId,
+      ref:   'Booking',
+      index: true,
+    },
 
-    doctorInternalNotes: { type: String, trim: true, maxlength: 10000, select: false },
-    metadata: { type: Schema.Types.Mixed },
+    outPatientRecord: {
+      type:  Schema.Types.ObjectId,
+      ref:   'OutPatientRecord',
+      index: true,
+    },
 
-    // ── SECTION 2: STATUS SYSTEM ──────────────────────────────────────────────
-    status:            { type: String, enum: CONSULTATION_STATUSES, default: 'created', index: true },
-    priority:          { type: String, enum: PRIORITY_LEVELS, default: 'routine', index: true },
-    consultationStage: { type: String, enum: CONSULTATION_STAGES, default: 'pre_consultation' },
-    completionStatus:  { type: String, enum: COMPLETION_STATUSES, default: 'not_started' },
+    // ── Parties ───────────────────────────────────────────────────────────────
+    doctor: {
+      type:     Schema.Types.ObjectId,
+      ref:      'DoctorProfile',
+      required: true,
+      index:    true,
+    },
 
-    cancelledBy:        { type: String, enum: CANCELLATION_ACTORS },
-    cancelledByUserId:  { type: Schema.Types.ObjectId, ref: 'User' },
-    cancellationReason: { type: String, trim: true, maxlength: 1000 },
-    cancelledAt:        { type: Date },
+    doctorUser: {
+      type:  Schema.Types.ObjectId,
+      ref:   'User',
+      index: true,
+    },
 
-    endedBy:           { type: String, enum: END_ACTORS },
-    endedByUserId:     { type: Schema.Types.ObjectId, ref: 'User' },
-    endedReason:       { type: String, trim: true, maxlength: 1000 },
-    autoEndedBySystem: { type: Boolean, default: false },
+    patient: {
+      type:     Schema.Types.ObjectId,
+      ref:      'User',
+      required: true,
+      index:    true,
+    },
 
-    failedReason: { type: String, trim: true, maxlength: 1000 },
-    failureCode:  { type: String, trim: true },
+    hospital: {
+      type:  Schema.Types.ObjectId,
+      ref:   'Hospital',
+      index: true,
+    },
 
-    statusLog: [
-      {
-        fromStatus: { type: String },
-        toStatus:   { type: String, required: true },
-        changedBy:  { type: Schema.Types.ObjectId, ref: 'User' },
-        reason:     { type: String, trim: true },
-        changedAt:  { type: Date, default: Date.now },
-      },
-    ],
+    // Snapshots (immutable at session start — Lybrate pattern)
+    doctorSnapshot: {
+      name:               { type: String },
+      specialization:     { type: String },
+      registrationNumber: { type: String },
+      profilePhotoUrl:    { type: String },
+      qualifications:     { type: String },
+      phone:              { type: String },
+    },
 
-    // ── SECTION 3: TIMING ─────────────────────────────────────────────────────
-    scheduledStartTime:       { type: Date, required: true, index: true },
-    scheduledEndTime:         { type: Date },
-    actualStartTime:          { type: Date },
-    actualEndTime:            { type: Date },
-    estimatedDurationMinutes: { type: Number, default: 30, min: 1 },
-    actualDurationMinutes:    { type: Number, default: 0, min: 0 },
-    waitingDurationMinutes:   { type: Number, default: 0, min: 0 },
-    timezone:                 { type: String, trim: true, default: 'Asia/Kolkata' },
+    patientSnapshot: {
+      name:       { type: String },
+      age:        { type: Number },
+      gender:     { type: String },
+      phone:      { type: String },
+      bloodGroup: { type: String },
+      allergies:  [{ type: String }],
+    },
 
-    doctorJoinedAt:  { type: Date },
-    patientJoinedAt: { type: Date },
-    doctorLeftAt:    { type: Date },
-    patientLeftAt:   { type: Date },
-    expiresAt:       { type: Date, index: true },
+    // ── Scheduling ────────────────────────────────────────────────────────────
+    scheduledAt:  { type: Date, required: true, index: true },
+    slotId:       { type: Schema.Types.ObjectId, default: null },
+    slotDurationMin: { type: Number, default: 15 },   // booked slot length
 
-    // ── SECTION 4: AGORA RTC MEETING ──────────────────────────────────────────
-    provider: { type: String, enum: ['Agora'], default: 'Agora' },
-
-    agoraAppId:       { type: String, trim: true, select: false },
-    agoraChannelId:   { type: String, trim: true, index: true },
-    hostToken:        { type: String, trim: true, select: false },
-    participantToken: { type: String, trim: true, select: false },
-    webhookSecret:    { type: String, trim: true, select: false },
-
-    sdkConfiguration: { type: sdkConfigurationSchema, default: () => ({}) },
-
-    region:         { type: String, trim: true, default: 'ap-southeast-1' }, 
-    encryptionMode: { type: String, enum: ['none', 'E2EE', 'transport'], default: 'transport' },
-    maxParticipants:{ type: Number, default: 5, min: 2 },
-
-    waitingRoomEnabled:   { type: Boolean, default: true },
-    screenShareEnabled:   { type: Boolean, default: true },
-    transcriptionEnabled: { type: Boolean, default: false },
-    e2eeEnabled:          { type: Boolean, default: false },
-
-    roomStarted: { type: Boolean, default: false },
-    roomEnded:   { type: Boolean, default: false },
-
-    // ── SECTION 5: PARTICIPANTS & WAITING ROOM ───────────────────────────────
-    participants:     { type: [participantSchema], default: [] },
-    waitingRoomQueue: { type: [waitingRoomEntrySchema], default: [] },
-
-    // ── SECTION 6: PRESCRIPTION & ATTACHMENTS ────────────────────────────────
-    prescription: {
-      type:    Schema.Types.ObjectId,
-      ref:     'EPrescription',
-      default: null,
+    urgency: {
+      type:    String,
+      enum:    URGENCY_LEVELS,
+      default: 'routine',
       index:   true,
     },
-    prescriptions: [
+
+    // ── Session Lifecycle ─────────────────────────────────────────────────────
+    status: {
+      type:    String,
+      enum:    CONSULTATION_STATUSES,
+      default: 'scheduled',
+      index:   true,
+    },
+
+    statusLog: { type: [statusLogSchema], default: [] },
+
+    waitingRoom: { type: waitingRoomSchema, default: () => ({}) },
+
+    // Grace period — if neither join within X min → auto-missed
+    gracePeriodMin:      { type: Number, default: 10 },
+    autoMissedAt:        { type: Date },   // scheduledAt + gracePeriodMin
+
+    sessionStartedAt:    { type: Date },
+    sessionEndedAt:      { type: Date },
+    actualDurationSec:   { type: Number },
+
+    // ── Agora ──────────────────────────────────────────────────────────────────
+    agora: { type: agoraSessionSchema, default: null },
+
+    // ── Participants ──────────────────────────────────────────────────────────
+    // Full join/leave audit (Doxy.me / Amwell pattern)
+    participantEvents: { type: [participantEventSchema], default: [] },
+
+    // Extra participants (caregiver, interpreter)
+    additionalParticipants: [
       {
-        type: Schema.Types.ObjectId,
-        ref:  'EPrescription',
+        userId:   { type: Schema.Types.ObjectId, ref: 'User' },
+        role:     { type: String, enum: PARTICIPANT_ROLES },
+        addedBy:  { type: Schema.Types.ObjectId, ref: 'User' },
+        addedAt:  { type: Date, default: Date.now },
       },
     ],
-    prescriptionUploaded:   { type: Boolean, default: false },
-    prescriptionUploadedAt: { type: Date },
-    prescriptionCount:      { type: Number, default: 0, min: 0 }, 
-    attachments:            { type: [fileAttachmentSchema], default: [] },
 
-    // ── SECTION 7: CONSENT ───────────────────────────────────────────────────
-    consents: { type: [consentSchema], default: [] },
-    telemedicineConsentAccepted: { type: Boolean, default: false },
+    // ── In-Session Chat (RTM mirror) ──────────────────────────────────────────
+    chatMessages: { type: [chatMessageSchema], default: [] },
 
-    // ── SECTION 8: AGGREGATED ANALYTICS (Raw logs in separate Collection) ────
-    networkStats: {
-      avgBandwidth:    { type: Number, default: 0 },
-      avgLatency:      { type: Number, default: 0 },
-      avgJitter:       { type: Number, default: 0 },
-      avgPacketLoss:   { type: Number, default: 0 },
-      totalReconnects: { type: Number, default: 0 },
-      networkType:     { type: String, trim: true },
+    // ── Vitals ────────────────────────────────────────────────────────────────
+    vitals: { type: vitalsSchema, default: null },
+
+    // ── Clinical ──────────────────────────────────────────────────────────────
+    clinicalNotes: { type: clinicalNotesSchema, default: () => ({}) },
+
+    // ── Prescriptions (1:many — doctor may issue multiple Rx) ────────
+    prescriptions: [{ type: Schema.Types.ObjectId, ref: 'EPrescription' }],
+
+    // ── Fee ───────────────────────────────────────────────────────────────────
+    fee: { type: consultationFeeSchema, default: () => ({}) },
+
+    // ── Cancellation ──────────────────────────────────────────────────────────
+    cancellation: { type: cancellationSchema, default: null },
+
+    // ── Rating ────────────────────────────────────────────────────────────────
+    rating:  { type: ratingSchema, default: null },
+    isRated: { type: Boolean, default: false, index: true },
+
+    // ── Session Metrics ───────────────────────────────────────────────────────
+    sessionMetrics: { type: sessionMetricsSchema, default: null },
+
+    // ── Notifications ─────────────────────────────────────────────────────────
+    notificationsSent: {
+      scheduledConfirmation: { type: Boolean, default: false },
+      reminderPatient15min:  { type: Boolean, default: false },
+      reminderDoctor15min:   { type: Boolean, default: false },
+      sessionStarted:        { type: Boolean, default: false },
+      sessionEnded:          { type: Boolean, default: false },
+      prescriptionReady:     { type: Boolean, default: false },
+      ratingRequest:         { type: Boolean, default: false },
     },
 
-    analytics: {
-      averageLatency:          { type: Number, default: 0 },
-      averageReconnects:       { type: Number, default: 0 },
-      totalParticipants:       { type: Number, default: 0 },
-      peakParticipants:        { type: Number, default: 0 },
-      callDropCount:           { type: Number, default: 0 },
-      consultationScore:       { type: Number, min: 0, max: 100 },
-      patientSatisfactionScore:{ type: Number, min: 0, max: 5 },
-      waitingRoomTime:         { type: Number, default: 0 },  
-      doctorResponseTime:      { type: Number, default: 0 }, 
-      callQualityScore:        { type: Number, min: 0, max: 5 },
+    // ── Consent & Compliance ──────────────────────────────────────────────────
+    // Recording consent (Amwell / Push Doctor legal requirement)
+    recordingConsent: {
+      doctorConsented:   { type: Boolean, default: false },
+      patientConsented:  { type: Boolean, default: false },
+      consentTimestamp:  { type: Date },
     },
 
-    // ── SECTION 9: FEEDBACK & AUDIT ─────────────────────────────────────────
-    feedback: {
-      patientRating:           { type: Number, min: 1, max: 5 },
-      doctorRating:            { type: Number, min: 1, max: 5 },
-      audioQualityRating:      { type: Number, min: 1, max: 5 },
-      videoQualityRating:      { type: Number, min: 1, max: 5 },
-      waitingExperienceRating: { type: Number, min: 1, max: 5 },
-      appExperienceRating:     { type: Number, min: 1, max: 5 },
-      review:                  { type: String, trim: true, maxlength: 2000 },
-      wouldRecommend:          { type: Boolean },
-      isPublic:                { type: Boolean, default: true },
-      submittedAt:             { type: Date },
-    },
+    hipaaAcknowledged:    { type: Boolean, default: false },   // for US-mode
+    consentFormSignedUrl: { type: String },
 
-    isRated:            { type: Boolean, default: false, index: true },
-    createdBy:          { type: Schema.Types.ObjectId, ref: 'User' },
-    updatedBy:          { type: Schema.Types.ObjectId, ref: 'User' },
-    internalAdminNotes: { type: String, trim: true, maxlength: 5000, select: false },
-    isTestConsultation: { type: Boolean, default: false, index: true },
+    // ── Flags ──────────────────────────────────────────────────────────────────
+    isEmergency:   { type: Boolean, default: false, index: true },
+    isFollowUp:    { type: Boolean, default: false },
+    parentConsultation: {
+      type:  Schema.Types.ObjectId,
+      ref:   'Consultation',
+      default: null,
+      index: true,
+    },
+    isTestSession: { type: Boolean, default: false },
+
+    // ── Admin ──────────────────────────────────────────────────────────────────
+    assignedAdminId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    internalNotes:   { type: String, trim: true, select: false },
+
+    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   {
     timestamps: true,
@@ -413,12 +466,10 @@ const consultationSchema = new Schema(
   }
 );
 
-// ══════════════════════════════════════════════════════════════════════════════
-// VIRTUALS
-// ══════════════════════════════════════════════════════════════════════════════
+// ── Virtuals ──────────────────────────────────────────────────────────────────
 
 consultationSchema.virtual('isActive').get(function () {
-  return ['waiting', 'active', 'paused', 'reconnecting'].includes(this.status);
+  return ['waiting', 'doctor_joined', 'patient_joined', 'in_progress', 'paused'].includes(this.status);
 });
 
 consultationSchema.virtual('isCompleted').get(function () {
@@ -426,77 +477,75 @@ consultationSchema.virtual('isCompleted').get(function () {
 });
 
 consultationSchema.virtual('isCancelled').get(function () {
-  return this.status === 'cancelled';
+  return ['cancelled', 'missed', 'no_show_patient', 'no_show_doctor', 'technical_failure'].includes(this.status);
 });
 
-consultationSchema.virtual('isExpired').get(function () {
-  if (!this.expiresAt) return false;
-  return new Date() > this.expiresAt;
+consultationSchema.virtual('isLive').get(function () {
+  return this.status === 'in_progress';
 });
 
-consultationSchema.virtual('durationDisplay').get(function () {
-  const d = this.actualDurationMinutes || 0;
-  const h = Math.floor(d / 60);
-  const m = d % 60;
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+consultationSchema.virtual('prescriptionCount').get(function () {
+  return this.prescriptions?.length ?? 0;
 });
 
-consultationSchema.virtual('participantCount').get(function () {
-  return this.participants?.length ?? 0;
+consultationSchema.virtual('needsTokenRefresh').get(function () {
+  if (!this.agora?.tokenExpiresAt) return false;
+  return new Date() > new Date(this.agora.tokenExpiresAt.getTime() - 5 * 60 * 1000); // refresh 5min early
 });
 
-consultationSchema.virtual('hasConsent').get(function () {
-  return this.telemedicineConsentAccepted;
+consultationSchema.virtual('isVideoType').get(function () {
+  return ['video'].includes(this.consultationType);
 });
 
-consultationSchema.virtual('doctorParticipant').get(function () {
-  return this.participants?.find(p => p.role === 'doctor') ?? null;
-});
-
-consultationSchema.virtual('patientParticipant').get(function () {
-  return this.participants?.find(p => p.role === 'patient') ?? null;
-});
-
-// Populate-friendly virtual for prescriptions
-consultationSchema.virtual('prescriptionDetails', {
-  ref:          'EPrescription',
-  localField:   'prescription',
-  foreignField: '_id',
-  justOne:      true,
-});
-
-// ══════════════════════════════════════════════════════════════════════════════
-// PRE-VALIDATE
-// ══════════════════════════════════════════════════════════════════════════════
+// ── Pre-validate ──────────────────────────────────────────────────────────────
 
 consultationSchema.pre('validate', function () {
-  if (this.status === 'active' && !this.telemedicineConsentAccepted) {
-    throw new Error('Telemedicine consent required before consultation can be active');
+  if (this.consultationType === 'video' || this.consultationType === 'audio') {
+    if (!this.agora?.channelName) {
+      // Channel name auto-generated in pre-save — skip throw here
+    }
   }
 
-  if (this.expiresAt && this.scheduledStartTime && this.expiresAt <= this.scheduledStartTime) {
-    throw new Error('expiresAt must be after scheduledStartTime');
-  }
-
-  if (this.actualEndTime && this.actualStartTime && this.actualEndTime < this.actualStartTime) {
-    throw new Error('actualEndTime cannot be before actualStartTime');
+  if (this.isFollowUp && !this.parentConsultation) {
+    throw new Error('follow_up consultation requires parentConsultation');
   }
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-// PRE-SAVE
-// ══════════════════════════════════════════════════════════════════════════════
+// ── Pre-save ──────────────────────────────────────────────────────────────────
 
 consultationSchema.pre('save', async function () {
-  if (this.isNew && !this.expiresAt && this.scheduledStartTime) {
-    const exp = new Date(this.scheduledStartTime);
-    exp.setHours(exp.getHours() + 2);
-    this.expiresAt = exp;
+  // 1. Auto-generate consultationCode
+  if (this.isNew && !this.consultationCode) {
+    let code, exists;
+    let attempts = 0;
+    do {
+      if (attempts++ > 10) throw new Error('consultationCode generation failed');
+      code   = `CS-${generateConsultId()}`;
+      exists = await mongoose.model('Consultation').exists({ consultationCode: code });
+    } while (exists);
+    this.consultationCode = code;
   }
 
+  // 2. Auto-generate Agora channel name
+  if (this.isNew && (this.consultationType === 'video' || this.consultationType === 'audio')) {
+    if (!this.agora) this.agora = {};
+    if (!this.agora.channelName) {
+      this.agora.channelName = `consult_${this._id.toString()}`;
+      this.agora.rtmChannelName = `rtm_${this._id.toString()}`;
+    }
+  }
+
+  // 3. Auto-compute autoMissedAt
+  if (this.isNew && this.scheduledAt && !this.autoMissedAt) {
+    const missed = new Date(this.scheduledAt);
+    missed.setMinutes(missed.getMinutes() + (this.gracePeriodMin || 10));
+    this.autoMissedAt = missed;
+  }
+
+  // 4. statusLog
   if (this.isModified('status') && !this.isNew) {
-    const lastLog    = this.statusLog?.[this.statusLog.length - 1];
-    const fromStatus = lastLog?.toStatus ?? null;
+    const last       = this.statusLog?.[this.statusLog.length - 1];
+    const fromStatus = last?.toStatus ?? null;
     this.statusLog.push({
       fromStatus,
       toStatus:  this.status,
@@ -505,97 +554,95 @@ consultationSchema.pre('save', async function () {
     });
   }
 
-  if (this.actualStartTime && this.actualEndTime) {
-    const diffMs = this.actualEndTime - this.actualStartTime;
-    this.actualDurationMinutes = Math.round(diffMs / 60000);
+  // 5. Auto-set sessionStartedAt / sessionEndedAt
+  if (this.isModified('status')) {
+    if (this.status === 'in_progress' && !this.sessionStartedAt) {
+      this.sessionStartedAt = new Date();
+    }
+    if (this.status === 'completed' && !this.sessionEndedAt) {
+      this.sessionEndedAt = new Date();
+      if (this.sessionStartedAt) {
+        this.actualDurationSec = Math.round(
+          (this.sessionEndedAt - this.sessionStartedAt) / 1000
+        );
+      }
+    }
   }
 
-  if (this.isModified('status') && this.status === 'completed') {
-    this.completionStatus  = this.prescriptionUploaded
-      ? 'completed_with_prescription'
-      : 'completed_without_prescription';
-    this.consultationStage = 'post_consultation';
-  }
-
-  if (this.isModified('status') && this.status === 'active') {
-    this.consultationStage = 'in_progress';
-  }
-
-  if (this.isModified('status') && this.status === 'waiting') {
-    this.consultationStage = 'waiting_room';
-  }
-
-  if (this.isModified('feedback') && this.feedback?.patientRating) {
+  // 6. Sync isRated
+  if (this.isModified('rating') && this.rating?.doctorRating) {
     this.isRated = true;
-    if (!this.feedback.submittedAt) this.feedback.submittedAt = new Date();
-    this.analytics.patientSatisfactionScore = this.feedback.patientRating;
+    this.rating.ratedAt = this.rating.ratedAt ?? new Date();
   }
 
-  if (this.isModified('participants')) {
-    this.analytics.totalParticipants = this.participants?.length ?? 0;
+  // 7. Doctor snapshot on first assignment
+  if (this.isModified('doctor') && this.doctor && !this.doctorSnapshot?.name) {
+    const DoctorProfile = mongoose.model('DoctorProfile');
+    const doc = await DoctorProfile.findById(this.doctor)
+      .populate('user', 'name phone')
+      .select('specialization registrationNumber profilePhotoUrl qualifications')
+      .lean();
+    if (doc) {
+      this.doctorSnapshot = {
+        name:               doc.user?.name,
+        specialization:     doc.specialization,
+        registrationNumber: doc.registrationNumber,
+        profilePhotoUrl:    doc.profilePhotoUrl,
+        qualifications:     doc.qualifications,
+        phone:              doc.user?.phone,
+      };
+      this.doctorUser = doc.user?._id;
+    }
   }
 
-  if (this.isModified('status') && this.status === 'cancelled') {
-    if (!this.cancelledAt) this.cancelledAt = new Date();
-    this.consultationStage = 'closed';
-  }
-
-  if (this.isModified('prescriptions')) {
-    this.prescriptionCount = this.prescriptions?.length ?? 0;
-    if (!this.prescription && this.prescriptions?.length > 0) {
-      this.prescription = this.prescriptions[0];
-    }
-    if (this.prescriptions?.length > 0 && !this.prescriptionUploaded) {
-      this.prescriptionUploaded   = true;
-      this.prescriptionUploadedAt = this.prescriptionUploadedAt || new Date();
+  // 8. Patient snapshot on first assignment
+  if (this.isModified('patient') && this.patient && !this.patientSnapshot?.name) {
+    const User = mongoose.model('User');
+    const u = await User.findById(this.patient)
+      .select('name phone')
+      .lean();
+    if (u) {
+      this.patientSnapshot = {
+        name:  u.name,
+        phone: u.phone,
+      };
     }
   }
 
-  if (this.isModified('prescription') && this.prescription) {
-    const alreadyInArray = this.prescriptions?.some(
-      id => id.toString() === this.prescription.toString()
-    );
-    if (!alreadyInArray) {
-      this.prescriptions.push(this.prescription);
-      this.prescriptionCount = this.prescriptions.length;
-    }
-    if (!this.prescriptionUploaded) {
-      this.prescriptionUploaded   = true;
-      this.prescriptionUploadedAt = this.prescriptionUploadedAt || new Date();
-    }
+  // 9. Sync sessionMetrics chatMessagesCount
+  if (this.isModified('chatMessages')) {
+    if (!this.sessionMetrics) this.sessionMetrics = {};
+    this.sessionMetrics.chatMessagesCount = this.chatMessages.length;
+  }
+
+  // 10. Sync sessionMetrics flags on completion
+  if (this.isModified('status') && this.status === 'completed') {
+    if (!this.sessionMetrics) this.sessionMetrics = {};
+    this.sessionMetrics.prescriptionIssued = (this.prescriptions?.length ?? 0) > 0;
+    this.sessionMetrics.labOrderIssued     = (this.labOrders?.length ?? 0) > 0;
+    this.sessionMetrics.referralIssued     = !!this.clinicalNotes?.referralTo;
+    this.sessionMetrics.videoEnabled       = this.consultationType === 'video';
+    this.sessionMetrics.audioEnabled       = ['video', 'audio'].includes(this.consultationType);
   }
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-// INDEXES
-// ══════════════════════════════════════════════════════════════════════════════
+// ── Indexes ───────────────────────────────────────────────────────────────────
 
-consultationSchema.index({ bookingId: 1 });
-consultationSchema.index({ patient: 1, status: 1 });
-consultationSchema.index({ patient: 1, scheduledStartTime: -1 });
+consultationSchema.index({ doctor: 1, scheduledAt: 1 });
 consultationSchema.index({ doctor: 1, status: 1 });
-consultationSchema.index({ doctor: 1, scheduledStartTime: -1 });
-consultationSchema.index({ hospital: 1, scheduledStartTime: -1 });
-consultationSchema.index({ hospital: 1, status: 1 });
-
-consultationSchema.index({ status: 1, scheduledStartTime: 1 });
-consultationSchema.index({ status: 1, createdAt: -1 });
-consultationSchema.index({ priority: 1, status: 1 });
-
-consultationSchema.index({ agoraChannelId: 1 });
-
-consultationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, partialFilterExpression: { status: 'expired' } });
-
-consultationSchema.index({ doctor: 1, scheduledStartTime: 1, status: 1 });
-consultationSchema.index({ patient: 1, consultationType: 1, createdAt: -1 });
-consultationSchema.index({ consultationType: 1, status: 1, createdAt: -1 });
-consultationSchema.index({ specialty: 1, status: 1 });
-consultationSchema.index({ isRated: 1 });
-consultationSchema.index({ 'feedback.patientRating': 1 });
-consultationSchema.index({ doctor: 1, hospital: 1, status: 1, scheduledStartTime: -1 });
-
-consultationSchema.index({ prescription: 1 });
-consultationSchema.index({ prescriptions: 1 });
+consultationSchema.index({ patient: 1, scheduledAt: -1 });
+consultationSchema.index({ patient: 1, status: 1 });
+consultationSchema.index({ booking: 1 });
+consultationSchema.index({ hospital: 1, scheduledAt: 1 });
+consultationSchema.index({ status: 1, scheduledAt: 1 });
+consultationSchema.index({ status: 1, autoMissedAt: 1 });   // cron: auto-miss job
+consultationSchema.index({ urgency: 1, status: 1 });
+consultationSchema.index({ isEmergency: 1, status: 1 });
+consultationSchema.index({ parentConsultation: 1 });
+consultationSchema.index({ createdAt: -1 });
+consultationSchema.index({ 'agora.channelName': 1 });        // Agora webhook lookup
+consultationSchema.index({ 'agora.cloudRecordingSid': 1 });  // recording callback lookup
+consultationSchema.index({ consultationType: 1, status: 1, scheduledAt: 1 });
 
 const Consultation = mongoose.model('Consultation', consultationSchema);
 export default Consultation;

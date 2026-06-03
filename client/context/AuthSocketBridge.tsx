@@ -4,7 +4,7 @@ import React, { useMemo, useCallback } from 'react';
 import { useSelector } from 'react-redux';
 import { selectToken } from '@/store/slices/userSlice';
 import SocketProvider from '@/context/SocketProvider';
-import { ConsultationProvider } from '@/providers/ConsultationSocketProvider';
+ 
 
 export default function AuthSocketBridge({
   children,
@@ -30,9 +30,9 @@ export default function AuthSocketBridge({
       onConnect={handleConnect}
       onDisconnect={handleDisconnect}
     >
-      <ConsultationProvider>
+ 
         {children}
-      </ConsultationProvider>
+      
     </SocketProvider>
   );
 }

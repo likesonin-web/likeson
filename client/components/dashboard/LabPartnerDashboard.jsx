@@ -55,7 +55,7 @@ import {
   XCircle,
   Loader2,
 } from "lucide-react";
-
+import Container from "../ui/Container";
 // ─────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────
@@ -897,7 +897,8 @@ export default function LabPartnerDashboard({ children }) {
         {/* Scrollable content:
             - If children are passed, render them as the page body.
             - Otherwise fall back to the default dashboard overview. */}
-        <main className="flex-1 overflow-y-auto px-4 lg:px-6 py-5">
+      <Container className="">
+          <main className="flex-1 overflow-y-auto ">
           {children ? (
             <motion.div
               key="children-view"
@@ -913,6 +914,7 @@ export default function LabPartnerDashboard({ children }) {
             <DashboardContent dashboard={dashboard} analytics={analytics} loading={loading} />
           )}
         </main>
+      </Container>
       </div>
 
       {/* Mobile bottom bar */}

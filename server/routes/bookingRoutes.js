@@ -1597,122 +1597,276 @@ router.patch('/:id/care/ride-status',
 router.get('/:id/care/tracking-snapshot',
   protect, authorize('customer', 'admin', 'superadmin', 'care_assistant'),
   async (req, res) => {
-    try {
-      const booking = await Booking.findById(req.params.id)
-        .select('customer primaryRide careAssistant status bookingType')
+   try {
+    const booking = await Booking.findById(req.params.id)
+      .select('customer primaryRide careAssistant status bookingType')
+      .lean();
+    if (!booking)
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+ 
+    // Access control for customer
+    if (req.user.role === 'customer' && String(booking.customer) !== String(req.user._id))
+      return res.status(403).json({ success: false, message: 'Access denied' });
+ 
+    const isCareAssistantOnly = booking.bookingType === 'care_assistant';
+    const isFullCareRide      = booking.bookingType === 'full_care_ride';
+ 
+    if (!booking.primaryRide)
+      return res.status(200).json({
+        success: true,
+        data: { message: 'No active ride yet', hasRide: false },
+      });
+ 
+    // ── Fetch ride + tracking in parallel ────────────────────────────────────
+    const [ride, tracking] = await Promise.all([
+      Ride.findById(booking.primaryRide)
+        .select([
+          'status liveLocation driverSnapshot vehicleSnapshot',
+          'pickup dropoff estimatedDistanceKm estimatedDurationMin',
+          'rideStartedAt scheduledPickupAt waypoints rideStage',
+          'activeNavigationTarget',
+        ].join(' '))
+        .lean(),
+      RideTracking.findOne({ ride: booking.primaryRide })
+        .select([
+          'currentEtaMinutes currentEtaTarget hasActiveSos expectedRoutePolyline',
+          'careAssistant careAssistantLiveLocation careAssistantStatus',
+          'careAssistantJoinedAt careAssistantBreadcrumbCount milestones',
+          'liveRouteContext activeTarget',
+        ].join(' '))
+        .lean(),
+    ]);
+ 
+    if (!ride)
+      return res.status(404).json({ success: false, message: 'Ride not found' });
+ 
+    // ── CA profile snapshot ───────────────────────────────────────────────────
+    let caSnapshot = null;
+    if (booking.careAssistant) {
+      const ca = await CareAssistantProfile.findById(booking.careAssistant)
+        .select('fullName phone photoUrl specializations performance.averageRating location')
         .lean();
-      if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
-
-      // Access control for customer
-      if (req.user.role === 'customer' && String(booking.customer) !== String(req.user._id))
-        return res.status(403).json({ success: false, message: 'Access denied' });
-
-      if (!booking.primaryRide)
-        return res.status(200).json({ success: true, data: { message: 'No active ride yet', hasRide: false } });
-
-      const [ride, tracking] = await Promise.all([
-        Ride.findById(booking.primaryRide)
-          .select('status liveLocation driverSnapshot vehicleSnapshot pickup dropoff estimatedDistanceKm estimatedDurationMin rideStartedAt scheduledPickupAt')
-          .lean(),
-        RideTracking.findOne({ ride: booking.primaryRide })
-          .select('currentEtaMinutes currentEtaTarget hasActiveSos expectedRoutePolyline careAssistant careAssistantLiveLocation careAssistantStatus careAssistantJoinedAt careAssistantBreadcrumbCount milestones')
-          .lean(),
-      ]);
-
-      if (!ride) return res.status(404).json({ success: false, message: 'Ride not found' });
-
-      // CA profile snapshot
-      let careAssistantSnapshot = null;
-      if (booking.careAssistant) {
-        const ca = await CareAssistantProfile.findById(booking.careAssistant)
-          .select('fullName phone photoUrl specializations performance.averageRating')
-          .lean();
-        if (ca) {
-          careAssistantSnapshot = {
-            profileId:       ca._id,
-            name:            ca.fullName,
-            phone:           ca.phone,
-            photoUrl:        ca.photoUrl,
-            specializations: ca.specializations,
-            rating:          ca.performance?.averageRating,
-            isLinkedToRide:  !!tracking?.careAssistant,
-            status:          tracking?.careAssistantStatus ?? 'not_joined',
-            joinedAt:        tracking?.careAssistantJoinedAt ?? null,
-          };
-        }
+      if (ca) {
+        caSnapshot = {
+          profileId:       ca._id,
+          name:            ca.fullName,
+          phone:           ca.phone,
+          photoUrl:        ca.photoUrl,
+          specializations: ca.specializations,
+          rating:          ca.performance?.averageRating,
+          isLinkedToRide:  !!tracking?.careAssistant,
+          status:          tracking?.careAssistantStatus ?? 'not_joined',
+          joinedAt:        tracking?.careAssistantJoinedAt ?? null,
+        };
       }
-
+    }
+ 
+    // ── Helper: format live location ──────────────────────────────────────────
+    const fmtLoc = (loc) => {
+      if (!loc?.coordinates || loc.coordinates.length !== 2) return null;
+      return {
+        lat:       loc.coordinates[1],
+        lng:       loc.coordinates[0],
+        heading:   loc.heading  ?? 0,
+        speedKmh:  loc.speedKmh ?? 0,
+        updatedAt: loc.updatedAt,
+      };
+    };
+ 
+    // ════════════════════════════════════════════════════════════════════════
+    // CASE A: care_assistant booking — CA is PRIMARY tracked entity, no driver
+    // ════════════════════════════════════════════════════════════════════════
+    if (isCareAssistantOnly) {
+      const caLiveLocation = fmtLoc(tracking?.careAssistantLiveLocation);
+ 
       return res.json({
         success: true,
         data: {
-          bookingId: booking._id,
-          rideId:    ride._id,
-          rideStatus: ride.status,
-
-          // Driver live tracking
-          driver: {
-            liveLocation: ride.liveLocation?.coordinates?.length === 2
-              ? {
-                  lat:       ride.liveLocation.coordinates[1],
-                  lng:       ride.liveLocation.coordinates[0],
-                  heading:   ride.liveLocation.heading  ?? 0,
-                  speedKmh:  ride.liveLocation.speedKmh ?? 0,
-                  updatedAt: ride.liveLocation.updatedAt,
-                }
-              : null,
-            snapshot:         ride.driverSnapshot,
-            vehicleSnapshot:  ride.vehicleSnapshot,
-          },
-
-          // Route
+          bookingId:   booking._id,
+          rideId:      ride._id,
+          rideStatus:  ride.status,
+          bookingType: 'care_assistant',
+ 
+          // PRIMARY: CA live tracking (no driver)
+          careAssistant: caSnapshot
+            ? {
+                ...caSnapshot,
+                liveLocation:    caLiveLocation,
+                breadcrumbCount: tracking?.careAssistantBreadcrumbCount ?? 0,
+                // CA route: from CA location to patient (pickup = patient)
+                destination: {
+                  coordinates: ride.dropoff?.coordinates,
+                  address:     ride.dropoff?.address,
+                },
+              }
+            : null,
+ 
+          // Route: CA start → patient location
           route: {
-            pickup:               ride.pickup,
-            dropoff:              ride.dropoff,
+            // pickup = CA start, dropoff = patient
+            caStart:              ride.pickup,
+            patientLocation:      ride.dropoff,
             expectedPolyline:     tracking?.expectedRoutePolyline ?? null,
             estimatedDistanceKm:  ride.estimatedDistanceKm,
             estimatedDurationMin: ride.estimatedDurationMin,
             currentEtaMinutes:    tracking?.currentEtaMinutes ?? null,
             currentEtaTarget:     tracking?.currentEtaTarget  ?? null,
           },
-
-          // Care Assistant live tracking (secondary participant)
-          careAssistant: careAssistantSnapshot
-            ? {
-                ...careAssistantSnapshot,
-                liveLocation: tracking?.careAssistantLiveLocation?.coordinates?.length === 2
-                  ? {
-                      lat:       tracking.careAssistantLiveLocation.coordinates[1],
-                      lng:       tracking.careAssistantLiveLocation.coordinates[0],
-                      heading:   tracking.careAssistantLiveLocation.heading  ?? 0,
-                      speedKmh:  tracking.careAssistantLiveLocation.speedKmh ?? 0,
-                      updatedAt: tracking.careAssistantLiveLocation.updatedAt,
-                    }
-                  : null,
-                breadcrumbCount: tracking?.careAssistantBreadcrumbCount ?? 0,
-              }
-            : null,
-
+ 
+          // No driver info for care_assistant booking
+          driver: null,
+ 
           hasActiveSos: tracking?.hasActiveSos ?? false,
-          milestones:   tracking?.milestones ?? [],
-
+          milestones:   tracking?.milestones   ?? [],
+ 
           socketHint: {
             room:   `booking:${booking._id}`,
             events: [
-              'location_update',           // driver GPS
-              'care_assistant_location_update',  // CA GPS
-              'care_assistant_status_change',    // CA milestone
-              'care_assistant_joined_ride',      // CA joins midway
+              'care_assistant_location_update',  // PRIMARY GPS for this booking type
+              'care_assistant_status_change',
+              'care_assistant_joined_ride',
+              'booking_status_change',
+            ],
+            note: 'care_assistant booking: CA location is primary. No driver tracking.',
+          },
+ 
+          _serverTime: new Date().toISOString(),
+        },
+      });
+    }
+ 
+    // ════════════════════════════════════════════════════════════════════════
+    // CASE B: full_care_ride — driver primary + CA secondary
+    // ════════════════════════════════════════════════════════════════════════
+    if (isFullCareRide) {
+      const driverLiveLocation = fmtLoc(ride.liveLocation);
+      const caLiveLocation     = fmtLoc(tracking?.careAssistantLiveLocation);
+ 
+      // Find CA join waypoint from ride.waypoints if present
+      const caJoinWaypoint = ride.waypoints?.find(w => w.type === 'care_assistant_join') ?? null;
+ 
+      return res.json({
+        success: true,
+        data: {
+          bookingId:   booking._id,
+          rideId:      ride._id,
+          rideStatus:  ride.status,
+          rideStage:   ride.rideStage,
+          bookingType: 'full_care_ride',
+ 
+          // PRIMARY: driver tracking
+          driver: {
+            liveLocation:    driverLiveLocation,
+            snapshot:        ride.driverSnapshot,
+            vehicleSnapshot: ride.vehicleSnapshot,
+          },
+ 
+          // Route: driver full route with CA join waypoint
+          route: {
+            pickup:               ride.pickup,
+            dropoff:              ride.dropoff,
+            expectedPolyline:     tracking?.expectedRoutePolyline ?? null,
+            estimatedDistanceKm:  ride.estimatedDistanceKm,
+            estimatedDurationMin: ride.estimatedDurationMin,
+            currentEtaMinutes:    tracking?.currentEtaMinutes     ?? null,
+            currentEtaTarget:     tracking?.currentEtaTarget      ?? null,
+            activeNavigationTarget: ride.activeNavigationTarget,
+            // CA join waypoint on driver route
+            caJoinWaypoint: caJoinWaypoint
+              ? {
+                  coordinates: caJoinWaypoint.location?.coordinates,
+                  address:     caJoinWaypoint.location?.address,
+                  label:       caJoinWaypoint.location?.label,
+                  isCompleted: caJoinWaypoint.isCompleted,
+                  completedAt: caJoinWaypoint.completedAt,
+                  zone:        caJoinWaypoint.meta?.zone,
+                  distCaToJoinKm: caJoinWaypoint.meta?.distCaToJoinKm,
+                  // CA travels from their location to this join point
+                  caRouteFrom: caJoinWaypoint.meta?.caFrom,
+                }
+              : null,
+          },
+ 
+          // SECONDARY: CA tracking
+          careAssistant: caSnapshot
+            ? {
+                ...caSnapshot,
+                liveLocation:    caLiveLocation,
+                breadcrumbCount: tracking?.careAssistantBreadcrumbCount ?? 0,
+                // CA own route to join point (CA navigates independently)
+                joinPointRoute: caJoinWaypoint && caJoinWaypoint.meta?.caFrom
+                  ? {
+                      from:        caJoinWaypoint.meta.caFrom,
+                      to:          caJoinWaypoint.location?.coordinates,
+                      distKm:      caJoinWaypoint.meta?.distCaToJoinKm,
+                      isCompleted: caJoinWaypoint.isCompleted,
+                      note:        'CA travels to join point independently, then boards ride',
+                    }
+                  : null,
+              }
+            : null,
+ 
+          hasActiveSos: tracking?.hasActiveSos ?? false,
+          milestones:   tracking?.milestones   ?? [],
+ 
+          socketHint: {
+            room:   `booking:${booking._id}`,
+            events: [
+              'location_update',                 // driver GPS (primary)
+              'care_assistant_location_update',  // CA GPS (secondary)
+              'care_assistant_status_change',
+              'care_assistant_joined_ride',
               'eta_update',
               'ride_status_changed',
             ],
           },
-
+ 
           _serverTime: new Date().toISOString(),
         },
       });
-    } catch (err) {
-      return res.status(500).json({ success: false, message: err.message });
     }
+ 
+    // ════════════════════════════════════════════════════════════════════════
+    // CASE C: other booking types (patient_transport etc.) — driver only
+    // ════════════════════════════════════════════════════════════════════════
+    return res.json({
+      success: true,
+      data: {
+        bookingId:  booking._id,
+        rideId:     ride._id,
+        rideStatus: ride.status,
+ 
+        driver: {
+          liveLocation:    fmtLoc(ride.liveLocation),
+          snapshot:        ride.driverSnapshot,
+          vehicleSnapshot: ride.vehicleSnapshot,
+        },
+ 
+        route: {
+          pickup:               ride.pickup,
+          dropoff:              ride.dropoff,
+          expectedPolyline:     tracking?.expectedRoutePolyline ?? null,
+          estimatedDistanceKm:  ride.estimatedDistanceKm,
+          estimatedDurationMin: ride.estimatedDurationMin,
+          currentEtaMinutes:    tracking?.currentEtaMinutes ?? null,
+          currentEtaTarget:     tracking?.currentEtaTarget  ?? null,
+        },
+ 
+        careAssistant: null,
+        hasActiveSos:  tracking?.hasActiveSos ?? false,
+        milestones:    tracking?.milestones   ?? [],
+ 
+        socketHint: {
+          room:   `booking:${booking._id}`,
+          events: ['location_update', 'eta_update', 'ride_status_changed'],
+        },
+ 
+        _serverTime: new Date().toISOString(),
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
   }
 );
 
@@ -2948,42 +3102,120 @@ router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('
  * POST /admin/bookings/:id/assign/care-assistant
  */
 router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('admin', 'superadmin'), async (req, res) => {
-  try {
+  try { // ⬅️ ADDED: Missing opening try block
     const { careAssistantId } = req.body;
     if (!careAssistantId)
       return res.status(400).json({ success: false, message: 'careAssistantId required' });
-
+ 
     const booking = await Booking.findById(req.params.id);
-    if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
-
-    // ✅ FIX: Fetch the 'ca' profile FIRST before trying to use it
+    if (!booking)
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+ 
     const ca = await CareAssistantProfile.findById(careAssistantId)
-      .populate('user', 'name phone email').lean();
-      
-    if (!ca) return res.status(404).json({ success: false, message: 'Care assistant not found' });
+      .populate('user', 'name phone email')
+      .lean();
+    if (!ca)
+      return res.status(404).json({ success: false, message: 'Care assistant not found' });
     if (!ca.isActive || !ca.verification?.isVerified)
-      return res.status(400).json({ success: false, message: 'Care assistant not available or not verified' });
-
-    // Auto-attach CA to RideTracking if ride already active
+      return res.status(400).json({
+        success: false,
+        message: 'Care assistant not available or not verified',
+      });
+ 
+    // ── full_care_ride: compute CA join point on existing ride route ──────────
+    let caJoinResult  = null;
+    let caJoinWaypoint = null;
+ 
+    if (booking.bookingType === 'full_care_ride' && booking.primaryRide) {
+      const existingRide = await Ride.findById(booking.primaryRide)
+        .select('pickup dropoff liveLocation trackingId waypoints status')
+        .lean();
+ 
+      const tracking = existingRide?.trackingId
+        ? await RideTracking.findById(existingRide.trackingId)
+            .select('expectedRoutePolyline')
+            .lean()
+        : null;
+ 
+      const caCoords = ca.location?.coordinates;
+      const driverCurrentCoords = existingRide?.liveLocation?.coordinates
+        || existingRide?.pickup?.coordinates
+        || [80.648, 16.506];
+      const pickupCoords  = existingRide?.pickup?.coordinates;
+      const dropoffCoords = existingRide?.dropoff?.coordinates;
+ 
+      if (caCoords && pickupCoords && dropoffCoords) {
+        caJoinResult = resolveCaJoinPoint({
+          caCoords,
+          driverCoords:    driverCurrentCoords,
+          pickupCoords,
+          dropoffCoords,
+          encodedPolyline: tracking?.expectedRoutePolyline ?? null,
+        });
+ 
+        caJoinWaypoint = buildCaJoinWaypoint(caJoinResult);
+ 
+        // Insert join waypoint into ride.waypoints (remove old CA join if exists)
+        const filteredWaypoints = (existingRide.waypoints || [])
+          .filter(w => w.type !== 'care_assistant_join');
+ 
+        await Ride.findByIdAndUpdate(booking.primaryRide, {
+          $set: {
+            waypoints: [...filteredWaypoints, caJoinWaypoint],
+          },
+        });
+ 
+        console.log(
+          `[assignCA] ✅ CA join point set. Zone: ${caJoinResult.zone}, ` +
+          `distCA→join: ${caJoinResult.distCaToJoinKm}km`
+        );
+      }
+    }
+ 
+    // ── Attach CA to RideTracking if ride already exists ─────────────────────
     if (booking.primaryRide) {
       RideTracking.attachCareAssistant(booking.primaryRide, careAssistantId)
-        .catch(e => console.error('[Admin assign CA] tracking attach:', e.message));
-
-      // Notify booking room that CA is now a participant
+        .then(() => {
+          // Seed CA live location from their profile location
+          if (ca.location?.coordinates) {
+            RideTracking.updateCareAssistantLocation(booking.primaryRide, {
+              coordinates: ca.location.coordinates,
+              source:      'gps',
+            }).catch(e => console.error('[assignCA] seed CA location:', e.message));
+          }
+        })
+        .catch(e => console.error('[assignCA] tracking attach:', e.message));
+ 
+      // Notify booking room: CA attached + join point info
       getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'care_assistant_attached_to_ride', {
         bookingId:         booking._id,
         rideId:            booking.primaryRide,
         careAssistantId,
-        careAssistantName: ca.fullName, // ✅ This will now work perfectly
+        careAssistantName: ca.fullName,
         timestamp:         new Date(),
+        // Send join point so customer/driver map can render it
+        caJoinPoint: caJoinResult
+          ? {
+              coordinates:    caJoinResult.joinPoint,
+              zone:           caJoinResult.zone,
+              distCaToJoinKm: caJoinResult.distCaToJoinKm,
+              caRoute: {
+                from:   caJoinResult.caRoute.from,
+                to:     caJoinResult.caRoute.to,
+                distKm: caJoinResult.caRoute.distKm,
+                note:   'CA travels independently to join point',
+              },
+            }
+          : null,
       });
     }
-
+ 
+    // ── Update booking ────────────────────────────────────────────────────────
     await Booking.findByIdAndUpdate(booking._id, {
       $set: { careAssistant: careAssistantId, updatedBy: req.user._id },
     });
  
-
+    // ── Notify CA ─────────────────────────────────────────────────────────────
     await createNotification({
       recipient: ca.user._id,
       title:     'New Care Request',
@@ -2992,9 +3224,12 @@ router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('adm
       bookingId: booking._id,
       priority:  'High',
     });
-
-    const customer = await User.findById(booking.customer).select('phone name email').lean();
-
+ 
+    const customer = await User.findById(booking.customer)
+      .select('phone name email')
+      .lean();
+ 
+    // ── SMS ───────────────────────────────────────────────────────────────────
     sendSms({
       to:      ca.user.phone,
       message: newCareRequestToAssistantSms({
@@ -3004,50 +3239,99 @@ router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('adm
         location:      booking.patientLocation?.address || '',
         scheduledAt:   new Date(booking.scheduledAt).toLocaleString('en-IN'),
       }),
-    }).catch(e => console.error('[Admin assign CA] SMS:', e.message));
-
+    }).catch(e => console.error('[assignCA] CA SMS:', e.message));
+ 
     sendSms({
-      to:      customer.phone,
+      to:      customer?.phone,
       message: careAssistantAssignedSms({
-        userName:       customer.name,
+        userName:       customer?.name,
         requestId:      booking.bookingCode,
         assistantName:  ca.fullName,
         assistantPhone: ca.user.phone,
       }),
-    }).catch(e => console.error('[Admin assign CA] Customer SMS:', e.message));
-
-    emailCareAssistantAssigned({ caUser: ca.user, caName: ca.fullName, booking }).catch(() => {});
-
+    }).catch(e => console.error('[assignCA] customer SMS:', e.message));
+ 
+    // ── Email: CA ─────────────────────────────────────────────────────────────
+    sendEmail({
+      email:   ca.user.email,
+      subject: `Care Request Assigned — Booking #${booking.bookingCode} | Likeson Healthcare`,
+      html: transactionalTemplate({
+        header:     'CARE ASSIGNMENT',
+        title:      `Booking #${booking.bookingCode} assigned to you`,
+        body: booking.bookingType === 'full_care_ride' && caJoinResult
+          ? `<b>Patient:</b> ${booking.patientInfo?.name || 'N/A'}<br/>
+             <b>Location:</b> ${booking.patientLocation?.address || 'N/A'}<br/>
+             <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}<br/><br/>
+             <b>Your Join Point:</b> ${caJoinResult.zone.replace(/_/g, ' ')} of driver route<br/>
+             <b>Distance to join point:</b> ${caJoinResult.distCaToJoinKm} km from your location<br/>
+             <b>Action:</b> Travel to the join point and wait for the driver to pick you up.`
+          : `<b>Patient:</b> ${booking.patientInfo?.name || 'N/A'}<br/>
+             <b>Location:</b> ${booking.patientLocation?.address || 'N/A'}<br/>
+             <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}`,
+        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/care/bookings`,
+        buttonText: 'View Booking',
+      }),
+    }).catch(e => console.error('[assignCA] CA email:', e.message));
+ 
+    // ── Email: customer ───────────────────────────────────────────────────────
     sendEmail({
       email:   customer?.email,
       subject: `Care Assistant Assigned — Booking #${booking.bookingCode} | Likeson Healthcare`,
-      html:    transactionalTemplate({
+      html: transactionalTemplate({
         header:     'CARE ASSISTANT ASSIGNED',
-        title:      `Your care assistant has been assigned for Booking #${booking.bookingCode}`,
+        title:      `Your care assistant for Booking #${booking.bookingCode}`,
         body:       `<b>Care Assistant:</b> ${ca.fullName}<br/>
                      <b>Phone:</b> ${ca.user.phone}<br/>
                      <b>Scheduled:</b> ${new Date(booking.scheduledAt).toLocaleString('en-IN')}`,
         buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
         buttonText: 'View Booking',
       }),
-    }).catch(e => console.error('[Admin assign CA] customer email:', e.message));
-
-    joinBookingRoom(ca.user._id, booking._id);
+    }).catch(e => console.error('[assignCA] customer email:', e.message));
+ 
+    // ── Join socket room ──────────────────────────────────────────────────────
+    try {
+      getBookingSocketService()?.emitJoinRoom(String(ca.user._id), `booking:${booking._id}`);
+    } catch (e) { /* non-fatal */ }
+ 
     getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'booking_assigned', {
       bookingId:         booking._id,
       careAssistantName: ca.fullName,
     });
-
+ 
     await SystemLog.createLog({
-      level: 'success', category: 'api',
-      message: `Admin assigned care assistant to #${booking.bookingCode}`,
-      actor: { userId: req.user._id, role: req.user.role },
+      level:    'success',
+      category: 'api',
+      message:  `Admin assigned care assistant to #${booking.bookingCode}`,
+      actor:    { userId: req.user._id, role: req.user.role },
       relatedEntity: { model: 'Booking', entityId: booking._id },
-      metadata: { careAssistantId },
+      metadata: {
+        careAssistantId,
+        caJoinZone:      caJoinResult?.zone           ?? null,
+        distCaToJoinKm:  caJoinResult?.distCaToJoinKm ?? null,
+      },
     });
-    await invalidateBookingCache();
-    return res.json({ success: true, message: 'Care assistant assigned', data: { booking } });
-  } catch (err) {
+ 
+    return res.json({
+      success: true,
+      message: 'Care assistant assigned',
+      data: {
+        booking,
+        caJoinPoint: caJoinResult
+          ? {
+              coordinates:    caJoinResult.joinPoint,
+              zone:           caJoinResult.zone,
+              distCaToJoinKm: caJoinResult.distCaToJoinKm,
+              caRoute: {
+                from:   caJoinResult.caRoute.from,
+                to:     caJoinResult.caRoute.to,
+                distKm: caJoinResult.caRoute.distKm,
+                note:   'CA navigates to this point independently before boarding',
+              },
+            }
+          : null,
+      },
+    });
+  } catch (err) { // ⬅️ Matches the added try block
     return res.status(500).json({ success: false, message: err.message });
   }
 });

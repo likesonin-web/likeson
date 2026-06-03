@@ -5372,7 +5372,9 @@ useEffect(() => {
   });
   const mkCommon = () => ({
     patientInfo: mkPatient(),
-    scheduledAt: form.scheduledAt,
+     scheduledAt: form.scheduledAt 
+    ? new Date(form.scheduledAt).toISOString()  // ← THIS converts local to UTC ISO properly
+    : undefined,
     paymentMethod: form.paymentMethod,
     couponCode: form.couponCode || undefined,
     slotId: form.slotId || undefined,

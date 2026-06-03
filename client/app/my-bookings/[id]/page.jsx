@@ -144,7 +144,8 @@ const resolveConsultationId = (consultationSessionId) => {
   if (!consultationSessionId) return null;
   if (typeof consultationSessionId === 'string') return consultationSessionId;
   if (typeof consultationSessionId === 'object') {
-    return consultationSessionId._id?.toString() ?? null;
+    // This line right here automatically extracts the _id from the object!
+    return consultationSessionId._id?.toString() ?? null; 
   }
   return null;
 };
@@ -933,7 +934,7 @@ const ConsultationSessionCard = memo(function ConsultationSessionCard({ booking 
         {/* Join + external meeting link buttons */}
         <div className="flex gap-2 pt-1">
           <Link
-            href={`/consultation/${booking._id}`}
+            href={`/consultation/${consultationId}`}
             className={`btn flex-1 gap-2 ${joinable ? 'btn-accent' : 'btn-ghost border border-base-300'}`}
           >
             <Video size={14} />
@@ -1131,7 +1132,7 @@ export default function BookingDetailsPage() {
 
                 {/* Live tracking */}
                 {isLive && primaryRideId && (
-                  <Link href={`/rides/${booking._id}/${primaryRideId}/tracking`} className="btn btn-info btn-sm gap-1.5">
+                  <Link href={`/rides/${consultationId}/${primaryRideId}/tracking`} className="btn btn-info btn-sm gap-1.5">
                     <Navigation2 size={13} />
                     <span className="hidden sm:inline">Track Live</span>
                   </Link>
@@ -1140,7 +1141,7 @@ export default function BookingDetailsPage() {
                 {/* Join consultation — primary CTA when joinable */}
                 {joinable && consultationId && (
                   <Link
-                    href={`/consultation/${booking._id}`}
+                    href={`/consultation/${consultationId}`}
                     className="btn btn-accent btn-sm gap-1.5"
                     aria-label="Join video consultation"
                   >
@@ -1492,7 +1493,7 @@ export default function BookingDetailsPage() {
                                 {(ride.status ?? 'pending').replace(/_/g, ' ')}
                               </span>
                               {isLive && rId && primaryRideId && (
-                                <Link href={`/rides/${booking._id}/${primaryRideId}/tracking`} className="btn btn-ghost btn-xs">
+                                <Link href={`/rides/${consultationId}/${primaryRideId}/tracking`} className="btn btn-ghost btn-xs">
                                   <Navigation2 size={11} />
                                 </Link>
                               )}
@@ -1702,7 +1703,7 @@ export default function BookingDetailsPage() {
               {/* Action Buttons */}
               <motion.div variants={fadeUp} className="space-y-3">
                 {isLive && primaryRideId && (
-                  <Link href={`/rides/${booking._id}/${primaryRideId}/tracking`} className="btn btn-info w-full gap-2">
+                  <Link href={`/rides/${consultationId}/${primaryRideId}/tracking`} className="btn btn-info w-full gap-2">
                     <Navigation2 size={15} /> Track Live Location
                   </Link>
                 )}
@@ -1710,7 +1711,7 @@ export default function BookingDetailsPage() {
               {/* Join consultation — full-width CTA in sidebar */}
                 {joinable && consultationId && (
                   <Link 
-                    href={`/consultation/${booking._id}`} 
+                    href={`/consultation/${consultationId}`} 
                     className="btn btn-accent w-full gap-2"
                   >
                     <Video size={15} /> Join Consultation
@@ -1720,7 +1721,7 @@ export default function BookingDetailsPage() {
                 {/* View session (not yet joinable) */}
                 {!joinable && consultationId && (
                   <Link 
-                    href={`/consultation/${booking._id}`} 
+                    href={`/consultation/${consultationId}`} 
                     className="btn btn-ghost border border-base-300 w-full gap-2"
                   >
                     <Radio size={15} /> View Session
@@ -1792,7 +1793,7 @@ export default function BookingDetailsPage() {
                 </Link>
                 {consultationId && (
                   <Link 
-                    href={`/consultation/${booking._id}`} 
+                    href={`/consultation/${consultationId}`} 
                     className="flex items-center justify-between gap-2 px-2 py-2 rounded-lg hover:bg-base-200 transition-colors group"
                   >
                     <div className="flex items-center gap-2">

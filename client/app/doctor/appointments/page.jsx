@@ -8,17 +8,17 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AreaChart, Area, Tooltip, ResponsiveContainer } from 'recharts';
+import { AreaChart, Area, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import {
   Calendar, Clock, ChevronRight, ChevronLeft,
   FileText, Stethoscope, Video, Home, Search,
   CheckCircle2, AlertCircle, XCircle, Clock3, RefreshCw,
   Plus, Eye, Activity, CalendarDays, MoreVertical, Layers,
-  ClipboardList, PenLine, BadgeCheck, Radio, UserCheck, XOctagon
+  ClipboardList, PenLine, BadgeCheck, Radio, UserCheck, XOctagon,
+  TrendingUp, LayoutDashboard, History, Star, Users,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-// Import from your clinical slice
 import {
   fetchDoctorAppointments,
   fetchOPRecords,
@@ -30,11 +30,17 @@ import {
   selectClinicalError,
 } from '@/store/slices/clinicalSlice';
 
-// Import the new actions from your consultation slice
 import {
-  acceptConsultation,
-  confirmConsultation,
-  cancelConsultation
+  fetchDoctorSchedule,
+  fetchDoctorHistory,
+  fetchDoctorStats,
+  fetchDoctorActive,
+  fetchDoctorMy,
+  cancelConsultation,
+  selectDoctorSchedule,
+  selectDoctorStats,
+  selectConsultationList,
+  selectLoading as selectConsultLoading,
 } from '@/store/slices/consultationSlice';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -69,6 +75,13 @@ const BOOKING_TYPE_LABEL = {
   physiotherapist:     'Physio',
   follow_up:           'Follow-up',
 };
+
+const TAB_OPTIONS = [
+  { value: 'appointments', label: 'Appointments', icon: CalendarDays },
+  { value: 'schedule',     label: 'Schedule',     icon: Calendar },
+  { value: 'history',      label: 'History',      icon: History },
+  { value: 'active',       label: 'Active',       icon: Radio },
+];
 
 const PAGE_LIMIT         = 10;
 const SEARCH_DEBOUNCE_MS = 400;
@@ -152,7 +165,6 @@ const getPatientName = (b) => b?.patientInfo?.name ?? b?.customer?.name ?? '—'
 const getPatientPhone = (b) => b?.patientInfo?.phone ?? b?.customer?.phone ?? '—';
 const getInitial = (b) => (getPatientName(b)?.[0] ?? '?').toUpperCase();
 
-// Bulletproof helper to extract Consultation ID strictly as a primitive string
 const getConsultationId = (b) => {
   const rawId = b?.consultationSessionId || b?.consultationId || b?.consultation;
   if (!rawId) return null;
@@ -272,7 +284,7 @@ const PatientAvatar = memo(({ booking }) => (
 PatientAvatar.displayName = 'PatientAvatar';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ACTION MENU (PORTALED to fix clipping issues)
+// ACTION MENU (PORTALED)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MenuItem = ({ icon, label, highlight = '', onClick }) => (
@@ -286,11 +298,10 @@ const MenuItem = ({ icon, label, highlight = '', onClick }) => (
   </button>
 );
 
-const ActionMenu = memo(({ booking, opRecord, onComplete, onAccept, onConfirm, onCancel, router }) => {
+const ActionMenu = memo(({ booking, opRecord, onComplete, onCancel, router }) => {
   const [open, setOpen] = useState(false);
   const [coords, setCoords] = useState({ top: 0, left: 0 });
   const [mounted, setMounted] = useState(false);
-  
   const ref = useRef(null);
   const triggerRef = useRef(null);
 
@@ -298,18 +309,13 @@ const ActionMenu = memo(({ booking, opRecord, onComplete, onAccept, onConfirm, o
 
   const canComplete = ['in_progress', 'confirmed', 'active'].includes(booking?.status);
   const showVideo   = canJoinConsult(booking);
-  
-  // Strict Extraction of ID
   const consultationId = getConsultationId(booking);
 
   const toggleMenu = (e) => {
     e.stopPropagation();
     if (!open && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
-      setCoords({
-        top: rect.bottom + 4,
-        left: Math.max(10, rect.right - 224) 
-      });
+      setCoords({ top: rect.bottom + 4, left: Math.max(10, rect.right - 224) });
     }
     setOpen((p) => !p);
   };
@@ -340,7 +346,7 @@ const ActionMenu = memo(({ booking, opRecord, onComplete, onAccept, onConfirm, o
         <motion.div
           ref={ref}
           initial={{ opacity: 0, scale: 0.95, y: -4 }}
-          animate={{ opacity: 1, scale: 1,    y: 0  }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95 }}
           transition={{ duration: 0.12 }}
           style={{ position: 'fixed', top: coords.top, left: coords.left, zIndex: 99999 }}
@@ -352,7 +358,6 @@ const ActionMenu = memo(({ booking, opRecord, onComplete, onAccept, onConfirm, o
             label="View Details"
             onClick={() => { close(); router.push(`/doctor/appointments/${booking._id}`); }}
           />
-         
           {showVideo && (
             <MenuItem
               icon={<Video size={14} className="text-info" />}
@@ -361,24 +366,14 @@ const ActionMenu = memo(({ booking, opRecord, onComplete, onAccept, onConfirm, o
               onClick={() => { close(); router.push(`/doctor/consultation/${booking._id}`); }}
             />
           )}
-
-          {/* Consultation Actions */}
-          {isOnlineBooking(booking) && (['confirmed', 'pending', 'in_progress'].includes(booking?.status)) && (
-             <MenuItem
-               icon={<UserCheck size={14} className="text-success" />}
-               label="Accept Consultation"
-               onClick={() => { close(); onAccept(consultationId); }}
-             />
+          {consultationId && showVideo && (
+            <MenuItem
+              icon={<Video size={14} className="text-success" />}
+              label="Join by Consultation ID"
+              highlight="text-success font-medium"
+              onClick={() => { close(); router.push(`/doctor/consultation/${consultationId}`); }}
+            />
           )}
-
-          {isOnlineBooking(booking) && (['scheduled', 'confirmed', 'pending', 'in_progress'].includes(booking?.status)) && (
-             <MenuItem
-               icon={<BadgeCheck size={14} className="text-primary" />}
-               label="Confirm Consultation"
-               onClick={() => { close(); onConfirm(consultationId); }}
-             />
-          )}
-
           <MenuItem
             icon={<PenLine size={14} className="text-accent" />}
             label="Write Prescription"
@@ -396,7 +391,6 @@ const ActionMenu = memo(({ booking, opRecord, onComplete, onAccept, onConfirm, o
               onClick={() => { close(); router.push(`/doctor/op-records/${opRecord._id}`); }}
             />
           )}
-
           {canComplete && (
             <>
               <div className="border-t border-base-200 my-1 mx-3" role="separator" />
@@ -408,7 +402,6 @@ const ActionMenu = memo(({ booking, opRecord, onComplete, onAccept, onConfirm, o
               />
             </>
           )}
-
           {isOnlineBooking(booking) && !['completed', 'cancelled', 'failed'].includes(booking?.status) && (
             <>
               <div className="border-t border-base-200 my-1 mx-3" role="separator" />
@@ -420,7 +413,6 @@ const ActionMenu = memo(({ booking, opRecord, onComplete, onAccept, onConfirm, o
               />
             </>
           )}
-
         </motion.div>
       )}
     </AnimatePresence>
@@ -486,31 +478,24 @@ const CompleteModal = memo(({ open, onClose, onSubmit, loading }) => {
         >
           <motion.div
             initial={{ scale: 0.92, opacity: 0, y: 20 }}
-            animate={{ scale: 1,    opacity: 1, y: 0  }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
             exit={{ scale: 0.92, opacity: 0 }}
             transition={{ type: 'spring', damping: 24, stiffness: 300 }}
             className="bg-base-100 border border-base-300 rounded-2xl shadow-2xl w-full max-w-md p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Header */}
             <div className="flex items-center gap-3 mb-6">
               <div className="p-2.5 rounded-xl bg-success/10" aria-hidden="true">
                 <CheckCircle2 size={20} className="text-success" />
               </div>
               <div>
-                <h3 className="font-bold text-base-content text-lg leading-tight">
-                  Complete Consultation
-                </h3>
-                <p className="text-xs text-base-content/60 mt-0.5">All fields optional — fill as needed</p>
+                <h3 className="font-bold text-base-content text-lg leading-tight">Complete Consultation</h3>
+                <p className="text-xs text-base-content/60 mt-0.5">All fields optional</p>
               </div>
             </div>
-
-            {/* Fields */}
             <div className="space-y-4">
               <div>
-                <label htmlFor="complete-reason" className="text-sm font-medium block mb-1.5">
-                  Reason for Visit
-                </label>
+                <label htmlFor="complete-reason" className="text-sm font-medium block mb-1.5">Reason for Visit</label>
                 <input
                   id="complete-reason"
                   ref={firstInputRef}
@@ -521,10 +506,7 @@ const CompleteModal = memo(({ open, onClose, onSubmit, loading }) => {
                 />
               </div>
               <div>
-                <label htmlFor="complete-code" className="text-sm font-medium block mb-1.5">
-                  ICD-10 Code
-                  <span className="text-xs text-base-content/50 font-normal ml-1">(optional)</span>
-                </label>
+                <label htmlFor="complete-code" className="text-sm font-medium block mb-1.5">ICD-10 Code <span className="text-xs text-base-content/50 font-normal ml-1">(optional)</span></label>
                 <input
                   id="complete-code"
                   className="input input-bordered w-full font-mono"
@@ -534,37 +516,20 @@ const CompleteModal = memo(({ open, onClose, onSubmit, loading }) => {
                 />
               </div>
               <div>
-                <label htmlFor="complete-notes" className="text-sm font-medium block mb-1.5">
-                  Doctor Notes
-                </label>
+                <label htmlFor="complete-notes" className="text-sm font-medium block mb-1.5">Doctor Notes</label>
                 <textarea
                   id="complete-notes"
                   className="textarea textarea-bordered w-full min-h-[96px] resize-none"
-                  placeholder="Clinical findings, advice, observations…"
+                  placeholder="Clinical findings, advice…"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                 />
               </div>
             </div>
-
-            {/* Actions */}
             <div className="flex gap-3 mt-6">
-              <button
-                className="btn btn-ghost flex-1"
-                onClick={onClose}
-                disabled={loading}
-              >
-                Cancel
-              </button>
-              <button
-                className="btn btn-success flex-1 gap-2"
-                onClick={handleSubmit}
-                disabled={loading}
-              >
-                {loading
-                  ? <span className="loading loading-xs loading-spinner" aria-hidden="true" />
-                  : <CheckCircle2 size={15} aria-hidden="true" />
-                }
+              <button className="btn btn-ghost flex-1" onClick={onClose} disabled={loading}>Cancel</button>
+              <button className="btn btn-success flex-1 gap-2" onClick={handleSubmit} disabled={loading}>
+                {loading ? <span className="loading loading-xs loading-spinner" aria-hidden="true" /> : <CheckCircle2 size={15} aria-hidden="true" />}
                 Confirm
               </button>
             </div>
@@ -577,7 +542,7 @@ const CompleteModal = memo(({ open, onClose, onSubmit, loading }) => {
 CompleteModal.displayName = 'CompleteModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EMPTY / LOADING STATES
+// EMPTY / LOADING
 // ─────────────────────────────────────────────────────────────────────────────
 
 const EmptyState = () => (
@@ -597,7 +562,7 @@ const LoadingRows = () => (
     <td colSpan={8} className="py-20 text-center">
       <div className="flex flex-col items-center gap-3" role="status" aria-live="polite">
         <span className="loading loading-md loading-spinner" aria-hidden="true" />
-        <span className="text-sm text-base-content/40">Loading appointments…</span>
+        <span className="text-sm text-base-content/40">Loading…</span>
       </div>
     </td>
   </tr>
@@ -607,9 +572,10 @@ const LoadingRows = () => (
 // APPOINTMENT TABLE ROW
 // ─────────────────────────────────────────────────────────────────────────────
 
-const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, onAccept, onConfirm, onCancel, router }) => {
+const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, onCancel, router }) => {
   const op       = opByBooking[booking._id?.toString()];
   const joinable = canJoinConsult(booking);
+  const consultId = getConsultationId(booking);
 
   return (
     <motion.tr
@@ -624,18 +590,14 @@ const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, onAccept
         <div className="flex items-center gap-2.5">
           <PatientAvatar booking={booking} />
           <div>
-            <p className="font-semibold text-sm text-base-content leading-tight">
-              {getPatientName(booking)}
-            </p>
+            <p className="font-semibold text-sm text-base-content leading-tight">{getPatientName(booking)}</p>
             <p className="text-xs text-base-content/60">{getPatientPhone(booking)}</p>
           </div>
         </div>
       </td>
       <td>
         <p className="font-mono text-xs font-bold text-primary">{booking.bookingCode ?? '—'}</p>
-        <p className="text-xs text-base-content/60">
-          {BOOKING_TYPE_LABEL[booking.bookingType] ?? booking.bookingType ?? '—'}
-        </p>
+        <p className="text-xs text-base-content/60">{BOOKING_TYPE_LABEL[booking.bookingType] ?? booking.bookingType ?? '—'}</p>
       </td>
       <td><ConsultTypeBadge type={booking.consultationType} /></td>
       <td><p className="text-sm">{formatDate(booking.scheduledAt)}</p></td>
@@ -661,10 +623,10 @@ const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, onAccept
       </td>
       <td className="text-right">
         <div className="flex items-center justify-end gap-1">
-          {joinable && (
+          {joinable && consultId && (
             <button
               className="btn btn-info btn-xs gap-1"
-             onClick={() => router.push(`/doctor/consultation/${booking._id}`)}
+              onClick={() => router.push(`/doctor/consultation/${consultId}`)}
             >
               <Video size={12} aria-hidden="true" />
               <span className="hidden lg:inline">Join</span>
@@ -681,8 +643,6 @@ const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, onAccept
             booking={booking}
             opRecord={op}
             onComplete={onComplete}
-            onAccept={onAccept}
-            onConfirm={onConfirm}
             onCancel={onCancel}
             router={router}
           />
@@ -697,9 +657,10 @@ AppointmentRow.displayName = 'AppointmentRow';
 // MOBILE CARD
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MobileCard = memo(({ booking, index, opByBooking, onComplete, onAccept, onConfirm, onCancel, router }) => {
-  const op       = opByBooking[booking._id?.toString()];
+const MobileCard = memo(({ booking, index, opByBooking, onComplete, onCancel, router }) => {
+  const op = opByBooking[booking._id?.toString()];
   const joinable = canJoinConsult(booking);
+  const consultId = getConsultationId(booking);
 
   return (
     <motion.div
@@ -719,7 +680,6 @@ const MobileCard = memo(({ booking, index, opByBooking, onComplete, onAccept, on
         </div>
         <StatusBadge status={booking.status} />
       </div>
-
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div>
           <p className="text-[10px] uppercase tracking-wide text-base-content/50 mb-0.5">Scheduled</p>
@@ -730,11 +690,10 @@ const MobileCard = memo(({ booking, index, opByBooking, onComplete, onAccept, on
           <ConsultTypeBadge type={booking.consultationType} />
         </div>
       </div>
-
       <div className="flex flex-wrap gap-2 pt-1">
-        {joinable && (
+        {joinable && consultId && (
           <button
-           onClick={() => router.push(`/doctor/consultation/${booking._id}`)}
+            onClick={() => router.push(`/doctor/consultation/${consultId}`)}
             className="btn btn-info btn-sm flex-1 gap-1 text-xs"
           >
             <Video size={12} aria-hidden="true" /> Join Call
@@ -755,15 +714,7 @@ const MobileCard = memo(({ booking, index, opByBooking, onComplete, onAccept, on
           </button>
         )}
         <div className="flex-none">
-          <ActionMenu
-            booking={booking}
-            opRecord={op}
-            onComplete={onComplete}
-            onAccept={onAccept}
-            onConfirm={onConfirm}
-            onCancel={onCancel}
-            router={router}
-          />
+          <ActionMenu booking={booking} opRecord={op} onComplete={onComplete} onCancel={onCancel} router={router} />
         </div>
       </div>
     </motion.div>
@@ -772,14 +723,212 @@ const MobileCard = memo(({ booking, index, opByBooking, onComplete, onAccept, on
 MobileCard.displayName = 'MobileCard';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SCHEDULE TAB
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ScheduleTab = memo(({ router }) => {
+  const doctorSchedule = useSelector(selectDoctorSchedule);
+
+  if (!doctorSchedule?.length) {
+    return (
+      <div className="py-16 text-center text-base-content/40">
+        <Calendar size={36} strokeWidth={1} className="mx-auto mb-3" />
+        <p>No schedule found</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="divide-y divide-base-200">
+      {doctorSchedule.map((item, i) => {
+        const consultId = item?.consultationSessionId
+          ? String(item.consultationSessionId)
+          : null;
+
+        return (
+          <motion.div
+            key={item._id ?? i}
+            initial={{ opacity: 0, x: -8 }}
+            animate={{ opacity: 1, x: 0, transition: { delay: i * 0.04 } }}
+            className="flex items-center justify-between p-4 hover:bg-base-200"
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-xl bg-primary/10 flex-shrink-0">
+                <Calendar size={16} className="text-primary" />
+              </div>
+              <div>
+                <p className="font-semibold text-sm">{getPatientName(item)}</p>
+                <p className="text-xs text-base-content/60">{formatDate(item.scheduledAt)}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <StatusBadge status={item.status} />
+              {canJoinConsult(item) && consultId && (
+                <button
+                  className="btn btn-info btn-xs gap-1"
+                  onClick={() => router.push(`/doctor/consultation/${consultId}`)}
+                >
+                  <Video size={12} />
+                  Join
+                </button>
+              )}
+            </div>
+          </motion.div>
+        );
+      })}
+    </div>
+  );
+});
+ScheduleTab.displayName = 'ScheduleTab';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HISTORY TAB
+// ─────────────────────────────────────────────────────────────────────────────
+
+const HistoryTab = memo(({ router }) => {
+  const dispatch = useDispatch();
+  const history = useSelector(selectConsultationList);
+  const loading = useSelector(selectConsultLoading('fetch'));
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    dispatch(fetchDoctorHistory({ page, limit: 10 }));
+  }, [page, dispatch]);
+
+  if (loading) {
+    return (
+      <div className="py-16 flex justify-center">
+        <span className="loading loading-md loading-spinner" />
+      </div>
+    );
+  }
+
+  if (!history?.length) {
+    return (
+      <div className="py-16 text-center text-base-content/40">
+        <History size={36} strokeWidth={1} className="mx-auto mb-3" />
+        <p>No consultation history</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="divide-y divide-base-200">
+        {history.map((c, i) => (
+          <motion.div
+            key={c._id}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1, transition: { delay: i * 0.03 } }}
+            className="flex items-center justify-between p-4 hover:bg-base-200"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-base-300 flex items-center justify-center text-sm font-bold">
+                {(c.patientSnapshot?.name?.[0] ?? '?').toUpperCase()}
+              </div>
+              <div>
+                <p className="font-semibold text-sm">{c.patientSnapshot?.name ?? '—'}</p>
+                <p className="text-xs text-base-content/60">{formatDate(c.scheduledAt)}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <StatusBadge status={c.status} />
+              <button
+                className="btn btn-ghost btn-xs"
+                onClick={() => router.push(`/doctor/appointments/${c.booking ?? c._id}`)}
+              >
+                <Eye size={12} />
+              </button>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+      <div className="flex justify-center gap-2 p-4">
+        <button className="btn btn-ghost btn-sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>
+          <ChevronLeft size={16} />
+        </button>
+        <span className="btn btn-ghost btn-sm pointer-events-none">{page}</span>
+        <button className="btn btn-ghost btn-sm" disabled={history.length < 10} onClick={() => setPage((p) => p + 1)}>
+          <ChevronRight size={16} />
+        </button>
+      </div>
+    </div>
+  );
+});
+HistoryTab.displayName = 'HistoryTab';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACTIVE SESSIONS TAB
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ActiveTab = memo(({ router }) => {
+  const dispatch = useDispatch();
+  const active = useSelector((s) => s.consultation?.doctorActive ?? []);
+  const loading = useSelector(selectConsultLoading('fetch'));
+
+  useEffect(() => {
+    dispatch(fetchDoctorActive());
+  }, [dispatch]);
+
+  if (loading) {
+    return (
+      <div className="py-16 flex justify-center">
+        <span className="loading loading-md loading-spinner" />
+      </div>
+    );
+  }
+
+  if (!active?.length) {
+    return (
+      <div className="py-16 text-center text-base-content/40">
+        <Radio size={36} strokeWidth={1} className="mx-auto mb-3" />
+        <p>No active sessions</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="divide-y divide-base-200">
+      {active.map((session, i) => (
+        <motion.div
+          key={session._id}
+          initial={{ opacity: 0, x: -8 }}
+          animate={{ opacity: 1, x: 0 }}
+          className="flex items-center justify-between p-4 hover:bg-base-200"
+        >
+          <div className="flex items-center gap-3">
+            <div className="relative p-2 rounded-xl bg-success/10">
+              <Radio size={16} className="text-success" />
+              <span className="absolute top-1 right-1 w-2 h-2 bg-success rounded-full animate-pulse" />
+            </div>
+            <div>
+              <p className="font-semibold text-sm">{session.patientSnapshot?.name ?? '—'}</p>
+              <p className="text-xs text-base-content/60">Started {formatDate(session.sessionStartedAt)}</p>
+            </div>
+          </div>
+          <button
+            className="btn btn-success btn-sm gap-1"
+            onClick={() => router.push(`/doctor/consultation/${session._id}`)}
+          >
+            <Video size={12} />
+            Rejoin
+          </button>
+        </motion.div>
+      ))}
+    </div>
+  );
+});
+ActiveTab.displayName = 'ActiveTab';
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PAGINATION
 // ─────────────────────────────────────────────────────────────────────────────
 
 const Pagination = memo(({ page, totalPages, total, onPage }) => {
   const window_ = useMemo(() => {
-    const max   = 5;
+    const max = 5;
     const start = Math.max(1, Math.min(page - Math.floor(max / 2), totalPages - max + 1));
-    const end   = Math.min(totalPages, start + max - 1);
+    const end = Math.min(totalPages, start + max - 1);
     return Array.from({ length: end - start + 1 }, (_, i) => start + i);
   }, [page, totalPages]);
 
@@ -791,11 +940,7 @@ const Pagination = memo(({ page, totalPages, total, onPage }) => {
         Page {page} of {totalPages} · {total} appointments
       </p>
       <div className="flex items-center gap-2">
-        <button
-          className="btn btn-ghost btn-sm"
-          disabled={page === 1}
-          onClick={() => onPage((p) => Math.max(1, p - 1))}
-        >
+        <button className="btn btn-ghost btn-sm" disabled={page === 1} onClick={() => onPage((p) => Math.max(1, p - 1))}>
           <ChevronLeft size={16} />
         </button>
         {window_.map((n) => (
@@ -807,11 +952,7 @@ const Pagination = memo(({ page, totalPages, total, onPage }) => {
             {n}
           </button>
         ))}
-        <button
-          className="btn btn-ghost btn-sm"
-          disabled={page === totalPages}
-          onClick={() => onPage((p) => Math.min(totalPages, p + 1))}
-        >
+        <button className="btn btn-ghost btn-sm" disabled={page === totalPages} onClick={() => onPage((p) => Math.min(totalPages, p + 1))}>
           <ChevronRight size={16} />
         </button>
       </div>
@@ -842,7 +983,6 @@ const FilterBar = memo(({
         onChange={(e) => setSearchRaw(e.target.value)}
       />
     </div>
-
     <div className="flex flex-wrap gap-1.5">
       {STATUSES.map((s) => (
         <button
@@ -858,7 +998,6 @@ const FilterBar = memo(({
         </button>
       ))}
     </div>
-
     <select
       className="select select-sm select-bordered w-auto min-w-[130px]"
       value={consType}
@@ -868,28 +1007,13 @@ const FilterBar = memo(({
         <option key={t.value} value={t.value}>{t.label}</option>
       ))}
     </select>
-
     <div className="flex flex-col sm:flex-row items-center gap-1.5">
-      <input
-        type="date"
-        className="input input-sm input-bordered w-auto"
-        value={from}
-        onChange={(e) => setFrom(e.target.value)}
-      />
+      <input type="date" className="input input-sm input-bordered w-auto" value={from} onChange={(e) => setFrom(e.target.value)} />
       <span className="text-base-content/30 text-sm">→</span>
-      <input
-        type="date"
-        className="input input-sm input-bordered w-auto"
-        value={to}
-        onChange={(e) => setTo(e.target.value)}
-      />
+      <input type="date" className="input input-sm input-bordered w-auto" value={to} onChange={(e) => setTo(e.target.value)} />
     </div>
-
     {hasFilters && (
-      <button
-        className="btn btn-ghost btn-sm text-error gap-1"
-        onClick={onClear}
-      >
+      <button className="btn btn-ghost btn-sm text-error gap-1" onClick={onClear}>
         <XCircle size={13} /> Clear
       </button>
     )}
@@ -912,6 +1036,10 @@ export default function AppointmentsManagement() {
   const loadingAppts = useSelector(selectClinicalLoading('fetchDoctorAppointments'));
   const loadingOP    = useSelector(selectClinicalLoading('completeOPRecord'));
   const error        = useSelector(selectClinicalError('fetchDoctorAppointments'));
+  const doctorStats  = useSelector(selectDoctorStats);
+
+  // ── Tab ────────────────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState('appointments');
 
   // ── Filter state ───────────────────────────────────────────────────────────
   const [statusFilter, setStatusFilter] = useState('');
@@ -939,11 +1067,13 @@ export default function AppointmentsManagement() {
       limit: PAGE_LIMIT,
     }));
     dispatch(fetchOPRecords({ page: 1, limit: 200 }));
+    dispatch(fetchDoctorStats());
+    dispatch(fetchDoctorSchedule());
   }, [dispatch, statusFilter, consType, search, from, to, page]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Reset to page 1 when filters change
+  // Reset page on filter change
   const filtersKey  = `${statusFilter}|${consType}|${search}|${from}|${to}`;
   const prevFilters = useRef(filtersKey);
   useEffect(() => {
@@ -973,7 +1103,7 @@ export default function AppointmentsManagement() {
     return {
       total,
       completed: appts.filter((a) => a.status === 'completed').length,
-      today:     appts.filter((a) => {
+      today: appts.filter((a) => {
         try { return new Date(a.scheduledAt).toDateString() === today; } catch { return false; }
       }).length,
       pending: appts.filter((a) => ['pending', 'created', 'scheduled', 'confirmed'].includes(a.status)).length,
@@ -984,7 +1114,7 @@ export default function AppointmentsManagement() {
   const chartData  = useMemo(() => buildChartData(appointments || []), [appointments]);
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_LIMIT)), [total]);
 
-  // ── Consultation Event Handlers ────────────────────────────────────────────
+  // ── Handlers ───────────────────────────────────────────────────────────────
   const handleCompleteClick = useCallback((bookingId, opId) => {
     setCompleteTarget({ bookingId, opId });
     setShowComplete(true);
@@ -1003,28 +1133,14 @@ export default function AppointmentsManagement() {
     fetchData();
   }, [completeTarget, dispatch, fetchData]);
 
-  // Make sure string conversion is enforced right before dispatch
-  const handleAcceptConsultation = useCallback(async (consultationId) => {
-    if (!consultationId) return toast.error("Consultation ID not found for this booking.");
-    await dispatch(acceptConsultation(String(consultationId)));
-    fetchData(); 
-  }, [dispatch, fetchData]);
-
-  const handleConfirmConsultation = useCallback(async (consultationId) => {
-    if (!consultationId) return toast.error("Consultation ID not found for this booking.");
-    await dispatch(confirmConsultation({ id: String(consultationId), consentAccepted: true }));
-    fetchData(); 
-  }, [dispatch, fetchData]);
-
   const handleCancelConsultation = useCallback(async (consultationId) => {
-    if (!consultationId) return toast.error("Consultation ID not found for this booking.");
-    const reason = window.prompt("Reason for cancellation:");
-    if (reason === null) return; // User pressed cancel on the prompt
+    if (!consultationId) return toast.error('Consultation ID not found for this booking.');
+    const reason = window.prompt('Reason for cancellation:');
+    if (reason === null) return;
     await dispatch(cancelConsultation({ id: String(consultationId), reason: reason || 'Cancelled by doctor' }));
-    fetchData(); 
+    fetchData();
   }, [dispatch, fetchData]);
 
-  // Filter clears
   const clearFilters = useCallback(() => {
     setStatusFilter(''); setConsType(''); setFrom(''); setTo(''); setSearchRaw('');
   }, []);
@@ -1037,6 +1153,8 @@ export default function AppointmentsManagement() {
 
   return (
     <div data-theme="doctor" className="min-h-screen bg-base-100 text-base-content">
+
+      {/* ── Header ───────────────────────────────────────────────────────── */}
       <motion.header
         initial={{ opacity: 0, y: -16 }}
         animate={{ opacity: 1, y: 0 }}
@@ -1048,33 +1166,21 @@ export default function AppointmentsManagement() {
               <CalendarDays size={22} className="text-primary" />
             </div>
             <div>
-              <h1 className="text-xl font-black text-base-content leading-tight">
-                Appointments
-              </h1>
+              <h1 className="text-xl font-black text-base-content leading-tight">Appointments</h1>
               <p className="text-xs text-base-content/60">
                 {total} total
                 {stats.online > 0 && (
-                  <span className="ml-2 text-success font-semibold">
-                    · {stats.online} live
-                  </span>
+                  <span className="ml-2 text-success font-semibold">· {stats.online} live</span>
                 )}
               </p>
             </div>
           </div>
-
           <div className="flex items-center gap-2">
-            <button
-              onClick={fetchData}
-              disabled={loadingAppts}
-              className="btn btn-ghost btn-sm gap-1.5"
-            >
+            <button onClick={fetchData} disabled={loadingAppts} className="btn btn-ghost btn-sm gap-1.5">
               <RefreshCw size={14} className={loadingAppts ? 'animate-spin' : ''} />
               Refresh
             </button>
-            <button
-              onClick={() => router.push('/doctor/prescriptions/new')}
-              className="btn btn-primary btn-sm gap-1.5"
-            >
+            <button onClick={() => router.push('/doctor/prescriptions/new')} className="btn btn-primary btn-sm gap-1.5">
               <Plus size={14} />
               New Prescription
             </button>
@@ -1083,93 +1189,172 @@ export default function AppointmentsManagement() {
       </motion.header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+
+        {/* ── Stat cards ────────────────────────────────────────────────── */}
         <section className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-          <StatCard icon={Layers} label="Total" value={stats.total} colorKey="primary" sub="All time" chartData={chartData} />
-          <StatCard icon={CalendarDays} label="Today" value={stats.today} colorKey="info" sub="Scheduled today" />
+          <StatCard icon={Layers}       label="Total"     value={stats.total}     colorKey="primary" sub="All time"      chartData={chartData} />
+          <StatCard icon={CalendarDays} label="Today"     value={stats.today}     colorKey="info"    sub="Scheduled today" />
           <StatCard icon={CheckCircle2} label="Completed" value={stats.completed} colorKey="success" sub="This page" />
-          <StatCard icon={Clock3} label="Pending" value={stats.pending} colorKey="warning" sub="Awaiting" />
-          <StatCard icon={Radio} label="Live" value={stats.online} colorKey="success" sub="In progress" live={stats.online > 0} />
+          <StatCard icon={Clock3}       label="Pending"   value={stats.pending}   colorKey="warning" sub="Awaiting" />
+          <StatCard icon={Radio}        label="Live"      value={stats.online}    colorKey="success" sub="In progress" live={stats.online > 0} />
         </section>
 
-        <FilterBar
-          searchRaw={searchRaw}  setSearchRaw={setSearchRaw}
-          statusFilter={statusFilter} setStatusFilter={setStatusFilter}
-          consType={consType}    setConsType={setConsType}
-          from={from}            setFrom={setFrom}
-          to={to}                setTo={setTo}
-          hasFilters={hasFilters}
-          onClear={clearFilters}
-        />
-
-        {error && (
-          <div className="alert alert-error">
-            <AlertCircle size={16} />
-            <span>{error}</span>
-          </div>
+        {/* ── Doctor stats from API ──────────────────────────────────────── */}
+        {doctorStats && (
+          <section className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {[
+              { label: 'Total Consultations', value: doctorStats.totalConsultations ?? 0,  icon: Stethoscope, colorKey: 'primary' },
+              { label: 'Avg. Rating',          value: doctorStats.avgRating?.toFixed(1) ?? '—', icon: Star, colorKey: 'warning' },
+              { label: 'Completed (Month)',    value: doctorStats.completedThisMonth ?? 0, icon: CheckCircle2, colorKey: 'success' },
+              { label: 'Patients',             value: doctorStats.totalPatients ?? 0,      icon: Users, colorKey: 'accent' },
+            ].map(({ label, value, icon, colorKey }) => (
+              <StatCard key={label} icon={icon} label={label} value={value} colorKey={colorKey} />
+            ))}
+          </section>
         )}
 
-        <section className="bg-base-100 border border-base-300 rounded-2xl overflow-visible shadow-sm">
-          <div className="overflow-x-auto hidden md:block rounded-t-2xl">
-            <table className="table table-zebra w-full" aria-label="Appointments">
-              <thead className="bg-base-200">
-                <tr>
-                  <th scope="col">Patient</th>
-                  <th scope="col">Booking</th>
-                  <th scope="col">Type</th>
-                  <th scope="col">Scheduled</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Payment</th>
-                  <th scope="col">OP Record</th>
-                  <th scope="col" className="text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loadingAppts && <LoadingRows />}
-                {!loadingAppts && (appointments || []).length === 0 && <EmptyState />}
-                <AnimatePresence mode="popLayout">
-                  {!loadingAppts && (appointments || []).map((booking, i) => (
-                    <AppointmentRow
-                      key={booking._id}
-                      booking={booking}
-                      index={i}
-                      opByBooking={opByBooking}
-                      onComplete={handleCompleteClick}
-                      onAccept={handleAcceptConsultation}
-                      onConfirm={handleConfirmConsultation}
-                      onCancel={handleCancelConsultation}
-                      router={router}
-                    />
-                  ))}
-                </AnimatePresence>
-              </tbody>
-            </table>
-          </div>
+        {/* ── Tab nav ───────────────────────────────────────────────────── */}
+        <div className="flex gap-1 bg-base-200 p-1 rounded-xl w-fit" role="tablist">
+          {TAB_OPTIONS.map(({ value, label, icon: Icon }) => (
+            <button
+              key={value}
+              role="tab"
+              aria-selected={activeTab === value}
+              onClick={() => setActiveTab(value)}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+                activeTab === value
+                  ? 'bg-base-100 text-primary shadow-sm'
+                  : 'text-base-content/60 hover:text-base-content'
+              }`}
+            >
+              <Icon size={14} />
+              <span className="hidden sm:inline">{label}</span>
+            </button>
+          ))}
+        </div>
 
-          <div className="md:hidden divide-y divide-base-300">
-            {loadingAppts && (
-              <div className="py-16 flex justify-center">
-                <span className="loading loading-md loading-spinner" />
+        {/* ── Tab content ───────────────────────────────────────────────── */}
+        <AnimatePresence mode="wait">
+          {activeTab === 'appointments' && (
+            <motion.div
+              key="appointments"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="space-y-4"
+            >
+              <FilterBar
+                searchRaw={searchRaw}    setSearchRaw={setSearchRaw}
+                statusFilter={statusFilter} setStatusFilter={setStatusFilter}
+                consType={consType}      setConsType={setConsType}
+                from={from}              setFrom={setFrom}
+                to={to}                  setTo={setTo}
+                hasFilters={hasFilters}
+                onClear={clearFilters}
+              />
+
+              {error && (
+                <div className="alert alert-error">
+                  <AlertCircle size={16} />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              <section className="bg-base-100 border border-base-300 rounded-2xl overflow-visible shadow-sm">
+                <div className="overflow-x-auto hidden md:block rounded-t-2xl">
+                  <table className="table table-zebra w-full" aria-label="Appointments">
+                    <thead className="bg-base-200">
+                      <tr>
+                        <th scope="col">Patient</th>
+                        <th scope="col">Booking</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Scheduled</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Payment</th>
+                        <th scope="col">OP Record</th>
+                        <th scope="col" className="text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loadingAppts && <LoadingRows />}
+                      {!loadingAppts && (appointments || []).length === 0 && <EmptyState />}
+                      <AnimatePresence mode="popLayout">
+                        {!loadingAppts && (appointments || []).map((booking, i) => (
+                          <AppointmentRow
+                            key={booking._id}
+                            booking={booking}
+                            index={i}
+                            opByBooking={opByBooking}
+                            onComplete={handleCompleteClick}
+                            onCancel={handleCancelConsultation}
+                            router={router}
+                          />
+                        ))}
+                      </AnimatePresence>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="md:hidden divide-y divide-base-300">
+                  {loadingAppts && (
+                    <div className="py-16 flex justify-center">
+                      <span className="loading loading-md loading-spinner" />
+                    </div>
+                  )}
+                  <AnimatePresence>
+                    {!loadingAppts && (appointments || []).map((booking, i) => (
+                      <MobileCard
+                        key={booking._id}
+                        booking={booking}
+                        index={i}
+                        opByBooking={opByBooking}
+                        onComplete={handleCompleteClick}
+                        onCancel={handleCancelConsultation}
+                        router={router}
+                      />
+                    ))}
+                  </AnimatePresence>
+                </div>
+
+                <Pagination page={page} totalPages={totalPages} total={total} onPage={setPage} />
+              </section>
+            </motion.div>
+          )}
+
+          {activeTab === 'schedule' && (
+            <motion.div key="schedule" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <div className="bg-base-100 border border-base-300 rounded-2xl overflow-hidden shadow-sm">
+                <div className="px-6 py-4 border-b border-base-200">
+                  <h2 className="font-bold text-base-content">Upcoming Schedule</h2>
+                </div>
+                <ScheduleTab router={router} />
               </div>
-            )}
-            <AnimatePresence>
-              {!loadingAppts && (appointments || []).map((booking, i) => (
-                <MobileCard
-                  key={booking._id}
-                  booking={booking}
-                  index={i}
-                  opByBooking={opByBooking}
-                  onComplete={handleCompleteClick}
-                  onAccept={handleAcceptConsultation}
-                  onConfirm={handleConfirmConsultation}
-                  onCancel={handleCancelConsultation}
-                  router={router}
-                />
-              ))}
-            </AnimatePresence>
-          </div>
+            </motion.div>
+          )}
 
-          <Pagination page={page} totalPages={totalPages} total={total} onPage={setPage} />
-        </section>
+          {activeTab === 'history' && (
+            <motion.div key="history" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <div className="bg-base-100 border border-base-300 rounded-2xl overflow-hidden shadow-sm">
+                <div className="px-6 py-4 border-b border-base-200">
+                  <h2 className="font-bold text-base-content">Consultation History</h2>
+                </div>
+                <HistoryTab router={router} />
+              </div>
+            </motion.div>
+          )}
+
+          {activeTab === 'active' && (
+            <motion.div key="active" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <div className="bg-base-100 border border-base-300 rounded-2xl overflow-hidden shadow-sm">
+                <div className="px-6 py-4 border-b border-base-200 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
+                  <h2 className="font-bold text-base-content">Active Sessions</h2>
+                </div>
+                <ActiveTab router={router} />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
 
       <CompleteModal

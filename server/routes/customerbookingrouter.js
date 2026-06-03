@@ -78,8 +78,9 @@ import {
 } from './bookingRouterShared.js';
 
 import PlatformPricingConfig from '../models/PlatformPricingConfig.js';
-import Consultation          from '../models/Consultation.js';
-import { createAgoraRoom, generateAgoraToken } from '../services/agoraService.js';
+ 
+import { provisionConsultationTokens } from '../services/agoraToken.js';
+import { createConsultation }          from '../services/consultationService.js';
 // ✉️ EMAIL — sendEmail util + all templates
 import sendEmail from '../utils/sendEmail.js';
 import {
@@ -1476,76 +1477,160 @@ router.post('/doctor-consultation', protect, authorize('customer'), async (req, 
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BOOKING — DOCTOR ONLINE (video)
+// POST /api/bookings/doctor-online
 // ═════════════════════════════════════════════════════════════════════════════
-// ═════════════════════════════════════════════════════════════════════════════
-// BOOKING — DOCTOR ONLINE (video)
-// ═════════════════════════════════════════════════════════════════════════════
+
 router.post('/doctor-online', protect, authorize('customer'), async (req, res) => {
   try {
     const {
-      doctorId, scheduledAt, patientInfo,
-      documents = [], paymentMethod = 'Razorpay',
+      doctorId,
+      scheduledAt,
+      patientInfo,
+      documents     = [],
+      paymentMethod = 'Razorpay',
+      couponCode,
+      coinsToRedeem = 0,
+      slotId,
     } = req.body;
 
-    if (!doctorId || !scheduledAt || !patientInfo)
-      return res.status(400).json({ success: false, message: 'doctorId, scheduledAt, patientInfo required' });
+    // ── 1. Input validation ──────────────────────────────────────────────────
+    if (!doctorId || !scheduledAt || !patientInfo) {
+      return res.status(400).json({
+        success: false,
+        message: 'doctorId, scheduledAt, patientInfo required',
+      });
+    }
 
-    const scheduledDate = new Date(scheduledAt);
+    // ── DATE PARSING (timezone-safe) ─────────────────────────────────────────
+    // Problem: frontend may send "2026-06-01" (date-only).
+    // JS parses date-only strings as UTC midnight → in IST (+5:30) that's
+    // already 5h30m in the past → false "past date" error.
+    //
+    // Fix:
+    //  • If string has no time component → treat as start-of-day IST (UTC+5:30)
+    //    by appending T00:00:00+05:30
+    //  • Allow a 5-minute grace window for clock skew / processing lag
+    //  • Only reject dates more than 5 min in the past
 
-    const avail = await checkHospitalOrDoctorAvailability({ doctorId, scheduledAt: scheduledDate });
-    if (!avail.available)
+    let scheduledDate;
+    const rawStr = String(scheduledAt).trim();
+
+    // Detect date-only format: "YYYY-MM-DD" (10 chars, no T)
+    const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(rawStr);
+
+    if (isDateOnly) {
+      // Treat as start-of-day IST
+      scheduledDate = new Date(`${rawStr}T00:00:00+05:30`);
+    } else {
+      scheduledDate = new Date(rawStr);
+    }
+
+    if (isNaN(scheduledDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid scheduledAt — use ISO 8601 format e.g. "2026-06-15T10:30:00+05:30"',
+      });
+    }
+
+ 
+    const GRACE_MS = 6 * 60 * 60 * 1000; // 6 hrs covers any TZ mess
+    const earliestAllow = new Date(Date.now() - GRACE_MS);
+
+    if (scheduledDate < earliestAllow) {
+      return res.status(400).json({
+        success: false,
+        message: `scheduledAt is in the past. Provided: ${scheduledDate.toISOString()}, Server time: ${new Date().toISOString()}`,
+      });
+    }
+
+    // ── 2a. Doctor availability ──────────────────────────────────────────────
+    const avail = await checkHospitalOrDoctorAvailability({
+      doctorId,
+      scheduledAt: scheduledDate,
+    });
+    if (!avail.available) {
       return res.status(400).json({ success: false, message: avail.reason });
+    }
 
+    // ── 2b. Video mode allowed for this user / plan ──────────────────────────
     const modeCheck = await checkConsultationModeAllowed(req.user._id, 'video');
-    if (!modeCheck.allowed)
+    if (!modeCheck.allowed) {
       return res.status(403).json({ success: false, message: modeCheck.reason });
+    }
 
+    // ── 3. Subscription coverage ─────────────────────────────────────────────
     const subCheck                = await checkSubscriptionConsultation(req.user._id, 'video');
     const isCoveredBySubscription = subCheck.allowed && subCheck.isFree;
 
+    // ── 4. Resolve consultation fee ──────────────────────────────────────────
     const { fee: consultationFee, source: pricingSource } = await resolveConsultationFee({
-      isFollowUp: false, followUpFee: 0,
-      isCoveredBySubscription, doctorId, hospitalId: null, consultationType: 'video',
+      isFollowUp:              false,
+      followUpFee:             0,
+      isCoveredBySubscription,
+      doctorId,
+      hospitalId:              null,
+      consultationType:        'video',
     });
 
+    // ── 5. Build fare breakdown ──────────────────────────────────────────────
     const config        = await PlatformPricingConfig.getGlobal();
     const fareBreakdown = buildFareBreakdown({
-      consultationFee, taxPercent: config?.tax?.consultationGstPercent ?? 0,
+      consultationFee,
+      taxPercent: config?.tax?.consultationGstPercent ?? 0,
     });
 
-    const initialStatus = paymentMethod === 'Razorpay' && fareBreakdown.totalAmount > 0
-      ? 'payment_pending'
-      : 'pending';
+    // ── 6. Create Booking ────────────────────────────────────────────────────
+    const initialStatus =
+      paymentMethod === 'Razorpay' && fareBreakdown.totalAmount > 0
+        ? 'payment_pending'
+        : 'pending';
 
     const booking = await Booking.create({
-      bookingType: 'doctor_online',
-      customer:    req.user._id,
-      patientInfo, doctor: doctorId, consultationType: 'video',
-      scheduledAt: scheduledDate,
-      documents, fareBreakdown,
-      pricingSource: pricingSource === 'doctor' ? 'doctor' : 'platform',
-      paymentStatus: 'unpaid', payments: [],
-      status: initialStatus, createdBy: req.user._id,
-      subscriptionUsagePending: [], confirmedSubscriptionUsage: [],
+      bookingType:      'doctor_online',
+      customer:         req.user._id,
+      patientInfo,
+      doctor:           doctorId,
+      hospital:         null,
+      consultationType: 'video',
+      scheduledAt:      scheduledDate,
+      slotId:           slotId || null,
+      documents,
+      fareBreakdown,
+      pricingSource:    pricingSource === 'doctor' ? 'doctor' : 'platform',
+      paymentStatus:    'unpaid',
+      payments:         [],
+      couponCode:       couponCode  || undefined,
+      coinsRedeemed:    coinsToRedeem,
+      status:           initialStatus,
+      createdBy:        req.user._id,
+      subscriptionUsagePending:   [],
+      confirmedSubscriptionUsage: [],
     });
 
+    // ── 7. Queue subscription usage (deferred — confirmed on payment) ────────
     if (isCoveredBySubscription && subCheck.sub) {
       await queueSubscriptionUsage(booking._id, subCheck.sub._id, 'consultationsUsed');
     }
 
+    // ── 8. Payment handling ──────────────────────────────────────────────────
     let razorpayOrder = null;
     let walletResult  = null;
 
+    // 8a. Wallet (full or partial + Razorpay for shortfall)
     if (paymentMethod === 'Wallet') {
       walletResult = await processWalletOrPartialPayment({
-        userId: req.user._id, amount: fareBreakdown.totalAmount,
-        bookingId: booking._id, bookingCode: booking.bookingCode,
+        userId:      req.user._id,
+        amount:      fareBreakdown.totalAmount,
+        bookingId:   booking._id,
+        bookingCode: booking.bookingCode,
       });
+
       booking.paymentStatus               = walletResult.paymentStatus;
       booking.payments                    = walletResult.payments;
       booking.fareBreakdown.walletApplied = walletResult.walletApplied;
       booking.fareBreakdown.amountPaid    = walletResult.amountPaid;
       await booking.save();
+
       if (!walletResult.needsRazorpay) {
         await flushAndRecord(booking);
         sendPaymentConfirmedEmails({ booking, paymentMethod: 'Wallet' });
@@ -1553,6 +1638,7 @@ router.post('/doctor-online', protect, authorize('customer'), async (req, res) =
       razorpayOrder = walletResult.razorpayOrder;
     }
 
+    // 8b. Free (₹0) — subscription-covered or zero-fee doctor
     if (fareBreakdown.totalAmount === 0 && paymentMethod === 'Razorpay') {
       booking.paymentStatus = 'paid';
       booking.status        = 'pending';
@@ -1561,93 +1647,128 @@ router.post('/doctor-online', protect, authorize('customer'), async (req, res) =
       sendPaymentConfirmedEmails({ booking, paymentMethod: 'Free (₹0)' });
     }
 
+    // 8c. Cash — collect at service
     if (paymentMethod === 'Cash') {
       booking.paymentStatus = 'pending_cash';
       await booking.save();
     }
 
+    // 8d. Razorpay — create order
     if (paymentMethod === 'Razorpay' && fareBreakdown.totalAmount > 0) {
-      razorpayOrder = await createRazorpayOrder(fareBreakdown.totalAmount, booking.bookingCode);
+      razorpayOrder = await createRazorpayOrder(
+        fareBreakdown.totalAmount,
+        booking.bookingCode,
+        { customerId: req.user._id.toString() },
+      );
     }
 
-    // ── AUTO-CREATE AGORA CONSULTATION SESSION ──────────────────────────────
+    // ── 9. Auto-create Consultation + provision Agora tokens ─────────────────
+    // Non-fatal — booking is valid even if this step fails.
+    // Tokens re-provisioned on-demand: GET /api/consultations/:id/agora/tokens
     let consultationSession = null;
     try {
-      const { roomId, meetingId, meetingLink } = createAgoraRoom(
-        booking.bookingCode,
-        booking._id.toString()
+      const { consultation } = await createConsultation(
+        {
+          bookingId:       booking._id.toString(),
+          consultationType:'video',
+          scheduledAt:     scheduledDate,
+          doctorId,
+          patientId:       req.user._id.toString(),
+          urgency:         'routine',
+          slotId:          slotId || null,
+          slotDurationMin: 15,
+          isFollowUp:      false,
+        },
+        req.user._id.toString(),
       );
-      const hostToken        = generateAgoraToken(roomId, 'host',        0);
-      const participantToken = generateAgoraToken(roomId, 'participant', 0);
 
-      consultationSession = await Consultation.create({
-        bookingId:                booking._id,
-        patient:                  req.user._id,
-        doctor:                   doctorId,
-        consultationType:         'video',
-        consultationMode:         'scheduled',
-        scheduledStartTime:       scheduledDate,
-        estimatedDurationMinutes: 30,
-        waitingRoomEnabled:       true,
-        recordingSupported:       false,
-        provider:                 'Agora',
-        roomId,
-        meetingId,
-        meetingLink,
-        hostToken,
-        participantToken,
-        status:    'created',
-        createdBy: req.user._id,
-      });
+      consultationSession = consultation;
+      // createConsultation already sets booking.consultationSessionId internally
+      // Refresh local ref for response
+      booking.consultationSessionId = consultation._id;
 
-      await Booking.findByIdAndUpdate(booking._id, {
-        $set: { consultationSessionId: consultationSession._id },
-      });
-      booking.consultationSessionId = consultationSession._id;
     } catch (consultErr) {
-      console.error('[POST /doctor-online] Agora room creation failed:', consultErr.message);
-      // non-fatal — booking is still valid
+      console.error(
+        '[POST /doctor-online] Consultation creation failed (non-fatal):',
+        consultErr.message,
+      );
     }
 
+    // ── 10. Notifications + emails ────────────────────────────────────────────
+    await createNotification({
+      recipient: req.user._id,
+      title:     'Video Consultation Booked',
+      body:      `Your video consultation (${booking.bookingCode}) is confirmed for ${scheduledDate.toLocaleString('en-IN')}.`,
+      type:      'BOOKING',
+      bookingId: booking._id,
+    });
+
+    // Non-blocking — do not await
     sendBookingCreatedEmails({ booking, billing: fareBreakdown });
 
-    const doctorUser = await DoctorProfile.findById(doctorId)
-      .populate('user', 'name').select('user').lean().catch(() => null);
+    DoctorProfile.findById(doctorId)
+      .populate('user', 'name')
+      .select('user')
+      .lean()
+      .then((doctorUser) => {
+        sendBookingConfirmationEmail({
+          user:            req.user._id,
+          booking,
+          consultationFee,
+          isCoveredBySubscription,
+          opNumber:        null,
+          doctorName:      doctorUser?.user?.name ?? null,
+          hospitalName:    null,
+          scheduledAt:     scheduledDate,
+        });
+      })
+      .catch((e) => console.error('[doctor-online] confirmation email failed:', e.message));
 
-    sendBookingConfirmationEmail({
-      user: req.user._id, booking, consultationFee, isCoveredBySubscription,
-      opNumber: null, doctorName: doctorUser?.user?.name || null, hospitalName: null, scheduledAt: scheduledDate,
-    }).catch(() => {});
-
+    // ── Response ──────────────────────────────────────────────────────────────
     return res.status(201).json({
       success: true,
+      message: 'Video consultation booked successfully',
       data: {
-        bookingId:    booking._id,
-        bookingCode:  booking.bookingCode,
+        bookingId:   booking._id,
+        bookingCode: booking.bookingCode,
+        status:      booking.status,
+        scheduledAt: booking.scheduledAt,
+
         fareBreakdown,
-        walletSplit: walletResult?.needsRazorpay ? {
-          walletApplied:   walletResult.walletApplied,
-          razorpayPortion: walletResult.razorpayPortion,
-          message:         `₹${walletResult.walletApplied} deducted from wallet. Pay remaining ₹${walletResult.razorpayPortion} via Razorpay.`,
-        } : null,
+
+        walletSplit: walletResult?.needsRazorpay
+          ? {
+              walletApplied:   walletResult.walletApplied,
+              razorpayPortion: walletResult.razorpayPortion,
+              message: `₹${walletResult.walletApplied} deducted from wallet. Pay remaining ₹${walletResult.razorpayPortion} via Razorpay.`,
+            }
+          : null,
+
         subscriptionCoverage: {
           consultationFree: isCoveredBySubscription,
           quotaInfo:        subCheck.reason,
+          remaining:        subCheck.remaining ?? null,
         },
+
         razorpayOrder,
-        note:               'Join the room using the meeting link below.',
+
+        // Agora consultation session info
+        // RTC/RTM tokens: GET /api/consultations/:consultationId/agora/tokens
         consultationSession: consultationSession
           ? {
-              consultationId: consultationSession._id,
-              roomId:         consultationSession.roomId,
-              meetingId:      consultationSession.meetingId,
-              meetingLink:    consultationSession.meetingLink,
-              provider:       'Agora',
-              status:         consultationSession.status,
+              consultationId:   consultationSession._id,
+              consultationCode: consultationSession.consultationCode,
+              status:           consultationSession.status,
+              scheduledAt:      consultationSession.scheduledAt,
+              channelName:      consultationSession.agora?.channelName    ?? null,
+              rtmChannelName:   consultationSession.agora?.rtmChannelName ?? null,
+              appId:            consultationSession.agora?.appId          ?? null,
+              tokenEndpoint:    `/api/consultations/${consultationSession._id}/agora/tokens`,
             }
           : null,
       },
     });
+
   } catch (err) {
     console.error('[POST /doctor-online]', err);
     return res.status(500).json({ success: false, message: err.message });
@@ -2370,6 +2491,7 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
         message: 'patientInfo, patientLocation.coordinates, scheduledAt required',
       });
 
+    // Find nearest available CA to patient
     const careAssistant = await autoAssignCareAssistant({
       patientCoords: patientLocation.coordinates,
       city:          patientLocation.city || 'Vijayawada',
@@ -2403,19 +2525,29 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
       patientInfo,
       careAssistant: careAssistant._id,
       scheduledAt:   new Date(scheduledAt),
-      patientLocation: { type: 'Point', coordinates: patientLocation.coordinates, address: patientLocation.address, city: patientLocation.city },
+      patientLocation: {
+        type: 'Point',
+        coordinates: patientLocation.coordinates,
+        address: patientLocation.address,
+        city: patientLocation.city,
+      },
       fareBreakdown,
       pricingSource: careResult.source === 'subscription' ? 'subscription' : 'platform',
       paymentStatus: 'unpaid', payments: [],
       status: initialStatus, createdBy: req.user._id,
       subscriptionUsagePending: [], confirmedSubscriptionUsage: [],
-      careAssistantSnapshot: { name: careAssistant.fullName, photoUrl: careAssistant.photoUrl, phone: careAssistant.phone },
+      careAssistantSnapshot: {
+        name:     careAssistant.fullName,
+        photoUrl: careAssistant.photoUrl,
+        phone:    careAssistant.phone,
+      },
     });
 
-   if ((careResult.isCoveredBySubscription || careResult.quotaTracked) && careResult.sub) {
-  await queueSubscriptionUsage(booking._id, careResult.sub._id, 'careAssistantVisitsUsed');
-}
+    if ((careResult.isCoveredBySubscription || careResult.quotaTracked) && careResult.sub) {
+      await queueSubscriptionUsage(booking._id, careResult.sub._id, 'careAssistantVisitsUsed');
+    }
 
+    // ── Payment handling (unchanged logic) ──────────────────────────────────
     let razorpayOrder = null;
     let walletResult  = null;
 
@@ -2457,27 +2589,110 @@ router.post('/care-assistant', protect, authorize('customer'), async (req, res) 
       razorpayOrder = await createRazorpayOrder(fareBreakdown.totalAmount, booking.bookingCode);
     }
 
+    // ── BUILD CA RIDE ────────────────────────────────────────────────────────
+    // CA travels TO patient. No driver.
+    // Pickup = CA current location. Dropoff = patientLocation.
+    const caCurrentCoords = careAssistant.location?.coordinates || [80.648, 16.506];
+    const patientCoords   = patientLocation.coordinates;
+
+    const { distanceKm: caDistKm, durationMin: caDurMin, polyline: caPolyline } =
+      await calculateCanonicalRoute(caCurrentCoords, patientCoords);
+
+    const careRide = await Ride.create({
+      ...buildRidePayload({
+        bookingId:         booking._id,
+        rideType:          'care_assistant',
+        vehicleClass:      'two_wheeler',
+        pickupCoords:      caCurrentCoords,               // CA starts here
+        pickupAddress:     'Care Assistant Location',
+        pickupCity:        patientLocation.city || 'Vijayawada',
+        dropoffCoords:     patientCoords,                 // CA goes to patient
+        dropoffAddress:    patientLocation.address,
+        dropoffCity:       patientLocation.city,
+        scheduledPickupAt: new Date(scheduledAt),
+        isReturnRide:      false,
+        createdBy:         req.user._id,
+      }),
+      // NO driver field — care_assistant booking has no driver
+      driver:               null,
+      estimatedDistanceKm:  caDistKm,
+      estimatedDurationMin: caDurMin,
+      status:               'driver_assigned', // CA = "driver" for tracking purposes
+    });
+
+    // ── CREATE TRACKING + IMMEDIATELY ATTACH CA ──────────────────────────────
+    const caTracking = await RideTracking.create({
+      ride:                  careRide._id,
+      booking:               booking._id,
+      careAssistant:         careAssistant._id,         // CA is primary participant
+      careAssistantStatus:   'en_route_to_pickup',
+      careAssistantJoinedAt: new Date(),
+      expectedRoutePolyline: caPolyline,
+      // Seed CA live location from profile
+      careAssistantLiveLocation: {
+        type:        'Point',
+        coordinates: caCurrentCoords,
+        heading:     0,
+        speedKmh:    0,
+        updatedAt:   new Date(),
+      },
+    });
+
+    await Ride.findByIdAndUpdate(careRide._id, { $set: { trackingId: caTracking._id } });
+
+    booking.primaryRide = careRide._id;
+    booking.rides       = [careRide._id];
+    await booking.save();
+
     sendBookingCreatedEmails({ booking, billing: fareBreakdown });
 
     return res.status(201).json({
       success: true,
       data: {
-        bookingId: booking._id, bookingCode: booking.bookingCode, fareBreakdown,
+        bookingId:    booking._id,
+        bookingCode:  booking.bookingCode,
+        fareBreakdown,
         walletSplit: walletResult?.needsRazorpay ? {
           walletApplied:   walletResult.walletApplied,
           razorpayPortion: walletResult.razorpayPortion,
-          message:         `₹${walletResult.walletApplied} deducted from wallet. Pay remaining ₹${walletResult.razorpayPortion} via Razorpay.`,
+          message: `₹${walletResult.walletApplied} deducted from wallet. Pay remaining ₹${walletResult.razorpayPortion} via Razorpay.`,
         } : null,
         subscriptionCoverage: {
           careAssistantFree:  careResult.isCoveredBySubscription,
           quotaInfo:          careResult.subQuotaInfo?.reason,
           visitsRemaining:    careResult.subQuotaInfo?.remaining,
         },
-        careAssistantAssigned: { id: careAssistant._id, name: careAssistant.fullName, phone: careAssistant.phone, photoUrl: careAssistant.photoUrl },
-        durationHours: parseInt(durationHours, 10) || 4,
-        pricingSource: careResult.source,
-        pricingTier:   careResult.tier?.label ?? 'Standard',
+        rides: { primary: careRide._id },
+        // caRoute: CA travels from their location to patient
+        caRoute: {
+          polyline:      caPolyline,
+          distanceKm:    caDistKm,
+          durationMin:   caDurMin,
+          fromCoords:    caCurrentCoords,   // CA start
+          toCoords:      patientCoords,     // patient location
+          currentTarget: 'patient_pickup',
+          note: 'Care assistant traveling to patient. No driver on this booking.',
+        },
+        careAssistantAssigned: {
+          id:       careAssistant._id,
+          name:     careAssistant.fullName,
+          phone:    careAssistant.phone,
+          photoUrl: careAssistant.photoUrl,
+        },
+        durationHours:  parseInt(durationHours, 10) || 4,
+        pricingSource:  careResult.source,
+        pricingTier:    careResult.tier?.label ?? 'Standard',
         razorpayOrder,
+        socketHint: {
+          room:   `booking:${booking._id}`,
+          events: [
+            'care_assistant_location_update',   // primary: CA GPS pings
+            'care_assistant_status_change',     // CA status transitions
+            'care_assistant_joined_ride',       // CA arrives at patient
+            'booking_status_change',
+          ],
+          note: 'For care_assistant booking, care_assistant_location_update is the primary tracking event.',
+        },
       },
     });
   } catch (err) {
@@ -2650,8 +2865,10 @@ router.get('/my-bookings', protect, authorize('customer'), async (req, res) => {
       .populate('hospital',      'name address')
       .populate('careAssistant', 'fullName photoUrl phone')
       .populate('primaryRide',   'status rideCode scheduledPickupAt driverSnapshot vehicleSnapshot')
-      // 👇 ADD THIS LINE 👇
-      .populate('consultationSessionId', 'status meetingLink roomId scheduledStartTime actualDurationMinutes') 
+     .populate(
+  'consultationSessionId',
+  'consultationCode consultationType status scheduledAt sessionStartedAt sessionEndedAt actualDurationSec agora.channelName agora.appId isRated'
+)
       .select('-internalNotes -__v -subscriptionUsagePending -confirmedSubscriptionUsage')
       .lean();
 
@@ -2928,7 +3145,7 @@ router.get('/subscription-benefits/care-assistant', protect, authorize('customer
     }).populate('plan', 'name planType careAssistant customOptions fixedTier').lean();
 
     if (!sub)
-      return res.status(404).json({ success: falsex, message: 'No active subscription found.' });
+      return res.status(404).json({ success: false, message: 'No active subscription found.' });
 
     let visitsPerMonth = sub.limits?.careAssistantVisitsPerMonth ?? null;
 

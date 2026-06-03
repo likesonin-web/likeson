@@ -14,7 +14,7 @@ const generateRideCode = customAlphabet(
 
 export const RIDE_TYPES = [
   "patient",
-  "care_assistant",
+  "care_assistant",   // ✅ exists
   "diagnostic_tech",
   "pharmacy_delivery",
   "blood_bank",

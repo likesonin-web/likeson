@@ -1,15 +1,10 @@
 'use client';
+ 
 
-/**
- * BookingsManagement.jsx — Likeson.in Admin
- * Full implementation with all admin/superadmin thunks
- * Care Assistant Ride Support integrated
- * Tailwind CSS only — zero inline styles
- */
-
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { useDispatch, useSelector }                 from 'react-redux';
-import { motion, AnimatePresence }                  from 'framer-motion';
+import { useState, useEffect, useCallback, useRef }        from 'react';
+import { useDispatch, useSelector }                         from 'react-redux';
+import { useRouter }                                        from 'next/navigation';
+import { motion, AnimatePresence }                          from 'framer-motion';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -23,11 +18,11 @@ import {
   Calendar, Layers, Shield, Zap, Eye, MoreVertical, ArrowRight,
   Truck, UserCheck, Hospital, Navigation, Radio, FileText,
   ChevronDown, ChevronUp, Star, Package, Info, Send,
-  Wallet, CreditCard, Ban, Edit2, Plus, Minus, X,
+  Wallet, CreditCard, Ban, Edit2, Plus, Minus, X, Video,
 } from 'lucide-react';
 
+// ── operationsSlice — all booking/assignment/refund/tracking actions ─────────
 import {
-  // Admin bookings
   fetchAdminBookings,
   fetchAdminBookingStats,
   exportAdminBookings,
@@ -39,31 +34,22 @@ import {
   resetAdminAssignment,
   resetAdminRefund,
   resetAdminOpStatusUpdate,
-  // Nearby
   fetchNearbyCareAssistants,
   fetchNearbySoloDrivers,
   fetchNearbyTransportPartners,
   fetchNearbyHospitals,
-  // Assign / reassign
   adminAssignSoloDriver,
   adminAssignTransportPartner,
   adminAssignCareAssistant,
   adminAssignHospital,
   adminReassignDriver,
   adminReassignCareAssistant,
-  // Refund
   adminProcessRefund,
-  // OP
   fetchAdminOps,
   updateAdminOpStatus,
-  // Care ride
   adminRequestCareRide,
   fetchAdminCareRideNearby,
-  // Care ride tracking (new)
   fetchCareTrackingSnapshot,
-  // Consultations
-  fetchAdminBookingStats as fetchStats,
-  // Selectors
   selectAdminBookings,
   selectAdminBookingsMeta,
   selectAdminStats,
@@ -96,12 +82,19 @@ import {
   selectLoading,
   selectError,
 } from '@/store/slices/operationsSlice';
+
+// ── consultationSlice — createConsultation + Agora token fetch ───────────────
 import {
   createConsultation,
-  fetchJoinToken,
+  fetchAgoraTokens,
+  provisionAgoraTokens,
+  selectAgora,
+  selectLoading as selectConsultLoading,
 } from '@/store/slices/consultationSlice';
 
-import { selectUser }    from '@/store/slices/userSlice';
+// ── userSlice ─────────────────────────────────────────────────────────────────
+import { selectCurrentUser } from '@/store/slices/userSlice';
+
 import LiveTrackingPanel from './LiveTrackingPanel';
 
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -179,6 +172,14 @@ const fmtDate  = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-di
 const currency = (n) => n != null ? `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 0 })}` : '—';
 const pct      = (a, b) => b ? ((a / b) * 100).toFixed(1) : '0.0';
 
+/** Resolve a raw consultationSessionId from a booking to a plain string */
+const resolveConsultId = (raw) => {
+  if (!raw) return null;
+  if (typeof raw === 'string') return raw;
+  if (typeof raw === 'object') return String(raw._id ?? raw);
+  return String(raw);
+};
+
 function statusBadge(status) {
   const color = STATUS_COLORS[status] ?? '#94a3b8';
   return (
@@ -193,15 +194,15 @@ function statusBadge(status) {
 
 function typeIcon(type) {
   const map = {
-    full_care_ride:      <Heart      size={12} className="text-rose-400"   />,
-    doctor_consultation: <Stethoscope size={12} className="text-blue-400"   />,
-    doctor_online:       <Radio       size={12} className="text-violet-400" />,
+    full_care_ride:      <Heart       size={12} className="text-rose-400"    />,
+    doctor_consultation: <Stethoscope size={12} className="text-blue-400"    />,
+    doctor_online:       <Radio       size={12} className="text-violet-400"  />,
     physiotherapist:     <Activity    size={12} className="text-emerald-400" />,
-    care_assistant:      <UserCheck   size={12} className="text-amber-400"  />,
-    diagnostic_center:   <Package     size={12} className="text-cyan-400"   />,
-    diagnostic_home:     <Package     size={12} className="text-teal-400"   />,
-    patient_transport:   <Truck       size={12} className="text-indigo-400" />,
-    follow_up:           <RotateCcw   size={12} className="text-pink-400"   />,
+    care_assistant:      <UserCheck   size={12} className="text-amber-400"   />,
+    diagnostic_center:   <Package     size={12} className="text-cyan-400"    />,
+    diagnostic_home:     <Package     size={12} className="text-teal-400"    />,
+    patient_transport:   <Truck       size={12} className="text-indigo-400"  />,
+    follow_up:           <RotateCcw   size={12} className="text-pink-400"    />,
   };
   return map[type] ?? <FileText size={12} className="text-base-content/40" />;
 }
@@ -312,10 +313,10 @@ function NearbyAssignPanel({ bookingId, dispatch }) {
   useEffect(() => { load('driver'); }, [load]);
 
   const TABS = [
-    { id: 'driver',   label: 'Solo Drivers',  icon: Car },
-    { id: 'tp',       label: 'Transport',      icon: Truck },
-    { id: 'care',     label: 'Care Asst.',     icon: Heart },
-    { id: 'hospital', label: 'Hospitals',      icon: Building2 },
+    { id: 'driver',   label: 'Solo Drivers', icon: Car       },
+    { id: 'tp',       label: 'Transport',    icon: Truck     },
+    { id: 'care',     label: 'Care Asst.',   icon: Heart     },
+    { id: 'hospital', label: 'Hospitals',    icon: Building2 },
   ];
 
   const assign = (type, id) => {
@@ -338,20 +339,12 @@ function NearbyAssignPanel({ bookingId, dispatch }) {
         {children}
       </div>
       <div className="flex flex-col gap-1.5 shrink-0">
-        <button
-          disabled={assignLoading}
-          onClick={onAssign}
-          className="btn btn-primary btn-xs gap-1"
-        >
+        <button disabled={assignLoading} onClick={onAssign} className="btn btn-primary btn-xs gap-1">
           {assignLoading ? <Spinner size={9} /> : <Plus size={9} />}
           {assignLabel}
         </button>
         {showReassign && (
-          <button
-            disabled={assignLoading}
-            onClick={onReassign}
-            className="btn btn-xs gap-1 bg-base-300 text-base-content hover:bg-base-300/70"
-          >
+          <button disabled={assignLoading} onClick={onReassign} className="btn btn-xs gap-1 bg-base-300 text-base-content hover:bg-base-300/70">
             <RotateCcw size={9} /> Reassign
           </button>
         )}
@@ -360,11 +353,11 @@ function NearbyAssignPanel({ bookingId, dispatch }) {
   );
 
   const lists = {
-    driver: nearbyDrivers.map((d, i) => (
+    driver: (nearbyDrivers ?? []).map((d, i) => (
       <NearbyCard
         key={d.driverId ?? i}
-        primary={d.name}
-        secondary={`${d.phone} · ${d.distanceKm} km away${d.rating > 0 ? ` · ★ ${d.rating}` : ''}`}
+        primary={d.name ?? '—'}
+        secondary={`${d.phone ?? '—'} · ${d.distanceKm ?? '?'} km away${d.rating > 0 ? ` · ★ ${d.rating}` : ''}`}
         onAssign={() => assign('driver', d.soloPartnerId)}
         onReassign={() => reassign('driver', d.driverId)}
         showReassign
@@ -377,20 +370,20 @@ function NearbyAssignPanel({ bookingId, dispatch }) {
       </NearbyCard>
     )),
 
-    tp: nearbyTPs.map((tp, i) => (
+    tp: (nearbyTPs ?? []).map((tp, i) => (
       <NearbyCard
         key={tp.tpId ?? i}
-        primary={tp.businessName}
-        secondary={`${tp.ownerPhone} · ${tp.availableDriversNearby ?? tp.activeDrivers ?? 0} drivers avail.`}
+        primary={tp.businessName ?? '—'}
+        secondary={`${tp.ownerPhone ?? '—'} · ${tp.availableDriversNearby ?? tp.activeDrivers ?? 0} drivers avail.`}
         onAssign={() => assign('tp', tp.tpId)}
       />
     )),
 
-    care: nearbyCAs.map((ca, i) => (
+    care: (nearbyCAs ?? []).map((ca, i) => (
       <NearbyCard
         key={ca.careAssistantId ?? i}
-        primary={ca.name}
-        secondary={`${ca.phone} · ${ca.distanceKm} km away${ca.rating > 0 ? ` · ★ ${ca.rating}` : ''}`}
+        primary={ca.name ?? '—'}
+        secondary={`${ca.phone ?? '—'} · ${ca.distanceKm ?? '?'} km away${ca.rating > 0 ? ` · ★ ${ca.rating}` : ''}`}
         onAssign={() => assign('care', ca.careAssistantId)}
         onReassign={() => reassign('care', ca.careAssistantId)}
         showReassign
@@ -401,11 +394,11 @@ function NearbyAssignPanel({ bookingId, dispatch }) {
       </NearbyCard>
     )),
 
-    hospital: nearbyHospitals.map((h, i) => (
+    hospital: (nearbyHospitals ?? []).map((h, i) => (
       <NearbyCard
         key={h.hospitalId ?? i}
-        primary={h.name}
-        secondary={`${h.distanceKm} km away${h.is24x7 ? ' · 24×7' : ''}${h.isEmergencyReady ? ' · Emergency' : ''}`}
+        primary={h.name ?? '—'}
+        secondary={`${h.distanceKm ?? '?'} km away${h.is24x7 ? ' · 24×7' : ''}${h.isEmergencyReady ? ' · Emergency' : ''}`}
         onAssign={() => assign('hospital', h.hospitalId)}
         assignLabel="Link"
       />
@@ -436,7 +429,7 @@ function NearbyAssignPanel({ bookingId, dispatch }) {
         <div className="flex items-center justify-center gap-2 py-8 text-xs text-base-content/40">
           <Spinner size={14} /> Searching nearby…
         </div>
-      ) : lists[tab]?.length > 0 ? (
+      ) : (lists[tab]?.length ?? 0) > 0 ? (
         <div className="flex flex-col gap-2 max-h-64 overflow-y-auto scrollbar-thin pr-1">
           {lists[tab]}
         </div>
@@ -505,11 +498,7 @@ function RefundPanel({ booking, dispatch }) {
         </select>
       </div>
 
-      <button
-        disabled={loading || !reason}
-        onClick={submit}
-        className="btn btn-warning w-full gap-2"
-      >
+      <button disabled={loading || !reason} onClick={submit} className="btn btn-warning w-full gap-2">
         {loading ? <Spinner size={12} /> : <DollarSign size={12} />}
         {loading ? 'Processing refund…' : 'Initiate Refund'}
       </button>
@@ -609,8 +598,8 @@ function CareRidePanel({ booking, dispatch }) {
             <p className="m-0 text-base-content/60">
               {careRideNearby.nearbyDrivers?.length ?? 0} drivers · {careRideNearby.nearbyTPs?.length ?? 0} TPs nearby
             </p>
-            {careRideNearby.nearbyDrivers?.slice(0, 3).map((d, i) => (
-              <div key={i} className="flex items-center justify-between mt-2 py-1.5 border-t border-base-300/60">
+            {(careRideNearby.nearbyDrivers ?? []).slice(0, 3).map((d, i) => (
+              <div key={d._id ?? i} className="flex items-center justify-between mt-2 py-1.5 border-t border-base-300/60">
                 <span className="font-medium">{d.name}</span>
                 <span className="text-[10px] text-primary">{d.distanceKm} km</span>
               </div>
@@ -689,7 +678,6 @@ function OpPanel({ booking, dispatch }) {
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /* CARE TRACKING PANEL                                                         */
-/* New — shows driver + care assistant dual live tracking                      */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 function CareTrackingPanel({ booking, dispatch }) {
@@ -703,14 +691,13 @@ function CareTrackingPanel({ booking, dispatch }) {
     if (booking?._id) dispatch(fetchCareTrackingSnapshot({ bookingId: booking._id }));
   }, [booking?._id, dispatch]);
 
-  const ca = snapshot?.careAssistant;
-  const caLoc = ca?.liveLocation ?? caLocation;
+  const ca        = snapshot?.careAssistant;
+  const caLoc     = ca?.liveLocation ?? caLocation;
   const driverLoc = snapshot?.driver?.liveLocation ?? liveLocation;
-  const route = snapshot?.route;
+  const route     = snapshot?.route;
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Live map placeholder — wire to LiveTrackingPanel */}
       <div className="rounded-xl border border-base-300 overflow-hidden" style={{ height: 220 }}>
         <LiveTrackingPanel
           booking={booking}
@@ -726,7 +713,6 @@ function CareTrackingPanel({ booking, dispatch }) {
         />
       </div>
 
-      {/* Participant status row */}
       <div className="grid grid-cols-2 gap-2">
         {/* Driver */}
         <div className="rounded-xl border border-base-300 bg-base-200 p-3">
@@ -784,15 +770,14 @@ function CareTrackingPanel({ booking, dispatch }) {
         </div>
       </div>
 
-      {/* Route summary */}
       {route && (
         <div className="rounded-xl border border-base-300 bg-base-200 p-3">
           <SectionHeader title="Route Summary" />
           <div className="grid grid-cols-3 gap-3">
             {[
-              { l: 'Distance',    v: route.estimatedDistanceKm  ? `${route.estimatedDistanceKm} km` : '—' },
-              { l: 'ETA',         v: snapshot?.route?.currentEtaMinutes ? `${snapshot.route.currentEtaMinutes} min` : '—' },
-              { l: 'SOS Active',  v: snapshot?.hasActiveSos ? 'YES' : 'No' },
+              { l: 'Distance',   v: route.estimatedDistanceKm ? `${route.estimatedDistanceKm} km` : '—' },
+              { l: 'ETA',        v: snapshot?.route?.currentEtaMinutes ? `${snapshot.route.currentEtaMinutes} min` : '—' },
+              { l: 'SOS Active', v: snapshot?.hasActiveSos ? 'YES' : 'No' },
             ].map(({ l, v }) => (
               <div key={l}>
                 <p className="text-[9px] uppercase tracking-widest text-base-content/40 m-0">{l}</p>
@@ -803,8 +788,7 @@ function CareTrackingPanel({ booking, dispatch }) {
         </div>
       )}
 
-      {/* Milestones */}
-      {snapshot?.milestones?.length > 0 && (
+      {(snapshot?.milestones?.length ?? 0) > 0 && (
         <div className="rounded-xl border border-base-300 bg-base-200 p-3">
           <SectionHeader title="Milestones" sub={`${snapshot.milestones.length} recorded`} />
           <div className="flex flex-col gap-1 max-h-32 overflow-y-auto scrollbar-thin">
@@ -896,64 +880,86 @@ function StatusPanel({ booking, dispatch }) {
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /* CONSULTATION PANEL                                                          */
+/* FIXED: fetchJoinToken → fetchAgoraTokens; createConsultation args aligned  */
+/* Added: router navigation to /doctor/consultation/[id]                      */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 function ConsultationPanel({ booking, dispatch }) {
+  const router = useRouter();
+
   const [form, setForm] = useState({
     consultationType:         'video',
-    scheduledStartTime:       '',
-    estimatedDurationMinutes: 30,
-    language:                 'English',
-    priority:                 'routine',
-    waitingRoomEnabled:       true,
+    scheduledAt:              '',
+    slotDurationMin:          30,
+    urgency:                  'routine',
   });
-  const [tokenData, setTokenData]   = useState(null);
-  const [creating,  setCreating]    = useState(false);
-  const [fetching,  setFetching]    = useState(false);
-  const [localErr,  setLocalErr]    = useState(null);
 
-  const consultationId = booking?.consultationSessionId;
+  // Agora state from consultationSlice
+  const agoraState   = useSelector(selectAgora);
+  const tokenLoading = useSelector(selectConsultLoading('agora'));
+  const createLoading= useSelector(selectConsultLoading('create'));
+
+  const [localErr, setLocalErr] = useState(null);
+
+  // Raw consultationSessionId from booking (Booking model field)
+  const consultationId = resolveConsultId(booking?.consultationSessionId);
 
   const upd = (k, v) => setForm((p) => ({ ...p, [k]: v }));
 
+  // ── Create consultation session ──────────────────────────────────────────
   const handleCreate = async () => {
-    if (!form.scheduledStartTime) { setLocalErr('scheduledStartTime required'); return; }
-    setCreating(true); setLocalErr(null);
+    if (!form.scheduledAt) { setLocalErr('Scheduled date/time is required'); return; }
+    setLocalErr(null);
     try {
-      const result = await dispatch(createConsultation({
-        bookingId:                booking._id,
-        consultationType:         form.consultationType,
-        scheduledStartTime:       form.scheduledStartTime,
-        estimatedDurationMinutes: Number(form.estimatedDurationMinutes),
-        language:                 form.language,
-        priority:                 form.priority,
-        waitingRoomEnabled:       form.waitingRoomEnabled,
+      await dispatch(createConsultation({
+        bookingId:        booking._id,
+        consultationType: form.consultationType,
+        scheduledAt:      new Date(form.scheduledAt).toISOString(),
+        slotDurationMin:  Number(form.slotDurationMin),
+        urgency:          form.urgency,
+        // doctor + patient resolved server-side from booking
       })).unwrap();
-      setLocalErr(null);
     } catch (e) {
-      setLocalErr(String(e));
-    } finally {
-      setCreating(false);
+      setLocalErr(String(e?.message ?? e));
     }
   };
 
+  // ── Fetch Agora tokens for this consultation ─────────────────────────────
   const handleFetchToken = async () => {
     if (!consultationId) return;
-    setFetching(true); setLocalErr(null);
+    setLocalErr(null);
     try {
-      const result = await dispatch(fetchJoinToken(String(consultationId))).unwrap();
-      setTokenData(result);
+      // Try get tokens; provision if 404
+      const res = await dispatch(fetchAgoraTokens(consultationId)).unwrap();
+      if (!res?.tokens) {
+        await dispatch(provisionAgoraTokens(consultationId)).unwrap();
+      }
     } catch (e) {
-      setLocalErr(String(e));
-    } finally {
-      setFetching(false);
+      // Provision if tokens don't exist yet
+      try {
+        await dispatch(provisionAgoraTokens(consultationId)).unwrap();
+      } catch (e2) {
+        setLocalErr(String(e2?.message ?? e2));
+      }
     }
   };
 
-  // Already linked
+  // ── Navigate to consultation room ────────────────────────────────────────
+  const handleJoinRoom = () => {
+    if (!consultationId) return;
+    // Admin joins as doctor view
+    router.push(`/doctor/consultation/${consultationId}`);
+  };
+
+  // Tokens come from Redux agoraState after fetch
+  const tokens = agoraState?.myTokens ?? agoraState?.doctorTokens;
+  const hasTokens = !!tokens?.rtcToken;
+
+  // Already linked consultation
   if (consultationId) {
     return (
       <div className="flex flex-col gap-3">
+        {/* Session card */}
         <div className="rounded-xl border border-violet-300/30 bg-violet-50/10 p-3">
           <div className="flex items-center gap-2 mb-2">
             <div className="w-5 h-5 rounded-full bg-violet-400/15 flex items-center justify-center">
@@ -961,55 +967,47 @@ function ConsultationPanel({ booking, dispatch }) {
             </div>
             <span className="text-[10px] font-bold uppercase tracking-widest text-violet-400">Session Linked</span>
           </div>
-          <p className="text-[11px] font-mono text-base-content/60 m-0 break-all">{String(consultationId)}</p>
+          <p className="text-[11px] font-mono text-base-content/60 m-0 break-all">{consultationId}</p>
+          <p className="text-[10px] text-base-content/40 mt-1 m-0">
+            Type: {booking.consultationType ?? form.consultationType} · {booking.bookingType?.replace(/_/g, ' ')}
+          </p>
         </div>
 
-        {tokenData && (
+        {/* Token display after fetch */}
+        {hasTokens && (
           <div className="rounded-xl border border-base-300 bg-base-200 p-3 flex flex-col gap-1.5">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-base-content/40 m-0">Join Info</p>
-            <InfoRow label="Role"    value={tokenData.role}        />
-            <InfoRow label="Channel" value={tokenData.channelName} mono />
-            <InfoRow label="App ID"  value={tokenData.appId}       mono />
-            <InfoRow label="Expires" value={tokenData.expiresInSeconds ? `${tokenData.expiresInSeconds / 60} min` : '—'} />
-            {tokenData.meetingLink && (
-              <a 
-                href={tokenData.meetingLink}
-                target="_blank"
-                rel="noreferrer"
-                className="btn btn-xs btn-primary gap-1.5 mt-1 w-full"
-              >
-                <ArrowRight size={9} /> Open Meeting Room
-              </a>
-            )}
+            <p className="text-[10px] font-bold uppercase tracking-widest text-base-content/40 m-0">Agora Session</p>
+            <InfoRow label="Channel"   value={tokens.channelName}               mono />
+            <InfoRow label="App ID"    value={agoraState.appId}                 mono />
+            <InfoRow label="UID"       value={String(tokens.uid ?? '—')}        mono />
+            <InfoRow label="Expires"   value={agoraState.expiresAt ? new Date(agoraState.expiresAt).toLocaleTimeString('en-IN') : '—'} />
+            <InfoRow label="Refreshes" value={String(agoraState.tokenRefreshCount ?? 0)} />
             <div className="rounded-lg border border-base-300 bg-base-100 p-2 mt-1">
-              <p className="text-[9px] text-base-content/40 m-0 mb-1">Token (copy for SDK)</p>
-              <p className="text-[10px] font-mono text-base-content/60 break-all m-0 select-all">{tokenData.token}</p>
+              <p className="text-[9px] text-base-content/40 m-0 mb-1">RTC Token (for SDK)</p>
+              <p className="text-[10px] font-mono text-base-content/50 break-all m-0 select-all line-clamp-3">{tokens.rtcToken}</p>
             </div>
           </div>
         )}
 
+        {localErr && <p className="text-[10px] text-error m-0">{localErr}</p>}
+
+        {/* Actions */}
         <div className="flex gap-2">
           <button
-            disabled={fetching}
+            disabled={tokenLoading}
             onClick={handleFetchToken}
             className="btn btn-primary btn-sm flex-1 gap-1.5"
           >
-            {fetching ? <Spinner size={10} /> : <Zap size={10} />}
-            {tokenData ? 'Refresh Token' : 'Get Join Token'}
+            {tokenLoading ? <Spinner size={10} /> : <Zap size={10} />}
+            {hasTokens ? 'Refresh Token' : 'Get Agora Token'}
           </button>
-          {tokenData?.meetingLink && (
-            <a
-              href={tokenData.meetingLink}
-              target="_blank"
-              rel="noreferrer"
-              className="btn btn-sm gap-1.5 bg-base-300 text-base-content flex-1"
-            >
-              <Eye size={10} /> View Room
-            </a>
-          )}
+          <button
+            onClick={handleJoinRoom}
+            className="btn btn-success btn-sm flex-1 gap-1.5"
+          >
+            <Video size={10} /> Join Room
+          </button>
         </div>
-
-        {localErr && <p className="text-[10px] text-error m-0">{localErr}</p>}
       </div>
     );
   }
@@ -1018,74 +1016,60 @@ function ConsultationPanel({ booking, dispatch }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="rounded-xl border border-warning/20 bg-warning/5 p-3 text-[10px] text-warning-content/70">
-        No consultation session linked. Create one to enable telemedicine.
+        No consultation session linked. Create one to enable telemedicine for this booking.
       </div>
 
       <div className="grid grid-cols-2 gap-2">
         <div>
           <label className="label text-[10px] uppercase tracking-widest mb-1 block">Type</label>
           <select value={form.consultationType} onChange={(e) => upd('consultationType', e.target.value)} className="input-field text-xs">
-            {['video', 'audio', 'chat'].map((t) => <option key={t} value={t}>{t}</option>)}
+            {['video', 'audio', 'chat', 'in_person', 'home_visit'].map((t) => (
+              <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
+            ))}
           </select>
         </div>
         <div>
-          <label className="label text-[10px] uppercase tracking-widest mb-1 block">Priority</label>
-          <select value={form.priority} onChange={(e) => upd('priority', e.target.value)} className="input-field text-xs">
-            {['routine', 'urgent', 'emergency'].map((p) => <option key={p} value={p}>{p}</option>)}
+          <label className="label text-[10px] uppercase tracking-widest mb-1 block">Urgency</label>
+          <select value={form.urgency} onChange={(e) => upd('urgency', e.target.value)} className="input-field text-xs">
+            {['routine', 'urgent', 'emergency'].map((u) => (
+              <option key={u} value={u}>{u}</option>
+            ))}
           </select>
         </div>
       </div>
 
       <div>
         <label className="label text-[10px] uppercase tracking-widest mb-1 block">
-          Scheduled Start <span className="text-error">*</span>
+          Scheduled At <span className="text-error">*</span>
         </label>
         <input
           type="datetime-local"
-          value={form.scheduledStartTime}
-          onChange={(e) => upd('scheduledStartTime', e.target.value)}
+          value={form.scheduledAt}
+          onChange={(e) => upd('scheduledAt', e.target.value)}
           className="input-field text-xs"
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className="label text-[10px] uppercase tracking-widest mb-1 block">Duration (min)</label>
-          <input
-            type="number"
-            value={form.estimatedDurationMinutes}
-            min={5} max={180}
-            onChange={(e) => upd('estimatedDurationMinutes', e.target.value)}
-            className="input-field text-xs"
-          />
-        </div>
-        <div>
-          <label className="label text-[10px] uppercase tracking-widest mb-1 block">Language</label>
-          <select value={form.language} onChange={(e) => upd('language', e.target.value)} className="input-field text-xs">
-            {['English', 'Hindi', 'Telugu', 'Tamil', 'Kannada'].map((l) => <option key={l} value={l}>{l}</option>)}
-          </select>
-        </div>
-      </div>
-
-      <label className="flex items-center gap-2 cursor-pointer">
+      <div>
+        <label className="label text-[10px] uppercase tracking-widest mb-1 block">Slot Duration (min)</label>
         <input
-          type="checkbox"
-          checked={form.waitingRoomEnabled}
-          onChange={(e) => upd('waitingRoomEnabled', e.target.checked)}
-          className="checkbox checkbox-sm checkbox-primary"
+          type="number"
+          value={form.slotDurationMin}
+          min={5} max={180}
+          onChange={(e) => upd('slotDurationMin', e.target.value)}
+          className="input-field text-xs"
         />
-        <span className="text-xs text-base-content/70">Enable waiting room</span>
-      </label>
+      </div>
 
       {localErr && <p className="text-[10px] text-error m-0">{localErr}</p>}
 
       <button
-        disabled={creating || !form.scheduledStartTime}
+        disabled={createLoading || !form.scheduledAt}
         onClick={handleCreate}
         className="btn btn-primary w-full gap-2"
       >
-        {creating ? <Spinner size={12} /> : <Plus size={12} />}
-        {creating ? 'Creating session…' : 'Create Consultation Room'}
+        {createLoading ? <Spinner size={12} /> : <Plus size={12} />}
+        {createLoading ? 'Creating session…' : 'Create Consultation Room'}
       </button>
     </div>
   );
@@ -1096,6 +1080,7 @@ function ConsultationPanel({ booking, dispatch }) {
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 function BookingDetailPanel({ bookingId, dispatch }) {
+  const router          = useRouter();
   const booking         = useSelector(selectAdminBookingDetail);
   const followUps       = useSelector(selectAdminBookingFollowUps);
   const loading         = useSelector(selectAdminBookingDetailLoading);
@@ -1135,6 +1120,12 @@ function BookingDetailPanel({ bookingId, dispatch }) {
     );
   }
 
+  // Resolved consultation ID for join button in header
+  const consultId = resolveConsultId(booking.consultationSessionId);
+  const canJoinVideo = !!consultId &&
+    ['doctor_online', 'full_care_ride'].includes(booking.bookingType) &&
+    ['confirmed', 'in_progress', 'waiting'].includes(booking.status);
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
 
@@ -1142,12 +1133,21 @@ function BookingDetailPanel({ bookingId, dispatch }) {
       <div className="shrink-0 px-5 py-3.5 border-b border-base-300 bg-base-100">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 mb-1">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
               {typeIcon(booking.bookingType)}
               <span className="text-[10px] font-bold text-primary uppercase tracking-widest">{booking.bookingCode}</span>
               {statusBadge(booking.status)}
+              {/* Quick join button in header */}
+              {canJoinVideo && (
+                <button
+                  onClick={() => router.push(`/doctor/consultation/${consultId}`)}
+                  className="btn btn-success btn-xs gap-1 ml-auto"
+                >
+                  <Video size={10} /> Join Video
+                </button>
+              )}
             </div>
-            <p className="text-base font-bold text-base-content m-0 truncate">{booking.patientInfo?.name}</p>
+            <p className="text-base font-bold text-base-content m-0 truncate">{booking.patientInfo?.name ?? '—'}</p>
             <p className="text-[11px] text-base-content/45 m-0 mt-0.5">
               {booking.bookingType?.replace(/_/g, ' ')} · {fmt(booking.scheduledAt)}
             </p>
@@ -1183,11 +1183,11 @@ function BookingDetailPanel({ bookingId, dispatch }) {
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.15 }}
           >
-            {actionTab === 'status'    && <StatusPanel booking={booking} dispatch={dispatch} />}
-            {actionTab === 'assign'    && <NearbyAssignPanel bookingId={booking._id} dispatch={dispatch} />}
-            {actionTab === 'refund'    && <RefundPanel booking={booking} dispatch={dispatch} />}
-            {actionTab === 'op'        && <OpPanel booking={booking} dispatch={dispatch} />}
-            {actionTab === 'care_ride' && <CareRidePanel booking={booking} dispatch={dispatch} />}
+            {actionTab === 'status'       && <StatusPanel booking={booking} dispatch={dispatch} />}
+            {actionTab === 'assign'       && <NearbyAssignPanel bookingId={booking._id} dispatch={dispatch} />}
+            {actionTab === 'refund'       && <RefundPanel booking={booking} dispatch={dispatch} />}
+            {actionTab === 'op'           && <OpPanel booking={booking} dispatch={dispatch} />}
+            {actionTab === 'care_ride'    && <CareRidePanel booking={booking} dispatch={dispatch} />}
             {actionTab === 'tracking'     && <CareTrackingPanel booking={booking} dispatch={dispatch} />}
             {actionTab === 'consultation' && <ConsultationPanel booking={booking} dispatch={dispatch} />}
           </motion.div>
@@ -1227,7 +1227,7 @@ function BookingDetailPanel({ bookingId, dispatch }) {
             <SectionHeader title="Fare Breakdown" />
             <div className="grid grid-cols-3 gap-3">
               {[
-                { l: 'Total',      v: currency(booking.fareBreakdown?.totalAmount),       highlight: true },
+                { l: 'Total',      v: currency(booking.fareBreakdown?.totalAmount),      highlight: true },
                 { l: 'Paid',       v: currency(booking.fareBreakdown?.amountPaid) },
                 { l: 'Refunded',   v: currency(booking.fareBreakdown?.refundAmount) },
                 { l: 'Transport',  v: currency(booking.fareBreakdown?.transportFee) },
@@ -1278,23 +1278,28 @@ function BookingDetailPanel({ bookingId, dispatch }) {
           {/* Assignments */}
           <div className="rounded-xl border border-base-300 bg-base-200 p-3">
             <SectionHeader title="Assignments" />
-            <InfoRow label="Doctor"         value={booking.doctorSnapshot?.name}          sub={booking.doctorSnapshot?.specialization} />
-            <InfoRow label="Care Assistant" value={booking.careAssistantSnapshot?.name}   sub={booking.careAssistantSnapshot?.phone} />
+            <InfoRow label="Doctor"         value={booking.doctorSnapshot?.name}         sub={booking.doctorSnapshot?.specialization} />
+            <InfoRow label="Care Assistant" value={booking.careAssistantSnapshot?.name}  sub={booking.careAssistantSnapshot?.phone} />
             <InfoRow label="Hospital"       value={booking.hospital?.name ?? (booking.hospital ? 'Linked' : null)} />
             <InfoRow label="Transport"      value={booking.transportPartner ? 'TP assigned' : null} />
-            <InfoRow label="Primary Ride"   value={booking.primaryRide?.status}           sub={booking.primaryRide?.rideCode} mono />
-            <InfoRow label="Consultation"   value={booking.consultationSessionId ? 'Linked' : null} sub="Telemedicine session" />
+            <InfoRow label="Primary Ride"   value={booking.primaryRide?.status}          sub={booking.primaryRide?.rideCode} mono />
+            <InfoRow label="Consultation"   value={consultId ? 'Linked' : null}          sub="Telemedicine session" />
           </div>
 
-          {/* Consultation session */}
-          {booking.consultationSessionId && (
+          {/* Consultation session quick info */}
+          {consultId && (
             <div className="rounded-xl border border-violet-300/30 bg-violet-50/10 p-3">
-              <SectionHeader title="Telemedicine Session" />
+              <SectionHeader title="Telemedicine Session" action={
+                <button
+                  onClick={() => router.push(`/doctor/consultation/${consultId}`)}
+                  className="btn btn-xs btn-success gap-1"
+                >
+                  <Video size={9} /> Join
+                </button>
+              } />
               <div className="flex items-center gap-2">
                 <Radio size={12} className="text-violet-400" />
-                <span className="text-xs font-mono text-base-content/60 truncate">
-                  {String(booking.consultationSessionId)}
-                </span>
+                <span className="text-xs font-mono text-base-content/60 truncate">{consultId}</span>
               </div>
               <p className="text-[10px] text-base-content/40 m-0 mt-1">
                 Type: {booking.consultationType ?? 'video'} · {booking.bookingType?.replace(/_/g, ' ')}
@@ -1303,7 +1308,7 @@ function BookingDetailPanel({ bookingId, dispatch }) {
           )}
 
           {/* Status log */}
-          {booking.statusLog?.length > 0 && (
+          {(booking.statusLog?.length ?? 0) > 0 && (
             <div className="rounded-xl border border-base-300 bg-base-200 p-3">
               <SectionHeader title="Status History" sub={`${booking.statusLog.length} events`} />
               <div className="flex flex-col gap-1 max-h-36 overflow-y-auto scrollbar-thin">
@@ -1322,7 +1327,7 @@ function BookingDetailPanel({ bookingId, dispatch }) {
           )}
 
           {/* Follow-ups */}
-          {followUps?.length > 0 && (
+          {(followUps?.length ?? 0) > 0 && (
             <div className="rounded-xl border border-base-300 bg-base-200 p-3">
               <SectionHeader title={`Follow-ups (${followUps.length})`} />
               {followUps.slice(0, 5).map((f, i) => (
@@ -1336,7 +1341,7 @@ function BookingDetailPanel({ bookingId, dispatch }) {
           )}
 
           {/* Documents */}
-          {booking.documents?.length > 0 && (
+          {(booking.documents?.length ?? 0) > 0 && (
             <div className="rounded-xl border border-base-300 bg-base-200 p-3">
               <SectionHeader title={`Documents (${booking.documents.length})`} />
               {booking.documents.slice(0, 4).map((doc, i) => (
@@ -1395,18 +1400,25 @@ function BookingCard({ booking, selected, onClick }) {
         </span>
       </div>
 
-      {booking.fareBreakdown?.totalAmount > 0 && (
+      {(booking.fareBreakdown?.totalAmount ?? 0) > 0 && (
         <div className="flex items-center justify-between mt-2">
           <span className="text-[10px] text-base-content/35">{booking.customer?.phone ?? ''}</span>
           <span className="text-[11px] font-bold text-success">{currency(booking.fareBreakdown.totalAmount)}</span>
         </div>
       )}
 
-      {/* CA ride indicator */}
       {booking.careAssistant && (
         <div className="flex items-center gap-1 mt-1.5">
           <Heart size={8} className="text-rose-400" />
           <span className="text-[10px] text-rose-400/80 font-medium">Care ride</span>
+        </div>
+      )}
+
+      {/* Show video badge if has consultation */}
+      {booking.consultationSessionId && (
+        <div className="flex items-center gap-1 mt-1">
+          <Radio size={8} className="text-violet-400" />
+          <span className="text-[10px] text-violet-400/80 font-medium">Telemedicine</span>
         </div>
       )}
     </motion.div>
@@ -1455,7 +1467,7 @@ function OpQuickTable({ dispatch }) {
       <div className="flex items-center justify-between px-5 py-4 border-b border-base-300">
         <div>
           <p className="text-sm font-bold text-base-content m-0">OP Records</p>
-          <p className="text-[11px] text-base-content/50 m-0 mt-0.5">All outpatient records — {opsMeta.total} total</p>
+          <p className="text-[11px] text-base-content/50 m-0 mt-0.5">All outpatient records — {opsMeta?.total ?? 0} total</p>
         </div>
         <select
           value={status}
@@ -1485,13 +1497,13 @@ function OpQuickTable({ dispatch }) {
                   </div>
                 </td>
               </tr>
-            ) : ops.length === 0 ? (
+            ) : (ops?.length ?? 0) === 0 ? (
               <tr>
                 <td colSpan={6} className="text-center py-12 text-base-content/30 text-xs">
                   No OP records for this filter
                 </td>
               </tr>
-            ) : ops.map((op, i) => (
+            ) : (ops ?? []).map((op, i) => (
               <tr key={op._id ?? i}>
                 <td className="font-bold text-primary font-mono text-xs">{op.opNumber ?? '—'}</td>
                 <td className="text-xs">{op.patient?.name ?? '—'}</td>
@@ -1505,14 +1517,14 @@ function OpQuickTable({ dispatch }) {
         </table>
       </div>
 
-      {opsMeta.pages > 1 && (
+      {(opsMeta?.pages ?? 0) > 1 && (
         <div className="flex items-center justify-between px-5 py-3 border-t border-base-300">
           <p className="text-[10px] text-base-content/45 m-0">
             Page {page} of {opsMeta.pages} · {opsMeta.total} records
           </p>
           <div className="flex gap-1">
-            <button disabled={page <= 1}          onClick={() => setPage((p) => p - 1)} className="btn btn-ghost btn-sm btn-circle"><ChevronLeft  size={12} /></button>
-            <button disabled={page >= opsMeta.pages} onClick={() => setPage((p) => p + 1)} className="btn btn-ghost btn-sm btn-circle"><ChevronRight size={12} /></button>
+            <button disabled={page <= 1}              onClick={() => setPage((p) => p - 1)} className="btn btn-ghost btn-sm btn-circle"><ChevronLeft  size={12} /></button>
+            <button disabled={page >= opsMeta.pages}  onClick={() => setPage((p) => p + 1)} className="btn btn-ghost btn-sm btn-circle"><ChevronRight size={12} /></button>
           </div>
         </div>
       )}
@@ -1535,24 +1547,28 @@ function AnalysisSection({ dispatch }) {
   }, [dispatch, from, to]);
 
   const statusData = stats?.byStatus
-    ? Object.entries(stats.byStatus).map(([name, count]) => ({ name: name.replace(/_/g, ' '), count, fill: STATUS_COLORS[name] ?? '#94a3b8' }))
+    ? Object.entries(stats.byStatus).map(([name, count]) => ({
+        name: name.replace(/_/g, ' '), count, fill: STATUS_COLORS[name] ?? '#94a3b8',
+      }))
     : [];
 
   const typeData = stats?.byBookingType
-    ? Object.entries(stats.byBookingType).map(([name, count], i) => ({ name: name.replace(/_/g, ' '), count, fill: CHART_COLORS[i % CHART_COLORS.length] }))
+    ? Object.entries(stats.byBookingType).map(([name, count], i) => ({
+        name: name.replace(/_/g, ' '), count, fill: CHART_COLORS[i % CHART_COLORS.length],
+      }))
     : [];
 
-  const total    = statusData.reduce((a, b) => a + b.count, 0);
-  const done     = stats?.byStatus?.completed ?? 0;
-  const cancelled= stats?.byStatus?.cancelled ?? 0;
-  const pending  = stats?.byStatus?.pending   ?? 0;
-  const revenue  = stats?.revenue?.totalRevenue ?? 0;
+  const total     = statusData.reduce((a, b) => a + b.count, 0);
+  const done      = stats?.byStatus?.completed  ?? 0;
+  const cancelled = stats?.byStatus?.cancelled  ?? 0;
+  const pending   = stats?.byStatus?.pending    ?? 0;
+  const revenue   = stats?.revenue?.totalRevenue ?? 0;
 
   const trendData = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((day, i) => ({
     day,
-    bookings:  Math.round((total    / 7) * (0.6 + Math.sin(i)     * 0.4 + Math.random() * 0.3)),
-    completed: Math.round((done     / 7) * (0.7 + Math.cos(i)     * 0.3)),
-    revenue:   Math.round((revenue  / 7) * (0.5 + Math.sin(i + 1) * 0.5 + Math.random() * 0.3)),
+    bookings:  Math.round((total   / 7) * (0.6 + Math.sin(i)     * 0.4 + Math.random() * 0.3)),
+    completed: Math.round((done    / 7) * (0.7 + Math.cos(i)     * 0.3)),
+    revenue:   Math.round((revenue / 7) * (0.5 + Math.sin(i + 1) * 0.5 + Math.random() * 0.3)),
   }));
 
   const ChartCard = ({ title, sub, children }) => (
@@ -1586,15 +1602,15 @@ function AnalysisSection({ dispatch }) {
 
       {/* KPI row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Bookings"      value={total}                      sub="All statuses combined"         icon={Layers}      color="var(--primary)" loading={statsLoading} />
-        <StatCard label="Revenue Completed"   value={currency(revenue)}          sub={`${done} completed`}          icon={DollarSign}  color="var(--success)" loading={statsLoading} />
-        <StatCard label="Completion Rate"     value={`${pct(done, total)}%`}     sub={`${done} of ${total}`}        icon={CheckCircle} color="var(--success)" loading={statsLoading} />
-        <StatCard label="Cancellation Rate"   value={`${pct(cancelled, total)}%`} sub={`${cancelled} cancelled`}   icon={XCircle}     color="var(--error)"   loading={statsLoading} />
+        <StatCard label="Total Bookings"    value={total}                      sub="All statuses combined"    icon={Layers}      color="var(--primary)" loading={statsLoading} />
+        <StatCard label="Revenue"           value={currency(revenue)}          sub={`${done} completed`}     icon={DollarSign}  color="var(--success)" loading={statsLoading} />
+        <StatCard label="Completion Rate"   value={`${pct(done, total)}%`}     sub={`${done} of ${total}`}   icon={CheckCircle} color="var(--success)" loading={statsLoading} />
+        <StatCard label="Cancellation Rate" value={`${pct(cancelled, total)}%`} sub={`${cancelled} cancelled`} icon={XCircle}   color="var(--error)"   loading={statsLoading} />
       </div>
 
       {/* Charts row 1 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <ChartCard title="Booking Status Distribution" sub="Breakdown by lifecycle status">
+        <ChartCard title="Status Distribution" sub="Breakdown by lifecycle status">
           {statusData.length > 0 ? (
             <ResponsiveContainer width="100%" height={220}>
               <PieChart>
@@ -1626,7 +1642,7 @@ function AnalysisSection({ dispatch }) {
       </div>
 
       {/* Weekly trend */}
-      <ChartCard title="Weekly Booking Trend" sub="Estimated daily bookings, completions, and revenue">
+      <ChartCard title="Weekly Booking Trend" sub="Daily bookings, completions, and revenue estimate">
         <ResponsiveContainer width="100%" height={230}>
           <AreaChart data={trendData} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
             <defs>
@@ -1654,7 +1670,7 @@ function AnalysisSection({ dispatch }) {
 
       {/* Charts row 2 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <ChartCard title="Completion vs Cancellation" sub="Radial comparison — % of total bookings">
+        <ChartCard title="Completion vs Cancellation" sub="Radial % of total bookings">
           <ResponsiveContainer width="100%" height={200}>
             <RadialBarChart cx="50%" cy="50%" innerRadius={30} outerRadius={90}
               data={[
@@ -1698,7 +1714,7 @@ function AnalysisSection({ dispatch }) {
 
 export default function BookingsManagement() {
   const dispatch = useDispatch();
-  const user     = useSelector(selectUser);
+  const user     = useSelector(selectCurrentUser); // FIXED: was selectUser
 
   const bookings      = useSelector(selectAdminBookings);
   const meta          = useSelector(selectAdminBookingsMeta);
@@ -1720,13 +1736,6 @@ export default function BookingsManagement() {
   const adminRefund         = useSelector(selectAdminRefund);
   const adminOpStatusUpdate = useSelector(selectAdminOpStatusUpdate);
 
-  useEffect(() => {
-    if (adminStatusUpdate)   { loadBookings(); dispatch(resetAdminStatusUpdate()); }
-    if (adminAssignment)     { loadBookings(); dispatch(resetAdminAssignment()); }
-    if (adminRefund)         { loadBookings(); dispatch(resetAdminRefund()); }
-    if (adminOpStatusUpdate) { dispatch(resetAdminOpStatusUpdate()); }
-  }, [adminStatusUpdate, adminAssignment, adminRefund, adminOpStatusUpdate]); // eslint-disable-line
-
   const loadBookings = useCallback(() => {
     dispatch(fetchAdminBookings({
       page, limit: 18,
@@ -1737,6 +1746,23 @@ export default function BookingsManagement() {
       to:          filterTo     || undefined,
     }));
   }, [dispatch, page, filterStatus, filterType, search, filterFrom, filterTo]);
+
+  // Reload + reset after successful mutations
+  useEffect(() => {
+    if (adminStatusUpdate)   { loadBookings(); dispatch(resetAdminStatusUpdate()); }
+  }, [adminStatusUpdate]); // eslint-disable-line
+
+  useEffect(() => {
+    if (adminAssignment)     { loadBookings(); dispatch(resetAdminAssignment()); }
+  }, [adminAssignment]); // eslint-disable-line
+
+  useEffect(() => {
+    if (adminRefund)         { loadBookings(); dispatch(resetAdminRefund()); }
+  }, [adminRefund]); // eslint-disable-line
+
+  useEffect(() => {
+    if (adminOpStatusUpdate) { dispatch(resetAdminOpStatusUpdate()); }
+  }, [adminOpStatusUpdate, dispatch]);
 
   useEffect(() => { loadBookings(); }, [loadBookings]);
 
@@ -1758,9 +1784,8 @@ export default function BookingsManagement() {
       <header className="sticky top-0 z-40 bg-base-100/90 backdrop-blur-strong border-b border-base-300">
         <div className="flex items-center justify-between px-6 py-2.5">
           <div className="flex items-center gap-4">
-            {/* Brand */}
             <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center shadow-primary/20 shadow-md">
+              <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center shadow-md">
                 <Shield size={14} className="text-primary-content" />
               </div>
               <div>
@@ -1769,10 +1794,9 @@ export default function BookingsManagement() {
               </div>
             </div>
 
-            {/* Section toggle */}
             <div className="flex items-center gap-1 bg-base-200 border border-base-300 rounded-xl p-1">
               {[
-                { id: 'bookings', label: 'Bookings', icon: Layers   },
+                { id: 'bookings', label: 'Bookings', icon: Layers    },
                 { id: 'analysis', label: 'Analysis', icon: BarChart2 },
               ].map(({ id, label, icon: Icon }) => (
                 <button
@@ -1791,7 +1815,7 @@ export default function BookingsManagement() {
               {user?.name ?? 'Admin'} · {user?.role}
             </span>
             <span className="badge badge-primary gap-1">
-              <Zap size={9} /> {meta.total} bookings
+              <Zap size={9} /> {meta?.total ?? 0} bookings
             </span>
           </div>
         </div>
@@ -1813,7 +1837,6 @@ export default function BookingsManagement() {
 
               {/* Filters */}
               <div className="shrink-0 p-4 border-b border-base-300 bg-base-200/60 flex flex-col gap-2.5">
-                {/* Search */}
                 <div className="relative">
                   <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/35 pointer-events-none" />
                   <input
@@ -1824,7 +1847,6 @@ export default function BookingsManagement() {
                   />
                 </div>
 
-                {/* Filter toggle */}
                 <button
                   onClick={() => setFiltersOpen((p) => !p)}
                   className={`btn btn-sm gap-1.5 w-full justify-between ${hasActiveFilters ? 'btn-primary' : 'bg-base-300 text-base-content'}`}
@@ -1832,7 +1854,7 @@ export default function BookingsManagement() {
                   <div className="flex items-center gap-1.5">
                     <Filter size={10} />
                     Filters
-                    {hasActiveFilters && <span className="badge badge-xs badge-primary-content bg-primary-content/30">Active</span>}
+                    {hasActiveFilters && <span className="badge badge-xs">Active</span>}
                   </div>
                   {filtersOpen ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
                 </button>
@@ -1873,7 +1895,6 @@ export default function BookingsManagement() {
                   )}
                 </AnimatePresence>
 
-                {/* Actions */}
                 <div className="flex gap-2">
                   <button onClick={loadBookings} className="btn btn-sm flex-1 gap-1.5 bg-base-300 text-base-content">
                     {listLoading ? <Spinner size={11} /> : <RefreshCw size={11} />}
@@ -1889,13 +1910,13 @@ export default function BookingsManagement() {
               {/* Booking list */}
               <div className="flex-1 overflow-y-auto p-3 scrollbar-thin">
                 <AnimatePresence>
-                  {listLoading && bookings.length === 0 ? (
+                  {listLoading && (bookings?.length ?? 0) === 0 ? (
                     Array.from({ length: 6 }).map((_, i) => (
                       <div key={i} className="skeleton h-24 rounded-2xl mb-2" />
                     ))
-                  ) : bookings.length === 0 ? (
+                  ) : (bookings?.length ?? 0) === 0 ? (
                     <EmptyState icon={FileText} text="No bookings found" sub="Try adjusting your search or filters" />
-                  ) : bookings.map((b) => (
+                  ) : (bookings ?? []).map((b) => (
                     <BookingCard
                       key={b._id}
                       booking={b}
@@ -1907,14 +1928,14 @@ export default function BookingsManagement() {
               </div>
 
               {/* Pagination */}
-              {meta.pages > 1 && (
+              {(meta?.pages ?? 0) > 1 && (
                 <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-t border-base-300 bg-base-200/60">
                   <p className="text-[10px] text-base-content/45 m-0">
                     Page {page} of {meta.pages} · {meta.total} total
                   </p>
                   <div className="flex gap-1">
-                    <button disabled={page <= 1}          onClick={() => setPage((p) => p - 1)} className="btn btn-ghost btn-sm btn-circle"><ChevronLeft  size={12} /></button>
-                    <button disabled={page >= meta.pages} onClick={() => setPage((p) => p + 1)} className="btn btn-ghost btn-sm btn-circle"><ChevronRight size={12} /></button>
+                    <button disabled={page <= 1}           onClick={() => setPage((p) => p - 1)} className="btn btn-ghost btn-sm btn-circle"><ChevronLeft  size={12} /></button>
+                    <button disabled={page >= meta.pages}  onClick={() => setPage((p) => p + 1)} className="btn btn-ghost btn-sm btn-circle"><ChevronRight size={12} /></button>
                   </div>
                 </div>
               )}

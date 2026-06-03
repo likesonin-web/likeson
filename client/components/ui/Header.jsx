@@ -25,7 +25,7 @@ import Container from './Container';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import RoleNavLinks from '../RoleNavLinks';
-
+import Marquee from '../Marquee';
 // ── Redux slices ─────────────────────────────────────────────────────────────
 import { fetchNotifications, selectUnreadCount } from '@/store/slices/notificationSlice';
 import { selectCartItems, fetchCart }             from '@/store/slices/pharmacyOrderSlice';
@@ -466,7 +466,7 @@ const WalletWidget = memo(function WalletWidget({ walletBalance, isMobile = fals
       </div>
       <div className="flex flex-col items-start leading-none">
         <span className="text-[8px] font-black uppercase tracking-tighter opacity-50">Balance</span>
-        <span aria-live="polite" className={cn('font-black tracking-tight', isMobile ? 'text-sm' : 'text-[11px]')} style={{ color: accentColor }}>
+        <span aria-live="polite" className={cn('font-black tracking-tight', isMobile ? 'text-xs' : 'text-[11px]')} style={{ color: accentColor }}>
           ₹{(walletBalance ?? 0).toLocaleString('en-IN')}
         </span>
       </div>
@@ -646,7 +646,7 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false, co
       <div className="rounded-2xl border overflow-hidden"
         style={{ borderColor: `color-mix(in srgb, ${accent} 25%, transparent)` }} aria-label="Location settings">
         <div className="flex items-center gap-3 px-4 py-3" style={{ background: triggerBg }}>
-          <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center text-sm font-black text-white shadow-sm"
+          <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center text-xs font-black text-white shadow-sm"
             style={{ background: triggerGrad }} aria-hidden="true">{nameInitial}</div>
           <div className="flex-1 min-w-0">
             <p className="text-[10px] font-black uppercase tracking-widest opacity-40 leading-none mb-0.5">{firstName}'s Location</p>
@@ -707,7 +707,7 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false, co
               role="dialog" aria-modal="true" aria-label="Change location"
               className="absolute left-0 top-full mt-2 w-[300px] z-[200] rounded-2xl shadow-2xl border border-base-300 bg-base-100 overflow-hidden origin-top-left">
               <div className="px-3 py-3 flex items-center gap-3 border-b border-base-300" style={{ background: triggerBg }}>
-                <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center text-sm font-black text-white shadow"
+                <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center text-xs font-black text-white shadow"
                   style={{ background: triggerGrad }} aria-hidden="true">{nameInitial}</div>
                 <div className="flex-1 min-w-0">
                   <p className="text-[10px] font-black uppercase tracking-widest opacity-40 leading-none mb-0.5">{firstName}'s Location</p>
@@ -778,17 +778,14 @@ const LocationWidget = memo(function LocationWidget({ mood, isMobile = false, co
             role="dialog" aria-modal="true" aria-label="Change location"
             className="absolute left-0 top-full mt-2 w-[320px] z-[200] rounded-2xl shadow-2xl border border-base-300 bg-base-100 overflow-hidden origin-top-left">
             <div className="px-4 py-3 flex items-center gap-3 border-b border-base-300" style={{ background: triggerBg }}>
-              <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center text-base font-black text-white shadow"
+              <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center   font-black text-white shadow"
                 style={{ background: triggerGrad }} aria-hidden="true">{nameInitial}</div>
               <div className="flex-1 min-w-0">
                 <p className="text-[10px] font-black uppercase tracking-widest opacity-40 leading-none mb-0.5">{firstName}'s Location</p>
                 <p className="text-[13px] font-black truncate leading-tight" style={{ color: accent }}>{cityLabel}</p>
                 {regionLabel && <p className="text-[10px] opacity-40 truncate">{regionLabel}</p>}
               </div>
-              <div className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black"
-                style={{ background: `color-mix(in srgb, ${accent} 18%, transparent)`, color: accent }} aria-hidden="true">
-                <Pencil size={10} strokeWidth={2.5} /><span>Edit</span>
-              </div>
+              
             </div>
             <div className="p-3 flex flex-col gap-2.5">
               <MotionButton whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} type="button"
@@ -873,7 +870,7 @@ const AvatarDropdown = memo(function AvatarDropdown({ user, userAvatar, activePa
                 <Image src={userAvatar} alt="" width={40} height={40} className="rounded-lg object-cover flex-shrink-0"
                   aria-hidden="true" unoptimized={userAvatar.includes('ui-avatars.com')} />
                 <div className="min-w-0">
-                  <p className="text-sm font-black uppercase tracking-tight truncate">{user.name}</p>
+                  <p className="text-xs font-black uppercase tracking-tight truncate">{user.name}</p>
                   <p className="text-[10px] opacity-50 truncate">{user.email}</p>
                   <span className="mt-1 inline-block px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest"
                     style={{ background: activePalette?.pillBg ?? 'var(--primary)', color: activePalette?.pillText ?? 'var(--primary-content)' }}>
@@ -1219,8 +1216,7 @@ const Header = () => {
         style={{ background: 'color-mix(in srgb, var(--base-100) 88%, transparent)' }}
         role="banner">
 
-        {/* Accent stripe */}
-        <MotionDiv className="h-0.5 w-full relative z-[101]" style={accentStripeStyle} layout aria-hidden="true" />
+        <Marquee/>
 
         {/* ── TOP BAR ─────────────────────────────────────────────────────── */}
         <div className="py-2 md:py-3 relative z-[101]">
@@ -1523,7 +1519,7 @@ const Header = () => {
                   <div className="w-12 h-12 rounded-full bg-base-200 flex items-center justify-center" aria-hidden="true">
                     <User className="opacity-20" />
                   </div>
-                  <p className="text-sm font-bold opacity-60">Sign in to manage your appointments and orders</p>
+                  <p className="text-xs font-bold opacity-60">Sign in to manage your appointments and orders</p>
                   <Link href="/login" onClick={() => setMobileOpen(false)} className="w-full">
                     <Button className="w-full rounded-xl py-6 text-white font-black uppercase tracking-widest">Sign In</Button>
                   </Link>
@@ -1553,7 +1549,7 @@ const Header = () => {
                               <link.icon size={22} strokeWidth={2.5} />
                             </div>
                             <div className="flex flex-col">
-                              <span className="font-black text-sm uppercase tracking-tight" style={{ color: isActive ? lAccent : 'var(--base-content)' }}>
+                              <span className="font-black text-xs uppercase tracking-tight" style={{ color: isActive ? lAccent : 'var(--base-content)' }}>
                                 {link.name}
                               </span>
                               {isActive && (
@@ -1580,7 +1576,7 @@ const Header = () => {
                 {(isCustomer || userRole === 'pharmacy') && (
                   <Link href="/pharmacy/cart" onClick={() => setMobileOpen(false)}>
                     <MotionButton whileTap={{ scale: 0.97 }} aria-label={`View cart with ${cartCount} items`}
-                      className="w-full h-14 rounded-2xl font-black text-sm uppercase tracking-widest bg-base-200 border border-base-300 flex items-center justify-center gap-3 focus-visible:outline-none focus-visible:ring-2">
+                      className="w-full h-14 rounded-2xl font-black text-xs uppercase tracking-widest bg-base-200 border border-base-300 flex items-center justify-center gap-3 focus-visible:outline-none focus-visible:ring-2">
                       <ShoppingCart size={18} aria-hidden="true" /> My Cart ({cartCount})
                     </MotionButton>
                   </Link>
@@ -1589,7 +1585,7 @@ const Header = () => {
                 {isCustomer && (
                   <Link href="/book-appointment" onClick={() => setMobileOpen(false)}>
                     <MotionButton whileTap={{ scale: 0.97 }} aria-label="Book a medical appointment"
-                      className="w-full h-14 rounded-2xl mb-20 font-black text-sm uppercase tracking-widest text-white flex items-center justify-center gap-3 transition-all shadow-xl focus-visible:outline-none focus-visible:ring-2"
+                      className="w-full h-14 rounded-2xl mb-20 font-black text-xs uppercase tracking-widest text-white flex items-center justify-center gap-3 transition-all shadow-xl focus-visible:outline-none focus-visible:ring-2"
                       style={{ background: mood?.barGradient ?? 'var(--primary)', boxShadow: mood ? `0 8px 30px ${mood.shadowColor}` : '0 8px 20px color-mix(in srgb, var(--primary) 20%, transparent)' }}>
                       <Calendar size={20} aria-hidden="true" /> Book Appointment
                     </MotionButton>

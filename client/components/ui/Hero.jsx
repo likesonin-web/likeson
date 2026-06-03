@@ -211,16 +211,6 @@ function SignalBars({ strength = 4 }) {
   );
 }
 
-function WifiIcon({ connected = true }) {
-  return (
-    <svg width="16" height="12" viewBox="0 0 16 12" fill="none" aria-label={connected ? "WiFi connected" : "WiFi disconnected"}>
-      <circle cx="8" cy="10.5" r="1.5" fill="white" />
-      <path d="M4.5 7.5a4.5 4.5 0 0 1 7 0" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity={connected ? 1 : 0.25} />
-      <path d="M1.5 4.5a9 9 0 0 1 13 0" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity={connected ? 0.6 : 0.15} />
-    </svg>
-  );
-}
-
 function BatteryIcon({ level = 1, charging = false }) {
   const fillWidth = Math.max(1, Math.round(18 * level));
   const fillColor = level <= 0.2 ? "var(--error)" : "white";
@@ -239,7 +229,6 @@ function PhoneStatusBar() {
   const [time, setTime] = useState(() => format12Hour(new Date()));
   const [battery, setBattery] = useState({ level: 1, charging: false, supported: false });
   const [signal, setSignal] = useState(4);
-  const [wifi, setWifi] = useState(true);
 
   useEffect(() => {
     const id = setInterval(() => setTime(format12Hour(new Date())), 1000);
@@ -263,12 +252,10 @@ function PhoneStatusBar() {
 
   const readNetwork = useCallback(() => {
     const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-    if (!c) { setSignal(navigator.onLine ? 4 : 0); setWifi(navigator.onLine); return; }
+    if (!c) { setSignal(navigator.onLine ? 4 : 0); return; }
     const type = c.effectiveType || c.type || "";
     const dl = c.downlink ?? 10;
-    const isWifi = c.type === "wifi" || c.type === "ethernet";
     setSignal(!navigator.onLine ? 0 : (type.includes("2g") || dl < 0.5) ? 1 : dl < 2 ? 2 : dl < 8 ? 3 : 4);
-    setWifi(isWifi || dl >= 8);
   }, []);
 
   useEffect(() => {
@@ -290,13 +277,18 @@ function PhoneStatusBar() {
         </span>
       </div>
       
-      {/* Dynamic Island */}
-      <div className="w-[110px] h-[32px] bg-black rounded-[20px] shadow-[0_0_0_1px_rgba(255,255,255,0.05)_inset]" />
+      {/* Dynamic Island with Camera */}
+      <div className="w-[110px] h-[32px] bg-black rounded-[20px] shadow-[0_0_0_1px_rgba(255,255,255,0.05)_inset] flex items-center justify-end pr-2.5">
+        {/* Subtle Camera Lens */}
+        <div className="w-3.5 h-3.5 rounded-full bg-[#111] border border-white/5 shadow-[inset_0_1px_2px_rgba(0,0,0,0.8)] flex items-center justify-center relative overflow-hidden">
+          <div className="absolute w-1 h-1 rounded-full bg-blue-800/40" />
+          <div className="absolute top-[3px] right-[3px] w-[1px] h-[1px] rounded-full bg-blue-300/80" />
+        </div>
+      </div>
       
-      {/* Right Icons */}
+      {/* Right Icons (Signal & Battery Only) */}
       <div className="w-[70px] flex justify-end items-center gap-[6px] pr-1 pt-0.5">
         <SignalBars strength={signal} />
-        <WifiIcon connected={wifi} />
         <BatteryIcon level={battery.level} charging={battery.charging} />
       </div>
     </div>

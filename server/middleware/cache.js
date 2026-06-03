@@ -4,7 +4,7 @@ const CACHE_VERSION = 'v1'; // bump on deploy to bust all cache
 
 const NON_CACHEABLE_PATTERNS = [
   '/tracking', '/otp', '/payment', '/notification',
-  '/driver/location', '/live', '/verify', '/auth',
+  '/driver/location', '/live', '/verify', '/auth','consultations',
 ];
 
 const MAX_PAYLOAD_BYTES = 512 * 1024; // 512 KB max — skip large payloads

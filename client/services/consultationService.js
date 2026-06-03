@@ -1,530 +1,79 @@
-/**
- * consultationService.js
- *
- * Client-side Socket.IO service for /consultations namespace.
- * Mirrors ALL events from consultationSocketService.js (server).
- */
-
-import { io } from "socket.io-client";
-import {
-  rtJoined,
-  rtStatusUpdate,
-  rtParticipantConnected,
-  rtParticipantDisconnected,
-  rtParticipantJoined,
-  rtParticipantLeft,
-  rtParticipantMuted,
-  rtParticipantUnmuted,
-  rtParticipantKicked,
-  rtYouWereKicked,
-  rtYouWereMuted,
-  rtYouWereUnmuted,
-  rtPatientEnteredWaiting,
-  rtWaitingRoomApproved,
-  rtWaitingRoomRejected,
-  rtWaitingRoomTimedOut,
-  rtHandRaised,
-  rtHandLowered,
-  rtScreenShareStarted,
-  rtScreenShareStopped,
-  rtConsentUpdated,
-  rtPrescriptionEvent,
-  rtAttachmentUploaded,
-  rtNetworkQuality,
-  rtReconnectAttempt,
-  rtReconnectSuccess,
-  rtDoctorOnline,
-  rtDoctorOffline,
-  rtDoctorReassigned,
-  rtAdminBroadcast,
-  rtConnectionLost, // ← was missing
-  rtConnectionRecovered, // ← was missing
-  rtStateSynced, // ← was missing
-  resetRt,
-} from "@/store/slices/consultationSlice";
-
-// ─── Config ───────────────────────────────────────────────────────────────────
-
-const SOCKET_URL =
-  process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5000";
-const NAMESPACE = "/consultations";
-
-// ─── Module state ─────────────────────────────────────────────────────────────
-
-/** @type {import('socket.io-client').Socket | null} */
-let socket = null;
-
-/** @type {import('@reduxjs/toolkit').EnhancedStore | null} */
-let _store = null;
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const dispatch = (action) => {
-  if (_store) _store.dispatch(action);
-};
-
-const getToken = () => {
-  const state = _store?.getState();
-  return state?.user?.token || "";
-};
-
-// ─── Connect ──────────────────────────────────────────────────────────────────
-
-const connect = (store) => {
-  if (socket?.connected) return;
-
-  _store = store;
-
-  socket = io(`${SOCKET_URL}${NAMESPACE}`, {
-    transports: ["websocket", "polling"],
-    withCredentials: true,
-    auth: (cb) => cb({ token: getToken() }),
-    reconnection: true,
-    reconnectionDelay: 1000,
-    reconnectionAttempts: 10,
-  });
-
-  _registerCoreListeners();
-};
-
-// ─── Disconnect ───────────────────────────────────────────────────────────────
-
-const disconnect = () => {
-  if (socket) {
-    socket.removeAllListeners();
-    socket.disconnect();
-    socket = null;
-  }
-  dispatch(resetRt());
-};
-
-// ─── Room join / leave ────────────────────────────────────────────────────────
-
-const joinConsultation = ({ consultationId, bookingId }) => {
-  if (!socket?.connected) {
-    console.warn(
-      "[ConsultationService] Socket not connected. Cannot join consultation.",
-    );
-    return;
-  }
-  socket.emit("join_consultation", { consultationId, bookingId });
-};
-
-const leaveConsultation = ({ consultationId, bookingId, reason }) => {
-  if (!socket?.connected) return;
-  socket.emit("leave_consultation", { consultationId, bookingId, reason });
-};
-
-// ─── Agora SDK bridge ─────────────────────────────────────────────────────────
-
-const emitParticipantJoin = ({
-  consultationId,
-  agoraUid,
-  deviceType,
-  browser,
-  os,
-}) => {
-  if (!socket?.connected) {
-    console.warn(
-      "[ConsultationService] Socket not connected. Cannot emit participant_join.",
-    );
-    return;
-  }
-  socket.emit("participant_join", {
-    consultationId,
-    agoraUid,
-    deviceType,
-    browser,
-    os,
-  });
-};
-
-const emitParticipantLeave = ({ consultationId, reason }) => {
-  if (!socket?.connected) return;
-  socket.emit("participant_leave", { consultationId, reason });
-};
-
-const emitNetworkQuality = ({
-  consultationId,
-  uplinkNetworkQuality,
-  downlinkNetworkQuality,
-  latency,
-  packetLoss,
-}) => {
-  if (!socket?.connected) return;
-  socket.emit("network_quality", {
-    consultationId,
-    uplinkNetworkQuality,
-    downlinkNetworkQuality,
-    latency,
-    packetLoss,
-  });
-};
-
-// ─── Screen share ─────────────────────────────────────────────────────────────
-
-const emitScreenShareStart = ({ consultationId }) => {
-  if (!socket?.connected) return;
-  socket.emit("screen_share_start", { consultationId });
-};
-
-const emitScreenShareStop = ({ consultationId }) => {
-  if (!socket?.connected) return;
-  socket.emit("screen_share_stop", { consultationId });
-};
-
-// ─── Reconnect ────────────────────────────────────────────────────────────────
-
-const emitReconnectAttempt = ({ consultationId, reason }) => {
-  if (!socket?.connected) return;
-  socket.emit("participant_reconnect_attempt", { consultationId, reason });
-};
-
-const emitReconnectSuccess = ({ consultationId }) => {
-  if (!socket?.connected) return;
-  socket.emit("participant_reconnect_success", { consultationId });
-};
-
-// ─── Interaction ──────────────────────────────────────────────────────────────
-
-const emitRaiseHand = ({ consultationId }) => {
-  if (!socket?.connected) return;
-  socket.emit("raise_hand", { consultationId });
-};
-
-const emitLowerHand = ({ consultationId }) => {
-  if (!socket?.connected) return;
-  socket.emit("lower_hand", { consultationId });
-};
-
-// ─── Telemedicine ─────────────────────────────────────────────────────────────
-
-const emitConsentGiven = ({ consultationId, consentType = "telemedicine" }) => {
-  if (!socket?.connected) return;
-  socket.emit("consent_given", { consultationId, consentType });
-};
-
-const emitDoctorStatus = (isOnline) => {
-  if (!socket?.connected) return;
-  socket.emit("doctor_status", { isOnline });
-};
-
-const emitSdkError = ({
-  consultationId,
-  code,
-  message,
-  severity = "error",
-}) => {
-  if (!socket?.connected) return;
-  socket.emit("sdk_error", { consultationId, code, message, severity });
-};
-
-// ─── Host actions ─────────────────────────────────────────────────────────────
-
-const emitKickParticipant = ({ consultationId, targetUserId, reason }) => {
-  if (!socket?.connected) return;
-  socket.emit("kick_participant", { consultationId, targetUserId, reason });
-};
-
-const emitMuteParticipant = ({
-  consultationId,
-  targetUserId,
-  muted = true,
-}) => {
-  if (!socket?.connected) return;
-  socket.emit("mute_participant", { consultationId, targetUserId, muted });
-};
-
-// ─── Admin ────────────────────────────────────────────────────────────────────
-
-const emitAdminBroadcast = ({ message, targetRoom }) => {
-  if (!socket?.connected) return;
-  socket.emit("admin_broadcast", { message, targetRoom });
-};
-
-// ─── Heartbeat ────────────────────────────────────────────────────────────────
-
-const ping = () => {
-  if (!socket?.connected) return;
-  socket.emit("ping");
-};
-
-// ─── Connection status helpers ────────────────────────────────────────────────
-
-const isConnected = () => !!socket?.connected;
-const getSocket = () => socket;
-
-// ─── Core listener registration ───────────────────────────────────────────────
-
-const _registerCoreListeners = () => {
-  if (!socket) return;
-
-  // ── Connection ────────────────────────────────────────────────────────────
-
-  let _reconnectTimer = null;
-
-  socket.on("connect", () => {
-    console.log("[ConsultationService] Connected:", socket.id);
-    dispatch(rtConnectionRecovered());
-
-    // Debounce rejoin — prevent double-emit on rapid reconnect
-    clearTimeout(_reconnectTimer);
-    _reconnectTimer = setTimeout(() => {
-      const state = _store?.getState()?.consultation?.rt;
-      if (state?.consultationId && state?.bookingId) {
-        socket.emit("join_consultation", {
-          consultationId: state.consultationId,
-          bookingId: state.bookingId,
-        });
-        // Request full state sync after rejoin
-        setTimeout(() => {
-          socket.emit("sync_consultation_state", {
-            consultationId: state.consultationId,
-          });
-        }, 500); // wait for join_consultation to complete
-      }
-    }, 300);
-  });
-
-  socket.on("consultation_state_sync", (payload) => {
-    dispatch(rtStateSynced(payload));
-  });
-
-  socket.on("disconnect", (reason) => {
-    console.warn("[ConsultationService] Disconnected:", reason);
-    // Do NOT resetRt() here — it wipes the waiting queue
-    dispatch(rtConnectionLost({ reason }));
-  });
-
-  socket.on("connect_error", (err) => {
-    console.error("[ConsultationService] Connect error:", err.message);
-    const fatal = [
-      "SESSION_REVOKED",
-      "AUTH_BLOCKED",
-      "TOKEN_EXPIRED",
-      "AUTH_USER_NOT_FOUND",
-    ];
-    if (fatal.includes(err.message)) {
-      console.warn("[ConsultationService] Fatal auth error — disconnect");
-      socket.disconnect();
-    }
-  });
-
-  socket.on("pong", ({ ts }) => {
-    // optional: latency = Date.now() - ts
-  });
-
-  socket.on("error", ({ message }) => {
-    console.error("[ConsultationService] Server error:", message);
-  });
-
-  // ── Joined ────────────────────────────────────────────────────────────────
-
-  socket.on("joined_consultation", (payload) => {
-    dispatch(rtJoined(payload));
-  });
-
-  // ── Participant socket connect/disconnect ─────────────────────────────────
-
-  socket.on("participant_connected", (payload) => {
-    dispatch(rtParticipantConnected(payload));
-  });
-
-  socket.on("participant_disconnected", (payload) => {
-    dispatch(rtParticipantDisconnected(payload));
-  });
-
-  // ── Agora participant join/leave ──────────────────────────────────────────
-
-  socket.on("participant_joined", (payload) => {
-    dispatch(rtParticipantJoined(payload));
-  });
-
-  socket.on("participant_left", (payload) => {
-    dispatch(rtParticipantLeft(payload));
-  });
-
-  // ── Mute / unmute ─────────────────────────────────────────────────────────
-
-  socket.on("participant_muted", (payload) => {
-    dispatch(rtParticipantMuted(payload));
-  });
-
-  socket.on("participant_unmuted", (payload) => {
-    dispatch(rtParticipantUnmuted(payload));
-  });
-
-  // ── Kick ──────────────────────────────────────────────────────────────────
-
-  socket.on("participant_kicked", (payload) => {
-    dispatch(rtParticipantKicked(payload));
-  });
-
-  // ── Personal events ───────────────────────────────────────────────────────
-
-  socket.on("you_were_kicked", (payload) => {
-    dispatch(rtYouWereKicked(payload));
-  });
-
-  socket.on("you_were_muted", (payload) => {
-    dispatch(rtYouWereMuted(payload));
-  });
-
-  socket.on("you_were_unmuted", (payload) => {
-    dispatch(rtYouWereUnmuted(payload));
-  });
-
-  socket.on("waiting_room_timed_out", (payload) => {
-    dispatch(rtWaitingRoomTimedOut(payload));
-  });
-
-  // ── Consultation lifecycle ────────────────────────────────────────────────
-
-  const lifecycleEvents = [
-    "consultation_created",
-    "consultation_accepted",
-    "consultation_confirmed",
-    "consultation_started",
-    "consultation_paused",
-    "consultation_resumed",
-    "consultation_ended",
-    "consultation_cancelled",
-  ];
-
-  lifecycleEvents.forEach((event) => {
-    socket.on(event, (payload) => {
-      dispatch(rtStatusUpdate(payload));
-    });
-  });
-
-  // ── Waiting room ──────────────────────────────────────────────────────────
-
-  socket.on("patient_entered_waiting_room", (payload) => {
-    dispatch(rtPatientEnteredWaiting(payload));
-  });
-
-  socket.on("waiting_room_approved", (payload) => {
-    dispatch(rtWaitingRoomApproved(payload));
-  });
-
-  socket.on("waiting_room_rejected", (payload) => {
-    dispatch(rtWaitingRoomRejected(payload));
-  });
-
-  // ── Hand raise ────────────────────────────────────────────────────────────
-
-  socket.on("hand_raised", (payload) => {
-    dispatch(rtHandRaised(payload));
-  });
-
-  socket.on("hand_lowered", (payload) => {
-    dispatch(rtHandLowered(payload));
-  });
-
-  // ── Screen share ──────────────────────────────────────────────────────────
-
-  socket.on("screen_share_started", (payload) => {
-    dispatch(rtScreenShareStarted(payload));
-  });
-
-  socket.on("screen_share_stopped", (payload) => {
-    dispatch(rtScreenShareStopped(payload));
-  });
-
-  // ── Consent ───────────────────────────────────────────────────────────────
-
-  socket.on("consent_updated", (payload) => {
-    dispatch(rtConsentUpdated(payload));
-  });
-
-  // ── Prescription ──────────────────────────────────────────────────────────
-
-  socket.on("prescription_uploaded", (payload) => {
-    dispatch(rtPrescriptionEvent(payload));
-  });
-
-  socket.on("prescription_issued", (payload) => {
-    dispatch(rtPrescriptionEvent(payload));
-  });
-
-  // ── Attachment ────────────────────────────────────────────────────────────
-
-  socket.on("attachment_uploaded", (payload) => {
-    dispatch(rtAttachmentUploaded(payload));
-  });
-
-  // ── Network quality ───────────────────────────────────────────────────────
-
-  socket.on("network_quality_update", (payload) => {
-    dispatch(rtNetworkQuality(payload));
-  });
-
-  // ── Reconnect ─────────────────────────────────────────────────────────────
-
-  socket.on("participant_reconnect_attempt", (payload) => {
-    dispatch(rtReconnectAttempt(payload));
-  });
-
-  socket.on("participant_reconnect_success", (payload) => {
-    dispatch(rtReconnectSuccess(payload));
-  });
-
-  // ── Doctor presence ───────────────────────────────────────────────────────
-
-  socket.on("doctor_online", (payload) => {
-    dispatch(rtDoctorOnline(payload));
-  });
-
-  socket.on("doctor_offline", (payload) => {
-    dispatch(rtDoctorOffline(payload));
-  });
-
-  // ── Doctor reassigned ─────────────────────────────────────────────────────
-
-  socket.on("doctor_reassigned", (payload) => {
-    dispatch(rtDoctorReassigned(payload));
-  });
-
-  // ── Admin broadcast ───────────────────────────────────────────────────────
-
-  socket.on("admin_broadcast", (payload) => {
-    dispatch(rtAdminBroadcast(payload));
-  });
-};
-
-// ─── Exported service ─────────────────────────────────────────────────────────
-
-const consultationService = {
-  connect,
-  disconnect,
-  isConnected,
-  getSocket,
-
-  joinConsultation,
-  leaveConsultation,
-
-  emitParticipantJoin,
-  emitParticipantLeave,
-  emitNetworkQuality,
-  emitReconnectAttempt,
-  emitReconnectSuccess,
-  emitSdkError,
-
-  emitScreenShareStart,
-  emitScreenShareStop,
-
-  emitRaiseHand,
-  emitLowerHand,
-
-  emitConsentGiven,
-  emitDoctorStatus,
-
-  emitKickParticipant,
-  emitMuteParticipant,
-
-  emitAdminBroadcast,
-
-  ping,
-};
-
-export default consultationService;
+// services/consultationService.js
+// All REST calls — no Redux logic.
+
+import API from "@/store/api";
+
+export const createConsultationAPI = (data) => API.post("/consultations/create", data);
+export const getConsultationByIdAPI = (id) => API.get(`/consultations/${id}`);
+export const getConsultationByBookingAPI = (bookingId) => API.get(`/consultations/booking/${bookingId}`);
+export const listConsultationsAPI = (params) => API.get("/consultations/admin/all", { params });
+export const updateConsultationAPI = (id, data) => API.patch(`/consultations/${id}`, data);
+export const cancelConsultationAPI = (id, reason, refundable = false) =>
+  API.post(`/consultations/${id}/cancel`, { reason, refundable });
+export const deleteConsultationAPI = (id, reason) =>
+  API.delete(`/consultations/${id}`, { data: { reason } });
+
+export const joinConsultationAPI = (id, deviceInfo = {}) =>
+  API.post(`/consultations/${id}/join`, { deviceInfo });
+export const leaveConsultationAPI = (id, metrics = {}) =>
+  API.post(`/consultations/${id}/leave`, { metrics });
+export const startConsultationAPI = (id) => API.post(`/consultations/${id}/start`);
+export const endConsultationAPI = (id) => API.post(`/consultations/${id}/end`);
+export const pauseConsultationAPI = (id) => API.post(`/consultations/${id}/pause`);
+export const resumeConsultationAPI = (id) => API.post(`/consultations/${id}/resume`);
+export const reportTechnicalFailureAPI = (id, errorDetails) =>
+  API.post(`/consultations/${id}/technical-failure`, { errorDetails });
+export const markNoShowAPI = (id, who = "patient", reason) =>
+  API.post(`/consultations/${id}/no-show`, { who, reason });
+
+export const enterWaitingRoomAPI = (id) => API.post(`/consultations/${id}/waiting-room/enter`);
+export const leaveWaitingRoomAPI = (id) => API.post(`/consultations/${id}/waiting-room/leave`);
+export const getWaitingRoomStatusAPI = (id) => API.post(`/consultations/${id}/waiting-room/status`);
+
+export const getDoctorScheduleAPI = () => API.get("/consultations/doctor/schedule");
+export const getDoctorHistoryAPI = (params) => API.get("/consultations/doctor/history", { params });
+export const getDoctorStatsAPI = () => API.get("/consultations/doctor/stats");
+export const getDoctorActiveAPI = () => API.get("/consultations/doctor/active");
+export const getDoctorMyAPI = (params) => API.get("/consultations/doctor/my", { params });
+export const getPatientHistoryAPI = (params) => API.get("/consultations/patient/history", { params });
+export const getPatientUpcomingAPI = () => API.get("/consultations/patient/upcoming");
+export const getPatientActiveAPI = () => API.get("/consultations/patient/active");
+export const getMyConsultationsAPI = (params) => API.get("/consultations/my", { params });
+
+export const getAdminAllAPI = (params) => API.get("/consultations/admin/all", { params });
+export const getAdminUpcomingAPI = () => API.get("/consultations/admin/upcoming");
+export const getAdminActiveAPI = () => API.get("/consultations/admin/active");
+export const getAdminStatsAPI = () => API.get("/consultations/admin/stats");
+export const assignAdminAPI = (id, adminId) =>
+  API.post(`/consultations/admin/${id}/assign`, { adminId });
+export const overrideStatusAPI = (id, status, reason) =>
+  API.patch(`/consultations/admin/${id}/override-status`, { status, reason });
+
+export const getParticipantsAPI = (id) => API.get(`/consultations/${id}/participants`);
+export const addParticipantAPI = (id, userId, role) =>
+  API.post(`/consultations/${id}/participants`, { userId, role });
+export const removeParticipantAPI = (id, userId) =>
+  API.delete(`/consultations/${id}/participants/${userId}`);
+export const getParticipantEventsAPI = (id) => API.get(`/consultations/${id}/participants/events`);
+export const updateNetworkQualityAPI = (id, userId, quality) =>
+  API.patch(`/consultations/${id}/participants/${userId}/network-quality`, { quality });
+
+export const saveMetricsAPI = (id, metrics) => API.put(`/consultations/${id}/metrics`, metrics);
+export const getMetricsAPI = (id) => API.get(`/consultations/${id}/metrics`);
+
+export const submitRatingAPI = (id, data) => API.post(`/consultations/${id}/rating`, data);
+export const getRatingAPI = (id) => API.get(`/consultations/${id}/rating`);
+export const editRatingAPI = (id, data) => API.patch(`/consultations/${id}/rating`, data);
+
+// Follow-up — includes followUpDate field
+export const createFollowUpAPI = (id, data) => API.post(`/consultations/${id}/follow-up`, data);
+export const getFollowUpHistoryAPI = (id) => API.get(`/consultations/${id}/follow-up/history`);
+
+export const triggerAutoMissAPI = (cronKey) =>
+  API.post("/consultations/cron/auto-miss", {}, { headers: { "x-cron-key": cronKey } });
+export const triggerTokenRefreshAPI = (cronKey) =>
+  API.post("/consultations/cron/token-refresh", {}, { headers: { "x-cron-key": cronKey } });
+export const triggerRemindersAPI = (cronKey) =>
+  API.post("/consultations/cron/reminders", {}, { headers: { "x-cron-key": cronKey } });
+export const triggerExpirePrescriptionsAPI = (cronKey) =>
+  API.post("/consultations/cron/expire-prescriptions", {}, { headers: { "x-cron-key": cronKey } });

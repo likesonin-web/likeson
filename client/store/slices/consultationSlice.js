@@ -1,41 +1,216 @@
-/**
- * consultationSlice.js — COMPLETE & CORRECTED
- *
- 
- */
+// store/slices/consultationSlice.js
+// Fat slice — all consultation state. Fixes + new features added.
 
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
-import API from "../api";
 import toast from "react-hot-toast";
 
-// ══════════════════════════════════════════════════════════════════════════════
-// SECTION 1 — CREATE
-// ══════════════════════════════════════════════════════════════════════════════
+import {
+  createConsultationAPI,
+  getConsultationByIdAPI,
+  getConsultationByBookingAPI,
+  updateConsultationAPI,
+  cancelConsultationAPI,
+  deleteConsultationAPI,
+  joinConsultationAPI,
+  leaveConsultationAPI,
+  startConsultationAPI,
+  endConsultationAPI,
+  pauseConsultationAPI,
+  resumeConsultationAPI,
+  reportTechnicalFailureAPI,
+  markNoShowAPI,
+  enterWaitingRoomAPI,
+  leaveWaitingRoomAPI,
+  getWaitingRoomStatusAPI,
+  getDoctorScheduleAPI,
+  getDoctorHistoryAPI,
+  getDoctorStatsAPI,
+  getDoctorActiveAPI,
+  getDoctorMyAPI,
+  getPatientHistoryAPI,
+  getPatientUpcomingAPI,
+  getPatientActiveAPI,
+  getMyConsultationsAPI,
+  getAdminAllAPI,
+  getAdminUpcomingAPI,
+  getAdminActiveAPI,
+  getAdminStatsAPI,
+  assignAdminAPI,
+  overrideStatusAPI,
+  getParticipantsAPI,
+  addParticipantAPI,
+  removeParticipantAPI,
+  getParticipantEventsAPI,
+  updateNetworkQualityAPI,
+  saveMetricsAPI,
+  getMetricsAPI,
+  submitRatingAPI,
+  getRatingAPI,
+  editRatingAPI,
+  createFollowUpAPI,
+  getFollowUpHistoryAPI,
+  triggerAutoMissAPI,
+  triggerTokenRefreshAPI,
+  triggerRemindersAPI,
+  triggerExpirePrescriptionsAPI,
+} from "../../services/consultationService";
+
+import {
+  provisionAgoraTokensAPI,
+  getAgoraTokensAPI,
+  refreshAgoraTokensAPI,
+  submitRecordingConsentAPI,
+  startRecordingAPI,
+  stopRecordingAPI,
+  getRecordingUrlsAPI,
+} from "../../services/agoraService";
+
+import {
+  saveVitalsAPI,
+  saveNotesAPI,
+  getNotesAPI,
+  issuePrescriptionAPI,
+  getPrescriptionsAPI,
+  saveReferralAPI,
+  getReferralAPI,
+  sendChatMessageAPI,
+  getChatHistoryAPI,
+  deleteChatMessageAPI,
+  uploadDocumentsAPI,
+} from "../../services/prescriptionService";
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INITIAL STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const initialState = {
+  current: null,
+  status: null,
+  statusMeta: null,
+  list: [],
+  pagination: null,
+  doctorSchedule: [],
+  doctorHistory: [],
+  doctorStats: null,
+  doctorActive: [],
+  patientHistory: [],
+  patientUpcoming: [],
+  patientActive: [],
+  myConsultations: [],
+  adminAll: [],
+  adminUpcoming: [],
+  adminActive: [],
+  adminStats: null,
+  sessionStartedAt: null,
+  sessionEndedAt: null,
+  actualDurationSec: null,
+  agora: {
+    appId: null,
+    channelName: null,
+    rtmChannelName: null,
+    doctorTokens: null,
+    patientTokens: null,
+    myTokens: null,
+    expiresAt: null,
+    tokenRefreshCount: 0,
+    isRecordingEnabled: false,
+    isRecordingActive: false,
+    recordingConsentDoctor: false,
+    recordingConsentPatient: false,
+    recordingStartedAt: null,
+    recordingStoppedAt: null,
+    recordingUrls: [],
+    // Local recording (MediaRecorder)
+    localRecordingActive: false,
+    localRecordingStartedAt: null,
+  },
+  waitingRoom: {
+    patientEnteredAt: null,
+    patientLeft: false,
+    estimatedWaitMin: 5,
+    queuePosition: 1,
+    doctorReadyAt: null,
+  },
+  participants: {
+    core: { doctor: null, patient: null },
+    additional: [],
+    events: [],
+    extra: [],
+  },
+  networkQuality: {},
+  vitals: null,
+  notes: null,
+  prescriptions: [],
+  referral: null,
+  documents: [],
+  prescriptionPreview: null,
+  // FIX: pendingChatIds tracks REST-sent messages to prevent socket double-add
+  chatMessages: [],
+  pendingChatIds: [], // temp IDs optimistically added; cleared when socket confirms
+  typingUsers: [],
+  rating: null,
+  isRated: false,
+  metrics: null,
+  followUpChain: [],
+  followUpChildren: [],
+  cronResults: {},
+  adminMessages: [],
+  loading: {
+    fetch: false,
+    create: false,
+    session: false,
+    agora: false,
+    clinical: false,
+    chat: false,
+    rating: false,
+    participants: false,
+    waitingRoom: false,
+    admin: false,
+    cron: false,
+    followUp: false,
+  },
+  error: null,
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ASYNC THUNKS (unchanged ones kept; new/fixed ones documented)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const mkThunk = (name, fn, loadingDomain, successMsg) =>
+  createAsyncThunk(name, async (arg, { rejectWithValue }) => {
+    try {
+      const res = await fn(arg);
+      if (successMsg) toast.success(successMsg);
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  });
 
 export const createConsultation = createAsyncThunk(
   "consultation/create",
-  async (body, { rejectWithValue }) => {
+  async (data, { rejectWithValue }) => {
     try {
-      const { data } = await API.post("/consultations", body);
-      return data.data.consultation;
+      const res = await createConsultationAPI(data);
+      toast.success("Consultation created");
+      return res.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
     }
   },
 );
-
-// ══════════════════════════════════════════════════════════════════════════════
-// SECTION 2 — READ
-// ══════════════════════════════════════════════════════════════════════════════
 
 export const fetchConsultationById = createAsyncThunk(
   "consultation/fetchById",
   async (id, { rejectWithValue }) => {
     try {
-      const { data } = await API.get(`/consultations/${id}`);
-      return data.data.consultation;
+      return (await getConsultationByIdAPI(id)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      return rejectWithValue(err?.response?.data?.message || err.message);
     }
   },
 );
@@ -44,231 +219,78 @@ export const fetchConsultationByBooking = createAsyncThunk(
   "consultation/fetchByBooking",
   async (bookingId, { rejectWithValue }) => {
     try {
-      const { data } = await API.get(`/consultations/by-booking/${bookingId}`);
-      return data.data.consultation;
+      return (await getConsultationByBookingAPI(bookingId)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      return rejectWithValue(err?.response?.data?.message || err.message);
     }
   },
 );
 
-export const fetchPatientConsultations = createAsyncThunk(
-  "consultation/fetchPatientList",
-  async (params = {}, { rejectWithValue }) => {
+export const updateConsultation = createAsyncThunk(
+  "consultation/update",
+  async ({ id, data }, { rejectWithValue }) => {
     try {
-      const { data } = await API.get("/consultations/patient/me", { params });
-      return data.data;
+      const res = await updateConsultationAPI(id, data);
+      toast.success("Updated");
+      return res.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
     }
   },
 );
 
-export const fetchDoctorConsultations = createAsyncThunk(
-  "consultation/fetchDoctorList",
-  async (params = {}, { rejectWithValue }) => {
+export const cancelConsultation = createAsyncThunk(
+  "consultation/cancel",
+  async ({ id, reason, refundable }, { rejectWithValue }) => {
     try {
-      const { data } = await API.get("/consultations/doctor/me", { params });
-      return data.data;
+      const res = await cancelConsultationAPI(id, reason, refundable);
+      toast.success("Cancelled");
+      return res.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
     }
   },
 );
 
-export const fetchAdminConsultations = createAsyncThunk(
-  "consultation/fetchAdminList",
-  async (params = {}, { rejectWithValue }) => {
+export const deleteConsultation = createAsyncThunk(
+  "consultation/delete",
+  async ({ id, reason }, { rejectWithValue }) => {
     try {
-      const { data } = await API.get("/consultations/admin/all", { params });
-      return data.data;
+      const res = await deleteConsultationAPI(id, reason);
+      toast.success("Deleted");
+      return res.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
     }
   },
 );
 
-export const fetchAdminStats = createAsyncThunk(
-  "consultation/fetchAdminStats",
-  async (params = {}, { rejectWithValue }) => {
+export const joinConsultation = createAsyncThunk(
+  "consultation/join",
+  async ({ id, deviceInfo }, { rejectWithValue }) => {
     try {
-      const { data } = await API.get("/consultations/admin/stats", { params });
-      return data.data;
+      return (await joinConsultationAPI(id, deviceInfo)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
     }
   },
 );
 
-export const fetchAdminFullConsultation = createAsyncThunk(
-  "consultation/fetchAdminFull",
-  async (id, { rejectWithValue }) => {
+export const leaveConsultation = createAsyncThunk(
+  "consultation/leave",
+  async ({ id, metrics }, { rejectWithValue }) => {
     try {
-      const { data } = await API.get(`/consultations/${id}/admin/full`);
-      return data.data.consultation;
+      return (await leaveConsultationAPI(id, metrics)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-export const verifyPrescription = createAsyncThunk(
-  "consultation/verifyPrescription",
-  async (rxNumber, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(
-        `/consultations/prescriptions/verify/${rxNumber}`,
-      );
-      return data.data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-// ══════════════════════════════════════════════════════════════════════════════
-// SECTION 3 — TOKEN / JOIN
-// ══════════════════════════════════════════════════════════════════════════════
-
-export const fetchJoinToken = createAsyncThunk(
-  "consultation/fetchJoinToken",
-  async (id, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(`/consultations/${id}/join-token`);
-      return data.data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-// ══════════════════════════════════════════════════════════════════════════════
-// SECTION 4 — CONSENT
-// ══════════════════════════════════════════════════════════════════════════════
-
-export const submitConsent = createAsyncThunk(
-  "consultation/submitConsent",
-  async (
-    {
-      id,
-      consentType = "telemedicine",
-      accepted = true,
-      consentVersion = "1.0",
-    },
-    { rejectWithValue },
-  ) => {
-    try {
-      await API.patch(`/consultations/${id}/consent`, {
-        consentType,
-        accepted,
-        consentVersion,
-      });
-      return { id, consentType, accepted };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-export const fetchConsents = createAsyncThunk(
-  "consultation/fetchConsents",
-  async (id, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(`/consultations/${id}/consents`);
-      return {
-        id,
-        consents: data.data.consents,
-        telemedicineConsentAccepted: data.data.telemedicineConsentAccepted,
-      };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-// ══════════════════════════════════════════════════════════════════════════════
-// SECTION 5 — WAITING ROOM
-// ══════════════════════════════════════════════════════════════════════════════
-
-export const enterWaitingRoom = createAsyncThunk(
-  "consultation/enterWaitingRoom",
-  async (id, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post(
-        `/consultations/${id}/waiting-room/enter`,
-      );
-      return { id, ...data.data };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-export const approveWaitingRoom = createAsyncThunk(
-  "consultation/approveWaitingRoom",
-  async ({ id, userId }, { rejectWithValue }) => {
-    try {
-      await API.patch(`/consultations/${id}/waiting-room/approve`, { userId });
-      return { id, userId };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-export const rejectWaitingRoom = createAsyncThunk(
-  "consultation/rejectWaitingRoom",
-  async ({ id, userId, reason }, { rejectWithValue }) => {
-    try {
-      await API.patch(`/consultations/${id}/waiting-room/reject`, {
-        userId,
-        reason,
-      });
-      return { id, userId, reason };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-export const fetchWaitingRoom = createAsyncThunk(
-  "consultation/fetchWaitingRoom",
-  async (id, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(`/consultations/${id}/waiting-room`);
-      return { id, queue: data.data.queue };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-// ══════════════════════════════════════════════════════════════════════════════
-// SECTION 6 — LIFECYCLE
-// ══════════════════════════════════════════════════════════════════════════════
-
-export const acceptConsultation = createAsyncThunk(
-  "consultation/accept",
-  async (id, { rejectWithValue }) => {
-    try {
-      const { data } = await API.patch(`/consultations/${id}/accept`);
-      return data.data.consultation;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-export const confirmConsultation = createAsyncThunk(
-  "consultation/confirm",
-  async ({ id, consentAccepted = false }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.patch(`/consultations/${id}/confirm`, {
-        consentAccepted,
-      });
-      return data.data.consultation;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      return rejectWithValue(err?.response?.data?.message || err.message);
     }
   },
 );
@@ -277,24 +299,39 @@ export const startConsultation = createAsyncThunk(
   "consultation/start",
   async (id, { rejectWithValue }) => {
     try {
-      const { data } = await API.patch(`/consultations/${id}/start`);
-      return data.data.consultation;
+      const res = await startConsultationAPI(id);
+      toast.success("Session started");
+      return res.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
+
+export const endConsultation = createAsyncThunk(
+  "consultation/end",
+  async (id, { rejectWithValue }) => {
+    try {
+      const res = await endConsultationAPI(id);
+      toast.success("Session ended");
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
     }
   },
 );
 
 export const pauseConsultation = createAsyncThunk(
   "consultation/pause",
-  async ({ id, reason }, { rejectWithValue }) => {
+  async (id, { rejectWithValue }) => {
     try {
-      const { data } = await API.patch(`/consultations/${id}/pause`, {
-        reason,
-      });
-      return data.data.consultation;
+      return (await pauseConsultationAPI(id)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      return rejectWithValue(err?.response?.data?.message || err.message);
     }
   },
 );
@@ -303,1566 +340,1531 @@ export const resumeConsultation = createAsyncThunk(
   "consultation/resume",
   async (id, { rejectWithValue }) => {
     try {
-      const { data } = await API.patch(`/consultations/${id}/resume`);
-      return data.data.consultation;
+      return (await resumeConsultationAPI(id)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      return rejectWithValue(err?.response?.data?.message || err.message);
     }
   },
 );
 
-export const endConsultation = createAsyncThunk(
-  "consultation/end",
-  async ({ id, reason, prescriptionUploaded = false }, { rejectWithValue }) => {
+export const reportTechnicalFailure = createAsyncThunk(
+  "consultation/technicalFailure",
+  async ({ id, errorDetails }, { rejectWithValue }) => {
     try {
-      const { data } = await API.patch(`/consultations/${id}/end`, {
-        reason,
-        prescriptionUploaded,
-      });
-      return data.data.consultation;
+      return (await reportTechnicalFailureAPI(id, errorDetails)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      return rejectWithValue(err?.response?.data?.message || err.message);
     }
   },
 );
 
-export const cancelConsultation = createAsyncThunk(
-  "consultation/cancel",
-  async ({ id, reason }, { rejectWithValue }) => {
+export const markNoShow = createAsyncThunk(
+  "consultation/noShow",
+  async ({ id, who, reason }, { rejectWithValue }) => {
     try {
-      const { data } = await API.patch(`/consultations/${id}/cancel`, {
-        reason,
-      });
-      return data.data.consultation;
+      const res = await markNoShowAPI(id, who, reason);
+      toast.success(`No-show: ${who}`);
+      return res.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
     }
   },
 );
 
-// ══════════════════════════════════════════════════════════════════════════════
-// SECTION 7 — FILE ATTACHMENTS
-// ══════════════════════════════════════════════════════════════════════════════
-
-export const uploadAttachment = createAsyncThunk(
-  "consultation/uploadAttachment",
-  async (
-    {
-      id,
-      file,
-      attachmentType = "medical_document",
-      description,
-      accessLevel = "shared",
-    },
-    { rejectWithValue },
-  ) => {
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("attachmentType", attachmentType);
-      if (description) form.append("description", description);
-      form.append("accessLevel", accessLevel);
-      const { data } = await API.post(
-        `/consultations/${id}/attachments`,
-        form,
-        { headers: { "Content-Type": "multipart/form-data" } },
-      );
-      return { id, attachment: data.data.attachment };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-export const fetchAttachments = createAsyncThunk(
-  "consultation/fetchAttachments",
-  async ({ id, type } = {}, { rejectWithValue }) => {
-    try {
-      const params = type ? { type } : {};
-      const { data } = await API.get(`/consultations/${id}/attachments`, {
-        params,
-      });
-      return { id, attachments: data.data.attachments };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-export const deleteAttachment = createAsyncThunk(
-  "consultation/deleteAttachment",
-  async ({ id, attachmentId }, { rejectWithValue }) => {
-    try {
-      await API.delete(`/consultations/${id}/attachments/${attachmentId}`);
-      return { id, attachmentId };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-// ══════════════════════════════════════════════════════════════════════════════
-// SECTION 8 — PRESCRIPTION
-// ══════════════════════════════════════════════════════════════════════════════
-
-export const uploadPrescription = createAsyncThunk(
-  "consultation/uploadPrescription",
-  async ({ id, file }, { rejectWithValue }) => {
-    try {
-      const form = new FormData();
-      form.append("prescription", file);
-      const { data } = await API.post(
-        `/consultations/${id}/prescription/upload`,
-        form,
-        { headers: { "Content-Type": "multipart/form-data" } },
-      );
-      return { id, fileUrl: data.data.fileUrl, fileName: data.data.fileName };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-export const issuePrescription = createAsyncThunk(
-  "consultation/issuePrescription",
-  async ({ id, ...body }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post(
-        `/consultations/${id}/prescription`,
-        body,
-      );
-      return { id, prescription: data.data.prescription };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-export const fetchPrescriptions = createAsyncThunk(
-  "consultation/fetchPrescriptions",
+export const enterWaitingRoom = createAsyncThunk(
+  "consultation/enterWaiting",
   async (id, { rejectWithValue }) => {
     try {
-      const { data } = await API.get(`/consultations/${id}/prescriptions`);
-      return { id, prescriptions: data.data.prescriptions };
+      return (await enterWaitingRoomAPI(id)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      return rejectWithValue(err?.response?.data?.message || err.message);
     }
   },
 );
 
-// ══════════════════════════════════════════════════════════════════════════════
-// SECTION 9 — PARTICIPANTS
-// ══════════════════════════════════════════════════════════════════════════════
-
-export const muteParticipant = createAsyncThunk(
-  "consultation/muteParticipant",
-  async ({ id, userId, muted = true }, { rejectWithValue }) => {
+export const leaveWaitingRoom = createAsyncThunk(
+  "consultation/leaveWaiting",
+  async (id, { rejectWithValue }) => {
     try {
-      await API.patch(`/consultations/${id}/participants/${userId}/mute`, {
-        muted,
-      });
-      return { id, userId, muted };
+      return (await leaveWaitingRoomAPI(id)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      return rejectWithValue(err?.response?.data?.message || err.message);
     }
   },
 );
 
-export const kickParticipant = createAsyncThunk(
-  "consultation/kickParticipant",
-  async ({ id, userId, reason }, { rejectWithValue }) => {
+export const fetchWaitingRoomStatus = createAsyncThunk(
+  "consultation/waitingStatus",
+  async (id, { rejectWithValue }) => {
     try {
-      await API.delete(`/consultations/${id}/participants/${userId}`, {
-        data: { reason },
-      });
-      return { id, userId, reason };
+      return (await getWaitingRoomStatusAPI(id)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      return rejectWithValue(err?.response?.data?.message || err.message);
     }
   },
 );
 
-export const toggleScreenShare = createAsyncThunk(
-  "consultation/toggleScreenShare",
-  async ({ id, enabled }, { rejectWithValue }) => {
+export const provisionAgoraTokens = createAsyncThunk(
+  "consultation/agora/provision",
+  async (consultationId, { rejectWithValue }) => {
     try {
-      await API.patch(`/consultations/${id}/screen-share`, { enabled });
-      return { id, enabled };
+      return (await provisionAgoraTokensAPI(consultationId)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      toast.error("Failed to provision tokens");
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchAgoraTokens = createAsyncThunk(
+  "consultation/agora/getTokens",
+  async (consultationId, { rejectWithValue }) => {
+    try {
+      return (await getAgoraTokensAPI(consultationId)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const refreshAgoraTokens = createAsyncThunk(
+  "consultation/agora/refresh",
+  async (consultationId, { rejectWithValue }) => {
+    try {
+      return (await refreshAgoraTokensAPI(consultationId)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const submitRecordingConsent = createAsyncThunk(
+  "consultation/agora/recordingConsent",
+  async ({ consultationId, consented }, { rejectWithValue }) => {
+    try {
+      return (await submitRecordingConsentAPI(consultationId, consented)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const startRecording = createAsyncThunk(
+  "consultation/agora/startRecording",
+  async (consultationId, { rejectWithValue }) => {
+    try {
+      const res = await startRecordingAPI(consultationId);
+      toast.success("Recording started");
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
+
+export const stopRecording = createAsyncThunk(
+  "consultation/agora/stopRecording",
+  async (consultationId, { rejectWithValue }) => {
+    try {
+      const res = await stopRecordingAPI(consultationId);
+      toast.success("Recording stopped");
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
+
+export const fetchRecordingUrls = createAsyncThunk(
+  "consultation/agora/recordingUrls",
+  async (consultationId, { rejectWithValue }) => {
+    try {
+      return (await getRecordingUrlsAPI(consultationId)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchDoctorSchedule = createAsyncThunk(
+  "consultation/doctorSchedule",
+  async (_, { rejectWithValue }) => {
+    try {
+      return (await getDoctorScheduleAPI()).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchDoctorHistory = createAsyncThunk(
+  "consultation/doctorHistory",
+  async (params, { rejectWithValue }) => {
+    try {
+      return (await getDoctorHistoryAPI(params)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchDoctorStats = createAsyncThunk(
+  "consultation/doctorStats",
+  async (_, { rejectWithValue }) => {
+    try {
+      return (await getDoctorStatsAPI()).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchDoctorActive = createAsyncThunk(
+  "consultation/doctorActive",
+  async (_, { rejectWithValue }) => {
+    try {
+      return (await getDoctorActiveAPI()).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchDoctorMy = createAsyncThunk(
+  "consultation/doctorMy",
+  async (params, { rejectWithValue }) => {
+    try {
+      return (await getDoctorMyAPI(params)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchPatientHistory = createAsyncThunk(
+  "consultation/patientHistory",
+  async (params, { rejectWithValue }) => {
+    try {
+      return (await getPatientHistoryAPI(params)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchPatientUpcoming = createAsyncThunk(
+  "consultation/patientUpcoming",
+  async (_, { rejectWithValue }) => {
+    try {
+      return (await getPatientUpcomingAPI()).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchPatientActive = createAsyncThunk(
+  "consultation/patientActive",
+  async (_, { rejectWithValue }) => {
+    try {
+      return (await getPatientActiveAPI()).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchMyConsultations = createAsyncThunk(
+  "consultation/my",
+  async (params, { rejectWithValue }) => {
+    try {
+      return (await getMyConsultationsAPI(params)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchAdminAll = createAsyncThunk(
+  "consultation/adminAll",
+  async (params, { rejectWithValue }) => {
+    try {
+      return (await getAdminAllAPI(params)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchAdminUpcoming = createAsyncThunk(
+  "consultation/adminUpcoming",
+  async (_, { rejectWithValue }) => {
+    try {
+      return (await getAdminUpcomingAPI()).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchAdminActive = createAsyncThunk(
+  "consultation/adminActive",
+  async (_, { rejectWithValue }) => {
+    try {
+      return (await getAdminActiveAPI()).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchAdminStats = createAsyncThunk(
+  "consultation/adminStats",
+  async (_, { rejectWithValue }) => {
+    try {
+      return (await getAdminStatsAPI()).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const assignAdmin = createAsyncThunk(
+  "consultation/assignAdmin",
+  async ({ id, adminId }, { rejectWithValue }) => {
+    try {
+      const res = await assignAdminAPI(id, adminId);
+      toast.success("Admin assigned");
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
+
+export const overrideStatus = createAsyncThunk(
+  "consultation/overrideStatus",
+  async ({ id, status, reason }, { rejectWithValue }) => {
+    try {
+      const res = await overrideStatusAPI(id, status, reason);
+      toast.success("Status overridden");
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
     }
   },
 );
 
 export const fetchParticipants = createAsyncThunk(
-  "consultation/fetchParticipants",
+  "consultation/participants/fetch",
   async (id, { rejectWithValue }) => {
     try {
-      const { data } = await API.get(`/consultations/${id}/participants`);
-      return { id, participants: data.data.participants };
+      return (await getParticipantsAPI(id)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      return rejectWithValue(err?.response?.data?.message || err.message);
     }
   },
 );
 
-// ══════════════════════════════════════════════════════════════════════════════
-// SECTION 10 — NOTES & FEEDBACK
-// ══════════════════════════════════════════════════════════════════════════════
-
-export const saveDoctorNotes = createAsyncThunk(
-  "consultation/saveDoctorNotes",
-  async ({ id, notes }, { rejectWithValue }) => {
+export const addParticipant = createAsyncThunk(
+  "consultation/participants/add",
+  async ({ id, userId, role }, { rejectWithValue }) => {
     try {
-      await API.patch(`/consultations/${id}/doctor-notes`, { notes });
-      return { id, notes };
+      const res = await addParticipantAPI(id, userId, role);
+      toast.success("Participant added");
+      return res.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
     }
   },
 );
 
-export const submitFeedback = createAsyncThunk(
-  "consultation/submitFeedback",
-  async ({ id, ...body }, { rejectWithValue }) => {
+export const removeParticipant = createAsyncThunk(
+  "consultation/participants/remove",
+  async ({ id, userId }, { rejectWithValue }) => {
     try {
-      const { data } = await API.patch(`/consultations/${id}/feedback`, body);
-      return { id, feedback: data.data.feedback };
+      await removeParticipantAPI(id, userId);
+      toast.success("Participant removed");
+      return { userId };
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
     }
   },
 );
 
-export const saveAdminNotes = createAsyncThunk(
-  "consultation/saveAdminNotes",
-  async ({ id, notes }, { rejectWithValue }) => {
-    try {
-      await API.patch(`/consultations/${id}/admin/notes`, { notes });
-      return { id, notes };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-// ══════════════════════════════════════════════════════════════════════════════
-// SECTION 11 — NETWORK ANALYTICS & SDK ERRORS
-// ══════════════════════════════════════════════════════════════════════════════
-
-export const pushAnalytics = createAsyncThunk(
-  "consultation/pushAnalytics",
-  async ({ id, ...body }, { rejectWithValue }) => {
-    try {
-      await API.post(`/consultations/${id}/analytics`, body);
-      return null;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
-  },
-);
-
-export const fetchAnalytics = createAsyncThunk(
-  "consultation/fetchAnalytics",
+export const fetchParticipantEvents = createAsyncThunk(
+  "consultation/participants/events",
   async (id, { rejectWithValue }) => {
     try {
-      const { data } = await API.get(`/consultations/${id}/analytics`);
-      return { id, analytics: data.data };
+      return (await getParticipantEventsAPI(id)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      return rejectWithValue(err?.response?.data?.message || err.message);
     }
   },
 );
 
-export const reportSdkError = createAsyncThunk(
-  "consultation/reportSdkError",
-  async ({ id, code, message, severity = "error" }, { rejectWithValue }) => {
+export const updateNetworkQuality = createAsyncThunk(
+  "consultation/participants/networkQuality",
+  async ({ id, userId, quality }, { rejectWithValue }) => {
     try {
-      await API.post(`/consultations/${id}/sdk-error`, {
-        code,
-        message,
-        severity,
-      });
-      return null;
+      await updateNetworkQualityAPI(id, userId, quality);
+      return { userId, quality };
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      return rejectWithValue(err?.response?.data?.message || err.message);
     }
   },
 );
 
-// ══════════════════════════════════════════════════════════════════════════════
-// SECTION 12 — EVENT LOGS
-// ══════════════════════════════════════════════════════════════════════════════
-
-export const fetchEventLogs = createAsyncThunk(
-  "consultation/fetchEventLogs",
-  async ({ id, ...params }, { rejectWithValue }) => {
+export const saveVitals = createAsyncThunk(
+  "consultation/clinical/vitals",
+  async ({ consultationId, vitals }, { rejectWithValue }) => {
     try {
-      const { data } = await API.get(`/consultations/${id}/events`, { params });
-      return { id, events: data.data.events, total: data.data.total };
+      const res = await saveVitalsAPI(consultationId, vitals);
+      toast.success("Vitals saved");
+      return res.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
     }
   },
 );
 
-export const logEvent = createAsyncThunk(
-  "consultation/logEvent",
-  async (
-    { id, eventType, payload, severity = "info" },
-    { rejectWithValue },
-  ) => {
+export const saveNotes = createAsyncThunk(
+  "consultation/clinical/notes",
+  async ({ consultationId, notes }, { rejectWithValue }) => {
     try {
-      await API.post(`/consultations/${id}/events`, {
-        eventType,
-        payload,
-        severity,
-      });
-      return { id, eventType };
+      const res = await saveNotesAPI(consultationId, notes);
+      toast.success("Notes saved");
+      return res.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
     }
   },
 );
 
-// ══════════════════════════════════════════════════════════════════════════════
-// SECTION 13 — ADMIN
-// ══════════════════════════════════════════════════════════════════════════════
-
-export const adminForceEnd = createAsyncThunk(
-  "consultation/adminForceEnd",
-  async ({ id, reason }, { rejectWithValue }) => {
+export const fetchNotes = createAsyncThunk(
+  "consultation/clinical/fetchNotes",
+  async (consultationId, { rejectWithValue }) => {
     try {
-      const { data } = await API.patch(`/consultations/${id}/admin/force-end`, {
-        reason,
-      });
-      return data.data.consultation;
+      return (await getNotesAPI(consultationId)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      return rejectWithValue(err?.response?.data?.message || err.message);
     }
   },
 );
 
-export const setAdminPriority = createAsyncThunk(
-  "consultation/setAdminPriority",
-  async ({ id, priority }, { rejectWithValue }) => {
+export const issuePrescription = createAsyncThunk(
+  "consultation/clinical/issuePrescription",
+  async ({ consultationId, data }, { rejectWithValue }) => {
     try {
-      await API.patch(`/consultations/${id}/admin/priority`, { priority });
-      return { id, priority };
+      const res = await issuePrescriptionAPI(consultationId, data);
+      toast.success("Prescription issued");
+      return res.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
     }
   },
 );
 
-export const reassignDoctor = createAsyncThunk(
-  "consultation/reassignDoctor",
-  async ({ id, doctorProfileId }, { rejectWithValue }) => {
+export const fetchPrescriptions = createAsyncThunk(
+  "consultation/clinical/prescriptions",
+  async (consultationId, { rejectWithValue }) => {
     try {
-      await API.patch(`/consultations/${id}/admin/reassign-doctor`, {
-        doctorProfileId,
-      });
-      return { id, doctorProfileId };
+      return (await getPrescriptionsAPI(consultationId)).data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      return rejectWithValue(err?.response?.data?.message || err.message);
     }
   },
 );
 
-export const adminBulkAction = createAsyncThunk(
-  "consultation/adminBulkAction",
-  async ({ consultationIds, action, reason }, { rejectWithValue }) => {
+export const saveReferral = createAsyncThunk(
+  "consultation/clinical/referral",
+  async ({ consultationId, data }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post("/consultations/admin/bulk-action", {
-        consultationIds,
-        action,
-        reason,
-      });
-      return data.data;
+      const res = await saveReferralAPI(consultationId, data);
+      toast.success("Referral saved");
+      return res.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
     }
   },
 );
 
-// ══════════════════════════════════════════════════════════════════════════════
-// INITIAL STATE
-// ══════════════════════════════════════════════════════════════════════════════
-
-const initialState = {
-  current: null,
-  joinToken: null,
-  consents: [],
-  waitingQueue: [],
-  participants: [],
-  attachments: [],
-  prescriptions: [],
-  analytics: null,
-  eventLogs: [],
-  verifiedRx: null,
-
-  list: [],
-  total: 0,
-  page: 1,
-  pages: 1,
-
-  stats: null,
-  bulkResult: null,
-
-  rt: {
-    connected: false,
-    consultationId: null,
-    bookingId: null,
-    status: null,
-    appId: null,
-    channelName: null,
-    telemedicineConsentRequired: false,
-    waitingRoomEnabled: false,
-    participantCount: 0,
-
-    participants: {},
-    waitingQueue: {},
-    typingUsers: {},
-    raisedHands: {},
-    screenSharing: {},
-    networkQuality: {},
-    reconnectAttempts: [],
-    onlineDoctors: {},
-
-    kicked: false,
-    kickReason: null,
-    muted: false,
-    waitingRoomTimedOut: false,
-
-    telemedicineConsentAccepted: false,
-    consents: [],
-    prescriptions: [],
-    attachments: [],
-
-    adminBroadcasts: [],
-    reassignedDoctorId: null,
+export const fetchReferral = createAsyncThunk(
+  "consultation/clinical/fetchReferral",
+  async (consultationId, { rejectWithValue }) => {
+    try {
+      return (await getReferralAPI(consultationId)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
   },
+);
 
-  loading: {
-    fetch: false,
-    list: false,
-    token: false,
-    lifecycle: false,
-    consent: false,
-    waitingRoom: false,
-    attachment: false,
-    prescription: false,
-    participant: false,
-    notes: false,
-    feedback: false,
-    analytics: false,
-    events: false,
-    stats: false,
-    admin: false,
-    verify: false,
+/**
+ * sendChatMessage — REST for persistence ONLY.
+ * FIX: do NOT push returned message into chatMessages here.
+ * Socket event "consultation:chat:message" handles display (dedupes by _id).
+ * This prevents double-display.
+ */
+export const sendChatMessage = createAsyncThunk(
+  "consultation/chat/send",
+  async ({ consultationId, message }, { rejectWithValue }) => {
+    try {
+      return (
+        await sendChatMessageAPI(consultationId, message, message._isMultipart)
+      ).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
   },
+);
 
-  error: null,
-};
+export const fetchChatHistory = createAsyncThunk(
+  "consultation/chat/history",
+  async (consultationId, { rejectWithValue }) => {
+    try {
+      return (await getChatHistoryAPI(consultationId)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
 
-const patchInList = (state, updated) => {
-  if (!updated) return;
-  const idx = state.list.findIndex((c) => c._id === updated._id);
-  if (idx >= 0) state.list[idx] = updated;
-  if (state.current?._id === updated._id) state.current = updated;
-};
+export const deleteChatMessage = createAsyncThunk(
+  "consultation/chat/delete",
+  async ({ consultationId, messageId }, { rejectWithValue }) => {
+    try {
+      await deleteChatMessageAPI(consultationId, messageId);
+      return { messageId };
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
 
-// ══════════════════════════════════════════════════════════════════════════════
+export const uploadDocuments = createAsyncThunk(
+  "consultation/clinical/documents",
+  async ({ consultationId, formData }, { rejectWithValue }) => {
+    try {
+      const res = await uploadDocumentsAPI(consultationId, formData);
+      toast.success("Documents uploaded");
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
+
+export const submitRating = createAsyncThunk(
+  "consultation/rating/submit",
+  async ({ id, data }, { rejectWithValue }) => {
+    try {
+      const res = await submitRatingAPI(id, data);
+      toast.success("Rating submitted");
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
+
+export const fetchRating = createAsyncThunk(
+  "consultation/rating/fetch",
+  async (id, { rejectWithValue }) => {
+    try {
+      return (await getRatingAPI(id)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const editRating = createAsyncThunk(
+  "consultation/rating/edit",
+  async ({ id, data }, { rejectWithValue }) => {
+    try {
+      const res = await editRatingAPI(id, data);
+      toast.success("Rating updated");
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
+
+export const saveMetrics = createAsyncThunk(
+  "consultation/metrics/save",
+  async ({ id, metrics }, { rejectWithValue }) => {
+    try {
+      return (await saveMetricsAPI(id, metrics)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const fetchMetrics = createAsyncThunk(
+  "consultation/metrics/fetch",
+  async (id, { rejectWithValue }) => {
+    try {
+      return (await getMetricsAPI(id)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const createFollowUp = createAsyncThunk(
+  "consultation/followUp/create",
+  async ({ id, data }, { rejectWithValue }) => {
+    try {
+      const res = await createFollowUpAPI(id, data);
+      toast.success("Follow-up created");
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
+
+export const fetchFollowUpHistory = createAsyncThunk(
+  "consultation/followUp/history",
+  async (id, { rejectWithValue }) => {
+    try {
+      return (await getFollowUpHistoryAPI(id)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const triggerAutoMiss = createAsyncThunk(
+  "consultation/cron/autoMiss",
+  async (cronKey, { rejectWithValue }) => {
+    try {
+      const res = await triggerAutoMissAPI(cronKey);
+      toast.success(`Auto-miss: ${res.data.processed}`);
+      return res.data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const triggerTokenRefreshCron = createAsyncThunk(
+  "consultation/cron/tokenRefresh",
+  async (cronKey, { rejectWithValue }) => {
+    try {
+      const res = await triggerTokenRefreshAPI(cronKey);
+      toast.success(`Token refresh: ${res.data.refreshed}`);
+      return res.data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const triggerReminders = createAsyncThunk(
+  "consultation/cron/reminders",
+  async (cronKey, { rejectWithValue }) => {
+    try {
+      const res = await triggerRemindersAPI(cronKey);
+      toast.success(`Reminders: ${res.data.sent}`);
+      return res.data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const triggerExpirePrescriptions = createAsyncThunk(
+  "consultation/cron/expirePrescriptions",
+  async (cronKey, { rejectWithValue }) => {
+    try {
+      const res = await triggerExpirePrescriptionsAPI(cronKey);
+      toast.success(`Expired: ${res.data.expired}`);
+      return res.data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SLICE
-// ══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
 
 const consultationSlice = createSlice({
   name: "consultation",
   initialState,
+
   reducers: {
-    clearCurrent(state) {
+    resetConsultation: () => initialState,
+
+    clearCurrent: (state) => {
       state.current = null;
-      state.joinToken = null;
-      state.consents = [];
-      state.waitingQueue = [];
-      state.participants = [];
-      state.attachments = [];
+      state.status = null;
+      state.statusMeta = null;
+      state.agora = initialState.agora;
+      state.waitingRoom = initialState.waitingRoom;
+      state.participants = initialState.participants;
+      state.chatMessages = [];
+      state.pendingChatIds = [];
+      state.typingUsers = [];
+      state.vitals = null;
+      state.notes = null;
       state.prescriptions = [];
-      state.analytics = null;
-      state.eventLogs = [];
-      state.verifiedRx = null;
+      state.referral = null;
+      state.metrics = null;
+      state.rating = null;
+      state.isRated = false;
+      state.networkQuality = {};
+      state.prescriptionPreview = null;
+      state.adminMessages = [];
+      state.sessionStartedAt = null;
+      state.sessionEndedAt = null;
+      state.actualDurationSec = null;
+      state.documents = [];
     },
-    clearError(state) {
+
+    clearError: (state) => {
       state.error = null;
     },
-    clearList(state) {
-      state.list = [];
-      state.total = 0;
-      state.page = 1;
-      state.pages = 1;
-    },
-    clearBulkResult(state) {
-      state.bulkResult = null;
-    },
 
-    rtJoined(state, { payload }) {
-      state.rt.connected = true;
-      state.rt.consultationId = payload.consultationId;
-      state.rt.bookingId = payload.bookingId;
-      state.rt.status = payload.status;
-      state.rt.appId = payload.appId;
-      state.rt.channelName = payload.channelName;
-      state.rt.telemedicineConsentRequired =
-        payload.telemedicineConsentRequired ?? false;
-      state.rt.waitingRoomEnabled = payload.waitingRoomEnabled ?? false;
-      state.rt.participantCount = payload.participantCount ?? 0;
+    // ── Socket actions ────────────────────────────────────────────────────────
 
-      // Seed doctor/patient into current consultation
-      if (payload.doctor && state.current) {
-        state.current.doctor = { ...state.current.doctor, ...payload.doctor };
-      }
-      if (payload.patient && state.current) {
-        state.current.patient = {
-          ...state.current.patient,
-          ...payload.patient,
-        };
-      }
-
-      // Seed existing participants
-      if (payload.existingParticipants?.length) {
-        payload.existingParticipants.forEach((p) => {
-          state.rt.participants[p.userId] = p;
-        });
-        state.rt.participantCount = payload.existingParticipants.filter(
-          (p) => p.connectionStatus === "connected",
-        ).length;
-      }
-
-      // Seed waiting queue
-      if (payload.existingWaitingQueue?.length) {
-        payload.existingWaitingQueue.forEach((e) => {
-          state.rt.waitingQueue[e.userId] = e;
-        });
-      }
+    socketStatusUpdate: (state, { payload }) => {
+      state.status = payload.status;
+      state.statusMeta = payload.statusMeta ?? state.statusMeta;
+      if (state.current) state.current.status = payload.status;
     },
 
-    rtStatusUpdate(state, { payload }) {
-      if (payload.status) {
-        state.rt.status = payload.status;
-        if (state.current) {
-          state.current.status = payload.status;
-          // Only patch list if item exists — avoid full scan on every event
-          const idx = state.list.findIndex((c) => c._id === state.current._id);
-          if (idx >= 0)
-            state.list[idx] = { ...state.list[idx], status: payload.status };
-        }
-      }
-      if (payload.actualDurationMinutes !== undefined && state.current) {
-        state.current.actualDurationMinutes = payload.actualDurationMinutes;
-      }
-      if (payload.cancelledBy !== undefined && state.current) {
-        state.current.cancelledBy = payload.cancelledBy;
-      }
-    },
-
-    rtParticipantConnected(state, { payload }) {
-      state.rt.participants[payload.userId] = {
-        ...state.rt.participants[payload.userId],
-        userId: payload.userId,
-        role: payload.role,
-        name: payload.name,
-        connectionStatus: "connected",
-        connectedAt: payload.timestamp,
-      };
-      state.rt.participantCount = Object.values(state.rt.participants).filter(
-        (p) => p.connectionStatus === "connected",
-      ).length;
-    },
-
-    rtParticipantDisconnected(state, { payload }) {
-      if (state.rt.participants[payload.userId]) {
-        state.rt.participants[payload.userId].connectionStatus = "disconnected";
-        state.rt.participants[payload.userId].disconnectedAt =
-          payload.timestamp;
-        state.rt.participants[payload.userId].disconnectReason = payload.reason;
-      }
-      state.rt.participantCount = Object.values(state.rt.participants).filter(
-        (p) => p.connectionStatus === "connected",
-      ).length;
-      delete state.rt.typingUsers[payload.userId];
-      delete state.rt.raisedHands[payload.userId];
-      delete state.rt.screenSharing[payload.userId];
-    },
-
-    rtParticipantJoined(state, { payload }) {
-      state.rt.participants[payload.userId] = {
-        ...state.rt.participants[payload.userId],
-        userId: payload.userId,
-        role: payload.role,
-        name: payload.name,
-        agoraUid: payload.agoraUid,
-        connectionStatus: "connected",
-        joinedAt: payload.timestamp,
-      };
-      state.rt.participantCount = Object.values(state.rt.participants).filter(
-        (p) => p.connectionStatus === "connected",
-      ).length;
-    },
-
-    rtParticipantLeft(state, { payload }) {
-      if (state.rt.participants[payload.userId]) {
-        state.rt.participants[payload.userId].connectionStatus = "disconnected";
-        state.rt.participants[payload.userId].leftAt = payload.timestamp;
-        state.rt.participants[payload.userId].leaveReason = payload.reason;
-      }
-      state.rt.participantCount = Object.values(state.rt.participants).filter(
-        (p) => p.connectionStatus === "connected",
-      ).length;
-      delete state.rt.typingUsers[payload.userId];
-      delete state.rt.raisedHands[payload.userId];
-      delete state.rt.screenSharing[payload.userId];
-    },
-
-    rtParticipantMuted(state, { payload }) {
-      if (state.rt.participants[payload.targetUserId]) {
-        state.rt.participants[payload.targetUserId].isMutedByHost = true;
-      }
-    },
-
-    rtParticipantUnmuted(state, { payload }) {
-      if (state.rt.participants[payload.targetUserId]) {
-        state.rt.participants[payload.targetUserId].isMutedByHost = false;
-      }
-    },
-
-    rtParticipantKicked(state, { payload }) {
-      if (state.rt.participants[payload.targetUserId]) {
-        state.rt.participants[payload.targetUserId].connectionStatus =
-          "disconnected";
-        state.rt.participants[payload.targetUserId].kicked = true;
-        state.rt.participants[payload.targetUserId].kickReason = payload.reason;
-        state.rt.participants[payload.targetUserId].leftAt = payload.timestamp;
-      }
-      state.rt.participantCount = Object.values(state.rt.participants).filter(
-        (p) => p.connectionStatus === "connected",
-      ).length;
-      delete state.rt.screenSharing[payload.targetUserId];
-    },
-
-    rtYouWereKicked(state, { payload }) {
-      state.rt.kicked = true;
-      state.rt.kickReason = payload.reason ?? null;
-    },
-
-    rtYouWereMuted(state) {
-      state.rt.muted = true;
-    },
-    rtYouWereUnmuted(state) {
-      state.rt.muted = false;
-    },
-
-    rtPatientEnteredWaiting(state, { payload }) {
-      state.rt.waitingQueue[payload.patientId] = {
-        userId: payload.patientId,
-        name: payload.patientName ?? "Patient",
-        queuePosition: payload.queuePosition,
-        waitingRoomStatus: "waiting",
-        enteredAt: payload.timestamp,
-      };
-      if (["scheduled", "created"].includes(state.rt.status)) {
-        state.rt.status = "waiting";
-      }
-    },
-
-    rtWaitingRoomApproved(state, { payload }) {
-      if (state.rt.waitingQueue[payload.userId]) {
-        state.rt.waitingQueue[payload.userId].waitingRoomStatus = "approved";
-        state.rt.waitingQueue[payload.userId].approvedAt = payload.timestamp;
-      }
-      if (state.rt.status === "waiting") state.rt.status = "active";
-      if (state.current?.status === "waiting") state.current.status = "active";
-    },
-
-    rtWaitingRoomRejected(state, { payload }) {
-      if (state.rt.waitingQueue[payload.userId]) {
-        state.rt.waitingQueue[payload.userId].waitingRoomStatus = "rejected";
-        state.rt.waitingQueue[payload.userId].rejectedAt = payload.timestamp;
-        state.rt.waitingQueue[payload.userId].rejectionReason =
-          payload.reason ?? null;
-      }
-    },
-
-    rtWaitingRoomTimedOut(state) {
-      state.rt.waitingRoomTimedOut = true;
-      Object.keys(state.rt.waitingQueue).forEach((uid) => {
-        if (state.rt.waitingQueue[uid].waitingRoomStatus === "waiting") {
-          state.rt.waitingQueue[uid].waitingRoomStatus = "timed_out";
-        }
-      });
-    },
-
-    rtTypingStart(state, { payload }) {
-      state.rt.typingUsers[payload.userId] = {
-        name: payload.name,
-        role: payload.role,
-      };
-    },
-
-    rtTypingStop(state, { payload }) {
-      delete state.rt.typingUsers[payload.userId];
-    },
-
-    rtHandRaised(state, { payload }) {
-      state.rt.raisedHands[payload.userId] = {
-        name: payload.name,
-        role: payload.role,
-        timestamp: payload.timestamp,
-      };
-    },
-
-    rtHandLowered(state, { payload }) {
-      delete state.rt.raisedHands[payload.userId];
-    },
-
-    rtScreenShareToggled(state, { payload }) {
-      if (state.current && state.current._id === payload.consultationId) {
-        state.current.screenShareEnabled = payload.screenShareEnabled;
-      }
-    },
-
-    rtScreenShareStarted(state, { payload }) {
-      state.rt.screenSharing[payload.userId] = {
-        role: payload.role,
-        timestamp: payload.timestamp,
-      };
-    },
-
-    rtScreenShareStopped(state, { payload }) {
-      delete state.rt.screenSharing[payload.userId];
-    },
-
-    rtConsentUpdated(state, { payload }) {
-      if (payload.consentType === "telemedicine") {
-        state.rt.telemedicineConsentAccepted = payload.accepted;
-        state.rt.telemedicineConsentRequired = !payload.accepted;
-        if (state.current)
-          state.current.telemedicineConsentAccepted = payload.accepted;
-      }
-      const idx = state.rt.consents.findIndex(
-        (c) => c.consentType === payload.consentType,
-      );
-      const entry = {
-        consentType: payload.consentType,
-        accepted: payload.accepted,
-        acceptedAt: payload.timestamp,
-      };
-      if (idx >= 0) state.rt.consents[idx] = entry;
-      else state.rt.consents.push(entry);
-    },
-
-    rtPrescriptionEvent(state, { payload }) {
-      if (state.current) state.current.prescriptionUploaded = true;
-      if (payload.rxId) {
-        const exists = state.rt.prescriptions.some(
-          (p) => p._id === payload.rxId,
-        );
-        if (!exists) {
-          state.rt.prescriptions.push({
-            _id: payload.rxId,
-            rxNumber: payload.rxNumber,
-            issuedAt: payload.timestamp,
-            fileUrl: payload.fileUrl ?? null,
-          });
-        }
-      }
-    },
-
-    rtAttachmentUploaded(state, { payload }) {
-      const exists = state.rt.attachments.some(
-        (a) => a._id === payload.attachmentId,
+    socketParticipantJoined: (state, { payload }) => {
+      const exists = state.participants.events.find(
+        (e) => e.userId === payload.userId && !e.leftAt,
       );
       if (!exists) {
-        state.rt.attachments.push({
-          _id: payload.attachmentId,
-          attachmentType: payload.attachmentType,
-          uploaderRole: payload.uploaderRole,
-          fileName: payload.fileName,
-          uploadedAt: payload.timestamp,
+        state.participants.events.push({
+          userId: payload.userId,
+          role: payload.role,
+          // FIX: use name from payload if present
+          name: payload.name || payload.userName || null,
+          joinedAt: new Date().toISOString(),
         });
+      }
+      if (payload.status) state.status = payload.status;
+    },
+
+    socketParticipantLeft: (state, { payload }) => {
+      const evt = state.participants.events
+        .filter((e) => e.userId === payload.userId && !e.leftAt)
+        .sort((a, b) => new Date(b.joinedAt) - new Date(a.joinedAt))[0];
+      if (evt) evt.leftAt = payload.leftAt || new Date().toISOString();
+      if (payload.status) {
+        state.status = payload.status;
+        state.statusMeta = payload.statusMeta ?? state.statusMeta;
       }
     },
 
-    rtNetworkQuality(state, { payload }) {
-      state.rt.networkQuality[payload.userId] = {
-        role: payload.role,
-        uplinkNetworkQuality: payload.uplinkNetworkQuality,
-        downlinkNetworkQuality: payload.downlinkNetworkQuality,
-        latency: payload.latency,
-        packetLoss: payload.packetLoss,
-        timestamp: payload.timestamp,
-      };
+    socketParticipantDisconnected: (state, { payload }) => {
+      const evt = state.participants.events
+        .filter((e) => e.userId === payload.userId && !e.leftAt)
+        .sort((a, b) => new Date(b.joinedAt) - new Date(a.joinedAt))[0];
+      if (evt) {
+        evt.leftAt = payload.at || new Date().toISOString();
+        evt.disconnectReason = payload.reason;
+      }
     },
 
-    rtReconnectAttempt(state, { payload }) {
-      state.rt.reconnectAttempts.push({
-        userId: payload.userId,
-        role: payload.role,
-        timestamp: payload.timestamp,
-        success: false,
+    socketPatientWaiting: (state, { payload }) => {
+      state.waitingRoom.patientEnteredAt = payload.enteredAt;
+      state.waitingRoom.patientLeft = false;
+      if (payload.status) state.status = payload.status;
+    },
+
+    socketPatientLeftWaiting: (state, { payload }) => {
+      state.waitingRoom.patientLeft = true;
+      state.waitingRoom.patientLeftAt = payload.leftAt;
+    },
+
+    /**
+     * FIX double-send: socket event is single source of truth for display.
+     * REST thunk fulfilled does NOT push to chatMessages.
+     */
+    socketChatMessage: (state, { payload }) => {
+      const dup = state.chatMessages.find((m) => m._id === payload._id);
+      if (!dup) state.chatMessages.push(payload);
+    },
+
+    socketChatTyping: (state, { payload }) => {
+      if (payload.isTyping) {
+        const exists = state.typingUsers.find(
+          (u) => u.userId === payload.userId,
+        );
+        if (!exists) state.typingUsers.push(payload);
+      } else {
+        state.typingUsers = state.typingUsers.filter(
+          (u) => u.userId !== payload.userId,
+        );
+      }
+    },
+
+    socketVitalsUpdate: (state, { payload }) => {
+      state.vitals = payload.vitals;
+    },
+    socketQosUpdate: (state, { payload }) => {
+      state.networkQuality[payload.userId] = payload.quality;
+    },
+    socketPrescriptionPreview: (state, { payload }) => {
+      state.prescriptionPreview = payload.preview;
+    },
+
+    socketPrescriptionReady: (state, { payload }) => {
+      const exists = state.prescriptions.find(
+        (p) => p.rxNumber === payload.rxNumber,
+      );
+      if (!exists)
+        state.prescriptions.push({
+          rxNumber: payload.rxNumber,
+          _id: payload.rxId,
+          status: "issued",
+        });
+      toast.success(`Prescription ${payload.rxNumber} ready`);
+    },
+
+    socketAdminMessage: (state, { payload }) => {
+      state.adminMessages.push(payload);
+      toast(payload.message, {
+        icon: payload.type === "warning" ? "⚠️" : "ℹ️",
       });
     },
 
-    rtReconnectSuccess(state, { payload }) {
-      const idx = [...state.rt.reconnectAttempts]
-        .reverse()
-        .findIndex((r) => r.userId === payload.userId && !r.success);
-      if (idx >= 0) {
-        const realIdx = state.rt.reconnectAttempts.length - 1 - idx;
-        state.rt.reconnectAttempts[realIdx].success = true;
-        state.rt.reconnectAttempts[realIdx].reconnectedAt = payload.timestamp;
-      }
+    socketTokenRefreshed: (state, { payload }) => {
+      if (payload.tokens) state.agora.myTokens = payload.tokens;
+      if (payload.expiresAt) state.agora.expiresAt = payload.expiresAt;
+      if (payload.tokenRefreshCount !== undefined)
+        state.agora.tokenRefreshCount = payload.tokenRefreshCount;
     },
 
-    rtDoctorOnline(state, { payload }) {
-      state.rt.onlineDoctors[payload.doctorUserId] = {
-        name: payload.doctorName,
-        timestamp: payload.timestamp,
-      };
+    // ── Recording socket events ───────────────────────────────────────────────
+    socketRecordingStarted: (state, { payload }) => {
+      state.agora.isRecordingActive = true;
+      state.agora.isRecordingEnabled = true;
+      state.agora.recordingStartedAt =
+        payload.startedAt ?? new Date().toISOString();
     },
 
-    rtDoctorOffline(state, { payload }) {
-      delete state.rt.onlineDoctors[payload.doctorUserId];
+    socketRecordingStopped: (state, { payload }) => {
+      state.agora.isRecordingActive = false;
+      state.agora.recordingStoppedAt =
+        payload.stoppedAt ?? new Date().toISOString();
+      if (payload.urls) state.agora.recordingUrls = payload.urls;
     },
 
-    rtDoctorReassigned(state, { payload }) {
-      state.rt.reassignedDoctorId = payload.newDoctorId;
-      if (state.current) state.current.doctor = payload.newDoctorId;
+    // ── Participant management socket events ──────────────────────────────────
+    socketParticipantAdded: (state, { payload }) => {
+      // payload: { userId, role, name, addedAt }
+      const exists = state.participants.additional.find(
+        (p) => p.userId === payload.userId,
+      );
+      if (!exists) state.participants.additional.push(payload);
     },
 
-    rtAdminBroadcast(state, { payload }) {
-      state.rt.adminBroadcasts.push({
-        message: payload.message,
-        from: payload.from,
-        timestamp: payload.timestamp,
-      });
+    socketParticipantRemoved: (state, { payload }) => {
+      state.participants.additional = state.participants.additional.filter(
+        (p) => p.userId !== payload.userId,
+      );
     },
 
-    rtConnectionLost(state, { payload }) {
-      state.rt.connected = false;
-      state.rt.disconnectReason = payload?.reason;
+    // ── Local recording (MediaRecorder) ───────────────────────────────────────
+    setLocalRecordingActive: (state, { payload }) => {
+      state.agora.localRecordingActive = payload;
+      if (payload)
+        state.agora.localRecordingStartedAt = new Date().toISOString();
     },
 
-    rtStateSynced(state, { payload }) {
-      if (payload.status) state.rt.status = payload.status;
-
-      // Sync doctor/patient info into current consultation
-      if (payload.doctor && state.current) {
-        state.current.doctor = { ...state.current.doctor, ...payload.doctor };
-      }
-      if (payload.patient && state.current) {
-        state.current.patient = {
-          ...state.current.patient,
-          ...payload.patient,
-        };
-      }
-
-      if (payload.waitingQueue) {
-        payload.waitingQueue.forEach((entry) => {
-          state.rt.waitingQueue[entry.userId] = entry;
-        });
-      }
-
-      if (payload.participants) {
-        payload.participants.forEach((p) => {
-          state.rt.participants[p.userId] = {
-            ...state.rt.participants[p.userId],
-            ...p,
-          };
-        });
-      }
+    // ── Manual setters ────────────────────────────────────────────────────────
+    setAgoraMyTokens: (state, { payload }) => {
+      state.agora.myTokens = payload;
     },
-
-    rtConnectionRecovered(state) {
-      state.rt.connected = true;
-      state.rt.disconnectReason = null;
+    clearTypingUsers: (state) => {
+      state.typingUsers = [];
     },
-
-    resetRt(state) {
-      state.rt = { ...initialState.rt };
+    clearPrescriptionPreview: (state) => {
+      state.prescriptionPreview = null;
+    },
+    clearAdminMessages: (state) => {
+      state.adminMessages = [];
     },
   },
 
   extraReducers: (builder) => {
-    // ── Section 1: Create ─────────────────────────────────────────────────────
-    builder
-      .addCase(createConsultation.pending, (s) => {
-        s.loading.lifecycle = true;
-        s.error = null;
-      })
-      .addCase(createConsultation.fulfilled, (s, { payload }) => {
-        s.loading.lifecycle = false;
-        s.current = payload;
-        toast.success("Consultation created");
-      })
-      .addCase(createConsultation.rejected, (s, { payload }) => {
-        s.loading.lifecycle = false;
-        s.error = payload;
-        toast.error(payload || "Failed to create consultation");
-      });
-
-    // ── Section 2: Read ───────────────────────────────────────────────────────
-    builder
-      .addCase(fetchConsultationById.pending, (s) => {
-        s.loading.fetch = true;
-        s.error = null;
-      })
-      .addCase(fetchConsultationById.fulfilled, (s, { payload }) => {
-        s.loading.fetch = false;
-        s.current = payload;
-      })
-      .addCase(fetchConsultationById.rejected, (s, { payload }) => {
-        s.loading.fetch = false;
-        s.error = payload;
-        toast.error(payload || "Failed to load consultation");
-      });
+    const setLoading = (domain) => (state) => {
+      state.loading[domain] = true;
+      state.error = null;
+    };
+    const clearLoading = (domain) => (state) => {
+      state.loading[domain] = false;
+    };
+    const setError =
+      (domain) =>
+      (state, { payload }) => {
+        state.loading[domain] = false;
+        state.error = payload;
+      };
 
     builder
-      .addCase(fetchConsultationByBooking.pending, (s) => {
-        s.loading.fetch = true;
+      // CREATE
+      .addCase(createConsultation.pending, setLoading("create"))
+      .addCase(createConsultation.fulfilled, (state, { payload }) => {
+        state.loading.create = false;
+        state.current = payload.consultation ?? null;
+        state.status = payload.consultation?.status ?? null;
+        if (payload.agoraTokens)
+          state.agora = { ...state.agora, ...payload.agoraTokens };
       })
-      .addCase(fetchConsultationByBooking.fulfilled, (s, { payload }) => {
-        s.loading.fetch = false;
-        s.current = payload;
-      })
-      .addCase(fetchConsultationByBooking.rejected, (s, { payload }) => {
-        s.loading.fetch = false;
-        s.error = payload;
-      });
+      .addCase(createConsultation.rejected, setError("create"))
 
-    [
-      fetchPatientConsultations,
-      fetchDoctorConsultations,
-      fetchAdminConsultations,
-    ].forEach((thunk) => {
-      builder
-        .addCase(thunk.pending, (s) => {
-          s.loading.list = true;
-          s.error = null;
-        })
-        .addCase(thunk.fulfilled, (s, { payload }) => {
-          s.loading.list = false;
-          s.list = payload.consultations;
-          s.total = payload.total;
-          s.page = payload.page;
-          s.pages = payload.pages;
-        })
-        .addCase(thunk.rejected, (s, { payload }) => {
-          s.loading.list = false;
-          s.error = payload;
-          toast.error(payload || "Failed to load consultations");
-        });
-    });
+      // FETCH BY ID
+      .addCase(fetchConsultationById.pending, setLoading("fetch"))
+      .addCase(fetchConsultationById.fulfilled, (state, { payload }) => {
+        state.loading.fetch = false;
+        state.current = payload.consultation ?? null;
+        state.status = payload.consultation?.status ?? null;
+      })
+      .addCase(fetchConsultationById.rejected, setError("fetch"))
 
-    builder
-      .addCase(fetchAdminStats.pending, (s) => {
-        s.loading.stats = true;
+      // FETCH BY BOOKING
+      .addCase(fetchConsultationByBooking.pending, setLoading("fetch"))
+      .addCase(fetchConsultationByBooking.fulfilled, (state, { payload }) => {
+        state.loading.fetch = false;
+        state.current = payload.consultation ?? null;
+        state.status = payload.consultation?.status ?? null;
       })
-      .addCase(fetchAdminStats.fulfilled, (s, { payload }) => {
-        s.loading.stats = false;
-        s.stats = payload;
-      })
-      .addCase(fetchAdminStats.rejected, (s, { payload }) => {
-        s.loading.stats = false;
-        s.error = payload;
-      });
+      .addCase(fetchConsultationByBooking.rejected, setError("fetch"))
 
-    builder
-      .addCase(fetchAdminFullConsultation.pending, (s) => {
-        s.loading.fetch = true;
+      // UPDATE
+      .addCase(updateConsultation.pending, setLoading("fetch"))
+      .addCase(updateConsultation.fulfilled, (state, { payload }) => {
+        state.loading.fetch = false;
+        state.current = payload.consultation ?? state.current;
+        if (payload.consultation?.status)
+          state.status = payload.consultation.status;
       })
-      .addCase(fetchAdminFullConsultation.fulfilled, (s, { payload }) => {
-        s.loading.fetch = false;
-        s.current = payload;
-      })
-      .addCase(fetchAdminFullConsultation.rejected, (s, { payload }) => {
-        s.loading.fetch = false;
-        s.error = payload;
-      });
+      .addCase(updateConsultation.rejected, setError("fetch"))
 
-    builder
-      .addCase(verifyPrescription.pending, (s) => {
-        s.loading.verify = true;
-        s.verifiedRx = null;
+      // CANCEL
+      .addCase(cancelConsultation.pending, setLoading("session"))
+      .addCase(cancelConsultation.fulfilled, (state, { payload }) => {
+        state.loading.session = false;
+        state.status = payload.status ?? "cancelled";
+        if (state.current) state.current.status = state.status;
       })
-      .addCase(verifyPrescription.fulfilled, (s, { payload }) => {
-        s.loading.verify = false;
-        s.verifiedRx = payload;
-      })
-      .addCase(verifyPrescription.rejected, (s, { payload }) => {
-        s.loading.verify = false;
-        s.error = payload;
-        toast.error(payload || "Prescription not found");
-      });
+      .addCase(cancelConsultation.rejected, setError("session"))
 
-    // ── Section 3: Token ──────────────────────────────────────────────────────
-    builder
-      .addCase(fetchJoinToken.pending, (s) => {
-        s.loading.token = true;
-        s.error = null;
+      // DELETE
+      .addCase(deleteConsultation.pending, setLoading("session"))
+      .addCase(deleteConsultation.fulfilled, (state) => {
+        state.loading.session = false;
+        state.current = null;
+        state.status = null;
       })
-      .addCase(fetchJoinToken.fulfilled, (s, { payload }) => {
-        s.loading.token = false;
-        s.joinToken = payload;
-      })
-      .addCase(fetchJoinToken.rejected, (s, { payload }) => {
-        s.loading.token = false;
-        s.error = payload;
-        toast.error(payload || "Failed to get join token");
-      });
+      .addCase(deleteConsultation.rejected, setError("session"))
 
-    // ── Section 4: Consent ────────────────────────────────────────────────────
-    builder
-      .addCase(submitConsent.pending, (s) => {
-        s.loading.consent = true;
+      // JOIN
+      .addCase(joinConsultation.pending, setLoading("session"))
+      .addCase(joinConsultation.fulfilled, (state, { payload }) => {
+        state.loading.session = false;
+        if (payload.status) state.status = payload.status;
+        if (payload.tokens) state.agora.myTokens = payload.tokens;
+        if (state.current && payload.status)
+          state.current.status = payload.status;
       })
-      .addCase(submitConsent.fulfilled, (s, { payload }) => {
-        s.loading.consent = false;
-        if (s.current && payload.consentType === "telemedicine") {
-          s.current.telemedicineConsentAccepted = payload.accepted;
+      .addCase(joinConsultation.rejected, setError("session"))
+
+      // LEAVE
+      .addCase(leaveConsultation.pending, setLoading("session"))
+      .addCase(leaveConsultation.fulfilled, (state, { payload }) => {
+        state.loading.session = false;
+        if (payload.status) {
+          state.status = payload.status;
+          if (state.current) state.current.status = payload.status;
         }
-        toast.success("Consent recorded");
       })
-      .addCase(submitConsent.rejected, (s, { payload }) => {
-        s.loading.consent = false;
-        s.error = payload;
-        toast.error(payload || "Consent failed");
-      });
+      .addCase(leaveConsultation.rejected, setError("session"))
 
-    builder
-      .addCase(fetchConsents.pending, (s) => {
-        s.loading.consent = true;
+      // START
+      .addCase(startConsultation.pending, setLoading("session"))
+      .addCase(startConsultation.fulfilled, (state, { payload }) => {
+        state.loading.session = false;
+        state.status = payload.status ?? "in_progress";
+        state.sessionStartedAt = new Date().toISOString();
+        if (state.current) state.current.status = state.status;
       })
-      .addCase(fetchConsents.fulfilled, (s, { payload }) => {
-        s.loading.consent = false;
-        s.consents = payload.consents;
-        if (s.current)
-          s.current.telemedicineConsentAccepted =
-            payload.telemedicineConsentAccepted;
-      })
-      .addCase(fetchConsents.rejected, (s) => {
-        s.loading.consent = false;
-      });
+      .addCase(startConsultation.rejected, setError("session"))
 
-    // ── Section 5: Waiting Room ───────────────────────────────────────────────
-    builder
-      .addCase(enterWaitingRoom.pending, (s) => {
-        s.loading.waitingRoom = true;
+      // END
+      .addCase(endConsultation.pending, setLoading("session"))
+      .addCase(endConsultation.fulfilled, (state, { payload }) => {
+        state.loading.session = false;
+        state.status = payload.status ?? "completed";
+        state.sessionEndedAt = new Date().toISOString();
+        state.actualDurationSec = payload.actualDurationSec ?? null;
+        if (state.current) state.current.status = state.status;
       })
-      .addCase(enterWaitingRoom.fulfilled, (s, { payload }) => {
-        s.loading.waitingRoom = false;
-        if (s.current) s.current.status = "waiting";
-        const patientId = String(
-          s.current?.patient?._id || s.current?.patient || "",
-        );
-        if (patientId) {
-          s.rt.waitingQueue[patientId] = {
-            userId: patientId,
-            name: "You",
-            queuePosition: payload.queuePosition ?? 1,
-            waitingRoomStatus: "waiting",
-            enteredAt: new Date().toISOString(),
-          };
+      .addCase(endConsultation.rejected, setError("session"))
+
+      // PAUSE
+      .addCase(pauseConsultation.pending, setLoading("session"))
+      .addCase(pauseConsultation.fulfilled, (state, { payload }) => {
+        state.loading.session = false;
+        state.status = payload.status ?? "paused";
+        if (state.current) state.current.status = state.status;
+      })
+      .addCase(pauseConsultation.rejected, setError("session"))
+
+      // RESUME
+      .addCase(resumeConsultation.pending, setLoading("session"))
+      .addCase(resumeConsultation.fulfilled, (state, { payload }) => {
+        state.loading.session = false;
+        state.status = payload.status ?? "in_progress";
+        if (state.current) state.current.status = state.status;
+      })
+      .addCase(resumeConsultation.rejected, setError("session"))
+
+      // TECHNICAL FAILURE
+      .addCase(reportTechnicalFailure.pending, setLoading("session"))
+      .addCase(reportTechnicalFailure.fulfilled, (state, { payload }) => {
+        state.loading.session = false;
+        state.status = payload.status ?? "technical_failure";
+        if (state.current) state.current.status = state.status;
+      })
+      .addCase(reportTechnicalFailure.rejected, setError("session"))
+
+      // NO SHOW
+      .addCase(markNoShow.pending, setLoading("session"))
+      .addCase(markNoShow.fulfilled, (state, { payload }) => {
+        state.loading.session = false;
+        if (payload.status) {
+          state.status = payload.status;
+          if (state.current) state.current.status = payload.status;
         }
-        toast.success("Entered waiting room");
       })
-      .addCase(enterWaitingRoom.rejected, (s, { payload }) => {
-        s.loading.waitingRoom = false;
-        toast.error(payload || "Failed to enter waiting room");
-      });
+      .addCase(markNoShow.rejected, setError("session"))
 
-    builder
-      .addCase(approveWaitingRoom.pending, (s) => {
-        s.loading.waitingRoom = true;
+      // WAITING ROOM
+      .addCase(enterWaitingRoom.pending, setLoading("waitingRoom"))
+      .addCase(enterWaitingRoom.fulfilled, (state, { payload }) => {
+        state.loading.waitingRoom = false;
+        if (payload.status) state.status = payload.status;
+        if (payload.waitingRoom)
+          state.waitingRoom = { ...state.waitingRoom, ...payload.waitingRoom };
       })
-      .addCase(approveWaitingRoom.fulfilled, (s, { payload }) => {
-        s.loading.waitingRoom = false;
-        s.waitingQueue = s.waitingQueue.filter(
-          (u) => u.userId !== payload.userId,
-        );
-        toast.success("Patient approved");
+      .addCase(enterWaitingRoom.rejected, setError("waitingRoom"))
+      .addCase(leaveWaitingRoom.pending, setLoading("waitingRoom"))
+      .addCase(leaveWaitingRoom.fulfilled, (state, { payload }) => {
+        state.loading.waitingRoom = false;
+        if (payload.waitingRoom)
+          state.waitingRoom = { ...state.waitingRoom, ...payload.waitingRoom };
       })
-      .addCase(approveWaitingRoom.rejected, (s, { payload }) => {
-        s.loading.waitingRoom = false;
-        toast.error(payload || "Approval failed");
-      });
+      .addCase(leaveWaitingRoom.rejected, setError("waitingRoom"))
+      .addCase(fetchWaitingRoomStatus.pending, setLoading("waitingRoom"))
+      .addCase(fetchWaitingRoomStatus.fulfilled, (state, { payload }) => {
+        state.loading.waitingRoom = false;
+        if (payload.status) state.status = payload.status;
+        if (payload.waitingRoom)
+          state.waitingRoom = { ...state.waitingRoom, ...payload.waitingRoom };
+      })
+      .addCase(fetchWaitingRoomStatus.rejected, setError("waitingRoom"))
 
-    builder
-      .addCase(rejectWaitingRoom.pending, (s) => {
-        s.loading.waitingRoom = true;
+      // AGORA
+      .addCase(provisionAgoraTokens.pending, setLoading("agora"))
+      .addCase(provisionAgoraTokens.fulfilled, (state, { payload }) => {
+        state.loading.agora = false;
+        state.agora.appId = payload.appId ?? state.agora.appId;
+        state.agora.channelName =
+          payload.channelName ?? state.agora.channelName;
+        state.agora.rtmChannelName =
+          payload.rtmChannelName ?? state.agora.rtmChannelName;
+        state.agora.expiresAt = payload.expiresAt ?? state.agora.expiresAt;
+        state.agora.doctorTokens =
+          payload.doctorTokens ?? state.agora.doctorTokens;
+        state.agora.patientTokens =
+          payload.patientTokens ?? state.agora.patientTokens;
       })
-      .addCase(rejectWaitingRoom.fulfilled, (s, { payload }) => {
-        s.loading.waitingRoom = false;
-        s.waitingQueue = s.waitingQueue.filter(
-          (u) => u.userId !== payload.userId,
-        );
-        toast.success("Patient rejected from waiting room");
+      .addCase(provisionAgoraTokens.rejected, setError("agora"))
+      .addCase(fetchAgoraTokens.pending, setLoading("agora"))
+      .addCase(fetchAgoraTokens.fulfilled, (state, { payload }) => {
+        state.loading.agora = false;
+        state.agora.myTokens = payload.tokens ?? null;
+        if (payload.tokens?.expiresAt)
+          state.agora.expiresAt = payload.tokens.expiresAt;
       })
-      .addCase(rejectWaitingRoom.rejected, (s, { payload }) => {
-        s.loading.waitingRoom = false;
-        toast.error(payload || "Rejection failed");
-      });
+      .addCase(fetchAgoraTokens.rejected, setError("agora"))
+      .addCase(refreshAgoraTokens.pending, setLoading("agora"))
+      .addCase(refreshAgoraTokens.fulfilled, (state, { payload }) => {
+        state.loading.agora = false;
+        state.agora.expiresAt = payload.expiresAt ?? state.agora.expiresAt;
+        state.agora.tokenRefreshCount =
+          payload.tokenRefreshCount ?? state.agora.tokenRefreshCount;
+        if (payload.tokens) state.agora.myTokens = payload.tokens;
+      })
+      .addCase(refreshAgoraTokens.rejected, setError("agora"))
+      .addCase(submitRecordingConsent.pending, setLoading("agora"))
+      .addCase(submitRecordingConsent.fulfilled, (state, { payload }) => {
+        state.loading.agora = false;
+        if (payload.bothConsented) state.agora.isRecordingEnabled = true;
+        if (payload.recordingConsentDoctor !== undefined)
+          state.agora.recordingConsentDoctor = payload.recordingConsentDoctor;
+        if (payload.recordingConsentPatient !== undefined)
+          state.agora.recordingConsentPatient = payload.recordingConsentPatient;
+      })
+      .addCase(submitRecordingConsent.rejected, setError("agora"))
+      .addCase(startRecording.pending, setLoading("agora"))
+      .addCase(startRecording.fulfilled, (state, { payload }) => {
+        state.loading.agora = false;
+        state.agora.isRecordingEnabled = true;
+        state.agora.isRecordingActive = true;
+        state.agora.recordingStartedAt =
+          payload.startedAt ?? new Date().toISOString();
+      })
+      .addCase(startRecording.rejected, setError("agora"))
+      .addCase(stopRecording.pending, setLoading("agora"))
+      .addCase(stopRecording.fulfilled, (state, { payload }) => {
+        state.loading.agora = false;
+        state.agora.isRecordingActive = false;
+        state.agora.recordingStoppedAt =
+          payload.stoppedAt ?? new Date().toISOString();
+      })
+      .addCase(stopRecording.rejected, setError("agora"))
+      .addCase(fetchRecordingUrls.pending, setLoading("agora"))
+      .addCase(fetchRecordingUrls.fulfilled, (state, { payload }) => {
+        state.loading.agora = false;
+        state.agora.recordingUrls = payload.urls ?? [];
+        state.agora.recordingStartedAt =
+          payload.recordingStartedAt ?? state.agora.recordingStartedAt;
+        state.agora.recordingStoppedAt =
+          payload.recordingStoppedAt ?? state.agora.recordingStoppedAt;
+        state.agora.isRecordingEnabled =
+          payload.isRecordingEnabled ?? state.agora.isRecordingEnabled;
+      })
+      .addCase(fetchRecordingUrls.rejected, setError("agora"))
 
-    builder
-      .addCase(fetchWaitingRoom.pending, (s) => {
-        s.loading.waitingRoom = true;
+      // DASHBOARD — DOCTOR
+      .addCase(fetchDoctorSchedule.pending, setLoading("fetch"))
+      .addCase(fetchDoctorSchedule.fulfilled, (state, { payload }) => {
+        state.loading.fetch = false;
+        state.doctorSchedule = payload.schedule ?? [];
       })
-      .addCase(fetchWaitingRoom.fulfilled, (s, { payload }) => {
-        s.loading.waitingRoom = false;
-        s.waitingQueue = payload.queue;
+      .addCase(fetchDoctorSchedule.rejected, setError("fetch"))
+      .addCase(fetchDoctorHistory.pending, setLoading("fetch"))
+      .addCase(fetchDoctorHistory.fulfilled, (state, { payload }) => {
+        state.loading.fetch = false;
+        state.doctorHistory = payload.consultations ?? [];
+        state.pagination = payload.pagination ?? null;
+      })
+      .addCase(fetchDoctorHistory.rejected, setError("fetch"))
+      .addCase(fetchDoctorStats.pending, setLoading("fetch"))
+      .addCase(fetchDoctorStats.fulfilled, (state, { payload }) => {
+        state.loading.fetch = false;
+        state.doctorStats = payload.stats ?? null;
+      })
+      .addCase(fetchDoctorStats.rejected, setError("fetch"))
+      .addCase(fetchDoctorActive.pending, setLoading("fetch"))
+      .addCase(fetchDoctorActive.fulfilled, (state, { payload }) => {
+        state.loading.fetch = false;
+        state.doctorActive = payload.sessions ?? [];
+      })
+      .addCase(fetchDoctorActive.rejected, setError("fetch"))
+      .addCase(fetchDoctorMy.pending, setLoading("fetch"))
+      .addCase(fetchDoctorMy.fulfilled, (state, { payload }) => {
+        state.loading.fetch = false;
+        state.list = payload.consultations ?? [];
+        state.pagination = payload.pagination ?? null;
+      })
+      .addCase(fetchDoctorMy.rejected, setError("fetch"))
 
-        // FIX: Include 'timed_out' entries — doctor panel needs to see them to admit manually.
-        // Previously only 'waiting' was synced → timed_out patients were invisible to doctor.
-        const ACTIONABLE = ["waiting", "timed_out"];
+      // DASHBOARD — PATIENT
+      .addCase(fetchPatientHistory.pending, setLoading("fetch"))
+      .addCase(fetchPatientHistory.fulfilled, (state, { payload }) => {
+        state.loading.fetch = false;
+        state.patientHistory = payload.consultations ?? [];
+        state.pagination = payload.pagination ?? null;
+      })
+      .addCase(fetchPatientHistory.rejected, setError("fetch"))
+      .addCase(fetchPatientUpcoming.pending, setLoading("fetch"))
+      .addCase(fetchPatientUpcoming.fulfilled, (state, { payload }) => {
+        state.loading.fetch = false;
+        state.patientUpcoming = payload.consultations ?? [];
+      })
+      .addCase(fetchPatientUpcoming.rejected, setError("fetch"))
+      .addCase(fetchPatientActive.pending, setLoading("fetch"))
+      .addCase(fetchPatientActive.fulfilled, (state, { payload }) => {
+        state.loading.fetch = false;
+        state.patientActive = payload.sessions ?? [];
+      })
+      .addCase(fetchPatientActive.rejected, setError("fetch"))
+      .addCase(fetchMyConsultations.pending, setLoading("fetch"))
+      .addCase(fetchMyConsultations.fulfilled, (state, { payload }) => {
+        state.loading.fetch = false;
+        state.myConsultations = payload.consultations ?? [];
+        state.pagination = payload.pagination ?? null;
+      })
+      .addCase(fetchMyConsultations.rejected, setError("fetch"))
 
-        payload.queue
-          .filter((e) => ACTIONABLE.includes(e.waitingRoomStatus))
-          .forEach((e) => {
-            const uid = String(e.userId);
-            // Always overwrite — server is source of truth for status
-            s.rt.waitingQueue[uid] = {
-              userId: uid,
-              name: e.displayName || e.name || "Patient",
-              queuePosition: e.queuePosition,
-              waitingRoomStatus: e.waitingRoomStatus,
-              enteredAt: e.enteredAt,
-            };
-          });
+      // DASHBOARD — ADMIN
+      .addCase(fetchAdminAll.pending, setLoading("admin"))
+      .addCase(fetchAdminAll.fulfilled, (state, { payload }) => {
+        state.loading.admin = false;
+        state.adminAll = payload.consultations ?? [];
+        state.pagination = payload.pagination ?? null;
       })
-      .addCase(fetchWaitingRoom.rejected, (s) => {
-        s.loading.waitingRoom = false;
-      });
-
-    // ── Section 6: Lifecycle ──────────────────────────────────────────────────
-    [
-      { thunk: acceptConsultation, msg: "Consultation accepted" },
-      { thunk: confirmConsultation, msg: "Consultation confirmed" },
-      { thunk: startConsultation, msg: "Consultation started" },
-      { thunk: pauseConsultation, msg: "Consultation paused" },
-      { thunk: resumeConsultation, msg: "Consultation resumed" },
-      { thunk: endConsultation, msg: "Consultation ended" },
-      { thunk: cancelConsultation, msg: "Consultation cancelled" },
-    ].forEach(({ thunk, msg }) => {
-      builder
-        .addCase(thunk.pending, (s) => {
-          s.loading.lifecycle = true;
-          s.error = null;
-        })
-        .addCase(thunk.fulfilled, (s, { payload }) => {
-          s.loading.lifecycle = false;
-          if (payload) {
-            s.current = payload;
-            patchInList(s, payload);
-          }
-          toast.success(msg);
-        })
-        .addCase(thunk.rejected, (s, { payload }) => {
-          s.loading.lifecycle = false;
-          s.error = payload;
-          toast.error(payload || `${msg} failed`);
-        });
-    });
-
-    // ── Section 7: Attachments ────────────────────────────────────────────────
-    builder
-      .addCase(uploadAttachment.pending, (s) => {
-        s.loading.attachment = true;
+      .addCase(fetchAdminAll.rejected, setError("admin"))
+      .addCase(fetchAdminUpcoming.pending, setLoading("admin"))
+      .addCase(fetchAdminUpcoming.fulfilled, (state, { payload }) => {
+        state.loading.admin = false;
+        state.adminUpcoming = payload.consultations ?? [];
       })
-      .addCase(uploadAttachment.fulfilled, (s, { payload }) => {
-        s.loading.attachment = false;
-        s.attachments.push(payload.attachment);
-        toast.success("File uploaded");
+      .addCase(fetchAdminUpcoming.rejected, setError("admin"))
+      .addCase(fetchAdminActive.pending, setLoading("admin"))
+      .addCase(fetchAdminActive.fulfilled, (state, { payload }) => {
+        state.loading.admin = false;
+        state.adminActive = payload.sessions ?? [];
       })
-      .addCase(uploadAttachment.rejected, (s, { payload }) => {
-        s.loading.attachment = false;
-        toast.error(payload || "Upload failed");
-      });
-
-    builder
-      .addCase(fetchAttachments.pending, (s) => {
-        s.loading.attachment = true;
+      .addCase(fetchAdminActive.rejected, setError("admin"))
+      .addCase(fetchAdminStats.pending, setLoading("admin"))
+      .addCase(fetchAdminStats.fulfilled, (state, { payload }) => {
+        state.loading.admin = false;
+        state.adminStats = payload.stats ?? null;
       })
-      .addCase(fetchAttachments.fulfilled, (s, { payload }) => {
-        s.loading.attachment = false;
-        s.attachments = payload.attachments;
+      .addCase(fetchAdminStats.rejected, setError("admin"))
+      .addCase(assignAdmin.pending, setLoading("admin"))
+      .addCase(assignAdmin.fulfilled, (state, { payload }) => {
+        state.loading.admin = false;
+        if (state.current?._id === payload.consultation?._id)
+          state.current = payload.consultation;
       })
-      .addCase(fetchAttachments.rejected, (s) => {
-        s.loading.attachment = false;
-      });
-
-    builder
-      .addCase(deleteAttachment.pending, (s) => {
-        s.loading.attachment = true;
-      })
-      .addCase(deleteAttachment.fulfilled, (s, { payload }) => {
-        s.loading.attachment = false;
-        s.attachments = s.attachments.filter(
-          (a) => a._id !== payload.attachmentId,
-        );
-        toast.success("Attachment deleted");
-      })
-      .addCase(deleteAttachment.rejected, (s, { payload }) => {
-        s.loading.attachment = false;
-        toast.error(payload || "Delete failed");
-      });
-
-    // ── Section 8: Prescription ───────────────────────────────────────────────
-    builder
-      .addCase(uploadPrescription.pending, (s) => {
-        s.loading.prescription = true;
-      })
-      .addCase(uploadPrescription.fulfilled, (s) => {
-        s.loading.prescription = false;
-        if (s.current) s.current.prescriptionUploaded = true;
-        toast.success("Prescription uploaded");
-      })
-      .addCase(uploadPrescription.rejected, (s, { payload }) => {
-        s.loading.prescription = false;
-        toast.error(payload || "Upload failed");
-      });
-
-    builder
-      .addCase(issuePrescription.pending, (s) => {
-        s.loading.prescription = true;
-      })
-      .addCase(issuePrescription.fulfilled, (s, { payload }) => {
-        s.loading.prescription = false;
-        s.prescriptions.push(payload.prescription);
-        if (s.current) s.current.prescriptionUploaded = true;
-        toast.success(
-          `Prescription issued — RX#${payload.prescription.rxNumber}`,
-        );
-      })
-      .addCase(issuePrescription.rejected, (s, { payload }) => {
-        s.loading.prescription = false;
-        toast.error(payload || "Prescription failed");
-      });
-
-    builder
-      .addCase(fetchPrescriptions.pending, (s) => {
-        s.loading.prescription = true;
-      })
-      .addCase(fetchPrescriptions.fulfilled, (s, { payload }) => {
-        s.loading.prescription = false;
-        s.prescriptions = payload.prescriptions;
-      })
-      .addCase(fetchPrescriptions.rejected, (s) => {
-        s.loading.prescription = false;
-      });
-
-    // ── Section 9: Participants ──────────────────────────────────────────────
-    builder
-      .addCase(muteParticipant.pending, (s) => {
-        s.loading.participant = true;
-      })
-      .addCase(muteParticipant.fulfilled, (s, { payload }) => {
-        s.loading.participant = false;
-        const p = s.participants.find((x) => x.userId === payload.userId);
-        if (p) p.isMutedByHost = payload.muted;
-        toast.success(
-          payload.muted ? "Participant muted" : "Participant unmuted",
-        );
-      })
-      .addCase(muteParticipant.rejected, (s, { payload }) => {
-        s.loading.participant = false;
-        toast.error(payload || "Mute failed");
-      });
-
-    builder
-      .addCase(kickParticipant.pending, (s) => {
-        s.loading.participant = true;
-      })
-      .addCase(kickParticipant.fulfilled, (s, { payload }) => {
-        s.loading.participant = false;
-        // REST list
-        s.participants = s.participants.filter(
-          (p) => String(p.userId) !== String(payload.userId),
-        );
-        // RT map — mark disconnected (socket event may arrive late)
-        if (s.rt.participants[payload.userId]) {
-          s.rt.participants[payload.userId].connectionStatus = "disconnected";
-          s.rt.participants[payload.userId].kicked = true;
+      .addCase(assignAdmin.rejected, setError("admin"))
+      .addCase(overrideStatus.pending, setLoading("admin"))
+      .addCase(overrideStatus.fulfilled, (state, { payload }) => {
+        state.loading.admin = false;
+        if (payload.consultation?.status) {
+          state.status = payload.consultation.status;
+          if (state.current) state.current.status = state.status;
         }
-        s.rt.participantCount = Object.values(s.rt.participants).filter(
-          (p) => p.connectionStatus === "connected",
-        ).length;
-        toast.success("Participant removed");
       })
-      .addCase(kickParticipant.rejected, (s, { payload }) => {
-        s.loading.participant = false;
-        toast.error(payload || "Kick failed");
-      });
+      .addCase(overrideStatus.rejected, setError("admin"))
 
-    builder
-      .addCase(toggleScreenShare.pending, (s) => {
-        s.loading.participant = true;
+      // PARTICIPANTS
+      .addCase(fetchParticipants.pending, setLoading("participants"))
+      .addCase(fetchParticipants.fulfilled, (state, { payload }) => {
+        state.loading.participants = false;
+        state.participants = {
+          core: payload.core ?? state.participants.core,
+          additional: payload.additional ?? [],
+          events: payload.events ?? [],
+          extra: payload.extraParticipants ?? [],
+        };
       })
-      .addCase(toggleScreenShare.fulfilled, (s, { payload }) => {
-        s.loading.participant = false;
-        if (s.current?._id === payload.id)
-          s.current.screenShareEnabled = payload.enabled;
-        toast.success(
-          `Screen share ${payload.enabled ? "enabled" : "disabled"}`,
+      .addCase(fetchParticipants.rejected, setError("participants"))
+      .addCase(addParticipant.pending, setLoading("participants"))
+      .addCase(addParticipant.fulfilled, (state, { payload }) => {
+        state.loading.participants = false;
+        // If payload has the new participant info, add to additional list
+        if (payload.participant) {
+          const exists = state.participants.additional.find(
+            (p) => p.userId === payload.participant.userId,
+          );
+          if (!exists) state.participants.additional.push(payload.participant);
+        }
+      })
+      .addCase(addParticipant.rejected, setError("participants"))
+      .addCase(removeParticipant.pending, setLoading("participants"))
+      .addCase(removeParticipant.fulfilled, (state, { payload }) => {
+        state.loading.participants = false;
+        state.participants.additional = state.participants.additional.filter(
+          (p) => p.userId !== payload.userId,
         );
       })
-      .addCase(toggleScreenShare.rejected, (s, { payload }) => {
-        s.loading.participant = false;
-        toast.error(payload || "Screen share toggle failed");
-      });
+      .addCase(removeParticipant.rejected, setError("participants"))
+      .addCase(fetchParticipantEvents.fulfilled, (state, { payload }) => {
+        state.participants.events = payload.events ?? [];
+      })
+      .addCase(updateNetworkQuality.fulfilled, (state, { payload }) => {
+        state.networkQuality[payload.userId] = payload.quality;
+      })
 
-    builder
-      .addCase(fetchParticipants.pending, (s) => {
-        s.loading.participant = true;
+      // CLINICAL — VITALS
+      .addCase(saveVitals.pending, setLoading("clinical"))
+      .addCase(saveVitals.fulfilled, (state, { payload }) => {
+        state.loading.clinical = false;
+        state.vitals = payload.vitals ?? null;
       })
-      .addCase(fetchParticipants.fulfilled, (s, { payload }) => {
-        s.loading.participant = false;
-        s.participants = payload.participants;
-      })
-      .addCase(fetchParticipants.rejected, (s) => {
-        s.loading.participant = false;
-      });
+      .addCase(saveVitals.rejected, setError("clinical"))
 
-    // ── Section 10: Notes & Feedback ──────────────────────────────────────────
-    builder
-      .addCase(saveDoctorNotes.pending, (s) => {
-        s.loading.notes = true;
+      // CLINICAL — NOTES
+      .addCase(saveNotes.pending, setLoading("clinical"))
+      .addCase(saveNotes.fulfilled, (state, { payload }) => {
+        state.loading.clinical = false;
+        state.notes = payload.notes ?? null;
       })
-      .addCase(saveDoctorNotes.fulfilled, (s) => {
-        s.loading.notes = false;
-        toast.success("Notes saved");
+      .addCase(saveNotes.rejected, setError("clinical"))
+      .addCase(fetchNotes.pending, setLoading("clinical"))
+      .addCase(fetchNotes.fulfilled, (state, { payload }) => {
+        state.loading.clinical = false;
+        state.notes = payload.notes ?? null;
       })
-      .addCase(saveDoctorNotes.rejected, (s, { payload }) => {
-        s.loading.notes = false;
-        toast.error(payload || "Notes save failed");
-      });
+      .addCase(fetchNotes.rejected, setError("clinical"))
 
-    builder
-      .addCase(submitFeedback.pending, (s) => {
-        s.loading.feedback = true;
+      // CLINICAL — PRESCRIPTIONS
+      .addCase(issuePrescription.pending, setLoading("clinical"))
+      .addCase(issuePrescription.fulfilled, (state, { payload }) => {
+        state.loading.clinical = false;
+        if (payload.prescription)
+          state.prescriptions.push(payload.prescription);
       })
-      .addCase(submitFeedback.fulfilled, (s, { payload }) => {
-        s.loading.feedback = false;
-        if (s.current) {
-          s.current.feedback = payload.feedback;
-          s.current.isRated = true;
-        }
-        toast.success("Thank you for your feedback!");
+      .addCase(issuePrescription.rejected, setError("clinical"))
+      .addCase(fetchPrescriptions.pending, setLoading("clinical"))
+      .addCase(fetchPrescriptions.fulfilled, (state, { payload }) => {
+        state.loading.clinical = false;
+        state.prescriptions = payload.prescriptions ?? [];
       })
-      .addCase(submitFeedback.rejected, (s, { payload }) => {
-        s.loading.feedback = false;
-        toast.error(payload || "Feedback failed");
-      });
+      .addCase(fetchPrescriptions.rejected, setError("clinical"))
 
-    builder
-      .addCase(saveAdminNotes.pending, (s) => {
-        s.loading.notes = true;
+      // CLINICAL — REFERRAL
+      .addCase(saveReferral.pending, setLoading("clinical"))
+      .addCase(saveReferral.fulfilled, (state, { payload }) => {
+        state.loading.clinical = false;
+        state.referral = payload.referral ?? null;
       })
-      .addCase(saveAdminNotes.fulfilled, (s) => {
-        s.loading.notes = false;
-        toast.success("Admin notes saved");
+      .addCase(saveReferral.rejected, setError("clinical"))
+      .addCase(fetchReferral.pending, setLoading("clinical"))
+      .addCase(fetchReferral.fulfilled, (state, { payload }) => {
+        state.loading.clinical = false;
+        state.referral = payload.referral ?? null;
       })
-      .addCase(saveAdminNotes.rejected, (s, { payload }) => {
-        s.loading.notes = false;
-        toast.error(payload || "Failed");
-      });
+      .addCase(fetchReferral.rejected, setError("clinical"))
 
-    // ── Section 11: Analytics & SDK Errors ───────────────────────────────────
-    builder
-      .addCase(pushAnalytics.rejected, () => {
-        /* silent */
+      // CHAT
+      // FIX: sendChatMessage.fulfilled does NOT push to chatMessages
+      // Socket event handles display. REST just ensures persistence.
+      .addCase(sendChatMessage.pending, setLoading("chat"))
+      .addCase(sendChatMessage.fulfilled, (state) => {
+        state.loading.chat = false;
       })
-      .addCase(reportSdkError.rejected, () => {
-        /* silent */
-      });
+      .addCase(sendChatMessage.rejected, setError("chat"))
+      .addCase(fetchChatHistory.pending, setLoading("chat"))
+      .addCase(fetchChatHistory.fulfilled, (state, { payload }) => {
+        state.loading.chat = false;
+        state.chatMessages = payload.messages ?? [];
+      })
+      .addCase(fetchChatHistory.rejected, setError("chat"))
+      .addCase(deleteChatMessage.fulfilled, (state, { payload }) => {
+        const msg = state.chatMessages.find((m) => m._id === payload.messageId);
+        if (msg) msg.isDeleted = true;
+      })
+      .addCase(uploadDocuments.pending, setLoading("clinical"))
+      .addCase(uploadDocuments.fulfilled, (state, { payload }) => {
+        state.loading.clinical = false;
+        if (payload.documents) state.documents.push(...payload.documents);
+      })
+      .addCase(uploadDocuments.rejected, setError("clinical"))
 
-    builder
-      .addCase(fetchAnalytics.pending, (s) => {
-        s.loading.analytics = true;
+      // RATING
+      .addCase(submitRating.pending, setLoading("rating"))
+      .addCase(submitRating.fulfilled, (state, { payload }) => {
+        state.loading.rating = false;
+        state.rating = payload.rating ?? null;
+        state.isRated = true;
       })
-      .addCase(fetchAnalytics.fulfilled, (s, { payload }) => {
-        s.loading.analytics = false;
-        // payload.analytics = consultationAnalytics object from server summary
-        // payload = { id, analytics: { avgLatency, avgBandwidth, ... } }
-        s.analytics = payload.analytics ?? payload; // guard both shapes
+      .addCase(submitRating.rejected, setError("rating"))
+      .addCase(fetchRating.pending, setLoading("rating"))
+      .addCase(fetchRating.fulfilled, (state, { payload }) => {
+        state.loading.rating = false;
+        state.rating = payload.rating ?? null;
+        state.isRated = payload.isRated ?? false;
       })
-      .addCase(fetchAnalytics.rejected, (s) => {
-        s.loading.analytics = false;
-      });
+      .addCase(fetchRating.rejected, setError("rating"))
+      .addCase(editRating.pending, setLoading("rating"))
+      .addCase(editRating.fulfilled, (state, { payload }) => {
+        state.loading.rating = false;
+        state.rating = payload.rating ?? state.rating;
+      })
+      .addCase(editRating.rejected, setError("rating"))
 
-    // ── Section 12: Event Logs ────────────────────────────────────────────────
-    builder
-      .addCase(fetchEventLogs.pending, (s) => {
-        s.loading.events = true;
+      // METRICS
+      .addCase(saveMetrics.pending, setLoading("fetch"))
+      .addCase(saveMetrics.fulfilled, (state, { payload }) => {
+        state.loading.fetch = false;
+        state.metrics = payload.metrics ?? null;
       })
-      .addCase(fetchEventLogs.fulfilled, (s, { payload }) => {
-        s.loading.events = false;
-        s.eventLogs = payload.events;
+      .addCase(saveMetrics.rejected, setError("fetch"))
+      .addCase(fetchMetrics.pending, setLoading("fetch"))
+      .addCase(fetchMetrics.fulfilled, (state, { payload }) => {
+        state.loading.fetch = false;
+        state.metrics = payload.metrics ?? null;
       })
-      .addCase(fetchEventLogs.rejected, (s) => {
-        s.loading.events = false;
-      });
+      .addCase(fetchMetrics.rejected, setError("fetch"))
 
-    builder.addCase(logEvent.rejected, () => {
-      /* silent — client-side telemetry */
-    });
+      // FOLLOW-UP
+      .addCase(createFollowUp.pending, setLoading("followUp"))
+      .addCase(createFollowUp.fulfilled, (state) => {
+        state.loading.followUp = false;
+      })
+      .addCase(createFollowUp.rejected, setError("followUp"))
+      .addCase(fetchFollowUpHistory.pending, setLoading("followUp"))
+      .addCase(fetchFollowUpHistory.fulfilled, (state, { payload }) => {
+        state.loading.followUp = false;
+        state.followUpChain = payload.chain ?? [];
+        state.followUpChildren = payload.children ?? [];
+      })
+      .addCase(fetchFollowUpHistory.rejected, setError("followUp"))
 
-    // ── Section 13: Admin ─────────────────────────────────────────────────────
-    builder
-      .addCase(adminForceEnd.pending, (s) => {
-        s.loading.admin = true;
-        s.error = null;
+      // CRON
+      .addCase(triggerAutoMiss.pending, setLoading("cron"))
+      .addCase(triggerAutoMiss.fulfilled, (state, { payload }) => {
+        state.loading.cron = false;
+        state.cronResults.autoMiss = payload;
       })
-      .addCase(adminForceEnd.fulfilled, (s, { payload }) => {
-        s.loading.admin = false;
-        if (payload) {
-          s.current = payload;
-          patchInList(s, payload);
-        }
-        toast.success("Force-ended");
+      .addCase(triggerAutoMiss.rejected, setError("cron"))
+      .addCase(triggerTokenRefreshCron.pending, setLoading("cron"))
+      .addCase(triggerTokenRefreshCron.fulfilled, (state, { payload }) => {
+        state.loading.cron = false;
+        state.cronResults.tokenRefresh = payload;
       })
-      .addCase(adminForceEnd.rejected, (s, { payload }) => {
-        s.loading.admin = false;
-        toast.error(payload || "Force-end failed");
-      });
-
-    builder
-      .addCase(setAdminPriority.pending, (s) => {
-        s.loading.admin = true;
+      .addCase(triggerTokenRefreshCron.rejected, setError("cron"))
+      .addCase(triggerReminders.pending, setLoading("cron"))
+      .addCase(triggerReminders.fulfilled, (state, { payload }) => {
+        state.loading.cron = false;
+        state.cronResults.reminders = payload;
       })
-      .addCase(setAdminPriority.fulfilled, (s, { payload }) => {
-        s.loading.admin = false;
-        if (s.current?._id === payload.id)
-          s.current.priority = payload.priority;
-        const item = s.list.find((c) => c._id === payload.id);
-        if (item) item.priority = payload.priority;
-        toast.success(`Priority set to ${payload.priority}`);
+      .addCase(triggerReminders.rejected, setError("cron"))
+      .addCase(triggerExpirePrescriptions.pending, setLoading("cron"))
+      .addCase(triggerExpirePrescriptions.fulfilled, (state, { payload }) => {
+        state.loading.cron = false;
+        state.cronResults.expirePrescriptions = payload;
       })
-      .addCase(setAdminPriority.rejected, (s, { payload }) => {
-        s.loading.admin = false;
-        toast.error(payload || "Priority update failed");
-      });
-
-    builder
-      .addCase(reassignDoctor.pending, (s) => {
-        s.loading.admin = true;
-      })
-      .addCase(reassignDoctor.fulfilled, (s, { payload }) => {
-        s.loading.admin = false;
-        if (s.current?._id === payload.id)
-          s.current.doctor = payload.doctorProfileId;
-        toast.success("Doctor reassigned");
-      })
-      .addCase(reassignDoctor.rejected, (s, { payload }) => {
-        s.loading.admin = false;
-        toast.error(payload || "Reassign failed");
-      });
-
-    builder
-      .addCase(adminBulkAction.pending, (s) => {
-        s.loading.admin = true;
-        s.bulkResult = null;
-      })
-      .addCase(adminBulkAction.fulfilled, (s, { payload }) => {
-        s.loading.admin = false;
-        s.bulkResult = payload;
-        toast.success(`Bulk action: ${payload.modified} updated`);
-      })
-      .addCase(adminBulkAction.rejected, (s, { payload }) => {
-        s.loading.admin = false;
-        toast.error(payload || "Bulk action failed");
-      });
+      .addCase(triggerExpirePrescriptions.rejected, setError("cron"));
   },
 });
 
+// ── Exports ───────────────────────────────────────────────────────────────────
+
 export const {
+  resetConsultation,
   clearCurrent,
   clearError,
-  clearList,
-  clearBulkResult,
-
-  rtJoined,
-  rtStatusUpdate,
-  rtParticipantConnected,
-  rtParticipantDisconnected,
-  rtParticipantJoined,
-  rtParticipantLeft,
-  rtParticipantMuted,
-  rtParticipantUnmuted,
-  rtParticipantKicked,
-  rtYouWereKicked,
-  rtYouWereMuted,
-  rtYouWereUnmuted,
-  rtPatientEnteredWaiting,
-  rtWaitingRoomApproved,
-  rtWaitingRoomRejected,
-  rtWaitingRoomTimedOut,
-  rtTypingStart,
-  rtTypingStop,
-  rtHandRaised,
-  rtHandLowered,
-  rtScreenShareToggled,
-  rtScreenShareStarted,
-  rtScreenShareStopped,
-  rtConsentUpdated,
-  rtPrescriptionEvent,
-  rtAttachmentUploaded,
-  rtNetworkQuality,
-  rtReconnectAttempt,
-  rtReconnectSuccess,
-  rtDoctorOnline,
-  rtDoctorOffline,
-  rtDoctorReassigned,
-  rtAdminBroadcast,
-  rtConnectionLost,
-  rtStateSynced,
-  rtConnectionRecovered,
-  resetRt,
+  setAgoraMyTokens,
+  clearTypingUsers,
+  clearPrescriptionPreview,
+  clearAdminMessages,
+  setLocalRecordingActive,
+  socketStatusUpdate,
+  socketParticipantJoined,
+  socketParticipantLeft,
+  socketParticipantDisconnected,
+  socketPatientWaiting,
+  socketPatientLeftWaiting,
+  socketChatMessage,
+  socketChatTyping,
+  socketVitalsUpdate,
+  socketQosUpdate,
+  socketPrescriptionPreview,
+  socketPrescriptionReady,
+  socketAdminMessage,
+  socketTokenRefreshed,
+  socketRecordingStarted,
+  socketRecordingStopped,
+  socketParticipantAdded,
+  socketParticipantRemoved,
 } = consultationSlice.actions;
 
-export default consultationSlice.reducer;
+// ── Selectors ─────────────────────────────────────────────────────────────────
 
 export const selectConsultation = (s) => s.consultation.current;
-export const selectJoinToken = (s) => s.consultation.joinToken;
+export const selectConsultationStatus = (s) => s.consultation.status;
+export const selectStatusMeta = (s) => s.consultation.statusMeta;
+export const selectSessionStartedAt = (s) => s.consultation.sessionStartedAt;
+export const selectSessionEndedAt = (s) => s.consultation.sessionEndedAt;
+export const selectActualDurationSec = (s) => s.consultation.actualDurationSec;
 export const selectConsultationList = (s) => s.consultation.list;
-export const selectConsultationTotal = (s) => s.consultation.total;
-export const selectConsultationPage = (s) => s.consultation.page;
-export const selectConsultationPages = (s) => s.consultation.pages;
-export const selectConsultationStats = (s) => s.consultation.stats;
-export const selectConsultationError = (s) => s.consultation.error;
-export const selectAttachments = (s) => s.consultation.attachments;
-export const selectPrescriptions = (s) => s.consultation.prescriptions;
-export const selectConsents = (s) => s.consultation.consents;
-export const selectWaitingQueue = (s) => s.consultation.waitingQueue;
+export const selectPagination = (s) => s.consultation.pagination;
+export const selectDoctorSchedule = (s) => s.consultation.doctorSchedule;
+export const selectDoctorHistory = (s) => s.consultation.doctorHistory;
+export const selectDoctorStats = (s) => s.consultation.doctorStats;
+export const selectDoctorActive = (s) => s.consultation.doctorActive;
+export const selectPatientHistory = (s) => s.consultation.patientHistory;
+export const selectPatientUpcoming = (s) => s.consultation.patientUpcoming;
+export const selectPatientActive = (s) => s.consultation.patientActive;
+export const selectMyConsultations = (s) => s.consultation.myConsultations;
+export const selectAdminAll = (s) => s.consultation.adminAll;
+export const selectAdminUpcoming = (s) => s.consultation.adminUpcoming;
+export const selectAdminActive = (s) => s.consultation.adminActive;
+export const selectAdminStats = (s) => s.consultation.adminStats;
+export const selectAgora = (s) => s.consultation.agora;
+export const selectMyTokens = (s) => s.consultation.agora.myTokens;
+export const selectAgoraChannel = (s) => s.consultation.agora.channelName;
+export const selectAgoraAppId = (s) => s.consultation.agora.appId;
+export const selectWaitingRoom = (s) => s.consultation.waitingRoom;
 export const selectParticipants = (s) => s.consultation.participants;
-export const selectAnalytics = (s) => s.consultation.analytics;
-export const selectEventLogs = (s) => s.consultation.eventLogs;
-export const selectVerifiedRx = (s) => s.consultation.verifiedRx;
-export const selectBulkResult = (s) => s.consultation.bulkResult;
-export const selectConsultationLoading = (s) => s.consultation.loading;
+export const selectNetworkQuality = (s) => s.consultation.networkQuality;
+export const selectVitals = (s) => s.consultation.vitals;
+export const selectNotes = (s) => s.consultation.notes;
+export const selectPrescriptions = (s) => s.consultation.prescriptions;
+export const selectReferral = (s) => s.consultation.referral;
+export const selectPrescriptionPreview = (s) =>
+  s.consultation.prescriptionPreview;
+export const selectDocuments = (s) => s.consultation.documents;
+export const selectChatMessages = (s) => s.consultation.chatMessages;
+export const selectTypingUsers = (s) => s.consultation.typingUsers;
+export const selectRating = (s) => ({
+  rating: s.consultation.rating,
+  isRated: s.consultation.isRated,
+});
+export const selectMetrics = (s) => s.consultation.metrics;
+export const selectFollowUp = (s) => ({
+  chain: s.consultation.followUpChain,
+  children: s.consultation.followUpChildren,
+});
+export const selectCronResults = (s) => s.consultation.cronResults;
+export const selectAdminMessages = (s) => s.consultation.adminMessages;
+export const selectLoading = (domain) => (s) => s.consultation.loading[domain];
+export const selectAnyLoading = (s) =>
+  Object.values(s.consultation.loading).some(Boolean);
+export const selectError = (s) => s.consultation.error;
+export const selectLocalRecordingActive = (s) =>
+  s.consultation.agora.localRecordingActive;
+export const selectRecordingActive = (s) =>
+  s.consultation.agora.isRecordingActive;
 
-export const selectRt = (s) => s.consultation.rt;
-export const selectRtStatus = (s) => s.consultation.rt.status;
-export const selectRtParticipants = (s) => s.consultation.rt.participants;
-export const selectRtWaitingQueue = (s) => s.consultation.rt.waitingQueue;
-export const selectRtTypingUsers = (s) => s.consultation.rt.typingUsers;
-export const selectRtRaisedHands = (s) => s.consultation.rt.raisedHands;
-export const selectRtScreenSharing = (s) => s.consultation.rt.screenSharing;
-export const selectRtNetworkQuality = (s) => s.consultation.rt.networkQuality;
-export const selectRtIsKicked = (s) => s.consultation.rt.kicked;
-export const selectRtIsMuted = (s) => s.consultation.rt.muted;
-export const selectRtOnlineDoctors = (s) => s.consultation.rt.onlineDoctors;
-export const selectRtAdminBroadcasts = (s) => s.consultation.rt.adminBroadcasts;
-export const selectRtParticipantCount = (s) =>
-  s.consultation.rt.participantCount;
-export const selectRtConsentAccepted = (s) =>
-  s.consultation.rt.telemedicineConsentAccepted;
-export const selectRtConnected = (s) => s.consultation.rt.connected;
+export default consultationSlice.reducer;

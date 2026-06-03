@@ -6,18 +6,19 @@ import Header from "./Header";
 import Footer from "./Footer";
 import LikesonSuperAdminDashboard from "@/components/dashboard/LikesonSuperAdminDashboard";
 import AdminDashboard from "@/app/admin/AdminDashboard";
-import PharmacyDashboard from '@/components/dashboard/PharmacyDashboard'
-import TransportPartnerDashboard from '@/components/dashboard/Transportpartnerdashboard'
- import Marquee from "@/components/Marquee";
- import HospitalMangerDashboard from "@/components/dashboard/HospitalMangerDashboard";
-import DoctorDashboard from '@/components/dashboard/DoctorDashboard'
- import { usePathname } from 'next/navigation';
+import PharmacyDashboard from '@/components/dashboard/PharmacyDashboard';
+import TransportPartnerDashboard from '@/components/dashboard/Transportpartnerdashboard';
+import Marquee from "@/components/Marquee";
+import HospitalMangerDashboard from "@/components/dashboard/HospitalMangerDashboard";
+import DoctorDashboard from '@/components/dashboard/DoctorDashboard';
+import { usePathname } from 'next/navigation';
 import BloodBankDashboard from "@/components/dashboard/BloodBankDashboard";
 import LabPartnerDashboard from "@/components/dashboard/LabPartnerDashboard";
+
 export default function LayoutConditionalWrapper({ children }) {
   const { user } = useSelector((state) => state.user);
   const [isClient, setIsClient] = useState(false);
-  const pathname = usePathname(); // ← MOVED HERE, before any returns
+  const pathname = usePathname();
 
   useEffect(() => {
     setIsClient(true);
@@ -56,8 +57,8 @@ export default function LayoutConditionalWrapper({ children }) {
 
   return (
     <>
-      {user && !isTrackingPage }
-       <Marquee />
+      {/* FIX: Corrected boolean syntax to encapsulate the Marquee */}
+      {user && !isTrackingPage  }
       <Header />
       <main className="min-h-screen transition-all duration-300">
         {children}

@@ -5,14 +5,6 @@
  * Care Assistant — Booking & Care Record Hub
  * Uses: clinicalSlice thunks, Next.js, Tailwind CSS, Lucide, Framer Motion
  * Theme: care-assistant (Rose) from globals.css
- *
- * FIXES:
- * 1. Added "Track Ride" button → /care-assistant/rides/[bookingId]/[rideId]/tracking
- *    - Uses booking.primaryRide (ObjectId) as rideId
- *    - Falls back to booking.rides[0] if primaryRide null
- *    - Button disabled/hidden if no ride linked
- * 2. BookingDetailPanel shows tracking link with ride status context
- * 3. Booking list row shows tracking icon when ride active
  */
 
 import { useEffect, useState, useCallback } from 'react';
@@ -100,6 +92,7 @@ const RIDE_BOOKING_TYPES = new Set([
   'full_care_ride',
   'patient_transport',
   'diagnostic_home',
+  'care_assistant'
 ]);
 
 /** Ride statuses considered "active/trackable" */
@@ -210,28 +203,20 @@ function EmptyState({ icon: Icon, title, subtitle }) {
   );
 }
 
-// ─── Track Ride Button ─────────────────────────────────────────────────────────
-
-/**
- * TrackRideButton
- * Renders only when booking is trackable.
- * Navigates to /care-assistant/rides/[bookingId]/[rideId]/tracking
- */
-// ─── Track Ride Button ─────────────────────────────────────────────────────────
-
+ 
 function TrackRideButton({ booking, variant = 'default' }) {
   const router = useRouter();
 
+  // Restore the validation check to only show the button for active, trackable rides
   if (!canTrack(booking)) return null;
 
-  // We only need the rideId to match your Next.js folder structure
   const rideId = getRideId(booking);
 
   function handleTrack(e) {
-    e.stopPropagation(); // prevent row click from firing
-    
-    // FIX: Updated to match app/care-assistant/rides/[rideId]/tracking/page.jsx
-    router.push(`/care-assistant/rides/${rideId}/tracking`);
+    e.stopPropagation(); // Prevent row click from firing the detail modal
+
+    // Corrected route to match: /care/tracking/[bookingId]?rideId=xxx&type=bookingType
+   router.push(`/care-assistant/tracking/${booking._id}/${rideId}?type=${booking.bookingType}`);
   }
 
   if (variant === 'panel') {
@@ -315,7 +300,6 @@ function PendingBookingCard({ booking, onAccept, onReject, onView, isAccepting, 
         </div>
 
         <div className="flex items-center gap-1.5 flex-shrink-0">
-          {/* Track button — only shown if ride already assigned pre-accept (rare but possible) */}
           <TrackRideButton booking={booking} />
           <button onClick={() => onView(booking._id)}
             className="btn btn-ghost btn-xs gap-1">
@@ -423,11 +407,12 @@ function PendingBookingCard({ booking, onAccept, onReject, onView, isAccepting, 
 
 // ─── Booking List Row ─────────────────────────────────────────────────────────
 
+// ─── Booking List Row ─────────────────────────────────────────────────────────
+
 function BookingRow({ booking, onView }) {
   const patientName = booking.patientInfo?.name || booking.customer?.name || 'Unknown';
   const phone       = booking.customer?.phone   || '—';
   const scheduled   = booking.scheduledAt ? new Date(booking.scheduledAt) : null;
-  const trackable   = canTrack(booking);
 
   return (
     <motion.tr variants={fadeUp}
@@ -466,8 +451,9 @@ function BookingRow({ booking, onView }) {
       <td><StatusBadge status={booking.status} /></td>
       <td>
         <div className="flex items-center gap-1.5">
-          {/* Track button stops row-click propagation internally */}
-          {trackable && <TrackRideButton booking={booking} />}
+          {/* 🚨 Button is now forced to show up right here, on the left of View! */}
+          <TrackRideButton booking={booking} />
+          
           <button className="btn btn-ghost btn-xs gap-1" onClick={e => { e.stopPropagation(); onView(booking._id); }}>
             <Eye className="w-3.5 h-3.5" />
             View
