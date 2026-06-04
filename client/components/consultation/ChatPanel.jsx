@@ -1,27 +1,12 @@
 'use client';
 
 /**
- * ChatPanel.jsx — PRODUCTION GRADE (double-message fix)
+ * ChatPanel.jsx — PRODUCTION GRADE
  *
- * ROOT CAUSE of duplicate messages:
- *   Before: socketSendChat() AND sendChatMessage (REST) were BOTH firing.
- *   The socket event "consultation:chat:message" arrived from the server PLUS
- *   the REST response was also being used to push the message.
- *
- * FIX:
- *   Single source of truth: the socket event "consultation:chat:message"
- *   (broadcast by server after persist) is the ONLY source that adds to
- *   chatMessages in the Redux slice.
- *
- *   For TEXT messages: we emit via socket only. The server persists AND
- *   broadcasts back. REST is NOT called for text (socket handles it all).
- *
- *   For FILE/IMAGE messages: we POST multipart to REST (socket can't carry
- *   binary). The server persists and emits the socket event to the room.
- *   The REST response is NOT pushed to chatMessages — slice.sendChatMessage
- *   fulfilled handler does nothing (already fixed in slice).
- *
- *   Dedup in socketChatMessage reducer (by _id) prevents any double-add.
+ * FIX: Added a pop-up menu for the attachment button to allow users to select
+ * the specific document type (Image, Document, Lab Order, Prescription).
+ * This maps perfectly to the backend Mongoose enum:
+ * ['text', 'image', 'file', 'prescription_preview', 'lab_order', 'system']
  */
 
 import React, {
@@ -30,7 +15,7 @@ import React, {
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Send, X, Paperclip, Image as ImageIcon,
-  FlaskConical, FileText,
+  FlaskConical, FileText, Pill
 } from 'lucide-react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useConsultation } from '@/context/ConsultationProvider';
@@ -61,10 +46,11 @@ const isImageFile = (file) => file?.type?.startsWith('image/');
 
 const typeIcon = (type) => {
   switch (type) {
-    case MSG_TYPES.image:   return <ImageIcon size={12} />;
-    case MSG_TYPES.file:    return <FileText  size={12} />;
-    case MSG_TYPES.lab_order: return <FlaskConical size={12} />;
-    default:                return null;
+    case MSG_TYPES.image:                return <ImageIcon size={12} />;
+    case MSG_TYPES.file:                 return <FileText  size={12} />;
+    case MSG_TYPES.lab_order:            return <FlaskConical size={12} />;
+    case MSG_TYPES.prescription_preview: return <Pill size={12} />;
+    default:                             return null;
   }
 };
 
@@ -115,9 +101,9 @@ const MessageBubble = memo(({ msg, isOwn }) => {
             : 'bg-base-200 text-base-content border border-base-300 rounded-tl-sm'
           }`}
       >
+        {/* Render Image */}
         {msg.messageType === MSG_TYPES.image && msg.attachmentUrl && (
           <a href={msg.attachmentUrl} target="_blank" rel="noopener noreferrer" className="block mb-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={msg.attachmentUrl}
               alt={msg.attachmentName ?? 'Image'}
@@ -126,23 +112,26 @@ const MessageBubble = memo(({ msg, isOwn }) => {
           </a>
         )}
 
-        {msg.messageType === MSG_TYPES.file && msg.attachmentUrl && (
+        {/* Render File/Lab/Prescription */}
+        {[MSG_TYPES.file, MSG_TYPES.lab_order, MSG_TYPES.prescription_preview].includes(msg.messageType) && msg.attachmentUrl && (
           <a
             href={msg.attachmentUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-2 underline underline-offset-2 mb-2 hover:opacity-80 font-medium break-all"
           >
-            <FileText size={15} className="shrink-0" />
-            <span>{msg.attachmentName || 'File'}</span>
+            {typeIcon(msg.messageType)}
+            <span>{msg.attachmentName || 'Document'}</span>
           </a>
         )}
 
+        {/* Render Text Content */}
         {(msg.content && (msg.messageType === MSG_TYPES.text || !msg.messageType)) && (
           <p className="whitespace-pre-wrap break-words leading-relaxed">{msg.content}</p>
         )}
 
-        {msg.content && [MSG_TYPES.image, MSG_TYPES.file].includes(msg.messageType) && (
+        {/* Render Caption for Attachments */}
+        {msg.content && msg.messageType !== MSG_TYPES.text && (
           <p className="whitespace-pre-wrap break-words leading-relaxed mt-1.5 text-[0.8rem]">
             {msg.content}
           </p>
@@ -189,7 +178,13 @@ const ChatPanel = memo(({ onClose }) => {
 
   const [input,      setInput]      = useState('');
   const [sending,    setSending]    = useState(false);
+  
+  // State for file attachment
   const [attachment, setAttachment] = useState(null);
+  const [selectedFileType, setSelectedFileType] = useState(MSG_TYPES.file);
+  
+  // UI state for attachment menu
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
 
   const bottomRef     = useRef(null);
   const typingTimeout = useRef(null);
@@ -209,9 +204,30 @@ const ChatPanel = memo(({ onClose }) => {
   const handleFilePick = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    
+    // Automatically set type to image if an image is uploaded and user chose generic 'file'
+    if (isImageFile(file) && selectedFileType === MSG_TYPES.file) {
+        setSelectedFileType(MSG_TYPES.image);
+    }
+    
     setAttachment(file);
+    setShowAttachMenu(false);
     e.target.value = '';
-  }, []);
+  }, [selectedFileType]);
+
+  const handleAttachOptionClick = (type) => {
+    setSelectedFileType(type);
+    
+    // Configure file input based on selected type
+    if (fileInputRef.current) {
+        if (type === MSG_TYPES.image) {
+             fileInputRef.current.accept = "image/*";
+        } else {
+             fileInputRef.current.accept = ".pdf,.doc,.docx,.xls,.xlsx,.txt,image/*";
+        }
+        fileInputRef.current.click();
+    }
+  };
 
   // ── Send — unified flow ───────────────────────────────────────────────────
   const handleSend = useCallback(async () => {
@@ -224,41 +240,25 @@ const ChatPanel = memo(({ onClose }) => {
 
     try {
       if (attachment) {
-        /**
-         * FILE / IMAGE:
-         * Send via REST (multipart). Server persists + emits socket event to room.
-         * The socket event adds the message to Redux via socketChatMessage.
-         * REST fulfilled handler does NOT push to chatMessages (fixed in slice).
-         * No duplication.
-         */
         const formData = new FormData();
         formData.append('attachment', attachment);
         if (content) formData.append('content', content);
-        formData.append('messageType', isImageFile(attachment) ? MSG_TYPES.image : MSG_TYPES.file);
+        
+        // Pass the explicit file type selected by the user
+        formData.append('messageType', selectedFileType);
 
         await dispatch(sendChatMessage({ consultationId, message: formData }));
       } else {
-        /**
-         * TEXT:
-         * Emit via socket ONLY. Server receives, persists, emits socket event back to room.
-         * That socket event ("consultation:chat:message") is the single source that
-         * adds the message to Redux via socketChatMessage reducer.
-         * Do NOT also call REST here — that would create a second DB record
-         * AND a second socket event = guaranteed duplicate.
-         *
-         * NOTE: If you need guaranteed delivery fallback, implement an ack callback
-         * on the socket emit and only fall back to REST if no ack within 3s.
-         */
         socketSendChat(consultationId, content, MSG_TYPES.text);
-        // REST is intentionally NOT called for plain text.
       }
 
       setInput('');
       setAttachment(null);
+      setSelectedFileType(MSG_TYPES.file);
     } finally {
       setSending(false);
     }
-  }, [input, attachment, sending, consultationId, dispatch]);
+  }, [input, attachment, sending, consultationId, dispatch, selectedFileType]);
 
   const handleKeyDown = useCallback((e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -270,7 +270,7 @@ const ChatPanel = memo(({ onClose }) => {
   return (
     <div className="flex flex-col h-full bg-base-100 border-l border-base-300 w-full sm:w-96 shadow-2xl" role="complementary" aria-label="Chat">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3.5 border-b border-base-300 bg-base-100/95 backdrop-blur-md shrink-0">
+      <div className="flex items-center justify-between px-4 py-3.5 border-b border-base-300 bg-base-100/95 backdrop-blur-md shrink-0 z-20">
         <h2 className="font-montserrat text-base font-bold text-base-content tracking-tight">Chat</h2>
         <button onClick={onClose} className="btn btn-ghost btn-circle btn-sm" aria-label="Close chat">
           <X size={17} />
@@ -298,64 +298,119 @@ const ChatPanel = memo(({ onClose }) => {
         <div ref={bottomRef} className="h-2 shrink-0" />
       </div>
 
-      {/* Input */}
-      <div className="p-4 border-t border-base-300 bg-base-100 flex items-end gap-2 relative shrink-0">
-        {/* Attachment preview */}
+      {/* Input Section */}
+      <div className="p-4 border-t border-base-300 bg-base-100 flex flex-col gap-2 relative shrink-0">
+        
+        {/* Attachment menu popover */}
+        <AnimatePresence>
+            {showAttachMenu && (
+                <>
+                {/* Backdrop to close menu when clicking outside */}
+                <div 
+                    className="fixed inset-0 z-10" 
+                    onClick={() => setShowAttachMenu(false)}
+                />
+                <motion.div 
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className="absolute bottom-[calc(100%+10px)] left-4 bg-base-100 border border-base-300 shadow-xl rounded-xl p-2 z-20 flex flex-col gap-1 w-48"
+                >
+                    <button 
+                        onClick={() => handleAttachOptionClick(MSG_TYPES.image)}
+                        className="flex items-center gap-3 px-3 py-2 text-sm font-medium hover:bg-base-200 rounded-lg transition-colors text-left"
+                    >
+                        <ImageIcon size={16} className="text-primary" /> Image
+                    </button>
+                    <button 
+                        onClick={() => handleAttachOptionClick(MSG_TYPES.file)}
+                        className="flex items-center gap-3 px-3 py-2 text-sm font-medium hover:bg-base-200 rounded-lg transition-colors text-left"
+                    >
+                        <FileText size={16} className="text-info" /> Document
+                    </button>
+                    <button 
+                        onClick={() => handleAttachOptionClick(MSG_TYPES.lab_order)}
+                        className="flex items-center gap-3 px-3 py-2 text-sm font-medium hover:bg-base-200 rounded-lg transition-colors text-left"
+                    >
+                        <FlaskConical size={16} className="text-secondary" /> Lab Report
+                    </button>
+                    <button 
+                        onClick={() => handleAttachOptionClick(MSG_TYPES.prescription_preview)}
+                        className="flex items-center gap-3 px-3 py-2 text-sm font-medium hover:bg-base-200 rounded-lg transition-colors text-left"
+                    >
+                        <Pill size={16} className="text-success" /> Prescription
+                    </button>
+                </motion.div>
+                </>
+            )}
+        </AnimatePresence>
+
+        {/* Selected Attachment preview banner */}
         {attachment && (
-          <div className="absolute bottom-full mb-2 left-4 right-4 bg-base-100 border border-base-300 p-2 rounded-xl flex items-center gap-3 shadow-lg z-10">
+          <div className="bg-base-200 border border-base-300 p-2 rounded-xl flex items-center gap-3 w-full mb-1">
             {isImageFile(attachment) ? (
-              /* eslint-disable-next-line @next/next/no-img-element */
-              <img src={URL.createObjectURL(attachment)} alt="preview" className="w-10 h-10 object-cover rounded-lg border border-base-200 shrink-0" />
+              <img src={URL.createObjectURL(attachment)} alt="preview" className="w-10 h-10 object-cover rounded-lg border border-base-100 shrink-0" />
             ) : (
-              <div className="w-10 h-10 flex items-center justify-center bg-base-200 rounded-lg text-base-content/70 shrink-0">
-                <FileText size={18} />
+              <div className="w-10 h-10 flex items-center justify-center bg-base-100 border border-base-200 rounded-lg text-base-content/70 shrink-0">
+                {typeIcon(selectedFileType)}
               </div>
             )}
-            <span className="text-sm font-semibold truncate flex-1">{attachment.name}</span>
-            <button className="btn btn-ghost btn-circle btn-xs text-error" onClick={() => setAttachment(null)} aria-label="Remove attachment">
+            <div className="flex flex-col flex-1 overflow-hidden">
+                <span className="text-sm font-semibold truncate">{attachment.name}</span>
+                <span className="text-[0.65rem] text-base-content/60 uppercase tracking-wider font-bold">
+                   {selectedFileType.replace('_', ' ')}
+                </span>
+            </div>
+            
+            <button className="btn btn-ghost btn-circle btn-xs text-error shrink-0" onClick={() => setAttachment(null)} aria-label="Remove attachment">
               <X size={13} />
             </button>
           </div>
         )}
 
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
-          className="hidden"
-          onChange={handleFilePick}
-        />
+        <div className="flex items-end gap-2">
+            {/* Hidden file input */}
+            <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                onChange={handleFilePick}
+            />
 
-        <button
-          className="btn btn-ghost btn-circle text-base-content/60 hover:text-primary hover:bg-primary/10 shrink-0"
-          onClick={() => fileInputRef.current?.click()}
-          aria-label="Attach file"
-          disabled={sending}
-        >
-          <Paperclip size={17} />
-        </button>
+            {/* Attachment Button */}
+            <button
+                className={`btn btn-circle shrink-0 ${showAttachMenu ? 'btn-primary' : 'btn-ghost text-base-content/60 hover:text-primary hover:bg-primary/10'}`}
+                onClick={() => setShowAttachMenu(!showAttachMenu)}
+                aria-label="Attach file"
+                disabled={sending}
+            >
+                <Paperclip size={17} />
+            </button>
 
-        <textarea
-          className="input-field min-h-[44px] max-h-32 resize-none py-2.5 px-4 scrollbar-thin flex-1 text-sm"
-          placeholder="Type a message… (Enter to send)"
-          value={input}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-          rows={1}
-          aria-label="Message input"
-        />
+            {/* Text Input */}
+            <textarea
+                className="input-field min-h-[44px] max-h-32 resize-none py-2.5 px-4 scrollbar-thin flex-1 text-sm"
+                placeholder={attachment ? "Add a caption..." : "Type a message… (Enter to send)"}
+                value={input}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                rows={1}
+                aria-label="Message input"
+            />
 
-        <button
-          className="btn btn-primary btn-circle shrink-0"
-          onClick={handleSend}
-          disabled={(!input.trim() && !attachment) || sending}
-          aria-label="Send"
-        >
-          {sending
-            ? <span className="loading loading-xs loading-spinner" />
-            : <Send size={15} className="ml-0.5" />
-          }
-        </button>
+            {/* Send Button */}
+            <button
+                className="btn btn-primary btn-circle shrink-0"
+                onClick={handleSend}
+                disabled={(!input.trim() && !attachment) || sending}
+                aria-label="Send"
+            >
+                {sending
+                    ? <span className="loading loading-xs loading-spinner" />
+                    : <Send size={15} className="ml-0.5" />
+                }
+            </button>
+        </div>
       </div>
     </div>
   );

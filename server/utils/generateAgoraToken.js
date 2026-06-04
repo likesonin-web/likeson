@@ -32,8 +32,8 @@ const toRtcRole = (role) =>
  * Generate Agora RTC token (video/audio session)
  *
  * agora-token v2 buildTokenWithUid signature:
- *   buildTokenWithUid(appId, appCert, channelName, uid, role, privilegeExpiredTs)
- *   → 6 arguments only.
+ * buildTokenWithUid(appId, appCert, channelName, uid, role, privilegeExpiredTs)
+ * → 6 arguments only.
  *
  * @param {object}  opts
  * @param {string}  opts.channelName
@@ -121,12 +121,12 @@ export function generateRtmToken({
  * @param {number} [opts.expireSec]
  *
  * @returns {{
- *   rtcToken: string,
- *   rtmToken: string,
- *   uid: number,
- *   userId: string,
- *   channelName: string,
- *   expiresAt: Date,
+ * rtcToken: string,
+ * rtmToken: string,
+ * uid: number,
+ * userId: string,
+ * channelName: string,
+ * expiresAt: Date,
  * }}
  */
 export function generateParticipantTokens({
@@ -148,3 +148,30 @@ export function generateParticipantTokens({
     expiresAt:  rtc.expiresAt, // RTC and RTM share same TTL
   };
 }
+
+// ── Dedicated Screen Share Token Generator ────────────────────────────────────
+
+/**
+ * Generate an Agora RTC token for a specific user + channel.
+ * Used primarily for the dedicated screen-share client.
+ * * @param {string} channelName
+ * @param {number} uid            numeric UID for this user
+ * @param {number} expireSeconds  default 7200 (2h)
+ * @returns {string} RTC token string
+ */
+export const generateAgoraToken = (channelName, uid, expireSeconds = 7200) => {
+  if (!channelName) throw new Error('[generateAgoraToken] channelName is required.');
+  if (!uid || uid === 0) throw new Error('[generateAgoraToken] uid must be a non-zero uint32.');
+
+  const privilegeExpiredTs = expireAt(expireSeconds);
+
+  // Using the 6-arg signature to match your v2 implementation
+  return RtcTokenBuilder.buildTokenWithUid(
+    agoraConfig.appId,
+    agoraConfig.appCert,
+    channelName,
+    uid,
+    RtcRole.PUBLISHER,
+    privilegeExpiredTs
+  );
+};

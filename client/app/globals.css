@@ -199,13 +199,19 @@
 
 /* ── DRIVER — Amber ── */
 [data-theme="driver"] {
-  --primary:         oklch(64% 0.22  52);
-  --primary-content: oklch(14% 0.04  52);
-  --secondary:       oklch(34% 0.05 242);
-  --secondary-content: oklch(99% 0  0);
-  --accent:          oklch(62% 0.18 158);
-  --accent-content:  oklch(99% 0    0);
-  --shadow-depth: 0 8px 22px -4px rgba(200, 110, 0, 0.14);
+  /* A sophisticated deep bronze/amber, not neon orange */
+  --primary:         oklch(70.879% 0.16842 44.967);
+  --primary-content: oklch(99% 0    0);
+  
+  /* Graphite/Deep Slate for secondary elements */
+  --secondary:         oklch(32% 0.02 250);
+  --secondary-content: oklch(99% 0    0);
+  
+  /* Soft gold/sage for accents */
+  --accent:          oklch(65% 0.14 75);
+  --accent-content:  oklch(15% 0.04 75);
+  
+  --shadow-depth: 0 8px 22px -4px rgba(120, 70, 20, 0.12);
 }
 
 /* ── SOLO DRIVER PARTNER — Gold ── */
@@ -391,17 +397,23 @@
 /* DRIVER DARK */
 [data-theme="driver"].dark,
 .dark [data-theme="driver"] {
-  --base-100:     oklch(13%  0.014  52);
-  --base-200:     oklch(18%  0.016  52);
-  --base-300:     oklch(24%  0.018  52);
-  --base-content: oklch(93%  0.007  55);
-  --primary:         oklch(74% 0.24  52);
-  --primary-content: oklch(12% 0.04  52);
-  --secondary:       oklch(50% 0.06 242);
-  --secondary-content: oklch(99% 0  0);
-  --accent:          oklch(70% 0.20 158);
-  --accent-content:  oklch(99% 0    0);
-  --shadow-depth: 0 12px 30px -5px rgba(200, 100, 0, 0.44);
+  /* Slate/Charcoal base, abandoning the muddy brown background */
+  --base-100:      oklch(14%  0.01 250);
+  --base-200:      oklch(18%  0.01 250);
+  --base-300:      oklch(24%  0.01 250);
+  --base-content:  oklch(93%  0.01 250);
+  
+  /* Bright but muted bronze for dark mode contrast */
+  --primary:         oklch(65% 0.15 45);
+  --primary-content: oklch(12% 0.04 45);
+  
+  --secondary:         oklch(28% 0.02 250);
+  --secondary-content: oklch(99% 0    0);
+  
+  --accent:          oklch(75% 0.16 75);
+  --accent-content:  oklch(14% 0.04 75);
+  
+  --shadow-depth: 0 12px 30px -5px rgba(0, 0, 0, 0.6);
 }
 
 /* SOLO DRIVER PARTNER DARK */

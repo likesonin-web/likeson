@@ -13,7 +13,7 @@ const CAM_INTERP_FACTOR    = 0.12;  // smoothness 0-1 (lower = smoother)
 const RECENTER_DELAY_MS    = 12000; // auto re-engage follow after user pan
 
 /**
- * useMapCamera
+ * useMapCamera,
  * 
  * Manages Google Map camera in navigation follow mode.
  * - Heading deadzone prevents micro-jitter

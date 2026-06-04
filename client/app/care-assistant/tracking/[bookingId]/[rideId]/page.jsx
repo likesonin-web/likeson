@@ -38,7 +38,6 @@ import {
   distanceKm,
 } from '@/utils/navigationUtils';
 
-// ── Redux thunks + selectors ─────────────────────────────────────────────────
 import {
   fetchCareTrackingSnapshot,
   selectCareTrackingSnapshot,
@@ -46,7 +45,7 @@ import {
   clearCareRideState,
   setCareAssistantStatus,
   setCareAssistantJoined,
-} from '@/store/slices/operationsSlice'; // adjust path if needed
+} from '@/store/slices/operationsSlice';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
@@ -59,7 +58,6 @@ const OFF_ROUTE_THRESHOLD     = 0.7;
 const REROUTE_COOLDOWN_MS     = 12000;
 const OFF_ROUTE_CONFIRM_COUNT = 3;
 
-// CA status display config
 const CA_STATUS_CFG = {
   not_joined:           { label: 'Not Joined',      color: 'var(--base-content)', bg: 'var(--base-300)', border: 'var(--base-300)',         dot: '#94a3b8' },
   en_route_to_pickup:   { label: 'En Route',         color: 'var(--info)',         bg: 'rgba(99,179,237,0.12)', border: 'rgba(99,179,237,0.35)',  dot: '#3b82f6' },
@@ -80,10 +78,6 @@ const RIDE_STATUS_CFG = {
   cancelled:        { label: 'Cancelled',        color: 'var(--error)',     bg: 'rgba(239,68,68,0.12)',   border: 'rgba(239,68,68,0.35)'  },
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MANEUVER ICONS
-// ─────────────────────────────────────────────────────────────────────────────
-
 const MANEUVER_ICONS = {
   'turn-left':  (sz) => <ArrowLeft  size={sz} />,
   'turn-right': (sz) => <ArrowRight size={sz} />,
@@ -94,6 +88,58 @@ const MANEUVER_ICONS = {
   'straight':   (sz) => <ArrowUp    size={sz} />,
   'merge':      (sz) => <ArrowUp    size={sz} />,
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POLYLINE HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Draw driver route from encoded polyline string.
+ * Returns the google.maps.Polyline instance so caller can remove it.
+ */
+function drawDriverPolyline(map, encodedPolyline) {
+  if (!map || !encodedPolyline || !window.google?.maps?.geometry?.encoding) return null;
+  try {
+    const path = window.google.maps.geometry.encoding.decodePath(encodedPolyline);
+    return new window.google.maps.Polyline({
+      path,
+      map,
+      strokeColor:   '#3b82f6',
+      strokeOpacity: 0.75,
+      strokeWeight:  5,
+      zIndex:        5,
+    });
+  } catch (e) {
+    console.error('[drawDriverPolyline]', e);
+    return null;
+  }
+}
+
+/**
+ * Draw CA→joinPoint route as a dashed magenta line.
+ * Uses an array of {lat,lng} points (from Directions API steps).
+ */
+function drawCaToJoinPolyline(map, pathPoints) {
+  if (!map || !pathPoints?.length) return null;
+  try {
+    return new window.google.maps.Polyline({
+      path:          pathPoints,
+      map,
+      strokeColor:   '#ec4899',
+      strokeOpacity: 0,
+      strokeWeight:  0,
+      icons: [{
+        icon:   { path: 'M 0,-1 0,1', strokeOpacity: 1, strokeWeight: 4, scale: 4, strokeColor: '#ec4899' },
+        offset: '0',
+        repeat: '20px',
+      }],
+      zIndex: 6,
+    });
+  } catch (e) {
+    console.error('[drawCaToJoinPolyline]', e);
+    return null;
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LOADING SKELETON
@@ -293,7 +339,6 @@ const BottomSheet = memo(function BottomSheet({
       {/* Content */}
       <div className="overflow-y-auto px-4 pb-8" style={{ maxHeight: 'calc(80vh - 84px)' }}>
 
-        {/* Patient card */}
         {(patientInfo || customerPhone) && (
           <div className="flex items-center gap-3 p-3.5 rounded-2xl mb-3 bg-base-300/50 border border-base-300">
             <div className="w-11 h-11 rounded-xl flex-shrink-0 flex items-center justify-center"
@@ -591,6 +636,12 @@ export default function CareAssistantLiveTracking() {
   const joinPointMarkerRef = useRef(null);
   const staticMadeRef      = useRef(false);
 
+  // ── Polyline refs for manual overlays ────────────────────────────────────
+  // driverPolylineRef: blue solid line = driver's route (from expectedPolyline)
+  // caToJoinPolylineRef: pink dashed line = CA walking route to join point
+  const driverPolylineRef   = useRef(null);
+  const caToJoinPolylineRef = useRef(null);
+
   // Kalman
   const kalmanRef = useRef(createKalmanFilter());
 
@@ -658,6 +709,9 @@ export default function CareAssistantLiveTracking() {
   // Track if initial route calculated
   const routeCalculatedRef = useRef(false);
 
+  // Track if driver polyline has been drawn
+  const driverPolylineDrawnRef = useRef(false);
+
   // ── Derived from snapshot ─────────────────────────────────────────────────
   const snap       = snapshot || reduxSnapshot;
   const ride       = snap?.ride;
@@ -672,9 +726,18 @@ export default function CareAssistantLiveTracking() {
     }
   }, [reduxJoinPoint, joinPointData]);
 
-  // Navigation target
+  // ── Navigation target ─────────────────────────────────────────────────────
+  // care_assistant: navigate to patient (ride.dropoff = patient location per backend)
+  // full_care_ride: navigate to join point
   const navTarget = useMemo(() => {
     if (isCareOnly) {
+      // Backend: route.patientLocation = ride.dropoff, caStart = ride.pickup
+      // So target = ride.dropoff (patient) OR route.patientLocation
+      const patientLoc = snap?.route?.patientLocation;
+      if (patientLoc?.coordinates) {
+        const c = patientLoc.coordinates;
+        return { lat: c[1], lng: c[0] };
+      }
       const c = ride?.dropoff?.coordinates || ride?.pickup?.coordinates;
       return c ? { lat: c[1], lng: c[0] } : null;
     }
@@ -684,15 +747,40 @@ export default function CareAssistantLiveTracking() {
       if (c?.lat) return c;
     }
     return null;
-  }, [isCareOnly, isFullCare, ride, joinPointData]);
+  }, [isCareOnly, isFullCare, ride, joinPointData, snap]);
 
-  // Pickup coords for static marker
+  // ── Pickup coords for static marker ──────────────────────────────────────
+  // care_assistant: pickup = patient location (ride.dropoff from backend)
+  // full_care_ride: pickup = ride.pickup (patient)
   const pickupCoords = useMemo(() => {
-    const c = ride?.dropoff?.coordinates || ride?.pickup?.coordinates;
+    if (isCareOnly) {
+      const patientLoc = snap?.route?.patientLocation;
+      if (patientLoc?.coordinates) {
+        const c = patientLoc.coordinates;
+        return { lat: c[1], lng: c[0] };
+      }
+      const c = ride?.dropoff?.coordinates || ride?.pickup?.coordinates;
+      return c ? { lat: c[1], lng: c[0] } : null;
+    }
+    // full_care_ride: show patient pickup
+    const c = snap?.route?.pickup?.coordinates || ride?.pickup?.coordinates;
     return c ? { lat: c[1], lng: c[0] } : null;
-  }, [ride]);
+  }, [isCareOnly, isFullCare, ride, snap]);
 
-  // ── FIX: Fetch snapshot via Redux thunk (not raw fetch) ───────────────────
+  // ── Driver live location from snapshot (full_care_ride) ───────────────────
+  const snapshotDriverLoc = useMemo(() => {
+    if (!isFullCare) return null;
+    const loc = snap?.driver?.liveLocation;
+    if (!loc) return null;
+    return { lat: loc.lat, lng: loc.lng, heading: loc.heading ?? 0, speed: loc.speedKmh ?? 0 };
+  }, [isFullCare, snap]);
+
+  // ── Expected route polyline from snapshot (full_care_ride driver route) ───
+  const expectedPolyline = useMemo(() => {
+    return snap?.route?.expectedPolyline ?? null;
+  }, [snap]);
+
+  // ── Fetch snapshot via Redux thunk ────────────────────────────────────────
   useEffect(() => {
     if (!bookingId) return;
     setIsLoading(true);
@@ -708,7 +796,11 @@ export default function CareAssistantLiveTracking() {
         if (data?.route?.caJoinWaypoint)  setJoinPointData(data.route.caJoinWaypoint);
         if (data?.rideStatus)  setRideStatus(data.rideStatus);
         if (data?.rideStage)   setRideStage(data.rideStage);
-        // Reset route flag so it recalculates with fresh target
+        // Seed driver position from snapshot
+        if (data?.driver?.liveLocation) {
+          const loc = data.driver.liveLocation;
+          setDriverPos({ lat: loc.lat, lng: loc.lng, heading: loc.heading ?? 0, speed: loc.speedKmh ?? 0 });
+        }
         routeCalculatedRef.current = false;
       })
       .catch((err) => {
@@ -734,6 +826,7 @@ export default function CareAssistantLiveTracking() {
     if (!EV) return;
     const unsubs = [
       on(EV.LOCATION_UPDATE, (d) => {
+        // Driver GPS update (full_care_ride)
         if (!mountedRef.current) return;
         setDriverPos({ lat: d.lat, lng: d.lng, heading: d.heading, speed: d.speed });
         setEtaUpdate(d);
@@ -757,7 +850,7 @@ export default function CareAssistantLiveTracking() {
         if (!mountedRef.current) return;
         if (d.caJoinPoint) {
           setJoinPointData(d.caJoinPoint);
-          routeCalculatedRef.current = false; // force route recalc
+          routeCalculatedRef.current = false;
         }
       }),
 
@@ -794,6 +887,13 @@ export default function CareAssistantLiveTracking() {
         if (d.tracking?.careAssistantStatus) setCaStatus(d.tracking.careAssistantStatus);
         if (d.ride?.status) setRideStatus(d.ride.status);
         if (d.ride?.rideStage) setRideStage(d.ride.rideStage);
+        // Update driver pos from snapshot
+        if (d.ride?.liveLocation) {
+          const loc = d.ride.liveLocation;
+          if (loc?.coordinates?.length === 2) {
+            setDriverPos({ lat: loc.coordinates[1], lng: loc.coordinates[0], heading: loc.heading ?? 0, speed: loc.speedKmh ?? 0 });
+          }
+        }
         setIsLoading(false);
       }),
     ];
@@ -864,6 +964,9 @@ export default function CareAssistantLiveTracking() {
       [caMarkerRef, joinPointMarkerRef, pickupMarkerRef].forEach(ref => {
         if (ref.current) { ref.current.map = null; ref.current = null; }
       });
+      // Remove manual polylines
+      if (driverPolylineRef.current) { driverPolylineRef.current.setMap(null); driverPolylineRef.current = null; }
+      if (caToJoinPolylineRef.current) { caToJoinPolylineRef.current.setMap(null); caToJoinPolylineRef.current = null; }
       clearRoute();
       dispatch(clearCareRideState());
     };
@@ -894,27 +997,14 @@ export default function CareAssistantLiveTracking() {
   }, [initCameraListeners]);
 
   // ── Static markers ────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!mapLoaded || staticMadeRef.current) return;
-    if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
+// Pickup marker — draw once when coords ready
+useEffect(() => {
+  if (!mapLoaded || !pickupCoords || pickupMarkerRef.current) return;
+  if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
+  pickupMarkerRef.current = createStaticMarker(mapRef.current, pickupCoords.lat, pickupCoords.lng, 'pickup');
+}, [mapLoaded, pickupCoords]);
 
-    if (pickupCoords && !pickupMarkerRef.current) {
-      pickupMarkerRef.current = createStaticMarker(mapRef.current, pickupCoords.lat, pickupCoords.lng, 'pickup');
-    }
-
-    if (isFullCare && joinPointData?.coordinates) {
-      const c   = joinPointData.coordinates;
-      const lat = Array.isArray(c) ? c[1] : c.lat;
-      const lng = Array.isArray(c) ? c[0] : c.lng;
-      if (lat && lng && !joinPointMarkerRef.current) {
-        joinPointMarkerRef.current = createJoinPointMarker(mapRef.current, lat, lng);
-      }
-    }
-
-    staticMadeRef.current = true;
-  }, [mapLoaded, pickupCoords, isFullCare, joinPointData]);
-
-  // Update join point marker when joinPointData changes
+  // ── Update join point marker when joinPointData changes ──────────────────
   useEffect(() => {
     if (!mapLoaded || !isFullCare || !joinPointData?.coordinates) return;
     if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
@@ -928,8 +1018,28 @@ export default function CareAssistantLiveTracking() {
       joinPointMarkerRef.current.position = { lat, lng };
     } else if (mapRef.current) {
       joinPointMarkerRef.current = createJoinPointMarker(mapRef.current, lat, lng);
+      // Reset static guard so pickup marker also renders if not yet done
+      if (!pickupMarkerRef.current && pickupCoords) {
+        pickupMarkerRef.current = createStaticMarker(mapRef.current, pickupCoords.lat, pickupCoords.lng, 'pickup');
+      }
     }
-  }, [mapLoaded, isFullCare, joinPointData]);
+  }, [mapLoaded, isFullCare, joinPointData, pickupCoords]);
+
+  // ── Draw driver route polyline (full_care_ride) ───────────────────────────
+  // Uses expectedPolyline from snapshot. Redraws when polyline string changes.
+  useEffect(() => {
+    if (!mapLoaded || !isFullCare || !expectedPolyline) return;
+    if (!window.google?.maps?.geometry?.encoding) return;
+
+    // Remove old polyline first
+    if (driverPolylineRef.current) {
+      driverPolylineRef.current.setMap(null);
+      driverPolylineRef.current = null;
+    }
+
+    driverPolylineRef.current = drawDriverPolyline(mapRef.current, expectedPolyline);
+    driverPolylineDrawnRef.current = true;
+  }, [mapLoaded, isFullCare, expectedPolyline]);
 
   // ── Update CA marker (self) ───────────────────────────────────────────────
   useEffect(() => {
@@ -944,11 +1054,16 @@ export default function CareAssistantLiveTracking() {
 
   // ── Update driver marker (full_care_ride) ─────────────────────────────────
   useEffect(() => {
-    if (!mapLoaded || !isFullCare || !driverPos) return;
-    updateDriverMarker(driverPos.lat, driverPos.lng, driverPos.heading ?? 0, mapBearingRef.current, driverPos.speed ?? 0);
-  }, [mapLoaded, isFullCare, driverPos, updateDriverMarker, mapBearingRef]);
+    if (!mapLoaded || !isFullCare) return;
+    // Use live driverPos (from socket) or fall back to snapshotDriverLoc
+    const pos = driverPos || snapshotDriverLoc;
+    if (!pos) return;
+    updateDriverMarker(pos.lat, pos.lng, pos.heading ?? 0, mapBearingRef.current, pos.speed ?? 0);
+  }, [mapLoaded, isFullCare, driverPos, snapshotDriverLoc, updateDriverMarker, mapBearingRef]);
 
-  // ── Route calculation ─────────────────────────────────────────────────────
+  // ── Route calculation (CA walking route) ──────────────────────────────────
+  // For care_assistant: CA current pos → patient (navTarget = ride.dropoff)
+  // For full_care_ride: CA current pos → join point (navTarget = joinPointData coords)
   const calculateRoute = useCallback(async (origin, destination) => {
     if (!dirServiceRef.current || !origin || !destination) return;
     if (!mapLoaded) return;
@@ -965,7 +1080,43 @@ export default function CareAssistantLiveTracking() {
         setNavSteps(steps);
         setCurrentStepIdx(0);
         resetManeuverBands();
-        setRoute(result, 'toPickup');
+
+        // For care_assistant: use useRouteRenderer (it handles the CA route polyline)
+        // For full_care_ride: draw as dashed pink line, keep driver blue line intact
+        if (isCareOnly) {
+          // care_assistant mode: render as primary route via hook
+          setRoute(result, 'toPickup');
+        } else {
+          // full_care_ride: draw CA→joinPoint as separate dashed polyline
+          // Remove old CA→join polyline first
+          if (caToJoinPolylineRef.current) {
+            caToJoinPolylineRef.current.setMap(null);
+            caToJoinPolylineRef.current = null;
+          }
+          // Extract path points from Directions result
+          const leg = result.routes?.[0]?.legs?.[0];
+          if (leg?.steps) {
+            const pathPoints = [];
+            leg.steps.forEach(step => {
+              if (step.path) {
+                step.path.forEach(pt => pathPoints.push({ lat: pt.lat(), lng: pt.lng() }));
+              } else if (step.start_location) {
+                pathPoints.push({ lat: step.start_location.lat(), lng: step.start_location.lng() });
+              }
+            });
+            // Add end location of last step
+            const lastStep = leg.steps[leg.steps.length - 1];
+            if (lastStep?.end_location) {
+              pathPoints.push({ lat: lastStep.end_location.lat(), lng: lastStep.end_location.lng() });
+            }
+            if (pathPoints.length > 1) {
+              caToJoinPolylineRef.current = drawCaToJoinPolyline(mapRef.current, pathPoints);
+            }
+          }
+          // Also feed to routePointsRef for off-route detection via setRoute
+          setRoute(result, 'caToJoin');
+        }
+
         routeCalculatedRef.current = true;
       }
     } catch (e) {
@@ -973,27 +1124,41 @@ export default function CareAssistantLiveTracking() {
     } finally {
       if (mountedRef.current) setIsRerouting(false);
     }
-  }, [mapLoaded, setRoute, resetManeuverBands]);
+  }, [mapLoaded, setRoute, resetManeuverBands, isCareOnly]);
 
-  // ── FIX: Calculate initial route — fires when map + position + target ready
-  // Also re-fires if navTarget changes (e.g. joinPoint updated via socket)
-  useEffect(() => {
-    if (!mapLoaded || !caPosition || !navTarget) return;
-    // Only calculate if not yet done, or navTarget changed (routeCalculatedRef reset by caller)
-    if (routeCalculatedRef.current) return;
-    calculateRoute({ lat: caPosition.lat, lng: caPosition.lng }, navTarget);
-  }, [mapLoaded, caPosition, navTarget, calculateRoute]);
+  // ── Calculate initial route when map + position + target ready ───────────
+ useEffect(() => {
+  if (!mapLoaded || !caPosition || !navTarget) return;
+  if (routeCalculatedRef.current) return;
+  calculateRoute({ lat: caPosition.lat, lng: caPosition.lng }, navTarget);
+}, [mapLoaded, caPosition, navTarget, joinPointData, calculateRoute]);
+// joinPointData in deps → re-triggers when async join point arrives
 
-  // Reset routeCalculatedRef when navTarget changes so recalc fires
-  const prevNavTargetRef = useRef(null);
-  useEffect(() => {
-    if (!navTarget) return;
-    const prev = prevNavTargetRef.current;
-    if (prev && (Math.abs(prev.lat - navTarget.lat) > 0.0001 || Math.abs(prev.lng - navTarget.lng) > 0.0001)) {
-      routeCalculatedRef.current = false;
-    }
-    prevNavTargetRef.current = navTarget;
-  }, [navTarget]);
+ // Reset routeCalculatedRef when navTarget changes OR joinPointData first arrives
+const prevNavTargetRef = useRef(null);
+useEffect(() => {
+  if (!navTarget) return;
+  const prev = prevNavTargetRef.current;
+  if (!prev || Math.abs(prev.lat - navTarget.lat) > 0.0001 || Math.abs(prev.lng - navTarget.lng) > 0.0001) {
+    routeCalculatedRef.current = false;
+  }
+  prevNavTargetRef.current = navTarget;
+}, [navTarget]);
+
+// Also reset when joinPointData coordinates change (full_care_ride async arrival)
+const prevJoinPointRef = useRef(null);
+useEffect(() => {
+  if (!isFullCare || !joinPointData?.coordinates) return;
+  const c = joinPointData.coordinates;
+  const lat = Array.isArray(c) ? c[1] : c.lat;
+  const lng = Array.isArray(c) ? c[0] : c.lng;
+  if (!lat || !lng) return;
+  const prev = prevJoinPointRef.current;
+  if (!prev || Math.abs(prev.lat - lat) > 0.0001 || Math.abs(prev.lng - lng) > 0.0001) {
+    routeCalculatedRef.current = false;
+  }
+  prevJoinPointRef.current = { lat, lng };
+}, [isFullCare, joinPointData]);
 
   // ── Main GPS → marker + camera + nav ─────────────────────────────────────
   useEffect(() => {
@@ -1094,6 +1259,12 @@ export default function CareAssistantLiveTracking() {
     if (!lat || !lng) return null;
     return distanceKm(caPosition.lat, caPosition.lng, lat, lng);
   }, [caPosition, joinPointData]);
+
+  // Distance from CA to patient/pickup (live) — for care_assistant type
+  const distToPickup = useMemo(() => {
+    if (!caPosition || !pickupCoords) return null;
+    return distanceKm(caPosition.lat, caPosition.lng, pickupCoords.lat, pickupCoords.lng);
+  }, [caPosition, pickupCoords]);
 
   // ── Guards ────────────────────────────────────────────────────────────────
   if (isLoading || !isLoaded) return <LoadingSkeleton />;
@@ -1253,9 +1424,9 @@ export default function CareAssistantLiveTracking() {
 
           {/* Driver live card (full_care_ride) */}
           <AnimatePresence>
-            {isFullCare && (driverPos || snap?.driver) && (
+            {isFullCare && (driverPos || snapshotDriverLoc || snap?.driver) && (
               <DriverLiveCard
-                driverLocation={driverPos}
+                driverLocation={driverPos || snapshotDriverLoc}
                 driverSnapshot={snap?.driver?.snapshot || snap?.driver}
                 vehicleSnapshot={snap?.driver?.vehicleSnapshot}
                 etaMinutes={etaMinutes}
@@ -1301,7 +1472,7 @@ export default function CareAssistantLiveTracking() {
           )}
         </AnimatePresence>
 
-        {/* ── WAITING FOR DRIVER badge ── */}
+        {/* ── WAITING FOR DRIVER badge (full_care_ride at_pickup) ── */}
         <AnimatePresence>
           {isFullCare && caStatus === 'at_pickup' && (
             <motion.div
@@ -1425,7 +1596,7 @@ export default function CareAssistantLiveTracking() {
           </motion.button>
 
           {/* Distance to target */}
-          {(navTarget && caPosition) && (
+          {navTarget && caPosition && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -1440,18 +1611,21 @@ export default function CareAssistantLiveTracking() {
             >
               <Flag size={12} style={{ color: '#f59e0b' }} />
               <span style={{ fontSize: 9, fontWeight: 800, color: 'rgba(255,255,255,0.7)', marginTop: 1 }}>
-                {distToJoin != null
-                  ? distToJoin < 1 ? `${Math.round(distToJoin * 1000)}m` : `${distToJoin.toFixed(1)}k`
-                  : distanceKm(caPosition.lat, caPosition.lng, navTarget.lat, navTarget.lng) < 1
-                    ? `${Math.round(distanceKm(caPosition.lat, caPosition.lng, navTarget.lat, navTarget.lng) * 1000)}m`
-                    : `${distanceKm(caPosition.lat, caPosition.lng, navTarget.lat, navTarget.lng).toFixed(1)}k`
-                }
+                {(() => {
+                  const d = isFullCare && distToJoin != null
+                    ? distToJoin
+                    : distToPickup != null
+                      ? distToPickup
+                      : distanceKm(caPosition.lat, caPosition.lng, navTarget.lat, navTarget.lng);
+                  return d < 1 ? `${Math.round(d * 1000)}m` : `${d.toFixed(1)}k`;
+                })()}
               </span>
             </motion.div>
           )}
         </div>
 
         {/* ── STATUS CONTEXT PILL ───────────────────────────────────── */}
+        {/* care_assistant: en route to patient */}
         <AnimatePresence>
           {isCareOnly && caStatus === 'en_route_to_pickup' && caPosition && pickupCoords && (
             <motion.div
@@ -1471,11 +1645,43 @@ export default function CareAssistantLiveTracking() {
               >
                 <PersonStanding size={13} />
                 Navigating to patient
-                {pickupCoords && caPosition && (
+                {distToPickup != null && (
                   <span className="opacity-70 ml-1">
-                    · {distanceKm(caPosition.lat, caPosition.lng, pickupCoords.lat, pickupCoords.lng) < 1
-                      ? `${Math.round(distanceKm(caPosition.lat, caPosition.lng, pickupCoords.lat, pickupCoords.lng) * 1000)}m`
-                      : `${distanceKm(caPosition.lat, caPosition.lng, pickupCoords.lat, pickupCoords.lng).toFixed(1)}km`} away
+                    · {distToPickup < 1
+                      ? `${Math.round(distToPickup * 1000)}m`
+                      : `${distToPickup.toFixed(1)}km`} away
+                  </span>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* full_care_ride: en route to join point */}
+        <AnimatePresence>
+          {isFullCare && caStatus === 'en_route_to_pickup' && caPosition && joinPointData && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="absolute z-25 left-1/2"
+              style={{ transform: 'translateX(-50%)', bottom: 155 }}
+            >
+              <div
+                className="flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold whitespace-nowrap"
+                style={{
+                  background: 'rgba(59,130,246,0.15)',
+                  border: '1px solid rgba(59,130,246,0.35)',
+                  color: '#3b82f6',
+                }}
+              >
+                <Route size={13} />
+                Navigating to join point
+                {distToJoin != null && (
+                  <span className="opacity-70 ml-1">
+                    · {distToJoin < 1
+                      ? `${Math.round(distToJoin * 1000)}m`
+                      : `${distToJoin.toFixed(1)}km`} away
                   </span>
                 )}
               </div>

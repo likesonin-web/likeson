@@ -1,4 +1,4 @@
-//agoraToken.js// services/agoraToken.js
+// services/agoraToken.js
 // DB-aware service — reads/writes Consultation model.
 // Handles: initial token generation, refresh, webhook verification.
 
@@ -9,6 +9,7 @@ import {
   generateParticipantTokens,
   generateRtcToken,
   generateRtmToken,
+  generateAgoraToken // <--- ADDED IMPORT HERE
 } from '../utils/generateAgoraToken.js';
 
 // ── UID assignment ────────────────────────────────────────────────────────────
@@ -30,17 +31,6 @@ const randomUid = (role) => {
 
 // ── 1. Provision tokens for a new consultation ────────────────────────────────
 
-/**
- * Called once when consultation is created / first join attempted.
- * Generates doctor + patient RTC + RTM tokens, writes to consultation.agora.
- *
- * @param {string} consultationId  - Consultation._id
- * @param {string} doctorUserId    - User._id of doctor
- * @param {string} patientUserId   - User._id of patient
- * @param {string} updatedBy       - actor _id (for audit)
- *
- * @returns {object}  { doctorTokens, patientTokens, channelName, appId, expiresAt }
- */
 export async function provisionConsultationTokens(
   consultationId,
   doctorUserId,
@@ -127,16 +117,6 @@ export async function provisionConsultationTokens(
 
 // ── 2. Get tokens for a specific participant (join / rejoin) ──────────────────
 
-/**
- * Returns existing tokens for doctor or patient.
- * If tokens are expired / missing, auto-refreshes first.
- *
- * @param {string} consultationId
- * @param {'doctor'|'patient'} participantRole
- * @param {string} userId   - User._id of the caller (for security check)
- *
- * @returns {{ uid, rtcToken, rtmToken, channelName, rtmChannelName, appId, expiresAt }}
- */
 export async function getParticipantTokens(consultationId, participantRole, userId) {
   let consultation = await Consultation.findById(consultationId)
     .select('+agora.doctorRtcToken +agora.doctorRtmToken +agora.patientRtcToken +agora.patientRtmToken');
@@ -189,17 +169,6 @@ export async function getParticipantTokens(consultationId, participantRole, user
 
 // ── 3. Refresh all tokens for a consultation ──────────────────────────────────
 
-/**
- * Regenerates RTC + RTM tokens for doctor + patient.
- * Increments tokenRefreshCount.
- * Called automatically by getParticipantTokens when near-expiry.
- * Can also be called explicitly (e.g. from a /refresh route).
- *
- * @param {string} consultationId
- * @param {string} updatedBy
- *
- * @returns {{ expiresAt: Date, tokenRefreshCount: number }}
- */
 export async function refreshConsultationTokens(consultationId, updatedBy) {
   const consultation = await Consultation.findById(consultationId)
     .select('+agora.doctorRtcToken +agora.doctorRtmToken +agora.patientRtcToken +agora.patientRtmToken');
@@ -243,16 +212,6 @@ export async function refreshConsultationTokens(consultationId, updatedBy) {
 
 // ── 4. Generate token for extra participant (interpreter / observer) ───────────
 
-/**
- * Add an extra participant (caregiver, interpreter, observer) to a live session.
- *
- * @param {string} consultationId
- * @param {string} userId        - extra participant User._id
- * @param {'interpreter'|'observer'|'caregiver'} role
- * @param {string} addedBy
- *
- * @returns {{ uid, rtcToken, rtmToken, channelName, appId, expiresAt }}
- */
 export async function addExtraParticipantToken(
   consultationId,
   userId,
@@ -311,20 +270,6 @@ export async function addExtraParticipantToken(
 
 // ── 5. Verify Agora webhook signature ─────────────────────────────────────────
 
-/**
- * Verify HMAC-SHA256 signature from Agora webhook headers.
- * Call in your webhook route middleware.
- *
- * Agora sends:
- *   Agora-Signature: <hex-hmac>
- *   Agora-Timestamp: <unix-epoch-string>
- *
- * @param {string} rawBody      - req.rawBody (Buffer or string)
- * @param {string} signature    - req.headers['agora-signature']
- * @param {string} timestamp    - req.headers['agora-timestamp']
- *
- * @returns {boolean}
- */
 export function verifyAgoraWebhook(rawBody, signature, timestamp) {
   if (!agoraConfig.webhookSecret) {
     throw new Error('[verifyAgoraWebhook] AGORA_WEBHOOK_SECRET not set');
@@ -350,17 +295,6 @@ export function verifyAgoraWebhook(rawBody, signature, timestamp) {
 
 // ── 6. Mark recording consent + start/stop stubs ─────────────────────────────
 
-/**
- * Update recording consent for doctor or patient.
- * Recording starts (via your recording service) only when both consent = true.
- *
- * @param {string} consultationId
- * @param {'doctor'|'patient'} who
- * @param {boolean} consented
- * @param {string} updatedBy
- *
- * @returns {{ bothConsented: boolean }}
- */
 export async function updateRecordingConsent(consultationId, who, consented, updatedBy) {
   const consultation = await Consultation.findById(consultationId);
   if (!consultation) throw new Error('Consultation not found');
@@ -387,4 +321,33 @@ export async function updateRecordingConsent(consultationId, who, consented, upd
   await consultation.save();
 
   return { bothConsented };
+}
+
+// ── 7. Generate dedicated screen share token (NEW) ───────────────────────────
+
+export async function getScreenShareToken(consultationId, screenUid, userId, userRole) {
+  const c = await Consultation.findById(consultationId)
+    .select('patient doctorUser agora status')
+    .lean();
+
+  if (!c) throw new Error('Consultation not found');
+  if (!c.agora?.channelName) throw new Error('Agora channel not initialized for this consultation');
+
+  // Security Check: Ensure the user requesting the token is actually part of this session
+  if (userRole === 'patient' && c.patient.toString() !== userId) {
+    throw new Error('You are not authorized to share screen in this consultation');
+  }
+  if (userRole === 'doctor' && c.doctorUser?.toString() !== userId) {
+    throw new Error('You are not authorized to share screen in this consultation');
+  }
+
+  // Generate the token specifically for the screenUid
+  // Expiration is set to 2 hours (7200 seconds)
+  const token = generateAgoraToken(c.agora.channelName, Number(screenUid), 7200);
+
+  return { 
+    token, 
+    uid: Number(screenUid), 
+    channelName: c.agora.channelName 
+  };
 }

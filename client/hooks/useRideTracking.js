@@ -4,26 +4,22 @@
  * useRideTracking.js — Likeson.in
  *
  * FIXES vs previous version:
- *  - GPS watchPosition inside hook called startGpsTracking (socketService) NOT dispatch(startGpsTracking)
- *    on every tick — that was dispatching a Redux thunk once per GPS position update (very wrong)
- *  - startGpsTracking dispatched ONCE on mount; stopGpsTracking dispatched ONCE on unmount
- *  - speed guard: same fix as socketService.js — null/negative check before * 3.6
- *  - verifyOtpThunk import fixed: it lives in operationsSlice (verifyOtpSocket), NOT rideRequestSlice
- *  - verifyOtp: socket path uses socketService.verifyOtpAsync directly (promise with rideId dedup)
- *    rather than dispatching verifyOtpThunk which wraps the same call — avoids double-call
- *  - sendStatusUpdate: DRIVER_STATUS.OTP_VERIFIED is not a driver action to send; removed from map
- *    (OTP verify has its own verifyOtp fn)
- *  - socket listeners: removed fine-grained events (driver_accepted, driver_en_route, etc.) —
- *    server does NOT emit these as separate events; RIDE_STATUS_CHANGED covers all transitions
- *  - socket listeners: wired in a single effect that does NOT depend on `connected` changing —
- *    socketService.on() queues if not connected; no need to re-register on reconnect
- *  - cleanup: mountedRef.current = false set FIRST in cleanup (before async callbacks fire)
- *  - offline handler: removed stale closure over connected (captured at effect time)
- *  - requestBookingState dispatched only once after join, not also inside online handler
- *    (requestBookingStateAsync is a promise — no double-fire)
- *  - bookingId guard: joinBookingRoom / leaveBookingRoom only fire when bookingId is defined
- *  - No import of updateRideStatus from rideRequestSlice (it's in rideRequestSlice, was being
- *    shadowed by verifyOtpSocket — cleaned up imports)
+ *  - Added CARE_ASSISTANT_LOCATION_UPDATE socket listener → exposes caLiveLocation state
+ *  - Added CARE_ASSISTANT_STATUS_CHANGE socket listener → exposes caStatus state
+ *  - Added CARE_ASSISTANT_JOINED_RIDE + CARE_ASSISTANT_ATTACHED socket listeners
+ *  - bookingType derived from tracking data + exposed from hook
+ *  - caJoinPoint extracted from tracking snapshot / socket events + exposed
+ *  - caName exposed from tracking snapshot
+ *  - socketLive now merged with CA fields (careAssistantLiveLocation, careAssistantName)
+ *  - GPS watchPosition inside hook (approach B) — not calling socketService.startGpsTracking
+ *  - startGpsTracking dispatched ONCE on mount; stopGpsTracking ONCE on unmount
+ *  - speed guard: null/negative check before * 3.6
+ *  - verifyOtp: socket path uses socketService.verifyOtpAsync directly
+ *  - sendStatusUpdate: OTP_VERIFIED omitted (use verifyOtp())
+ *  - socket listeners registered ONCE (not per-connection)
+ *  - mountedRef.current = false set FIRST in cleanup
+ *  - bookingId guard on joinBookingRoom / leaveBookingRoom
+ *  - requestBookingState dispatched once after join
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react';
@@ -57,7 +53,7 @@ import {
   updateDriverStatusSocket,
   triggerSos,
   requestBookingState,
-  verifyOtpSocket,          // ← correct home: operationsSlice, not rideRequestSlice
+  verifyOtpSocket,
   setLiveLocation,
   setEtaUpdate,
   setRideStatus,
@@ -67,6 +63,11 @@ import {
   DRIVER_STATUS,
   acceptRide,
   markDriverArrived,
+  // CA reducers
+  setCareAssistantLocation,
+  setCareAssistantStatus,
+  setCareAssistantJoined,
+  setCareRideWorkflow,
 } from '@/store/slices/operationsSlice';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,21 +96,82 @@ export function useRideTracking({ rideId, bookingId }) {
   const [isOffline,       setIsOffline]       = useState(false);
   const [currentPosition, setCurrentPosition] = useState(null);
 
+  // ── CA-specific local state ───────────────────────────────────────────────
+  // Stored locally so component can read without full Redux selector chain.
+  // Also pushed to Redux via setCareAssistantLocation for persistence.
+  const [caLiveLocation, setCaLiveLocation] = useState(null);  // { lat, lng, heading, speed }
+  const [caStatus,       setCaStatusLocal]  = useState('not_joined');
+  const [caJoinPoint,    setCaJoinPoint]    = useState(null);   // { coordinates, zone, distCaToJoinKm }
+  const [caName,         setCaName]         = useState(null);
+
+  // ── Derived booking type ──────────────────────────────────────────────────
+  // Read from tracking data (populated by fetchRideTracking) or socketLive
+  const [bookingType, setBookingType] = useState(null);
+
   // ── Refs ─────────────────────────────────────────────────────────────────
   const gpsWatchIdRef   = useRef(null);
   const lastPositionRef = useRef(null);
   const mountedRef      = useRef(true);
-  const lastSetPosAt    = useRef(0);  // throttle React re-renders to 1/s
+  const lastSetPosAt    = useRef(0);
 
   // ── 1. Initial data fetch ────────────────────────────────────────────────
   useEffect(() => {
     if (!rideId) return;
     setIsLoadingRide(true);
     dispatch(fetchRideTracking({ rideId }))
+      .then((result) => {
+        if (!mountedRef.current) return;
+        // Extract bookingType from fetched data
+        const data = result?.payload;
+        const bt = data?.ride?.booking?.bookingType
+          || data?.booking?.bookingType
+          || data?.bookingType
+          || null;
+        if (bt) setBookingType(bt);
+
+        // Extract CA join point from ride waypoints
+        const waypoints = data?.ride?.waypoints || [];
+        const joinWp = waypoints.find(w => w.type === 'care_assistant_join');
+        if (joinWp?.location?.coordinates?.length >= 2) {
+          setCaJoinPoint({
+            coordinates:    joinWp.location.coordinates,
+            zone:           joinWp.meta?.zone || null,
+            distCaToJoinKm: joinWp.meta?.distCaToJoinKm || null,
+          });
+        }
+
+        // Extract CA name from tracking snapshot
+        const caSnap = data?.ride?.careAssistantSnapshot
+          || data?.careAssistant;
+        if (caSnap?.name || caSnap?.fullName) {
+          setCaName(caSnap.name || caSnap.fullName);
+        }
+
+        // Extract CA live location from tracking if present
+        const caLoc = data?.careAssistant?.liveLocation
+          || data?.tracking?.careAssistantLiveLocation;
+        if (caLoc?.lat && caLoc?.lng) {
+          setCaLiveLocation(caLoc);
+        }
+      })
       .finally(() => { if (mountedRef.current) setIsLoadingRide(false); });
   }, [rideId, dispatch]);
 
-  // ── 2. Socket room: join once when connected + bookingId available ────────
+  // ── Sync bookingType from Redux once ride loads ───────────────────────────
+  useEffect(() => {
+    if (!currentRide) return;
+    const bt = currentRide?.booking?.bookingType
+      || currentRide?.bookingType
+      || trackingData?.bookingType
+      || null;
+    if (bt && bt !== bookingType) setBookingType(bt);
+
+    // CA name from ride snapshot
+    const snap = currentRide?.careAssistantSnapshot;
+    if (snap?.name && !caName) setCaName(snap.name);
+  }, [currentRide, trackingData, bookingType, caName]);
+
+  // ── 2. Socket room: join once when connected + bookingId available ─────────
   useEffect(() => {
     if (!connected || !bookingId) return;
     dispatch(joinBookingRoom({ bookingId }));
@@ -117,81 +179,198 @@ export function useRideTracking({ rideId, bookingId }) {
     return () => { dispatch(leaveBookingRoom({ bookingId })); };
   }, [connected, bookingId, dispatch]);
 
-  // ── 3. Socket event listeners — registered ONCE, not per-connection ───────
-  //
-  // socketService.on() queues events if not yet connected so we don't need to
-  // re-register on every connected change. Re-registering would create duplicate
-  // listeners on reconnect.
-  //
-  // Fine-grained events (driver_accepted, driver_en_route, …) are NOT emitted
-  // as separate top-level events by the server — RIDE_STATUS_CHANGED carries
-  // all status transitions. Those reducers (socketDriverAccepted, etc.) can be
-  // called from RIDE_STATUS_CHANGED if the UI needs them.
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── 3. Socket event listeners — registered ONCE ───────────────────────────
   useEffect(() => {
     const unsubs = [
+
+      // ── Driver location ─────────────────────────────────────────────────
       on(EV.LOCATION_UPDATE, (data) => {
         dispatch(socketLocationUpdate(data));
         dispatch(setLiveLocation(data));
       }),
 
+      // ── ETA ─────────────────────────────────────────────────────────────
       on(EV.ETA_UPDATE, (data) => {
         dispatch(socketEtaUpdate(data));
         dispatch(setEtaUpdate(data));
       }),
 
+      // ── Ride status ──────────────────────────────────────────────────────
       on(EV.RIDE_STATUS_CHANGED, (data) => {
-  dispatch(socketRideStatusChanged(data));
-  dispatch(setRideStatus(data));
-  if (data.status === 'completed')    dispatch(socketRideCompleted(data));
-  if (data.status === 'otp_verified') dispatch(socketOtpVerified(data));
-  // NEW: sync activeNavigationTarget from status event
-  if (data.activeNavigationTarget) {
-    dispatch(setNavigationTarget({
-      currentTarget:          data.activeNavigationTarget,
-      activeNavigationTarget: data.activeNavigationTarget,
-      bookingId:              data.bookingId,
-      rideId:                 data.rideId,
-    }));
-    dispatch(socketNavigationTargetChanged({
-      currentTarget: data.activeNavigationTarget,
-    }));
-  }
-}),
+        dispatch(socketRideStatusChanged(data));
+        dispatch(setRideStatus(data));
+        if (data.status === 'completed')    dispatch(socketRideCompleted(data));
+        if (data.status === 'otp_verified') dispatch(socketOtpVerified(data));
 
+        // Sync activeNavigationTarget from status event
+        if (data.activeNavigationTarget) {
+          dispatch(setNavigationTarget({
+            currentTarget:          data.activeNavigationTarget,
+            activeNavigationTarget: data.activeNavigationTarget,
+            bookingId:              data.bookingId,
+            rideId:                 data.rideId,
+          }));
+          dispatch(socketNavigationTargetChanged({
+            currentTarget: data.activeNavigationTarget,
+          }));
+        }
+
+        // Sync bookingType if server sends it
+        if (data.bookingType && mountedRef.current) {
+          setBookingType(data.bookingType);
+        }
+      }),
+
+      // ── Navigation target ────────────────────────────────────────────────
       on(EV.NAVIGATION_TARGET_CHANGED, (data) => {
         dispatch(socketNavigationTargetChanged(data));
         dispatch(setNavigationTarget(data));
       }),
+
+      // ── CARE ASSISTANT: live location update ─────────────────────────────
+      // Server emits 'care_assistant_location_update' to booking room when CA
+      // calls PATCH /care/location or emits care_location socket event.
+      on('care_assistant_location_update', (data) => {
+        if (!mountedRef.current) return;
+
+        const loc = {
+          lat:       data.lat,
+          lng:       data.lng,
+          heading:   data.heading  ?? 0,
+          speed:     data.speed    ?? 0,
+          updatedAt: data.updatedAt || new Date().toISOString(),
+        };
+
+        // Local state — drives marker in RideLiveTracking
+        setCaLiveLocation(loc);
+
+        // Redux — persists across re-renders, readable by other selectors
+        dispatch(setCareAssistantLocation({
+          ...loc,
+          role:           'care_assistant',
+          careAssistantId: data.careAssistantId || null,
+          bookingId:       data.bookingId       || bookingId,
+          rideId:          data.rideId          || rideId,
+          status:          data.status          || null,
+        }));
+
+        // Also sync CA status if server sends it alongside location
+        if (data.status && mountedRef.current) {
+          setCaStatusLocal(data.status);
+        }
+      }),
+
+      // ── CARE ASSISTANT: status change ─────────────────────────────────────
+      // Server emits when CA calls PATCH /:id/care/ride-status
+      on('care_assistant_status_change', (data) => {
+        if (!mountedRef.current) return;
+
+        const newStatus = data.careAssistantStatus || data.status || null;
+        if (newStatus) {
+          setCaStatusLocal(newStatus);
+          dispatch(setCareAssistantStatus({ careAssistantStatus: newStatus }));
+        }
+
+        // Update CA name if server sends it
+        if (data.careAssistantName && mountedRef.current) {
+          setCaName(data.careAssistantName);
+        }
+      }),
+
+      // ── CARE ASSISTANT: joined ride session ───────────────────────────────
+      // Server emits when CA calls POST /:id/care/join-ride
+      on('care_assistant_joined_ride', (data) => {
+        if (!mountedRef.current) return;
+
+        dispatch(setCareAssistantJoined({
+          careAssistantId:   data.careAssistantId,
+          careAssistantName: data.careAssistantName,
+          joinedAt:          data.joinedAt,
+          caJoinPoint:       null, // join-ride doesn't send join point
+        }));
+
+        if (data.careAssistantName) setCaName(data.careAssistantName);
+
+        // If server sends current CA location in joined event
+        if (data.currentLocation?.lat && data.currentLocation?.lng) {
+          const loc = {
+            lat:     data.currentLocation.lat,
+            lng:     data.currentLocation.lng,
+            heading: 0,
+            speed:   0,
+          };
+          setCaLiveLocation(loc);
+          dispatch(setCareAssistantLocation({ ...loc, role: 'care_assistant' }));
+        }
+      }),
+
+      // ── CARE ASSISTANT: attached to ride by admin ──────────────────────────
+      // Server emits when admin calls POST /assign/care-assistant
+      // This event includes the caJoinPoint geometry
+      on('care_assistant_attached_to_ride', (data) => {
+        if (!mountedRef.current) return;
+
+        if (data.careAssistantName) setCaName(data.careAssistantName);
+
+        // Extract join point — this is the primary source for full_care_ride
+        if (data.caJoinPoint?.coordinates?.length >= 2) {
+          setCaJoinPoint({
+            coordinates:    data.caJoinPoint.coordinates,
+            zone:           data.caJoinPoint.zone           || null,
+            distCaToJoinKm: data.caJoinPoint.distCaToJoinKm || null,
+          });
+
+          // Persist in Redux careRideStatus
+          dispatch(setCareRideWorkflow({
+            careAssistantJoined:    true,
+            activeNavigationTarget: 'pickup_care_assistant',
+          }));
+        }
+
+        dispatch(setCareAssistantJoined({
+          careAssistantId:   data.careAssistantId,
+          careAssistantName: data.careAssistantName,
+          joinedAt:          new Date().toISOString(),
+          caJoinPoint:       data.caJoinPoint || null,
+        }));
+      }),
+
+      // ── BOOKING STATE SNAPSHOT (reconnect) ────────────────────────────────
+      // Server sends full snapshot on request_booking_state
+      on('booking_state_snapshot', (data) => {
+        if (!mountedRef.current) return;
+
+        // Restore CA live location from snapshot
+        if (data.tracking?.careAssistantLiveLocation) {
+          const loc = data.tracking.careAssistantLiveLocation;
+          if (loc.coordinates?.length >= 2) {
+            setCaLiveLocation({
+              lat:     loc.coordinates[1],
+              lng:     loc.coordinates[0],
+              heading: loc.heading  || 0,
+              speed:   loc.speedKmh || 0,
+            });
+          }
+        }
+
+        // Restore CA status from snapshot
+        if (data.tracking?.careAssistantStatus) {
+          setCaStatusLocal(data.tracking.careAssistantStatus);
+        }
+      }),
+
     ];
 
     return () => unsubs.forEach(fn => fn?.());
-  }, [on, EV, dispatch]); // EV and on are stable refs from context
+  }, [on, EV, dispatch, bookingId, rideId]); // bookingId/rideId needed in closure for dispatch calls
 
-  // ── 4. GPS — internal watchPosition (does NOT call socketService.startGpsTracking) ──
-  //
-  // socketService.startGpsTracking() creates its OWN watchPosition internally.
-  // If we also create one here, we get TWO concurrent GPS watches. The correct
-  // approach is ONE of:
-  //   A) Use socketService.startGpsTracking() exclusively (hands off to the service), OR
-  //   B) Own the watchPosition here and emit manually via socketService.emit().
-  //
-  // This hook uses approach B so it can:
-  //   - compute heading from movement delta when device doesn't provide it
-  //   - throttle React state updates independently of socket emit rate
-  //   - expose currentPosition to the UI
-  //
-  // We still dispatch startGpsTracking() / stopGpsTracking() to update Redux
-  // gpsTracking flag (used by UI to show GPS indicator).
-  // ─────────────────────────────────────────────────────────────────────────
-
+  // ── 4. GPS — internal watchPosition ──────────────────────────────────────
   const startTracking = useCallback(() => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
       setGpsError('GPS not supported on this device');
       return;
     }
 
-    // Clear any existing watch before starting a new one
     if (gpsWatchIdRef.current !== null) {
       navigator.geolocation.clearWatch(gpsWatchIdRef.current);
       gpsWatchIdRef.current = null;
@@ -202,7 +381,7 @@ export function useRideTracking({ rideId, bookingId }) {
         const { latitude: lat, longitude: lng, heading, accuracy } = pos.coords;
         const rawSpeed = pos.coords.speed;
 
-        // FIX: guard null / negative speed before unit conversion (same fix as socketService.js)
+        // Guard null/negative speed before unit conversion
         const speedKmh = rawSpeed != null && rawSpeed >= 0
           ? +(rawSpeed * 3.6).toFixed(1)
           : 0;
@@ -233,7 +412,7 @@ export function useRideTracking({ rideId, bookingId }) {
           if (mountedRef.current) setCurrentPosition({ ...position });
         }
 
-        // Emit to server via socketService directly (service has its own 2s throttle)
+        // Emit to server via socketService directly
         socketService.emit('driver_location', {
           bookingId: bookingId ?? undefined,
           lat,
@@ -258,7 +437,6 @@ export function useRideTracking({ rideId, bookingId }) {
       { enableHighAccuracy: true, maximumAge: 2000, timeout: 10_000 }
     );
 
-    // Update Redux GPS tracking flag
     dispatch(startGpsTracking({ bookingId }));
   }, [bookingId, dispatch, gpsError]);
 
@@ -274,20 +452,16 @@ export function useRideTracking({ rideId, bookingId }) {
   useEffect(() => {
     startTracking();
     return () => stopTracking();
-  }, []); // intentionally empty — start once, stop once; eslint-disable-line
+  }, []); // eslint-disable-line
 
-  // ── 5. Offline detection ─────────────────────────────────────────────────
+  // ── 5. Offline detection ──────────────────────────────────────────────────
   useEffect(() => {
     const onOffline = () => { if (mountedRef.current) setIsOffline(true); };
     const onOnline  = () => {
       if (!mountedRef.current) return;
       setIsOffline(false);
-      // Refresh ride data after reconnect
       if (rideId) dispatch(fetchRideTracking({ rideId }));
-      // Don't call requestBookingState here — the socket room effect handles
-      // it on reconnect (connected → false → true triggers the room effect).
     };
-
     window.addEventListener('offline', onOffline);
     window.addEventListener('online',  onOnline);
     return () => {
@@ -300,24 +474,15 @@ export function useRideTracking({ rideId, bookingId }) {
   useEffect(() => {
     mountedRef.current = true;
     return () => {
+      // Set false FIRST before async callbacks fire
       mountedRef.current = false;
-      // stopTracking called by GPS effect cleanup — no double-call needed here
     };
   }, []);
 
-  // ── sendStatusUpdate ─────────────────────────────────────────────────────
-  /**
-   * Sends status via:
-   *   1. HTTP PATCH /ride-requests/:rideId/status  (primary — state machine)
-   *   2. Socket driver_status_update               (real-time room broadcast)
-   *
-   * Legacy booking-based HTTP routes (accept, arrived) dispatched separately.
-   */
+  // ── sendStatusUpdate ──────────────────────────────────────────────────────
   const sendStatusUpdate = useCallback(async (action, extras = {}) => {
     const pos = lastPositionRef.current;
 
-    // Map DRIVER_STATUS constants → HTTP action strings for /ride-requests/:rideId/status
-    // OTP_VERIFIED intentionally omitted — use verifyOtp() instead
     const driverStatusToAction = {
       [DRIVER_STATUS.ACCEPTED]:      'accept',
       [DRIVER_STATUS.EN_ROUTE]:      'start_route',
@@ -331,7 +496,6 @@ export function useRideTracking({ rideId, bookingId }) {
 
     const httpAction = driverStatusToAction[action] ?? action;
 
-    // Special cases: booking-based HTTP routes (legacy)
     if (action === DRIVER_STATUS.ACCEPTED && bookingId) {
       await dispatch(acceptRide({ bookingId }));
     } else if (action === DRIVER_STATUS.ARRIVED && bookingId) {
@@ -340,7 +504,6 @@ export function useRideTracking({ rideId, bookingId }) {
       await dispatch(updateRideStatus({ rideId, action: httpAction, ...extras }));
     }
 
-    // Always broadcast via socket for real-time location + status to room
     if (bookingId && rideId) {
       dispatch(updateDriverStatusSocket({
         bookingId,
@@ -352,7 +515,6 @@ export function useRideTracking({ rideId, bookingId }) {
       }));
     }
 
-    // Refresh tracking data after transition (short delay for DB to settle)
     if (rideId) {
       setTimeout(() => {
         if (mountedRef.current) dispatch(fetchRideTracking({ rideId }));
@@ -361,25 +523,12 @@ export function useRideTracking({ rideId, bookingId }) {
   }, [bookingId, rideId, dispatch]);
 
   // ── verifyOtp ─────────────────────────────────────────────────────────────
-  /**
-   * Primary: HTTP verify_otp via ride state machine.
-   * Secondary: socket verifyOtpAsync for real-time room event.
-   *
-   * Uses socketService.verifyOtpAsync directly (not via thunk) because the
-   * thunk wraps the same promise — dispatching the thunk AND calling the service
-   * directly would fire two socket emits.
-   */
   const verifyOtp = useCallback(async (otp) => {
     if (!rideId) return { success: false, message: 'No rideId' };
-
-    // HTTP primary
     const httpResult = await dispatch(updateRideStatus({ rideId, action: 'verify_otp', otp }));
-
-    // Socket secondary — real-time room broadcast (best-effort, don't await)
     if (bookingId) {
       socketService.verifyOtpAsync({ bookingId, rideId, otp }).catch(() => {});
     }
-
     return httpResult;
   }, [bookingId, rideId, dispatch]);
 
@@ -397,24 +546,31 @@ export function useRideTracking({ rideId, bookingId }) {
 
   // ─────────────────────────────────────────────────────────────────────────
   return {
-  ride:            currentRide,
-  tracking:        trackingData,
-  socketLive,
-  rideStatus:      rideStatus || currentRide?.status,
-  rideStage:       socketLive?.rideStage || currentRide?.rideStage,  // ← ADD
-  activeNavigationTarget: socketLive?.activeNavigationTarget || currentRide?.activeNavigationTarget,  // ← ADD
-  navigationTarget,
-  etaUpdate,
-  currentPosition,
-  isLoadingRide,
-  gpsError,
-  isOffline,
-  connected,
-  sendStatusUpdate,
-  verifyOtp,
-  triggerSosAlert,
-  startTracking,
-  stopTracking,
-  DRIVER_STATUS,
-};
+    ride:            currentRide,
+    tracking:        trackingData,
+    socketLive,
+    rideStatus:      rideStatus || currentRide?.status,
+    rideStage:       socketLive?.rideStage || currentRide?.rideStage,
+    activeNavigationTarget: socketLive?.activeNavigationTarget || currentRide?.activeNavigationTarget,
+    navigationTarget,
+    etaUpdate,
+    currentPosition,
+    isLoadingRide,
+    gpsError,
+    isOffline,
+    connected,
+    // ── CA-specific ──────────────────────────────────────────────────────
+    bookingType,
+    caLiveLocation,   // { lat, lng, heading, speed } — CA live position
+    caStatus,         // 'not_joined'|'en_route_to_pickup'|'at_pickup'|'in_ride'|'departed'
+    caJoinPoint,      // { coordinates: [lng,lat], zone, distCaToJoinKm } | null
+    caName,           // string | null
+    // ── Actions ──────────────────────────────────────────────────────────
+    sendStatusUpdate,
+    verifyOtp,
+    triggerSosAlert,
+    startTracking,
+    stopTracking,
+    DRIVER_STATUS,
+  };
 }

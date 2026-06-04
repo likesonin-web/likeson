@@ -14,6 +14,10 @@ export const getAgoraTokensAPI = (consultationId) =>
 export const refreshAgoraTokensAPI = (consultationId) =>
   API.post(`/consultations/${consultationId}/agora/refresh`);
 
+// NEW: Fetch a dedicated token for the screen share client
+export const getScreenShareTokenAPI = (consultationId, screenUid) =>
+  API.post(`/consultations/${consultationId}/agora/screen-token`, { uid: screenUid });
+
 // ── Recording consent ─────────────────────────────────────────────────────────
 
 export const submitRecordingConsentAPI = (consultationId, consented) =>

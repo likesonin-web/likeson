@@ -3,29 +3,30 @@
 /**
  * Panels.jsx — PRODUCTION GRADE
  *
- * FIXES & NEW FEATURES:
- * 1. ParticipantsPanel: Doctor / admin / superadmin can DELETE any participant
- *    (including core doctor/patient if admin — matches clinical workflow where
- *    admin may need to forcibly eject someone).
+ * FIXES:
+ * 1. ParticipantsPanel: real populated API data used correctly.
+ *    getParticipantsAPI returns { core: { doctor, patient }, events[], extraParticipants[] }
+ *    where doctor/patient objects have nested user: { _id, name, email, avatar, phone }.
+ *    resolveName() now reads all these paths so "Unknown" never shows.
  *
- * 2. REFERRAL SECTION added to ParticipantsPanel: Doctor can search for
- *    a specialist and add them as an observer/consultant. Shows referral note
- *    input and a "Send Referral" action.
+ * 2. ParticipantRow: avatar image support — shows real photo if userId.avatar exists.
  *
- * 3. Name resolution: uses resolveName() helper that reads from all
- *    possible locations (doctorSnapshot, patientSnapshot, userId.name, etc.)
- *    so "Unknown" never appears.
+ * 3. buildParticipantList(): flattens core doctor/patient + events + extra
+ *    into one unified list with correct role labels.
  *
- * 4. SettingsPanel: referral quick-reference + recording info.
+ * 4. Doctor / admin / superadmin can DELETE any participant.
  *
- * 5. Recording REC badge in header uses correct Redux selectors.
+ * 5. REFERRAL SECTION: Doctor can search for a specialist and add as observer.
+ *
+ * 6. SettingsPanel: referral quick-reference + recording info.
+ *
+ * 7. Recording REC badge in header uses correct Redux selectors.
  */
 
 import React, { useState, useEffect, useCallback, memo } from 'react';
 import {
   X, Monitor, Volume2, User, UserPlus, Trash2,
   Circle, SendHorizonal, UserCheck, Stethoscope,
-  Phone, AlertTriangle,
 } from 'lucide-react';
 import { useSelector, useDispatch } from 'react-redux';
 import {
@@ -52,41 +53,145 @@ const ADDABLE_ROLES = [
 ];
 
 // ── Name resolution helper ────────────────────────────────────────────────────
-
+/**
+ * Resolves display name from any participant shape returned by the API.
+ *
+ * Shapes encountered:
+ *  a) Core doctor:  { user: { name }, specialization }  (doctor doc)
+ *  b) Core patient: { name, email, phone, avatar }      (user doc)
+ *  c) Event entry:  { userId: { name, role, avatar }, role, joinedAt }
+ *  d) Extra:        { userId: { name }, role }
+ *  e) Snapshot:     { doctorSnapshot: { name }, patientSnapshot: { name } }
+ *
+ * Priority: direct name > userId.name > user.name > snapshots > fallback
+ */
 const resolveName = (participant) => {
   if (!participant) return 'Participant';
-  return (
-    participant.name
-    ?? participant.userName
-    ?? (participant.userId && typeof participant.userId === 'object' ? participant.userId.name : null)
-    ?? participant.doctorSnapshot?.name
-    ?? participant.patientSnapshot?.name
-    ?? participant.user?.name
-    ?? 'Participant'
-  );
+
+  // Direct name field (patient user doc, event userId after populate)
+  if (participant.name && typeof participant.name === 'string') return participant.name;
+
+  // userId populated object
+  if (participant.userId && typeof participant.userId === 'object') {
+    if (participant.userId.name) return participant.userId.name;
+  }
+
+  // Doctor doc has nested user object
+  if (participant.user && typeof participant.user === 'object') {
+    if (participant.user.name) return participant.user.name;
+  }
+
+  // Snapshot fallbacks (from consultation doc)
+  if (participant.doctorSnapshot?.name) return participant.doctorSnapshot.name;
+  if (participant.patientSnapshot?.name) return participant.patientSnapshot.name;
+
+  // userName (enriched Agora user)
+  if (participant.userName) return participant.userName;
+
+  return 'Participant';
+};
+
+/**
+ * Resolves avatar URL from any participant shape.
+ */
+const resolveAvatar = (participant) => {
+  if (!participant) return null;
+  if (participant.avatar) return participant.avatar;
+  if (participant.userId?.avatar) return participant.userId.avatar;
+  if (participant.user?.avatar) return participant.user?.avatar;
+  return null;
+};
+
+/**
+ * Resolves the userId string for socket/API calls.
+ */
+const resolveUserId = (participant) => {
+  if (!participant) return null;
+  if (typeof participant.userId === 'string') return participant.userId;
+  if (participant.userId?._id) return participant.userId._id;
+  if (participant.user?._id) return participant.user._id;
+  if (participant._id) return participant._id;
+  return null;
+};
+
+// ── Build unified participant list from API response ──────────────────────────
+/**
+ * participants from Redux (selectParticipants) has shape:
+ * {
+ *   core: { doctor: <doctorDoc>, patient: <patientDoc> },
+ *   events: [ { userId: { _id, name, avatar, role }, role, joinedAt, rejoinCount } ],
+ *   extraParticipants: [],
+ *   additional: []
+ * }
+ *
+ * We flatten into a unified array for rendering, deduping by userId.
+ */
+const buildParticipantList = (participants) => {
+  if (!participants) return [];
+
+  const seen = new Set();
+  const list = [];
+
+  const push = (item) => {
+    const id = resolveUserId(item);
+    if (id && seen.has(id)) return;
+    if (id) seen.add(id);
+    list.push(item);
+  };
+
+  // Core doctor
+  if (participants.core?.doctor) {
+    push({ ...participants.core.doctor, role: 'doctor' });
+  }
+  // Core patient
+  if (participants.core?.patient) {
+    push({ ...participants.core.patient, role: 'patient' });
+  }
+
+  // Events (participant join events — have userId populated with name/avatar)
+  const events = participants.events ?? [];
+  events.forEach(ev => push(ev));
+
+  // Additional / extra
+  const additional = participants.additional ?? [];
+  const extra      = participants.extra ?? [];
+  const extraP     = participants.extraParticipants ?? [];
+  [...additional, ...extra, ...extraP].forEach(p => push(p));
+
+  return list;
 };
 
 // ── Confirm dialog helper ─────────────────────────────────────────────────────
-// Uses the native browser confirm so we don't need a modal library.
 
 const confirmAction = (msg) => window.confirm(msg);
 
 // ── Participant Row ───────────────────────────────────────────────────────────
 
 const ParticipantRow = memo(({ participant, netQuality, canRemove, onRemove }) => {
-  const name = resolveName(participant);
-  const role = participant.role ?? 'participant';
-  const init = name[0]?.toUpperCase() ?? '?';
-  const pid  = participant._id ?? participant.userId?._id ?? participant.userId;
+  const name   = resolveName(participant);
+  const avatar = resolveAvatar(participant);
+  const role   = participant.role ?? 'participant';
+  const uid    = resolveUserId(participant);
+  const init   = name[0]?.toUpperCase() ?? '?';
 
   const roleLabel = role.replace(/_/g, ' ');
   const isCore    = ['doctor', 'patient'].includes(role);
 
   return (
     <div className="flex items-center justify-between p-3 bg-base-200/50 hover:bg-base-200 border border-base-300 rounded-xl transition-colors mb-2 group">
-      <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center font-bold text-lg shrink-0 mr-3">
-        {init}
-      </div>
+      {/* Avatar */}
+      {avatar ? (
+        <img
+          src={avatar}
+          alt={name}
+          className="w-10 h-10 rounded-xl object-cover shrink-0 mr-3 border border-base-300"
+          onError={e => { e.target.style.display = 'none'; }}
+        />
+      ) : (
+        <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center font-bold text-lg shrink-0 mr-3">
+          {init}
+        </div>
+      )}
 
       <div className="flex flex-col flex-1 overflow-hidden">
         <span className="text-sm font-semibold text-base-content truncate">{name}</span>
@@ -106,7 +211,7 @@ const ParticipantRow = memo(({ participant, netQuality, canRemove, onRemove }) =
             className="btn btn-ghost btn-circle btn-xs text-error hover:bg-error/10 opacity-0 group-hover:opacity-100 transition-opacity"
             onClick={() => {
               if (confirmAction(`Remove ${name} from the session?`)) {
-                onRemove(typeof pid === 'string' ? pid : pid?.toString?.() ?? String(pid));
+                onRemove(uid);
               }
             }}
             aria-label={`Remove ${name}`}
@@ -186,20 +291,14 @@ const AddParticipantForm = memo(({ consultationId, onAdded }) => {
 AddParticipantForm.displayName = 'AddParticipantForm';
 
 // ── Referral Section ──────────────────────────────────────────────────────────
-/**
- * Doctor can:
- * 1. Fill in referral note for a specialist.
- * 2. Optionally add the specialist as an observer so they can join the session.
- * 3. Save the referral to the consultation.
- */
 
 const ReferralSection = memo(({ consultationId }) => {
   const dispatch = useDispatch();
-  const [referTo,      setReferTo]      = useState('');
-  const [referNote,    setReferNote]    = useState('');
-  const [addAsObserver, setAddAsObserver] = useState(false);
+  const [referTo,        setReferTo]        = useState('');
+  const [referNote,      setReferNote]      = useState('');
+  const [addAsObserver,  setAddAsObserver]  = useState(false);
   const [observerUserId, setObserverUserId] = useState('');
-  const [saving,       setSaving]       = useState(false);
+  const [saving,         setSaving]         = useState(false);
 
   const handleSave = useCallback(async () => {
     if (!referTo.trim()) { toast.error('Referral destination required'); return; }
@@ -308,22 +407,14 @@ export const ParticipantsPanel = memo(({ onClose }) => {
   const isAdmin   = ['admin', 'superadmin'].includes(userRole);
   const canManage = isDoctor || isAdmin;
 
-  // Build flat participant list
-  const coreList = [
-    participants.core?.doctor  ? { ...participants.core.doctor,  role: 'doctor'  } : null,
-    participants.core?.patient ? { ...participants.core.patient, role: 'patient' } : null,
-  ].filter(Boolean);
-
-  const allParticipants = [
-    ...coreList,
-    ...(participants.additional ?? []),
-    ...(participants.extra ?? []),
-  ];
+  // Build unified flat list from populated API response
+  const allParticipants = buildParticipantList(participants);
 
   const handleRemove = useCallback(async (targetUserId) => {
     if (!targetUserId) return;
     await dispatch(removeParticipant({ id: consultationId, userId: targetUserId }));
     socketRemoveParticipant(consultationId, targetUserId);
+    await dispatch(fetchParticipants(consultationId));
   }, [dispatch, consultationId]);
 
   const isRecording = localRecording || serverRecording;
@@ -365,8 +456,8 @@ export const ParticipantsPanel = memo(({ onClose }) => {
         ) : (
           <div>
             {allParticipants.map((p, i) => {
-              const pid = p._id ?? p.userId?._id ?? p.userId ?? i;
-              const netKey = p.userId?._id ?? p.userId ?? p._id;
+              const uid    = resolveUserId(p);
+              const netKey = uid;
               // Admin can remove anyone. Doctor can remove non-core.
               const removable = isAdmin
                 ? true
@@ -374,7 +465,7 @@ export const ParticipantsPanel = memo(({ onClose }) => {
 
               return (
                 <ParticipantRow
-                  key={String(pid)}
+                  key={uid ?? i}
                   participant={p}
                   netQuality={networkQuality[netKey]}
                   canRemove={removable && canManage}
@@ -385,16 +476,13 @@ export const ParticipantsPanel = memo(({ onClose }) => {
           </div>
         )}
 
-        {/* ── Doctor/Admin controls ── */}
+        {/* Doctor/Admin controls */}
         {canManage && (
           <>
-            {/* Add participant */}
             <AddParticipantForm
               consultationId={consultationId}
               onAdded={() => dispatch(fetchParticipants(consultationId))}
             />
-
-            {/* Referral section */}
             {(isDoctor || isAdmin) && (
               <ReferralSection consultationId={consultationId} />
             )}
@@ -444,7 +532,6 @@ export const SettingsPanel = memo(({ onClose }) => {
       role="complementary"
       aria-label="Settings"
     >
-      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3.5 border-b border-base-300 bg-base-100/95 backdrop-blur-md shrink-0">
         <h2 className="font-montserrat text-base font-bold text-base-content tracking-tight">
           Settings
@@ -456,7 +543,6 @@ export const SettingsPanel = memo(({ onClose }) => {
 
       <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-5 scrollbar-thin">
 
-        {/* Camera select */}
         <div className="flex flex-col gap-2">
           <label className="flex items-center gap-2 text-xs font-bold text-base-content/70 uppercase tracking-wider">
             <Monitor size={14} /> Camera
@@ -476,7 +562,6 @@ export const SettingsPanel = memo(({ onClose }) => {
           </select>
         </div>
 
-        {/* Microphone select */}
         <div className="flex flex-col gap-2">
           <label className="flex items-center gap-2 text-xs font-bold text-base-content/70 uppercase tracking-wider">
             <Volume2 size={14} /> Microphone
@@ -496,7 +581,6 @@ export const SettingsPanel = memo(({ onClose }) => {
           </select>
         </div>
 
-        {/* Video quality info */}
         <div className="p-4 bg-base-200 border border-base-300 rounded-xl text-sm">
           <p className="font-semibold text-base-content mb-1 flex items-center gap-2">
             <Monitor size={14} className="text-primary" /> Video Quality
@@ -506,20 +590,17 @@ export const SettingsPanel = memo(({ onClose }) => {
           </p>
         </div>
 
-        {/* Recording info */}
         <div className="p-4 bg-base-200 border border-base-300 rounded-xl text-sm">
           <p className="font-semibold text-base-content mb-1 flex items-center gap-2">
             <Circle size={13} className="text-error fill-current" /> Recording
           </p>
           <p className="text-xs text-base-content/60 leading-relaxed">
             Local recording captures <strong>all participants</strong> in a grid layout using
-            a canvas compositor — not just your camera. The file is saved to your downloads
-            when you stop recording. Server-side recording (admin only) stores the session
-            securely in the cloud.
+            a canvas compositor. The file is saved to your downloads when you stop recording.
+            Server-side recording (admin only) stores the session securely in the cloud.
           </p>
         </div>
 
-        {/* Referral quick-reference for doctor/admin */}
         {isPrivileged && (
           <div className="p-4 bg-info/5 border border-info/30 rounded-xl text-sm">
             <p className="font-semibold text-info mb-1 flex items-center gap-2">
@@ -533,7 +614,6 @@ export const SettingsPanel = memo(({ onClose }) => {
           </div>
         )}
 
-        {/* Security note */}
         <div className="p-4 bg-success/5 border border-success/30 rounded-xl text-sm">
           <p className="font-semibold text-success mb-1 flex items-center gap-2">
             <UserCheck size={14} /> End-to-end encrypted

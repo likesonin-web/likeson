@@ -59,6 +59,7 @@ import {
   runTokenRefresh,
   runReminders,
   runExpirePrescriptions,
+  getScreenShareToken,
 } from '../services/consultationService.js';
 
 const router = express.Router();
@@ -327,6 +328,23 @@ router.post('/:id/agora/provision', authorize(...ADMIN_ROLES, ...DOCTOR_ROLES), 
 router.get('/:id/agora/tokens', asyncHandler(async (req, res) => {
   const tokens = await getTokensForParticipant(req.params.id, req.user._id.toString(), req.user.role);
   ok(res, { tokens });
+}));
+
+// NEW: Endpoint to fetch dedicated screen-share token
+router.post('/:id/agora/screen-token', asyncHandler(async (req, res) => {
+  const { uid } = req.body;
+  if (!uid) return fail(res, 'Screen UID is required', 400);
+
+  const role = req.user.role === 'doctor' ? 'doctor' : 'patient';
+  
+  const tokenData = await getScreenShareToken(
+    req.params.id, 
+    uid, 
+    req.user._id.toString(), 
+    role
+  );
+  
+  ok(res, tokenData);
 }));
 
 router.post('/:id/agora/refresh', asyncHandler(async (req, res) => {

@@ -20,6 +20,7 @@ import {
   updateRecordingConsent,
   verifyAgoraWebhook,
 } from './agoraToken.js';
+import { generateAgoraToken } from '../utils/generateAgoraToken.js';
 import { invalidatePattern, invalidateKey } from '../utils/cacheInvalidation.js';
 import redisClient from '../config/redis.js';
 
@@ -1216,6 +1217,34 @@ export const runAutoMiss = async () => {
     }
   }
   return { processed: count };
+};
+
+export const getScreenShareToken = async (consultationId, screenUid, userId, userRole) => {
+  // 1. Fetch the consultation to get the channelName and verify participants
+  const c = await Consultation.findById(consultationId)
+    .select('patient doctorUser agora status')
+    .lean();
+    
+  if (!c) throw new Error('Consultation not found');
+  if (!c.agora?.channelName) throw new Error('Agora channel not initialized for this consultation');
+
+  // 2. Security Check: Ensure the user requesting the token is actually part of this session
+  if (userRole === 'patient' && c.patient.toString() !== userId) {
+    throw new Error('You are not authorized to share screen in this consultation');
+  }
+  if (userRole === 'doctor' && c.doctorUser?.toString() !== userId) {
+    throw new Error('You are not authorized to share screen in this consultation');
+  }
+
+  // 3. Generate the token specifically for the screenUid
+  // Expiration is set to 2 hours (7200 seconds) by default
+  const token = generateAgoraToken(c.agora.channelName, Number(screenUid), 7200);
+
+  return { 
+    token, 
+    uid: screenUid, 
+    channelName: c.agora.channelName 
+  };
 };
 
 export const runTokenRefresh = async () => {
