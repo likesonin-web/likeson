@@ -53,7 +53,8 @@ import {
   selectPendingBookings,
   selectActiveBookings,
 } from '@/store/slices/labPartnerBookingSlice';
-
+import BackButton from '@/components/BackButton';
+import Container from '@/components/ui/Container';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const STATUS_OPTIONS = [
@@ -144,7 +145,7 @@ function BookingDetailDrawer({ booking, onClose, isActionLoading, dispatch }) {
 
   return (
     <motion.div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+      className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -476,8 +477,9 @@ export default function ManageBookings() {
   const totalPages = pagination?.pages || 1;
 
   return (
-    <div className="space-y-4">
-
+    <div className="space-y-4 ">
+    <Container>
+      <BackButton className='m-3'  />
       {/* ── Filter bar ── */}
       <div className="card p-4">
         <div className="flex flex-wrap items-center gap-3">
@@ -557,7 +559,7 @@ export default function ManageBookings() {
       </AnimatePresence>
 
       {/* ── Table ── */}
-      <div className="card overflow-hidden">
+      <div className="card mt-3 overflow-hidden">
         {/* Count row */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50">
           <p className="text-[10px] text-base-content/50 font-semibold">
@@ -670,7 +672,7 @@ export default function ManageBookings() {
           </motion.div>
         )}
       </AnimatePresence>
-
+</Container>
     </div>
   );
 }

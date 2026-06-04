@@ -233,7 +233,7 @@ const Chip = memo(({ children, color, onClick, active }) => (
     whileTap={{ scale: 0.96 }}
     onClick={onClick}
     style={active ? { background: color, color: "#fff", borderColor: color, boxShadow: `0 4px 12px color-mix(in srgb, ${color} 40%, transparent)` } : {}}
-    className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-poppins text-xs font-bold border transition-all duration-200
+    className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-poppins text-[10px] font-bold border transition-all duration-200
       ${active ? "" : "bg-[var(--base-200)] border-[var(--base-300)] text-[var(--base-content)]/70 hover:border-[var(--primary)] hover:text-[var(--primary)]"}`}
   >
     {children}
@@ -258,10 +258,10 @@ SkeletonCard.displayName = "SkeletonCard";
 const EmptyState = memo(({ query }) => (
   <motion.div variants={fadeUp} initial="hidden" animate="visible" className="flex flex-col items-center justify-center py-20 text-center">
     <MediHound />
-    <h3 className="font-montserrat font-black text-2xl text-[var(--base-content)] mt-4">
+    <h3 className="font-montserrat  text-2xl text-[var(--base-content)] mt-4">
       No results {query ? `for "${query}"` : "found"}
     </h3>
-    <p className="font-poppins text-sm font-medium text-[var(--base-content)]/50 mt-2 max-w-sm">
+    <p className="font-poppins text-xs font-medium text-[var(--base-content)]/50 mt-2 max-w-sm">
       Our medical hounds couldn't sniff out anything matching your criteria. Try adjusting your filters or keywords.
     </p>
   </motion.div>
@@ -281,7 +281,7 @@ const Pagination = memo(({ pagination, onPageChange }) => {
         const p = pages <= 7 ? i + 1 : i < 3 ? i + 1 : i === 3 ? page : pages - (6 - i);
         return (
           <button key={i} onClick={() => onPageChange(p)}
-            className="w-10 h-10 rounded-[var(--r-selector)] font-poppins text-sm font-black transition-all"
+            className="w-10 h-10 rounded-[var(--r-selector)] font-poppins text-xs  transition-all"
             style={p === page ? { background: "var(--primary)", color: "var(--primary-content)", border: "2px solid var(--primary)", boxShadow: "0 4px 12px color-mix(in srgb, var(--primary), transparent 60%)" } : { background: "var(--base-100)", color: "var(--base-content)", border: "2px solid var(--base-300)" }}>
             {p}
           </button>
@@ -305,13 +305,13 @@ const DoctorCard = memo(({ doc }) => (
     <div className="flex-1 min-w-0">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h3 className="font-montserrat font-black text-sm text-[var(--base-content)] group-hover:text-[var(--info)] transition-colors flex items-center gap-1.5">
+          <h3 className="font-montserrat  text-xs text-[var(--base-content)] group-hover:text-[var(--info)] transition-colors flex items-center gap-1.5">
             Dr. {doc.name}
             {doc.isVerified && <BadgeCheck size={14} className="text-[var(--info)] flex-shrink-0" />}
           </h3>
-          <p className="font-poppins text-xs font-bold text-[var(--base-content)]/60 mt-0.5 uppercase tracking-wider">{doc.specialization}</p>
+          <p className="font-poppins text-[10px] font-bold text-[var(--base-content)]/60 mt-0.5 uppercase tracking-wider">{doc.specialization}</p>
         </div>
-        {doc.distanceKm != null && <span className="font-poppins text-[10px] font-black text-[var(--info)] whitespace-nowrap flex items-center gap-1 px-2 py-1 bg-[var(--info)]/10 rounded-md"><MapPin size={10} /> {doc.distanceKm.toFixed(1)} km</span>}
+        {doc.distanceKm != null && <span className="font-poppins text-[10px]  text-[var(--info)] whitespace-nowrap flex items-center gap-1 px-2 py-1 bg-[var(--info)]/10 rounded-md"><MapPin size={10} /> {doc.distanceKm.toFixed(1)} km</span>}
       </div>
       <div className="flex items-center gap-3 mt-2 flex-wrap">
         <div className="flex items-center gap-1.5">
@@ -339,13 +339,13 @@ const HospitalCard = memo(({ hosp }) => (
     <div className="flex-1 min-w-0">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h3 className="font-montserrat font-black text-sm text-[var(--base-content)] group-hover:text-[#8b5cf6] transition-colors flex items-center gap-1.5 line-clamp-1">
+          <h3 className="font-montserrat  text-xs text-[var(--base-content)] group-hover:text-[#8b5cf6] transition-colors flex items-center gap-1.5 line-clamp-1">
             {hosp.name}
             {hosp.isVerified && <BadgeCheck size={14} className="text-[#8b5cf6] flex-shrink-0" />}
           </h3>
-          <p className="font-poppins text-xs font-bold text-[var(--base-content)]/60 mt-0.5 uppercase tracking-wider">{hosp.hospitalType}</p>
+          <p className="font-poppins text-[10px] font-bold text-[var(--base-content)]/60 mt-0.5 uppercase tracking-wider">{hosp.hospitalType}</p>
         </div>
-        {hosp.distanceKm != null && <span className="font-poppins text-[10px] font-black text-[#8b5cf6] whitespace-nowrap flex items-center gap-1 px-2 py-1 bg-[#8b5cf6]/10 rounded-md"><MapPin size={10} /> {hosp.distanceKm.toFixed(1)} km</span>}
+        {hosp.distanceKm != null && <span className="font-poppins text-[10px]  text-[#8b5cf6] whitespace-nowrap flex items-center gap-1 px-2 py-1 bg-[#8b5cf6]/10 rounded-md"><MapPin size={10} /> {hosp.distanceKm.toFixed(1)} km</span>}
       </div>
       <div className="flex items-center gap-1.5 mt-2">
         <Stars rating={hosp.rating?.averageRating} />
@@ -373,13 +373,13 @@ const LabCard = memo(({ lab }) => (
     <div className="flex-1 min-w-0">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h3 className="font-montserrat font-black text-sm text-[var(--base-content)] group-hover:text-[var(--success)] transition-colors flex items-center gap-1.5 line-clamp-1">
+          <h3 className="font-montserrat  text-xs text-[var(--base-content)] group-hover:text-[var(--success)] transition-colors flex items-center gap-1.5 line-clamp-1">
             {lab.labName}
             {lab.isVerified && <BadgeCheck size={14} className="text-[var(--success)] flex-shrink-0" />}
           </h3>
-          <p className="font-poppins text-xs font-bold text-[var(--base-content)]/60 mt-0.5 uppercase tracking-wider">{lab.labType}</p>
+          <p className="font-poppins text-[10px] font-bold text-[var(--base-content)]/60 mt-0.5 uppercase tracking-wider">{lab.labType}</p>
         </div>
-        {lab.distanceKm != null && <span className="font-poppins text-[10px] font-black text-[var(--success)] whitespace-nowrap flex items-center gap-1 px-2 py-1 bg-[var(--success)]/10 rounded-md"><MapPin size={10} /> {lab.distanceKm.toFixed(1)} km</span>}
+        {lab.distanceKm != null && <span className="font-poppins text-[10px]  text-[var(--success)] whitespace-nowrap flex items-center gap-1 px-2 py-1 bg-[var(--success)]/10 rounded-md"><MapPin size={10} /> {lab.distanceKm.toFixed(1)} km</span>}
       </div>
       <div className="flex items-center gap-3 mt-2 flex-wrap">
         <div className="flex items-center gap-1.5">
@@ -408,14 +408,14 @@ const MedicineCard = memo(({ med }) => {
       <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 pr-2">
-            <h3 className="font-montserrat font-black text-sm text-[var(--base-content)] group-hover:text-[var(--warning)] transition-colors line-clamp-1">
+            <h3 className="font-montserrat  text-xs text-[var(--base-content)] group-hover:text-[var(--warning)] transition-colors line-clamp-1">
               {med.brandName || med.name}
             </h3>
-            <p className="font-poppins text-xs font-medium text-[var(--base-content)]/60 mt-0.5 truncate">{med.genericName}</p>
+            <p className="font-poppins text-[10px] font-medium text-[var(--base-content)]/60 mt-0.5 truncate">{med.genericName}</p>
           </div>
           <div className="text-right flex-shrink-0">
-            {med.mrp != null && <p className="font-montserrat font-black text-sm text-[var(--warning)]">₹{med.mrp}</p>}
-            <span className={`font-poppins text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded mt-1 inline-block ${med.isAvailable ? "bg-[var(--success)]/10 text-[var(--success)]" : "bg-[var(--error)]/10 text-[var(--error)]"}`}>
+            {med.mrp != null && <p className="font-montserrat  text-xs text-[var(--warning)]">₹{med.mrp}</p>}
+            <span className={`font-poppins text-[9px]  uppercase tracking-widest px-1.5 py-0.5 rounded mt-1 inline-block ${med.isAvailable ? "bg-[var(--success)]/10 text-[var(--success)]" : "bg-[var(--error)]/10 text-[var(--error)]"}`}>
               {med.isAvailable ? "In Stock" : "Out of Stock"}
             </span>
           </div>
@@ -441,8 +441,8 @@ const GlobalSection = memo(({ title, icon: Icon, color, children, count }) => {
         <div className="w-8 h-8 rounded-[var(--r-selector)] flex items-center justify-center border" style={{ background: `color-mix(in srgb, ${color} 10%, transparent)`, borderColor: `color-mix(in srgb, ${color} 20%, transparent)` }}>
           <Icon size={16} style={{ color }} aria-hidden="true" />
         </div>
-        <h2 className="font-montserrat font-black text-lg text-[var(--base-content)] tracking-tight">{title}</h2>
-        <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider" style={{ background: color, color: "#fff" }}>{count} found</span>
+        <h2 className="font-montserrat  text-lg text-[var(--base-content)] tracking-tight">{title}</h2>
+        <span className="px-2.5 py-1 rounded-full text-[10px]  uppercase tracking-wider" style={{ background: color, color: "#fff" }}>{count} found</span>
       </div>
       <motion.div variants={stagger} initial="hidden" animate="visible" className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {children}
@@ -460,20 +460,20 @@ const FilterPanel = memo(({ tab, filters, setFilters, specializations }) => {
   return (
     <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="bg-[var(--base-100)] border border-[var(--base-300)] rounded-[var(--r-box)] p-6 space-y-6 sticky top-4 shadow-sm">
       <div className="flex items-center justify-between pb-4 border-b border-[var(--base-200)]">
-        <h3 className="font-montserrat font-black text-base text-[var(--base-content)] flex items-center gap-2">
+        <h3 className="font-montserrat  text-base text-[var(--base-content)] flex items-center gap-2">
           <SlidersHorizontal size={16} className="text-[var(--primary)]" aria-hidden="true" />Filters
         </h3>
-        <button onClick={() => setFilters({})} className="font-poppins text-[10px] font-black text-[var(--error)] uppercase tracking-wider hover:underline">Reset</button>
+        <button onClick={() => setFilters({})} className="font-poppins text-[10px]  text-[var(--error)] uppercase tracking-wider hover:underline">Reset</button>
       </div>
 
       {sortOpts.length > 0 && (
         <div>
-          <label className="font-poppins text-[10px] font-black uppercase tracking-widest text-[var(--base-content)]/50 mb-3 block">Sort by</label>
+          <label className="font-poppins text-[10px]  uppercase tracking-widest text-[var(--base-content)]/50 mb-3 block">Sort by</label>
           <div className="flex flex-col gap-2">
             {sortOpts.map((s) => (
               <label key={s} className="flex items-center gap-3 cursor-pointer group">
                 <input type="radio" name="sort" value={s} checked={filters.sort === s || (!filters.sort && s === "relevance")} onChange={(e) => setFilters((f) => ({ ...f, sort: e.target.value }))} className="radio radio-primary radio-sm border-[var(--base-300)]" />
-                <span className="font-poppins text-xs font-bold text-[var(--base-content)]/80 group-hover:text-[var(--primary)] capitalize transition-colors">{s.replace(/-/g, " ")}</span>
+                <span className="font-poppins text-[10px] font-bold text-[var(--base-content)]/80 group-hover:text-[var(--primary)] capitalize transition-colors">{s.replace(/-/g, " ")}</span>
               </label>
             ))}
           </div>
@@ -483,8 +483,8 @@ const FilterPanel = memo(({ tab, filters, setFilters, specializations }) => {
       {tab === "doctor" && (
         <>
           <div>
-            <label className="font-poppins text-[10px] font-black uppercase tracking-widest text-[var(--base-content)]/50 mb-3 block">Specialization</label>
-            <select value={filters.specialization || ""} onChange={(e) => setFilters((f) => ({ ...f, specialization: e.target.value || undefined }))} className="input-field w-full text-xs font-bold font-poppins py-2.5">
+            <label className="font-poppins text-[10px]  uppercase tracking-widest text-[var(--base-content)]/50 mb-3 block">Specialization</label>
+            <select value={filters.specialization || ""} onChange={(e) => setFilters((f) => ({ ...f, specialization: e.target.value || undefined }))} className="input-field w-full text-[10px] font-bold font-poppins py-2.5">
               <option value="">All Specializations</option>
               {specializations.map((s) => (
                 <option key={s.specialization} value={s.specialization}>{s.specialization} ({s.doctorCount})</option>
@@ -492,17 +492,17 @@ const FilterPanel = memo(({ tab, filters, setFilters, specializations }) => {
             </select>
           </div>
           <div>
-            <label className="font-poppins text-[10px] font-black uppercase tracking-widest text-[var(--base-content)]/50 mb-3 block">Consultation Type</label>
+            <label className="font-poppins text-[10px]  uppercase tracking-widest text-[var(--base-content)]/50 mb-3 block">Consultation Type</label>
             {["inPerson", "video", "homeVisit"].map((t) => (
               <label key={t} className="flex items-center gap-3 cursor-pointer group mb-2">
                 <input type="checkbox" checked={!!filters[t]} onChange={(e) => setFilters((f) => ({ ...f, [t]: e.target.checked ? "true" : undefined }))} className="checkbox checkbox-primary checkbox-sm border-[var(--base-300)]" />
-                <span className="font-poppins text-xs font-bold text-[var(--base-content)]/80 group-hover:text-[var(--primary)] capitalize transition-colors">{t === "homeVisit" ? "Home Visit" : t === "inPerson" ? "In-Person" : "Video"}</span>
+                <span className="font-poppins text-[10px] font-bold text-[var(--base-content)]/80 group-hover:text-[var(--primary)] capitalize transition-colors">{t === "homeVisit" ? "Home Visit" : t === "inPerson" ? "In-Person" : "Video"}</span>
               </label>
             ))}
           </div>
           <label className="flex items-center gap-3 cursor-pointer group mt-4 pt-4 border-t border-[var(--base-200)]">
             <input type="checkbox" checked={filters.verified === "true"} onChange={(e) => setFilters((f) => ({ ...f, verified: e.target.checked ? "true" : undefined }))} className="checkbox checkbox-primary checkbox-sm border-[var(--base-300)]" />
-            <span className="font-poppins text-xs font-black text-[var(--base-content)] uppercase tracking-wider group-hover:text-[var(--primary)] transition-colors">Verified Doctors Only</span>
+            <span className="font-poppins text-[10px]  text-[var(--base-content)] uppercase tracking-wider group-hover:text-[var(--primary)] transition-colors">Verified Doctors Only</span>
           </label>
         </>
       )}
@@ -510,16 +510,16 @@ const FilterPanel = memo(({ tab, filters, setFilters, specializations }) => {
       {tab === "hospital" && (
         <>
           <div>
-            <label className="font-poppins text-[10px] font-black uppercase tracking-widest text-[var(--base-content)]/50 mb-3 block">Hospital Type</label>
+            <label className="font-poppins text-[10px]  uppercase tracking-widest text-[var(--base-content)]/50 mb-3 block">Hospital Type</label>
             {["Multi-Specialty", "Super-Specialty", "Clinic", "Nursing Home", "Trust", "Government"].map((t) => (
               <label key={t} className="flex items-center gap-3 cursor-pointer group mb-2">
                 <input type="checkbox" checked={filters.hospitalType === t} onChange={(e) => setFilters((f) => ({ ...f, hospitalType: e.target.checked ? t : undefined }))} className="checkbox checkbox-primary checkbox-sm border-[var(--base-300)]" />
-                <span className="font-poppins text-xs font-bold text-[var(--base-content)]/80 group-hover:text-[var(--primary)] transition-colors">{t}</span>
+                <span className="font-poppins text-[10px] font-bold text-[var(--base-content)]/80 group-hover:text-[var(--primary)] transition-colors">{t}</span>
               </label>
             ))}
           </div>
           <div>
-            <label className="font-poppins text-[10px] font-black uppercase tracking-widest text-[var(--base-content)]/50 mb-3 block">Facilities</label>
+            <label className="font-poppins text-[10px]  uppercase tracking-widest text-[var(--base-content)]/50 mb-3 block">Facilities</label>
             {[
               { key: "isEmergencyReady", label: "Emergency Services" },
               { key: "hasICU",           label: "ICU Available" },
@@ -532,7 +532,7 @@ const FilterPanel = memo(({ tab, filters, setFilters, specializations }) => {
                     const next = e.target.checked ? [...new Set([...facs, key])].join(",") : facs.filter((f) => f !== key).join(",");
                     setFilters((f) => ({ ...f, facilities: next || undefined }));
                   }} className="checkbox checkbox-primary checkbox-sm border-[var(--base-300)]" />
-                <span className="font-poppins text-xs font-bold text-[var(--base-content)]/80 group-hover:text-[var(--primary)] transition-colors">{label}</span>
+                <span className="font-poppins text-[10px] font-bold text-[var(--base-content)]/80 group-hover:text-[var(--primary)] transition-colors">{label}</span>
               </label>
             ))}
           </div>
@@ -542,7 +542,7 @@ const FilterPanel = memo(({ tab, filters, setFilters, specializations }) => {
       {tab === "lab" && (
         <label className="flex items-center gap-3 cursor-pointer group pt-2">
           <input type="checkbox" checked={filters.homeCollection === "true"} onChange={(e) => setFilters((f) => ({ ...f, homeCollection: e.target.checked ? "true" : undefined }))} className="checkbox checkbox-primary checkbox-sm border-[var(--base-300)]" />
-          <span className="font-poppins text-xs font-black text-[var(--base-content)] uppercase tracking-wider group-hover:text-[var(--primary)] transition-colors">Home Collection</span>
+          <span className="font-poppins text-[10px]  text-[var(--base-content)] uppercase tracking-wider group-hover:text-[var(--primary)] transition-colors">Home Collection</span>
         </label>
       )}
 
@@ -550,11 +550,11 @@ const FilterPanel = memo(({ tab, filters, setFilters, specializations }) => {
         <div className="space-y-3 pt-2">
           <label className="flex items-center gap-3 cursor-pointer group">
             <input type="checkbox" checked={filters.otcOnly === "true"} onChange={(e) => setFilters((f) => ({ ...f, otcOnly: e.target.checked ? "true" : undefined }))} className="checkbox checkbox-primary checkbox-sm border-[var(--base-300)]" />
-            <span className="font-poppins text-xs font-black text-[var(--base-content)] uppercase tracking-wider group-hover:text-[var(--primary)] transition-colors">OTC only</span>
+            <span className="font-poppins text-[10px]  text-[var(--base-content)] uppercase tracking-wider group-hover:text-[var(--primary)] transition-colors">OTC only</span>
           </label>
           <label className="flex items-center gap-3 cursor-pointer group">
             <input type="checkbox" checked={filters.prescriptionRequired === "true"} onChange={(e) => setFilters((f) => ({ ...f, prescriptionRequired: e.target.checked ? "true" : undefined }))} className="checkbox checkbox-primary checkbox-sm border-[var(--base-300)]" />
-            <span className="font-poppins text-xs font-black text-[var(--base-content)] uppercase tracking-wider group-hover:text-[var(--primary)] transition-colors">Rx Required</span>
+            <span className="font-poppins text-[10px]  text-[var(--base-content)] uppercase tracking-wider group-hover:text-[var(--primary)] transition-colors">Rx Required</span>
           </label>
         </div>
       )}
@@ -591,9 +591,9 @@ const NearbyStrip = memo(({ hospitals, labs, loading }) => {
               <div className={`w-8 h-8 rounded-[var(--r-selector)] flex items-center justify-center border ${item._type === "hospital" ? "bg-[var(--info)]/10 text-[var(--info)] border-[var(--info)]/20" : "bg-[var(--success)]/10 text-[var(--success)] border-[var(--success)]/20"}`}>
                 {item._type === "hospital" ? <Building2 size={14} aria-hidden="true" /> : <TestTube size={14} aria-hidden="true" />}
               </div>
-              <span className="font-poppins text-[9px] font-black uppercase tracking-widest text-[var(--base-content)]/50">{item._type}</span>
+              <span className="font-poppins text-[9px]  uppercase tracking-widest text-[var(--base-content)]/50">{item._type}</span>
             </div>
-            <p className="font-montserrat font-black text-sm text-[var(--base-content)] group-hover:text-[var(--primary)] transition-colors line-clamp-2">{item.label}</p>
+            <p className="font-montserrat  text-xs text-[var(--base-content)] group-hover:text-[var(--primary)] transition-colors line-clamp-2">{item.label}</p>
             {item.distanceKm != null && <p className="font-poppins text-[10px] font-bold text-[var(--primary)] mt-1.5 flex items-center gap-1 bg-[var(--primary)]/10 w-fit px-2 py-0.5 rounded"><MapPin size={10} aria-hidden="true" /> {item.distanceKm.toFixed(1)} km away</p>}
           </motion.div>
         ))}
@@ -773,10 +773,10 @@ export default function SearchPage() {
 
         <div className="relative z-40 container-custom py-10 pb-6">
           <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="text-center mb-8">
-            <h1 className="font-montserrat font-black text-3xl md:text-4xl lg:text-5xl text-white mb-3 tracking-tight">
+            <h1 className="font-montserrat  text-3xl md:text-4xl lg:text-5xl text-white mb-3 tracking-tight">
               Global Healthcare <span className="text-white/80">Search</span>
             </h1>
-            <p className="font-poppins text-white/70 text-sm md:text-base font-medium">Instantly locate doctors, hospitals, diagnostic labs & medicines</p>
+            <p className="font-poppins text-white/70 text-xs md:text-base font-medium">Instantly locate doctors, hospitals, diagnostic labs & medicines</p>
           </motion.div>
 
           {/* Search bar container */}
@@ -807,7 +807,7 @@ export default function SearchPage() {
                 <Navigation size={18} />
               </button>
 
-              <button onClick={() => doSearch()} className="m-2 px-6 sm:px-8 py-0 h-[44px] rounded-[var(--r-field)] font-poppins text-xs font-black uppercase tracking-wider text-white transition-all hover:brightness-110 active:scale-95 shadow-md flex items-center justify-center shrink-0" style={{ background: "var(--primary)" }}>
+              <button onClick={() => doSearch()} className="m-2 px-6 sm:px-8 py-0 h-[44px] rounded-[var(--r-field)] font-poppins text-[10px]  uppercase tracking-wider text-white transition-all hover:brightness-110 active:scale-95 shadow-md flex items-center justify-center shrink-0" style={{ background: "var(--primary)" }}>
                 Search
               </button>
             </div>
@@ -817,7 +817,7 @@ export default function SearchPage() {
               {showDropdown && (suggestions.length > 0 || acLoading) && (
                 <motion.div variants={dropdownVariant} initial="hidden" animate="visible" exit="exit" className="absolute top-[70px] left-0 md:left-[68px] right-0 bg-[var(--base-100)] rounded-[var(--r-box)] shadow-[var(--shadow-depth-lg)] border border-[var(--base-300)] overflow-hidden max-h-[320px] overflow-y-auto scrollbar-thin z-[100]">
                   {acLoading && (
-                    <div className="flex items-center gap-2 px-5 py-4 text-xs font-bold uppercase tracking-widest text-[var(--base-content)]/50 font-poppins bg-[var(--base-200)]/50">
+                    <div className="flex items-center gap-2 px-5 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--base-content)]/50 font-poppins bg-[var(--base-200)]/50">
                       <Loader2 size={14} className="animate-spin" aria-hidden="true" /> Analyzing Database...
                     </div>
                   )}
@@ -830,7 +830,7 @@ export default function SearchPage() {
                           <Icon size={16} style={{ color: tabInfo?.color || "var(--primary)" }} aria-hidden="true" />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="font-poppins text-sm font-black text-[var(--base-content)] truncate">{s.label}</p>
+                          <p className="font-poppins text-xs  text-[var(--base-content)] truncate">{s.label}</p>
                           {s.sub && <p className="font-poppins text-[10px] font-medium text-[var(--base-content)]/50 truncate mt-0.5 uppercase tracking-wider">{s.sub}</p>}
                         </div>
                         <span className="font-poppins text-[9px] font-bold text-[var(--base-content)]/30 uppercase tracking-widest bg-[var(--base-200)] px-2 py-1 rounded-full group-hover:bg-[var(--base-100)]">{s.category}</span>
@@ -844,8 +844,8 @@ export default function SearchPage() {
 
           {/* Geo status hints */}
           <div className="h-6 mt-3">
-            {geoError && <motion.p initial={{opacity:0}} animate={{opacity:1}} className="text-center text-white/80 font-poppins text-xs font-bold flex items-center justify-center gap-1.5"><AlertCircle size={14} /> Location access denied — searching default zone</motion.p>}
-            {geo && !geoError && <motion.p initial={{opacity:0}} animate={{opacity:1}} className="text-center text-[#10b981] font-poppins text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1.5 drop-shadow-md"><CheckCircle size={14} /> GPS Location Active</motion.p>}
+            {geoError && <motion.p initial={{opacity:0}} animate={{opacity:1}} className="text-center text-white/80 font-poppins text-[10px] font-bold flex items-center justify-center gap-1.5"><AlertCircle size={14} /> Location access denied — searching default zone</motion.p>}
+            {geo && !geoError && <motion.p initial={{opacity:0}} animate={{opacity:1}} className="text-center text-[#10b981] font-poppins text-[10px]  uppercase tracking-wider flex items-center justify-center gap-1.5 drop-shadow-md"><CheckCircle size={14} /> GPS Location Active</motion.p>}
           </div>
 
           {/* Category Tabs */}
@@ -855,7 +855,7 @@ export default function SearchPage() {
               const isActive = tab === t.key;
               return (
                 <motion.button key={t.key} whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={() => { setTab(t.key); setFilters({}); }}
-                  className={`flex items-center gap-2 px-5 py-2.5 rounded-full font-poppins text-xs font-black uppercase tracking-wider transition-all duration-300 border-2
+                  className={`flex items-center gap-2 px-5 py-2.5 rounded-full font-poppins text-[10px]  uppercase tracking-wider transition-all duration-300 border-2
                     ${isActive ? "bg-white text-[var(--base-content)] border-white shadow-[0_4px_16px_rgba(0,0,0,0.2)]" : "text-white/80 border-white/20 hover:text-white hover:bg-white/10 hover:border-white/40"}`}
                 >
                   <Icon size={14} style={isActive ? { color: t.color } : {}} aria-hidden="true" />
@@ -878,12 +878,12 @@ export default function SearchPage() {
             {(nearbyLoading || nearbyHosp.length > 0 || nearbyLab.length > 0) && (
               <motion.section variants={fadeUp}>
                 <div className="flex items-center justify-between mb-5">
-                  <h2 className="font-montserrat font-black text-xl text-[var(--base-content)] flex items-center gap-2.5">
+                  <h2 className="font-montserrat  text-xl text-[var(--base-content)] flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-[var(--r-selector)] bg-[var(--primary)]/10 text-[var(--primary)] flex items-center justify-center border border-[var(--primary)]/20"><Navigation size={16} /></div>
                     {geo ? "Facilities Near You" : "Facilities in Default Zone"}
                   </h2>
                   {!geo && (
-                    <button onClick={requestGeo} className="font-poppins text-xs font-black text-[var(--primary)] uppercase tracking-wider hover:underline flex items-center gap-1.5 px-3 py-1.5 bg-[var(--primary)]/5 rounded-full">
+                    <button onClick={requestGeo} className="font-poppins text-[10px]  text-[var(--primary)] uppercase tracking-wider hover:underline flex items-center gap-1.5 px-3 py-1.5 bg-[var(--primary)]/5 rounded-full">
                       <Wifi size={12} /> Activate GPS
                     </button>
                   )}
@@ -894,7 +894,7 @@ export default function SearchPage() {
 
             {/* Trending */}
             <motion.section variants={fadeUp}>
-              <h2 className="font-montserrat font-black text-xl text-[var(--base-content)] flex items-center gap-2.5 mb-5">
+              <h2 className="font-montserrat  text-xl text-[var(--base-content)] flex items-center gap-2.5 mb-5">
                 <div className="w-8 h-8 rounded-[var(--r-selector)] bg-[var(--accent)]/10 text-[var(--accent)] flex items-center justify-center border border-[var(--accent)]/20"><TrendingUp size={16} /></div>
                 Trending Searches
               </h2>
@@ -921,7 +921,7 @@ export default function SearchPage() {
               {/* Specializations */}
               {specs.length > 0 && (
                 <motion.section variants={fadeUp}>
-                  <h2 className="font-montserrat font-black text-xl text-[var(--base-content)] flex items-center gap-2.5 mb-5">
+                  <h2 className="font-montserrat  text-xl text-[var(--base-content)] flex items-center gap-2.5 mb-5">
                     <div className="w-8 h-8 rounded-[var(--r-selector)] bg-[var(--info)]/10 text-[var(--info)] flex items-center justify-center border border-[var(--info)]/20"><Stethoscope size={16} /></div>
                     Browse Specialists
                   </h2>
@@ -943,18 +943,18 @@ export default function SearchPage() {
               {recent.length > 0 && (
                 <motion.section variants={fadeUp}>
                   <div className="flex items-center justify-between mb-5">
-                    <h2 className="font-montserrat font-black text-xl text-[var(--base-content)] flex items-center gap-2.5">
+                    <h2 className="font-montserrat  text-xl text-[var(--base-content)] flex items-center gap-2.5">
                       <div className="w-8 h-8 rounded-[var(--r-selector)] bg-[var(--success)]/10 text-[var(--success)] flex items-center justify-center border border-[var(--success)]/20"><Clock size={16} /></div>
                       Recent History
                     </h2>
-                    <button onClick={() => dispatch(clearRecentSearches())} disabled={recentLoading} className="font-poppins text-[10px] font-black uppercase tracking-widest text-[var(--error)] hover:underline flex items-center gap-1.5 px-3 py-1.5 bg-[var(--error)]/5 rounded-full transition-colors">
+                    <button onClick={() => dispatch(clearRecentSearches())} disabled={recentLoading} className="font-poppins text-[10px]  uppercase tracking-widest text-[var(--error)] hover:underline flex items-center gap-1.5 px-3 py-1.5 bg-[var(--error)]/5 rounded-full transition-colors">
                       <Trash2 size={12} aria-hidden="true" /> Clear all
                     </button>
                   </div>
                   <div className="flex flex-wrap gap-3">
                     {recent.map((r, i) => (
                       <motion.div key={i} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }} className="flex items-center gap-2 bg-[var(--base-100)] border border-[var(--base-300)] rounded-full pl-4 pr-1 py-1 shadow-sm hover:border-[var(--primary)] transition-colors group">
-                        <button onClick={() => handleQuickSearch(r.query, r.category)} className="font-poppins text-xs font-bold text-[var(--base-content)]/80 group-hover:text-[var(--primary)] transition-colors flex items-center gap-2">
+                        <button onClick={() => handleQuickSearch(r.query, r.category)} className="font-poppins text-[10px] font-bold text-[var(--base-content)]/80 group-hover:text-[var(--primary)] transition-colors flex items-center gap-2">
                           <Clock size={12} className="text-[var(--base-content)]/30" aria-hidden="true" />
                           {r.query}
                           <span className="text-[9px] uppercase tracking-widest bg-[var(--base-200)] px-1.5 py-0.5 rounded text-[var(--base-content)]/40 ml-1">{r.category}</span>
@@ -991,25 +991,25 @@ export default function SearchPage() {
               {/* Results header / Toolbar */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-4 bg-[var(--base-100)] border border-[var(--base-300)] p-4 rounded-[var(--r-box)] shadow-sm">
                 <div>
-                  <h2 className="font-montserrat font-black text-xl text-[var(--base-content)] tracking-tight">
+                  <h2 className="font-montserrat  text-xl text-[var(--base-content)] tracking-tight">
                     {tab === "all" ? "Global Search Results" : `${TABS.find((t) => t.key === tab)?.label} Directory`}
                   </h2>
                   <div className="flex items-center gap-2 mt-1">
-                    {inputValue && <span className="font-poppins text-xs font-bold text-[var(--base-content)]/50 uppercase tracking-widest bg-[var(--base-200)] px-2 py-0.5 rounded">"{inputValue}"</span>}
-                    {tab !== "all" && current?.pagination?.total != null && <span className="font-poppins text-xs font-bold text-[var(--primary)] uppercase tracking-widest px-2 py-0.5 rounded bg-[var(--primary)]/10">{current.pagination.total} Matches</span>}
+                    {inputValue && <span className="font-poppins text-[10px] font-bold text-[var(--base-content)]/50 uppercase tracking-widest bg-[var(--base-200)] px-2 py-0.5 rounded">"{inputValue}"</span>}
+                    {tab !== "all" && current?.pagination?.total != null && <span className="font-poppins text-[10px] font-bold text-[var(--primary)] uppercase tracking-widest px-2 py-0.5 rounded bg-[var(--primary)]/10">{current.pagination.total} Matches</span>}
                   </div>
                 </div>
 
                 <div className="flex items-center gap-3">
                   {/* Mobile filter toggle */}
                   {tab !== "all" && (
-                    <button onClick={() => setShowFilters((v) => !v)} className="lg:hidden btn-secondary text-xs px-4 py-2 font-poppins uppercase tracking-wider flex items-center gap-2">
+                    <button onClick={() => setShowFilters((v) => !v)} className="lg:hidden btn-secondary text-[10px] px-4 py-2 font-poppins uppercase tracking-wider flex items-center gap-2">
                       <Filter size={14} aria-hidden="true" /> Filters
                     </button>
                   )}
                   {/* Loading indicator */}
                   {(currentLoading || anyLoading) && (
-                    <div className="flex items-center gap-2 font-poppins text-xs font-black uppercase tracking-widest text-[var(--base-content)]/50 bg-[var(--base-200)] px-4 py-2 rounded-[var(--r-field)]">
+                    <div className="flex items-center gap-2 font-poppins text-[10px]  uppercase tracking-widest text-[var(--base-content)]/50 bg-[var(--base-200)] px-4 py-2 rounded-[var(--r-field)]">
                       <Loader2 size={14} className="animate-spin text-[var(--primary)]" aria-hidden="true" /> Scanning...
                     </div>
                   )}
@@ -1029,7 +1029,7 @@ export default function SearchPage() {
               {currentLoading && (
                 <div className="py-20 flex flex-col items-center">
                   <PulseRadar />
-                  <p className="font-poppins text-sm font-bold text-[var(--base-content)]/50 uppercase tracking-widest mt-4">Running Deep Scan</p>
+                  <p className="font-poppins text-xs font-bold text-[var(--base-content)]/50 uppercase tracking-widest mt-4">Running Deep Scan</p>
                 </div>
               )}
 

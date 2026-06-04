@@ -66,6 +66,7 @@ import {
   selectTrialConvertLoading,
   selectTrialVerifyConvertLoading,
 } from "@/store/slices/subscriptionSlice";
+import BackButton from "../../components/BackButton";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  PLAN DESIGN TOKENS
@@ -1173,6 +1174,7 @@ export default function SubscriptionPage() {
   return (
     <div className="min-h-screen" style={{ background: "var(--base-100)" }}>
       <div className="max-w-5xl mx-auto px-4 py-10 space-y-12">
+      <BackButton />
 
         {/* ── HERO ─────────────────────────────────────────────────────────── */}
         <motion.div initial={{ opacity: 0, y: -24 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.55 }}>

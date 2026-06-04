@@ -25,6 +25,7 @@ import {
   selectLoaders,
   selectWalletBalance,
 } from '@/store/slices/userSlice';
+import BackButton from "../../components/BackButton";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const COINS_PER_RUPEE = 100;
@@ -837,8 +838,8 @@ export default function MyReferral() {
         <ParticleField />
 
         {/* ── Hero Content ── */}
+          <BackButton className="m-3" />
         <div className="relative z-10 container-custom pt-10 pb-10">
-
           {/* Programme label */}
           <motion.div
             initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }}

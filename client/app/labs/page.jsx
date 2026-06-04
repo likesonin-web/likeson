@@ -26,6 +26,7 @@ import {
 } from "@/store/slices/labSlice";
 import Banner from "../../components/Banner";
 import Container from "../../components/ui/Container";
+import BackButton from "../../components/BackButton";
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -433,7 +434,7 @@ export default function LabsPage() {
         <Banner position="Lab_Page" />
 
         {/* ═══ HERO ══════════════════════════════════════════════════════ */}
-        <div className="relative mb-12 rounded-[var(--r-box)] mt-4 overflow-hidden border border-[var(--primary)]/15 bg-gradient-to-br from-[color-mix(in_srgb,var(--primary)_8%,var(--base-100))] via-[var(--base-100)] to-[color-mix(in_srgb,var(--secondary)_8%,var(--base-100))]">
+        <div className="relative mb-12 rounded-[var(--r-box)] mt-4   border border-[var(--primary)]/15 bg-gradient-to-br from-[color-mix(in_srgb,var(--primary)_8%,var(--base-100))] via-[var(--base-100)] to-[color-mix(in_srgb,var(--secondary)_8%,var(--base-100))]">
           
           {/* Background pattern */}
           <div className="absolute inset-0 pointer-events-none opacity-[0.03]"
@@ -444,9 +445,9 @@ export default function LabsPage() {
             aria-hidden="true"
           />
 
+              <BackButton className=" m-3"/>
           <motion.div style={{ y: heroParallax }} className="relative z-10 px-6 py-12 lg:py-20">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 items-center max-w-6xl mx-auto">
-              
               {/* Left Content */}
               <motion.div
                 initial={{ opacity: 0, x: -30 }}

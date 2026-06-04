@@ -53,6 +53,8 @@ import {
   selectIsActionLoading,
   selectLabError,
 } from '@/store/slices/labPartnerBookingSlice';
+import BackButton from '@/components/BackButton';
+import Container from '@/components/ui/Container';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -372,9 +374,12 @@ export default function ReportsArchive() {
 
   return (
     <div className="space-y-4">
-
+      <Container>
+          <BackButton className='m-3'  />
+          {/* ── Header ── */}
       {/* ── Charts ── */}
       <ReportsCharts reports={reports} />
+
 
       {/* ── Filter bar ── */}
       <div className="card p-4">
@@ -451,7 +456,7 @@ export default function ReportsArchive() {
       </AnimatePresence>
 
       {/* ── Table ── */}
-      <div className="card overflow-hidden">
+      <div className="card mt-3 overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50">
           <p className="text-[10px] text-base-content/50 font-semibold">
             {pagination?.total ?? 0} reports total
@@ -555,7 +560,7 @@ export default function ReportsArchive() {
           />
         )}
       </AnimatePresence>
-
+</Container>
     </div>
   );
 }

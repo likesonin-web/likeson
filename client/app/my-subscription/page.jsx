@@ -40,6 +40,7 @@ import {
   selectTrialConvertLoading,
   selectTrialVerifyConvertLoading,
 } from "@/store/slices/subscriptionSlice";
+import BackButton from "../../components/BackButton";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DESIGN THEME MAPPER
@@ -795,8 +796,8 @@ export default function MySubscriptionPage() {
   return (
     <>
       <div className="min-h-screen bg-base-100 font-sans antialiased text-base-content selection:bg-primary/10">
-        <div className="max-w-4xl mx-auto px-4 py-12 space-y-8">
-
+        <div className="max-w-4xl mx-auto px-4 pb-12 pt-3 space-y-8">
+          <BackButton className=" "  />
           {/* Page header */}
           <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-base-300 pb-6">
             <div className="space-y-1">

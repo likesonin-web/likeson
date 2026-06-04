@@ -1,15 +1,16 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef, memo } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
+import Link from "next/link";
 import {
   Search, Filter, LayoutGrid, List, Star, ArrowUpRight,
   ShieldCheck, Bed, Stethoscope, Zap, Phone, MapPin, X,
-  Info, Activity, Navigation, Loader2, Building2, ChevronRight,
+  Info, Navigation, Loader2, Building2
 } from "lucide-react";
-import Link from "next/link";
+
 import {
   fetchAllHospitals, fetchNearbyHospitals,
   selectHospitals, selectNearbyHospitals,
@@ -17,34 +18,10 @@ import {
 } from "@/store/slices/hospitalSlice";
 import Container from "../../components/ui/Container";
 import Banner from "../../components/Banner";
+import BackButton from "../../components/BackButton";
 
 const GOOGLE_MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
 const MotionImage = motion(Image);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DESIGN TOKENS — all CSS vars, zero hardcoded colors
-// Hospital theme: navy (h 245) per global.css [data-theme="hospital"]
-// ─────────────────────────────────────────────────────────────────────────────
-const T = {
-  accent:        'var(--primary)',
-  accentContent: 'var(--primary-content)',
-  secondary:     'var(--secondary)',
-  base100:       'var(--base-100)',
-  base200:       'var(--base-200)',
-  base300:       'var(--base-300)',
-  baseContent:   'var(--base-content)',
-  success:       'var(--success)',
-  error:         'var(--error)',
-  warning:       'var(--warning)',
-
-  accentBg:     'color-mix(in srgb, var(--primary) 8%,  transparent)',
-  accentBgMid:  'color-mix(in srgb, var(--primary) 14%, transparent)',
-  accentBorder: 'color-mix(in srgb, var(--primary) 25%, transparent)',
-  accentShadow: 'color-mix(in srgb, var(--primary) 28%, transparent)',
-  accentGrad:   'linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%)',
-  errorBg:      'color-mix(in srgb, var(--error)   10%, transparent)',
-  successBg:    'color-mix(in srgb, var(--success) 10%, transparent)',
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -52,7 +29,7 @@ const T = {
 async function geocodeAddress(address) {
   if (!GOOGLE_MAPS_KEY) return null;
   try {
-    const res  = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${GOOGLE_MAPS_KEY}`);
+    const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${GOOGLE_MAPS_KEY}`);
     const data = await res.json();
     if (data.status === "OK" && data.results?.[0]) {
       const { lat, lng } = data.results[0].geometry.location;
@@ -65,13 +42,13 @@ async function geocodeAddress(address) {
 async function fetchPlaceSuggestions(input) {
   if (!GOOGLE_MAPS_KEY || input.trim().length < 2) return [];
   try {
-    const res  = await fetch(`https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&key=${GOOGLE_MAPS_KEY}&components=country:in&types=(regions)`);
+    const res = await fetch(`https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&key=${GOOGLE_MAPS_KEY}&components=country:in&types=(regions)`);
     const data = await res.json();
     if (data.status === "OK" && data.predictions?.length) {
       return data.predictions.map((p) => ({
-        placeId:       p.place_id,
-        description:   p.description,
-        mainText:      p.structured_formatting?.main_text      || p.description,
+        placeId: p.place_id,
+        description: p.description,
+        mainText: p.structured_formatting?.main_text || p.description,
         secondaryText: p.structured_formatting?.secondary_text || "",
       }));
     }
@@ -91,37 +68,14 @@ const HospitalCard = ({ hospital, viewMode }) => {
       layout
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      className="group relative rounded-2xl overflow-hidden flex"
-      style={{
-        flexDirection:  isListMode ? undefined : 'column',
-        background:     T.base100,
-        border:         `1px solid var(--base-300)`,
-        boxShadow:      '0 1px 8px rgba(0,0,0,0.04)',
-        transition:     'box-shadow 0.25s, border-color 0.25s',
-        minHeight:      isListMode ? 220 : 'auto',
-      }}
-      whileHover={{
-        y: -3,
-        boxShadow: `0 16px 40px ${T.accentShadow}`,
-        borderColor: T.accent,
-      }}
+      className={`group relative overflow-hidden card hover-glow-primary ${
+        isListMode ? "flex-row min-h-[220px]" : "flex-col"
+      } flex`}
+      whileHover={{ y: -3 }}
     >
-      {/* Top accent bar on hover */}
-      <div
-        className="absolute top-0 left-0 right-0 h-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10"
-        style={{ background: T.accentGrad }}
-        aria-hidden="true"
-      />
-
+     
       {/* ── IMAGE ─────────────────────────────────────────────────────── */}
-      <div
-        className="relative overflow-hidden flex-shrink-0"
-        style={{
-          width:  isListMode ? 240 : '100%',
-          height: isListMode ? '100%' : 200,
-          minHeight: isListMode ? 220 : 200,
-        }}
-      >
+      <div className={`relative overflow-hidden flex-shrink-0 ${isListMode ? "w-60 h-full min-h-[220px]" : "w-full h-52"}`}>
         <MotionImage
           animate={{ scale: hovered ? 1.06 : 1 }}
           transition={{ duration: 0.7, ease: "easeOut" }}
@@ -132,54 +86,32 @@ const HospitalCard = ({ hospital, viewMode }) => {
           className="object-cover"
         />
         {/* Gradient overlay */}
-        <div
-          className="absolute inset-0"
-          style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.45) 0%, transparent 60%)' }}
-          aria-hidden="true"
-        />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" aria-hidden="true" />
 
         {/* Verified badge */}
         {hospital.isVerified && (
-          <div
-            className="absolute top-3 left-3 w-8 h-8 rounded-xl flex items-center justify-center shadow-lg"
-            style={{ background: 'var(--success)', color: 'var(--success-content)' }}
-            aria-label="Verified hospital"
-          >
+          <div className="absolute top-3 left-3 flex items-center justify-center w-8 h-8 rounded-xl shadow-lg bg-success text-success-content" aria-label="Verified hospital">
             <ShieldCheck size={16} />
           </div>
         )}
 
         {/* Rating + distance — float top right */}
         <div className="absolute top-3 right-3 flex flex-col gap-1.5 items-end">
-          <div
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl backdrop-blur-md text-[11px] font-black"
-            style={{
-              background: 'color-mix(in srgb, var(--base-100) 90%, transparent)',
-              border: '1px solid var(--base-300)',
-              color: 'var(--base-content)',
-            }}
-          >
-            <Star size={11} style={{ fill: 'var(--warning)', color: 'var(--warning)' }} aria-hidden="true" />
+          <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl backdrop-blur-strong bg-base-100/90 border border-base-300 text-[10px] font-black text-base-content">
+            <Star size={12} className="fill-warning text-warning" aria-hidden="true" />
             {hospital.rating?.averageRating?.toFixed(1) || "0.0"}
           </div>
           {hospital.distance && (
-            <div
-              className="flex items-center gap-1 px-2 py-1 rounded-xl text-[10px] font-black"
-              style={{ background: T.accentBg, color: T.accent, border: `1px solid ${T.accentBorder}` }}
-            >
-              <MapPin size={9} aria-hidden="true" /> {hospital.distance}
+            <div className="badge badge-primary shadow-sm text-[10px]">
+              <MapPin size={10} aria-hidden="true" className="mr-1" /> {hospital.distance}
             </div>
           )}
         </div>
 
         {/* ER badge — bottom of image */}
         {hospital.isEmergencyReady && (
-          <div
-            className="absolute bottom-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[9px] font-black uppercase tracking-widest"
-            style={{ background: T.errorBg, color: 'var(--error)', border: `1px solid color-mix(in srgb, var(--error) 30%, transparent)` }}
-            aria-label="Emergency ready 24/7"
-          >
-            <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: 'var(--error)' }} aria-hidden="true" />
+          <div className="absolute bottom-3 left-3 badge badge-error shadow-sm text-[10px]" aria-label="Emergency ready 24/7">
+            <span className="status-dot status-dot-error bg-error-content animate-pulse mr-1" aria-hidden="true" />
             ER 24/7
           </div>
         )}
@@ -189,17 +121,14 @@ const HospitalCard = ({ hospital, viewMode }) => {
       <div className="flex flex-col flex-1 p-5">
         {/* Location tag */}
         <div className="flex items-center gap-1.5 mb-2">
-          <MapPin size={10} style={{ color: T.accent, opacity: 0.7 }} aria-hidden="true" />
-          <span className="text-[10px] font-black uppercase tracking-widest opacity-50">
+          <MapPin size={12} className="text-primary text-opacity-70" aria-hidden="true" />
+          <span className="text-[10px] font-black uppercase tracking-widest text-base-content/50">
             {hospital.address?.city || "Vijayawada"}
           </span>
           {hospital.hospitalType && (
             <>
-              <span className="opacity-20 text-[10px]">·</span>
-              <span
-                className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full"
-                style={{ background: T.accentBg, color: T.accent }}
-              >
+              <span className="text-base-content/20 text-[10px]">·</span>
+              <span className="badge badge-accent badge-xs border-none">
                 {hospital.hospitalType}
               </span>
             </>
@@ -207,53 +136,37 @@ const HospitalCard = ({ hospital, viewMode }) => {
         </div>
 
         {/* Name */}
-        <h3
-          className="font-black text-[16px] leading-tight mb-3 tracking-tight group-hover:opacity-80 transition-opacity"
-          style={{ color: 'var(--base-content)' }}
-        >
+        <h3 className=" text-xs font-extrabold uppercase leading-tight mb-3 tracking-tight group-hover:text-primary transition-colors text-base-content">
           {hospital.name}
         </h3>
 
         {/* Stats row */}
-        <div
-          className="grid grid-cols-3 gap-0 rounded-xl overflow-hidden mb-4"
-          style={{ border: `1px solid var(--base-300)`, background: T.accentBg }}
-        >
+        <div className="grid grid-cols-3 gap-0 rounded-xl overflow-hidden mb-4 bg-primary/5 border border-primary/20">
           {[
-            { Icon: Bed,        value: hospital.bedCount?.total || 0,         label: 'Beds'  },
-            { Icon: Stethoscope,value: hospital.specialties?.length || 0,     label: 'Depts' },
-            { Icon: Zap,        value: hospital.isEmergencyReady ? '24/7' : '–', label: 'ER', filled: hospital.isEmergencyReady },
+            { Icon: Bed, value: hospital.bedCount?.total || 0, label: 'Beds' },
+            { Icon: Stethoscope, value: hospital.specialties?.length || 0, label: 'Depts' },
+            { Icon: Zap, value: hospital.isEmergencyReady ? '24/7' : '–', label: 'ER', filled: hospital.isEmergencyReady },
           ].map(({ Icon, value, label, filled }, i) => (
             <div
               key={label}
-              className="flex flex-col items-center py-3"
-              style={{ borderRight: i < 2 ? `1px solid var(--base-300)` : 'none' }}
+              className={`flex flex-col items-center py-3 ${i < 2 ? 'border-r border-primary/20' : ''}`}
             >
               <Icon
-                size={13}
-                style={{
-                  color:        filled ? 'var(--error)' : T.accent,
-                  fill:         filled ? 'var(--error)' : 'none',
-                  marginBottom: 4,
-                  opacity:      filled === false ? 0.3 : 1,
-                }}
+                size={14}
+                className={`mb-1 ${filled ? 'text-error fill-error/20' : 'text-primary'} ${filled === false ? 'opacity-30' : ''}`}
                 aria-hidden="true"
               />
-              <span className="text-[13px] font-black leading-none" style={{ color: T.accent }}>{value}</span>
-              <span className="text-[8px] font-black uppercase tracking-widest mt-0.5 opacity-40">{label}</span>
+              <span className="text-xs font-black leading-none text-primary">{value}</span>
+              <span className="text-[9px] font-black uppercase tracking-widest mt-1 text-primary/50">{label}</span>
             </div>
           ))}
         </div>
 
         {/* Accreditations */}
         {hospital.accreditations?.length > 0 && (
-          <div className="flex flex-wrap gap-1 mb-4">
+          <div className="flex flex-wrap gap-1.5 mb-4">
             {hospital.accreditations.slice(0, 3).map(acc => (
-              <span
-                key={acc}
-                className="text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full"
-                style={{ background: T.accentBg, color: T.accent, border: `1px solid ${T.accentBorder}` }}
-              >
+              <span key={acc} className="badge badge-primary badge-sm bg-transparent border-primary/30">
                 {acc}
               </span>
             ))}
@@ -264,27 +177,17 @@ const HospitalCard = ({ hospital, viewMode }) => {
         <div className="flex items-center gap-2 mt-auto">
           <Link
             href={`/hospitals/${hospital.slug}`}
-            className="flex-1 h-10 rounded-xl font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-1.5 transition-all"
-            style={{
-              background: T.accentGrad,
-              color:      'var(--primary-content)',
-              boxShadow:  `0 4px 14px ${T.accentShadow}`,
-            }}
+            className="btn btn-primary-cta flex-1 h-10 px-0 flex items-center justify-center gap-1.5"
             aria-label={`Visit ${hospital.name} portal`}
           >
-            View Hospital <ArrowUpRight size={13} aria-hidden="true" />
+            View Hospital <ArrowUpRight size={14} aria-hidden="true" />
           </Link>
 
           {hospital.contact?.phone && (
             <a
               href={`tel:${hospital.contact.phone}`}
               aria-label={`Call ${hospital.name}`}
-              className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 border transition-all hover:opacity-80"
-              style={{
-                border:     `1px solid var(--base-300)`,
-                background: 'var(--base-200)',
-                color:      'var(--base-content)',
-              }}
+              className="btn btn-circle btn-outline border-base-300 text-base-content hover:bg-base-200"
             >
               <Phone size={16} aria-hidden="true" />
             </a>
@@ -293,14 +196,9 @@ const HospitalCard = ({ hospital, viewMode }) => {
           <Link
             href={`/hospitals/${hospital.slug}`}
             aria-label={`More info about ${hospital.name}`}
-            className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 border transition-all hover:opacity-80"
-            style={{
-              border:     `1px solid ${T.accentBorder}`,
-              background: T.accentBg,
-              color:      T.accent,
-            }}
+            className="btn btn-circle bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 transition-colors"
           >
-            <Info size={15} aria-hidden="true" />
+            <Info size={16} aria-hidden="true" />
           </Link>
         </div>
       </div>
@@ -312,25 +210,12 @@ const HospitalCard = ({ hospital, viewMode }) => {
 // SKELETON CARD
 // ─────────────────────────────────────────────────────────────────────────────
 const SkeletonCard = ({ viewMode }) => (
-  <div
-    className="rounded-2xl overflow-hidden flex"
-    style={{
-      flexDirection: viewMode === 'list' ? undefined : 'column',
-      border: '1px solid var(--base-300)',
-      background: 'var(--base-100)',
-    }}
-  >
-    <div
-      className="skeleton flex-shrink-0"
-      style={{
-        width:  viewMode === 'list' ? 240 : '100%',
-        height: viewMode === 'list' ? 220 : 200,
-      }}
-    />
+  <div className={`card flex ${viewMode === 'list' ? 'flex-row min-h-[220px]' : 'flex-col'}`}>
+    <div className={`skeleton flex-shrink-0 rounded-none ${viewMode === 'list' ? 'w-60 h-full' : 'w-full h-52'}`} />
     <div className="p-5 flex flex-col gap-3 flex-1">
       <div className="h-3 w-1/3 rounded-lg skeleton" />
       <div className="h-5 w-3/4 rounded-lg skeleton" />
-      <div className="h-14 rounded-xl skeleton" />
+      <div className="h-16 rounded-xl skeleton" />
       <div className="h-10 rounded-xl skeleton mt-auto" />
     </div>
   </div>
@@ -343,25 +228,23 @@ const FilterSidebar = ({ activeFilter, setActiveFilter, erOnly, setErOnly, onClo
   const categories = ["All", "Multi-Specialty", "Super-Specialty", "Clinic", "Nursing Home", "Government"];
 
   return (
-    <div className="space-y-6 w-56">
+    <div className="space-y-6 w-full lg:w-56">
       <div>
-        <p className="text-[10px] font-black uppercase tracking-[0.3em] opacity-40 mb-4 flex items-center gap-2">
+        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-base-content/40 mb-4 flex items-center gap-2">
           <Filter size={12} aria-hidden="true" /> Hospital Type
         </p>
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1.5">
           {categories.map((cat) => {
             const active = activeFilter === cat;
             return (
               <button
                 key={cat}
                 onClick={() => { setActiveFilter(cat); onClose?.(); }}
-                className="text-left px-3 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-wide transition-all"
-                style={{
-                  background:  active ? T.accentGrad  : 'transparent',
-                  color:       active ? 'var(--primary-content)' : 'var(--base-content)',
-                  opacity:     active ? 1 : 0.6,
-                  boxShadow:   active ? `0 4px 12px ${T.accentShadow}` : 'none',
-                }}
+                className={`text-left px-4 py-2.5 rounded-xl text-[10px] font-bold transition-all duration-200 ${
+                  active 
+                    ? "bg-primary text-primary-content shadow-primary scale-[1.02]" 
+                    : "text-base-content/70 hover:bg-base-200 hover:text-base-content"
+                }`}
                 aria-pressed={active}
               >
                 {cat}
@@ -372,35 +255,16 @@ const FilterSidebar = ({ activeFilter, setActiveFilter, erOnly, setErOnly, onClo
       </div>
 
       {/* Emergency filter */}
-      <div
-        className="p-4 rounded-xl"
-        style={{ border: `1px solid var(--base-300)`, background: 'var(--base-200)' }}
-      >
-        <p className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-3">Priority</p>
-        <label className="flex items-center gap-3 cursor-pointer group">
-          <div
-            className="w-5 h-5 rounded-lg flex items-center justify-center border-2 transition-all flex-shrink-0"
-            style={{
-              borderColor: erOnly ? T.accent : 'var(--base-300)',
-              background:  erOnly ? T.accentBgMid : 'transparent',
-            }}
-            onClick={() => setErOnly(p => !p)}
-            role="checkbox"
-            aria-checked={erOnly}
-            tabIndex={0}
-          >
-            {erOnly && (
-              <div
-                className="w-2.5 h-2.5 rounded-sm"
-                style={{ background: T.accent }}
-                aria-hidden="true"
-              />
-            )}
-          </div>
-          <span
-            className="text-[11px] font-black uppercase tracking-wide transition-colors"
-            style={{ color: erOnly ? T.accent : 'var(--base-content)', opacity: erOnly ? 1 : 0.7 }}
-          >
+      <div className="p-4 rounded-xl border border-base-300 bg-base-200">
+        <p className="text-[10px] font-black uppercase tracking-widest text-base-content/40 mb-3">Priority</p>
+        <label className="flex items-center gap-3 cursor-pointer group label p-0">
+          <input 
+            type="checkbox" 
+            className="checkbox checkbox-error checkbox-sm"
+            checked={erOnly}
+            onChange={() => setErOnly(p => !p)}
+          />
+          <span className={`text-[10px] font-bold transition-colors ${erOnly ? 'text-error' : 'text-base-content/70 group-hover:text-base-content'}`}>
             Emergency Ready Only
           </span>
         </label>
@@ -413,13 +277,13 @@ const FilterSidebar = ({ activeFilter, setActiveFilter, erOnly, setErOnly, onClo
 // LOCATION INPUT WITH AUTOCOMPLETE
 // ─────────────────────────────────────────────────────────────────────────────
 const LocationInput = ({ onSelect, onClear, hasValue }) => {
-  const [inputVal,    setInputVal]    = useState("");
+  const [inputVal, setInputVal] = useState("");
   const [suggestions, setSuggestions] = useState([]);
-  const [showDrop,    setShowDrop]    = useState(false);
-  const [loading,     setLoading]     = useState(false);
-  const [activeIdx,   setActiveIdx]   = useState(-1);
+  const [showDrop, setShowDrop] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(-1);
   const debounceRef = useRef(null);
-  const wrapperRef  = useRef(null);
+  const wrapperRef = useRef(null);
 
   const handleChange = (e) => {
     const val = e.target.value;
@@ -449,7 +313,7 @@ const LocationInput = ({ onSelect, onClear, hasValue }) => {
       return;
     }
     if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx(i => Math.min(i + 1, suggestions.length - 1)); }
-    else if (e.key === "ArrowUp")  { e.preventDefault(); setActiveIdx(i => Math.max(i - 1, -1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx(i => Math.max(i - 1, -1)); }
     else if (e.key === "Enter") {
       e.preventDefault();
       if (activeIdx >= 0 && suggestions[activeIdx]) handleSelect(suggestions[activeIdx]);
@@ -465,15 +329,8 @@ const LocationInput = ({ onSelect, onClear, hasValue }) => {
 
   return (
     <div ref={wrapperRef} className="relative flex-1 min-w-[200px] max-w-sm">
-      <div
-        className="flex items-center gap-2 h-10 px-4 rounded-xl border transition-colors"
-        style={{
-          background:  'var(--base-100)',
-          border:      `1px solid var(--base-300)`,
-          outline:     'none',
-        }}
-      >
-        <MapPin size={13} style={{ color: T.accent, opacity: 0.6, flexShrink: 0 }} aria-hidden="true" />
+      <div className="flex items-center gap-2 h-11 px-4 rounded-xl border border-base-300 bg-base-100 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20 transition-all">
+        <MapPin size={14} className="text-primary text-opacity-60 flex-shrink-0" aria-hidden="true" />
         <input
           type="text"
           value={inputVal}
@@ -483,18 +340,16 @@ const LocationInput = ({ onSelect, onClear, hasValue }) => {
           placeholder="City, area or landmark…"
           aria-label="Search by location"
           autoComplete="off"
-          className="flex-1 bg-transparent text-[12px] font-bold outline-none"
-          style={{ color: 'var(--base-content)', fontFamily: 'var(--font-family-poppins)' }}
+          className="flex-1 bg-transparent text-xs font-semibold outline-none text-base-content placeholder-base-content/40 w-full"
         />
-        {loading && <Loader2 size={12} className="animate-spin flex-shrink-0" style={{ color: T.accent }} aria-hidden="true" />}
+        {loading && <Loader2 size={14} className="animate-spin flex-shrink-0 text-primary" aria-hidden="true" />}
         {(inputVal || hasValue) && !loading && (
           <button
             onClick={() => { setInputVal(""); setSuggestions([]); setShowDrop(false); onClear(); }}
             aria-label="Clear location"
-            className="flex-shrink-0 transition-opacity hover:opacity-60"
-            style={{ color: 'var(--base-content)', opacity: 0.4 }}
+            className="flex-shrink-0 text-base-content/40 hover:text-base-content transition-colors"
           >
-            <X size={12} />
+            <X size={14} />
           </button>
         )}
       </div>
@@ -508,8 +363,7 @@ const LocationInput = ({ onSelect, onClear, hasValue }) => {
             transition={{ duration: 0.14 }}
             role="listbox"
             aria-label="Location suggestions"
-            className="absolute top-[calc(100%+6px)] left-0 right-0 z-[200] rounded-2xl shadow-2xl overflow-hidden"
-            style={{ background: 'var(--base-100)', border: '1px solid var(--base-300)' }}
+            className="absolute top-[calc(100%+8px)] left-0 right-0 z-[200] rounded-2xl shadow-lg bg-base-100 border border-base-300 overflow-hidden"
           >
             {suggestions.map((s, idx) => (
               <button
@@ -517,17 +371,15 @@ const LocationInput = ({ onSelect, onClear, hasValue }) => {
                 role="option"
                 aria-selected={activeIdx === idx}
                 onMouseDown={(e) => { e.preventDefault(); handleSelect(s); }}
-                className="w-full text-left px-4 py-3 flex items-start gap-3 transition-colors border-b last:border-0"
-                style={{
-                  background:  activeIdx === idx ? T.accentBg : 'transparent',
-                  borderColor: 'var(--base-300)',
-                }}
+                className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-colors border-b border-base-300 last:border-0 ${
+                  activeIdx === idx ? 'bg-primary/10' : 'hover:bg-base-200'
+                }`}
               >
-                <MapPin size={13} style={{ color: T.accent, marginTop: 2, flexShrink: 0 }} aria-hidden="true" />
+                <MapPin size={14} className="text-primary mt-1 flex-shrink-0" aria-hidden="true" />
                 <div className="min-w-0">
-                  <p className="text-[12px] font-black truncate" style={{ color: 'var(--base-content)' }}>{s.mainText}</p>
+                  <p className="text-xs font-bold text-base-content truncate">{s.mainText}</p>
                   {s.secondaryText && (
-                    <p className="text-[10px] truncate mt-0.5" style={{ color: 'var(--base-content)', opacity: 0.4 }}>{s.secondaryText}</p>
+                    <p className="text-[10px] text-base-content/50 truncate mt-0.5">{s.secondaryText}</p>
                   )}
                 </div>
               </button>
@@ -545,10 +397,7 @@ const LocationInput = ({ onSelect, onClear, hasValue }) => {
 const LocationBar = ({ mode, manualAddress, locationLabel, onUseGPS, onManualSearch, onClear, gpsLoading, gpsError }) => {
   const isActive = mode === "user" || mode === "nearby";
   return (
-    <div
-      className="flex flex-wrap items-center gap-3 py-4 mb-6 border-b"
-      style={{ borderColor: 'var(--base-300)' }}
-    >
+    <div className="flex flex-wrap items-center gap-3 py-4 mb-6 border-b border-base-300">
       {/* GPS button */}
       <motion.button
         whileHover={{ scale: 1.02 }}
@@ -556,17 +405,13 @@ const LocationBar = ({ mode, manualAddress, locationLabel, onUseGPS, onManualSea
         onClick={onUseGPS}
         disabled={gpsLoading || mode === "user"}
         aria-label={isActive ? "Location active" : "Use my current location"}
-        className="flex items-center gap-2 h-10 px-4 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all disabled:opacity-60"
-        style={{
-          background:  isActive ? T.accentGrad  : 'var(--base-200)',
-          color:       isActive ? 'var(--primary-content)' : 'var(--base-content)',
-          border:      isActive ? 'none' : `1px solid var(--base-300)`,
-          boxShadow:   isActive ? `0 4px 14px ${T.accentShadow}` : 'none',
-        }}
+        className={`btn h-11 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-60 ${
+          isActive ? 'btn-primary shadow-primary' : 'bg-base-200 border-base-300 text-base-content hover:bg-base-300'
+        }`}
       >
         {gpsLoading
-          ? <Loader2 size={14} className="animate-spin" aria-hidden="true" />
-          : <Navigation size={14} aria-hidden="true" />
+          ? <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+          : <Navigation size={16} aria-hidden="true" />
         }
         {mode === "user" ? "Location Active ✓" : mode === "nearby" ? "Near Me ✓" : "Use My Location"}
       </motion.button>
@@ -575,20 +420,16 @@ const LocationBar = ({ mode, manualAddress, locationLabel, onUseGPS, onManualSea
       <LocationInput onSelect={onManualSearch} onClear={onClear} hasValue={mode === "manual" || mode === "manual-near"} />
 
       {/* Status */}
-      <span
-        className="text-[10px] font-black uppercase tracking-wider opacity-40"
-        aria-live="polite"
-        style={{ color: 'var(--base-content)' }}
-      >
-        {mode === "user"         ? `📍 ${locationLabel || "Saved location"} · 100 km`
-        : mode === "nearby"      ? "📍 Current location · 100 km"
+      <span className="text-[10px] font-bold text-base-content/50 ml-auto" aria-live="polite">
+        {mode === "user" ? `📍 ${locationLabel || "Saved location"} · 100 km`
+        : mode === "nearby" ? "📍 Current location · 100 km"
         : mode === "manual-near" ? `🔍 Near "${manualAddress}" · 100 km`
-        : mode === "manual"      ? `🔍 "${manualAddress}"`
+        : mode === "manual" ? `🔍 "${manualAddress}"`
         : "All hospitals"}
       </span>
 
       {gpsError && (
-        <span className="text-[10px] font-black" style={{ color: 'var(--error)' }} role="alert">
+        <span className="text-[10px] font-bold text-error w-full mt-2" role="alert">
           {gpsError}
         </span>
       )}
@@ -601,31 +442,25 @@ const LocationBar = ({ mode, manualAddress, locationLabel, onUseGPS, onManualSea
 // ─────────────────────────────────────────────────────────────────────────────
 const TrustBar = memo(function TrustBar() {
   const stats = [
-    { label: 'Verified Hospitals', value: '200+',  icon: ShieldCheck },
-    { label: 'Cities Covered',     value: '15+',   icon: MapPin      },
-    { label: 'Total Beds',         value: '5000+', icon: Bed         },
-    { label: 'Avg Rating',         value: '4.7★',  icon: Star        },
+    { label: 'Verified Hospitals', value: '200+', icon: ShieldCheck },
+    { label: 'Cities Covered', value: '15+', icon: MapPin },
+    { label: 'Total Beds', value: '5000+', icon: Bed },
+    { label: 'Avg Rating', value: '4.7★', icon: Star },
   ];
   return (
-    <div
-      className="grid grid-cols-2 md:grid-cols-4 border-y mb-8"
-      style={{ borderColor: 'var(--base-300)' }}
-    >
+    <div className="grid grid-cols-2 md:grid-cols-4 border-y border-base-300 mb-8 bg-base-100">
       {stats.map(({ label, value, icon: Icon }, i) => (
         <div
           key={label}
-          className="flex flex-col items-center justify-center py-5 gap-1 text-center"
-          style={{ borderRight: i < stats.length - 1 ? `1px solid var(--base-300)` : 'none' }}
+          className={`flex flex-col items-center justify-center py-6 gap-1 text-center ${
+            i < stats.length - 1 ? 'border-r border-base-300' : ''
+          }`}
         >
-          <div
-            className="w-8 h-8 rounded-xl flex items-center justify-center mb-1"
-            style={{ background: T.accentBg }}
-            aria-hidden="true"
-          >
-            <Icon size={14} style={{ color: T.accent }} />
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-2 bg-primary/10 text-primary" aria-hidden="true">
+            <Icon size={18} />
           </div>
-          <span className="text-[17px] font-black leading-none" style={{ color: T.accent }}>{value}</span>
-          <span className="text-[9px] font-black uppercase tracking-widest opacity-40" style={{ color: 'var(--base-content)' }}>
+          <span className="text-2xl font-black leading-none text-primary">{value}</span>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-base-content/50 mt-1">
             {label}
           </span>
         </div>
@@ -634,34 +469,32 @@ const TrustBar = memo(function TrustBar() {
   );
 });
 
-import { memo } from "react";
-
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 const HospitalsPage = () => {
   const dispatch = useDispatch();
 
-  const user            = useSelector((s) => s.user?.user) ?? null;
-  const allHospitals    = useSelector(selectHospitals);
+  const user = useSelector((s) => s.user?.user) ?? null;
+  const allHospitals = useSelector(selectHospitals);
   const nearbyHospitals = useSelector(selectNearbyHospitals);
-  const loadingAll      = useSelector(selectIsLoadingHospitals);
-  const loadingNearby   = useSelector(selectIsLoadingNearbyHospitals);
+  const loadingAll = useSelector(selectIsLoadingHospitals);
+  const loadingNearby = useSelector(selectIsLoadingNearbyHospitals);
 
-  const [searchTerm,    setSearchTerm]    = useState("");
-  const [activeFilter,  setActiveFilter]  = useState("All");
-  const [viewMode,      setViewMode]      = useState("grid");
-  const [erOnly,        setErOnly]        = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [activeFilter, setActiveFilter] = useState("All");
+  const [viewMode, setViewMode] = useState("grid");
+  const [erOnly, setErOnly] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [mode,          setMode]          = useState("all");
+  const [mode, setMode] = useState("all");
   const [manualAddress, setManualAddress] = useState("");
   const [locationLabel, setLocationLabel] = useState("");
-  const [gpsLoading,    setGpsLoading]    = useState(false);
-  const [gpsError,      setGpsError]      = useState("");
+  const [gpsLoading, setGpsLoading] = useState(false);
+  const [gpsError, setGpsError] = useState("");
 
   const isNearbyMode = mode === "user" || mode === "nearby" || mode === "manual-near";
-  const hospitals    = isNearbyMode ? nearbyHospitals : allHospitals;
-  const loading      = isNearbyMode ? loadingNearby   : loadingAll;
+  const hospitals = isNearbyMode ? nearbyHospitals : allHospitals;
+  const loading = isNearbyMode ? loadingNearby : loadingAll;
 
   useEffect(() => {
     if (user?.location?.coordinates) {
@@ -731,9 +564,9 @@ const HospitalsPage = () => {
   const filteredHospitals = useMemo(() => {
     if (!hospitals?.length) return [];
     return hospitals.filter((h) => {
-      const matchesSearch   = h.name?.toLowerCase().includes(searchTerm.toLowerCase()) || h.address?.city?.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesSearch = h.name?.toLowerCase().includes(searchTerm.toLowerCase()) || h.address?.city?.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesCategory = activeFilter === "All" || h.hospitalType === activeFilter;
-      const matchesER       = erOnly ? h.isEmergencyReady === true : true;
+      const matchesER = erOnly ? h.isEmergencyReady === true : true;
       return matchesSearch && matchesCategory && matchesER;
     });
   }, [hospitals, searchTerm, activeFilter, erOnly]);
@@ -741,7 +574,8 @@ const HospitalsPage = () => {
   return (
     <Container className="mt-4">
       <Banner position="Home_Top" />
-      <main className="min-h-screen" style={{ background: 'var(--base-100)' }}>
+      <main className="min-h-screen bg-base-100">
+        <BackButton className="my-4" />
 
         {/* ── MOBILE SIDEBAR OVERLAY ────────────────────────────────── */}
         <AnimatePresence>
@@ -750,27 +584,21 @@ const HospitalsPage = () => {
               <motion.div
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 onClick={() => setIsSidebarOpen(false)}
-                className="fixed inset-0 z-[100] lg:hidden"
-                style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }}
+                className="fixed inset-0 z-[100] lg:hidden bg-black/50 backdrop-blur-sm"
               />
               <motion.div
                 initial={{ x: "-100%" }} animate={{ x: 0 }} exit={{ x: "-100%" }}
                 transition={{ type: 'spring', damping: 28, stiffness: 240 }}
-                className="fixed left-0 top-0 bottom-0 w-[280px] z-[101] p-6 shadow-2xl lg:hidden"
-                style={{ background: 'var(--base-100)', borderRight: '1px solid var(--base-300)' }}
+                className="fixed left-0 top-0 bottom-0 w-[280px] z-[101] p-6 shadow-2xl bg-base-100 border-r border-base-300 lg:hidden"
               >
                 <div className="flex items-center justify-between mb-8">
-                  <span
-                    className="text-[10px] font-black uppercase tracking-[0.3em] opacity-40"
-                    style={{ color: 'var(--base-content)' }}
-                  >
+                  <span className="text-[10px] font-black uppercase tracking-[0.2em] text-base-content/40">
                     Filters
                   </span>
                   <button
                     onClick={() => setIsSidebarOpen(false)}
                     aria-label="Close filter sidebar"
-                    className="w-8 h-8 rounded-xl flex items-center justify-center transition-colors hover:opacity-70"
-                    style={{ background: 'var(--base-200)', color: 'var(--base-content)' }}
+                    className="btn btn-circle btn-sm bg-base-200 text-base-content hover:bg-base-300 border-none"
                   >
                     <X size={16} />
                   </button>
@@ -786,87 +614,74 @@ const HospitalsPage = () => {
         </AnimatePresence>
 
         {/* ── HERO ──────────────────────────────────────────────────── */}
-        <section
-          className="relative overflow-hidden py-10 md:py-14"
-          style={{ background: `linear-gradient(180deg, color-mix(in srgb, var(--primary) 5%, transparent) 0%, var(--base-100) 100%)` }}
-        >
+        <section className="relative overflow-hidden py-12 md:py-16 bg-gradient-to-b from-primary/10 to-base-100 rounded-3xl mb-8">
           {/* Decorative blob */}
-          <div
-            className="absolute -top-24 -right-24 w-80 h-80 rounded-full pointer-events-none"
-            style={{ background: 'color-mix(in srgb, var(--secondary) 7%, transparent)', filter: 'blur(48px)' }}
-            aria-hidden="true"
-          />
+          <div className="absolute -top-24 -right-24 w-80 h-80 rounded-full pointer-events-none bg-secondary/10 blur-[48px]" aria-hidden="true" />
 
           <Container className="relative z-10">
             <div className="flex flex-col md:flex-row md:items-end gap-8 md:gap-12">
               {/* Left: heading */}
               <div className="flex-1 max-w-xl">
-                <div
-                  className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest mb-5 border"
-                  style={{ background: T.accentBg, color: T.accent, borderColor: T.accentBorder }}
-                  aria-hidden="true"
-                >
-                  <Building2 size={11} /> Hospital Registry
+                <div className="badge badge-primary bg-primary/10 border-primary/30 mb-6 gap-1.5 px-4 py-2 font-black uppercase tracking-widest text-[10px]" aria-hidden="true">
+                  <Building2 size={12} /> Hospital Registry
                 </div>
 
-                <h1
-                  className="text-3xl md:text-5xl font-black tracking-tight leading-tight mb-4"
-                  style={{ color: 'var(--base-content)' }}
-                >
-                  Find a{' '}
-                  <span
-                    style={{
-                      background:           T.accentGrad,
-                      WebkitBackgroundClip: 'text',
-                      WebkitTextFillColor:  'transparent',
-                      backgroundClip:       'text',
-                    }}
-                  >
-                    Hospital
-                  </span>
+                <h1 className="text-4xl md:text-5xl lg:text-6xl font-black tracking-tight leading-tight mb-5 text-base-content">
+                  Find a <span className="text-gradient-primary">Hospital</span>
                 </h1>
 
-                <p
-                  className="text-sm leading-relaxed max-w-md"
-                  style={{ color: 'var(--base-content)', opacity: 0.55 }}
-                >
+                <p className="text-base leading-relaxed max-w-md text-base-content/60 font-medium">
                   Verified healthcare facilities, surgical centers, and diagnostic hubs across the network. Find emergency-ready hospitals near you.
                 </p>
               </div>
 
-              {/* Right: search */}
-              <div className="w-full max-w-md">
-                <div
-                  className="relative flex items-center rounded-2xl overflow-hidden"
-                  style={{ border: `2px solid ${T.accentBorder}`, background: 'var(--base-100)', boxShadow: `0 8px 32px ${T.accentShadow}` }}
-                >
-                  <Search
-                    className="absolute left-4"
-                    size={18}
-                    style={{ color: T.accent, opacity: 0.6 }}
-                    aria-hidden="true"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Search hospital name or city…"
-                    aria-label="Search hospitals"
-                    className="w-full pl-12 pr-4 py-4 bg-transparent text-sm font-bold outline-none"
-                    style={{ color: 'var(--base-content)', fontFamily: 'var(--font-family-poppins)' }}
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
-                  {searchTerm && (
-                    <button
-                      onClick={() => setSearchTerm("")}
-                      aria-label="Clear search"
-                      className="absolute right-4 opacity-40 hover:opacity-70 transition-opacity"
-                      style={{ color: 'var(--base-content)' }}
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
-                </div>
-              </div>
+              <div className="w-full max-w-lg group mx-auto">
+  <div className="relative flex items-center p-1.5 bg-base-100 rounded-full border border-base-300 shadow-sm hover:shadow-md focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10 focus-within:shadow-md transition-all duration-300">
+    
+    {/* ── Search Icon (Left) ── */}
+    <div className="pl-4 pr-2 pointer-events-none flex-shrink-0">
+      <Search 
+        className="text-primary/50 group-focus-within:text-primary transition-colors duration-300" 
+        size={18} 
+        aria-hidden="true" 
+      />
+    </div>
+    
+    {/* ── Input Field ── */}
+    <input
+      type="text"
+      placeholder="Search hospital name or city…"
+      aria-label="Search hospitals"
+      className="flex-1 min-w-0 py-2.5 px-2 bg-transparent text-xs font-semibold text-base-content outline-none placeholder-base-content/40 truncate"
+      value={searchTerm}
+      onChange={(e) => setSearchTerm(e.target.value)}
+    />
+
+    {/* ── Action Buttons Container ── */}
+    <div className="flex items-center flex-shrink-0">
+      
+      {/* Clear Button (Smooth fade in/out) */}
+      <button
+        onClick={() => setSearchTerm("")}
+        aria-label="Clear search"
+        className={`p-1.5 mr-1 rounded-full text-base-content/40 hover:text-base-content hover:bg-base-200 transition-all duration-200 flex items-center justify-center ${
+          searchTerm ? "opacity-100 scale-100 visible pointer-events-auto w-7 h-7" : "opacity-0 scale-75 invisible pointer-events-none w-0 h-7 overflow-hidden m-0"
+        }`}
+      >
+        <X size={15} strokeWidth={2.5} />
+      </button>
+
+      {/* Embedded Search Button */}
+      <button
+        className="h-10 px-5 md:px-7 rounded-full bg-primary text-primary-content text-xs font-bold tracking-wide shadow-sm hover:brightness-110 active:scale-[0.97] transition-all flex items-center gap-2"
+      >
+        <span className="hidden md:inline">Search</span>
+        <Search size={14} className="md:hidden stroke-[2.5]" aria-hidden="true" />
+      </button>
+
+    </div>
+  </div>
+</div>
             </div>
           </Container>
         </section>
@@ -876,27 +691,21 @@ const HospitalsPage = () => {
 
         {/* ── MAIN CONTENT ──────────────────────────────────────────── */}
         <Container className="py-6">
-
           {/* Mobile filter button */}
           <div className="flex lg:hidden mb-6">
             <motion.button
               whileTap={{ scale: 0.97 }}
               onClick={() => setIsSidebarOpen(true)}
-              className="flex-1 flex items-center justify-center gap-2.5 py-3.5 rounded-xl font-black text-[11px] uppercase tracking-widest"
-              style={{
-                background:  T.accentGrad,
-                color:       'var(--primary-content)',
-                boxShadow:   `0 4px 14px ${T.accentShadow}`,
-              }}
+              className="btn btn-primary-cta w-full"
               aria-label="Open filter sidebar"
             >
               <Filter size={16} aria-hidden="true" /> Browse Categories
             </motion.button>
           </div>
 
-          <div className="flex gap-8">
+          <div className="flex flex-col lg:flex-row gap-8 lg:gap-10">
             {/* Desktop sidebar */}
-            <aside className="hidden lg:block flex-shrink-0 sticky top-28 self-start" aria-label="Hospital filters">
+            <aside className="hidden lg:block flex-shrink-0 w-56 sticky top-28 self-start" aria-label="Hospital filters">
               <FilterSidebar
                 activeFilter={activeFilter} setActiveFilter={setActiveFilter}
                 erOnly={erOnly} setErOnly={setErOnly}
@@ -912,48 +721,31 @@ const HospitalsPage = () => {
               />
 
               {/* Results header */}
-              <div
-                className="flex items-center justify-between mb-6 pb-4 border-b"
-                style={{ borderColor: 'var(--base-300)' }}
-              >
+              <div className="flex flex-wrap items-center justify-between gap-4 mb-6 pb-4 border-b border-base-300">
                 <div className="flex items-center gap-2">
-                  <span
-                    className="w-2 h-2 rounded-full animate-pulse"
-                    style={{ background: T.accent }}
-                    aria-hidden="true"
-                  />
-                  <p
-                    className="text-[11px] font-black uppercase tracking-wider"
-                    style={{ color: 'var(--base-content)', opacity: 0.5 }}
-                    aria-live="polite"
-                  >
-                    <span style={{ color: T.accent, opacity: 1 }}>{filteredHospitals.length}</span>
+                  <span className="status-dot status-dot-info bg-primary animate-pulse" aria-hidden="true" />
+                  <p className="text-[10px] font-black uppercase tracking-wider text-base-content/50" aria-live="polite">
+                    <span className="text-primary text-opacity-100">{filteredHospitals.length}</span>
                     {' '}Hospital{filteredHospitals.length !== 1 ? "s" : ""} found
                   </p>
                 </div>
 
                 {/* View toggle */}
-                <div
-                  className="flex p-1 rounded-xl border"
-                  style={{ background: 'var(--base-200)', borderColor: 'var(--base-300)' }}
-                  role="group"
-                  aria-label="View mode"
-                >
+                <div className="flex p-1 rounded-xl bg-base-200 border border-base-300" role="group" aria-label="View mode">
                   {[
                     { mode: "grid", Icon: LayoutGrid, label: "Grid view" },
-                    { mode: "list", Icon: List,       label: "List view" },
+                    { mode: "list", Icon: List, label: "List view" },
                   ].map(({ mode: m, Icon, label }) => (
                     <button
                       key={m}
                       onClick={() => setViewMode(m)}
                       aria-label={label}
                       aria-pressed={viewMode === m}
-                      className="p-2 rounded-lg transition-all"
-                      style={{
-                        background: viewMode === m ? T.accentGrad : 'transparent',
-                        color:      viewMode === m ? 'var(--primary-content)' : 'var(--base-content)',
-                        opacity:    viewMode === m ? 1 : 0.4,
-                      }}
+                      className={`p-2 rounded-lg transition-all ${
+                        viewMode === m 
+                          ? "bg-primary text-primary-content shadow-sm" 
+                          : "text-base-content/40 hover:text-base-content"
+                      }`}
                     >
                       <Icon size={16} aria-hidden="true" />
                     </button>
@@ -963,14 +755,14 @@ const HospitalsPage = () => {
 
               {/* Grid / List */}
               {loading ? (
-                <div className={`grid gap-5 ${viewMode === "grid" ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3" : "grid-cols-1"}`}>
+                <div className={`grid gap-6 ${viewMode === "grid" ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3" : "grid-cols-1"}`}>
                   {Array.from({ length: 6 }).map((_, i) => <SkeletonCard key={i} viewMode={viewMode} />)}
                 </div>
               ) : (
                 <AnimatePresence mode="popLayout">
                   <motion.div
                     layout
-                    className={`grid gap-5 ${viewMode === "grid" ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3" : "grid-cols-1"}`}
+                    className={`grid gap-6 ${viewMode === "grid" ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3" : "grid-cols-1"}`}
                   >
                     {filteredHospitals.map((hospital) => (
                       <motion.div
@@ -993,28 +785,22 @@ const HospitalsPage = () => {
                 <motion.div
                   initial={{ opacity: 0, y: 16 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="flex flex-col items-center justify-center py-20 text-center rounded-2xl border border-dashed"
-                  style={{ borderColor: 'var(--base-300)', background: 'var(--base-200)' }}
+                  className="flex flex-col items-center justify-center py-24 text-center rounded-2xl border-2 border-dashed border-base-300 bg-base-200/50"
                 >
-                  <div
-                    className="w-20 h-20 rounded-3xl flex items-center justify-center mb-5 mx-auto"
-                    style={{ background: T.accentBg }}
-                    aria-hidden="true"
-                  >
-                    <Building2 size={32} style={{ color: T.accent, opacity: 0.6 }} />
+                  <div className="w-20 h-20 rounded-full flex items-center justify-center mb-6 bg-primary/10 text-primary/60 mx-auto" aria-hidden="true">
+                    <Building2 size={36} />
                   </div>
-                  <h3 className="font-black text-lg mb-2" style={{ color: 'var(--base-content)' }}>
+                  <h3 className="font-black text-xl mb-3 text-base-content">
                     No Hospitals Found
                   </h3>
-                  <p className="text-sm mb-6 max-w-xs" style={{ color: 'var(--base-content)', opacity: 0.5 }}>
+                  <p className="text-base mb-8 max-w-sm text-base-content/50">
                     {isNearbyMode
                       ? "No hospitals found within 100 km of your location."
-                      : "No facilities match your current filters."}
+                      : "No facilities match your current filters. Try adjusting your search."}
                   </p>
                   <button
                     onClick={() => { setSearchTerm(""); setActiveFilter("All"); setErOnly(false); handleClear(); }}
-                    className="px-6 py-2.5 rounded-xl font-black text-sm"
-                    style={{ background: T.accentGrad, color: 'var(--primary-content)' }}
+                    className="btn btn-primary-cta"
                   >
                     Reset All Filters
                   </button>

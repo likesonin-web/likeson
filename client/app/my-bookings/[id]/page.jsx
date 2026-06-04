@@ -1131,12 +1131,13 @@ export default function BookingDetailsPage() {
                 </motion.button>
 
                 {/* Live tracking */}
-                {isLive && primaryRideId && (
-                  <Link href={`/rides/${consultationId}/${primaryRideId}/tracking`} className="btn btn-info btn-sm gap-1.5">
-                    <Navigation2 size={13} />
-                    <span className="hidden sm:inline">Track Live</span>
-                  </Link>
-                )}
+              {/* Live tracking */}
+{isLive && primaryRideId && (
+  <Link href={`/rides/${booking._id}/${primaryRideId}/tracking`} className="btn btn-info btn-sm gap-1.5">
+    <Navigation2 size={13} />
+    <span className="hidden sm:inline">Track Live</span>
+  </Link>
+)}
 
                 {/* Join consultation — primary CTA when joinable */}
                 {joinable && consultationId && (

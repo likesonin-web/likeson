@@ -22,6 +22,7 @@ import {
   selectLabError,
   clearLabError,
 } from "@/store/slices/labSlice";
+import BackButton from "../../../components/BackButton";
 
 // ─── animation variants ────────────────────────────────────────────────────
 const fadeUp   = { hidden: { opacity: 0, y: 24 }, visible: (i = 0) => ({ opacity: 1, y: 0, transition: { delay: i * 0.06, duration: 0.45, ease: [0.22, 1, 0.36, 1] } }) };
@@ -71,6 +72,7 @@ function TestCard({ test, index, onEdit, onToggle, onDelete, actionLoading }) {
       }`}
       style={{ boxShadow: test.isActive ? "0 2px 20px rgba(0,0,0,0.04)" : "none" }}
     >
+      
       {/* Header */}
       <div className="flex items-start gap-4 p-5">
         <div className={`p-3 rounded-xl shrink-0 ${test.isActive ? "bg-primary/10" : "bg-base-300"}`}>
@@ -475,6 +477,7 @@ export default function TestsPage() {
 
   return (
     <div data-theme="lab"  className="min-h-screen" style={{ background: "var(--base-100)" }}>
+      <BackButton className="m-3" label="Back to Dashboard" />
       {/* ── Topbar ── */}
       <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}
         className="sticky top-0 z-30 border-b border-base-300 bg-base-100/90 backdrop-blur-xl"

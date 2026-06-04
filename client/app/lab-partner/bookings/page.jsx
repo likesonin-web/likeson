@@ -26,6 +26,7 @@ import {
 
 import ManageBookings from './ManageBookings';
 import ReportsArchive from './ReportsArchive';
+import BackButton from '../../../components/BackButton';
 
 // ─── Tab config ───────────────────────────────────────────────────────────────
 
@@ -87,6 +88,7 @@ export default function LabPartnerBookingManagement() {
 
   return (
     <div className="min-h-screen bg-base-100" data-theme="lab-partner">
+      <BackButton className='m-3'  />
       {/* ── Header ── */}
       <div className="bg-base-100 border-b border-base-300 sticky top-0 z-40">
         <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 py-4">

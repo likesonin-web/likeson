@@ -26,6 +26,7 @@ import {
   selectIsLoadingDoctors,
 } from '@/store/slices/hospitalSlice';
 import Container from '@/components/ui/Container';
+import BackButton from '../../components/BackButton';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DESIGN TOKENS — all via CSS vars, zero hardcoded colors
@@ -746,6 +747,9 @@ export default function DoctorsPage() {
           paddingBottom: '2.5rem',
         }}
       >
+        <div className=" absolute top-5 left-5 ">
+          <BackButton label=' back to home'/>
+        </div>
         {/* Decorative circles */}
         <div
           className="absolute -top-24 -right-24 w-80 h-80 rounded-full pointer-events-none"

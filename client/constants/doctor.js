@@ -37,7 +37,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
   // ── 1. Overview ──────────────────────────────────────────────────────────
   {
     title: "Overview",
-    icons: <LayoutDashboard />,
+    icons: <LayoutDashboard size={20} />,
     links: [
       { name: "Dashboard",           href: "/doctor/dashboard",             icon: <LayoutDashboard size={18} />  },
       { name: "Analytics",           href: "/doctor/analytics",             icon: <AreaChart size={18} />        },
@@ -49,7 +49,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
   // ── 2. My Profile ────────────────────────────────────────────────────────
   {
     title: "My Profile",
-    icons: <UserCog />,
+    icons: <UserCog size={20}  />,
     links: [
       { name: "Profile Overview",    href: "/doctor/profile",               icon: <UserRound size={18} />        },
       { name: "Professional Info",   href: "/doctor/profile/professional",  icon: <Stethoscope size={18} />      },
@@ -63,7 +63,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
   // ── 3. Appointments & Schedule ───────────────────────────────────────────
   {
     title: "Appointments & Schedule",
-    icons: <CalendarCheck />,
+    icons: <CalendarCheck size={20}  />,
     links: [
       { name: "My Appointments",     href: "/doctor/appointments",          icon: <CalendarClock size={18} />    },
       { name: "Availability Slots",  href: "/doctor/availability",          icon: <Clock size={18} />            },
@@ -79,7 +79,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
   //   PATCH /:bookingId/op/complete     → mark complete + save notes/prescription/diagnosisCode
   {
     title: "OP Records",
-    icons: <FolderOpen />,
+    icons: <FolderOpen size={20}  />,
     links: [
       {
         name: "All OP Records",
@@ -95,7 +95,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
   // ── 6. My Hospitals ──────────────────────────────────────────────────────
   {
     title: "My Hospitals",
-    icons: <Hospital />,
+    icons: <Hospital size={20}  />,
     links: [
       { name: "All My Hospitals",    href: "/doctor/hospitals",             icon: <Building2 size={18} />        },
       { name: "Primary Hospital",    href: "/doctor/hospitals/primary",     icon: <Hospital size={18} />         },
@@ -107,7 +107,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
   // ── 7. Finance & Earnings ────────────────────────────────────────────────
   {
     title: "Finance & Earnings",
-    icons: <Landmark />,
+    icons: <Landmark size={20}  />,
     links: [
       { name: "Earnings Overview",   href: "/doctor/finance/earnings",      icon: <Wallet size={18} />           },
       { name: "Transactions",        href: "/doctor/finance/transactions",  icon: <ArrowLeftRight size={18} />   },
@@ -120,7 +120,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
   // ── 8. KYC & Verification ────────────────────────────────────────────────
   {
     title: "KYC & Verification",
-    icons: <ShieldCheck />,
+    icons: <ShieldCheck size={20}  />,
     links: [
       { name: "KYC Status",          href: "/doctor/kyc",                   icon: <ShieldCheck size={18} />      },
       { name: "Aadhaar Verification",href: "/doctor/kyc/aadhaar",           icon: <ScanLine size={18} />         },
@@ -131,7 +131,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
   // ── 9. Settings ──────────────────────────────────────────────────────────
   {
     title: "Settings",
-    icons: <Settings2 />,
+    icons: <Settings2 size={20}  />,
     links: [
       { name: "Account Settings",    href: "/doctor/settings",              icon: <Settings2 size={18} />        },
       { name: "Online Status",       href: "/doctor/settings/online",       icon: <ToggleRight size={18} />      },
@@ -144,7 +144,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
   // ── 10. Support ──────────────────────────────────────────────────────────
   {
     title: "Support",
-    icons: <LifeBuoy />,
+    icons: <LifeBuoy size={20}  />,
     links: [
       { name: "Help & Support",      href: "/doctor/support",               icon: <LifeBuoy size={18} />         },
       { name: "Raise a Ticket",      href: "/doctor/support/ticket",        icon: <MessageSquare size={18} />    },
@@ -159,7 +159,7 @@ export const DOCTOR_DASHBOARD_LINKS = [
 export const DOCTOR_TOP_RIGHT_LINKS = [
   {
     name: "Quick Actions",
-    icon: <CalendarCheck size={18} />,
+    icon: <CalendarCheck size={20}  />,
     links: [
       { name: "My Appointments", href: "/doctor/appointments",  icon: <CalendarClock size={18} /> },
       { name: "Availability",    href: "/doctor/availability",  icon: <Clock size={18} />         },

@@ -61,6 +61,7 @@ import {
   selectWalletBalance,
   selectWalletData,
 } from '@/store/slices/walletSlice';
+import BackButton from '../../../components/BackButton';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // § CONSTANTS
@@ -180,7 +181,7 @@ const RxImagePreview = React.memo(({ imageUrl, onView }) => {
       {isPdf ? (
         <div className="w-full h-full flex flex-col items-center justify-center gap-0.5 bg-error/10">
           <FileText className="w-5 h-5 text-error" />
-          <span className="text-[8px] font-black text-error uppercase tracking-wider">PDF</span>
+          <span className="text-[8px]  text-error uppercase tracking-wider">PDF</span>
         </div>
       ) : (
         <img src={imageUrl} alt="Prescription" className="w-full h-full object-cover" />
@@ -213,7 +214,7 @@ const RxLightbox = React.memo(({ imageUrl, medicineName, onClose }) => {
         <div className="flex items-center gap-2">
           <FileText className="w-4 h-4 text-success" />
           <div>
-            <p className="text-xs font-black text-white">Prescription</p>
+            <p className="text-xs  text-white">Prescription</p>
             {medicineName && <p className="text-[10px] text-white/50">{medicineName}</p>}
           </div>
         </div>
@@ -234,9 +235,9 @@ const RxLightbox = React.memo(({ imageUrl, medicineName, onClose }) => {
             <div className="w-24 h-24 rounded-md bg-error/20 border border-error/30 flex items-center justify-center">
               <FileText className="w-12 h-12 text-error" />
             </div>
-            <p className="text-white/60 text-sm font-bold">PDF prescription uploaded</p>
+            <p className="text-white/60 text-xs font-bold">PDF prescription uploaded</p>
             <a href={imageUrl} target="_blank" rel="noopener noreferrer"
-              className="px-4 py-2 rounded-md bg-primary text-primary-content text-xs font-black hover:opacity-90">
+              className="px-4 py-2 rounded-md bg-primary text-primary-content text-xs  hover:opacity-90">
               Open PDF in new tab ↗
             </a>
           </div>
@@ -269,7 +270,7 @@ const PrescriptionBadge = React.memo(({ item, onUpload, onView, isUploading }) =
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
             <CheckCheck className="w-3 h-3 text-success shrink-0" />
-            <span className="text-[10px] font-black text-success uppercase tracking-wide">Rx Uploaded</span>
+            <span className="text-[10px]  text-success uppercase tracking-wide">Rx Uploaded</span>
           </div>
           {item.prescription?.uploadedAt && (
             <p className="text-[9px] text-base-content/40 flex items-center gap-1 mt-0.5">
@@ -297,11 +298,11 @@ const PrescriptionBadge = React.memo(({ item, onUpload, onView, isUploading }) =
   return (
     <div className={`flex items-center gap-2 mt-2 px-2 py-1.5 rounded-md border ${rxStatus.bg}`}>
       <Icon className={`w-3 h-3 shrink-0 ${rxStatus.color}`} />
-      <span className={`text-[10px] font-black ${rxStatus.color} uppercase tracking-wide flex-1`}>
+      <span className={`text-[10px]  ${rxStatus.color} uppercase tracking-wide flex-1`}>
         {rxStatus.label}
       </span>
       <button onClick={() => onUpload(item)} disabled={isUploading}
-        className="ml-auto flex items-center gap-1 text-error hover:text-error/80 font-black underline underline-offset-2 text-[10px] disabled:opacity-40 transition-colors">
+        className="ml-auto flex items-center gap-1 text-error hover:text-error/80  underline underline-offset-2 text-[10px] disabled:opacity-40 transition-colors">
         {isUploading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
         Upload
       </button>
@@ -374,7 +375,7 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
               <FileText className="w-5 h-5 text-error" />
             </div>
             <div>
-              <h3 className="text-sm font-black text-base-content">
+              <h3 className="text-xs  text-base-content">
                 {item?.prescription?.imageUrl ? 'Replace Prescription' : 'Upload Prescription'}
               </h3>
               <p className="text-[10px] text-base-content/50 mt-0.5">
@@ -393,7 +394,7 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
           <div className="flex items-center gap-3 p-3 rounded-md bg-base-200 border border-base-300">
             <Package className="w-4 h-4 text-primary shrink-0" />
             <div className="min-w-0">
-              <p className="text-xs font-black text-base-content truncate">{medicine.brandName}</p>
+              <p className="text-xs  text-base-content truncate">{medicine.brandName}</p>
               {medicine.genericName && (
                 <p className="text-[10px] text-base-content/50 truncate">{medicine.genericName}</p>
               )}
@@ -404,7 +405,7 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
         {/* Currently uploaded (replace flow) */}
         {item?.prescription?.imageUrl && !selectedFile && (
           <div className="space-y-1.5">
-            <p className="text-[9px] font-black uppercase tracking-widest text-base-content/40">
+            <p className="text-[9px]  uppercase tracking-widest text-base-content/40">
               Currently Uploaded
             </p>
             <div className="relative w-full h-32 rounded-md overflow-hidden border border-success/40 bg-base-200">
@@ -419,7 +420,7 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
                 <img src={item.prescription.imageUrl} alt="Current prescription"
                   className="w-full h-full object-contain p-2" />
               )}
-              <div className="absolute top-1.5 right-1.5 bg-success text-white text-[8px] font-black px-1.5 py-0.5 rounded-md uppercase tracking-wider">
+              <div className="absolute top-1.5 right-1.5 bg-success text-white text-[8px]  px-1.5 py-0.5 rounded-md uppercase tracking-wider">
                 Current
               </div>
             </div>
@@ -429,7 +430,7 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
         {/* New file preview */}
         {selectedFile && (
           <div className="space-y-1.5">
-            <p className="text-[9px] font-black uppercase tracking-widest text-base-content/40">
+            <p className="text-[9px]  uppercase tracking-widest text-base-content/40">
               {item?.prescription?.imageUrl ? 'New Prescription (Preview)' : 'Selected File (Preview)'}
             </p>
             <div className="relative w-full h-40 rounded-md overflow-hidden border-2 border-primary/40 bg-base-200">
@@ -446,7 +447,7 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
                 className="absolute top-1.5 right-1.5 p-1 rounded-md bg-error/80 text-white hover:bg-error transition-colors">
                 <X className="w-3 h-3" />
               </button>
-              <div className="absolute bottom-1.5 left-1.5 bg-primary text-primary-content text-[8px] font-black px-1.5 py-0.5 rounded-md uppercase tracking-wider">
+              <div className="absolute bottom-1.5 left-1.5 bg-primary text-primary-content text-[8px]  px-1.5 py-0.5 rounded-md uppercase tracking-wider">
                 New
               </div>
             </div>
@@ -465,7 +466,7 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
               <Upload className="w-6 h-6 text-primary" />
             </div>
             <div className="text-center">
-              <p className="text-xs font-black text-base-content">
+              <p className="text-xs  text-base-content">
                 {item?.prescription?.imageUrl ? 'Select new prescription file' : 'Click to select file'}
               </p>
               <p className="text-[10px] text-base-content/40 mt-0.5">JPG, PNG, WEBP, or PDF · Max 5 MB</p>
@@ -511,11 +512,11 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
         {/* Actions */}
         <div className="flex gap-2 pt-1">
           <button onClick={onClose} disabled={isUploading}
-            className="flex-1 py-2.5 rounded-lg bg-base-300 font-bold text-sm hover:bg-base-400 disabled:opacity-40">
+            className="flex-1 py-2.5 rounded-lg bg-base-300 font-bold text-xs hover:bg-base-400 disabled:opacity-40">
             Cancel
           </button>
           <button onClick={handleConfirm} disabled={isUploading || !selectedFile}
-            className="flex-1 py-2.5 rounded-lg bg-primary text-white font-bold text-sm hover:bg-primary/80 disabled:opacity-40 flex items-center justify-center gap-1.5">
+            className="flex-1 py-2.5 rounded-lg bg-primary text-white font-bold text-xs hover:bg-primary/80 disabled:opacity-40 flex items-center justify-center gap-1.5">
             {isUploading
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Uploading…</>
               : <><CheckCheck className="w-4 h-4" />{item?.prescription?.imageUrl ? 'Replace' : 'Confirm Upload'}</>}
@@ -544,7 +545,7 @@ const PrescriptionStep = React.memo(({ items, onUpload, onView, uploadingItemId 
       <div className="flex items-start gap-3 p-4 rounded-xl bg-warning/10 border border-warning/30">
         <FileText className="w-5 h-5 text-warning shrink-0 mt-0.5" />
         <div>
-          <p className="text-sm font-black text-base-content">Prescription Required</p>
+          <p className="text-xs  text-base-content">Prescription Required</p>
           <p className="text-[10px] text-base-content/50 mt-1 leading-relaxed">
             {missingRx.length > 0
               ? `${missingRx.length} item${missingRx.length > 1 ? 's' : ''} in your cart require a valid doctor's prescription.`
@@ -591,7 +592,7 @@ const PrescriptionStep = React.memo(({ items, onUpload, onView, uploadingItemId 
               </div>
               <div className="flex-1 min-w-0 space-y-2">
                 <div>
-                  <h4 className="text-xs font-black text-base-content truncate">{medicine?.brandName ?? 'Medicine'}</h4>
+                  <h4 className="text-xs  text-base-content truncate">{medicine?.brandName ?? 'Medicine'}</h4>
                   {medicine?.genericName && <p className="text-[10px] text-base-content/50">{medicine.genericName}</p>}
                   <p className="text-[9px] text-base-content/30 mt-0.5">Qty: {item.quantity} · ₹{item.pricePerUnit}/unit</p>
                 </div>
@@ -600,7 +601,7 @@ const PrescriptionStep = React.memo(({ items, onUpload, onView, uploadingItemId 
                     <div className="flex items-center gap-2 flex-wrap">
                       <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-success/10 border border-success/30">
                         <CheckCheck className="w-3 h-3 text-success" />
-                        <span className="text-[9px] font-black text-success uppercase tracking-wide">Uploaded</span>
+                        <span className="text-[9px]  text-success uppercase tracking-wide">Uploaded</span>
                       </div>
                       {item.prescription?.uploadedAt && (
                         <span className="text-[9px] text-base-content/30 flex items-center gap-1">
@@ -625,7 +626,7 @@ const PrescriptionStep = React.memo(({ items, onUpload, onView, uploadingItemId 
                   </div>
                 ) : (
                   <button onClick={() => onUpload(item)} disabled={isUploading}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-error/10 border border-error/30 text-error text-[10px] font-black hover:bg-error/20 transition-colors disabled:opacity-40">
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-error/10 border border-error/30 text-error text-[10px]  hover:bg-error/20 transition-colors disabled:opacity-40">
                     {isUploading ? <><Loader2 className="w-3 h-3 animate-spin" /> Uploading…</> : <><Upload className="w-3 h-3" /> Upload Prescription</>}
                   </button>
                 )}
@@ -668,7 +669,7 @@ const CartItem = React.memo(({ item, onQuantityChange, onRemove, onUploadPrescri
           ? <img src={primaryImg} alt={medicine?.brandName ?? 'Medicine'} loading="lazy" className="w-full h-full object-contain p-2" />
           : <div className="w-full h-full flex items-center justify-center"><Package className="w-8 h-8 text-primary/20" /></div>}
         {item.isPrescriptionRequired && (
-          <div className="absolute bottom-0 inset-x-0 bg-error/80 text-white text-[8px] font-black text-center py-0.5 uppercase tracking-wider">
+          <div className="absolute bottom-0 inset-x-0 bg-error/80 text-white text-[8px]  text-center py-0.5 uppercase tracking-wider">
             Rx
           </div>
         )}
@@ -676,13 +677,13 @@ const CartItem = React.memo(({ item, onQuantityChange, onRemove, onUploadPrescri
 
       {/* Medicine details */}
       <div className="flex-1 min-w-0 space-y-1">
-        <h3 className="text-sm font-black text-base-content truncate">{medicine?.brandName ?? 'Medicine'}</h3>
+        <h3 className="text-xs  text-base-content truncate">{medicine?.brandName ?? 'Medicine'}</h3>
         <p className="text-[10px] text-base-content/50 font-medium uppercase tracking-wider truncate">
           {medicine?.genericName} {medicine?.dosage ? `• ${medicine.dosage}` : ''}
         </p>
         <p className="text-[10px] text-base-content/40 truncate">{medicine?.packaging}</p>
         <div className="flex items-center gap-2 pt-1">
-          <span className="text-xs font-black text-primary">₹{item.pricePerUnit}</span>
+          <span className="text-xs  text-primary">₹{item.pricePerUnit}</span>
           <span className="text-[9px] text-base-content/30 font-bold">/unit</span>
           {medicine?.gstPercentage > 0 && (
             <span className="text-[9px] text-base-content/30">+{medicine.gstPercentage}% GST</span>
@@ -701,7 +702,7 @@ const CartItem = React.memo(({ item, onQuantityChange, onRemove, onUploadPrescri
             className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-primary hover:text-primary-content disabled:opacity-30 transition-all">
             <Minus className="w-3 h-3" />
           </button>
-          <span className="w-7 text-center text-xs font-black" aria-live="polite">
+          <span className="w-7 text-center text-xs " aria-live="polite">
             {isUpdating ? <RefreshCw className="w-3 h-3 animate-spin mx-auto text-primary" /> : item.quantity}
           </span>
           <button onClick={() => onQuantityChange(item, item.quantity + 1)} disabled={isUpdating}
@@ -712,7 +713,7 @@ const CartItem = React.memo(({ item, onQuantityChange, onRemove, onUploadPrescri
         </div>
 
         {/* Line total */}
-        <span className="text-base font-black text-base-content">₹{lineTotal}</span>
+        <span className="text-base  text-base-content">₹{lineTotal}</span>
 
         <button onClick={() => onRemove(item)} disabled={isUpdating} aria-label={`Remove ${medicine?.brandName ?? 'item'}`}
           className="p-1.5 rounded-md text-base-content/30 hover:text-error hover:bg-error/10 transition-all disabled:opacity-30">
@@ -730,7 +731,7 @@ const AddressForm = React.memo(({ address, onChange, errors }) => (
     {ADDRESS_FIELDS.map((field) => (
       <div key={field.name} className={field.half ? '' : 'sm:col-span-2'}>
         <label htmlFor={`addr-${field.name}`}
-          className="block text-[10px] font-black uppercase tracking-widest text-base-content/50 mb-1.5">
+          className="block text-[10px]  uppercase tracking-widest text-base-content/50 mb-1.5">
           {field.label}
           {REQUIRED_FIELDS.includes(field.name) && <span className="text-error ml-0.5" aria-hidden="true">*</span>}
         </label>
@@ -741,7 +742,7 @@ const AddressForm = React.memo(({ address, onChange, errors }) => (
           onChange={(e) => onChange(field.name, e.target.value)}
           placeholder={field.placeholder}
           aria-invalid={!!errors?.[field.name]}
-          className={`w-full px-3 py-2.5 bg-base-200 border border-base-300 rounded-xl text-sm focus:outline-none focus:border-primary placeholder-base-content/25 ${errors?.[field.name] ? 'ring-2 ring-error/50 border-error' : ''}`}
+          className={`w-full px-3 py-2.5 bg-base-200 border border-base-300 rounded-xl text-xs focus:outline-none focus:border-primary placeholder-base-content/25 ${errors?.[field.name] ? 'ring-2 ring-error/50 border-error' : ''}`}
         />
         <p className="text-[9px] text-base-content/30 mt-1">{field.note}</p>
         {errors?.[field.name] && (
@@ -769,7 +770,7 @@ const CouponInput = React.memo(({ orderTotal, coupon, couponLoading, couponError
         <div className="flex items-center gap-2">
           <BadgePercent className="w-4 h-4 text-success shrink-0" />
           <div>
-            <p className="text-xs font-black text-success">{coupon.code}</p>
+            <p className="text-xs  text-success">{coupon.code}</p>
             <p className="text-[10px] text-base-content/50">You save ₹{coupon.discountAmount?.toFixed(2)}</p>
           </div>
         </div>
@@ -788,7 +789,7 @@ const CouponInput = React.memo(({ orderTotal, coupon, couponLoading, couponError
           <input type="text" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())}
             onKeyDown={(e) => e.key === 'Enter' && handleApply()}
             placeholder="Enter coupon code" aria-label="Coupon code"
-            className="w-full pl-9 pr-3 py-2.5 bg-base-200 border border-base-300 rounded-xl text-sm focus:outline-none focus:border-primary uppercase tracking-widest placeholder-base-content/25" />
+            className="w-full pl-9 pr-3 py-2.5 bg-base-200 border border-base-300 rounded-xl text-xs focus:outline-none focus:border-primary uppercase tracking-widest placeholder-base-content/25" />
         </div>
         <button onClick={handleApply} disabled={couponLoading || !code.trim()}
           className="px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-xs hover:bg-primary/80 disabled:opacity-40 flex items-center gap-1.5 shrink-0">
@@ -825,14 +826,14 @@ const BillSummary = React.memo(({ billSummary, subscriptionDiscount, coupon, pay
   return (
     <div className="space-y-2" aria-label="Bill summary">
       {rows.map((row) => (
-        <div key={row.label} className="flex justify-between items-center text-sm">
+        <div key={row.label} className="flex justify-between items-center text-xs">
           <span className="text-base-content/60 font-medium">{row.label}</span>
-          <span className={`font-black ${row.isDiscount ? 'text-success' : row.highlight ? 'text-success' : 'text-base-content'}`}>{row.value}</span>
+          <span className={` ${row.isDiscount ? 'text-success' : row.highlight ? 'text-success' : 'text-base-content'}`}>{row.value}</span>
         </div>
       ))}
       <div className="border-t border-base-300 pt-3 mt-3 flex justify-between items-center">
-        <span className="text-sm font-black uppercase tracking-wider text-base-content">Total Payable</span>
-        <span className="text-xl font-black text-primary">₹{finalTotal.toFixed(2)}</span>
+        <span className="text-xs  uppercase tracking-wider text-base-content">Total Payable</span>
+        <span className="text-xl  text-primary">₹{finalTotal.toFixed(2)}</span>
       </div>
       {(subSavings > 0 || couponSaving > 0) && (
         <p className="text-[10px] font-bold text-success flex items-center gap-1 pt-1">
@@ -981,8 +982,8 @@ const EmptyCart = React.memo(({ onShop }) => (
       </svg>
     </div>
 
-    <h2 className="text-xl md:text-2xl font-black text-base-content mb-2 tracking-tight">Your cart is feeling a bit lonely</h2>
-    <p className="text-sm text-base-content/50 max-w-sm mb-8 leading-relaxed">
+    <h2 className="text-xl md:text-2xl  text-base-content mb-2 tracking-tight">Your cart is feeling a bit lonely</h2>
+    <p className="text-xs text-base-content/50 max-w-sm mb-8 leading-relaxed">
       Our little pharmacy bag is completely empty! Add some medicines or healthcare products to cheer it up.
     </p>
     
@@ -1025,10 +1026,10 @@ const StepIndicator = React.memo(({ step, onBack, hasRxItems }) => {
         <React.Fragment key={s.key}>
           <button onClick={() => idx < current && onBack(s.key)} disabled={idx >= current}
             aria-current={idx === current ? 'step' : undefined}
-            className={`flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest transition-all disabled:cursor-default ${
+            className={`flex items-center gap-1.5 text-[10px]  uppercase tracking-widest transition-all disabled:cursor-default ${
               idx === current ? 'text-primary' : idx < current ? 'text-success cursor-pointer hover:underline' : 'text-base-content/30'
             }`}>
-            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black border ${
+            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px]  border ${
               idx < current ? 'bg-success border-success text-white' : idx === current ? 'bg-primary border-primary text-primary-content' : 'bg-transparent border-base-300 text-base-content/30'
             }`}>
               {idx < current ? <CheckCircle2 className="w-3 h-3" /> : idx === current && s.key === 'prescription' ? <FileText className="w-2.5 h-2.5" /> : idx + 1}
@@ -1249,14 +1250,14 @@ export default function CartPage() {
             className="w-24 h-24 rounded-2xl bg-success/10 border border-success/20 flex items-center justify-center mx-auto mb-6">
             <CheckCircle2 className="w-12 h-12 text-success" />
           </motion.div>
-          <h1 className="text-3xl font-black text-base-content mb-2">Order Confirmed!</h1>
-          <p className="text-sm text-base-content/50 mb-2">Order <strong>#{currentOrder?.orderId}</strong> has been placed.</p>
+          <h1 className="text-3xl  text-base-content mb-2">Order Confirmed!</h1>
+          <p className="text-xs text-base-content/50 mb-2">Order <strong>#{currentOrder?.orderId}</strong> has been placed.</p>
           <p className="text-xs text-base-content/40 mb-8">A confirmation has been sent to your registered email.</p>
           {rxRequired && (
             <div className={`flex items-start gap-3 p-3 rounded-xl mb-4 text-left border ${rxStatus === 'Approved' ? 'bg-success/10 border-success/30' : rxStatus === 'Pending' ? 'bg-warning/10 border-warning/30' : 'bg-error/10 border-error/30'}`}>
               <FileText className={`w-4 h-4 shrink-0 mt-0.5 ${rxStatus === 'Approved' ? 'text-success' : rxStatus === 'Pending' ? 'text-warning' : 'text-error'}`} />
               <div>
-                <p className="text-xs font-black text-base-content">Prescription Status</p>
+                <p className="text-xs  text-base-content">Prescription Status</p>
                 <p className="text-[10px] text-base-content/60 mt-0.5">
                   {rxStatus === 'Approved' ? 'Your prescription has been verified. Order is being processed.'
                     : rxStatus === 'Pending' ? 'Your prescription is pending pharmacist verification.'
@@ -1266,7 +1267,7 @@ export default function CartPage() {
             </div>
           )}
           <div className="bg-base-100 rounded-2xl border border-base-300 p-4 text-left mb-8 space-y-2">
-            <p className="text-[10px] font-black uppercase tracking-widest text-base-content/40 mb-3">Order Summary</p>
+            <p className="text-[10px]  uppercase tracking-widest text-base-content/40 mb-3">Order Summary</p>
             {[
               { label: 'Payment Method', value: currentOrder?.payment?.method },
               { label: 'Amount Paid',    value: `₹${currentOrder?.billing?.totalPayable?.toFixed(2)}`, accent: 'text-primary' },
@@ -1274,7 +1275,7 @@ export default function CartPage() {
             ].map(({ label, value, accent, truncate }) => (
               <div key={label} className="flex justify-between text-xs">
                 <span className="text-base-content/60">{label}</span>
-                <span className={`font-black ${accent ?? ''} ${truncate ? 'truncate max-w-[180px]' : ''}`}>{value}</span>
+                <span className={` ${accent ?? ''} ${truncate ? 'truncate max-w-[180px]' : ''}`}>{value}</span>
               </div>
             ))}
           </div>
@@ -1303,7 +1304,8 @@ export default function CartPage() {
           <div className="container-custom py-5">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-2xl font-black text-base-content flex items-center gap-2">
+                <h1 className="text-2xl  text-base-content flex items-center gap-2">
+                <BackButton />
                   <ShoppingCart className="w-6 h-6 text-primary" />
                   My Cart
                   {totalItems > 0 && (
@@ -1339,10 +1341,10 @@ export default function CartPage() {
               {showStoreInfo && cart.store && (
                 <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
                   <div className="mt-3 p-3 rounded-xl bg-base-100 border border-base-300 grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    {cart.store.contact?.phone && <div className="text-[10px]"><p className="text-base-content/40 font-bold uppercase">Phone</p><p className="font-black">{cart.store.contact.phone}</p></div>}
-                    {cart.store.address?.city  && <div className="text-[10px]"><p className="text-base-content/40 font-bold uppercase">Location</p><p className="font-black">{cart.store.address.city}</p></div>}
-                    {cart.store.deliverySettings?.estimatedDeliveryTime && <div className="text-[10px]"><p className="text-base-content/40 font-bold uppercase">Est. Delivery</p><p className="font-black text-success">{cart.store.deliverySettings.estimatedDeliveryTime}</p></div>}
-                    {cart.store.status && <div className="text-[10px]"><p className="text-base-content/40 font-bold uppercase">Store Status</p><p className={`font-black ${cart.store.status === 'Open' ? 'text-success' : 'text-error'}`}>{cart.store.status}</p></div>}
+                    {cart.store.contact?.phone && <div className="text-[10px]"><p className="text-base-content/40 font-bold uppercase">Phone</p><p className="">{cart.store.contact.phone}</p></div>}
+                    {cart.store.address?.city  && <div className="text-[10px]"><p className="text-base-content/40 font-bold uppercase">Location</p><p className="">{cart.store.address.city}</p></div>}
+                    {cart.store.deliverySettings?.estimatedDeliveryTime && <div className="text-[10px]"><p className="text-base-content/40 font-bold uppercase">Est. Delivery</p><p className=" text-success">{cart.store.deliverySettings.estimatedDeliveryTime}</p></div>}
+                    {cart.store.status && <div className="text-[10px]"><p className="text-base-content/40 font-bold uppercase">Store Status</p><p className={` ${cart.store.status === 'Open' ? 'text-success' : 'text-error'}`}>{cart.store.status}</p></div>}
                   </div>
                 </motion.div>
               )}
@@ -1366,7 +1368,7 @@ export default function CartPage() {
                   {step === 'cart' && (
                     <motion.div key="cart-items" custom={slideDir} variants={slideVariants} initial="enter" animate="center" exit="exit">
                       <div className="flex items-center justify-between mb-3">
-                        <h2 className="text-[10px] font-black uppercase tracking-widest text-base-content/40">
+                        <h2 className="text-[10px]  uppercase tracking-widest text-base-content/40">
                           {items.length} Item{items.length !== 1 ? 's' : ''} in Cart
                         </h2>
                         <button onClick={() => dispatch(fetchCart())}
@@ -1392,7 +1394,7 @@ export default function CartPage() {
                       </motion.div>
                       {/* Coupon section */}
                       <div className="bg-base-100 rounded-2xl border border-base-300 p-4 mt-4">
-                        <p className="text-[10px] font-black uppercase tracking-widest text-base-content/40 mb-3 flex items-center gap-1.5">
+                        <p className="text-[10px]  uppercase tracking-widest text-base-content/40 mb-3 flex items-center gap-1.5">
                           <Tag className="w-3.5 h-3.5" /> Have a Coupon?
                         </p>
                         <CouponInput orderTotal={orderTotalForCoupon} coupon={coupon} couponLoading={couponLoading}
@@ -1414,7 +1416,7 @@ export default function CartPage() {
                       className="bg-base-100 rounded-2xl border border-base-300 p-5">
                       <div className="flex items-center gap-2 mb-5">
                         <MapPin className="w-4 h-4 text-primary" />
-                        <h2 className="text-sm font-black">Delivery Address</h2>
+                        <h2 className="text-xs ">Delivery Address</h2>
                       </div>
                       <AddressForm address={address} onChange={handleAddressChange} errors={addressErrors} />
                     </motion.div>
@@ -1423,7 +1425,7 @@ export default function CartPage() {
                   {/* Step 4 — Payment Method */}
                   {step === 'payment' && (
                     <motion.div key="payment-method" custom={slideDir} variants={slideVariants} initial="enter" animate="center" exit="exit" className="space-y-3">
-                      <h2 className="text-[10px] font-black uppercase tracking-widest text-base-content/40 mb-1">Select Payment Method</h2>
+                      <h2 className="text-[10px]  uppercase tracking-widest text-base-content/40 mb-1">Select Payment Method</h2>
                       <div role="radiogroup" aria-label="Payment method options" className="space-y-3">
                         {PAYMENT_METHODS.map((pm) => {
                           const Icon = pm.icon;
@@ -1438,7 +1440,7 @@ export default function CartPage() {
                                 <Icon className={`w-5 h-5 ${isSelected ? pm.color : 'text-base-content/40'}`} />
                               </div>
                               <div className="flex-1 min-w-0">
-                                <p className="text-sm font-black text-base-content">{pm.label}</p>
+                                <p className="text-xs  text-base-content">{pm.label}</p>
                                 <p className="text-[10px] text-base-content/50">
                                   {pm.id === 'Wallet' && !walletData?.isActive ? 'Wallet is currently inactive' : pm.sub}
                                 </p>
@@ -1446,7 +1448,7 @@ export default function CartPage() {
                               {pm.id === 'Wallet' && walletData?.isActive && (
                                 <div className="text-right shrink-0">
                                   <p className="text-[9px] text-base-content/40 font-bold uppercase">Balance</p>
-                                  <p className={`text-xs font-black ${walletBalance >= finalPayable ? 'text-success' : 'text-error'}`}>₹{walletBalance.toFixed(2)}</p>
+                                  <p className={`text-xs  ${walletBalance >= finalPayable ? 'text-success' : 'text-error'}`}>₹{walletBalance.toFixed(2)}</p>
                                 </div>
                               )}
                               {isSelected && <CheckCircle2 className={`w-4 h-4 shrink-0 ${pm.color}`} />}
@@ -1476,7 +1478,7 @@ export default function CartPage() {
                 <div className="sticky top-28 space-y-4">
 
                   <section className="bg-base-100 rounded-2xl border border-base-300 p-5" aria-label="Bill summary">
-                    <h2 className="text-[10px] font-black uppercase tracking-widest text-base-content/40 mb-4 flex items-center gap-1.5">
+                    <h2 className="text-[10px]  uppercase tracking-widest text-base-content/40 mb-4 flex items-center gap-1.5">
                       <ReceiptText className="w-3.5 h-3.5" /> Bill Summary
                     </h2>
                     <BillSummary billSummary={billSummary} subscriptionDiscount={pharmacyDiscount} coupon={coupon} paymentMethod={paymentMethod} />
@@ -1486,7 +1488,7 @@ export default function CartPage() {
                     <div className={`flex items-start gap-3 p-3 rounded-xl border ${allRxDone ? 'bg-success/10 border-success/20' : 'bg-warning/10 border-warning/30'}`} role="note">
                       <FileText className={`w-4 h-4 shrink-0 mt-0.5 ${allRxDone ? 'text-success' : 'text-warning'}`} />
                       <div className="flex-1 min-w-0">
-                        <p className={`text-[10px] font-black uppercase tracking-wider ${allRxDone ? 'text-success' : 'text-warning'}`}>
+                        <p className={`text-[10px]  uppercase tracking-wider ${allRxDone ? 'text-success' : 'text-warning'}`}>
                           Prescription {allRxDone ? 'Ready' : 'Required'}
                         </p>
                         <p className="text-xs text-base-content/60 mt-0.5">
@@ -1500,7 +1502,7 @@ export default function CartPage() {
                     <div className="flex items-start gap-3 p-3 rounded-xl bg-success/10 border border-success/20" role="note">
                       <BadgePercent className="w-4 h-4 text-success shrink-0 mt-0.5" />
                       <div className="flex-1 min-w-0">
-                        <p className="text-[10px] font-black uppercase tracking-wider text-success">Coupon Applied</p>
+                        <p className="text-[10px]  uppercase tracking-wider text-success">Coupon Applied</p>
                         <p className="text-xs text-base-content/60 mt-0.5 truncate"><strong>{coupon.code}</strong> — saving ₹{coupon.discountAmount?.toFixed(2)}</p>
                       </div>
                       <button onClick={handleRemoveCoupon} aria-label="Remove coupon" className="p-1 rounded-md hover:bg-error/10 text-base-content/30 hover:text-error transition-all shrink-0">
@@ -1513,7 +1515,7 @@ export default function CartPage() {
                     <div className="flex items-start gap-3 p-3 rounded-xl bg-success/10 border border-success/20" role="note">
                       <Star className="w-4 h-4 text-success shrink-0 mt-0.5" />
                       <div>
-                        <p className="text-[10px] font-black uppercase tracking-wider text-success">{subscriptionName} Benefit</p>
+                        <p className="text-[10px]  uppercase tracking-wider text-success">{subscriptionName} Benefit</p>
                         <p className="text-xs text-base-content/60 mt-0.5">{pharmacyDiscount}% discount applied automatically.</p>
                       </div>
                     </div>
@@ -1538,35 +1540,35 @@ export default function CartPage() {
                   <div className="space-y-2">
                     {step === 'cart' && (
                       <button onClick={handleProceedFromCart}
-                        className="w-full flex items-center justify-center gap-2 py-3 bg-primary text-white rounded-xl text-sm font-bold hover:bg-primary/80 transition-all">
+                        className="w-full flex items-center justify-center gap-2 py-3 bg-primary text-white rounded-xl text-xs font-bold hover:bg-primary/80 transition-all">
                         {rxPresent ? 'Add Prescriptions' : 'Proceed to Address'}
                         <ArrowRight className="w-4 h-4" />
                       </button>
                     )}
                     {step === 'prescription' && (
                       <div className="flex gap-2">
-                        <button onClick={() => goToStep('cart')} className="px-4 py-2.5 bg-base-300 rounded-xl font-bold text-sm hover:bg-base-400">Back</button>
+                        <button onClick={() => goToStep('cart')} className="px-4 py-2.5 bg-base-300 rounded-xl font-bold text-xs hover:bg-base-400">Back</button>
                         <button onClick={handleProceedFromPrescription}
-                          className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-primary text-white rounded-xl text-sm font-bold hover:bg-primary/80">
+                          className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-primary text-white rounded-xl text-xs font-bold hover:bg-primary/80">
                           {allRxDone ? 'Proceed to Address' : 'Skip & Continue'} <ArrowRight className="w-4 h-4" />
                         </button>
                       </div>
                     )}
                     {step === 'address' && (
                       <div className="flex gap-2">
-                        <button onClick={() => goToStep(rxPresent ? 'prescription' : 'cart')} className="px-4 py-2.5 bg-base-300 rounded-xl font-bold text-sm hover:bg-base-400">Back</button>
+                        <button onClick={() => goToStep(rxPresent ? 'prescription' : 'cart')} className="px-4 py-2.5 bg-base-300 rounded-xl font-bold text-xs hover:bg-base-400">Back</button>
                         <button onClick={handleProceedToPayment}
-                          className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-primary text-white rounded-xl text-sm font-bold hover:bg-primary/80">
+                          className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-primary text-white rounded-xl text-xs font-bold hover:bg-primary/80">
                           Select Payment <ArrowRight className="w-4 h-4" />
                         </button>
                       </div>
                     )}
                     {step === 'payment' && (
                       <div className="flex gap-2">
-                        <button onClick={() => goToStep('address')} className="px-4 py-2.5 bg-base-300 rounded-xl font-bold text-sm hover:bg-base-400">Back</button>
+                        <button onClick={() => goToStep('address')} className="px-4 py-2.5 bg-base-300 rounded-xl font-bold text-xs hover:bg-base-400">Back</button>
                         <button onClick={handlePlaceOrder}
                           disabled={isActing || (paymentMethod === 'Wallet' && (!walletData?.isActive || walletBalance < finalPayable))}
-                          className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-primary text-white rounded-xl text-sm font-bold hover:bg-primary/80 disabled:opacity-40">
+                          className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-primary text-white rounded-xl text-xs font-bold hover:bg-primary/80 disabled:opacity-40">
                           {isActing
                             ? <><Loader2 className="w-4 h-4 animate-spin" /> Processing…</>
                             : <><CreditCard className="w-4 h-4" />{paymentMethod === 'COD' ? 'Place Order' : paymentMethod === 'Wallet' ? 'Pay via Wallet' : `Pay ₹${finalPayable.toFixed(2)}`}</>}

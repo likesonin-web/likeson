@@ -22,6 +22,7 @@ import {
   selectPharmacyGlobalLoading,
   selectOrderError,
 } from '@/store/slices/pharmacyOrderSlice';
+import BackButton from '../../../components/BackButton';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // § CONFIG
@@ -394,9 +395,9 @@ export default function MyOrders() {
   const totalPages = pagination.totalPages ?? pagination.pages ?? 1;
 
   return (
-    <div className="min-h-screen bg-base-200 py-6 px-4">
+    <div className="min-h-screen bg-base-200 pb-6 pt-2 px-4">
       <div className="max-w-3xl mx-auto">
-
+       <BackButton className="mb-4" label="Back to Dashboard" />
         {/* Page header */}
         <motion.div initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
           <div className="flex items-center justify-between flex-wrap gap-3">

@@ -19,6 +19,7 @@ import {
   selectMyBookingsMeta,
   selectLoading,
 } from '@/store/slices/bookingSlice';
+import BackButton from '../../components/BackButton';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -237,6 +238,7 @@ export default function BookingsPage() {
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between gap-4">
             <div>
+              <BackButton className="mb-2" />
               <h1 className="text-2xl md:text-3xl font-black text-base-content tracking-tight">My Bookings</h1>
               <p className="text-base-content/50 text-xs font-medium mt-0.5">
                 {meta?.total != null ? `${meta.total} records found` : 'Loading your history...'}
