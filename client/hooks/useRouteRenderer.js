@@ -14,6 +14,14 @@
  *  - Colors object extended with CA route color
  *  - ensureLines() never recreates existing lines (guard added)
  *  - clearRoute() also calls clearCaRoute()
+ *
+ * FIX (this version):
+ *  - ensureLines() now always calls applyColors() internally so routeType
+ *    color changes apply to already-existing lines. Previously if lines existed
+ *    from a prior routeType, colors were stale until applyColors() was called
+ *    by the caller — but callers that skip applyColors() would see wrong colors.
+ *    Now ensureLines(routeType) is the single call needed for both create + recolor.
+ *  - setRoute() no longer calls applyColors() separately — ensureLines handles it.
  */
 
 import { useRef, useCallback, useEffect } from 'react';
@@ -21,37 +29,48 @@ import { extractRoutePolyline, snapToPolyline } from '@/utils/navigationUtils';
 
 export function useRouteRenderer(mapRef) {
   // ── Driver route polylines ────────────────────────────────────────────────
-  const traversedLineRef  = useRef(null);  // driven portion
-  const remainingLineRef  = useRef(null);  // upcoming portion
-  const borderLineRef     = useRef(null);  // outline/border for remaining
+  const traversedLineRef  = useRef(null);
+  const remainingLineRef  = useRef(null);
+  const borderLineRef     = useRef(null);
 
   // ── CA route polyline (full_care_ride only) ───────────────────────────────
-  const caRouteLineRef    = useRef(null);  // CA path from their position → join point
-  const caBorderLineRef   = useRef(null);  // border/shadow for CA route
+  const caRouteLineRef    = useRef(null);
+  const caBorderLineRef   = useRef(null);
 
   // ── Data ──────────────────────────────────────────────────────────────────
-  const routePointsRef    = useRef([]);    // full decoded driver polyline
-  const caRoutePointsRef  = useRef([]);    // CA route points
+  const routePointsRef    = useRef([]);
+  const caRoutePointsRef  = useRef([]);
 
   // ── Colors ───────────────────────────────────────────────────────────────
   const COLORS = {
     toPickup: {
-      remaining: '#10b981',   // green — driver going to customer
+      remaining: '#10b981',
       traversed: '#6ee7b7',
       border:    '#059669',
     },
     toDropoff: {
-      remaining: '#3b82f6',   // blue — trip in progress
+      remaining: '#3b82f6',
       traversed: '#93c5fd',
       border:    '#1d4ed8',
     },
     caRoute: {
-      line:   '#8b5cf6',      // purple — care assistant route to join point
+      line:   '#8b5cf6',
       border: '#6d28d9',
     },
   };
 
+  // ── Apply colors for route type ───────────────────────────────────────────
+  // Kept as standalone — callers can recolor without recreating lines.
+  const applyColors = useCallback((routeType = 'toPickup') => {
+    const colors = COLORS[routeType] || COLORS.toPickup;
+    borderLineRef.current?.setOptions({ strokeColor: colors.border });
+    remainingLineRef.current?.setOptions({ strokeColor: colors.remaining });
+    traversedLineRef.current?.setOptions({ strokeColor: colors.traversed });
+  }, []); // eslint-disable-line
+
   // ── Create driver polyline objects ────────────────────────────────────────
+  // FIX: always call applyColors() at end so changing routeType on existing
+  // lines takes effect immediately — callers don't need a separate applyColors call.
   const ensureLines = useCallback((routeType = 'toPickup') => {
     const map = mapRef.current;
     if (!map || !window.google?.maps?.Polyline) return;
@@ -103,7 +122,10 @@ export function useRouteRenderer(mapRef) {
         clickable:     false,
       });
     }
-  }, [mapRef]); // eslint-disable-line
+
+    // FIX: always reapply colors — handles routeType change on existing lines
+    applyColors(routeType);
+  }, [mapRef, applyColors]); // eslint-disable-line
 
   // ── Create CA route polylines ─────────────────────────────────────────────
   const ensureCaLines = useCallback(() => {
@@ -131,7 +153,6 @@ export function useRouteRenderer(mapRef) {
         strokeOpacity: 0.85,
         zIndex:        2,
         clickable:     false,
-        // Dashed pattern — distinguishes CA route from driver route
         icons: [
           {
             icon: {
@@ -159,15 +180,8 @@ export function useRouteRenderer(mapRef) {
     }
   }, [mapRef]); // eslint-disable-line
 
-  // ── Apply colors for route type ───────────────────────────────────────────
-  const applyColors = useCallback((routeType = 'toPickup') => {
-    const colors = COLORS[routeType] || COLORS.toPickup;
-    borderLineRef.current?.setOptions({ strokeColor: colors.border });
-    remainingLineRef.current?.setOptions({ strokeColor: colors.remaining });
-    traversedLineRef.current?.setOptions({ strokeColor: colors.traversed });
-  }, []); // eslint-disable-line
-
   // ── Set driver route (from DirectionsResult) ──────────────────────────────
+  // FIX: removed separate applyColors() call — ensureLines() now handles it.
   const setRoute = useCallback((directionsResult, routeType = 'toPickup') => {
     const map = mapRef.current;
     if (!map || !directionsResult) return;
@@ -175,22 +189,15 @@ export function useRouteRenderer(mapRef) {
     const points = extractRoutePolyline(directionsResult);
     routePointsRef.current = points;
 
-    ensureLines(routeType);
-    applyColors(routeType);
+    ensureLines(routeType); // creates lines if needed AND recolors if routeType changed
 
     const path = points.map(p => ({ lat: p.lat, lng: p.lng }));
     borderLineRef.current?.setPath(path);
     remainingLineRef.current?.setPath(path);
     traversedLineRef.current?.setPath([]);
-  }, [mapRef, ensureLines, applyColors]);
+  }, [mapRef, ensureLines]);
 
   // ── Set CA route from DirectionsResult ───────────────────────────────────
-  /**
-   * setCaRoute — draws CA path from DirectionsResult.
-   * Used when you have a full DirectionsResult for the CA's path to join point.
-   *
-   * @param {google.maps.DirectionsResult} directionsResult
-   */
   const setCaRoute = useCallback((directionsResult) => {
     const map = mapRef.current;
     if (!map || !directionsResult) return;
@@ -205,14 +212,7 @@ export function useRouteRenderer(mapRef) {
     caRouteLineRef.current?.setPath(path);
   }, [mapRef, ensureCaLines]);
 
-  // ── Set CA route from raw [lng,lat] coordinate pairs ─────────────────────
-  /**
-   * setCaRouteDirect — draws CA path from raw coordinate array.
-   * Used with caJoinPoint.caRoute.from/to or direct coordinate pairs
-   * (no DirectionsResult needed — straight-line approximation).
-   *
-   * @param {{ lat: number, lng: number }[]} points  — already lat/lng objects
-   */
+  // ── Set CA route from raw {lat,lng} coordinate pairs ─────────────────────
   const setCaRouteDirect = useCallback((points) => {
     const map = mapRef.current;
     if (!map || !points?.length) return;

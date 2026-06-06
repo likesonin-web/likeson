@@ -20,6 +20,12 @@
  *  - mountedRef.current = false set FIRST in cleanup
  *  - bookingId guard on joinBookingRoom / leaveBookingRoom
  *  - requestBookingState dispatched once after join
+ *
+ * FIX (this version):
+ *  - Removed gpsError from startTracking useCallback deps — caused new fn ref on every
+ *    GPS error → stale closure in success handler couldn't clear error state.
+ *    Now uses setGpsError(prev => prev ? null : prev) — no stale read needed.
+ *  - GPS success handler: clear error without reading stale gpsError closure value.
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react';
@@ -97,15 +103,12 @@ export function useRideTracking({ rideId, bookingId }) {
   const [currentPosition, setCurrentPosition] = useState(null);
 
   // ── CA-specific local state ───────────────────────────────────────────────
-  // Stored locally so component can read without full Redux selector chain.
-  // Also pushed to Redux via setCareAssistantLocation for persistence.
-  const [caLiveLocation, setCaLiveLocation] = useState(null);  // { lat, lng, heading, speed }
+  const [caLiveLocation, setCaLiveLocation] = useState(null);
   const [caStatus,       setCaStatusLocal]  = useState('not_joined');
-  const [caJoinPoint,    setCaJoinPoint]    = useState(null);   // { coordinates, zone, distCaToJoinKm }
+  const [caJoinPoint,    setCaJoinPoint]    = useState(null);
   const [caName,         setCaName]         = useState(null);
 
   // ── Derived booking type ──────────────────────────────────────────────────
-  // Read from tracking data (populated by fetchRideTracking) or socketLive
   const [bookingType, setBookingType] = useState(null);
 
   // ── Refs ─────────────────────────────────────────────────────────────────
@@ -121,7 +124,6 @@ export function useRideTracking({ rideId, bookingId }) {
     dispatch(fetchRideTracking({ rideId }))
       .then((result) => {
         if (!mountedRef.current) return;
-        // Extract bookingType from fetched data
         const data = result?.payload;
         const bt = data?.ride?.booking?.bookingType
           || data?.booking?.bookingType
@@ -129,7 +131,6 @@ export function useRideTracking({ rideId, bookingId }) {
           || null;
         if (bt) setBookingType(bt);
 
-        // Extract CA join point from ride waypoints
         const waypoints = data?.ride?.waypoints || [];
         const joinWp = waypoints.find(w => w.type === 'care_assistant_join');
         if (joinWp?.location?.coordinates?.length >= 2) {
@@ -140,14 +141,12 @@ export function useRideTracking({ rideId, bookingId }) {
           });
         }
 
-        // Extract CA name from tracking snapshot
         const caSnap = data?.ride?.careAssistantSnapshot
           || data?.careAssistant;
         if (caSnap?.name || caSnap?.fullName) {
           setCaName(caSnap.name || caSnap.fullName);
         }
 
-        // Extract CA live location from tracking if present
         const caLoc = data?.careAssistant?.liveLocation
           || data?.tracking?.careAssistantLiveLocation;
         if (caLoc?.lat && caLoc?.lng) {
@@ -166,7 +165,6 @@ export function useRideTracking({ rideId, bookingId }) {
       || null;
     if (bt && bt !== bookingType) setBookingType(bt);
 
-    // CA name from ride snapshot
     const snap = currentRide?.careAssistantSnapshot;
     if (snap?.name && !caName) setCaName(snap.name);
   }, [currentRide, trackingData, bookingType, caName]);
@@ -183,26 +181,22 @@ export function useRideTracking({ rideId, bookingId }) {
   useEffect(() => {
     const unsubs = [
 
-      // ── Driver location ─────────────────────────────────────────────────
       on(EV.LOCATION_UPDATE, (data) => {
         dispatch(socketLocationUpdate(data));
         dispatch(setLiveLocation(data));
       }),
 
-      // ── ETA ─────────────────────────────────────────────────────────────
       on(EV.ETA_UPDATE, (data) => {
         dispatch(socketEtaUpdate(data));
         dispatch(setEtaUpdate(data));
       }),
 
-      // ── Ride status ──────────────────────────────────────────────────────
       on(EV.RIDE_STATUS_CHANGED, (data) => {
         dispatch(socketRideStatusChanged(data));
         dispatch(setRideStatus(data));
         if (data.status === 'completed')    dispatch(socketRideCompleted(data));
         if (data.status === 'otp_verified') dispatch(socketOtpVerified(data));
 
-        // Sync activeNavigationTarget from status event
         if (data.activeNavigationTarget) {
           dispatch(setNavigationTarget({
             currentTarget:          data.activeNavigationTarget,
@@ -215,21 +209,17 @@ export function useRideTracking({ rideId, bookingId }) {
           }));
         }
 
-        // Sync bookingType if server sends it
         if (data.bookingType && mountedRef.current) {
           setBookingType(data.bookingType);
         }
       }),
 
-      // ── Navigation target ────────────────────────────────────────────────
       on(EV.NAVIGATION_TARGET_CHANGED, (data) => {
         dispatch(socketNavigationTargetChanged(data));
         dispatch(setNavigationTarget(data));
       }),
 
       // ── CARE ASSISTANT: live location update ─────────────────────────────
-      // Server emits 'care_assistant_location_update' to booking room when CA
-      // calls PATCH /care/location or emits care_location socket event.
       on('care_assistant_location_update', (data) => {
         if (!mountedRef.current) return;
 
@@ -241,27 +231,23 @@ export function useRideTracking({ rideId, bookingId }) {
           updatedAt: data.updatedAt || new Date().toISOString(),
         };
 
-        // Local state — drives marker in RideLiveTracking
         setCaLiveLocation(loc);
 
-        // Redux — persists across re-renders, readable by other selectors
         dispatch(setCareAssistantLocation({
           ...loc,
-          role:           'care_assistant',
+          role:            'care_assistant',
           careAssistantId: data.careAssistantId || null,
           bookingId:       data.bookingId       || bookingId,
           rideId:          data.rideId          || rideId,
           status:          data.status          || null,
         }));
 
-        // Also sync CA status if server sends it alongside location
         if (data.status && mountedRef.current) {
           setCaStatusLocal(data.status);
         }
       }),
 
       // ── CARE ASSISTANT: status change ─────────────────────────────────────
-      // Server emits when CA calls PATCH /:id/care/ride-status
       on('care_assistant_status_change', (data) => {
         if (!mountedRef.current) return;
 
@@ -271,14 +257,12 @@ export function useRideTracking({ rideId, bookingId }) {
           dispatch(setCareAssistantStatus({ careAssistantStatus: newStatus }));
         }
 
-        // Update CA name if server sends it
         if (data.careAssistantName && mountedRef.current) {
           setCaName(data.careAssistantName);
         }
       }),
 
       // ── CARE ASSISTANT: joined ride session ───────────────────────────────
-      // Server emits when CA calls POST /:id/care/join-ride
       on('care_assistant_joined_ride', (data) => {
         if (!mountedRef.current) return;
 
@@ -286,12 +270,11 @@ export function useRideTracking({ rideId, bookingId }) {
           careAssistantId:   data.careAssistantId,
           careAssistantName: data.careAssistantName,
           joinedAt:          data.joinedAt,
-          caJoinPoint:       null, // join-ride doesn't send join point
+          caJoinPoint:       null,
         }));
 
         if (data.careAssistantName) setCaName(data.careAssistantName);
 
-        // If server sends current CA location in joined event
         if (data.currentLocation?.lat && data.currentLocation?.lng) {
           const loc = {
             lat:     data.currentLocation.lat,
@@ -305,14 +288,11 @@ export function useRideTracking({ rideId, bookingId }) {
       }),
 
       // ── CARE ASSISTANT: attached to ride by admin ──────────────────────────
-      // Server emits when admin calls POST /assign/care-assistant
-      // This event includes the caJoinPoint geometry
       on('care_assistant_attached_to_ride', (data) => {
         if (!mountedRef.current) return;
 
         if (data.careAssistantName) setCaName(data.careAssistantName);
 
-        // Extract join point — this is the primary source for full_care_ride
         if (data.caJoinPoint?.coordinates?.length >= 2) {
           setCaJoinPoint({
             coordinates:    data.caJoinPoint.coordinates,
@@ -320,7 +300,6 @@ export function useRideTracking({ rideId, bookingId }) {
             distCaToJoinKm: data.caJoinPoint.distCaToJoinKm || null,
           });
 
-          // Persist in Redux careRideStatus
           dispatch(setCareRideWorkflow({
             careAssistantJoined:    true,
             activeNavigationTarget: 'pickup_care_assistant',
@@ -336,11 +315,9 @@ export function useRideTracking({ rideId, bookingId }) {
       }),
 
       // ── BOOKING STATE SNAPSHOT (reconnect) ────────────────────────────────
-      // Server sends full snapshot on request_booking_state
       on('booking_state_snapshot', (data) => {
         if (!mountedRef.current) return;
 
-        // Restore CA live location from snapshot
         if (data.tracking?.careAssistantLiveLocation) {
           const loc = data.tracking.careAssistantLiveLocation;
           if (loc.coordinates?.length >= 2) {
@@ -353,7 +330,6 @@ export function useRideTracking({ rideId, bookingId }) {
           }
         }
 
-        // Restore CA status from snapshot
         if (data.tracking?.careAssistantStatus) {
           setCaStatusLocal(data.tracking.careAssistantStatus);
         }
@@ -362,9 +338,12 @@ export function useRideTracking({ rideId, bookingId }) {
     ];
 
     return () => unsubs.forEach(fn => fn?.());
-  }, [on, EV, dispatch, bookingId, rideId]); // bookingId/rideId needed in closure for dispatch calls
+  }, [on, EV, dispatch, bookingId, rideId]);
 
   // ── 4. GPS — internal watchPosition ──────────────────────────────────────
+  // FIX: removed gpsError from deps — caused new fn ref on every error state change,
+  // making the stale closure unable to clear the error. Now uses functional updater
+  // setGpsError(prev => prev ? null : prev) in success handler — no stale read.
   const startTracking = useCallback(() => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
       setGpsError('GPS not supported on this device');
@@ -381,12 +360,10 @@ export function useRideTracking({ rideId, bookingId }) {
         const { latitude: lat, longitude: lng, heading, accuracy } = pos.coords;
         const rawSpeed = pos.coords.speed;
 
-        // Guard null/negative speed before unit conversion
         const speedKmh = rawSpeed != null && rawSpeed >= 0
           ? +(rawSpeed * 3.6).toFixed(1)
           : 0;
 
-        // Compute heading from movement delta when device omits it
         let computedHeading = heading;
         if ((computedHeading === null || computedHeading === undefined) && lastPositionRef.current) {
           const prev = lastPositionRef.current;
@@ -405,14 +382,12 @@ export function useRideTracking({ rideId, bookingId }) {
 
         lastPositionRef.current = position;
 
-        // Throttle React state update to 1/s — prevents render flood
         const now = Date.now();
         if (now - lastSetPosAt.current > 1000) {
           lastSetPosAt.current = now;
           if (mountedRef.current) setCurrentPosition({ ...position });
         }
 
-        // Emit to server via socketService directly
         socketService.emit('driver_location', {
           bookingId: bookingId ?? undefined,
           lat,
@@ -422,7 +397,8 @@ export function useRideTracking({ rideId, bookingId }) {
           accuracy: accuracy ?? undefined,
         });
 
-        if (mountedRef.current && gpsError) setGpsError(null);
+        // FIX: functional updater — no stale closure read of gpsError
+        if (mountedRef.current) setGpsError(prev => prev ? null : prev);
       },
       (err) => {
         if (!mountedRef.current) return;
@@ -438,7 +414,7 @@ export function useRideTracking({ rideId, bookingId }) {
     );
 
     dispatch(startGpsTracking({ bookingId }));
-  }, [bookingId, dispatch, gpsError]);
+  }, [bookingId, dispatch]); // FIX: removed gpsError — was causing fn churn + stale closures
 
   const stopTracking = useCallback(() => {
     if (gpsWatchIdRef.current !== null) {
@@ -561,10 +537,10 @@ export function useRideTracking({ rideId, bookingId }) {
     connected,
     // ── CA-specific ──────────────────────────────────────────────────────
     bookingType,
-    caLiveLocation,   // { lat, lng, heading, speed } — CA live position
-    caStatus,         // 'not_joined'|'en_route_to_pickup'|'at_pickup'|'in_ride'|'departed'
-    caJoinPoint,      // { coordinates: [lng,lat], zone, distCaToJoinKm } | null
-    caName,           // string | null
+    caLiveLocation,
+    caStatus,
+    caJoinPoint,
+    caName,
     // ── Actions ──────────────────────────────────────────────────────────
     sendStatusUpdate,
     verifyOtp,

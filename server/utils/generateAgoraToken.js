@@ -1,9 +1,6 @@
 // utils/generateAgoraToken.js
 // Low-level token generators — pure functions, no DB, no side effects.
 // Used by agoraToken.js
-//
-// FIX #1: RtcTokenBuilder.buildTokenWithUid called with correct 6 args (not 7).
-//         Original code passed privilegeExpiredTs twice — second arg was wrong.
 
 import pkg from 'agora-token';
 const { RtcTokenBuilder, RtmTokenBuilder, RtcRole } = pkg;
@@ -16,8 +13,7 @@ import agoraConfig from '../config/agora.config.js';
  * Current epoch (seconds) + offset
  * @param {number} offsetSec
  */
-const expireAt = (offsetSec) =>
-  Math.floor(Date.now() / 1000) + offsetSec;
+const expireAt = (offsetSec) => Math.floor(Date.now() / 1000) + offsetSec;
 
 /**
  * Map custom role string → Agora RtcRole int
@@ -28,52 +24,21 @@ const toRtcRole = (role) =>
 
 // ── RTC Token ─────────────────────────────────────────────────────────────────
 
-/**
- * Generate Agora RTC token (video/audio session)
- *
- * agora-token v2 buildTokenWithUid signature:
- * buildTokenWithUid(appId, appCert, channelName, uid, role, privilegeExpiredTs)
- * → 6 arguments only.
- *
- * @param {object}  opts
- * @param {string}  opts.channelName
- * @param {number}  opts.uid           Agora UID (uint32)
- * @param {'publisher'|'subscriber'} [opts.role='publisher']
- * @param {number}  [opts.expireSec]   override default TTL
- *
- * @returns {{ token: string, expiresAt: Date, uid: number, channelName: string }}
- */
-export function generateRtcToken({
-  channelName,
-  uid,
-  role = 'publisher',
-  expireSec = agoraConfig.tokenExpireSec,
-}) {
-  if (!channelName) throw new Error('[generateRtcToken] channelName required');
-  if (uid === undefined || uid === null) throw new Error('[generateRtcToken] uid required');
-
+export const generateRtcToken = ({ channelName, uid, role = 'publisher', expireSec = agoraConfig?.tokenExpireSec || 7200 }) => {
+  const agoraRole = toRtcRole(role);
   const privilegeExpiredTs = expireAt(expireSec);
-  const rtcRole            = toRtcRole(role);
 
-  // ── FIX #1 — 6 args only (agora-token v2) ────────────────────────────────
-  // Original had 7 args: ...role, privilegeExpiredTs, privilegeExpiredTs
-  // The 7th param does not exist in v2 and caused silent/incorrect behavior.
   const token = RtcTokenBuilder.buildTokenWithUid(
-    agoraConfig.appId,
-    agoraConfig.appCert,
+    agoraConfig?.appId || process.env.AGORAIO_APP_ID,
+    agoraConfig?.appCert || process.env.AGORAIO_APP_CERT,
     channelName,
     uid,
-    rtcRole,
-    privilegeExpiredTs,   // single expiry — controls all privileges
+    agoraRole,
+    privilegeExpiredTs,
+    privilegeExpiredTs
   );
-
-  return {
-    token,
-    uid,
-    channelName,
-    expiresAt: new Date(privilegeExpiredTs * 1000),
-  };
-}
+  return { token, expiresAt: new Date(privilegeExpiredTs * 1000) };
+};
 
 // ── RTM Token ─────────────────────────────────────────────────────────────────
 
@@ -86,19 +51,16 @@ export function generateRtcToken({
  *
  * @returns {{ token: string, expiresAt: Date, userId: string }}
  */
-export function generateRtmToken({
-  userId,
-  expireSec = agoraConfig.rtm.expireSec,
-}) {
+export function generateRtmToken({ userId, expireSec = agoraConfig?.rtm?.expireSec || 7200 }) {
   if (!userId) throw new Error('[generateRtmToken] userId required');
 
   const privilegeExpiredTs = expireAt(expireSec);
 
   const token = RtmTokenBuilder.buildToken(
-    agoraConfig.appId,
-    agoraConfig.appCert,
+    agoraConfig?.appId || process.env.AGORAIO_APP_ID,
+    agoraConfig?.appCert || process.env.AGORAIO_APP_CERT,
     String(userId),
-    privilegeExpiredTs,
+    privilegeExpiredTs
   );
 
   return {
@@ -134,7 +96,7 @@ export function generateParticipantTokens({
   uid,
   userId,
   role = 'publisher',
-  expireSec = agoraConfig.tokenExpireSec,
+  expireSec = agoraConfig?.tokenExpireSec || 7200,
 }) {
   const rtc = generateRtcToken({ channelName, uid, role, expireSec });
   const rtm = generateRtmToken({ userId, expireSec });
@@ -145,7 +107,7 @@ export function generateParticipantTokens({
     uid,
     userId:     String(userId),
     channelName,
-    expiresAt:  rtc.expiresAt, // RTC and RTM share same TTL
+    expiresAt:  rtc.expiresAt,
   };
 }
 
@@ -154,7 +116,8 @@ export function generateParticipantTokens({
 /**
  * Generate an Agora RTC token for a specific user + channel.
  * Used primarily for the dedicated screen-share client.
- * * @param {string} channelName
+ *
+ * @param {string} channelName
  * @param {number} uid            numeric UID for this user
  * @param {number} expireSeconds  default 7200 (2h)
  * @returns {string} RTC token string
@@ -165,13 +128,13 @@ export const generateAgoraToken = (channelName, uid, expireSeconds = 7200) => {
 
   const privilegeExpiredTs = expireAt(expireSeconds);
 
-  // Using the 6-arg signature to match your v2 implementation
   return RtcTokenBuilder.buildTokenWithUid(
-    agoraConfig.appId,
-    agoraConfig.appCert,
+    agoraConfig?.appId || process.env.AGORAIO_APP_ID,
+    agoraConfig?.appCert || process.env.AGORAIO_APP_CERT,
     channelName,
     uid,
     RtcRole.PUBLISHER,
+    privilegeExpiredTs,
     privilegeExpiredTs
   );
 };

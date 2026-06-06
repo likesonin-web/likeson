@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import Banner from '@/components/Banner';
 import Container from '@/components/ui/Container';
-
+import { selectMySubscription, selectMySubPlanName } from '@/store/slices/subscriptionSlice';
 // ─── Redux ────────────────────────────────────────────────────────────────────
 import {
   fetchCart,
@@ -1075,8 +1075,9 @@ export default function CartPage() {
   const rxUploadLoading = useSelector(selectPrescriptionUploadLoading);
   const rxUploadError   = useSelector(selectPrescriptionUploadError);
 
-  const pharmacyDiscount = useSelector((s) => s.user?.subscription?.pharmacyDiscount ?? 0);
-  const subscriptionName = useSelector((s) => s.user?.subscription?.planName ?? '');
+ const mySub           = useSelector(selectMySubscription);
+const pharmacyDiscount = mySub?.limits?.pharmacyDiscountPercent ?? 0;
+const subscriptionName = useSelector(selectMySubPlanName) ?? '';
   const razorpayKeyId    = useSelector((s) => s.user?.razorpayKey) ?? RAZORPAY_KEY;
 
   // ── Local state ───────────────────────────────────────────────────────────────

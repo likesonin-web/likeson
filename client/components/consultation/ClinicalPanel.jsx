@@ -4,9 +4,10 @@
  * ClinicalPanel.jsx — TAILWIND REFACTOR & SCHEMA ALIGNMENT
  *
  * NEW & ENHANCED:
- * 1. Fully utilizes Tailwind utility classes and global.css components (input-field, btn, etc.)
+ * 1. Fully utilizes Tailwind utility classes and global.css components.
  * 2. Mapped perfectly to Consultation and EPrescription schemas.
  * 3. Every single field includes a descriptive, small note label.
+ * 4. Strictly uses a responsive 1-column (mobile) to 2-column (desktop) grid layout.
  */
 
 import React, { useState, useEffect, useCallback, useRef, memo } from 'react';
@@ -131,7 +132,7 @@ const VitalsForm = memo(({ consultationId }) => {
 
   return (
     <div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {fields.map(({ key, label, note, placeholder }) => (
           <FormGroup key={key} label={label} note={note}>
             <input
@@ -182,11 +183,10 @@ const SOAPNotes = memo(({ consultationId }) => {
 
   return (
     <div className="space-y-4">
-      <FormGroup label="Chief Complaint" note="Primary reason for the patient's visit today.">
-        <textarea className="input-field min-h-[60px]" value={notes.chiefComplaint} onChange={update('chiefComplaint')} placeholder="e.g. Headache for 3 days..." />
-      </FormGroup>
-
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <FormGroup label="Chief Complaint" note="Primary reason for the patient's visit today.">
+          <textarea className="input-field min-h-[80px]" value={notes.chiefComplaint} onChange={update('chiefComplaint')} placeholder="e.g. Headache for 3 days..." />
+        </FormGroup>
         <FormGroup label="S — Subjective" note="Patient's history, reported symptoms, and feelings.">
           <textarea className="input-field min-h-[80px]" value={notes.subjective} onChange={update('subjective')} />
         </FormGroup>
@@ -199,29 +199,20 @@ const SOAPNotes = memo(({ consultationId }) => {
         <FormGroup label="P — Plan" note="Treatment plan, medications ordered, and next steps.">
           <textarea className="input-field min-h-[80px]" value={notes.plan} onChange={update('plan')} />
         </FormGroup>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-base-300 pt-4 mt-2">
         <FormGroup label="Lifestyle Advice" note="Exercise, sleep, or habit recommendations.">
-          <textarea className="input-field min-h-[60px]" value={notes.lifestyleAdvice} onChange={update('lifestyleAdvice')} />
+          <textarea className="input-field min-h-[80px]" value={notes.lifestyleAdvice} onChange={update('lifestyleAdvice')} />
         </FormGroup>
         <FormGroup label="Diet Advice" note="Specific dietary restrictions or nutritional goals.">
-          <textarea className="input-field min-h-[60px]" value={notes.dietAdvice} onChange={update('dietAdvice')} />
+          <textarea className="input-field min-h-[80px]" value={notes.dietAdvice} onChange={update('dietAdvice')} />
         </FormGroup>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <FormGroup label="Internal Private Notes" note="Confidential notes visible only to the doctor and admin.">
+          <textarea className="input-field min-h-[80px] bg-warning/5 border-warning/30" value={notes.privateNotes} onChange={update('privateNotes')} placeholder="Internal reminders, hunches..." />
+        </FormGroup>
         <FormGroup label="Follow-up in Days" note="Number of days until the next recommended visit.">
           <input type="number" className="input-field" value={notes.followUpInDays} onChange={update('followUpInDays')} placeholder="e.g. 7" />
         </FormGroup>
         <FormGroup label="Follow-up Note" note="Specific reason or focus for the follow-up appointment.">
           <input type="text" className="input-field" value={notes.followUpNote} onChange={update('followUpNote')} placeholder="e.g. Check blood pressure" />
-        </FormGroup>
-      </div>
-
-      <div className="border-t border-base-300 pt-4 mt-2">
-        <FormGroup label="Internal Private Notes" note="Confidential notes visible only to the doctor and admin. Not shared with patient.">
-          <textarea className="input-field min-h-[80px] bg-warning/5 border-warning/30" value={notes.privateNotes} onChange={update('privateNotes')} placeholder="Internal reminders, hunches..." />
         </FormGroup>
       </div>
 
@@ -260,7 +251,7 @@ const MedicineRow = memo(({ med, index, onChange, onRemove }) => {
       
       <h4 className="text-sm font-bold text-base-content mb-3 font-montserrat">Medicine #{index + 1}</h4>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <FormGroup label="Medicine Name *" note="Exact prescribed name">
           <input className="input-field" placeholder="e.g. Paracetamol 500mg" value={med.medicineName} onChange={(e) => update('medicineName', e.target.value)} />
         </FormGroup>
@@ -270,9 +261,6 @@ const MedicineRow = memo(({ med, index, onChange, onRemove }) => {
         <FormGroup label="Brand Name" note="Specific brand requested">
           <input className="input-field" placeholder="e.g. Tylenol" value={med.brandName} onChange={(e) => update('brandName', e.target.value)} />
         </FormGroup>
-      </div>
-
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
         <FormGroup label="Dosage *" note="Amount per intake">
           <input className="input-field" placeholder="e.g. 500mg" value={med.dosage} onChange={(e) => update('dosage', e.target.value)} />
         </FormGroup>
@@ -289,9 +277,6 @@ const MedicineRow = memo(({ med, index, onChange, onRemove }) => {
         <FormGroup label="Duration" note="Total days to take">
           <input type="number" className="input-field" placeholder="e.g. 7" value={med.durationDays} onChange={(e) => update('durationDays', e.target.value)} />
         </FormGroup>
-      </div>
-
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
         <FormGroup label="Timing" note="Relation to meals">
           <select className="input-field" value={med.timing} onChange={(e) => update('timing', e.target.value)}>
             {TIMINGS.map((t) => <option key={t}>{t}</option>)}
@@ -308,16 +293,15 @@ const MedicineRow = memo(({ med, index, onChange, onRemove }) => {
         <FormGroup label="Refills" note="Allowed repeat purchases">
           <input type="number" className="input-field" placeholder="0" min={0} value={med.refillsAllowed} onChange={(e) => update('refillsAllowed', Number(e.target.value))} />
         </FormGroup>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
         <FormGroup label="Instructions" note="Special usage directions for patient">
           <input className="input-field" placeholder="e.g. Take with plenty of water" value={med.instructions} onChange={(e) => update('instructions', e.target.value)} />
         </FormGroup>
-        <div className="flex items-center gap-2 mb-2">
-          <input type="checkbox" className="checkbox checkbox-sm checkbox-primary" checked={med.isSubstitutable} onChange={(e) => update('isSubstitutable', e.target.checked)} id={`subst-${index}`} />
-          <label htmlFor={`subst-${index}`} className="text-sm font-semibold cursor-pointer text-base-content/80">Allow Generic Substitution</label>
-        </div>
+        <FormGroup label="Generic Substitution" note="Allow pharmacy to substitute brand">
+          <div className="flex items-center gap-2 h-10 px-3 bg-base-100 rounded-[var(--r-field)] border border-base-300">
+            <input type="checkbox" className="checkbox checkbox-sm checkbox-primary" checked={med.isSubstitutable} onChange={(e) => update('isSubstitutable', e.target.checked)} id={`subst-${index}`} />
+            <label htmlFor={`subst-${index}`} className="text-sm font-semibold cursor-pointer text-base-content/80">Allow Generic Alternative</label>
+          </div>
+        </FormGroup>
       </div>
     </div>
   );
@@ -456,27 +440,29 @@ const PrescriptionForm = memo(({ consultationId }) => {
 
       {/* ── UPLOAD MODE ── */}
       {uploadMode ? (
-        <div className="space-y-4 bg-base-100 border border-base-300 p-4 rounded-[var(--r-box)]">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-base-100 border border-base-300 p-4 rounded-[var(--r-box)]">
           <FormGroup label="Primary Diagnosis (Optional)" note="For record-keeping purposes.">
             <input className="input-field" placeholder="e.g. Viral Fever" value={diagnosis} onChange={(e) => setDiagnosis(e.target.value)} />
           </FormGroup>
           <FormGroup label="Prescription File" note="Upload clear photo or PDF of handwritten prescription.">
             <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={(e) => setRxFile(e.target.files?.[0] ?? null)} />
-            <div className="flex flex-col items-center justify-center border-2 border-dashed border-primary/40 bg-primary/5 hover:bg-primary/10 transition-colors p-8 rounded-[var(--r-box)] cursor-pointer text-center" onClick={() => fileRef.current?.click()}>
+            <div className="flex flex-col items-center justify-center border-2 border-dashed border-primary/40 bg-primary/5 hover:bg-primary/10 transition-colors p-3 rounded-[var(--r-box)] cursor-pointer text-center" onClick={() => fileRef.current?.click()}>
               {rxFile ? (
                 <span className="text-sm font-bold text-primary flex items-center gap-2"><ShieldCheck size={18}/> {rxFile.name}</span>
               ) : (
                 <>
-                  <Upload size={28} className="text-primary mb-2 opacity-80" />
-                  <span className="text-sm font-semibold text-base-content">Click to select PDF or Image</span>
+                  <Upload size={20} className="text-primary mb-1 opacity-80" />
+                  <span className="text-xs font-semibold text-base-content">Select PDF/Image</span>
                 </>
               )}
             </div>
           </FormGroup>
-          <button className="btn btn-success w-full gap-2 shadow-sm" onClick={handleUpload} disabled={uploading || !rxFile}>
-            {uploading ? <span className="loading loading-sm loading-spinner" /> : <Upload size={16} />}
-            Upload & Finalize Prescription
-          </button>
+          <div className="col-span-1 sm:col-span-2">
+            <button className="btn btn-success w-full gap-2 shadow-sm" onClick={handleUpload} disabled={uploading || !rxFile}>
+              {uploading ? <span className="loading loading-sm loading-spinner" /> : <Upload size={16} />}
+              Upload & Finalize Prescription
+            </button>
+          </div>
         </div>
       ) : (
         /* ── MANUAL MODE ── */
@@ -490,13 +476,13 @@ const PrescriptionForm = memo(({ consultationId }) => {
               <FormGroup label="ICD-10 Code" note="Standard medical billing code.">
                 <input className="input-field font-mono" placeholder="e.g. J20.9" value={diagnosisCode} onChange={(e) => setDiagnosisCode(e.target.value)} />
               </FormGroup>
+              <FormGroup label="Chief Complaints" note="Comma-separated list of patient symptoms.">
+                <input className="input-field" placeholder="e.g. Cough, Fever, Fatigue" value={chiefComplaints} onChange={(e) => setChiefComplaints(e.target.value)} />
+              </FormGroup>
+              <FormGroup label="Clinical Findings" note="Brief objective findings to attach to prescription.">
+                <textarea className="input-field min-h-[60px]" placeholder="e.g. Mild wheezing in lower lobes..." value={clinicalFindings} onChange={(e) => setClinicalFindings(e.target.value)} />
+              </FormGroup>
             </div>
-            <FormGroup label="Chief Complaints" note="Comma-separated list of patient symptoms.">
-              <input className="input-field" placeholder="e.g. Cough, Fever, Fatigue" value={chiefComplaints} onChange={(e) => setChiefComplaints(e.target.value)} />
-            </FormGroup>
-            <FormGroup label="Clinical Findings" note="Brief objective findings to attach to prescription.">
-              <textarea className="input-field min-h-[60px]" placeholder="e.g. Mild wheezing in lower lobes..." value={clinicalFindings} onChange={(e) => setClinicalFindings(e.target.value)} />
-            </FormGroup>
           </div>
 
           <div className="space-y-4">
@@ -530,7 +516,7 @@ const PrescriptionForm = memo(({ consultationId }) => {
               </div>
             )}
             
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 items-end bg-base-200/50 p-3 rounded-[var(--r-box)] border border-base-300">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end bg-base-200/50 p-4 rounded-[var(--r-box)] border border-base-300">
               <FormGroup label="Test Name" note="e.g. Complete Blood Count">
                 <input className="input-field" value={labName} onChange={(e) => setLabName(e.target.value)} />
               </FormGroup>
@@ -544,26 +530,24 @@ const PrescriptionForm = memo(({ consultationId }) => {
                   <option value="stat">STAT</option>
                 </select>
               </FormGroup>
-              <div className="flex flex-col gap-2">
-                 <FormGroup label="Instructions" note="Special prep (e.g. Fasting)">
-                  <div className="flex gap-2">
-                    <input className="input-field w-full" value={labInst} onChange={(e) => setLabInst(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addLabTest()} />
-                    <button className="btn btn-secondary btn-sm px-2" onClick={addLabTest}><Plus size={16}/></button>
-                  </div>
-                </FormGroup>
-              </div>
+              <FormGroup label="Instructions" note="Special prep (e.g. Fasting)">
+                <div className="flex gap-2">
+                  <input className="input-field w-full" value={labInst} onChange={(e) => setLabInst(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addLabTest()} />
+                  <button className="btn btn-secondary px-3 rounded-[var(--r-field)]" onClick={addLabTest}><Plus size={16}/></button>
+                </div>
+              </FormGroup>
             </div>
           </div>
 
           <div className="space-y-4">
              <h3 className="text-sm font-bold text-primary font-montserrat uppercase tracking-widest border-b border-base-300 pb-1">4. Instructions & Follow-up</h3>
-             <FormGroup label="General Advice" note="Dietary, lifestyle, or general precautions.">
-              <textarea className="input-field min-h-[60px]" placeholder="e.g. Drink plenty of warm fluids..." value={advice} onChange={(e) => setAdvice(e.target.value)} />
-            </FormGroup>
-            <FormGroup label="Referral Note" note="If referring to another specialist, provide details here.">
-              <input className="input-field" placeholder="e.g. Refer to Pulmonologist for further evaluation" value={referralNote} onChange={(e) => setReferralNote(e.target.value)} />
-            </FormGroup>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+               <FormGroup label="General Advice" note="Dietary, lifestyle, or general precautions.">
+                <textarea className="input-field min-h-[60px]" placeholder="e.g. Drink plenty of warm fluids..." value={advice} onChange={(e) => setAdvice(e.target.value)} />
+              </FormGroup>
+              <FormGroup label="Referral Note" note="If referring to another specialist, provide details here.">
+                <input className="input-field" placeholder="e.g. Refer to Pulmonologist for further evaluation" value={referralNote} onChange={(e) => setReferralNote(e.target.value)} />
+              </FormGroup>
                <FormGroup label="Follow-up Date" note="When should the patient return?">
                 <input type="date" className="input-field" value={followUpDate} onChange={(e) => setFollowUpDate(e.target.value)} />
               </FormGroup>
@@ -589,7 +573,7 @@ PrescriptionForm.displayName = 'PrescriptionForm';
 const ClinicalPanel = memo(({ onClose }) => {
   const { consultationId } = useConsultation();
   const hasAccess = useClinicalAccess();
-
+  const prescriptions = useSelector(selectPrescriptions);
   if (!hasAccess) {
     return (
       <div className="flex flex-col h-full bg-base-100 border-l border-base-300 w-full sm:w-96 md:w-[28rem] lg:w-[34rem] shadow-depth-lg" role="complementary">
@@ -607,8 +591,6 @@ const ClinicalPanel = memo(({ onClose }) => {
       </div>
     );
   }
-
-  const prescriptions = useSelector(selectPrescriptions);
 
   return (
     <div className="flex flex-col h-full bg-base-100 border-l border-base-300 w-full sm:w-96 md:w-[32rem] lg:w-[38rem] shadow-depth-lg" role="complementary" aria-label="Clinical panel">

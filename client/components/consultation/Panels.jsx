@@ -1,47 +1,31 @@
 'use client';
 
-/**
- * Panels.jsx — PRODUCTION GRADE
- *
- * FIXES:
- * 1. ParticipantsPanel: real populated API data used correctly.
- *    getParticipantsAPI returns { core: { doctor, patient }, events[], extraParticipants[] }
- *    where doctor/patient objects have nested user: { _id, name, email, avatar, phone }.
- *    resolveName() now reads all these paths so "Unknown" never shows.
- *
- * 2. ParticipantRow: avatar image support — shows real photo if userId.avatar exists.
- *
- * 3. buildParticipantList(): flattens core doctor/patient + events + extra
- *    into one unified list with correct role labels.
- *
- * 4. Doctor / admin / superadmin can DELETE any participant.
- *
- * 5. REFERRAL SECTION: Doctor can search for a specialist and add as observer.
- *
- * 6. SettingsPanel: referral quick-reference + recording info.
- *
- * 7. Recording REC badge in header uses correct Redux selectors.
- */
-
-import React, { useState, useEffect, useCallback, memo } from 'react';
+import React, { useState, useEffect, useCallback, memo, useMemo } from 'react';
 import {
   X, Monitor, Volume2, User, UserPlus, Trash2,
-  Circle, SendHorizonal, UserCheck, Stethoscope,
+  Circle, SendHorizonal, UserCheck, Stethoscope, Mic, MicOff
 } from 'lucide-react';
 import { useSelector, useDispatch } from 'react-redux';
 import {
   selectParticipants, selectNetworkQuality,
   addParticipant, removeParticipant, fetchParticipants,
   selectLocalRecordingActive, selectRecordingActive,
+  selectMutedParticipants, selectKickedParticipants,
   saveReferral,
+  muteParticipant,
+  unmuteParticipant,
+  kickParticipant,
 } from '@/store/slices/consultationSlice';
-import { useAgora } from '@/context/AgoraProvider';
-import { useConsultation } from '@/context/ConsultationProvider';
-import { NetworkBars } from './VideoTile';
 import {
   socketAddParticipant,
   socketRemoveParticipant,
+  socketMuteParticipant,
+  socketUnmuteParticipant,
+  socketKickParticipant,
 } from '@/services/consultationSocketService';
+import { useAgora } from '@/context/AgoraProvider';
+import { useConsultation } from '@/context/ConsultationProvider';
+import { NetworkBars } from './VideoTile';
 import toast from 'react-hot-toast';
 
 // Roles that can be added mid-session
@@ -54,39 +38,67 @@ const ADDABLE_ROLES = [
 
 // ── Name resolution helper ────────────────────────────────────────────────────
 /**
- * Resolves display name from any participant shape returned by the API.
- *
- * Shapes encountered:
- *  a) Core doctor:  { user: { name }, specialization }  (doctor doc)
- *  b) Core patient: { name, email, phone, avatar }      (user doc)
- *  c) Event entry:  { userId: { name, role, avatar }, role, joinedAt }
- *  d) Extra:        { userId: { name }, role }
- *  e) Snapshot:     { doctorSnapshot: { name }, patientSnapshot: { name } }
- *
- * Priority: direct name > userId.name > user.name > snapshots > fallback
+ * Resolves display name from any participant shape.
+ * Skips generic UID-like strings (User-1004, user-1004, 1004).
+ * Falls back to uidNameMap lookup by role, then consultation snapshots.
  */
-const resolveName = (participant) => {
+const resolveName = (participant, uidNameMap = {}, consultation = null) => {
   if (!participant) return 'Participant';
 
-  // Direct name field (patient user doc, event userId after populate)
-  if (participant.name && typeof participant.name === 'string') return participant.name;
+  const isBadName = (n) =>
+    !n
+    || n === 'Participant'
+    || /^[Uu]ser[-_]?\d+$/.test(n)
+    || /^\d+$/.test(n)
+    || n === 'You'
+    || n === 'you';
+
+  // _displayName injected by enrichment in ParticipantsPanel
+  if (participant._displayName && !isBadName(participant._displayName))
+    return participant._displayName;
+
+  // Direct name field
+  if (participant.name && typeof participant.name === 'string' && !isBadName(participant.name))
+    return participant.name;
 
   // userId populated object
   if (participant.userId && typeof participant.userId === 'object') {
-    if (participant.userId.name) return participant.userId.name;
+    if (participant.userId.name && !isBadName(participant.userId.name))
+      return participant.userId.name;
   }
 
-  // Doctor doc has nested user object
+  // Doctor doc nested user object
   if (participant.user && typeof participant.user === 'object') {
-    if (participant.user.name) return participant.user.name;
+    if (participant.user.name && !isBadName(participant.user.name))
+      return participant.user.name;
   }
 
-  // Snapshot fallbacks (from consultation doc)
-  if (participant.doctorSnapshot?.name) return participant.doctorSnapshot.name;
-  if (participant.patientSnapshot?.name) return participant.patientSnapshot.name;
+  // Snapshot fallbacks from consultation doc
+  if (participant.doctorSnapshot?.name && !isBadName(participant.doctorSnapshot.name))
+    return participant.doctorSnapshot.name;
+  if (participant.patientSnapshot?.name && !isBadName(participant.patientSnapshot.name))
+    return participant.patientSnapshot.name;
 
   // userName (enriched Agora user)
-  if (participant.userName) return participant.userName;
+  if (participant.userName && !isBadName(participant.userName))
+    return participant.userName;
+
+  // ── Consultation snapshot lookup by role ──────────────────────────────────
+  const role = participant.role;
+  if (consultation) {
+    if (role === 'doctor' && consultation.doctorSnapshot?.name && !isBadName(consultation.doctorSnapshot.name))
+      return consultation.doctorSnapshot.name;
+    if (role === 'patient' && consultation.patientSnapshot?.name && !isBadName(consultation.patientSnapshot.name))
+      return consultation.patientSnapshot.name;
+  }
+
+  // ── uidNameMap lookup by role ─────────────────────────────────────────────
+  if (Object.keys(uidNameMap).length > 0) {
+    const match = Object.values(uidNameMap).find(
+      meta => meta.role === role && meta.name && !isBadName(meta.name)
+    );
+    if (match) return match.name;
+  }
 
   return 'Participant';
 };
@@ -115,17 +127,6 @@ const resolveUserId = (participant) => {
 };
 
 // ── Build unified participant list from API response ──────────────────────────
-/**
- * participants from Redux (selectParticipants) has shape:
- * {
- *   core: { doctor: <doctorDoc>, patient: <patientDoc> },
- *   events: [ { userId: { _id, name, avatar, role }, role, joinedAt, rejoinCount } ],
- *   extraParticipants: [],
- *   additional: []
- * }
- *
- * We flatten into a unified array for rendering, deduping by userId.
- */
 const buildParticipantList = (participants) => {
   if (!participants) return [];
 
@@ -139,20 +140,12 @@ const buildParticipantList = (participants) => {
     list.push(item);
   };
 
-  // Core doctor
-  if (participants.core?.doctor) {
-    push({ ...participants.core.doctor, role: 'doctor' });
-  }
-  // Core patient
-  if (participants.core?.patient) {
-    push({ ...participants.core.patient, role: 'patient' });
-  }
+  if (participants.core?.doctor) push({ ...participants.core.doctor, role: 'doctor' });
+  if (participants.core?.patient) push({ ...participants.core.patient, role: 'patient' });
 
-  // Events (participant join events — have userId populated with name/avatar)
   const events = participants.events ?? [];
   events.forEach(ev => push(ev));
 
-  // Additional / extra
   const additional = participants.additional ?? [];
   const extra      = participants.extra ?? [];
   const extraP     = participants.extraParticipants ?? [];
@@ -162,13 +155,15 @@ const buildParticipantList = (participants) => {
 };
 
 // ── Confirm dialog helper ─────────────────────────────────────────────────────
-
 const confirmAction = (msg) => window.confirm(msg);
 
 // ── Participant Row ───────────────────────────────────────────────────────────
-
-const ParticipantRow = memo(({ participant, netQuality, canRemove, onRemove }) => {
-  const name   = resolveName(participant);
+const ParticipantRow = memo(({
+  participant, netQuality, canRemove, onRemove,
+  canControl, onMute, isMuted, isKicked,
+  uidNameMap, consultation,
+}) => {
+  const name   = resolveName(participant, uidNameMap, consultation);
   const avatar = resolveAvatar(participant);
   const role   = participant.role ?? 'participant';
   const uid    = resolveUserId(participant);
@@ -177,9 +172,10 @@ const ParticipantRow = memo(({ participant, netQuality, canRemove, onRemove }) =
   const roleLabel = role.replace(/_/g, ' ');
   const isCore    = ['doctor', 'patient'].includes(role);
 
+  if (isKicked) return null;
+
   return (
     <div className="flex items-center justify-between p-3 bg-base-200/50 hover:bg-base-200 border border-base-300 rounded-xl transition-colors mb-2 group">
-      {/* Avatar */}
       {avatar ? (
         <img
           src={avatar}
@@ -195,24 +191,41 @@ const ParticipantRow = memo(({ participant, netQuality, canRemove, onRemove }) =
 
       <div className="flex flex-col flex-1 overflow-hidden">
         <span className="text-sm font-semibold text-base-content truncate">{name}</span>
-        <div className="flex items-center gap-1.5 mt-0.5">
+        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
           <span className={`text-[0.65rem] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-sm ${
             isCore ? 'bg-primary/10 text-primary' : 'bg-base-300 text-base-content/60'
           }`}>
             {roleLabel}
           </span>
+          {isMuted && (
+            <span className="text-[0.6rem] font-bold text-error bg-error/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider">
+              Muted
+            </span>
+          )}
         </div>
       </div>
 
-      <div className="flex items-center gap-3 shrink-0 ml-2">
+      <div className="flex items-center gap-1.5 shrink-0 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
         <NetworkBars quality={netQuality ?? 0} />
+
+        {/* Mute / Unmute — doctor only, non-doctor targets */}
+        {canControl && role !== 'doctor' && (
+          <button
+            className={`btn btn-ghost btn-circle btn-xs ${isMuted ? 'text-warning' : 'text-base-content/60'} hover:bg-warning/10`}
+            onClick={() => isMuted ? onMute(uid, false) : onMute(uid, true)}
+            title={isMuted ? 'Unmute' : 'Mute'}
+            aria-label={isMuted ? `Unmute ${name}` : `Mute ${name}`}
+          >
+            {isMuted ? <MicOff size={13} className="text-warning" /> : <Mic size={13} />}
+          </button>
+        )}
+
+        {/* Kick — non-core targets */}
         {canRemove && (
           <button
-            className="btn btn-ghost btn-circle btn-xs text-error hover:bg-error/10 opacity-0 group-hover:opacity-100 transition-opacity"
+            className="btn btn-ghost btn-circle btn-xs text-error hover:bg-error/10"
             onClick={() => {
-              if (confirmAction(`Remove ${name} from the session?`)) {
-                onRemove(uid);
-              }
+              if (confirmAction(`Remove ${name} from the session?`)) onRemove(uid);
             }}
             aria-label={`Remove ${name}`}
             title="Remove from session"
@@ -227,7 +240,6 @@ const ParticipantRow = memo(({ participant, netQuality, canRemove, onRemove }) =
 ParticipantRow.displayName = 'ParticipantRow';
 
 // ── Add Participant Form ──────────────────────────────────────────────────────
-
 const AddParticipantForm = memo(({ consultationId, onAdded }) => {
   const dispatch = useDispatch();
   const [userId, setUserId] = useState('');
@@ -291,7 +303,6 @@ const AddParticipantForm = memo(({ consultationId, onAdded }) => {
 AddParticipantForm.displayName = 'AddParticipantForm';
 
 // ── Referral Section ──────────────────────────────────────────────────────────
-
 const ReferralSection = memo(({ consultationId }) => {
   const dispatch = useDispatch();
   const [referTo,        setReferTo]        = useState('');
@@ -394,27 +405,85 @@ const ReferralSection = memo(({ consultationId }) => {
 ReferralSection.displayName = 'ReferralSection';
 
 // ── Participants Panel ────────────────────────────────────────────────────────
-
 export const ParticipantsPanel = memo(({ onClose }) => {
   const dispatch        = useDispatch();
   const participants    = useSelector(selectParticipants);
   const networkQuality  = useSelector(selectNetworkQuality);
   const localRecording  = useSelector(selectLocalRecordingActive);
   const serverRecording = useSelector(selectRecordingActive);
-  const { userRole, consultationId } = useConsultation();
+  const mutedIds        = useSelector(selectMutedParticipants);
+  const kickedIds       = useSelector(selectKickedParticipants);
+
+  // ── Pull uidNameMap from Agora + consultation for name resolution ──────────
+  const { uidNameMap } = useAgora();
+  const { userRole, consultationId, consultation } = useConsultation();
 
   const isDoctor  = userRole === 'doctor';
   const isAdmin   = ['admin', 'superadmin'].includes(userRole);
   const canManage = isDoctor || isAdmin;
 
-  // Build unified flat list from populated API response
-  const allParticipants = buildParticipantList(participants);
+  // ── Build + enrich participant list ───────────────────────────────────────
+  // Merges Redux API data with live Agora uidNameMap names and consultation snapshots
+  const allParticipants = useMemo(() => {
+    const list = buildParticipantList(participants);
+
+    return list.map(p => {
+      const currentName = resolveName(p); // quick check without extras
+      const isBadName =
+        !currentName
+        || currentName === 'Participant'
+        || /^[Uu]ser[-_]?\d+$/.test(currentName)
+        || /^\d+$/.test(currentName);
+
+      if (!isBadName) return p; // already has a real name
+
+      const role = p.role;
+
+      // Try consultation snapshots first (most reliable)
+      if (role === 'doctor' && consultation?.doctorSnapshot?.name) {
+        return { ...p, _displayName: consultation.doctorSnapshot.name };
+      }
+      if (role === 'patient' && consultation?.patientSnapshot?.name) {
+        return { ...p, _displayName: consultation.patientSnapshot.name };
+      }
+
+      // Try uidNameMap by role match
+      const mapMatch = Object.values(uidNameMap).find(
+        meta =>
+          meta.role === role
+          && meta.name
+          && meta.name !== 'You'
+          && meta.name !== 'you'
+          && !/^[Uu]ser[-_]?\d+$/.test(meta.name)
+          && !/^\d+$/.test(meta.name)
+      );
+      if (mapMatch) return { ...p, _displayName: mapMatch.name };
+
+      return p;
+    });
+  }, [participants, uidNameMap, consultation]);
 
   const handleRemove = useCallback(async (targetUserId) => {
     if (!targetUserId) return;
-    await dispatch(removeParticipant({ id: consultationId, userId: targetUserId }));
-    socketRemoveParticipant(consultationId, targetUserId);
+    if (isDoctor) {
+      await dispatch(kickParticipant({ id: consultationId, userId: targetUserId, reason: 'Removed by doctor' }));
+      socketKickParticipant(consultationId, targetUserId, 'Removed by doctor');
+    } else {
+      await dispatch(removeParticipant({ id: consultationId, userId: targetUserId }));
+      socketRemoveParticipant(consultationId, targetUserId);
+    }
     await dispatch(fetchParticipants(consultationId));
+  }, [dispatch, consultationId, isDoctor]);
+
+  const handleMute = useCallback(async (targetUserId, shouldMute) => {
+    if (!targetUserId) return;
+    if (shouldMute) {
+      await dispatch(muteParticipant({ id: consultationId, userId: targetUserId }));
+      socketMuteParticipant(consultationId, targetUserId);
+    } else {
+      await dispatch(unmuteParticipant({ id: consultationId, userId: targetUserId }));
+      socketUnmuteParticipant(consultationId, targetUserId);
+    }
   }, [dispatch, consultationId]);
 
   const isRecording = localRecording || serverRecording;
@@ -447,7 +516,6 @@ export const ParticipantsPanel = memo(({ onClose }) => {
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto p-4 flex flex-col scrollbar-thin">
-        {/* Participant list */}
         {allParticipants.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center text-center px-4 opacity-50 min-h-32">
             <User size={36} className="text-base-content/30 mb-3" />
@@ -456,27 +524,33 @@ export const ParticipantsPanel = memo(({ onClose }) => {
         ) : (
           <div>
             {allParticipants.map((p, i) => {
-              const uid    = resolveUserId(p);
-              const netKey = uid;
-              // Admin can remove anyone. Doctor can remove non-core.
+              const uid      = resolveUserId(p);
+              const isMuted  = uid ? mutedIds.includes(uid) : false;
+              const isKicked = uid ? kickedIds.includes(uid) : false;
               const removable = isAdmin
                 ? true
-                : (isDoctor && !['doctor', 'patient'].includes(p.role));
+                : (isDoctor && p.role !== 'doctor');
+              const canControl = isDoctor && p.role !== 'doctor';
 
               return (
                 <ParticipantRow
                   key={uid ?? i}
                   participant={p}
-                  netQuality={networkQuality[netKey]}
+                  uidNameMap={uidNameMap}
+                  consultation={consultation}
+                  netQuality={networkQuality[uid]}
                   canRemove={removable && canManage}
+                  canControl={canControl}
                   onRemove={handleRemove}
+                  onMute={handleMute}
+                  isMuted={isMuted}
+                  isKicked={isKicked}
                 />
               );
             })}
           </div>
         )}
 
-        {/* Doctor/Admin controls */}
         {canManage && (
           <>
             <AddParticipantForm
@@ -495,7 +569,6 @@ export const ParticipantsPanel = memo(({ onClose }) => {
 ParticipantsPanel.displayName = 'ParticipantsPanel';
 
 // ── Settings Panel ────────────────────────────────────────────────────────────
-
 export const SettingsPanel = memo(({ onClose }) => {
   const { switchCamera, switchMic } = useAgora();
   const { userRole } = useConsultation();

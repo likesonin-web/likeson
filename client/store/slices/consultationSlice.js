@@ -52,7 +52,13 @@ import {
   triggerAutoMissAPI,
   triggerTokenRefreshAPI,
   triggerRemindersAPI,
-  triggerExpirePrescriptionsAPI,
+   triggerExpirePrescriptionsAPI,
+  muteParticipantAPI,
+  unmuteParticipantAPI,
+  kickParticipantAPI,
+  getConsultationTimerAPI,
+  triggerAutoEndAPI,
+  triggerTimerReminderAPI,
 } from "../../services/consultationService";
 
 import {
@@ -154,6 +160,17 @@ const initialState = {
   followUpChain: [],
   followUpChildren: [],
   cronResults: {},
+    timer: {
+    maxTimeSec: null,
+    remainingSec: null,
+    elapsedSec: null,
+    hardDeadlineAt: null,
+    reminderSent: false,
+    autoEnded: false,
+    segments: [],
+  },
+  mutedParticipants: [],  // tracks who is muted by doctor
+  kickedParticipants: [], // tracks who was kicked this session
   adminMessages: [],
   loading: {
     fetch: false,
@@ -1007,6 +1024,89 @@ export const triggerReminders = createAsyncThunk(
   },
 );
 
+export const muteParticipant = createAsyncThunk(
+  "consultation/participants/mute",
+  async ({ id, userId }, { rejectWithValue }) => {
+    try {
+      const res = await muteParticipantAPI(id, userId);
+      toast.success("Participant muted");
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
+
+export const unmuteParticipant = createAsyncThunk(
+  "consultation/participants/unmute",
+  async ({ id, userId }, { rejectWithValue }) => {
+    try {
+      const res = await unmuteParticipantAPI(id, userId);
+      toast.success("Participant unmuted");
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
+
+export const kickParticipant = createAsyncThunk(
+  "consultation/participants/kick",
+  async ({ id, userId, reason }, { rejectWithValue }) => {
+    try {
+      const res = await kickParticipantAPI(id, userId, reason);
+      toast.success("Participant removed");
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.message || err.message;
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
+
+export const fetchConsultationTimer = createAsyncThunk(
+  "consultation/timer/fetch",
+  async (id, { rejectWithValue }) => {
+    try {
+      return (await getConsultationTimerAPI(id)).data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const triggerAutoEnd = createAsyncThunk(
+  "consultation/cron/autoEnd",
+  async (cronKey, { rejectWithValue }) => {
+    try {
+      const res = await triggerAutoEndAPI(cronKey);
+      toast.success(`Auto-end: ${res.data.autoEnded}`);
+      return res.data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+export const triggerTimerReminder = createAsyncThunk(
+  "consultation/cron/timerReminder",
+  async (cronKey, { rejectWithValue }) => {
+    try {
+      const res = await triggerTimerReminderAPI(cronKey);
+      toast.success(`Reminders sent: ${res.data.reminded}`);
+      return res.data;
+    } catch (err) {
+      return rejectWithValue(err?.response?.data?.message || err.message);
+    }
+  },
+);
+
+
 export const triggerExpirePrescriptions = createAsyncThunk(
   "consultation/cron/expirePrescriptions",
   async (cronKey, { rejectWithValue }) => {
@@ -1055,6 +1155,9 @@ const consultationSlice = createSlice({
       state.sessionEndedAt = null;
       state.actualDurationSec = null;
       state.documents = [];
+      state.timer = initialState.timer;
+      state.mutedParticipants = [];
+      state.kickedParticipants = [];
     },
 
     clearError: (state) => {
@@ -1204,6 +1307,58 @@ const consultationSlice = createSlice({
       state.participants.additional = state.participants.additional.filter(
         (p) => p.userId !== payload.userId,
       );
+    },
+
+    socketMuted: (state, { payload }) => {
+      if (payload.isMuted) {
+        if (!state.mutedParticipants.includes(payload.targetUserId)) {
+          state.mutedParticipants.push(payload.targetUserId);
+        }
+      } else {
+        state.mutedParticipants = state.mutedParticipants.filter(
+          (id) => id !== payload.targetUserId,
+        );
+      }
+      // Update participantEvent flag if present
+      const evt = state.participants.events.find(
+        (e) => e.userId === payload.targetUserId && !e.leftAt,
+      );
+      if (evt) evt.isMutedByDoctor = payload.isMuted;
+    },
+
+    socketKicked: (state, { payload }) => {
+      if (!state.kickedParticipants.includes(payload.targetUserId)) {
+        state.kickedParticipants.push(payload.targetUserId);
+      }
+      // Mark event as kicked
+      const evt = state.participants.events.find(
+        (e) => e.userId === payload.targetUserId && !e.leftAt,
+      );
+      if (evt) {
+        evt.isKicked = true;
+        evt.leftAt = payload.at || new Date().toISOString();
+      }
+    },
+
+    socketTimerUpdate: (state, { payload }) => {
+      state.timer = {
+        maxTimeSec:     payload.maxTimeSec    ?? state.timer.maxTimeSec,
+        remainingSec:   payload.remainingSec  ?? state.timer.remainingSec,
+        elapsedSec:     payload.elapsedSec    ?? state.timer.elapsedSec,
+        hardDeadlineAt: payload.hardDeadlineAt?? state.timer.hardDeadlineAt,
+        reminderSent:   payload.reminderSent  ?? state.timer.reminderSent,
+        autoEnded:      payload.autoEnded     ?? state.timer.autoEnded,
+        segments:       payload.segments      ?? state.timer.segments,
+      };
+      if (payload.autoEnded) {
+        state.status = "completed";
+        if (state.current) state.current.status = "completed";
+      }
+    },
+
+    clearMutedKicked: (state) => {
+      state.mutedParticipants = [];
+      state.kickedParticipants = [];
     },
 
     // ── Local recording (MediaRecorder) ───────────────────────────────────────
@@ -1774,8 +1929,53 @@ const consultationSlice = createSlice({
         state.loading.cron = false;
         state.cronResults.expirePrescriptions = payload;
       })
-      .addCase(triggerExpirePrescriptions.rejected, setError("cron"));
+      .addCase(triggerExpirePrescriptions.rejected, setError("cron"))
+       .addCase(muteParticipant.fulfilled, (state, { payload }) => {
+        if (payload.mutedUserId) {
+          if (!state.mutedParticipants.includes(payload.mutedUserId)) {
+            state.mutedParticipants.push(payload.mutedUserId);
+          }
+        }
+      })
+      // UNMUTE
+      .addCase(unmuteParticipant.fulfilled, (state, { payload }) => {
+        state.mutedParticipants = state.mutedParticipants.filter(
+          (id) => id !== payload.mutedUserId,
+        );
+      })
+      // KICK
+      .addCase(kickParticipant.fulfilled, (state, { payload }) => {
+        if (payload.kickedUserId) {
+          if (!state.kickedParticipants.includes(payload.kickedUserId)) {
+            state.kickedParticipants.push(payload.kickedUserId);
+          }
+          state.participants.events = state.participants.events.map((e) =>
+            e.userId === payload.kickedUserId ? { ...e, isKicked: true } : e,
+          );
+        }
+      })
+      // TIMER
+      .addCase(fetchConsultationTimer.fulfilled, (state, { payload }) => {
+        state.timer = payload.timer ?? state.timer;
+      })
+      // CRON — AUTO END
+      .addCase(triggerAutoEnd.pending, setLoading("cron"))
+      .addCase(triggerAutoEnd.fulfilled, (state, { payload }) => {
+        state.loading.cron = false;
+        state.cronResults.autoEnd = payload;
+      })
+      .addCase(triggerAutoEnd.rejected, setError("cron"))
+      // CRON — TIMER REMINDER
+      .addCase(triggerTimerReminder.pending, setLoading("cron"))
+      .addCase(triggerTimerReminder.fulfilled, (state, { payload }) => {
+        state.loading.cron = false;
+        state.cronResults.timerReminder = payload;
+      })
+      .addCase(triggerTimerReminder.rejected, setError("cron"))
+
+      
   },
+  
 });
 
 // ── Exports ───────────────────────────────────────────────────────────────────
@@ -1807,6 +2007,10 @@ export const {
   socketRecordingStopped,
   socketParticipantAdded,
   socketParticipantRemoved,
+    socketMuted,
+  socketKicked,
+  socketTimerUpdate,
+  clearMutedKicked
 } = consultationSlice.actions;
 
 // ── Selectors ─────────────────────────────────────────────────────────────────
@@ -1864,6 +2068,13 @@ export const selectAnyLoading = (s) =>
 export const selectError = (s) => s.consultation.error;
 export const selectLocalRecordingActive = (s) =>
   s.consultation.agora.localRecordingActive;
+export const selectTimer = (s) => s.consultation.timer;
+export const selectMutedParticipants = (s) => s.consultation.mutedParticipants;
+export const selectKickedParticipants = (s) => s.consultation.kickedParticipants;
+export const selectIsParticipantMuted = (userId) => (s) =>
+  s.consultation.mutedParticipants.includes(userId);
+export const selectIsParticipantKicked = (userId) => (s) =>
+  s.consultation.kickedParticipants.includes(userId);
 export const selectRecordingActive = (s) =>
   s.consultation.agora.isRecordingActive;
 

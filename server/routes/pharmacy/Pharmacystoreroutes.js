@@ -138,7 +138,10 @@ const findOrderPopulated = async (orderId, storeId) => {
       .populate('cancellation.cancelledBy',   'name role')
       .populate('cancellation.returnDecisionBy', 'name role')
       .populate('cancellation.pickupVerifiedBy', 'name role')
-      .populate('adminNotes.addedBy',         'name role');
+      .populate('adminNotes.addedBy',         'name role')
+      .populate('store',                       'storeName contact address legal status') 
+      .populate('customer',                    'name email phone avatar')
+      .populate('delivery.internalPartner',    'name phone avatar')
 
   try {
     let order = null;
@@ -626,9 +629,10 @@ router.get('/orders', protect, authorize('pharmacy'), attachPharmacyStore,
     const sortField   = allowedSort.includes(sortBy) ? sortBy : 'createdAt';
     const [orders, totalCount] = await Promise.all([
       PharmacyOrder.find(filter)
+      .populate('store', 'storeName contact address status')
         .populate('customer', 'name email phone')
-        // FIX: populate items.medicine for list view (lightweight fields only)
-        .populate('items.medicine', 'name brandName genericName images category')
+ 
+ .populate('items.medicine', 'name brandName genericName images category')
         .sort({ [sortField]: sortOrder === 'asc' ? 1 : -1 })
         .skip(skip)
         .limit(limit)
@@ -1502,7 +1506,7 @@ router.get('/financials/history', protect, authorize('pharmacy'), attachPharmacy
     const filter    = { store: storeId, isArchived: false, 'payment.status': 'Paid', createdAt: dateRange };
     if (paymentMethod) filter['payment.method'] = paymentMethod;
     const [orders, totalCount, summary] = await Promise.all([
-      PharmacyOrder.find(filter).select('orderId billing payment delivery.status createdAt customer').populate('customer', 'name phone').sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      PharmacyOrder.find(filter).select('orderId billing payment delivery.status createdAt customer store').populate('customer', 'name phone').populate('store', 'storeName address contact').sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       PharmacyOrder.countDocuments(filter),
       PharmacyOrder.aggregate([{ $match: filter }, { $group: { _id: null, totalRevenue: { $sum: '$billing.totalPayable' }, totalGst: { $sum: '$billing.gstAmount' }, totalDiscount: { $sum: '$billing.discountAmount' } } }]),
     ]);

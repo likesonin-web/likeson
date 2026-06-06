@@ -48,15 +48,11 @@ export function interpolatePosition(from, to, t) {
 
 // ─── KALMAN FILTER ───────────────────────────────────────────────────────────
 
-/**
- * Simple 2D Kalman filter for GPS smoothing.
- * Returns a factory — call .update(lat, lng, accuracy, timestampMs) each tick.
- */
 export function createKalmanFilter() {
   let lat      = null;
   let lng      = null;
-  let variance = -1;           // P matrix diagonal (same for lat/lng)
-  const Q      = 3;            // process noise (m²/s) — higher = trust GPS more
+  let variance = -1;
+  const Q      = 3;
   const minAcc = 1;
 
   return {
@@ -70,12 +66,10 @@ export function createKalmanFilter() {
         return { lat, lng };
       }
 
-      // Predict — variance grows with time
       const dt = Math.max((timestampMs - (this._lastTs || timestampMs)) / 1000, 0.01);
       this._lastTs = timestampMs;
       variance += dt * Q * Q;
 
-      // Update
       const K    = variance / (variance + acc * acc);
       lat        = lat + K * (newLat - lat);
       lng        = lng + K * (newLng - lng);
@@ -89,10 +83,6 @@ export function createKalmanFilter() {
 
 // ─── POLYLINE UTILS ──────────────────────────────────────────────────────────
 
-/**
- * Decode Google encoded polyline to [{lat,lng}] array.
- * Used when DirectionsRenderer replaced with raw polyline.
- */
 export function decodePolyline(encoded) {
   if (!encoded) return [];
   const points = [];
@@ -120,10 +110,6 @@ export function decodePolyline(encoded) {
   return points;
 }
 
-/**
- * Project point onto segment [A,B]. Returns:
- * { projectedLat, projectedLng, t (0-1 along segment), distanceKm }
- */
 export function projectPointOnSegment(pLat, pLng, aLat, aLng, bLat, bLng) {
   const ax = bLng - aLng;
   const ay = bLat - aLat;
@@ -152,10 +138,6 @@ export function projectPointOnSegment(pLat, pLng, aLat, aLng, bLat, bLng) {
   };
 }
 
-/**
- * Snap GPS position to nearest point on polyline.
- * Returns { lat, lng, segmentIndex, progressRatio, distanceOffRouteKm }
- */
 export function snapToPolyline(pLat, pLng, polylinePoints) {
   if (!polylinePoints?.length) return { lat: pLat, lng: pLng, segmentIndex: 0, progressRatio: 0, distanceOffRouteKm: 0 };
 
@@ -191,9 +173,6 @@ export function snapToPolyline(pLat, pLng, polylinePoints) {
   };
 }
 
-/**
- * Remaining route distance from current position along polyline.
- */
 export function remainingRouteDistanceKm(polylinePoints, fromSegmentIndex, fromT) {
   if (!polylinePoints?.length || fromSegmentIndex >= polylinePoints.length - 1) return 0;
 
@@ -201,12 +180,10 @@ export function remainingRouteDistanceKm(polylinePoints, fromSegmentIndex, fromT
   const startPt = polylinePoints[fromSegmentIndex];
   const nextPt  = polylinePoints[fromSegmentIndex + 1];
 
-  // Partial first segment
   const partialLat = startPt.lat + fromT * (nextPt.lat - startPt.lat);
   const partialLng = startPt.lng + fromT * (nextPt.lng - startPt.lng);
   total += distanceKm(partialLat, partialLng, nextPt.lat, nextPt.lng);
 
-  // Remaining full segments
   for (let i = fromSegmentIndex + 1; i < polylinePoints.length - 1; i++) {
     total += distanceKm(
       polylinePoints[i].lat, polylinePoints[i].lng,
@@ -218,9 +195,6 @@ export function remainingRouteDistanceKm(polylinePoints, fromSegmentIndex, fromT
 
 // ─── STEP PROGRESSION ────────────────────────────────────────────────────────
 
-/**
- * Parse Google directions legs → flat nav steps with polyline segments.
- */
 export function parseDirectionSteps(legs) {
   if (!legs?.length) return [];
   const steps = [];
@@ -231,7 +205,6 @@ export function parseDirectionSteps(legs) {
       const endLat   = step.end_location?.lat?.()   ?? step.end_location?.lat   ?? 0;
       const endLng   = step.end_location?.lng?.()   ?? step.end_location?.lng   ?? 0;
 
-      // Decode step-level polyline for better snapping
       const polylinePoints = step.polyline?.points
         ? decodePolyline(step.polyline.points)
         : [{ lat: startLat, lng: startLng }, { lat: endLat, lng: endLng }];
@@ -253,14 +226,9 @@ export function parseDirectionSteps(legs) {
   return steps;
 }
 
-/**
- * Find active step index using polyline segment proximity.
- * More reliable than endpoint-distance only.
- */
 export function findCurrentStepByPolyline(steps, lat, lng, fromIndex = 0) {
   if (!steps?.length) return 0;
 
-  // Check if driver has passed current step
   let bestIdx  = fromIndex;
   let bestDist = Infinity;
 
@@ -275,10 +243,6 @@ export function findCurrentStepByPolyline(steps, lat, lng, fromIndex = 0) {
   return bestIdx;
 }
 
-/**
- * Projected distance (in meters) remaining in current step,
- * using polyline snap instead of straight-line endpoint distance.
- */
 export function distanceToStepEndMeters(step, lat, lng) {
   if (!step?.polylinePoints?.length) {
     return distanceKm(lat, lng, step?.endLat ?? lat, step?.endLng ?? lng) * 1000;
@@ -289,9 +253,6 @@ export function distanceToStepEndMeters(step, lat, lng) {
 
 // ─── OFF-ROUTE DETECTION ─────────────────────────────────────────────────────
 
-/**
- * Heading mismatch check — large angle diff means wrong direction.
- */
 export function isHeadingMismatch(gpsHeading, stepHeading, thresholdDeg = 90) {
   if (gpsHeading == null || stepHeading == null) return false;
   let diff = Math.abs(gpsHeading - stepHeading);
@@ -299,12 +260,8 @@ export function isHeadingMismatch(gpsHeading, stepHeading, thresholdDeg = 90) {
   return diff > thresholdDeg;
 }
 
-/**
- * Off-route confidence score 0-1.
- * > 0.7 → trigger reroute.
- */
 export function offRouteScore(distanceOffKm, gpsHeading, stepHeading, speedKmh = 0) {
-  const distScore = Math.min(distanceOffKm / 0.3, 1);  // 300m = max
+  const distScore = Math.min(distanceOffKm / 0.3, 1);
 
   let headingScore = 0;
   if (gpsHeading != null && stepHeading != null && speedKmh > 5) {
@@ -318,12 +275,7 @@ export function offRouteScore(distanceOffKm, gpsHeading, stepHeading, speedKmh =
 
 // ─── TURN ANNOUNCEMENT BANDS ─────────────────────────────────────────────────
 
-/**
- * Get announcement text for given distance + maneuver.
- * Returns null if band already announced.
- */
 export function getAnnouncementBand(distanceMeters, speedKmh = 30) {
-  // Scale thresholds for highway speeds
   const speedMultiplier = speedKmh > 80 ? 2.0 : speedKmh > 50 ? 1.4 : 1.0;
 
   const bands = [
@@ -358,18 +310,23 @@ export function formatSpeed(speedKmh) {
   return Math.round(speedKmh).toString();
 }
 
+/**
+ * FIX: check keep-left / keep-right / slight-left / slight-right BEFORE
+ * checking plain 'left' / 'right' — otherwise 'keep-left'.includes('left')
+ * matches the wrong branch and returns 'turn-left' instead of 'keep-left'.
+ */
 export function getManeuverIcon(maneuver = '') {
   const m = (maneuver || '').toLowerCase();
-  if (m.includes('left'))        return 'turn-left';
-  if (m.includes('right'))       return 'turn-right';
-  if (m.includes('u-turn'))      return 'u-turn';
-  if (m.includes('roundabout'))  return 'roundabout';
-  if (m.includes('merge'))       return 'merge';
-  if (m.includes('ramp'))        return 'ramp';
-  if (m.includes('keep-left'))   return 'keep-left';
-  if (m.includes('keep-right'))  return 'keep-right';
-  if (m.includes('slight-left')) return 'keep-left';
-  if (m.includes('slight-right'))return 'keep-right';
+  if (m.includes('u-turn'))       return 'u-turn';
+  if (m.includes('roundabout'))   return 'roundabout';
+  if (m.includes('keep-left'))    return 'keep-left';
+  if (m.includes('keep-right'))   return 'keep-right';
+  if (m.includes('slight-left'))  return 'keep-left';
+  if (m.includes('slight-right')) return 'keep-right';
+  if (m.includes('left'))         return 'turn-left';
+  if (m.includes('right'))        return 'turn-right';
+  if (m.includes('merge'))        return 'merge';
+  if (m.includes('ramp'))         return 'merge';
   return 'straight';
 }
 
@@ -378,7 +335,6 @@ export function stripHtml(html) {
   return html.replace(/<[^>]*>/g, '');
 }
 
-/** Build full route polyline from all legs */
 export function extractRoutePolyline(directionsResult) {
   if (!directionsResult?.routes?.[0]) return [];
   const route = directionsResult.routes[0];

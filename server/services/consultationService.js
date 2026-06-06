@@ -11,7 +11,7 @@ import DoctorProfile from '../models/DoctorProfile.js';
 import User from '../models/User.js';
 import Notification from '../models/Notification.js';
 import sendEmail from '../utils/sendEmail.js';
-import { transactionalTemplate } from '../utils/emailTemplates.js'; // Ensure this path matches your project structure
+import { transactionalTemplate } from '../utils/emailTemplates.js';
 import {
   provisionConsultationTokens,
   getParticipantTokens,
@@ -27,22 +27,22 @@ import redisClient from '../config/redis.js';
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const VALID_STATUS_TRANSITIONS = {
-  scheduled:      ['waiting', 'doctor_joined', 'patient_joined', 'cancelled', 'missed'],
-  waiting:        ['doctor_joined', 'in_progress', 'cancelled', 'no_show_patient'],
-  doctor_joined:  ['in_progress', 'patient_joined', 'missed', 'no_show_patient', 'cancelled'],
-  patient_joined: ['in_progress', 'doctor_joined', 'missed', 'no_show_doctor', 'cancelled'],
-  in_progress:    ['paused', 'completed', 'technical_failure'],
-  paused:         ['in_progress', 'completed', 'technical_failure'],
-  completed:      [],
-  missed:         [],
-  cancelled:      [],
-  no_show_patient:[],
-  no_show_doctor: [],
-  technical_failure: ['scheduled'], // can reschedule after failure
+  scheduled:        ['waiting', 'doctor_joined', 'patient_joined', 'cancelled', 'missed'],
+  waiting:          ['doctor_joined', 'in_progress', 'cancelled', 'no_show_patient'],
+  doctor_joined:    ['in_progress', 'patient_joined', 'missed', 'no_show_patient', 'cancelled'],
+  patient_joined:   ['in_progress', 'doctor_joined', 'missed', 'no_show_doctor', 'cancelled'],
+  in_progress:      ['paused', 'completed', 'technical_failure'],
+  paused:           ['in_progress', 'completed', 'technical_failure'],
+  completed:        [],
+  missed:           [],
+  cancelled:        [],
+  no_show_patient:  [],
+  no_show_doctor:   [],
+  technical_failure:['scheduled'],
 };
 
-const CONSULTATION_CACHE_TTL = 60; // 1 min for active sessions
-const LIST_CACHE_TTL = 120;
+const CONSULTATION_CACHE_TTL = 60;
+const LIST_CACHE_TTL         = 120;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -82,6 +82,25 @@ const pushNotification = async ({ recipientId, title, body, type, relatedEntityI
   }
 };
 
+// ── Timer helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Compute net elapsed seconds for a consultation from its timerState segments
+ * plus any currently-running segment that hasn't been closed yet.
+ */
+const computeCurrentElapsedSec = (timerState) => {
+  if (!timerState) return 0;
+  let total = timerState.totalElapsedSec || 0;
+  // If there's an open segment (currentSegmentStartedAt), add live duration
+  if (timerState.currentSegmentStartedAt) {
+    total += Math.floor((Date.now() - new Date(timerState.currentSegmentStartedAt).getTime()) / 1000);
+  }
+  return total;
+};
+
+const MAX_TIME_MIN = () => parseInt(process.env.CONSULTATION_MAX_TIME_MIN || '30', 10);
+const REMINDER_MIN = () => parseInt(process.env.CONSULTATION_REMINDER_MIN_BEFORE || '15', 10);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // 1. CREATE CONSULTATION
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -105,14 +124,12 @@ export const createConsultation = async (data, createdBy) => {
       parentConsultationId = null,
     } = data;
 
-    // ── 1. Validate booking ──────────────────────────────────────────────────
     const booking = await Booking.findById(bookingId).session(session);
     if (!booking) throw new Error('Booking not found');
     if (booking.consultationSessionId) {
       throw new Error('Booking already has a consultation session linked');
     }
 
-    // ── 2. Validate doctor & patient ─────────────────────────────────────────
     const doctor = await DoctorProfile.findById(doctorId)
       .populate('user', 'name phone email')
       .session(session);
@@ -121,7 +138,6 @@ export const createConsultation = async (data, createdBy) => {
     const patient = await User.findById(patientId).session(session);
     if (!patient) throw new Error('Patient (User) not found');
 
-    // ── 3. Create Consultation ───────────────────────────────────────────────
     const [consultation] = await Consultation.create(
       [
         {
@@ -137,7 +153,7 @@ export const createConsultation = async (data, createdBy) => {
           urgency,
           isFollowUp,
           parentConsultation: parentConsultationId || null,
-          gracePeriodMin: 10,
+          gracePeriodMin: parseInt(process.env.CONSULTATION_GRACE_PERIOD_MIN || '10', 10),
           status: 'scheduled',
           createdBy,
           updatedBy: createdBy,
@@ -146,14 +162,12 @@ export const createConsultation = async (data, createdBy) => {
       { session }
     );
 
-    // ── 4. Link consultation back to booking ─────────────────────────────────
     booking.consultationSessionId = consultation._id;
     booking.updatedBy = createdBy;
     await booking.save({ session });
 
-    // ── 5. Create OutPatientRecord ───────────────────────────────────────────
-    const opDate = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const opSeq = await Consultation.countDocuments({ doctor: doctorId }).session(session);
+    const opDate  = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const opSeq   = await Consultation.countDocuments({ doctor: doctorId }).session(session);
     const opNumber = `OP-${opDate}-${String(opSeq + 1).padStart(4, '0')}`;
 
     await OutPatientRecord.create(
@@ -185,7 +199,6 @@ export const createConsultation = async (data, createdBy) => {
 
     await session.commitTransaction();
 
-    // ── 6. Provision Agora tokens (outside tx — network call) ────────────────
     let agoraTokens = null;
     if (['video', 'audio'].includes(consultationType)) {
       try {
@@ -200,16 +213,12 @@ export const createConsultation = async (data, createdBy) => {
       }
     }
 
-    // ── 7. Invalidate caches ──────────────────────────────────────────────────
     await invalidateConsultationCache(consultation._id, patientId, doctorId);
 
-    // ── 8. Notifications & Emails ─────────────────────────────────────────────
     const timeString = new Date(scheduledAt).toLocaleString('en-IN', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
+      dateStyle: 'medium', timeStyle: 'short',
     });
 
-    // Email to Patient
     if (patient.email) {
       sendEmail({
         email: patient.email,
@@ -219,12 +228,11 @@ export const createConsultation = async (data, createdBy) => {
           title: `Consultation Confirmed with Dr. ${doctor.user.name}`,
           body: `Your ${consultationType} consultation is successfully scheduled for <strong>${timeString}</strong>. Please ensure you are available 5 minutes before the start time.`,
           buttonText: 'View Details',
-          buttonLink: `${process.env.FRONTEND_URL}/consultations/${consultation._id}`
-        })
+          buttonLink: `${process.env.FRONTEND_URL}/consultations/${consultation._id}`,
+        }),
       }).catch(err => console.error('Patient email failed:', err.message));
     }
 
-    // Email to Doctor
     if (doctor.user.email) {
       sendEmail({
         email: doctor.user.email,
@@ -234,12 +242,11 @@ export const createConsultation = async (data, createdBy) => {
           title: `New ${consultationType} Consultation`,
           body: `You have a new consultation scheduled with ${patient.name} for <strong>${timeString}</strong>.`,
           buttonText: 'View Schedule',
-          buttonLink: `${process.env.FRONTEND_URL}/doctor/consultations/${consultation._id}`
-        })
+          buttonLink: `${process.env.FRONTEND_URL}/doctor/consultations/${consultation._id}`,
+        }),
       }).catch(err => console.error('Doctor email failed:', err.message));
     }
 
-    // Push Notifications
     await Promise.allSettled([
       pushNotification({
         recipientId: patientId,
@@ -261,9 +268,7 @@ export const createConsultation = async (data, createdBy) => {
 
     return { consultation, agoraTokens };
   } catch (err) {
-    if (session.inTransaction()) {
-      await session.abortTransaction();
-    }
+    if (session.inTransaction()) await session.abortTransaction();
     throw err;
   } finally {
     session.endSession();
@@ -312,7 +317,7 @@ export const getConsultationById = async (id, includeTokens = false) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const listConsultations = async ({ filter = {}, page = 1, limit = 10, sort = { scheduledAt: -1 }, cacheKeyPrefix = null }) => {
-  const skip = (page - 1) * limit;
+  const skip     = (page - 1) * limit;
   const cacheKey = cacheKeyPrefix ? `${cacheKeyPrefix}:${JSON.stringify({ filter, page, limit })}` : null;
 
   if (cacheKey) {
@@ -388,9 +393,11 @@ export const transitionStatus = async (id, toStatus, { actor, reason, metadata =
 
   assertTransition(consultation.status, toStatus);
 
-  consultation.status = toStatus;
+  consultation.status    = toStatus;
   consultation.updatedBy = actor;
-  if (reason) consultation.statusLog.push({ fromStatus: consultation.status, toStatus, changedBy: actor, reason });
+  if (reason) {
+    consultation.statusLog.push({ fromStatus: consultation.status, toStatus, changedBy: actor, reason });
+  }
 
   switch (toStatus) {
     case 'in_progress':
@@ -406,21 +413,19 @@ export const transitionStatus = async (id, toStatus, { actor, reason, metadata =
         );
       }
       if (!consultation.sessionMetrics) consultation.sessionMetrics = {};
-      consultation.sessionMetrics.totalDurationSec = consultation.actualDurationSec;
+      consultation.sessionMetrics.totalDurationSec   = consultation.actualDurationSec;
       consultation.sessionMetrics.prescriptionIssued = (consultation.prescriptions?.length ?? 0) > 0;
-      consultation.sessionMetrics.referralIssued = !!consultation.clinicalNotes?.referralTo;
+      consultation.sessionMetrics.referralIssued     = !!consultation.clinicalNotes?.referralTo;
       break;
 
     case 'cancelled':
       consultation.cancellation = {
-        cancelledBy: metadata.cancelledBy || 'admin',
+        cancelledBy:   metadata.cancelledBy || 'admin',
         cancelledById: actor,
-        reason: reason || 'No reason provided',
-        cancelledAt: new Date(),
-        refundable: metadata.refundable ?? false,
+        reason:        reason || 'No reason provided',
+        cancelledAt:   new Date(),
+        refundable:    metadata.refundable ?? false,
       };
-
-      // Cancellation Email to Patient
       if (consultation.patient?.email) {
         sendEmail({
           email: consultation.patient.email,
@@ -430,15 +435,15 @@ export const transitionStatus = async (id, toStatus, { actor, reason, metadata =
             title: 'Your Consultation Has Been Cancelled',
             body: `Your consultation scheduled for ${new Date(consultation.scheduledAt).toLocaleString('en-IN')} has been cancelled.<br><br><strong>Reason:</strong> ${reason || 'Not specified'}`,
             buttonText: 'Book New Appointment',
-            buttonLink: `${process.env.FRONTEND_URL}/doctors`
-          })
+            buttonLink: `${process.env.FRONTEND_URL}/doctors`,
+          }),
         }).catch(err => console.error('Cancellation email failed:', err.message));
       }
       break;
 
     case 'waiting':
-      consultation.waitingRoom.patientEnteredAt = new Date();
-      consultation.waitingRoom.estimatedWaitMin = metadata.estimatedWaitMin || 5;
+      consultation.waitingRoom.patientEnteredAt  = new Date();
+      consultation.waitingRoom.estimatedWaitMin  = metadata.estimatedWaitMin || 5;
       break;
 
     case 'doctor_joined':
@@ -475,10 +480,10 @@ export const enterWaitingRoom = async (consultationId, patientId) => {
   }
 
   c.waitingRoom.patientEnteredAt = new Date();
-  c.waitingRoom.patientLeft = false;
-  c.waitingRoom.patientLeftAt = undefined;
+  c.waitingRoom.patientLeft      = false;
+  c.waitingRoom.patientLeftAt    = undefined;
   c.waitingRoom.estimatedWaitMin = 5;
-  c.status = 'waiting';
+  c.status    = 'waiting';
   c.updatedBy = patientId;
 
   await pushNotification({
@@ -499,8 +504,8 @@ export const leaveWaitingRoom = async (consultationId, patientId) => {
   const c = await Consultation.findById(consultationId);
   if (!c) throw new Error('Consultation not found');
 
-  c.waitingRoom.patientLeft = true;
-  c.waitingRoom.patientLeftAt = new Date();
+  c.waitingRoom.patientLeft    = true;
+  c.waitingRoom.patientLeftAt  = new Date();
   c.updatedBy = patientId;
   await c.save();
   return c;
@@ -512,13 +517,13 @@ export const getWaitingRoomStatus = async (consultationId) => {
     .lean();
   if (!c) throw new Error('Consultation not found');
   return {
-    status: c.status,
-    waitingRoom: c.waitingRoom,
-    scheduledAt: c.scheduledAt,
-    autoMissedAt: c.autoMissedAt,
-    gracePeriodMin: c.gracePeriodMin,
+    status:           c.status,
+    waitingRoom:      c.waitingRoom,
+    scheduledAt:      c.scheduledAt,
+    autoMissedAt:     c.autoMissedAt,
+    gracePeriodMin:   c.gracePeriodMin,
     estimatedWaitMin: c.waitingRoom?.estimatedWaitMin ?? 0,
-    queuePosition: c.waitingRoom?.queuePosition ?? 1,
+    queuePosition:    c.waitingRoom?.queuePosition ?? 1,
   };
 };
 
@@ -534,23 +539,23 @@ export const participantJoin = async (consultationId, userId, role, deviceInfo =
   );
   if (existingEvent) {
     existingEvent.rejoinCount += 1;
-    existingEvent.joinedAt = new Date();
+    existingEvent.joinedAt     = new Date();
   } else {
     c.participantEvents.push({
       userId,
       role,
-      joinedAt: new Date(),
+      joinedAt:    new Date(),
       deviceInfo,
       rejoinCount: 0,
     });
   }
 
-  const isDoctor = role === 'doctor';
+  const isDoctor  = role === 'doctor';
   const isPatient = role === 'patient';
 
-  if (isDoctor && c.status === 'scheduled') c.status = 'doctor_joined';
+  if (isDoctor && c.status === 'scheduled')      c.status = 'doctor_joined';
   if (isDoctor && c.status === 'patient_joined') c.status = 'in_progress';
-  if (isPatient && c.status === 'scheduled') c.status = 'patient_joined';
+  if (isPatient && c.status === 'scheduled')     c.status = 'patient_joined';
   if (isPatient && ['waiting', 'doctor_joined'].includes(c.status)) c.status = 'in_progress';
 
   c.updatedBy = userId;
@@ -575,7 +580,7 @@ export const participantLeave = async (consultationId, userId, role, metrics = {
     .sort((a, b) => b.joinedAt - a.joinedAt)[0];
 
   if (event && !event.leftAt) {
-    event.leftAt = new Date();
+    event.leftAt     = new Date();
     event.durationSec = Math.round((event.leftAt - event.joinedAt) / 1000);
     if (metrics.networkQuality) event.networkQuality = metrics.networkQuality;
   }
@@ -602,12 +607,13 @@ export const provisionTokens = async (consultationId, actorId) => {
 };
 
 export const getTokensForParticipant = async (consultationId, userId, userRole) => {
-  const c = await Consultation.findById(consultationId).select('patient doctorUser consultationType status');
+  const c = await Consultation.findById(consultationId)
+    .select('patient doctorUser consultationType status');
   if (!c) throw new Error('Consultation not found');
   if (c.isCancelled) throw new Error('Consultation is cancelled');
 
   let participantRole;
-  if (c.patient.toString() === userId) participantRole = 'patient';
+  if (c.patient.toString() === userId)         participantRole = 'patient';
   else if (c.doctorUser?.toString() === userId) participantRole = 'doctor';
   else throw new Error('You are not a participant of this consultation');
 
@@ -637,8 +643,8 @@ export const handleAgoraWebhook = async (rawBody, signature, timestamp) => {
     const c = await Consultation.findOne({ 'agora.channelName': payload?.channelName });
     if (c) {
       c.agora.cloudRecordingResourceId = payload.resourceId;
-      c.agora.cloudRecordingSid = payload.sid;
-      c.agora.recordingStartedAt = new Date();
+      c.agora.cloudRecordingSid        = payload.sid;
+      c.agora.recordingStartedAt       = new Date();
       await c.save();
     }
   }
@@ -662,10 +668,10 @@ export const startRecording = async (consultationId, actorId) => {
   if (!c) throw new Error('Consultation not found');
   if (!c.isActive) throw new Error('Consultation is not active');
 
-  c.agora.isRecordingEnabled = true;
-  c.agora.recordingStartedAt = new Date();
-  c.agora.recordingConsentDoctor = true;
-  c.agora.recordingConsentPatient = true;
+  c.agora.isRecordingEnabled       = true;
+  c.agora.recordingStartedAt       = new Date();
+  c.agora.recordingConsentDoctor   = true;
+  c.agora.recordingConsentPatient  = true;
   c.recordingConsent = { doctorConsented: true, patientConsented: true, consentTimestamp: new Date() };
   c.updatedBy = actorId;
   await c.save();
@@ -676,8 +682,8 @@ export const stopRecording = async (consultationId, actorId) => {
   const c = await Consultation.findById(consultationId);
   if (!c) throw new Error('Consultation not found');
 
-  c.agora.isRecordingEnabled = false;
-  c.agora.recordingStoppedAt = new Date();
+  c.agora.isRecordingEnabled  = false;
+  c.agora.recordingStoppedAt  = new Date();
   c.updatedBy = actorId;
   await c.save();
   return { recording: false, stoppedAt: c.agora.recordingStoppedAt };
@@ -702,22 +708,18 @@ export const getRecordingUrls = async (consultationId) => {
 
 export const getParticipants = async (consultationId) => {
   const c = await Consultation.findById(consultationId)
-    // 1. Use an object to perform a nested populate on the doctor's 'user' field
     .populate({
       path: 'doctor',
       select: 'user specialization profilePhotoUrl',
-      populate: {
-        path: 'user',
-        select: 'name phone email avatar' // Specify the fields you want from the User model
-      }
+      populate: { path: 'user', select: 'name phone email avatar' },
     })
     .populate('patient', 'name phone email avatar')
     .populate('additionalParticipants.userId', 'name avatar phone email role')
     .populate('participantEvents.userId', 'name avatar role')
     .lean();
-    
+
   if (!c) throw new Error('Consultation not found');
-  
+
   return {
     core: { doctor: c.doctor, patient: c.patient },
     additional: c.additionalParticipants ?? [],
@@ -761,8 +763,132 @@ export const updateParticipantNetworkQuality = async (consultationId, userId, qu
   return { updated: true, quality };
 };
 
+// ── NEW: Mute participant (doctor only) ───────────────────────────────────────
+
+/**
+ * Doctor mutes a participant's audio.
+ * This stores the flag on DB and the socket broadcasts a mute command so the
+ * client SDK calls localAudioTrack.setEnabled(false).
+ *
+ * @param {string} consultationId
+ * @param {string} targetUserId     — the participant to mute
+ * @param {string} actorId          — must be the doctor of this consultation
+ * @returns {{ mutedUserId: string, isMuted: boolean }}
+ */
+export const muteParticipant = async (consultationId, targetUserId, actorId) => {
+  const c = await Consultation.findById(consultationId).select('doctorUser patient participantEvents status');
+  if (!c) throw new Error('Consultation not found');
+  if (c.doctorUser?.toString() !== actorId) throw new Error('Only the doctor can mute participants');
+  if (!['in_progress', 'paused'].includes(c.status)) {
+    throw new Error('Can only mute during an active session');
+  }
+
+  // Find the most recent active participant event for targetUser
+  const event = c.participantEvents
+    .filter((e) => e.userId.toString() === targetUserId && !e.leftAt)
+    .sort((a, b) => b.joinedAt - a.joinedAt)[0];
+
+  if (!event) throw new Error('Participant not currently in session');
+
+  event.isMutedByDoctor  = true;
+  event.mutedByDoctorAt  = new Date();
+  await c.save();
+
+  return { mutedUserId: targetUserId, isMuted: true };
+};
+
+/**
+ * Doctor unmutes a participant's audio.
+ */
+export const unmuteParticipant = async (consultationId, targetUserId, actorId) => {
+  const c = await Consultation.findById(consultationId).select('doctorUser participantEvents status');
+  if (!c) throw new Error('Consultation not found');
+  if (c.doctorUser?.toString() !== actorId) throw new Error('Only the doctor can unmute participants');
+
+  const event = c.participantEvents
+    .filter((e) => e.userId.toString() === targetUserId && !e.leftAt)
+    .sort((a, b) => b.joinedAt - a.joinedAt)[0];
+
+  if (!event) throw new Error('Participant not currently in session');
+
+  event.isMutedByDoctor    = false;
+  event.unmutedByDoctorAt  = new Date();
+  await c.save();
+
+  return { mutedUserId: targetUserId, isMuted: false };
+};
+
+/**
+ * Doctor kicks a participant from the session.
+ * After kick the participant's socket receives a kick event and should
+ * disconnect from the Agora channel.
+ *
+ * @param {string} consultationId
+ * @param {string} targetUserId
+ * @param {string} actorId        — must be doctor
+ * @param {string} [reason]
+ */
+export const kickParticipant = async (consultationId, targetUserId, actorId, reason = '') => {
+  const c = await Consultation.findById(consultationId)
+    .select('doctorUser patient participantEvents status');
+  if (!c) throw new Error('Consultation not found');
+  if (c.doctorUser?.toString() !== actorId) throw new Error('Only the doctor can kick participants');
+
+  // Prevent doctor from kicking the patient of the consultation entirely
+  // (admins use overrideStatus / cancel for that)
+  const event = c.participantEvents
+    .filter((e) => e.userId.toString() === targetUserId && !e.leftAt)
+    .sort((a, b) => b.joinedAt - a.joinedAt)[0];
+
+  if (!event) throw new Error('Participant not currently in session');
+
+  event.isKicked   = true;
+  event.kickedAt   = new Date();
+  event.kickReason = reason || 'Removed by doctor';
+  event.leftAt     = new Date(); // treat as left
+  event.durationSec = Math.round((event.leftAt - (event.joinedAt || event.leftAt)) / 1000);
+
+  await c.save();
+  return { kickedUserId: targetUserId, reason: event.kickReason };
+};
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// 8. CLINICAL NOTES (SOAP)
+// 8. CONSULTATION TIMER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Get the current timer state for a consultation.
+ * Returns elapsed time, remaining time, and deadline.
+ */
+export const getConsultationTimer = async (consultationId) => {
+  const c = await Consultation.findById(consultationId)
+    .select('timerState status sessionStartedAt')
+    .lean({ virtuals: true });
+  if (!c) throw new Error('Consultation not found');
+
+  const maxTimeSec    = MAX_TIME_MIN() * 60;
+  const elapsedSec    = computeCurrentElapsedSec(c.timerState);
+const hardDeadline = c.timerState?.hardDeadlineAt;
+// If active deadline exists, use it (accurate wall clock)
+// Else compute from elapsed (session paused or not started)
+const remainingSec = hardDeadline
+  ? Math.max(0, Math.floor((new Date(hardDeadline).getTime() - Date.now()) / 1000))
+  : Math.max(0, maxTimeSec - elapsedSec);
+
+  return {
+    status:          c.status,
+    maxTimeSec,
+    elapsedSec,
+    remainingSec,
+    hardDeadlineAt:  hardDeadline,
+    reminderSent:    c.timerState?.reminderSent ?? false,
+    autoEnded:       c.timerState?.autoEnded ?? false,
+    segments:        c.timerState?.segments ?? [],
+  };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 9. CLINICAL NOTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const saveVitals = async (consultationId, vitals, actorId) => {
@@ -788,22 +914,20 @@ export const saveNotes = async (consultationId, notes, actorId) => {
 };
 
 export const getNotes = async (consultationId) => {
-  const c = await Consultation.findById(consultationId)
-    .select('+clinicalNotes.privateNotes')
-    .lean();
+  const c = await Consultation.findById(consultationId).select('+clinicalNotes.privateNotes').lean();
   if (!c) throw new Error('Consultation not found');
   return c.clinicalNotes;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 9. PRESCRIPTIONS
+// 10. PRESCRIPTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const issuePrescription = async (consultationId, prescriptionData, actorId) => {
   const consultation = await Consultation.findById(consultationId)
     .populate('doctor', 'user specialization registrationNumber qualifications')
     .populate('patient', 'name phone email');
-  
+
   if (!consultation) throw new Error('Consultation not found');
   if (!consultation.isActive && consultation.status !== 'completed') {
     throw new Error('Cannot issue prescription for inactive consultation');
@@ -815,23 +939,23 @@ export const issuePrescription = async (consultationId, prescriptionData, actorI
     booking: consultation.booking,
     patientCareRecord: null,
     doctor: {
-      userId: consultation.doctor.user,
-      doctorProfileId: consultation.doctor._id,
-      name: doctorUser.name,
+      userId:             consultation.doctor.user,
+      doctorProfileId:    consultation.doctor._id,
+      name:               doctorUser.name,
       registrationNumber: consultation.doctor.registrationNumber,
-      specialization: consultation.doctor.specialization,
-      qualifications: consultation.doctor.qualifications?.map(q => q.degree).join(', '),
-      phone: doctorUser.phone,
-      email: doctorUser.email,
+      specialization:     consultation.doctor.specialization,
+      qualifications:     consultation.doctor.qualifications?.map(q => q.degree).join(', '),
+      phone:              doctorUser.phone,
+      email:              doctorUser.email,
     },
     patient: {
-      userId: consultation.patient._id,
-      name: consultation.patient.name,
-      age: consultation.patientSnapshot?.age,
-      gender: consultation.patientSnapshot?.gender,
-      phone: consultation.patient.phone,
+      userId:     consultation.patient._id,
+      name:       consultation.patient.name,
+      age:        consultation.patientSnapshot?.age,
+      gender:     consultation.patientSnapshot?.gender,
+      phone:      consultation.patient.phone,
       bloodGroup: consultation.patientSnapshot?.bloodGroup,
-      allergies: consultation.patientSnapshot?.allergies ?? [],
+      allergies:  consultation.patientSnapshot?.allergies ?? [],
     },
     ...prescriptionData,
     createdBy: actorId,
@@ -843,7 +967,6 @@ export const issuePrescription = async (consultationId, prescriptionData, actorI
   consultation.sessionMetrics.prescriptionIssued = true;
   await consultation.save();
 
-  // Email Notification
   if (consultation.patient?.email) {
     sendEmail({
       email: consultation.patient.email,
@@ -853,8 +976,8 @@ export const issuePrescription = async (consultationId, prescriptionData, actorI
         title: `Prescription from Dr. ${rx.doctor.name}`,
         body: `Your prescription for your recent consultation is now available. You can view, download, or order medicines directly from our platform.`,
         buttonText: 'View Prescription',
-        buttonLink: `${process.env.FRONTEND_URL}/prescriptions/${rx._id}`
-      })
+        buttonLink: `${process.env.FRONTEND_URL}/prescriptions/${rx._id}`,
+      }),
     }).catch(err => console.error('Prescription email failed:', err.message));
   }
 
@@ -881,14 +1004,14 @@ export const getPrescriptions = async (consultationId) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 10. REFERRAL
+// 11. REFERRAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const saveReferral = async (consultationId, { referralTo, referralNote }, actorId) => {
   const c = await Consultation.findById(consultationId);
   if (!c) throw new Error('Consultation not found');
 
-  c.clinicalNotes.referralTo = referralTo;
+  c.clinicalNotes.referralTo   = referralTo;
   c.clinicalNotes.referralNote = referralNote;
   c.clinicalNotes.lastEditedAt = new Date();
   c.updatedBy = actorId;
@@ -905,13 +1028,13 @@ export const getReferral = async (consultationId) => {
     .lean();
   if (!c) throw new Error('Consultation not found');
   return {
-    referralTo: c.clinicalNotes?.referralTo,
-    referralNote: c.clinicalNotes?.referralNote,
+    referralTo:  c.clinicalNotes?.referralTo,
+    referralNote:c.clinicalNotes?.referralNote,
   };
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 11. IN-SESSION CHAT
+// 12. IN-SESSION CHAT
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const sendChatMessage = async (consultationId, senderId, senderRole, messageData) => {
@@ -922,24 +1045,21 @@ export const sendChatMessage = async (consultationId, senderId, senderRole, mess
   const newMessage = {
     senderUserId: senderId,
     senderRole,
-    content: messageData.content || '',
-    messageType: messageData.messageType || 'text',
-    attachmentUrl: messageData.attachmentUrl || null,
+    content:        messageData.content || '',
+    messageType:    messageData.messageType || 'text',
+    attachmentUrl:  messageData.attachmentUrl || null,
     attachmentName: messageData.attachmentName || null,
     sentAt: new Date(),
   };
 
   c.chatMessages.push(newMessage);
-
   if (!c.sessionMetrics) c.sessionMetrics = {};
   c.sessionMetrics.chatMessagesCount = c.chatMessages.length;
 
   await c.save();
-  
-  // Populate sender details before returning so socket can broadcast rich data
+
   const savedMsg = c.chatMessages[c.chatMessages.length - 1];
   await Consultation.populate(savedMsg, { path: 'senderUserId', select: 'name avatar role' });
-  
   return savedMsg;
 };
 
@@ -966,7 +1086,7 @@ export const deleteChatMessage = async (consultationId, messageId, actorId) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 12. RATING
+// 13. RATING
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const submitRating = async (consultationId, patientId, ratingData) => {
@@ -976,7 +1096,7 @@ export const submitRating = async (consultationId, patientId, ratingData) => {
   if (c.status !== 'completed') throw new Error('Can only rate completed consultations');
   if (c.isRated) throw new Error('Already rated');
 
-  c.rating = { ...ratingData, ratedAt: new Date() };
+  c.rating  = { ...ratingData, ratedAt: new Date() };
   c.isRated = true;
   c.updatedBy = patientId;
   await c.save();
@@ -991,7 +1111,7 @@ export const submitRating = async (consultationId, patientId, ratingData) => {
 
   await DoctorProfile.findByIdAndUpdate(c.doctor, {
     'rating.averageRating': +avg.toFixed(2),
-    'rating.totalRatings': allRatings.length,
+    'rating.totalRatings':  allRatings.length,
   });
 
   await invalidateKey(consultationCacheKey(consultationId));
@@ -1016,14 +1136,14 @@ export const editRating = async (consultationId, patientId, updates) => {
     if (diffHours > 24) throw new Error('Rating can only be edited within 24 hours');
   }
 
-  c.rating = { ...c.rating.toObject?.() ?? c.rating, ...updates, ratedAt: c.rating.ratedAt };
+  c.rating    = { ...c.rating.toObject?.() ?? c.rating, ...updates, ratedAt: c.rating.ratedAt };
   c.updatedBy = patientId;
   await c.save();
   return c.rating;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 13. METRICS
+// 14. METRICS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const saveMetrics = async (consultationId, metrics, actorId) => {
@@ -1043,7 +1163,7 @@ export const getMetrics = async (consultationId) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 14. FOLLOW-UP
+// 15. FOLLOW-UP
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const createFollowUp = async (parentConsultationId, followUpData, createdBy) => {
@@ -1054,12 +1174,12 @@ export const createFollowUp = async (parentConsultationId, followUpData, created
   return createConsultation(
     {
       ...followUpData,
-      doctorId: parent.doctor.toString(),
-      patientId: parent.patient.toString(),
-      hospitalId: parent.hospital?.toString(),
-      isFollowUp: true,
+      doctorId:             parent.doctor.toString(),
+      patientId:            parent.patient.toString(),
+      hospitalId:           parent.hospital?.toString(),
+      isFollowUp:           true,
       parentConsultationId: parentConsultationId,
-      bookingId: followUpData.bookingId,
+      bookingId:            followUpData.bookingId,
     },
     createdBy
   );
@@ -1087,12 +1207,12 @@ export const getFollowUpHistory = async (consultationId) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 15. DASHBOARD QUERIES
+// 16. DASHBOARD QUERIES
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const getDoctorSchedule = async (doctorId) => {
   const start = new Date(); start.setHours(0, 0, 0, 0);
-  const end = new Date(); end.setDate(end.getDate() + 7); end.setHours(23, 59, 59);
+  const end   = new Date(); end.setDate(end.getDate() + 7); end.setHours(23, 59, 59);
 
   return Consultation.find({
     doctor: doctorId,
@@ -1153,7 +1273,7 @@ export const getPlatformStats = async () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 16. ADMIN OPERATIONS
+// 17. ADMIN OPERATIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const assignAdmin = async (consultationId, adminId, actorId) => {
@@ -1169,7 +1289,7 @@ export const assignAdmin = async (consultationId, adminId, actorId) => {
 export const overrideStatus = async (consultationId, status, reason, actorId) => {
   const c = await Consultation.findById(consultationId);
   if (!c) throw new Error('Consultation not found');
-  c.status = status;
+  c.status    = status;
   c.updatedBy = actorId;
   c.statusLog.push({ fromStatus: c.status, toStatus: status, changedBy: actorId, reason });
   await c.save();
@@ -1178,11 +1298,11 @@ export const overrideStatus = async (consultationId, status, reason, actorId) =>
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 17. CRON JOBS
+// 18. CRON JOBS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const runAutoMiss = async () => {
-  const now = new Date();
+  const now    = new Date();
   const missed = await Consultation.find({
     status: 'scheduled',
     autoMissedAt: { $lt: now },
@@ -1219,37 +1339,193 @@ export const runAutoMiss = async () => {
   return { processed: count };
 };
 
-export const getScreenShareToken = async (consultationId, screenUid, userId, userRole) => {
-  // 1. Fetch the consultation to get the channelName and verify participants
-  const c = await Consultation.findById(consultationId)
-    .select('patient doctorUser agora status')
-    .lean();
-    
-  if (!c) throw new Error('Consultation not found');
-  if (!c.agora?.channelName) throw new Error('Agora channel not initialized for this consultation');
+/**
+ * runAutoEnd
+ * Fires every minute via cron.
+ * Finds active consultations whose hardDeadlineAt has passed and auto-completes them.
+ * Sends email + push notification to both doctor and patient.
+ */
+export const runAutoEnd = async () => {
+  const now = new Date();
 
-  // 2. Security Check: Ensure the user requesting the token is actually part of this session
-  if (userRole === 'patient' && c.patient.toString() !== userId) {
-    throw new Error('You are not authorized to share screen in this consultation');
+ const overdue = await Consultation.find({
+  status:                     'in_progress',   // paused = no deadline, skip
+  'timerState.hardDeadlineAt':{ $lt: now, $exists: true },
+  'timerState.autoEnded':      false,
+})
+    .select('_id patient doctorUser booking consultationCode timerState')
+    .populate('patient', 'name email')
+    .populate('doctorUser', 'name email');
+
+  let count = 0;
+  for (const c of overdue) {
+    try {
+      // Mark auto-ended before transition to prevent double-fire
+      await Consultation.findByIdAndUpdate(c._id, {
+        'timerState.autoEnded': true,
+        autoEndedAt:            now,
+      });
+
+      await transitionStatus(c._id.toString(), 'completed', {
+        actor:  null,
+        reason: `Auto-ended: max consultation time of ${MAX_TIME_MIN()} minutes reached`,
+      });
+
+      const maxMin = MAX_TIME_MIN();
+
+      // Email — patient
+      if (c.patient?.email) {
+        sendEmail({
+          email: c.patient.email,
+          subject: `Your Consultation Has Ended - ${c.consultationCode}`,
+          html: transactionalTemplate({
+            header: 'CONSULTATION ENDED',
+            title: 'Your Consultation Session Has Ended',
+            body: `Your consultation <strong>${c.consultationCode}</strong> has been automatically ended after reaching the maximum allowed time of <strong>${maxMin} minutes</strong>.<br><br>Your doctor may have issued a prescription. Please check your prescriptions section.`,
+            buttonText: 'View Consultation',
+            buttonLink: `${process.env.FRONTEND_URL}/consultations/${c._id}`,
+          }),
+        }).catch(err => console.error('[runAutoEnd] Patient email failed:', err.message));
+      }
+
+      // Email — doctor
+      if (c.doctorUser?.email) {
+        sendEmail({
+          email: c.doctorUser.email,
+          subject: `Consultation Auto-Ended - ${c.consultationCode}`,
+          html: transactionalTemplate({
+            header: 'SESSION ENDED',
+            title: 'Consultation Auto-Ended',
+            body: `Consultation <strong>${c.consultationCode}</strong> with patient <strong>${c.patient?.name}</strong> was automatically ended after ${maxMin} minutes.`,
+            buttonText: 'View Details',
+            buttonLink: `${process.env.FRONTEND_URL}/doctor/consultations/${c._id}`,
+          }),
+        }).catch(err => console.error('[runAutoEnd] Doctor email failed:', err.message));
+      }
+
+      // Push notifications
+      await Promise.allSettled([
+        pushNotification({
+          recipientId:    c.patient?._id,
+          title:          'Consultation Ended',
+          body:           `Your consultation has automatically ended after ${maxMin} minutes.`,
+          type:           'Appointment_Reminder',
+          relatedEntityId:c.booking,
+          deepLink:       { screen: 'ConsultationDetail', referenceId: c._id },
+        }),
+        pushNotification({
+          recipientId:    c.doctorUser?._id,
+          title:          'Consultation Auto-Ended',
+          body:           `Consultation with ${c.patient?.name} ended after ${maxMin} minutes.`,
+          type:           'Appointment_Reminder',
+          relatedEntityId:c.booking,
+          deepLink:       { screen: 'DoctorConsultationDetail', referenceId: c._id },
+        }),
+      ]);
+
+      count++;
+    } catch (err) {
+      console.error(`[runAutoEnd] failed for ${c._id}:`, err.message);
+    }
   }
-  if (userRole === 'doctor' && c.doctorUser?.toString() !== userId) {
-    throw new Error('You are not authorized to share screen in this consultation');
+  return { autoEnded: count };
+};
+
+/**
+ * runTimerReminder
+ * Fires every minute.
+ * Finds active consultations approaching their hard deadline (≤ reminderMin remaining)
+ * and sends a 15-min-remaining email + push notification to both parties.
+ */
+export const runTimerReminder = async () => {
+  const now        = new Date();
+  const reminderMs = REMINDER_MIN() * 60 * 1000;
+  const cutoff     = new Date(now.getTime() + reminderMs); // deadline within next 15 min
+
+  const approaching = await Consultation.find({
+  status:                       'in_progress',  // paused = no deadline
+  'timerState.hardDeadlineAt':  { $gt: now, $lte: cutoff, $exists: true },
+    'timerState.reminderSent':    false,
+    'timerState.autoEnded':       false,
+  })
+    .select('_id patient doctorUser booking consultationCode timerState')
+    .populate('patient', 'name email')
+    .populate('doctorUser', 'name email');
+
+  let count = 0;
+  for (const c of approaching) {
+    try {
+      const remainingMin = Math.ceil(
+        (new Date(c.timerState.hardDeadlineAt).getTime() - now.getTime()) / 60000
+      );
+
+      // Mark sent first to avoid double-send on slow cron
+      await Consultation.findByIdAndUpdate(c._id, {
+        'timerState.reminderSent':             true,
+        'notificationsSent.maxTimeReminder15min': true,
+      });
+
+      // Email — patient
+      if (c.patient?.email) {
+        sendEmail({
+          email: c.patient.email,
+          subject: `Consultation Ending Soon - ${c.consultationCode}`,
+          html: transactionalTemplate({
+            header: 'TIME REMINDER',
+            title: `Your Consultation Ends in ~${remainingMin} Minutes`,
+            body: `Your ongoing consultation <strong>${c.consultationCode}</strong> will automatically end in approximately <strong>${remainingMin} minutes</strong>.<br><br>Please wrap up with your doctor.`,
+            buttonText: 'View Consultation',
+            buttonLink: `${process.env.FRONTEND_URL}/consultations/${c._id}`,
+          }),
+        }).catch(err => console.error('[runTimerReminder] Patient email failed:', err.message));
+      }
+
+      // Email — doctor
+      if (c.doctorUser?.email) {
+        sendEmail({
+          email: c.doctorUser.email,
+          subject: `Consultation Ending Soon - ${c.consultationCode}`,
+          html: transactionalTemplate({
+            header: 'TIME REMINDER',
+            title: `Session Ends in ~${remainingMin} Minutes`,
+            body: `Your consultation <strong>${c.consultationCode}</strong> with patient <strong>${c.patient?.name}</strong> will auto-end in approximately <strong>${remainingMin} minutes</strong>. Please issue any prescriptions or referrals before the session ends.`,
+            buttonText: 'View Session',
+            buttonLink: `${process.env.FRONTEND_URL}/doctor/consultations/${c._id}`,
+          }),
+        }).catch(err => console.error('[runTimerReminder] Doctor email failed:', err.message));
+      }
+
+      // Push notifications
+      await Promise.allSettled([
+        pushNotification({
+          recipientId:    c.patient?._id,
+          title:          `Session Ending in ${remainingMin} min`,
+          body:           `Your consultation will automatically end in ${remainingMin} minutes.`,
+          type:           'Appointment_Reminder',
+          relatedEntityId:c.booking,
+          deepLink:       { screen: 'ConsultationDetail', referenceId: c._id },
+        }),
+        pushNotification({
+          recipientId:    c.doctorUser?._id,
+          title:          `Session Ending in ${remainingMin} min`,
+          body:           `Consultation with ${c.patient?.name} ends in ${remainingMin} minutes.`,
+          type:           'Appointment_Reminder',
+          relatedEntityId:c.booking,
+          deepLink:       { screen: 'DoctorConsultationDetail', referenceId: c._id },
+        }),
+      ]);
+
+      count++;
+    } catch (err) {
+      console.error(`[runTimerReminder] failed for ${c._id}:`, err.message);
+    }
   }
-
-  // 3. Generate the token specifically for the screenUid
-  // Expiration is set to 2 hours (7200 seconds) by default
-  const token = generateAgoraToken(c.agora.channelName, Number(screenUid), 7200);
-
-  return { 
-    token, 
-    uid: screenUid, 
-    channelName: c.agora.channelName 
-  };
+  return { reminded: count };
 };
 
 export const runTokenRefresh = async () => {
   const fiveMinFromNow = new Date(Date.now() + 5 * 60 * 1000);
-  const consultations = await Consultation.find({
+  const consultations  = await Consultation.find({
     status: { $in: ['waiting', 'doctor_joined', 'patient_joined', 'in_progress', 'paused'] },
     'agora.tokenExpiresAt': { $lt: fiveMinFromNow },
     consultationType: { $in: ['video', 'audio'] },
@@ -1268,13 +1544,13 @@ export const runTokenRefresh = async () => {
 };
 
 export const runReminders = async () => {
-  const now = new Date();
-  const in15min = new Date(now.getTime() + 15 * 60 * 1000);
-  const in20min = new Date(now.getTime() + 20 * 60 * 1000);
+  const now    = new Date();
+  const in15   = new Date(now.getTime() + 15 * 60 * 1000);
+  const in20   = new Date(now.getTime() + 20 * 60 * 1000);
 
   const upcoming = await Consultation.find({
     status: 'scheduled',
-    scheduledAt: { $gte: in15min, $lte: in20min },
+    scheduledAt: { $gte: in15, $lte: in20 },
     'notificationsSent.reminderPatient15min': false,
   }).select('_id patient doctorUser booking notificationsSent');
 
@@ -1283,24 +1559,24 @@ export const runReminders = async () => {
     try {
       await Promise.allSettled([
         pushNotification({
-          recipientId: c.patient,
-          title: 'Consultation in 15 minutes',
-          body: 'Your consultation starts soon. Please be ready.',
-          type: 'Appointment_Reminder',
-          relatedEntityId: c.booking,
-          deepLink: { screen: 'ConsultationDetail', referenceId: c._id },
+          recipientId:    c.patient,
+          title:          'Consultation in 15 minutes',
+          body:           'Your consultation starts soon. Please be ready.',
+          type:           'Appointment_Reminder',
+          relatedEntityId:c.booking,
+          deepLink:       { screen: 'ConsultationDetail', referenceId: c._id },
         }),
         pushNotification({
-          recipientId: c.doctorUser,
-          title: 'Consultation in 15 minutes',
-          body: 'You have a consultation starting soon.',
-          type: 'Appointment_Reminder',
-          relatedEntityId: c.booking,
-          deepLink: { screen: 'DoctorConsultationDetail', referenceId: c._id },
+          recipientId:    c.doctorUser,
+          title:          'Consultation in 15 minutes',
+          body:           'You have a consultation starting soon.',
+          type:           'Appointment_Reminder',
+          relatedEntityId:c.booking,
+          deepLink:       { screen: 'DoctorConsultationDetail', referenceId: c._id },
         }),
       ]);
       c.notificationsSent.reminderPatient15min = true;
-      c.notificationsSent.reminderDoctor15min = true;
+      c.notificationsSent.reminderDoctor15min  = true;
       await c.save();
       count++;
     } catch (err) {
@@ -1316,4 +1592,23 @@ export const runExpirePrescriptions = async () => {
     { $set: { status: 'expired' } }
   );
   return { expired: result.modifiedCount };
+};
+
+export const getScreenShareToken = async (consultationId, screenUid, userId, userRole) => {
+  const c = await Consultation.findById(consultationId)
+    .select('patient doctorUser agora status')
+    .lean();
+
+  if (!c) throw new Error('Consultation not found');
+  if (!c.agora?.channelName) throw new Error('Agora channel not initialized for this consultation');
+
+  if (userRole === 'patient' && c.patient.toString() !== userId) {
+    throw new Error('You are not authorized to share screen in this consultation');
+  }
+  if (userRole === 'doctor' && c.doctorUser?.toString() !== userId) {
+    throw new Error('You are not authorized to share screen in this consultation');
+  }
+
+  const token = generateAgoraToken(c.agora.channelName, Number(screenUid), 7200);
+  return { token, uid: screenUid, channelName: c.agora.channelName };
 };

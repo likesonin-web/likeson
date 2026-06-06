@@ -616,7 +616,7 @@ const DoctorDashboard = ({ children }) => {
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3 }}
-            className="md:rounded-md.5rem] rounded-md border border-base-300 bg-base-200/40 min-h-[75vh] shadow-inner relative overflow-hidden backdrop-blur-sm"
+            className="md:rounded-md.5rem] rounded-md border border-base-300 bg-base-200/40 min-h-screen shadow-inner relative overflow-hidden backdrop-blur-sm"
           >
             {/* Decorative medical-teal glow */}
             <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-success/4 blur-[130px] rounded-mdll pointer-events-none" />

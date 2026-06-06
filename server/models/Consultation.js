@@ -9,51 +9,46 @@ const generateConsultId = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 export const CONSULTATION_TYPES = [
-  'video',        // Agora RTC — primary
-  'audio',        // Agora voice-only
-  'chat',         // text chat (Agora RTM or internal)
-  'in_person',    // walk-in / clinic visit
-  'home_visit',   // doctor visits patient
+  'video',
+  'audio',
+  'chat',
+  'in_person',
+  'home_visit',
 ];
 
 export const CONSULTATION_STATUSES = [
-  'scheduled',      // booked, not started
-  'waiting',        // patient in waiting room
-  'doctor_joined',  // doctor entered, patient not yet
-  'patient_joined', // patient entered, doctor not yet
-  'in_progress',    // both in session
-  'paused',         // reconnecting / temp break
-  'completed',      // session ended normally
-  'missed',         // neither joined in grace period
-  'cancelled',      // cancelled before start
+  'scheduled',
+  'waiting',
+  'doctor_joined',
+  'patient_joined',
+  'in_progress',
+  'paused',
+  'completed',
+  'missed',
+  'cancelled',
   'no_show_patient',
   'no_show_doctor',
-  'technical_failure', // Agora/network failure
+  'technical_failure',
 ];
 
 export const URGENCY_LEVELS = ['routine', 'urgent', 'emergency'];
-
 export const PARTICIPANT_ROLES = ['doctor', 'patient', 'interpreter', 'observer', 'caregiver'];
 
 // ── Sub-schemas ───────────────────────────────────────────────────────────────
 
-// Agora RTC / RTM token + channel info (server-generated, short-lived)
 const agoraSessionSchema = new Schema(
   {
-    channelName:     { type: String, required: true },  // unique per consultation
-    appId:           { type: String },                  // Agora App ID (env-safe to store)
+    channelName:     { type: String, required: true },
+    appId:           { type: String },
 
-    // Doctor tokens
-    doctorUid:       { type: Number },                  // Agora UID (uint32)
-    doctorRtcToken:  { type: String, select: false },   // RTC — expires
-    doctorRtmToken:  { type: String, select: false },   // RTM (chat/signalling) — expires
+    doctorUid:       { type: Number },
+    doctorRtcToken:  { type: String, select: false },
+    doctorRtmToken:  { type: String, select: false },
 
-    // Patient tokens
     patientUid:      { type: Number },
     patientRtcToken: { type: String, select: false },
     patientRtmToken: { type: String, select: false },
 
-    // Additional participant tokens (interpreter, observer)
     extraParticipants: [
       {
         uid:       { type: Number },
@@ -63,27 +58,55 @@ const agoraSessionSchema = new Schema(
       },
     ],
 
-    tokenExpiresAt:  { type: Date },                    // when to refresh tokens
+    tokenExpiresAt:    { type: Date },
     tokenRefreshCount: { type: Number, default: 0 },
 
-    // Recording (Agora Cloud Recording)
     cloudRecordingResourceId: { type: String },
     cloudRecordingSid:        { type: String },
     cloudRecordingMode:       { type: String, enum: ['mix', 'individual', 'web'], default: 'mix' },
     recordingStartedAt:       { type: Date },
     recordingStoppedAt:       { type: Date },
-    recordingFileUrls:        [{ type: String }],       // S3 / OSS URLs after upload
+    recordingFileUrls:        [{ type: String }],
     isRecordingEnabled:       { type: Boolean, default: false },
     recordingConsentDoctor:   { type: Boolean, default: false },
     recordingConsentPatient:  { type: Boolean, default: false },
 
-    // RTM (in-session chat)
     rtmChannelName:  { type: String },
   },
   { _id: false }
 );
 
-// Who joined when — full audit trail
+// ── NEW: Timer segment — one entry per in_progress segment ────────────────────
+const timerSegmentSchema = new Schema(
+  {
+    startedAt:   { type: Date, required: true },
+    pausedAt:    { type: Date },          // null = segment still running
+    durationSec: { type: Number },        // filled when paused / ended
+    reason:      { type: String },        // 'disconnect' | 'explicit_pause' | 'resume' | 'ended'
+  },
+  { _id: true }
+);
+
+// ── NEW: timerState — tracks net elapsed time across reconnects/pauses ─────────
+const timerStateSchema = new Schema(
+  {
+    // Each continuous in_progress stretch gets one segment
+    segments:                { type: [timerSegmentSchema], default: [] },
+    // Net seconds in in_progress state (updated on pause/end)
+    totalElapsedSec:         { type: Number, default: 0 },
+    // When current segment started (fast-read without scanning segments)
+    currentSegmentStartedAt: { type: Date },
+    // Absolute wall-clock deadline = first sessionStartedAt + maxTimeMin * 60
+    hardDeadlineAt:          { type: Date },
+    // Whether the 15-min-remaining reminder was already sent
+    reminderSent:            { type: Boolean, default: false },
+    // Whether auto-end has already fired
+    autoEnded:               { type: Boolean, default: false },
+  },
+  { _id: false }
+);
+
+// ── participantEventSchema — UPDATED with mute / kick fields ──────────────────
 const participantEventSchema = new Schema(
   {
     userId:     { type: Schema.Types.ObjectId, ref: 'User', required: true },
@@ -91,20 +114,27 @@ const participantEventSchema = new Schema(
     agoraUid:   { type: Number },
     joinedAt:   { type: Date },
     leftAt:     { type: Date },
-    durationSec:{ type: Number },   // auto-computed on leave
+    durationSec:{ type: Number },
     deviceInfo: {
-      platform:   { type: String },   // 'web' | 'android' | 'ios'
+      platform:   { type: String },
       browser:    { type: String },
       os:         { type: String },
       sdkVersion: { type: String },
     },
-    networkQuality: { type: Number, min: 0, max: 6 }, // Agora quality probe (0=unknown,6=excellent)
-    rejoinCount:    { type: Number, default: 0 },
+    networkQuality:    { type: Number, min: 0, max: 6 },
+    rejoinCount:       { type: Number, default: 0 },
+    // Doctor-imposed audio mute
+    isMutedByDoctor:   { type: Boolean, default: false },
+    mutedByDoctorAt:   { type: Date },
+    unmutedByDoctorAt: { type: Date },
+    // Kick tracking
+    isKicked:          { type: Boolean, default: false },
+    kickedAt:          { type: Date },
+    kickReason:        { type: String, trim: true },
   },
   { _id: true, timestamps: false }
 );
 
-// In-session chat messages (Agora RTM peer/channel messages mirrored server-side)
 const chatMessageSchema = new Schema(
   {
     senderUserId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
@@ -123,7 +153,6 @@ const chatMessageSchema = new Schema(
   { _id: true }
 );
 
-// Vitals captured during / before session
 const vitalsSchema = new Schema(
   {
     bloodPressureSystolic:  { type: Number },
@@ -137,70 +166,60 @@ const vitalsSchema = new Schema(
     bloodGlucose:           { type: Number },
     recordedAt:             { type: Date, default: Date.now },
     recordedBy:             { type: String, enum: ['patient', 'doctor', 'care_assistant', 'device'] },
-    deviceSource:           { type: String },   // e.g. "Omron BP Monitor"
+    deviceSource:           { type: String },
   },
   { _id: false }
 );
 
-// Doctor's clinical notes (SOAP format)
 const clinicalNotesSchema = new Schema(
   {
-    chiefComplaint:   { type: String, trim: true, maxlength: 500 },
-    // SOAP
-    subjective:       { type: String, trim: true, maxlength: 2000 },  // patient history, symptoms
-    objective:        { type: String, trim: true, maxlength: 2000 },  // exam findings, vitals
-    assessment:       { type: String, trim: true, maxlength: 2000 },  // diagnosis, differential
-    plan:             { type: String, trim: true, maxlength: 2000 },  // treatment, referral, f/u
-    // ICD-10
-    diagnosisCodes:   [{ code: String, description: String }],
-    // Free advice
-    lifestyleAdvice:  { type: String, trim: true, maxlength: 1000 },
-    dietAdvice:       { type: String, trim: true, maxlength: 500 },
-    // Referral
-    referralTo:       { type: String, trim: true },
-    referralNote:     { type: String, trim: true, maxlength: 500 },
-    // Follow-up
-    followUpInDays:   { type: Number, min: 1 },
-    followUpNote:     { type: String, trim: true, maxlength: 300 },
-    // Internal
-    privateNotes:     { type: String, trim: true, maxlength: 1000, select: false }, // doctor-only
-    lastEditedAt:     { type: Date },
+    chiefComplaint:  { type: String, trim: true, maxlength: 500 },
+    subjective:      { type: String, trim: true, maxlength: 2000 },
+    objective:       { type: String, trim: true, maxlength: 2000 },
+    assessment:      { type: String, trim: true, maxlength: 2000 },
+    plan:            { type: String, trim: true, maxlength: 2000 },
+    diagnosisCodes:  [{ code: String, description: String }],
+    lifestyleAdvice: { type: String, trim: true, maxlength: 1000 },
+    dietAdvice:      { type: String, trim: true, maxlength: 500 },
+    referralTo:      { type: String, trim: true },
+    referralNote:    { type: String, trim: true, maxlength: 500 },
+    followUpInDays:  { type: Number, min: 1 },
+    followUpNote:    { type: String, trim: true, maxlength: 300 },
+    privateNotes:    { type: String, trim: true, maxlength: 1000, select: false },
+    lastEditedAt:    { type: Date },
   },
   { _id: false }
 );
 
-// Waiting room events (Lybrate/Amwell style queue)
 const waitingRoomSchema = new Schema(
   {
-    patientEnteredAt:  { type: Date },
-    doctorNotifiedAt:  { type: Date },
-    estimatedWaitMin:  { type: Number },
-    queuePosition:     { type: Number },
-    patientReadyAt:    { type: Date },     // patient clicked "I'm ready"
-    doctorReadyAt:     { type: Date },
-    patientLeft:       { type: Boolean, default: false },
-    patientLeftAt:     { type: Date },
+    patientEnteredAt: { type: Date },
+    doctorNotifiedAt: { type: Date },
+    estimatedWaitMin: { type: Number },
+    queuePosition:    { type: Number },
+    patientReadyAt:   { type: Date },
+    doctorReadyAt:    { type: Date },
+    patientLeft:      { type: Boolean, default: false },
+    patientLeftAt:    { type: Date },
   },
   { _id: false }
 );
 
-// Payment/fee at consultation level (may differ from booking-level fareBreakdown)
 const consultationFeeSchema = new Schema(
   {
-    consultationFee:   { type: Number, default: 0, min: 0 },
-    platformFee:       { type: Number, default: 0, min: 0 },
-    taxes:             { type: Number, default: 0, min: 0 },
-    discount:          { type: Number, default: 0, min: 0 },
-    totalAmount:       { type: Number, default: 0, min: 0 },
-    currency:          { type: String, default: 'INR' },
-    isPaid:            { type: Boolean, default: false },
-    paidAt:            { type: Date },
-    paymentRef:        { type: String },   // link to booking payment
+    consultationFee: { type: Number, default: 0, min: 0 },
+    platformFee:     { type: Number, default: 0, min: 0 },
+    taxes:           { type: Number, default: 0, min: 0 },
+    discount:        { type: Number, default: 0, min: 0 },
+    totalAmount:     { type: Number, default: 0, min: 0 },
+    currency:        { type: String, default: 'INR' },
+    isPaid:          { type: Boolean, default: false },
+    paidAt:          { type: Date },
+    paymentRef:      { type: String },
   },
   { _id: false }
 );
 
-// Cancellation
 const cancellationSchema = new Schema(
   {
     cancelledBy:   { type: String, enum: ['doctor', 'patient', 'admin', 'system'] },
@@ -212,48 +231,41 @@ const cancellationSchema = new Schema(
   { _id: false }
 );
 
-// Rating (both sides rate each other — Lybrate / HealthTap pattern)
 const ratingSchema = new Schema(
   {
-    // Patient rates doctor
-    doctorRating:   { type: Number, min: 1, max: 5 },
-    doctorFeedback: { type: String, trim: true, maxlength: 500 },
-    // Doctor rates patient (for internal quality)
+    doctorRating:    { type: Number, min: 1, max: 5 },
+    doctorFeedback:  { type: String, trim: true, maxlength: 500 },
     patientRating:   { type: Number, min: 1, max: 5 },
     patientFeedback: { type: String, trim: true, maxlength: 200, select: false },
-    // Overall experience
-    overallRating:  { type: Number, min: 1, max: 5 },
-    tags:           [{ type: String, trim: true }], // "knowledgeable", "punctual", etc.
-    ratedAt:        { type: Date },
-    isPublic:       { type: Boolean, default: true },
+    overallRating:   { type: Number, min: 1, max: 5 },
+    tags:            [{ type: String, trim: true }],
+    ratedAt:         { type: Date },
+    isPublic:        { type: Boolean, default: true },
   },
   { _id: false }
 );
 
-// Quality / session metrics (for analytics — Push Doctor / Doxy.me style)
 const sessionMetricsSchema = new Schema(
   {
-    totalDurationSec:     { type: Number },
-    doctorTalkTimeSec:    { type: Number },
-    patientTalkTimeSec:   { type: Number },
-    avgNetworkQuality:    { type: Number },  // 1–6
-    reconnectCount:       { type: Number, default: 0 },
-    videoEnabled:         { type: Boolean },
-    audioEnabled:         { type: Boolean },
-    chatMessagesCount:    { type: Number, default: 0 },
-    prescriptionIssued:   { type: Boolean, default: false },
-    labOrderIssued:       { type: Boolean, default: false },
-    referralIssued:       { type: Boolean, default: false },
-    // Agora Quality of Service (QoS)
-    doctorAvgFrameRate:   { type: Number },
-    patientAvgFrameRate:  { type: Number },
-    doctorPacketLoss:     { type: Number },
-    patientPacketLoss:    { type: Number },
+    totalDurationSec:   { type: Number },
+    doctorTalkTimeSec:  { type: Number },
+    patientTalkTimeSec: { type: Number },
+    avgNetworkQuality:  { type: Number },
+    reconnectCount:     { type: Number, default: 0 },
+    videoEnabled:       { type: Boolean },
+    audioEnabled:       { type: Boolean },
+    chatMessagesCount:  { type: Number, default: 0 },
+    prescriptionIssued: { type: Boolean, default: false },
+    labOrderIssued:     { type: Boolean, default: false },
+    referralIssued:     { type: Boolean, default: false },
+    doctorAvgFrameRate: { type: Number },
+    patientAvgFrameRate:{ type: Number },
+    doctorPacketLoss:   { type: Number },
+    patientPacketLoss:  { type: Number },
   },
   { _id: false }
 );
 
-// Status history log
 const statusLogSchema = new Schema(
   {
     fromStatus: { type: String },
@@ -271,13 +283,13 @@ const consultationSchema = new Schema(
   {
     // ── Identity ──────────────────────────────────────────────────────────────
     consultationCode: {
-      type:    String,
-      unique:  true,
-      sparse:  true,
-      index:   true,
+      type:      String,
+      unique:    true,
+      sparse:    true,
+      index:     true,
       uppercase: true,
-      trim:    true,
-    },   // e.g. CS-XXXXXXXX
+      trim:      true,
+    },
 
     consultationType: {
       type:     String,
@@ -287,46 +299,15 @@ const consultationSchema = new Schema(
     },
 
     // ── Linkage ───────────────────────────────────────────────────────────────
-    booking: {
-      type:  Schema.Types.ObjectId,
-      ref:   'Booking',
-      index: true,
-    },
-
-    outPatientRecord: {
-      type:  Schema.Types.ObjectId,
-      ref:   'OutPatientRecord',
-      index: true,
-    },
+    booking:       { type: Schema.Types.ObjectId, ref: 'Booking',         index: true },
+    outPatientRecord: { type: Schema.Types.ObjectId, ref: 'OutPatientRecord', index: true },
 
     // ── Parties ───────────────────────────────────────────────────────────────
-    doctor: {
-      type:     Schema.Types.ObjectId,
-      ref:      'DoctorProfile',
-      required: true,
-      index:    true,
-    },
+    doctor:     { type: Schema.Types.ObjectId, ref: 'DoctorProfile', required: true, index: true },
+    doctorUser: { type: Schema.Types.ObjectId, ref: 'User',          index: true },
+    patient:    { type: Schema.Types.ObjectId, ref: 'User',          required: true, index: true },
+    hospital:   { type: Schema.Types.ObjectId, ref: 'Hospital',      index: true },
 
-    doctorUser: {
-      type:  Schema.Types.ObjectId,
-      ref:   'User',
-      index: true,
-    },
-
-    patient: {
-      type:     Schema.Types.ObjectId,
-      ref:      'User',
-      required: true,
-      index:    true,
-    },
-
-    hospital: {
-      type:  Schema.Types.ObjectId,
-      ref:   'Hospital',
-      index: true,
-    },
-
-    // Snapshots (immutable at session start — Lybrate pattern)
     doctorSnapshot: {
       name:               { type: String },
       specialization:     { type: String },
@@ -346,9 +327,9 @@ const consultationSchema = new Schema(
     },
 
     // ── Scheduling ────────────────────────────────────────────────────────────
-    scheduledAt:  { type: Date, required: true, index: true },
-    slotId:       { type: Schema.Types.ObjectId, default: null },
-    slotDurationMin: { type: Number, default: 15 },   // booked slot length
+    scheduledAt:     { type: Date, required: true, index: true },
+    slotId:          { type: Schema.Types.ObjectId, default: null },
+    slotDurationMin: { type: Number, default: 15 },
 
     urgency: {
       type:    String,
@@ -365,36 +346,40 @@ const consultationSchema = new Schema(
       index:   true,
     },
 
-    statusLog: { type: [statusLogSchema], default: [] },
+    statusLog:  { type: [statusLogSchema], default: [] },
+    waitingRoom:{ type: waitingRoomSchema, default: () => ({}) },
 
-    waitingRoom: { type: waitingRoomSchema, default: () => ({}) },
+    gracePeriodMin: { type: Number, default: 10 },
+    autoMissedAt:   { type: Date },
 
-    // Grace period — if neither join within X min → auto-missed
-    gracePeriodMin:      { type: Number, default: 10 },
-    autoMissedAt:        { type: Date },   // scheduledAt + gracePeriodMin
+    sessionStartedAt:  { type: Date },
+    sessionEndedAt:    { type: Date },
+    actualDurationSec: { type: Number },
 
-    sessionStartedAt:    { type: Date },
-    sessionEndedAt:      { type: Date },
-    actualDurationSec:   { type: Number },
+    // ── NEW: Auto-end timestamp (set when cron fires due to max time) ──────────
+    autoEndedAt: { type: Date, default: null },
 
-    // ── Agora ──────────────────────────────────────────────────────────────────
+    // ── Agora ─────────────────────────────────────────────────────────────────
     agora: { type: agoraSessionSchema, default: null },
 
+    // ── NEW: Consultation Timer ───────────────────────────────────────────────
+    // Tracks net active (in_progress) time, surviving reconnects and pauses.
+    // hardDeadlineAt = first sessionStartedAt + CONSULTATION_MAX_TIME_MIN * 60
+    timerState: { type: timerStateSchema, default: () => ({}) },
+
     // ── Participants ──────────────────────────────────────────────────────────
-    // Full join/leave audit (Doxy.me / Amwell pattern)
     participantEvents: { type: [participantEventSchema], default: [] },
 
-    // Extra participants (caregiver, interpreter)
     additionalParticipants: [
       {
-        userId:   { type: Schema.Types.ObjectId, ref: 'User' },
-        role:     { type: String, enum: PARTICIPANT_ROLES },
-        addedBy:  { type: Schema.Types.ObjectId, ref: 'User' },
-        addedAt:  { type: Date, default: Date.now },
+        userId:  { type: Schema.Types.ObjectId, ref: 'User' },
+        role:    { type: String, enum: PARTICIPANT_ROLES },
+        addedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+        addedAt: { type: Date, default: Date.now },
       },
     ],
 
-    // ── In-Session Chat (RTM mirror) ──────────────────────────────────────────
+    // ── In-Session Chat ───────────────────────────────────────────────────────
     chatMessages: { type: [chatMessageSchema], default: [] },
 
     // ── Vitals ────────────────────────────────────────────────────────────────
@@ -403,7 +388,7 @@ const consultationSchema = new Schema(
     // ── Clinical ──────────────────────────────────────────────────────────────
     clinicalNotes: { type: clinicalNotesSchema, default: () => ({}) },
 
-    // ── Prescriptions (1:many — doctor may issue multiple Rx) ────────
+    // ── Prescriptions ─────────────────────────────────────────────────────────
     prescriptions: [{ type: Schema.Types.ObjectId, ref: 'EPrescription' }],
 
     // ── Fee ───────────────────────────────────────────────────────────────────
@@ -421,38 +406,34 @@ const consultationSchema = new Schema(
 
     // ── Notifications ─────────────────────────────────────────────────────────
     notificationsSent: {
-      scheduledConfirmation: { type: Boolean, default: false },
-      reminderPatient15min:  { type: Boolean, default: false },
-      reminderDoctor15min:   { type: Boolean, default: false },
-      sessionStarted:        { type: Boolean, default: false },
-      sessionEnded:          { type: Boolean, default: false },
-      prescriptionReady:     { type: Boolean, default: false },
-      ratingRequest:         { type: Boolean, default: false },
+      scheduledConfirmation:  { type: Boolean, default: false },
+      reminderPatient15min:   { type: Boolean, default: false },
+      reminderDoctor15min:    { type: Boolean, default: false },
+      sessionStarted:         { type: Boolean, default: false },
+      sessionEnded:           { type: Boolean, default: false },
+      prescriptionReady:      { type: Boolean, default: false },
+      ratingRequest:          { type: Boolean, default: false },
+      // NEW: fires when ≤15 min of consultation time remains (max-time countdown)
+      maxTimeReminder15min:   { type: Boolean, default: false },
     },
 
     // ── Consent & Compliance ──────────────────────────────────────────────────
-    // Recording consent (Amwell / Push Doctor legal requirement)
     recordingConsent: {
-      doctorConsented:   { type: Boolean, default: false },
-      patientConsented:  { type: Boolean, default: false },
-      consentTimestamp:  { type: Date },
+      doctorConsented:  { type: Boolean, default: false },
+      patientConsented: { type: Boolean, default: false },
+      consentTimestamp: { type: Date },
     },
 
-    hipaaAcknowledged:    { type: Boolean, default: false },   // for US-mode
+    hipaaAcknowledged:    { type: Boolean, default: false },
     consentFormSignedUrl: { type: String },
 
     // ── Flags ──────────────────────────────────────────────────────────────────
-    isEmergency:   { type: Boolean, default: false, index: true },
-    isFollowUp:    { type: Boolean, default: false },
-    parentConsultation: {
-      type:  Schema.Types.ObjectId,
-      ref:   'Consultation',
-      default: null,
-      index: true,
-    },
-    isTestSession: { type: Boolean, default: false },
+    isEmergency:        { type: Boolean, default: false, index: true },
+    isFollowUp:         { type: Boolean, default: false },
+    parentConsultation: { type: Schema.Types.ObjectId, ref: 'Consultation', default: null, index: true },
+    isTestSession:      { type: Boolean, default: false },
 
-    // ── Admin ──────────────────────────────────────────────────────────────────
+    // ── Admin ─────────────────────────────────────────────────────────────────
     assignedAdminId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     internalNotes:   { type: String, trim: true, select: false },
 
@@ -490,22 +471,23 @@ consultationSchema.virtual('prescriptionCount').get(function () {
 
 consultationSchema.virtual('needsTokenRefresh').get(function () {
   if (!this.agora?.tokenExpiresAt) return false;
-  return new Date() > new Date(this.agora.tokenExpiresAt.getTime() - 5 * 60 * 1000); // refresh 5min early
+  return new Date() > new Date(this.agora.tokenExpiresAt.getTime() - 5 * 60 * 1000);
 });
 
 consultationSchema.virtual('isVideoType').get(function () {
   return ['video'].includes(this.consultationType);
 });
 
+// NEW: Remaining seconds = hardDeadlineAt - now, clamped to 0
+consultationSchema.virtual('remainingTimeSec').get(function () {
+  if (!this.timerState?.hardDeadlineAt) return null;
+  const remaining = Math.floor((this.timerState.hardDeadlineAt - Date.now()) / 1000);
+  return Math.max(0, remaining);
+});
+
 // ── Pre-validate ──────────────────────────────────────────────────────────────
 
 consultationSchema.pre('validate', function () {
-  if (this.consultationType === 'video' || this.consultationType === 'audio') {
-    if (!this.agora?.channelName) {
-      // Channel name auto-generated in pre-save — skip throw here
-    }
-  }
-
   if (this.isFollowUp && !this.parentConsultation) {
     throw new Error('follow_up consultation requires parentConsultation');
   }
@@ -530,7 +512,7 @@ consultationSchema.pre('save', async function () {
   if (this.isNew && (this.consultationType === 'video' || this.consultationType === 'audio')) {
     if (!this.agora) this.agora = {};
     if (!this.agora.channelName) {
-      this.agora.channelName = `consult_${this._id.toString()}`;
+      this.agora.channelName    = `consult_${this._id.toString()}`;
       this.agora.rtmChannelName = `rtm_${this._id.toString()}`;
     }
   }
@@ -554,24 +536,82 @@ consultationSchema.pre('save', async function () {
     });
   }
 
-  // 5. Auto-set sessionStartedAt / sessionEndedAt
+  // 5. Auto-set sessionStartedAt / sessionEndedAt + timer management
   if (this.isModified('status')) {
-    if (this.status === 'in_progress' && !this.sessionStartedAt) {
-      this.sessionStartedAt = new Date();
+    const maxTimeMin = parseInt(process.env.CONSULTATION_MAX_TIME_MIN || '30', 10);
+
+   if (this.status === 'in_progress') {
+  if (!this.sessionStartedAt) {
+    this.sessionStartedAt = new Date();
+  }
+
+  // Start new segment (every in_progress entry = new segment)
+  if (!this.timerState) this.timerState = {};
+  if (!this.timerState.segments) this.timerState.segments = [];
+  const now = new Date();
+  this.timerState.segments.push({ startedAt: now, reason: 'resumed' });
+  this.timerState.currentSegmentStartedAt = now;
+
+  // hardDeadlineAt = dynamically computed = now + remainingSeconds
+  // Only set on very first start (no elapsed yet)
+  if (!this.timerState.hardDeadlineAt) {
+    this.timerState.hardDeadlineAt = new Date(
+      now.getTime() + maxTimeMin * 60 * 1000
+    );
+  } else {
+    // Recompute deadline = now + remaining (elapsed already subtracted)
+    const elapsed = this.timerState.totalElapsedSec || 0;
+    const remaining = Math.max(0, maxTimeMin * 60 - elapsed);
+    this.timerState.hardDeadlineAt = new Date(now.getTime() + remaining * 1000);
+  }
+}
+
+   if (this.status === 'paused') {
+  if (this.timerState?.currentSegmentStartedAt) {
+    const now = new Date();
+    const lastSeg = this.timerState.segments?.[this.timerState.segments.length - 1];
+    if (lastSeg && !lastSeg.pausedAt) {
+      lastSeg.pausedAt    = now;
+      lastSeg.durationSec = Math.round((now - new Date(lastSeg.startedAt).getTime()) / 1000);
+      lastSeg.reason      = 'paused';
     }
-    if (this.status === 'completed' && !this.sessionEndedAt) {
-      this.sessionEndedAt = new Date();
+    this.timerState.totalElapsedSec = (this.timerState.segments || []).reduce(
+      (sum, s) => sum + (s.durationSec || 0), 0
+    );
+    this.timerState.currentSegmentStartedAt = undefined;
+    // Clear deadline — meaningless while paused
+    this.timerState.hardDeadlineAt = undefined;
+  }
+}
+
+    // Completing — close segment + compute totals
+    if (this.status === 'completed') {
+      if (!this.sessionEndedAt) this.sessionEndedAt = new Date();
       if (this.sessionStartedAt) {
         this.actualDurationSec = Math.round(
           (this.sessionEndedAt - this.sessionStartedAt) / 1000
         );
+      }
+      // Close open timer segment
+      if (this.timerState?.currentSegmentStartedAt) {
+        const now = new Date();
+        const lastSeg = this.timerState.segments?.[this.timerState.segments.length - 1];
+        if (lastSeg && !lastSeg.pausedAt) {
+          lastSeg.pausedAt    = now;
+          lastSeg.durationSec = Math.round((now - lastSeg.startedAt) / 1000);
+          lastSeg.reason      = 'ended';
+        }
+        this.timerState.totalElapsedSec = (this.timerState.segments || []).reduce(
+          (sum, s) => sum + (s.durationSec || 0), 0
+        );
+        this.timerState.currentSegmentStartedAt = undefined;
       }
     }
   }
 
   // 6. Sync isRated
   if (this.isModified('rating') && this.rating?.doctorRating) {
-    this.isRated = true;
+    this.isRated        = true;
     this.rating.ratedAt = this.rating.ratedAt ?? new Date();
   }
 
@@ -598,14 +638,9 @@ consultationSchema.pre('save', async function () {
   // 8. Patient snapshot on first assignment
   if (this.isModified('patient') && this.patient && !this.patientSnapshot?.name) {
     const User = mongoose.model('User');
-    const u = await User.findById(this.patient)
-      .select('name phone')
-      .lean();
+    const u = await User.findById(this.patient).select('name phone').lean();
     if (u) {
-      this.patientSnapshot = {
-        name:  u.name,
-        phone: u.phone,
-      };
+      this.patientSnapshot = { name: u.name, phone: u.phone };
     }
   }
 
@@ -635,14 +670,17 @@ consultationSchema.index({ patient: 1, status: 1 });
 consultationSchema.index({ booking: 1 });
 consultationSchema.index({ hospital: 1, scheduledAt: 1 });
 consultationSchema.index({ status: 1, scheduledAt: 1 });
-consultationSchema.index({ status: 1, autoMissedAt: 1 });   // cron: auto-miss job
+consultationSchema.index({ status: 1, autoMissedAt: 1 });
 consultationSchema.index({ urgency: 1, status: 1 });
 consultationSchema.index({ isEmergency: 1, status: 1 });
 consultationSchema.index({ parentConsultation: 1 });
 consultationSchema.index({ createdAt: -1 });
-consultationSchema.index({ 'agora.channelName': 1 });        // Agora webhook lookup
-consultationSchema.index({ 'agora.cloudRecordingSid': 1 });  // recording callback lookup
+consultationSchema.index({ 'agora.channelName': 1 });
+consultationSchema.index({ 'agora.cloudRecordingSid': 1 });
 consultationSchema.index({ consultationType: 1, status: 1, scheduledAt: 1 });
+// NEW: cron indexes for timer jobs
+consultationSchema.index({ 'timerState.hardDeadlineAt': 1, status: 1 });
+consultationSchema.index({ 'timerState.reminderSent': 1, status: 1 });
 
 const Consultation = mongoose.model('Consultation', consultationSchema);
 export default Consultation;

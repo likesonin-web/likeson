@@ -32,7 +32,7 @@ import {
   selectMedicinePagination,
   selectMedicineError,
 } from '@/store/slices/medicineSlice';
-
+import { selectMySubscription } from '@/store/slices/subscriptionSlice';
 import {
   addToCart,
   uploadCartItemPrescription,
@@ -1437,11 +1437,18 @@ export default function MedicinePage({ router }) {
 
   const buyNowBestInv  = useMemo(() => getBestInventory(buyNowMed?.inventory), [buyNowMed]);
   const buyNowStoreId  = useMemo(() => extractStoreId(buyNowBestInv?.storeId), [buyNowBestInv]);
-  const buyNowBaseTotal = useMemo(() => {
-    if (!buyNowMed) return 0;
-    const price = buyNowBestInv?.pricePerUnit ?? buyNowMed.mrp;
-    return parseFloat((price * buyNowQty).toFixed(2));
-  }, [buyNowMed, buyNowBestInv, buyNowQty]);
+// Add selector at top of MedicinePage component
+const mySub               = useSelector(selectMySubscription);
+const subscriptionDiscountPct = mySub?.limits?.pharmacyDiscountPercent ?? 0;
+
+// Fix buyNowBaseTotal
+const buyNowBaseTotal = useMemo(() => {
+  if (!buyNowMed) return 0;
+  const price = buyNowBestInv?.pricePerUnit ?? buyNowMed.mrp;
+  const raw   = price * buyNowQty;
+  const disc  = raw * (subscriptionDiscountPct / 100);
+  return parseFloat((raw - disc).toFixed(2));
+}, [buyNowMed, buyNowBestInv, buyNowQty, subscriptionDiscountPct]);
 
   const activeFiltersCount = useMemo(() => {
     let count = filters.categories.length + filters.schedules.length;

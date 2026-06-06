@@ -261,9 +261,13 @@ const uploadToImageKit = async (buffer, fileName, folder = '/prescriptions') => 
 const resolvePharmacyDiscount = async (userId) => {
   if (!userId) return 0;
   try {
-    const sub = await UserSubscription.findOne({ user: userId, status: 'Active' })
-      .populate('plan', 'benefits').lean();
-    return sub?.plan?.benefits?.pharmacyDiscount ?? 0;
+    const sub = await UserSubscription.findOne({
+      user: userId,
+      status: { $in: ['Active', 'Trial'] },
+    })
+      .select('limits.pharmacyDiscountPercent')
+      .lean();
+    return sub?.limits?.pharmacyDiscountPercent ?? 0;
   } catch { return 0; }
 };
 
@@ -659,12 +663,12 @@ const resolveStoreForMedicine = async (medicineId, requiredQty, customerUser, pr
     return { store, inventoryEntry: invEntry, distanceKm };
   });
 
-  candidates.sort((a, b) => {
-    if (a.distanceKm !== null && b.distanceKm !== null) return a.distanceKm - b.distanceKm;
-    if (a.distanceKm !== null) return -1;
-    if (b.distanceKm !== null) return  1;
-    return (b.inventoryEntry.stockQuantity || 0) - (a.inventoryEntry.stockQuantity || 0);
-  });
+ candidates.sort((a, b) => {
+  if (a.distanceKm !== null && b.distanceKm !== null) return a.distanceKm - b.distanceKm; // nearest first
+  if (a.distanceKm !== null) return -1;
+  if (b.distanceKm !== null) return  1;
+  return (b.inventoryEntry.stockQuantity || 0) - (a.inventoryEntry.stockQuantity || 0); // fallback: most stock
+});
 
   if (preferredStoreId) {
     const prefObjId = toObjectId(preferredStoreId, 'preferredStoreId');

@@ -27,6 +27,9 @@ import {
   socketRecordingStopped,
   socketParticipantAdded,
   socketParticipantRemoved,
+  socketMuted,
+  socketKicked,
+  socketTimerUpdate
 } from "../store/slices/consultationSlice";
 
 export const initConsultationSocket = (store) => {
@@ -74,6 +77,15 @@ export const connectConsultationSocket = (token) => {
   // ── Participant management ────────────────────────────────────────────────
   socket.on("consultation:participant:added", (data) => _store?.dispatch(socketParticipantAdded(data)));
   socket.on("consultation:participant:removed", (data) => _store?.dispatch(socketParticipantRemoved(data)));
+   // Doctor mute/unmute — isMuted true or false
+  socket.on("consultation:muted", (data) => _store?.dispatch(socketMuted(data)));
+
+  // Doctor kick
+  socket.on("consultation:kicked", (data) => _store?.dispatch(socketKicked(data)));
+
+  // Timer countdown update (from cron via emitTimerUpdate)
+  socket.on("consultation:timer:update", (data) => _store?.dispatch(socketTimerUpdate(data)));
+  socket.on("consultation:timer:snapshot", (data) => _store?.dispatch(socketTimerUpdate(data)));
 
   return socket;
 };
@@ -162,5 +174,17 @@ export const socketAddParticipant = (consultationId, userId, role) =>
 
 export const socketRemoveParticipant = (consultationId, userId) =>
   socket?.emit("consultation:participant:remove", { consultationId, userId });
+
+export const socketMuteParticipant = (consultationId, targetUserId) =>
+  socket?.emit("consultation:mute", { consultationId, targetUserId });
+
+export const socketUnmuteParticipant = (consultationId, targetUserId) =>
+  socket?.emit("consultation:unmute", { consultationId, targetUserId });
+
+export const socketKickParticipant = (consultationId, targetUserId, reason) =>
+  socket?.emit("consultation:kick", { consultationId, targetUserId, reason });
+
+export const socketGetTimer = (consultationId) =>
+  socket?.emit("consultation:timer:get", { consultationId });
 
 export const getSocket = () => socket;

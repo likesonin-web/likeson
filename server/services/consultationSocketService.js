@@ -1,23 +1,9 @@
 // sockets/consultationSocket.js — PRODUCTION GRADE
-// FIXES:
-// 1. CHAT DEDUP: "consultation:chat:send" socket event now persists via
-//    sendChatMessage service AND emits ONCE to the room. The client must
-//    NOT also call the REST endpoint for text messages — that would persist
-//    twice and broadcast twice.
-//
-// 2. AUDIO: No server-side changes needed. The Agora RTC SDK handles audio
-//    routing. The fix is in AgoraProvider (calling audioTrack.play() explicitly
-//    and adding the remote audio track to the Web Audio graph for recording).
-//
-// 3. SCREEN SHARE: No server-side changes needed. The fix is using a second
-//    AgoraRTC client with a different UID in AgoraProvider.
-//
-// 4. RECORDING: No server-side changes needed. Full-consultation recording
-//    uses a canvas compositor on the client in AgoraProvider.
-//
-// 5. PARTICIPANT REMOVAL: participantLeave service is called to log the event.
-//    The socket also handles the "remove" event so the removed user gets
-//    a disconnect notification.
+// Added in this revision:
+//   - consultation:mute / consultation:unmute   (doctor mutes/unmutes a participant)
+//   - consultation:kick                         (doctor kicks a participant)
+//   - consultation:timer:update                 (periodic broadcast of remaining time)
+//   - Duplicate-chat fix preserved from v2
 
 import jwt from 'jsonwebtoken';
 import Consultation from '../models/Consultation.js';
@@ -31,6 +17,10 @@ import {
   saveVitals,
   forceRefreshTokens,
   getTokensForParticipant,
+  muteParticipant,
+  unmuteParticipant,
+  kickParticipant,
+  getConsultationTimer,
 } from '../services/consultationService.js';
 import {
   resolveLeaveTransition,
@@ -94,7 +84,7 @@ export const registerConsultationSocket = (io) => {
         if (!consultationId) throw new Error('consultationId required');
 
         const consultation = await Consultation.findById(consultationId)
-          .select('patient doctorUser doctor status consultationType agora isActive')
+          .select('patient doctorUser doctor status consultationType agora isActive timerState')
           .lean({ virtuals: true });
 
         if (!consultation) throw new Error('Consultation not found');
@@ -127,11 +117,19 @@ export const registerConsultationSocket = (io) => {
           consultationId, userId, participantRole, deviceInfo,
         );
 
+        // Compute timer snapshot for rejoining client
+        const maxTimeSec  = parseInt(process.env.CONSULTATION_MAX_TIME_MIN || '30', 10) * 60;
+        const timerState  = updated.timerState;
+        const hardDeadline= timerState?.hardDeadlineAt;
+        const remainingSec= hardDeadline
+          ? Math.max(0, Math.floor((new Date(hardDeadline) - Date.now()) / 1000))
+          : maxTimeSec;
+
         emit_ok(socket, 'consultation:join', {
           consultation: {
-            _id:    updated._id,
-            status: updated.status,
-            consultationType: updated.consultationType,
+            _id:             updated._id,
+            status:          updated.status,
+            consultationType:updated.consultationType,
             agora: {
               channelName:    updated.agora?.channelName,
               rtmChannelName: updated.agora?.rtmChannelName,
@@ -141,6 +139,13 @@ export const registerConsultationSocket = (io) => {
           tokens,
           participantRole,
           statusMeta: STATUS_META[updated.status],
+          // Timer info for rejoining mid-session
+          timer: {
+            maxTimeSec,
+            remainingSec,
+            hardDeadlineAt: hardDeadline,
+            autoEnded:      timerState?.autoEnded ?? false,
+          },
         });
 
         ns.to(consultationRoom(consultationId)).emit('consultation:status', {
@@ -166,9 +171,9 @@ export const registerConsultationSocket = (io) => {
         const userId = user._id.toString();
         const role   = socket.participantRole || 'patient';
 
-        const updated  = await participantLeave(consultationId, userId, role, metrics);
+        const updated    = await participantLeave(consultationId, userId, role, metrics);
         const nextStatus = resolveLeaveTransition(updated.status, role);
-        let finalStatus = updated;
+        let finalStatus  = updated;
         if (nextStatus) {
           finalStatus = await transitionStatus(consultationId, nextStatus, {
             actor: userId, reason: `${role} left the session`,
@@ -212,7 +217,7 @@ export const registerConsultationSocket = (io) => {
           statusMeta: STATUS_META[updated.status],
           changedBy:  { userId: user._id, role: user.role, name: user.name },
           reason,
-          updatedAt: new Date(),
+          updatedAt:  new Date(),
         });
 
         emit_ok(socket, `consultation:${targetStatus}`, { status: updated.status });
@@ -266,17 +271,7 @@ export const registerConsultationSocket = (io) => {
       emit_ok(socket, 'consultation:waiting-leave', {});
     });
 
-    // ── 5. CHAT — FIXED: persist + broadcast ONCE ─────────────────────────
-    /**
-     * FIX for duplicate messages:
-     * Server receives the chat message, persists it via sendChatMessage service,
-     * then emits "consultation:chat:message" to ALL clients in the room
-     * (including the sender for confirmation).
-     *
-     * The client MUST NOT also call the REST POST /chat endpoint for text messages.
-     * If it does: the message gets persisted TWICE and the socket event fires TWICE.
-     * See ChatPanel.jsx — REST is only called for file/image uploads.
-     */
+    // ── 5. CHAT — persist + broadcast ONCE ───────────────────────────────
     socket.on('consultation:chat:send', async (payload) => {
       try {
         const { consultationId, content, messageType, attachmentUrl, attachmentName } = payload;
@@ -290,8 +285,6 @@ export const registerConsultationSocket = (io) => {
           { content, messageType: messageType || 'text', attachmentUrl, attachmentName },
         );
 
-        // Broadcast to room (including sender) — this is the ONLY place
-        // where this message enters the clients' Redux chatMessages state.
         ns.to(consultationRoom(consultationId)).emit('consultation:chat:message', {
           _id:           msg._id,
           senderUserId:  user._id,
@@ -309,7 +302,6 @@ export const registerConsultationSocket = (io) => {
       }
     });
 
-    // Typing (no DB write)
     socket.on('consultation:chat:typing', ({ consultationId, isTyping }) => {
       socket.to(consultationRoom(consultationId)).emit('consultation:chat:typing', {
         userId: user._id, name: user.name, role: socket.participantRole, isTyping,
@@ -385,7 +377,139 @@ export const registerConsultationSocket = (io) => {
       socket.emit('consultation:pong', { consultationId, serverTime: new Date().toISOString() });
     });
 
-    // ── 12. DISCONNECT ────────────────────────────────────────────────────
+    // ── 12. MUTE PARTICIPANT (doctor only) ────────────────────────────────
+    /**
+     * Client emits: consultation:mute
+     * Payload: { consultationId, targetUserId }
+     *
+     * Server:
+     *  - Validates caller is the doctor of this consultation
+     *  - Persists isMutedByDoctor = true on participantEvent
+     *  - Broadcasts "consultation:muted" to the room so the target client
+     *    calls localAudioTrack.setEnabled(false) in the Agora SDK
+     */
+    socket.on('consultation:mute', async ({ consultationId, targetUserId }) => {
+      try {
+        if (!socket.isDoctor) {
+          return emit_error(socket, 'consultation:mute', 'Only the doctor can mute participants', 'FORBIDDEN');
+        }
+        if (!targetUserId) return emit_error(socket, 'consultation:mute', 'targetUserId required');
+
+        const result = await muteParticipant(
+          consultationId,
+          targetUserId,
+          user._id.toString(),
+        );
+
+        // Broadcast to everyone — the target client checks if the event is for them
+        ns.to(consultationRoom(consultationId)).emit('consultation:muted', {
+          targetUserId:  result.mutedUserId,
+          mutedBy:       { userId: user._id, name: user.name, role: 'doctor' },
+          isMuted:       true,
+          at:            new Date(),
+        });
+
+        emit_ok(socket, 'consultation:mute', result);
+      } catch (err) {
+        emit_error(socket, 'consultation:mute', err.message);
+      }
+    });
+
+    // ── 13. UNMUTE PARTICIPANT (doctor only) ──────────────────────────────
+    /**
+     * Client emits: consultation:unmute
+     * Payload: { consultationId, targetUserId }
+     */
+    socket.on('consultation:unmute', async ({ consultationId, targetUserId }) => {
+      try {
+        if (!socket.isDoctor) {
+          return emit_error(socket, 'consultation:unmute', 'Only the doctor can unmute participants', 'FORBIDDEN');
+        }
+        if (!targetUserId) return emit_error(socket, 'consultation:unmute', 'targetUserId required');
+
+        const result = await unmuteParticipant(
+          consultationId,
+          targetUserId,
+          user._id.toString(),
+        );
+
+        ns.to(consultationRoom(consultationId)).emit('consultation:muted', {
+          targetUserId: result.mutedUserId,
+          mutedBy:      { userId: user._id, name: user.name, role: 'doctor' },
+          isMuted:      false,
+          at:           new Date(),
+        });
+
+        emit_ok(socket, 'consultation:unmute', result);
+      } catch (err) {
+        emit_error(socket, 'consultation:unmute', err.message);
+      }
+    });
+
+    // ── 14. KICK PARTICIPANT (doctor only) ────────────────────────────────
+    /**
+     * Client emits: consultation:kick
+     * Payload: { consultationId, targetUserId, reason? }
+     *
+     * Server:
+     *  - Marks participant as kicked in DB
+     *  - Emits "consultation:kicked" to room; target client should
+     *    leave the Agora channel + socket room on receipt
+     */
+    socket.on('consultation:kick', async ({ consultationId, targetUserId, reason }) => {
+      try {
+        if (!socket.isDoctor) {
+          return emit_error(socket, 'consultation:kick', 'Only the doctor can kick participants', 'FORBIDDEN');
+        }
+        if (!targetUserId) return emit_error(socket, 'consultation:kick', 'targetUserId required');
+
+        const result = await kickParticipant(
+          consultationId,
+          targetUserId,
+          user._id.toString(),
+          reason || '',
+        );
+
+        // Targeted event so kicked user knows they were removed
+        ns.to(consultationRoom(consultationId)).emit('consultation:kicked', {
+          targetUserId: result.kickedUserId,
+          kickedBy:     { userId: user._id, name: user.name, role: 'doctor' },
+          reason:       result.reason,
+          at:           new Date(),
+        });
+
+        // Also notify admin room
+        ns.to(adminRoom()).emit('consultation:participant-kicked', {
+          consultationId,
+          kickedUserId: result.kickedUserId,
+          kickedBy:     user._id,
+          reason:       result.reason,
+        });
+
+        emit_ok(socket, 'consultation:kick', result);
+      } catch (err) {
+        emit_error(socket, 'consultation:kick', err.message);
+      }
+    });
+
+    // ── 15. TIMER POLL (client requests current timer snapshot) ───────────
+    /**
+     * Client emits: consultation:timer:get
+     * Payload: { consultationId }
+     *
+     * Server responds with consultation:timer:snapshot directly to caller.
+     * Clients should call this on rejoin to sync the timer UI.
+     */
+    socket.on('consultation:timer:get', async ({ consultationId }) => {
+      try {
+        const timer = await getConsultationTimer(consultationId);
+        socket.emit('consultation:timer:snapshot', timer);
+      } catch (err) {
+        emit_error(socket, 'consultation:timer:get', err.message);
+      }
+    });
+
+    // ── 16. DISCONNECT ────────────────────────────────────────────────────
     socket.on('disconnect', async (reason) => {
       console.log(`[Socket] disconnected: ${user.name} — ${reason}`);
 
@@ -425,6 +549,7 @@ export const registerConsultationSocket = (io) => {
 
 let _ns = null;
 export const setConsultationNamespace = (ns) => { _ns = ns; };
+
 export const emitToConsultation = (consultationId, event, data) => {
   _ns?.to(consultationRoom(consultationId)).emit(event, data);
 };
@@ -433,4 +558,20 @@ export const emitToDoctor = (doctorUserId, event, data) => {
 };
 export const emitToPatient = (patientUserId, event, data) => {
   _ns?.to(patientRoom(patientUserId)).emit(event, data);
+};
+
+/**
+ * emitTimerUpdate
+ * Called by the runAutoEnd / runTimerReminder cron jobs (via a thin wrapper
+ * imported in the cron scheduler) to push the remaining-time update into the
+ * room in real-time without waiting for the next client poll.
+ *
+ * @param {string} consultationId
+ * @param {{ remainingSec: number, hardDeadlineAt: Date, autoEnded: boolean }} timerData
+ */
+export const emitTimerUpdate = (consultationId, timerData) => {
+  _ns?.to(consultationRoom(consultationId)).emit('consultation:timer:update', {
+    ...timerData,
+    at: new Date(),
+  });
 };

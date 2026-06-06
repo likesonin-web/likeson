@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Poppins, Montserrat } from 'next/font/google';
 import './globals.css';
+import './consultation-admin.css';
 import ConnectivityWrapper from '@/components/ui/ConnectivityWrapper';
 import StoreProvider from '@/store/StoreProvider';
 import LayoutConditionalWrapper from '@/components/ui/LayoutConditionalWrapper';

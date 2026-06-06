@@ -105,11 +105,12 @@ export const SUPER_ADMIN_DASHBOARD_LINKS = [
     title: "Clinical Network",
     icons: <Hospital size={18} />,
     links: [
-      { name: "Hospital Affiliates", href: "/super-admin/hospitals",    icon: <Hospital size={15} />      },
-      { name: "Physician Directory", href: "/super-admin/doctors",      icon: <UserCog size={15} />       },
-      { name: "Clinical Appointments",href: "/super-admin/appointments",icon: <CalendarClock size={15} /> },
-      { name: "Medical Specialties", href: "/super-admin/specialties",  icon: <Stethoscope size={15} />   },
-      { name: "Blood Bank",          href: "/super-admin/blood-bank",   icon: <Droplets size={15} />      },
+      { name: "Hospital Affiliates",    href: "/super-admin/hospitals",        icon: <Hospital size={15} />      },
+      { name: "Physician Directory",    href: "/super-admin/doctors",          icon: <UserCog size={15} />       },
+      { name: "Clinical Appointments",  href: "/super-admin/appointments",     icon: <CalendarClock size={15} /> },
+      { name: "Consultation Management",href: "/super-admin/consultations",    icon: <Activity size={15} />      }, // NEW LINK ADDED HERE
+      { name: "Medical Specialties",    href: "/super-admin/specialties",      icon: <Stethoscope size={15} />   },
+      { name: "Blood Bank",             href: "/super-admin/blood-bank",       icon: <Droplets size={15} />      },
     ],
   },
 
@@ -164,7 +165,7 @@ export const SUPER_ADMIN_DASHBOARD_LINKS = [
     title: "Content & Communications",
     icons: <LifeBuoy size={18} />,
     links: [
-      { name: "Platform Announcements", href: "/super-admin/announcements",  icon: <Megaphone size={15} />            }, // NEW LINK ADDED HERE
+      { name: "Platform Announcements", href: "/super-admin/announcements",  icon: <Megaphone size={15} />            },
       { name: "Helpdesk Tickets",       href: "/super-admin/support",        icon: <LifeBuoy size={15} />             },
       { name: "Legal & Compliance",     href: "/super-admin/legal",          icon: <Scale size={15} />                },
       { name: "Knowledge Base",         href: "/super-admin/faq",            icon: <FileQuestion size={15} />         },

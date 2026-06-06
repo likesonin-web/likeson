@@ -1035,9 +1035,19 @@ export const checkSubscriptionDiagnostics = async (userId) => {
     }
   }
 
+ // Count home collection visits used this month
+  const now2   = new Date();
+  const usage2 = sub?.usageHistory?.find(
+    u => u.month === now2.getMonth() + 1 && u.year === now2.getFullYear()
+  );
+  const homeVisitsUsed      = usage2?.diagnosticBookingsMade ?? 0;
+  const homeVisitLimit      = (sub?.limits?.labTestsPerMonth ?? null); // null = unlimited if included
+
   return {
     discountPercent:      discountPercent      ?? 0,
     homeSampleCollection: homeSampleCollection ?? false,
+    homeVisitsUsed,
+    homeVisitLimit,          // null = unlimited when homeSampleCollection=true
     sub,
   };
 };
@@ -1314,7 +1324,9 @@ export const resolveCareAssistantFee = async ({ userId, durationHours, config })
   const parsedDuration = parseInt(durationHours, 10) || 4;
   const subCheck       = await checkSubscriptionCareAssistant(userId);
 
+  // ─────────────────────────────────────────────────────────────────────────
   // 1. FIXED plan sub → visit free, count quota
+  // ─────────────────────────────────────────────────────────────────────────
   if (subCheck.allowed && subCheck.isFree && subCheck.planType !== 'custom') {
     const platformTier = PlatformPricingConfig.resolveCareAssistantTier?.(resolvedConfig, parsedDuration) ?? null;
     return {
@@ -1328,76 +1340,132 @@ export const resolveCareAssistantFee = async ({ userId, durationHours, config })
     };
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
   // 2. CUSTOM plan
+  // ─────────────────────────────────────────────────────────────────────────
   if (subCheck.planType === 'custom') {
     const sub       = subCheck.sub;
     const remaining = subCheck.remaining ?? 0;
 
-    // 2a. Quota remaining → FREE, track usage
+    // ── 2a. Quota remaining ───────────────────────────────────────────────
     if (subCheck.allowed && (remaining > 0 || remaining === Infinity)) {
-      const snapshotTierIndex = sub.limits?.careAssistantTierIndex;
-      const snapshotCharge    = sub.limits?.careAssistantChargePerVisit;
-      const snapshotLabel     = sub.limits?.careAssistantTierLabel;
 
-      // Resolve tier for display/payout purposes only — user charge is 0
-      let tier = null;
+      // Plan tier index snapshotted at subscribe time
+      const planTierIdx = sub.limits?.careAssistantTierIndex ?? 0;
 
-      if (snapshotCharge != null) {
-        tier = {
-          label:        snapshotLabel ?? `Tier ${snapshotTierIndex}`,
-          chargeToUser: snapshotCharge,
-          tierIndex:    snapshotTierIndex,
-        };
-      } else {
-        // Fallback: resolve from plan.customOptions if snapshot missing
-        try {
-          const plan = await SubscriptionPlan.findById(sub.plan)
-            .select('planType customOptions')
-            .lean();
+      // Resolve all custom tiers from platform config
+      const customTiers = resolvedConfig?.customPlanOptions?.careAssistant?.pricingTiers ?? [];
 
-          if (plan?.planType === 'custom' && Array.isArray(plan.customOptions)) {
-            const caOpt = plan.customOptions.find(o => o.optionKey === 'careAssistant');
-            if (caOpt) {
-              const tierIndex   = Number(caOpt.careAssistantTierIndex ?? 0);
-              const customTiers = resolvedConfig?.customPlanOptions?.careAssistant?.pricingTiers ?? [];
-              const customTier  = customTiers[tierIndex] ?? customTiers[0] ?? null;
+      // Find which tier index the selected duration falls into
+      // Match: minHours <= parsedDuration < maxHours (or maxHours null = open-ended)
+      let selectedTierIdx = customTiers.findIndex(
+        (t) =>
+          parsedDuration >= (t.minHours ?? 0) &&
+          (t.maxHours == null || parsedDuration < t.maxHours)
+      );
+      // Fallback: exact minHours match
+      if (selectedTierIdx < 0) {
+        selectedTierIdx = customTiers.findIndex((t) => t.minHours === parsedDuration);
+      }
+      // Final fallback: tier 0
+      if (selectedTierIdx < 0) selectedTierIdx = 0;
 
-              if (customTier) {
-                tier = {
-                  label:             customTier.label,
-                  minHours:          customTier.minHours,
-                  maxHours:          customTier.maxHours ?? null,
-                  chargeToUser:      customTier.chargeToUser,
-                  payoutToAssistant: customTier.payoutToAssistant,
-                  tierIndex,
-                };
-              } else if (caOpt.unitPrice != null) {
-                tier = {
-                  label:        caOpt.label ?? `Tier ${tierIndex}`,
-                  chargeToUser: caOpt.unitPrice,
-                  tierIndex,
-                };
+      // ── 2a-i. PLAN TIER selected → FREE, consume quota ──────────────────
+      if (selectedTierIdx === planTierIdx) {
+        const snapshotTierIndex = sub.limits?.careAssistantTierIndex;
+        const snapshotCharge    = sub.limits?.careAssistantChargePerVisit;
+        const snapshotLabel     = sub.limits?.careAssistantTierLabel;
+
+        let tier = null;
+
+        if (snapshotCharge != null) {
+          tier = {
+            label:        snapshotLabel ?? `Tier ${snapshotTierIndex}`,
+            chargeToUser: snapshotCharge,
+            tierIndex:    snapshotTierIndex,
+          };
+        } else if (customTiers[selectedTierIdx]) {
+          const ct = customTiers[selectedTierIdx];
+          tier = {
+            label:             ct.label,
+            minHours:          ct.minHours,
+            maxHours:          ct.maxHours ?? null,
+            chargeToUser:      ct.chargeToUser,
+            payoutToAssistant: ct.payoutToAssistant,
+            tierIndex:         selectedTierIdx,
+          };
+        } else {
+          // Fallback: read from plan.customOptions
+          try {
+            const plan = await SubscriptionPlan.findById(sub.plan)
+              .select('planType customOptions')
+              .lean();
+
+            if (plan?.planType === 'custom' && Array.isArray(plan.customOptions)) {
+              const caOpt = plan.customOptions.find((o) => o.optionKey === 'careAssistant');
+              if (caOpt) {
+                const idx        = Number(caOpt.careAssistantTierIndex ?? 0);
+                const customTier = customTiers[idx] ?? customTiers[0] ?? null;
+                if (customTier) {
+                  tier = {
+                    label:             customTier.label,
+                    minHours:          customTier.minHours,
+                    maxHours:          customTier.maxHours ?? null,
+                    chargeToUser:      customTier.chargeToUser,
+                    payoutToAssistant: customTier.payoutToAssistant,
+                    tierIndex:         idx,
+                  };
+                } else if (caOpt.unitPrice != null) {
+                  tier = {
+                    label:        caOpt.label ?? `Tier ${idx}`,
+                    chargeToUser: caOpt.unitPrice,
+                    tierIndex:    idx,
+                  };
+                }
               }
             }
+          } catch (e) {
+            console.error('[resolveCareAssistantFee] plan lookup failed:', e.message);
           }
-        } catch (e) {
-          console.error('[resolveCareAssistantFee] plan lookup failed:', e.message);
         }
+
+        return {
+          fee:                     0,           // FREE — plan tier, quota covers
+          source:                  'custom_plan_quota',
+          isCoveredBySubscription: true,
+          quotaTracked:            true,         // quota WILL be consumed
+          sub,
+          subQuotaInfo:            subCheck,
+          tier,
+        };
       }
 
+      // ── 2a-ii. DIFFERENT tier selected → charge platform rate, NO quota ──
+      // User picked a higher/lower tier than their plan covers.
+      // Charge that tier's platform rate. Quota is NOT consumed.
+      const chargeTier = customTiers[selectedTierIdx] ?? null;
+
+      console.log(
+        `[resolveCareAssistantFee] custom plan: selected tier ${selectedTierIdx} ≠ plan tier ${planTierIdx}` +
+        ` — charging platform rate ${chargeTier?.chargeToUser ?? 0}`
+      );
+
       return {
-        fee:                     0,                   // FREE — quota covers this visit
-        source:                  'custom_plan_quota',
-        isCoveredBySubscription: true,
-        quotaTracked:            true,
+        fee:                     chargeTier?.chargeToUser ?? 0,
+        source:                  'platform',
+        isCoveredBySubscription: false,
+        quotaTracked:            false,          // quota NOT consumed — different tier
         sub,
         subQuotaInfo:            subCheck,
-        tier,
+        tier:                    chargeTier
+          ? { ...chargeTier, tierIndex: selectedTierIdx }
+          : null,
       };
     }
 
-    // 2b. Quota exhausted or not allowed → charge platform tier rate
+    // ── 2b. Quota exhausted or not allowed → platform tier rate ──────────
     const platformTier = PlatformPricingConfig.resolveCareAssistantTier?.(resolvedConfig, parsedDuration) ?? null;
+
     return {
       fee:                     platformTier?.chargeToUser ?? 0,
       source:                  'platform',
@@ -1409,8 +1477,11 @@ export const resolveCareAssistantFee = async ({ userId, durationHours, config })
     };
   }
 
-  // 3. No sub / quota exhausted / no plan → platform tiers by duration, always paid
+  // ─────────────────────────────────────────────────────────────────────────
+  // 3. No sub / no plan / quota exhausted → platform tiers by duration
+  // ─────────────────────────────────────────────────────────────────────────
   const platformTier = PlatformPricingConfig.resolveCareAssistantTier?.(resolvedConfig, parsedDuration) ?? null;
+
   return {
     fee:                     platformTier?.chargeToUser ?? 0,
     source:                  'platform',
@@ -1455,12 +1526,17 @@ export const buildFareBreakdown = ({
   homeCollectionFee = 0, platformFee       = 0, taxPercent      = 0,
   discount          = 0, couponDiscount    = 0, walletApplied   = 0,
 } = {}) => {
-  const subtotal    = consultationFee + careAssistantFee + transportFee + diagnosticFee +
-                      pharmacyFee + bloodBankFee + homeCollectionFee + platformFee;
-  const taxable     = Math.max(0, subtotal - discount - couponDiscount);
-  const taxes       = taxPercent ? +(taxable * (taxPercent / 100)).toFixed(2) : 0;
-  const totalAmount = +(taxable + taxes).toFixed(2);
-  const amountPaid  = Math.max(0, +(totalAmount - walletApplied).toFixed(2));
+ const subtotal    = +(
+    consultationFee + careAssistantFee + transportFee + diagnosticFee +
+    pharmacyFee + bloodBankFee + homeCollectionFee + platformFee
+  ).toFixed(2);
+  const discountTotal = +((discount || 0) + (couponDiscount || 0)).toFixed(2);
+  const taxableBase   = +Math.max(0, subtotal - discountTotal).toFixed(2);
+  // GST applies on discounted base (Indian GST rules)
+  const taxes       = taxPercent ? +(taxableBase * (taxPercent / 100)).toFixed(2) : 0;
+  const totalAmount = +(taxableBase + taxes).toFixed(2);
+  // amountPaid = totalAmount at creation; wallet/partial updated by payment routes
+  const amountPaid  = totalAmount;
   return {
     consultationFee, careAssistantFee, transportFee, diagnosticFee,
     pharmacyFee, bloodBankFee, homeCollectionFee, platformFee,

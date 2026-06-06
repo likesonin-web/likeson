@@ -1,12 +1,5 @@
 'use client';
 
-/**
- * AgoraProvider.jsx — PRODUCTION GRADE
- * * FIXES APPLIED:
- * Screen share now fetches a dedicated RTC token for its unique UID to prevent
- * the "CAN_NOT_GET_GATEWAY_SERVER: invalid token" error.
- */
-
 import React, {
   createContext,
   useContext,
@@ -25,6 +18,7 @@ import {
   refreshAgoraTokens,
   fetchAgoraTokens,
   setLocalRecordingActive,
+  selectMutedParticipants,
 } from '@/store/slices/consultationSlice';
 import { getScreenShareTokenAPI } from '@/services/agoraService';
 import toast from 'react-hot-toast';
@@ -37,6 +31,8 @@ export const useAgora = () => {
   return ctx;
 };
 
+const SCREEN_SHARE_UID_THRESHOLD = 1_000_000;
+
 export default function AgoraProvider({
   children,
   consultationId,
@@ -44,48 +40,147 @@ export default function AgoraProvider({
   role,
   userName = '',
 }) {
-  const dispatch = useDispatch();
-  const myTokens = useSelector(selectMyTokens);
-  const agoraState = useSelector(selectAgora);
+  const dispatch    = useDispatch();
+  const myTokens    = useSelector(selectMyTokens);
+  const mutedIds    = useSelector(selectMutedParticipants);
 
-  const clientRef = useRef(null);
+  const clientRef       = useRef(null);
   const screenClientRef = useRef(null);
-  const uidNameMap = useRef({});
+  const uidNameMap      = useRef({});
 
-  const [localAudioTrack, setLocalAudioTrack] = useState(null);
-  const [localVideoTrack, setLocalVideoTrack] = useState(null);
+  // doctor-mute lock: true = doctor force-muted → toggleMic blocked
+  const doctorMutedRef = useRef(false);
+
+  // Keep latest track refs accessible in cleanup without stale closures
+  const localAudioTrackRef  = useRef(null);
+  const localVideoTrackRef  = useRef(null);
+  const screenVideoTrackRef = useRef(null);
+  const screenAudioTrackRef = useRef(null);
+
+  const [localAudioTrack,  setLocalAudioTrack]  = useState(null);
+  const [localVideoTrack,  setLocalVideoTrack]  = useState(null);
   const [screenVideoTrack, setScreenVideoTrack] = useState(null);
   const [screenAudioTrack, setScreenAudioTrack] = useState(null);
 
-  const [remoteUsers, setRemoteUsers] = useState([]);
-
-  const [isJoined, setIsJoined] = useState(false);
-  const [isMicOn, setIsMicOn] = useState(true);
-  const [isCamOn, setIsCamOn] = useState(true);
-  const [isSharingScreen, setIsSharingScreen] = useState(false);
+  const [remoteUsers,    setRemoteUsers]    = useState([]);
+  const [isJoined,       setIsJoined]       = useState(false);
+  const [isMicOn,        setIsMicOn]        = useState(true);
+  const [isCamOn,        setIsCamOn]        = useState(true);
+  const [isSharingScreen,setIsSharingScreen]= useState(false);
   const [networkQuality, setNetworkQuality] = useState(0);
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [connectionState, setConnectionState] = useState('DISCONNECTED');
-  const [error, setError] = useState(null);
+  const [isConnecting,   setIsConnecting]   = useState(false);
+  const [connectionState,setConnectionState]= useState('DISCONNECTED');
+  const [error,          setError]          = useState(null);
   const [localScreenUid, setLocalScreenUid] = useState(null);
+  const [isDoctorMuted,  setIsDoctorMuted]  = useState(false);
 
-  const canvasRef = useRef(null);
-  const animFrameRef = useRef(null);
+  // ── Sync track refs whenever state changes ──────────────────────────────
+  useEffect(() => { localAudioTrackRef.current  = localAudioTrack;  }, [localAudioTrack]);
+  useEffect(() => { localVideoTrackRef.current  = localVideoTrack;  }, [localVideoTrack]);
+  useEffect(() => { screenVideoTrackRef.current = screenVideoTrack; }, [screenVideoTrack]);
+  useEffect(() => { screenAudioTrackRef.current = screenAudioTrack; }, [screenAudioTrack]);
+
+  // ── Core cleanup — stops ALL tracks and leaves channels ────────────────
+  // Uses refs so it's always fresh — safe to call from beforeunload / unmount
+  const hardStop = useCallback(async () => {
+    // Stop recording if active
+    if (mediaRecorderRef.current?.state === 'recording') {
+      mediaRecorderRef.current.stop();
+    }
+    cancelAnimationFrame(animFrameRef.current);
+
+    // Leave screen share client
+    const sc = screenClientRef.current;
+    if (sc) {
+      try {
+        screenVideoTrackRef.current?.stop();
+        screenVideoTrackRef.current?.close();
+        screenAudioTrackRef.current?.stop();
+        screenAudioTrackRef.current?.close();
+        await sc.leave();
+      } catch {}
+      screenClientRef.current = null;
+    }
+
+    // Stop local tracks
+    localAudioTrackRef.current?.stop();
+    localAudioTrackRef.current?.close();
+    localVideoTrackRef.current?.stop();
+    localVideoTrackRef.current?.close();
+
+    // Disconnect audio mix
+    audioSourcesRef.current.forEach(src => { try { src.disconnect(); } catch {} });
+    audioSourcesRef.current.clear();
+
+    if (audioCtxRef.current) {
+      try { await audioCtxRef.current.close(); } catch {}
+      audioCtxRef.current  = null;
+      audioDestRef.current = null;
+    }
+
+    // Leave main channel
+    const c = clientRef.current;
+    if (c) {
+      try { await c.leave(); } catch {}
+    }
+
+    // Reset state
+    setLocalAudioTrack(null);
+    setLocalVideoTrack(null);
+    setScreenVideoTrack(null);
+    setScreenAudioTrack(null);
+    setRemoteUsers([]);
+    setLocalScreenUid(null);
+    setIsJoined(false);
+    setIsSharingScreen(false);
+    doctorMutedRef.current = false;
+    setIsDoctorMuted(false);
+  }, []); // no deps — uses refs only
+
+  // ── Doctor mute enforcement ────────────────────────────────────────────
+  useEffect(() => {
+    if (!userId || !localAudioTrack) return;
+    const muted = mutedIds.includes(userId);
+
+    doctorMutedRef.current = muted;
+    setIsDoctorMuted(muted);
+
+    if (muted) {
+      localAudioTrack.setEnabled(false).catch(() => {});
+      setIsMicOn(false);
+    } else {
+      localAudioTrack.setEnabled(true).catch(() => {});
+      setIsMicOn(true);
+    }
+  }, [mutedIds, userId, localAudioTrack]);
+
+  const canvasRef        = useRef(null);
+  const animFrameRef     = useRef(null);
   const mediaRecorderRef = useRef(null);
-  const recordedChunks = useRef([]);
-  const audioCtxRef = useRef(null);
-  const audioDestRef = useRef(null);
-  const audioSourcesRef = useRef(new Map());
+  const recordedChunks   = useRef([]);
+  const audioCtxRef      = useRef(null);
+  const audioDestRef     = useRef(null);
+  const audioSourcesRef  = useRef(new Map());
 
   const enrichUser = useCallback((agoraUser) => {
     const meta = uidNameMap.current[agoraUser.uid] ?? {};
+    const isScreenShare =
+      meta.isScreenShare ?? (Number(agoraUser.uid) >= SCREEN_SHARE_UID_THRESHOLD);
+
+    let resolvedName = meta.name;
+    if (!resolvedName && isScreenShare) {
+      const cameraUid  = Number(agoraUser.uid) - SCREEN_SHARE_UID_THRESHOLD;
+      const cameraMeta = uidNameMap.current[cameraUid];
+      resolvedName = cameraMeta?.name ?? 'Participant';
+    }
+
     return {
-      uid: agoraUser.uid,
-      videoTrack: agoraUser.videoTrack ?? null,
-      audioTrack: agoraUser.audioTrack ?? null,
-      userName: meta.name ?? `User-${agoraUser.uid}`,
-      userRole: meta.role ?? 'participant',
-      isScreenShare: meta.isScreenShare ?? false,
+      uid:         agoraUser.uid,
+      videoTrack:  agoraUser.videoTrack  ?? null,
+      audioTrack:  agoraUser.audioTrack  ?? null,
+      userName:    resolvedName ?? `User-${agoraUser.uid}`,
+      userRole:    meta.role ?? 'participant',
+      isScreenShare,
       _raw: agoraUser,
     };
   }, []);
@@ -103,25 +198,22 @@ export default function AgoraProvider({
     });
   }, [enrichUser]);
 
+  // ── Agora client setup ─────────────────────────────────────────────────
   useEffect(() => {
     const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
     clientRef.current = client;
 
     client.on('user-published', async (user, mediaType) => {
       await client.subscribe(user, mediaType);
-
       if (mediaType === 'audio' && user.audioTrack) {
         user.audioTrack.play();
         addAudioSourceToMix(user.uid, user.audioTrack);
       }
-
       upsertRemoteUser(client.remoteUsers.find(u => u.uid === user.uid) || user);
     });
 
     client.on('user-unpublished', (user, mediaType) => {
-      if (mediaType === 'audio') {
-        removeAudioSourceFromMix(user.uid);
-      }
+      if (mediaType === 'audio') removeAudioSourceFromMix(user.uid);
       upsertRemoteUser(client.remoteUsers.find(u => u.uid === user.uid) || user);
     });
 
@@ -168,11 +260,87 @@ export default function AgoraProvider({
       }
     });
 
-    return () => {
-      client.removeAllListeners();
-    };
+    return () => { client.removeAllListeners(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [consultationId, userId, dispatch]);
 
+  // ── CRITICAL: hard-stop on provider unmount ────────────────────────────
+  // Fires when user navigates away, closes ConsultationRoom, etc.
+  useEffect(() => {
+    return () => {
+      // Synchronous immediate track kill (fastest — no await needed here)
+      localAudioTrackRef.current?.stop();
+      localAudioTrackRef.current?.close();
+      localVideoTrackRef.current?.stop();
+      localVideoTrackRef.current?.close();
+      screenVideoTrackRef.current?.stop();
+      screenVideoTrackRef.current?.close();
+      screenAudioTrackRef.current?.stop();
+      screenAudioTrackRef.current?.close();
+
+      // Async leave (fire and forget — page may be gone anyway)
+      screenClientRef.current?.leave().catch(() => {});
+      clientRef.current?.leave().catch(() => {});
+
+      // Audio context
+      try { audioCtxRef.current?.close(); } catch {}
+      audioSourcesRef.current.forEach(src => { try { src.disconnect(); } catch {} });
+      audioSourcesRef.current.clear();
+
+      // Recording
+      if (mediaRecorderRef.current?.state === 'recording') {
+        mediaRecorderRef.current.stop();
+      }
+      cancelAnimationFrame(animFrameRef.current);
+    };
+  }, []); // empty deps — intentional, uses refs
+
+  // ── beforeunload: kill tracks synchronously on tab close / refresh ──────
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      // Synchronous only — no await in beforeunload
+      localAudioTrackRef.current?.stop();
+      localAudioTrackRef.current?.close();
+      localVideoTrackRef.current?.stop();
+      localVideoTrackRef.current?.close();
+      screenVideoTrackRef.current?.stop();
+      screenVideoTrackRef.current?.close();
+      screenAudioTrackRef.current?.stop();
+      screenAudioTrackRef.current?.close();
+
+      try { audioCtxRef.current?.close(); } catch {}
+      audioSourcesRef.current.forEach(src => { try { src.disconnect(); } catch {} });
+
+      if (mediaRecorderRef.current?.state === 'recording') {
+        mediaRecorderRef.current.stop();
+      }
+      cancelAnimationFrame(animFrameRef.current);
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []); // empty deps — uses refs
+
+  // ── visibilitychange: stop tracks when tab hidden (mobile browser) ──────
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState !== 'hidden') return;
+      // Only kill if already left (session ended), not just tab-switching mid-call
+      // Check connectionState ref instead of state to avoid stale closure
+      const state = clientRef.current?.connectionState;
+      if (state === 'DISCONNECTED' || state === 'DISCONNECTING') {
+        localAudioTrackRef.current?.stop();
+        localAudioTrackRef.current?.close();
+        localVideoTrackRef.current?.stop();
+        localVideoTrackRef.current?.close();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, []);
+
+  // ── Token renewal ──────────────────────────────────────────────────────
   useEffect(() => {
     const client = clientRef.current;
     if (!client || !myTokens?.rtcToken || !isJoined) return;
@@ -181,9 +349,9 @@ export default function AgoraProvider({
 
   const ensureAudioCtx = useCallback(() => {
     if (!audioCtxRef.current) {
-      const ctx = new AudioContext();
+      const ctx  = new AudioContext();
       const dest = ctx.createMediaStreamDestination();
-      audioCtxRef.current = ctx;
+      audioCtxRef.current  = ctx;
       audioDestRef.current = dest;
     }
     return { ctx: audioCtxRef.current, dest: audioDestRef.current };
@@ -193,7 +361,7 @@ export default function AgoraProvider({
     if (!audioTrack || audioSourcesRef.current.has(uid)) return;
     try {
       const { ctx, dest } = ensureAudioCtx();
-      const ms = new MediaStream([audioTrack.getMediaStreamTrack()]);
+      const ms  = new MediaStream([audioTrack.getMediaStreamTrack()]);
       const src = ctx.createMediaStreamSource(ms);
       src.connect(dest);
       audioSourcesRef.current.set(uid, src);
@@ -210,6 +378,7 @@ export default function AgoraProvider({
     }
   }, []);
 
+  // ── joinChannel ────────────────────────────────────────────────────────
   const joinChannel = useCallback(async (tokens, userMeta = {}) => {
     const client = clientRef.current;
     if (!client || isJoined || isConnecting) return;
@@ -227,21 +396,26 @@ export default function AgoraProvider({
       const numericUid = await client.join(appId, channelName, rtcToken, uid ?? null);
 
       uidNameMap.current[numericUid] = {
-        name: userMeta.name || userName || 'You',
-        role: userMeta.role || role || 'participant',
+        name:        userMeta.name || userName || 'You',
+        role:        userMeta.role || role || 'participant',
         isScreenShare: false,
       };
 
+      const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
       const [audioTrack, videoTrack] = await AgoraRTC.createMicrophoneAndCameraTracks(
         { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        { encoderConfig: '720p_2', optimizationMode: 'motion' },
+        {
+          encoderConfig:    isMobile ? '360p_7' : '720p_2',
+          optimizationMode: 'motion',
+          facingMode:       'user',
+        },
       );
 
       setLocalAudioTrack(audioTrack);
       setLocalVideoTrack(videoTrack);
 
       const { ctx, dest } = ensureAudioCtx();
-      const localMs = new MediaStream([audioTrack.getMediaStreamTrack()]);
+      const localMs  = new MediaStream([audioTrack.getMediaStreamTrack()]);
       const localSrc = ctx.createMediaStreamSource(localMs);
       localSrc.connect(dest);
       audioSourcesRef.current.set(numericUid, localSrc);
@@ -257,54 +431,18 @@ export default function AgoraProvider({
     }
   }, [isJoined, isConnecting, userName, role, ensureAudioCtx]);
 
+  // ── leaveChannel (explicit user action) ───────────────────────────────
   const leaveChannel = useCallback(async () => {
-    const client = clientRef.current;
-    const screenClient = screenClientRef.current;
+    await hardStop();
+  }, [hardStop]);
 
-    if (mediaRecorderRef.current?.state === 'recording') {
-      mediaRecorderRef.current.stop();
-    }
-    cancelAnimationFrame(animFrameRef.current);
-
-    if (screenClient) {
-      try {
-        screenVideoTrack?.stop();
-        screenVideoTrack?.close();
-        screenAudioTrack?.stop();
-        screenAudioTrack?.close();
-        await screenClient.leave();
-        screenClientRef.current = null;
-      } catch {}
-    }
-
-    localAudioTrack?.stop(); localAudioTrack?.close();
-    localVideoTrack?.stop(); localVideoTrack?.close();
-
-    audioSourcesRef.current.forEach(src => { try { src.disconnect(); } catch {} });
-    audioSourcesRef.current.clear();
-
-    if (audioCtxRef.current) {
-      try { await audioCtxRef.current.close(); } catch {}
-      audioCtxRef.current = null;
-      audioDestRef.current = null;
-    }
-
-    setLocalAudioTrack(null);
-    setLocalVideoTrack(null);
-    setScreenVideoTrack(null);
-    setScreenAudioTrack(null);
-    setRemoteUsers([]);
-    setLocalScreenUid(null);
-
-    if (client) {
-      await client.leave().catch(() => {});
-    }
-    setIsJoined(false);
-    setIsSharingScreen(false);
-  }, [localAudioTrack, localVideoTrack, screenVideoTrack, screenAudioTrack]);
-
+  // ── toggleMic ─────────────────────────────────────────────────────────
   const toggleMic = useCallback(async () => {
     if (!localAudioTrack) return;
+    if (doctorMutedRef.current) {
+      toast.error('You have been muted by the doctor.', { icon: '🔇' });
+      return;
+    }
     await localAudioTrack.setEnabled(!isMicOn);
     setIsMicOn(p => !p);
   }, [localAudioTrack, isMicOn]);
@@ -315,6 +453,7 @@ export default function AgoraProvider({
     setIsCamOn(p => !p);
   }, [localVideoTrack, isCamOn]);
 
+  // ── Screen share ───────────────────────────────────────────────────────
   const startScreenShare = useCallback(async () => {
     const mainClient = clientRef.current;
     if (!mainClient || isSharingScreen) return;
@@ -335,26 +474,21 @@ export default function AgoraProvider({
       screenClientRef.current = screenClient;
 
       const { appId, channelName, uid } = myTokens ?? {};
-      const screenUid = ((Number(uid || 0) + 1_000_000) >>> 0) || 1_000_001;
+      const screenUid =
+        ((Number(uid || 0) + SCREEN_SHARE_UID_THRESHOLD) >>> 0) ||
+        (SCREEN_SHARE_UID_THRESHOLD + 1);
 
-      // FETCH DEDICATED SCREEN SHARE TOKEN
-      // Ensure your backend node/python server has the route `/consultations/:id/agora/screen-token` 
-      // configured to generate a token specifically for `screenUid`
-      const tokenResponse = await getScreenShareTokenAPI(consultationId, screenUid);
-      
-      // Assumes your backend responds with { data: { token: "..." } } or similar
-      const screenRtcToken = tokenResponse.data?.token || tokenResponse.data?.rtcToken; 
+      const tokenResponse  = await getScreenShareTokenAPI(consultationId, screenUid);
+      const screenRtcToken =
+        tokenResponse.data?.token || tokenResponse.data?.rtcToken;
 
-      if (!screenRtcToken) {
-        throw new Error('Failed to retrieve screen share token from server.');
-      }
+      if (!screenRtcToken) throw new Error('Failed to retrieve screen share token.');
 
-      // USE THE NEW TOKEN TO JOIN
       await screenClient.join(appId, channelName, screenRtcToken, screenUid);
 
       uidNameMap.current[screenUid] = {
-        name: userName || 'You (Screen)',
-        role: role,
+        name: userName || 'You',
+        role,
         isScreenShare: true,
       };
       setLocalScreenUid(screenUid);
@@ -363,7 +497,6 @@ export default function AgoraProvider({
       await screenClient.publish(tracksToPublish);
 
       sVideo.on('track-ended', () => stopScreenShare());
-
       setIsSharingScreen(true);
     } catch (err) {
       if (err.name !== 'NotAllowedError') {
@@ -374,25 +507,23 @@ export default function AgoraProvider({
   }, [isSharingScreen, myTokens, userName, role, consultationId]);
 
   const stopScreenShare = useCallback(async () => {
-    const screenClient = screenClientRef.current;
-    if (!screenClient) return;
-
+    const sc = screenClientRef.current;
+    if (!sc) return;
     try {
-      screenVideoTrack?.stop();
-      screenVideoTrack?.close();
-      screenAudioTrack?.stop();
-      screenAudioTrack?.close();
-      await screenClient.leave();
+      screenVideoTrackRef.current?.stop();
+      screenVideoTrackRef.current?.close();
+      screenAudioTrackRef.current?.stop();
+      screenAudioTrackRef.current?.close();
+      await sc.leave();
       screenClientRef.current = null;
     } catch (err) {
       console.error('[ScreenShare] Stop failed:', err);
     }
-
     setScreenVideoTrack(null);
     setScreenAudioTrack(null);
     setLocalScreenUid(null);
     setIsSharingScreen(false);
-  }, [screenVideoTrack, screenAudioTrack]);
+  }, []);
 
   const switchCamera = useCallback(async (deviceId) => {
     if (!localVideoTrack) return;
@@ -404,6 +535,7 @@ export default function AgoraProvider({
     await localAudioTrack.setDevice(deviceId);
   }, [localAudioTrack]);
 
+  // ── Local recording ────────────────────────────────────────────────────
   const startLocalRecording = useCallback(() => {
     if (mediaRecorderRef.current?.state === 'recording') return;
 
@@ -411,14 +543,13 @@ export default function AgoraProvider({
       recordedChunks.current = [];
 
       const canvas = document.createElement('canvas');
-      canvas.width = 1280;
+      canvas.width  = 1280;
       canvas.height = 720;
       canvasRef.current = canvas;
       const ctx2d = canvas.getContext('2d');
 
-      const getVideoEls = () => {
-        return Array.from(document.querySelectorAll('[data-agora-video] video'));
-      };
+      const getVideoEls = () =>
+        Array.from(document.querySelectorAll('[data-agora-video] video'));
 
       const drawFrame = () => {
         const videos = getVideoEls();
@@ -428,16 +559,14 @@ export default function AgoraProvider({
         } else if (videos.length === 1) {
           ctx2d.drawImage(videos[0], 0, 0, canvas.width, canvas.height);
         } else {
-          const cols = Math.ceil(Math.sqrt(videos.length));
-          const rows = Math.ceil(videos.length / cols);
-          const tileW = canvas.width / cols;
+          const cols  = Math.ceil(Math.sqrt(videos.length));
+          const rows  = Math.ceil(videos.length / cols);
+          const tileW = canvas.width  / cols;
           const tileH = canvas.height / rows;
           videos.forEach((v, i) => {
             const col = i % cols;
             const row = Math.floor(i / cols);
-            try {
-              ctx2d.drawImage(v, col * tileW, row * tileH, tileW, tileH);
-            } catch {}
+            try { ctx2d.drawImage(v, col * tileW, row * tileH, tileW, tileH); } catch {}
           });
         }
         animFrameRef.current = requestAnimationFrame(drawFrame);
@@ -445,8 +574,7 @@ export default function AgoraProvider({
       drawFrame();
 
       const canvasStream = canvas.captureStream(30);
-
-      const { dest } = ensureAudioCtx();
+      const { dest }     = ensureAudioCtx();
       const mixed = new MediaStream([
         ...canvasStream.getVideoTracks(),
         ...dest.stream.getAudioTracks(),
@@ -467,15 +595,15 @@ export default function AgoraProvider({
       recorder.onstop = () => {
         cancelAnimationFrame(animFrameRef.current);
         const blob = new Blob(recordedChunks.current, { type: 'video/webm' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
         a.download = `consultation-${consultationId}-${Date.now()}.webm`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        toast.success('Full consultation recording saved to downloads');
+        toast.success('Recording saved to downloads');
         dispatch(setLocalRecordingActive(false));
       };
 
@@ -511,6 +639,7 @@ export default function AgoraProvider({
     connectionState,
     error,
     localScreenUid,
+    isDoctorMuted,
     joinChannel,
     leaveChannel,
     toggleMic,
@@ -526,7 +655,7 @@ export default function AgoraProvider({
     localAudioTrack, localVideoTrack, screenVideoTrack, screenAudioTrack,
     remoteUsers, isJoined, isMicOn, isCamOn,
     isSharingScreen, networkQuality, isConnecting,
-    connectionState, error, localScreenUid,
+    connectionState, error, localScreenUid, isDoctorMuted,
     joinChannel, leaveChannel, toggleMic, toggleCamera,
     startScreenShare, stopScreenShare, switchCamera, switchMic,
     startLocalRecording, stopLocalRecording,

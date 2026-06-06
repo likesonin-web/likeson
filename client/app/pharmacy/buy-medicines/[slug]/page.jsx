@@ -22,7 +22,7 @@ import {
   Ticket, BadgePercent, CircleSlash, Loader2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-
+import { selectMySubscription, selectMySubPlanName } from '@/store/slices/subscriptionSlice';
 // ─── Redux Actions ────────────────────────────────────────────────────────────
 import {
   fetchMedicineBySlug,
@@ -1150,8 +1150,9 @@ export default function MedicineDetails() {
   const similarMedicinesLoading = useSelector(selectSimilarMedicinesLoading);
   // ── Auth / subscription ──
   const user                 = useSelector((state) => state.user?.user) ?? null;
-  const subscriptionDiscount = useSelector((s) => s.user?.subscription?.pharmacyDiscount ?? 0);
-  const subscriptionPlanName = useSelector((s) => s.user?.subscription?.planName ?? '');
+const mySub              = useSelector(selectMySubscription);
+const subscriptionDiscount = mySub?.limits?.pharmacyDiscountPercent ?? 0;
+const subscriptionPlanName = useSelector(selectMySubPlanName) ?? '';
 
   // ── Local state ──
   const [activeTab,        setActiveTab]        = useState('overview');

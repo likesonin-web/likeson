@@ -528,8 +528,9 @@ export const verifyRazorpayPayment = mkThunk(
     const { data } = await API.post(`${BASE}/verify-payment`, {
       bookingId, razorpay_order_id, razorpay_payment_id, razorpay_signature,
     });
-    toast.success('Payment verified!');
-    return data.data; // { bookingId, paymentStatus }
+    // Return full response so handler can check data.success
+    // toast fired in UI after onSuccess callback, not here
+    return { success: data.success, ...(data.data || {}) };
   }
 );
 
@@ -658,16 +659,27 @@ export const downloadOpCard = mkThunk(
 export const fetchSubscriptionBenefitConsultations = mkThunk(
   'booking/fetchSubscriptionBenefitConsultations',
   async () => {
-    const { data } = await API.get(`${BASE}/subscription-benefits/consultations`);
-    return data.data;
+    try {
+      const { data } = await API.get(`${BASE}/subscription-benefits/consultations`);
+      return data.data;
+    } catch (err) {
+      // 404 = no active subscription — not an error, return null silently
+      if (err?.response?.status === 404) return null;
+      throw err;
+    }
   }
 );
 
 export const fetchSubscriptionBenefitCareAssistant = mkThunk(
   'booking/fetchSubscriptionBenefitCareAssistant',
   async () => {
-    const { data } = await API.get(`${BASE}/subscription-benefits/care-assistant`);
-    return data.data;
+    try {
+      const { data } = await API.get(`${BASE}/subscription-benefits/care-assistant`);
+      return data.data;
+    } catch (err) {
+      if (err?.response?.status === 404) return null;
+      throw err;
+    }
   }
 );
 
@@ -700,8 +712,13 @@ export const deleteFailedBooking = mkThunk(
 export const fetchSubscriptionBenefitLabs = mkThunk(
   'booking/fetchSubscriptionBenefitLabs',
   async () => {
-    const { data } = await API.get(`${BASE}/subscription-benefits/labs`);
-    return data.data;
+    try {
+      const { data } = await API.get(`${BASE}/subscription-benefits/labs`);
+      return data.data;
+    } catch (err) {
+      if (err?.response?.status === 404) return null;
+      throw err;
+    }
   }
 );
 
@@ -791,6 +808,7 @@ const bookingSlice = createSlice({
       delete state.loading.checkFollowUpEligibility;
       delete state.errors.checkFollowUpEligibility;
     },
+    
 
     resetBookingOptions(state) {
       state.bookingOptions = null;
@@ -1359,6 +1377,8 @@ export const selectSubHomeCollectionIncluded   = (s) => s.booking.subscriptionBe
 export const selectSubHomeCollectionRemaining  = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.homeVisitsRemaining ?? null;
 export const selectSubHomeCollectionUsed       = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.homeVisitsUsed ?? 0;
 export const selectSubHomeCollectionUnlimited  = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.homeVisitUnlimited ?? false;
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // RE-EXPORTS
 // ─────────────────────────────────────────────────────────────────────────────

@@ -54,7 +54,7 @@ import {
   LocateFixed,
   Star,
 } from "lucide-react";
-
+import toast from "react-hot-toast";
 import {
   fetchHospitals,
   fetchHospitalDoctors,
@@ -136,7 +136,7 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const GMAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || "";
-const RAZORPAY_KEY = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "";
+const RAZORPAY_KEY = (process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "").trim();
 const VIJAYAWADA = { lat: 16.5062, lng: 80.648 };
 const GMAPS_LIBRARIES = ["places", "geometry"];
 
@@ -621,6 +621,13 @@ const fmtDate = (d) =>
       })
     : "—";
 
+// FIX: normalizeId moved to module scope — used in diag fee calc + test selection
+const normalizeId = (id) => {
+  if (!id) return "";
+  if (typeof id === "object" && id.$oid) return id.$oid;
+  return id?.toString?.() ?? String(id);
+};
+
 const getSteps = (bookingType) => {
   const keys =
     bookingType && STEPS_MAP[bookingType]
@@ -649,6 +656,7 @@ const loadRazorpay = () =>
     }
     const s = document.createElement("script");
     s.src = "https://checkout.razorpay.com/v1/checkout.js";
+    s.async = true;
     s.onload = () => resolve(true);
     s.onerror = () => resolve(false);
     document.body.appendChild(s);
@@ -664,9 +672,24 @@ const openRazorpay = async ({
   onFailure,
   dispatch,
 }) => {
+  if (!RAZORPAY_KEY) {
+    onFailure?.("Payment configuration missing. Contact support.");
+    return;
+  }
+  if (
+    !RAZORPAY_KEY.startsWith("rzp_test_") &&
+    !RAZORPAY_KEY.startsWith("rzp_live_")
+  ) {
+    console.error(
+      "[openRazorpay] Invalid key format:",
+      JSON.stringify(RAZORPAY_KEY),
+    );
+    onFailure?.("Payment configuration error — invalid key. Contact support.");
+    return;
+  }
   const loaded = await loadRazorpay();
   if (!loaded) {
-    onFailure?.("Razorpay failed to load");
+    onFailure?.("Razorpay failed to load. Check your internet connection.");
     return;
   }
   const options = {
@@ -679,21 +702,39 @@ const openRazorpay = async ({
     prefill: prefill || {},
     theme: { color: "#4f46e5" },
     handler: async (response) => {
-      if (dispatch && bookingId) {
-        await dispatch(
-          verifyRazorpayPayment({
-            bookingId,
-            razorpay_order_id: response.razorpay_order_id,
-            razorpay_payment_id: response.razorpay_payment_id,
-            razorpay_signature: response.razorpay_signature,
-          }),
+      try {
+        if (dispatch && bookingId) {
+          const verifyResult = await dispatch(
+            verifyRazorpayPayment({
+              bookingId,
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            }),
+          );
+          if (
+            verifyResult?.error ||
+            verifyResult?.payload?.success === false ||
+            !verifyResult?.payload?.success
+          ) {
+            onFailure?.(
+              verifyResult?.error?.message ||
+                "Payment verification failed — contact support with your payment ID: " +
+                  response.razorpay_payment_id,
+            );
+            return;
+          }
+        }
+        onSuccess?.({
+          razorpay_order_id: response.razorpay_order_id,
+          razorpay_payment_id: response.razorpay_payment_id,
+          razorpay_signature: response.razorpay_signature,
+        });
+      } catch (err) {
+        onFailure?.(
+          err?.message || "Payment verification error — contact support.",
         );
       }
-      onSuccess?.({
-        razorpay_order_id: response.razorpay_order_id,
-        razorpay_payment_id: response.razorpay_payment_id,
-        razorpay_signature: response.razorpay_signature,
-      });
     },
     modal: { ondismiss: () => onFailure?.("Payment cancelled by user") },
   };
@@ -729,7 +770,6 @@ const resolveConsultFee = (form, followUpCheck) => {
         : "Home visit fee applies",
     };
   }
-  // ← THIS IS THE FIX: check isFree OR consultationFree, both paths
   const isCovered = !!(
     sub?.isFree === true ||
     sub?.consultationFree === true ||
@@ -742,7 +782,6 @@ const resolveConsultFee = (form, followUpCheck) => {
       reason:
         sub?.reason || sub?.consultationQuota || "Covered by subscription",
     };
-
   let fee = 0;
   if (form.doctorFees) {
     fee =
@@ -761,8 +800,6 @@ const resolveConsultFee = (form, followUpCheck) => {
 
 const resolveCaFee = (form, caTiers) => {
   const sub = form.subCoverage;
-
-  // Fixed plan — all tiers free when sub covers
   if (sub?.careAssistantFree && !sub?.isCustomPlan) {
     return {
       fee: 0,
@@ -771,23 +808,36 @@ const resolveCaFee = (form, caTiers) => {
       reason: sub.careAssistantQuota || "Covered by subscription",
     };
   }
-
-  // Custom plan — quota remaining → FREE regardless of tier selected
-  // Backend charges ₹0 when quota exists; tier selection only affects payout, not user charge
   if (
     sub?.isCustomPlan &&
     sub?.careAssistantAllowed &&
     (sub?.careAssistantRemaining ?? 0) > 0
   ) {
+    const planTierIdx = sub?.careAssistantTierIndex ?? 0;
+    const durHours = form.durationHours ?? caTiers[0]?.hours ?? 1;
+    const selectedTierIdx = caTiers.findIndex((t) => t.hours === durHours);
+    const effectiveSelectedIdx = selectedTierIdx >= 0 ? selectedTierIdx : 0;
+    if (effectiveSelectedIdx === planTierIdx) {
+      return {
+        fee: 0,
+        isFree: true,
+        isCustomPlan: true,
+        reason: `Included in your plan · ${sub.careAssistantRemaining} visit(s) remaining this month`,
+      };
+    }
+    const allTiers = sub?.careAssistantAllTiers;
+    const selectedPlatformTier = allTiers
+      ? allTiers[effectiveSelectedIdx]
+      : caTiers[effectiveSelectedIdx];
+    const extraFee =
+      selectedPlatformTier?.chargeToUser ?? selectedPlatformTier?.price ?? 0;
     return {
-      fee: 0,
-      isFree: true,
+      fee: extraFee,
+      isFree: false,
       isCustomPlan: true,
-      reason: `Included in your plan · ${sub.careAssistantRemaining} visit(s) remaining this month`,
+      reason: `Plan covers tier 0 only — this tier charges platform rate`,
     };
   }
-
-  // No sub or quota exhausted → platform tier price
   const durHours = form.durationHours || (caTiers[0]?.hours ?? 4);
   const caTier = caTiers.find((t) => t.hours === durHours) || caTiers[0];
   return {
@@ -806,6 +856,13 @@ const resolveTransportFee = (transportEstimate) => {
     fee: transportEstimate.totalTransportFee || 0,
     ratePerKm: transportEstimate.ratePerKm || null,
   };
+};
+
+// FIX: helper to check if lab supports home collection
+const labSupportsHomeCollection = (lab) => {
+  if (!lab) return false;
+  const mode = lab.sampleCollectionMode || "";
+  return mode === "Both" || mode === "Home Collection" || mode === "Home";
 };
 
 // ─── Animation ─────────────────────────────────────────────────────────────
@@ -1018,7 +1075,6 @@ function WalletSplitBanner({
   paymentMethod,
 }) {
   if (paymentMethod !== "Wallet" || !totalAmount) return null;
-  // Use available = balance - lockedBalance, same as backend
   const available = walletData
     ? Math.max(0, (walletData.balance || 0) - (walletData.lockedBalance || 0))
     : (walletBalance ?? 0);
@@ -1389,7 +1445,7 @@ function DiagSubBanner({ subCoverage }) {
   const homeIncluded = subCoverage.homeCollectionIncluded ?? false;
   const homeWaived = subCoverage.homeSampleCollectionFree === true;
   const homeUsed = subCoverage.homeCollectionUsed ?? 0;
-  const homeRemaining = subCoverage.homeCollectionRemaining; // null = unlimited
+  const homeRemaining = subCoverage.homeCollectionRemaining;
   const homeUnlimited = subCoverage.homeCollectionUnlimited ?? false;
   const homeLimit = subCoverage.homeCollectionLimit ?? null;
 
@@ -1415,7 +1471,6 @@ function DiagSubBanner({ subCoverage }) {
         </p>
       </div>
       <div className="px-3 py-2.5 space-y-2">
-        {/* Discount row */}
         {discount > 0 && (
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5">
@@ -1447,8 +1502,6 @@ function DiagSubBanner({ subCoverage }) {
             </p>
           </div>
         )}
-
-        {/* Home collection row */}
         {homeIncluded ? (
           <div className="rounded-lg border border-success/25 bg-success/5 px-2.5 py-2 space-y-1.5">
             <div className="flex items-center justify-between gap-2">
@@ -1467,7 +1520,6 @@ function DiagSubBanner({ subCoverage }) {
                 {homeWaived ? "WAIVED" : "QUOTA USED"}
               </span>
             </div>
-            {/* Usage bar */}
             {!homeUnlimited && homeLimit != null && homeLimit > 0 && (
               <div className="space-y-1">
                 <div className="flex justify-between text-[9px]" style={PP}>
@@ -1589,6 +1641,7 @@ function LocationPicker({
     },
     [reverseGeocode, readOnly],
   );
+
   const handleMarkerDragEnd = useCallback(
     (e) => {
       if (readOnly) return;
@@ -1598,6 +1651,7 @@ function LocationPicker({
     },
     [reverseGeocode, readOnly],
   );
+
   const handlePlaceChanged = useCallback(() => {
     if (!autocompleteRef.current || readOnly) return;
     const place = autocompleteRef.current.getPlace();
@@ -1956,24 +2010,17 @@ function ServiceEducation({ bt }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STEP BAR — FIX: tooltip renders ABOVE step node using Tailwind only
+// STEP BAR
 // ─────────────────────────────────────────────────────────────────────────────
 
 function StepBar({ steps, currentId, visitedIds, onStepClick }) {
   const [hoveredId, setHoveredId] = useState(null);
-
   return (
-    /*
-      Outer wrapper: overflow-x-auto so it scrolls on mobile.
-      overflow-y: visible so the upward tooltip is not clipped.
-      We achieve this by giving the bar a top padding that equals
-      the tooltip height + gap, so the tooltip has room above the node.
-    */
     <div className="w-full overflow-x-auto" style={{ overflowY: "visible" }}>
       <div
         className="flex items-end justify-center gap-0 px-2 pb-2"
         style={{
-          paddingTop: "3rem" /* space for tooltip above nodes */,
+          paddingTop: "3rem",
           minWidth: "max-content",
           position: "relative",
         }}
@@ -1985,10 +2032,8 @@ function StepBar({ steps, currentId, visitedIds, onStepClick }) {
           const ok = visitedIds.includes(s.id) || active;
           const canClick = visitedIds.includes(s.id) && s.id !== currentId;
           const isHovered = hoveredId === s.id;
-
           return (
             <div key={s.id} className="flex items-center flex-shrink-0">
-              {/* ── Step node wrapper — position:relative so tooltip is above ── */}
               <div
                 className="relative flex flex-col items-center gap-0.5"
                 style={{ minWidth: "44px" }}
@@ -1996,60 +2041,23 @@ function StepBar({ steps, currentId, visitedIds, onStepClick }) {
                 onMouseLeave={() => setHoveredId(null)}
                 onClick={() => canClick && onStepClick?.(s.id)}
               >
-                {/*
-                  TOOLTIP — position: absolute, bottom: 100% = above node.
-                  mb-2 adds 8px gap between tooltip arrow and node top.
-                  pointer-events-none so it doesn't block mouse events.
-                  z-50 ensures it renders over everything.
-                */}
                 {isHovered && (
                   <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 pointer-events-none flex flex-col items-center">
-                    {/* Tooltip bubble */}
                     <div
-                      className={`px-2 py-1 rounded-lg text-[10px] font-black text-center whitespace-nowrap shadow-lg
-                        ${
-                          active
-                            ? "bg-primary text-primary-content"
-                            : done
-                              ? "bg-success text-success-content"
-                              : "bg-base-300 text-base-content"
-                        }`}
+                      className={`px-2 py-1 rounded-lg text-[10px] font-black text-center whitespace-nowrap shadow-lg ${active ? "bg-primary text-primary-content" : done ? "bg-success text-success-content" : "bg-base-300 text-base-content"}`}
                       style={PP}
                     >
                       {s.label}
                       {canClick && <span className="ml-1 opacity-70">↩</span>}
                     </div>
-                    {/*
-                      Arrow pointing DOWN toward the step node.
-                      rotate-45 makes a square look like a diamond.
-                      -mt-1 overlaps arrow with bubble bottom edge.
-                    */}
                     <div
-                      className={`w-2 h-2 rotate-45 -mt-1
-                        ${
-                          active
-                            ? "bg-primary"
-                            : done
-                              ? "bg-success"
-                              : "bg-base-300"
-                        }`}
+                      className={`w-2 h-2 rotate-45 -mt-1 ${active ? "bg-primary" : done ? "bg-success" : "bg-base-300"}`}
                     />
                   </div>
                 )}
-
-                {/* ── Step circle ── */}
                 <motion.div
                   animate={{ scale: active ? 1.12 : 1 }}
-                  className={`w-5 h-5 rounded-full flex items-center justify-center transition-colors duration-300 cursor-${canClick ? "pointer" : "default"}
-                    ${
-                      done
-                        ? "bg-success text-success-content"
-                        : active
-                          ? "bg-primary text-primary-content"
-                          : "bg-base-300 text-base-content"
-                    }
-                    ${ok ? "opacity-100" : "opacity-30"}
-                    ${isHovered && canClick ? "ring-2 ring-primary/30" : ""}`}
+                  className={`w-5 h-5 rounded-full flex items-center justify-center transition-colors duration-300 cursor-${canClick ? "pointer" : "default"} ${done ? "bg-success text-success-content" : active ? "bg-primary text-primary-content" : "bg-base-300 text-base-content"} ${ok ? "opacity-100" : "opacity-30"} ${isHovered && canClick ? "ring-2 ring-primary/30" : ""}`}
                 >
                   {done ? (
                     <Check size={9} strokeWidth={3} />
@@ -2057,12 +2065,8 @@ function StepBar({ steps, currentId, visitedIds, onStepClick }) {
                     <Icon size={9} />
                   )}
                 </motion.div>
-
-                {/* ── Label — visible on sm+ ── */}
                 <span
-                  className={`hidden sm:block text-[7px] font-black uppercase tracking-wider text-center leading-tight
-                    ${ok ? "opacity-100" : "opacity-30"}
-                    ${active ? "text-primary" : canClick ? "text-primary" : "text-base-content"}`}
+                  className={`hidden sm:block text-[7px] font-black uppercase tracking-wider text-center leading-tight ${ok ? "opacity-100" : "opacity-30"} ${active ? "text-primary" : canClick ? "text-primary" : "text-base-content"}`}
                   style={{
                     maxWidth: "44px",
                     overflow: "hidden",
@@ -2073,19 +2077,13 @@ function StepBar({ steps, currentId, visitedIds, onStepClick }) {
                 >
                   {s.label}
                 </span>
-
-                {/* ── Mobile dot ── */}
                 <span
-                  className={`block sm:hidden w-1 h-1 rounded-full mt-0.5
-                    ${active ? "bg-primary" : ok ? "bg-success" : "bg-base-300"}`}
+                  className={`block sm:hidden w-1 h-1 rounded-full mt-0.5 ${active ? "bg-primary" : ok ? "bg-success" : "bg-base-300"}`}
                 />
               </div>
-
-              {/* ── Connector line ── */}
               {i < steps.length - 1 && (
                 <div
-                  className={`w-3 h-px mx-0.5 flex-shrink-0 transition-all duration-500
-                    ${done ? "bg-success opacity-100" : "bg-base-300 opacity-30"}`}
+                  className={`w-3 h-px mx-0.5 flex-shrink-0 transition-all duration-500 ${done ? "bg-success opacity-100" : "bg-base-300 opacity-30"}`}
                 />
               )}
             </div>
@@ -2235,58 +2233,19 @@ function StepProvider({
   const providerIcon = isDiag ? FlaskConical : Stethoscope;
 
   useEffect(() => {
-    if (!labDetail) {
-      set("estimatedDiagFee", 0);
-      return;
-    }
-    const hasSelections =
-      form.selectedTests?.length || form.selectedPackages?.length;
-    if (!hasSelections) {
-      set("estimatedDiagFee", 0);
-      return;
-    }
-    const discPct = form.subCoverage?.diagnosticsDiscountPercent || 0;
-    let total = 0;
-    for (const testId of form.selectedTests || []) {
-        if (!testId) continue; // ADD THIS LINE
-      const t = labDetail.labTests?.find(
-        (lt) => (lt._id?.toString?.() ?? String(lt._id)) === String(testId),
-      );
-      if (t) {
-        const base = t.discountedPrice ?? t.mrpPrice;
-        total += discPct > 0 ? +(base * (1 - discPct / 100)) : base;
-      }
-    }
-    for (const pkgId of form.selectedPackages || []) {
-      const p = labDetail.labPackages?.find(
-        (lp) => (lp._id?.toString?.() ?? String(lp._id)) === String(pkgId),
-      );
-      if (p) total += p.mrpPrice;
-    }
-    set("estimatedDiagFee", +total.toFixed(2));
-  }, [
-    labDetail,
-    form.selectedTests,
-    form.selectedPackages,
-    form.subCoverage?.diagnosticsDiscountPercent,
-  ]);
-
-
-  useEffect(() => {
     if (isOnline && !allDoctors?.length && !allDoctorsLoading) {
       onLoadAllDoctors?.({ consultationType: "video", isOnline: "true" });
     }
   }, [isOnline]);
   useEffect(() => {
-    if (isDiag) {
-      onLoadLabs(form.labCity || ""); // load all labs immediately, no city required
+    if (isDiag && !labs?.length) {
+      onLoadLabs(form.labCity || "");
     }
   }, [isDiag]);
   useEffect(() => {
     if (form.bookingType === "follow_up" && form.doctorId)
       onCheckFollowUp(form.doctorId, form.hospitalId);
   }, [form.doctorId, form.hospitalId, form.bookingType]);
-   
   useEffect(() => {
     if (isOnline) set("consultationType", "video");
   }, [isOnline]);
@@ -2393,16 +2352,17 @@ function StepProvider({
                     "labName",
                     labs.find((l) => l._id === labId)?.labName || "",
                   );
+                  set("selectedTests", []);
+                  set("selectedPackages", []);
                   if (labId) onLoadLabDetail(labId);
                 }}
               >
                 <option value="">— Choose a lab —</option>
                 {labs.map((l) => (
                   <option key={l._id} value={l._id}>
+                    {/* FIX: use labSupportsHomeCollection helper for accurate Home ✓ label */}
                     {l.labName} — {l.registeredAddress?.city}
-                    {l.sampleCollectionMode !== "Center Only"
-                      ? " (Home ✓)"
-                      : ""}
+                    {labSupportsHomeCollection(l) ? " (Home ✓)" : ""}
                   </option>
                 ))}
               </Sel>
@@ -2415,6 +2375,15 @@ function StepProvider({
             >
               <Loader2 size={11} className="animate-spin" />
               Loading tests…
+            </div>
+          )}
+          {!labDetailLoading && form.labId && !labDetail && (
+            <div
+              className="flex items-center gap-2 text-xs text-error py-1"
+              style={PP}
+            >
+              <AlertCircle size={11} />
+              Failed to load lab tests. Try selecting lab again.
             </div>
           )}
           {labDetail && (
@@ -2433,31 +2402,39 @@ function StepProvider({
                   onChange={(e) =>
                     set(
                       "selectedTests",
-                      Array.from(e.target.selectedOptions, (o) => o.value),
+                      Array.from(
+                        e.target.selectedOptions,
+                        (o) => o.value,
+                      ).filter(Boolean),
                     )
                   }
                 >
-                  {labDetail.labTests?.map((t) => {
-                    const discPct =
-                      form.subCoverage?.diagnosticsDiscountPercent || 0;
-                    const basePrice = t.discountedPrice ?? t.mrpPrice;
-                    const displayPrice =
-                      discPct > 0
-                        ? +(basePrice * (1 - discPct / 100)).toFixed(0)
-                        : basePrice;
-                    const testIdStr =
-                      t._id?.toString?.() ?? String(t._id ?? "");
-                    return (
-                      <option key={testIdStr} value={testIdStr}>
-                        {t.testName} — {fmt(displayPrice)}
-                        {discPct > 0 ? ` (${discPct}% off)` : ""}
-                        {form.bookingType === "diagnostic_home" &&
-                        !t.homeCollectionAvailable
-                          ? " (centre only)"
-                          : ""}
-                      </option>
-                    );
-                  })}
+                  {labDetail.labTests
+                    ?.filter((t) =>
+                      form.bookingType === "diagnostic_home"
+                        ? t.homeCollectionAvailable === true ||
+                          t.homeCollectionAvailable == null
+                        : true,
+                    )
+                    .map((t, i) => {
+                      const discPct =
+                        form.subCoverage?.diagnosticsDiscountPercent || 0;
+                      const basePrice = t.discountedPrice ?? t.mrpPrice;
+                      const displayPrice =
+                        discPct > 0
+                          ? +(basePrice * (1 - discPct / 100)).toFixed(0)
+                          : basePrice;
+                     const testIdStr = t._id
+  ? normalizeId(t._id)
+  : t.testCode || `idx-${i}`; 
+                      if (!testIdStr) return null;
+                      return (
+                        <option key={`test-${i}`} value={testIdStr}>
+                          {t.testName} — {fmt(displayPrice)}
+                          {discPct > 0 ? ` (${discPct}% off)` : ""}
+                        </option>
+                      );
+                    })}
                 </select>
                 {form.selectedTests?.length > 0 && (
                   <p className="text-[10px] text-primary font-bold" style={PP}>
@@ -2480,53 +2457,35 @@ function StepProvider({
                     onChange={(e) =>
                       set(
                         "selectedPackages",
-                        Array.from(e.target.selectedOptions, (o) => o.value),
+                        Array.from(
+                          e.target.selectedOptions,
+                          (o) => o.value,
+                        ).filter(Boolean),
                       )
                     }
                   >
-                    {labDetail.labPackages.map((p) => {
-                      const pkgIdStr =
-                        p._id?.toString?.() ?? String(p._id ?? "");
+                    {labDetail.labPackages?.map((p, pi) => {
+                      const pkgIdStr = p._id
+  ? (p._id?.toString?.() ?? String(p._id))
+  : (p.packageCode || `idx-${pi}`);
+                      if (!pkgIdStr) return null;
+                      const discPct =
+                        form.subCoverage?.diagnosticsDiscountPercent || 0;
+                      const displayPrice =
+                        discPct > 0
+                          ? +(p.mrpPrice * (1 - discPct / 100)).toFixed(0)
+                          : p.mrpPrice;
                       return (
-                        <option key={pkgIdStr} value={pkgIdStr}>
-                          {p.packageName} — {fmt(p.mrpPrice)}
+                        <option key={`pkg-${pi}`} value={pkgIdStr}>
+                          {p.packageName} — {fmt(displayPrice)}
+                          {discPct > 0 ? ` (${discPct}% off)` : ""}
                         </option>
                       );
                     })}
                   </select>
                 </Field>
               )}
-              {form.bookingType === "diagnostic_home" && (
-                <div
-                  className={`flex items-start gap-2 p-2.5 rounded-xl border ${form.subCoverage?.homeSampleCollectionFree ? "border-success/25 bg-success/5" : "border-info/25 bg-info/5"}`}
-                >
-                  {form.subCoverage?.homeSampleCollectionFree ? (
-                    <>
-                      <ShieldCheck
-                        size={11}
-                        className="text-success flex-shrink-0"
-                      />
-                      <p
-                        className="text-[10px] text-success font-bold"
-                        style={PP}
-                      >
-                        Home collection fee waived — included in your plan
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <Info size={11} className="text-info flex-shrink-0" />
-                      <p
-                        className="text-[10px] text-info font-semibold"
-                        style={PP}
-                      >
-                        Home collection fee:{" "}
-                        {fmt(labDetail.homeCollectionFee || 0)}
-                      </p>
-                    </>
-                  )}
-                </div>
-              )}
+
               <Field label="Report Delivery Mode">
                 <Sel
                   value={form.reportDeliveryMode || "Digital (App)"}
@@ -2878,8 +2837,7 @@ function StepProvider({
                         !notAvailable && set("consultationType", value)
                       }
                       disabled={notAvailable}
-                      className={`flex flex-col items-center gap-1 py-2 px-1 rounded-xl border-2 transition-all text-center relative
-                        ${on ? "border-primary bg-primary/10 text-primary" : notAvailable ? "border-base-300 bg-base-100 opacity-40 cursor-not-allowed" : "border-base-300 bg-base-200 text-base-content"}`}
+                      className={`flex flex-col items-center gap-1 py-2 px-1 rounded-xl border-2 transition-all text-center relative ${on ? "border-primary bg-primary/10 text-primary" : notAvailable ? "border-base-300 bg-base-100 opacity-40 cursor-not-allowed" : "border-base-300 bg-base-200 text-base-content"}`}
                       style={PP}
                     >
                       <Icon size={13} />
@@ -3199,8 +3157,7 @@ function StepSchedule({
             key={h}
             type="button"
             onClick={() => onSelect(h)}
-            className={`flex flex-col items-center gap-0.5 py-2.5 px-1 rounded-xl border-2 transition-all
-              ${on ? (isQuotaTier || caFreeViaSub ? "border-success bg-success/10 text-success" : "border-warning bg-warning/10 text-warning") : "border-base-300 bg-base-200 text-base-content"}`}
+            className={`flex flex-col items-center gap-0.5 py-2.5 px-1 rounded-xl border-2 transition-all ${on ? (isQuotaTier || caFreeViaSub ? "border-success bg-success/10 text-success" : "border-warning bg-warning/10 text-warning") : "border-base-300 bg-base-200 text-base-content"}`}
           >
             <span
               className="text-[10px] font-black text-center leading-tight"
@@ -3250,12 +3207,10 @@ function StepSchedule({
           Set your preferred date, time, and locations.
         </p>
       </div>
-
       <SubCoverageBanner
         subCoverage={form.subCoverage}
         consultationType={form.consultationType}
       />
-
       <SCard
         title="Appointment Date & Time"
         icon={Calendar}
@@ -3458,9 +3413,13 @@ function StepSchedule({
                     <FareRow
                       label="Care Assistant"
                       value={
-                        caResolved.isCustomPlan || caResolved.serverResolved
-                          ? "Custom plan rate"
-                          : fmt(caTier?.price || 0)
+                        caResolved.isFree
+                          ? "FREE"
+                          : caResolved.fee > 0
+                            ? fmt(caResolved.fee)
+                            : caResolved.serverResolved
+                              ? "Confirmed at booking"
+                              : fmt(caTier?.price || 0)
                       }
                       note={`${form.durationHours || caTiers[0]?.hours || 4} hrs`}
                       isFree={caResolved.isFree}
@@ -3834,6 +3793,7 @@ function StepPayment({
   caTiers,
   walletBalance,
   walletData,
+  labDetail,
 }) {
   const bt = BOOKING_TYPES.find((b) => b.value === form.bookingType);
 
@@ -3854,11 +3814,20 @@ function StepPayment({
   const homeCollectionFree =
     form.subCoverage?.homeSampleCollectionFree === true;
 
-  // Diagnostic fee from computed state (set by StepProvider useEffect)
-  const rawDiagFee = hasDiag ? form.estimatedDiagFee || 0 : 0;
-  // diagDiscountPct is already applied inside estimatedDiagFee, so rawDiagFee is already post-discount
-  const diagFee = rawDiagFee;
+  // FIX: diagFee now always comes from computed estimatedDiagFee (post-discount)
+  const diagFee = hasDiag ? form.estimatedDiagFee || 0 : 0;
   const diagGstAmt = hasDiag ? +(diagFee * 0.05).toFixed(2) : 0;
+
+  // Home collection fee: free if sub covers it AND visits remaining, else lab's fee
+  const rawHomeColFee = labDetail?.homeCollectionFee ?? 0;
+  const homeColFree = homeCollectionFree; // already computed above from subCoverage
+  const homeColFeeToCharge =
+    form.bookingType === "diagnostic_home"
+      ? homeColFree
+        ? 0
+        : rawHomeColFee
+      : 0;
+  const homeColGstAmt = +(homeColFeeToCharge * 0.05).toFixed(2);
 
   const consultGstRate = form.bookingType === "doctor_online" ? 0.05 : 0.0;
   const transportGstRate = 0.05;
@@ -3873,11 +3842,18 @@ function StepPayment({
   const caGstAmt =
     bt?.needsCare && !caResolved.isFree ? +(caFee * caGstRate).toFixed(2) : 0;
 
-  const subtotal = consultFee + transportFee + caFee + diagFee;
-  const totalGst = consultGstAmt + transportGstAmt + caGstAmt + diagGstAmt;
+  const subtotal =
+    consultFee + transportFee + caFee + diagFee + homeColFeeToCharge;
+  const totalGst =
+    consultGstAmt + transportGstAmt + caGstAmt + diagGstAmt + homeColGstAmt;
   const estimatedTotal = +(subtotal + totalGst).toFixed(2);
+  // FIX: hasKnownTotal — show total only when tests selected or other service components present
   const hasKnownTotal =
-    subtotal > 0 || consultResolved.isFree || caResolved.isFree || hasDiag;
+    subtotal > 0 ||
+    consultResolved.isFree ||
+    caResolved.isFree ||
+    (hasDiag &&
+      (form.selectedTests?.length > 0 || form.selectedPackages?.length > 0));
   const consultTypeLabel =
     CONSULT_TYPES.find((c) => c.value === form.consultationType)?.label ||
     "In-Person";
@@ -3894,13 +3870,11 @@ function StepPayment({
           Review all charges before confirming.
         </p>
       </div>
-
       <SubCoverageBanner
         subCoverage={form.subCoverage}
         consultationType={form.consultationType}
       />
       {hasDiag && <DiagSubBanner subCoverage={form.subCoverage} />}
-
       <SCard title="Fare Breakdown" icon={Receipt} accent="var(--primary)">
         {bt?.needsDoctor && (
           <>
@@ -3981,9 +3955,13 @@ function StepPayment({
             <FareRow
               label="Care Assistant Fee"
               value={
-                caResolved.isCustomPlan || caResolved.serverResolved
-                  ? "Confirmed at booking"
-                  : fmt(caFee)
+                caResolved.isFree
+                  ? "FREE"
+                  : caResolved.fee > 0
+                    ? fmt(caResolved.fee)
+                    : caResolved.serverResolved
+                      ? "Confirmed at booking"
+                      : fmt(caTier?.price || 0)
               }
               note={
                 caTier
@@ -3993,30 +3971,29 @@ function StepPayment({
               isFree={caResolved.isFree}
               freeReason={caResolved.reason}
             />
-            {!caResolved.isFree &&
-              !caResolved.isCustomPlan &&
-              !caResolved.serverResolved &&
-              caFee > 0 && (
-                <FareRow
-                  label="GST on Care Assistant (18%)"
-                  value={fmt(caGstAmt)}
-                  sub
-                />
-              )}
+            {!caResolved.isFree && caGstAmt > 0 && (
+              <FareRow
+                label="GST on Care Assistant (18%)"
+                value={fmt(caGstAmt)}
+                sub
+              />
+            )}
           </>
         )}
         {hasDiag && (
           <>
             <div className="border-t border-base-300/40 pt-1" />
+            {/* FIX: show actual price when diagFee > 0, "No tests selected" when none chosen, never "Calculating..." */}
             <FareRow
               label="Diagnostic Tests / Packages"
-            value={
-  diagFee > 0 
-    ? fmt(diagFee) 
-    : (form.selectedTests?.length || form.selectedPackages?.length) 
-      ? "Calculating…"
-      : "No tests selected"
-}
+              value={
+                diagFee > 0
+                  ? fmt(diagFee)
+                  : form.selectedTests?.length > 0 ||
+                      form.selectedPackages?.length > 0
+                    ? fmt(0)
+                    : "No tests selected"
+              }
               note={`${(form.selectedTests?.length || 0) + (form.selectedPackages?.length || 0)} item(s) selected`}
             />
             {diagDiscountPct > 0 && diagFee > 0 && (
@@ -4038,12 +4015,33 @@ function StepPayment({
           </>
         )}
         {form.bookingType === "diagnostic_home" && (
+          // REPLACE WITH:
           <FareRow
             label="Home Collection Fee"
-            value={homeCollectionFree ? "WAIVED" : "Lab-dependent"}
+            value={
+              homeCollectionFree
+                ? "WAIVED"
+                : labDetail?.homeCollectionFee != null
+                  ? fmt(labDetail.homeCollectionFee)
+                  : "Lab-dependent"
+            }
+            note={
+              !homeCollectionFree && labDetail?.homeCollectionFee != null
+                ? form.subCoverage?.homeCollectionIncluded &&
+                  (form.subCoverage?.homeCollectionRemaining ?? 0) <= 0
+                  ? "Quota exhausted — fee applies"
+                  : "Charged by lab for technician visit"
+                : undefined
+            }
             sub={!homeCollectionFree}
             isFree={homeCollectionFree}
-            freeReason="Included in your subscription plan"
+            freeReason={
+              homeCollectionFree
+                ? form.subCoverage?.homeCollectionUnlimited
+                  ? "Unlimited home collection — included in plan"
+                  : `${form.subCoverage?.homeCollectionRemaining ?? ""} visit(s) remaining this month`
+                : undefined
+            }
           />
         )}
         {hasKnownTotal &&
@@ -4218,10 +4216,10 @@ function StepReview({
   pendingPaymentBooking,
   handleRetryPayment,
   isRetryingPayment,
+  labDetail,
 }) {
   const bt = BOOKING_TYPES.find((b) => b.value === form.bookingType);
   const Icon = bt?.icon || Stethoscope;
-
   const durHours = form.durationHours || (caTiers[0]?.hours ?? 4);
   const caTier = caTiers.find((t) => t.hours === durHours) || caTiers[0];
 
@@ -4238,6 +4236,16 @@ function StepReview({
   const diagFee = bt?.isDiag ? form.estimatedDiagFee || 0 : 0;
   const diagGstAmt = bt?.isDiag ? +(diagFee * 0.05).toFixed(2) : 0;
 
+  const rawHomeColFee2 = labDetail?.homeCollectionFee ?? 0;
+  const homeColFree2 = form.subCoverage?.homeSampleCollectionFree === true;
+  const homeColFeeToCharge2 =
+    form.bookingType === "diagnostic_home"
+      ? homeColFree2
+        ? 0
+        : rawHomeColFee2
+      : 0;
+  const homeColGstAmt2 = +(homeColFeeToCharge2 * 0.05).toFixed(2);
+
   const consultGstRate = form.bookingType === "doctor_online" ? 0.05 : 0.0;
   const transportGstRate = 0.05;
   const caGstRate = 0.18;
@@ -4251,17 +4259,19 @@ function StepReview({
   const caGstAmt =
     bt?.needsCare && !caResolved.isFree ? +(caFee * caGstRate).toFixed(2) : 0;
 
-  const subtotal = consultFee + transportFee + caFee + diagFee;
-  const totalGst = consultGstAmt + transportGstAmt + caGstAmt + diagGstAmt;
+  const subtotal =
+    consultFee + transportFee + caFee + diagFee + homeColFeeToCharge2;
+  const totalGst =
+    consultGstAmt + transportGstAmt + caGstAmt + diagGstAmt + homeColGstAmt2;
   const total = +(subtotal + totalGst).toFixed(2);
-
   const consultTypeLabel =
     CONSULT_TYPES.find((c) => c.value === form.consultationType)?.label ||
     "In-Person";
-
-  const walletAvailable = walletBalance ?? 0;
+  const walletAvailable = Math.max(0, walletBalance ?? 0);
   const walletPays =
-    form.paymentMethod === "Wallet" ? Math.min(walletAvailable, total) : 0;
+    form.paymentMethod === "Wallet" && total > 0
+      ? Math.min(walletAvailable, total)
+      : 0;
   const razorpayPortion =
     form.paymentMethod === "Wallet" ? Math.max(0, total - walletPays) : 0;
 
@@ -4332,7 +4342,6 @@ function StepReview({
           Double-check everything before confirming.
         </p>
       </div>
-
       <div
         className="flex items-center gap-2.5 p-3 rounded-2xl"
         style={{ background: bt?.bg || "var(--base-200)" }}
@@ -4358,7 +4367,6 @@ function StepReview({
           </p>
         </div>
       </div>
-
       <div className="rounded-2xl border border-base-300">
         {summaryItems.map((item, i) => (
           <div
@@ -4386,7 +4394,6 @@ function StepReview({
           </div>
         ))}
       </div>
-
       <div className="rounded-2xl border border-primary/20 bg-primary/5">
         <div className="px-3 py-2 border-b border-primary/15">
           <p
@@ -4462,11 +4469,13 @@ function StepReview({
               <FareRow
                 label="Care Assistant"
                 value={
-                  caResolved.serverResolved
-                    ? "Confirmed at booking"
-                    : caResolved.isCustomPlan || caResolved.fee > 0
+                  caResolved.isFree
+                    ? "FREE"
+                    : caResolved.fee > 0
                       ? fmt(caResolved.fee)
-                      : "FREE"
+                      : caResolved.serverResolved
+                        ? "Confirmed at booking"
+                        : fmt(caTier?.price || 0)
                 }
                 note={
                   caTier
@@ -4544,7 +4553,6 @@ function StepReview({
           )}
         </div>
       </div>
-
       {form.paymentMethod === "Razorpay" && total > 0 && (
         <div className="flex items-start gap-2 p-3 rounded-xl border border-primary/20 bg-primary/5">
           <CreditCard size={13} className="text-primary flex-shrink-0 mt-0.5" />
@@ -4557,7 +4565,6 @@ function StepReview({
           </p>
         </div>
       )}
-
       {form.paymentMethod === "Razorpay" &&
         total === 0 &&
         !caResolved.isCustomPlan &&
@@ -4576,7 +4583,6 @@ function StepReview({
             </p>
           </div>
         )}
-
       {error && (
         <motion.div
           initial={{ opacity: 0, y: 6 }}
@@ -4589,7 +4595,6 @@ function StepReview({
           </p>
         </motion.div>
       )}
-
       {isLoading && (
         <div className="flex items-center gap-3 p-3 rounded-xl border border-primary/20 bg-primary/5">
           <Loader2
@@ -4606,7 +4611,6 @@ function StepReview({
           </div>
         </div>
       )}
-
       {paymentState === "failed" && pendingPaymentBooking && (
         <motion.div
           initial={{ opacity: 0, y: 6 }}
@@ -4637,14 +4641,51 @@ function StepReview({
           </div>
         </motion.div>
       )}
-
-      <p
-        className="text-[9px] text-base-content/30 text-center leading-relaxed"
-        style={PP}
-      >
-        By confirming, you agree to Likeson.in Terms of Service and Cancellation
-        Policy.
-      </p>
+      <div className="space-y-1 text-center">
+        <p
+          className="text-[9px] text-base-content/30 leading-relaxed"
+          style={PP}
+        >
+          By confirming, you agree to Likeson.in{" "}
+          <a
+            href="/terms"
+            className="underline hover:text-primary transition-colors"
+          >
+            Terms of Service
+          </a>{" "}
+          and{" "}
+          <a
+            href="/cancellation-policy"
+            className="underline hover:text-primary transition-colors"
+          >
+            Cancellation Policy
+          </a>
+          .
+        </p>
+        <p
+          className="text-[9px] text-base-content/25 leading-relaxed"
+          style={PP}
+        >
+          Likeson Healthcare Pvt. Ltd. · Vijayawada, Andhra Pradesh · CIN:
+          U85100AP2024PTC001 ·{" "}
+          <a
+            href="mailto:support@likeson.in"
+            className="underline hover:text-primary transition-colors"
+          >
+            support@likeson.in
+          </a>{" "}
+          ·{" "}
+          <a
+            href="tel:+918008000000"
+            className="underline hover:text-primary transition-colors"
+          >
+            +91 80080 00000
+          </a>
+        </p>
+        <p className="text-[9px] text-base-content/20" style={PP}>
+          Payments secured by Razorpay · Data protected under IT Act 2000
+        </p>
+      </div>
     </div>
   );
 }
@@ -4755,6 +4796,24 @@ function BookingSuccess({ data, onReset, router }) {
           )}
         </div>
       </div>
+      <div className="flex items-center gap-2 px-4 py-2 rounded-xl border border-base-300 bg-base-200/50 w-full max-w-xs">
+        <img
+          src="https://ik.imagekit.io/4wja0s7p9/%20favicon.ico"
+          alt="Likeson"
+          className="w-5 h-5 rounded object-contain flex-shrink-0"
+        />
+        <div className="min-w-0">
+          <p
+            className="text-[10px] font-black text-base-content/60 truncate"
+            style={PP}
+          >
+            Likeson Healthcare · Vijayawada
+          </p>
+          <p className="text-[9px] text-base-content/35" style={PP}>
+            support@likeson.in · +91 80080 00000
+          </p>
+        </div>
+      </div>
       <div className="flex gap-2 w-full max-w-xs">
         {bookingId && (
           <button
@@ -4820,6 +4879,7 @@ const INIT = {
   paymentMethod: "Razorpay",
   couponCode: "",
   subCoverage: null,
+  estimatedDiagFee: 0,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4830,7 +4890,7 @@ export default function BookingSystem() {
   const dispatch = useDispatch();
   const router = useRouter();
   const searchParams = useSearchParams();
-  // ADD after subBenefitCareAssistant selector
+
   const subBenefitLabs = useSelector(selectSubBenefitLabs);
   const subLabsDiscountPercent = useSelector(selectSubLabsDiscountPercent);
   const subHomeCollection = useSelector(
@@ -4872,7 +4932,6 @@ export default function BookingSystem() {
   const walletBalance = useSelector(selectWalletBalance);
 
   const stepContentRef = useRef(null);
-
   const [currentStepId, setCurrentStepId] = useState("service");
   const [direction, setDirection] = useState(1);
   const [visitedIds, setVisitedIds] = useState(["service"]);
@@ -4917,7 +4976,7 @@ export default function BookingSystem() {
   useEffect(() => {
     dispatch(fetchSubscriptionBenefitConsultations());
     dispatch(fetchSubscriptionBenefitCareAssistant());
-    dispatch(fetchSubscriptionBenefitLabs()); // ← ADD
+    dispatch(fetchSubscriptionBenefitLabs());
     dispatch(
       checkConsultationCoverage({
         consultationType: form.consultationType || "inPerson",
@@ -4948,6 +5007,7 @@ export default function BookingSystem() {
         paymentMethod: p.paymentMethod || "Razorpay",
         bookingType: btValue,
         durationHours: null,
+        estimatedDiagFee: 0,
       }));
       setErrors({});
       dispatch(resetHospitals());
@@ -4973,7 +5033,6 @@ export default function BookingSystem() {
       const care = subBenefitCareAssistant?.careAssistant ?? null;
       const coverage = consultationCoverage ?? {};
 
-      // ── Consultation ────────────────────────────────────────────────────────
       const consultationsRemaining = consult?.unlimited
         ? null
         : (consult?.remaining ?? coverage.remaining ?? 0);
@@ -4981,7 +5040,6 @@ export default function BookingSystem() {
         coverage.isFree === true || coverage.consultationFree === true
       );
 
-      // ── Care Assistant ──────────────────────────────────────────────────────
       const caRemaining = care?.unlimited
         ? null
         : (care?.remaining ?? coverage.careAssistantRemaining ?? 0);
@@ -4998,7 +5056,6 @@ export default function BookingSystem() {
         !care?.isDedicated &&
         (caRemaining === null || caRemaining > 0);
 
-      // ── Diagnostics / Labs (NEW) ────────────────────────────────────────────
       const labsBenefit = subBenefitLabs ?? null;
       const diagDiscount =
         labsBenefit?.labs?.discountPercent ??
@@ -5010,7 +5067,7 @@ export default function BookingSystem() {
         false;
       const homeColUsed = labsBenefit?.homeCollection?.homeVisitsUsed ?? 0;
       const homeColRemaining =
-        labsBenefit?.homeCollection?.homeVisitsRemaining ?? null; // null = unlimited
+        labsBenefit?.homeCollection?.homeVisitsRemaining ?? null;
       const homeColUnlimited =
         labsBenefit?.homeCollection?.homeVisitUnlimited ?? false;
       const homeColLimit = labsBenefit?.homeCollection?.homeVisitLimit ?? null;
@@ -5019,14 +5076,12 @@ export default function BookingSystem() {
         ...p,
         subCoverage: {
           ...(p.subCoverage || {}),
-          // consult
           isFree: consultationFree,
           allowed: coverage.allowed ?? false,
           remaining: consultationsRemaining,
           reason: coverage.reason ?? null,
           consultationFree,
           consultationQuota: coverage.reason ?? null,
-          // care
           careAssistantFree,
           careAssistantAllowed:
             caIncluded &&
@@ -5040,8 +5095,9 @@ export default function BookingSystem() {
             : null,
           careAssistantTierIndex: activeTier?.tierIndex ?? null,
           careAssistantActiveTier: activeTier,
+          careAssistantAllTiers:
+            subBenefitCareAssistant?.careAssistant?.allTiers ?? null,
           isCustomPlan,
-          // diagnostics/labs (NEW)
           diagnosticsDiscountPercent: diagDiscount,
           homeSampleCollectionFree:
             homeColIncluded &&
@@ -5054,7 +5110,6 @@ export default function BookingSystem() {
           homeCollectionIncluded: homeColIncluded,
           labsMessage: labsBenefit?.labs?.message ?? null,
           homeCollectionMessage: labsBenefit?.homeCollection?.message ?? null,
-          // transport
           kmRateSource: p.subCoverage?.kmRateSource ?? null,
           ratePerKm: p.subCoverage?.ratePerKm ?? null,
         },
@@ -5107,53 +5162,61 @@ export default function BookingSystem() {
     }));
   }, [transportEstimate]);
 
-  // ADD in BookingSystem — after the transportEstimate useEffect
-useEffect(() => {
-  const bt = BOOKING_TYPES.find((b) => b.value === form.bookingType);
-  if (!bt?.isDiag) { 
-    if (form.estimatedDiagFee !== 0) set("estimatedDiagFee", 0); 
-    return; 
-  }
-  if (!labDetail) { 
-    if (form.estimatedDiagFee !== 0) set("estimatedDiagFee", 0); 
-    return; 
-  }
-  const hasSelections = form.selectedTests?.length || form.selectedPackages?.length;
-  if (!hasSelections) { 
-    if (form.estimatedDiagFee !== 0) set("estimatedDiagFee", 0); 
-    return; 
-  }
-
-  const discPct = form.subCoverage?.diagnosticsDiscountPercent || 0;
-  let total = 0;
-
-  for (const testId of (form.selectedTests || [])) {
-      if (!testId) continue; // ADD THIS LINE
-    const t = labDetail.labTests?.find(
-      lt => (lt._id?.toString?.() ?? String(lt._id ?? "")) === String(testId ?? "")
-    );
-    if (t) {
-      const base = t.discountedPrice ?? t.mrpPrice ?? 0;
-      total += discPct > 0 ? +(base * (1 - discPct / 100)) : base;
+  // FIX: estimatedDiagFee calculation — use module-level normalizeId, guard empty IDs
+  useEffect(() => {
+    const bt = BOOKING_TYPES.find((b) => b.value === form.bookingType);
+    if (!bt?.isDiag || !labDetail) {
+      if (form.estimatedDiagFee !== 0) set("estimatedDiagFee", 0);
+      return;
     }
-  }
+    const hasSelections =
+      form.selectedTests?.length || form.selectedPackages?.length;
+    if (!hasSelections) {
+      if (form.estimatedDiagFee !== 0) set("estimatedDiagFee", 0);
+      return;
+    }
+    const discPct = form.subCoverage?.diagnosticsDiscountPercent || 0;
+    let total = 0;
 
-  for (const pkgId of (form.selectedPackages || [])) {
-    const p = labDetail.labPackages?.find(
-      lp => (lp._id?.toString?.() ?? String(lp._id ?? "")) === String(pkgId ?? "")
-    );
-    if (p) total += p.mrpPrice ?? 0;
-  }
+    for (const testId of form.selectedTests || []) {
+      if (!testId) continue;
+      // FIX: use module-level normalizeId
+      const t = labDetail.labTests?.find((lt, idx) => {
+        const id = lt._id
+          ? normalizeId(lt._id)
+          : `testcode-${lt.testCode || idx}`;
+        return id === testId;
+      });
+      if (t) {
+        const base = t.discountedPrice ?? t.mrpPrice ?? 0;
+        total += discPct > 0 ? +(base * (1 - discPct / 100)) : base;
+      }
+    }
 
-  const computed = +total.toFixed(2);
-  if (computed !== form.estimatedDiagFee) set("estimatedDiagFee", computed);
-}, [
-  form.bookingType,
-  form.selectedTests,
-  form.selectedPackages,
-  form.subCoverage?.diagnosticsDiscountPercent,
-  labDetail,
-]);
+    // REPLACE WITH:
+    for (const pkgId of (form.selectedPackages || []).filter(Boolean)) {
+      const p = labDetail.labPackages?.find((lp, pidx) => {
+        const id = lp._id
+          ? (lp._id?.toString?.() ?? String(lp._id))
+          : `pkgcode-${lp.packageCode || pidx}`;
+        return id === pkgId;
+      });
+      if (p) {
+        const base = p.mrpPrice ?? 0;
+        // Apply sub discount to packages same as tests
+        total += discPct > 0 ? +(base * (1 - discPct / 100)) : base;
+      }
+    }
+
+    const computed = +total.toFixed(2);
+    if (computed !== form.estimatedDiagFee) set("estimatedDiagFee", computed);
+  }, [
+    form.bookingType,
+    form.selectedTests,
+    form.selectedPackages,
+    form.subCoverage?.diagnosticsDiscountPercent,
+    labDetail,
+  ]);
 
   useEffect(() => {
     if (!form.bookingType) return;
@@ -5235,6 +5298,7 @@ useEffect(() => {
           subCoverage: {
             ...(p.subCoverage || {}),
             consultationFree: sc.consultationFree ?? false,
+            careAssistantAllTiers: sc.careAssistantAllTiers ?? null,
             consultationQuota: sc.consultationQuota || sc.quotaInfo || null,
             careAssistantFree: sc.careAssistantFree ?? false,
             careAssistantQuota:
@@ -5282,8 +5346,15 @@ useEffect(() => {
     [dispatch, form.bookingType],
   );
   const onLoadLabDetail = useCallback(
-    (labId) => dispatch(fetchLabById({ labId })),
-    [dispatch],
+    async (labId) => {
+      const result = await dispatch(fetchLabById({ labId }));
+      // If payload wraps in {data: lab}, store may need unwrapping
+      // This is handled by the slice — no change needed here
+      // But set labName from result if available
+      const lab = result?.payload?.data || result?.payload;
+      if (lab?.labName) set("labName", lab.labName);
+    },
+    [dispatch, set],
   );
   const onCheckHospAvail = useCallback(() => {
     if (form.hospitalId && form.scheduledAt)
@@ -5370,11 +5441,17 @@ useEffect(() => {
     bloodGroup: form.patientBloodGroup || undefined,
     weight: form.patientWeight || undefined,
   });
+  const toISOSafe = (dtLocal) => {
+    if (!dtLocal) return undefined;
+    const raw = String(dtLocal).trim();
+    if (raw.includes("+") || raw.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(raw))
+      return new Date(raw).toISOString();
+    const normalized = raw.length === 16 ? `${raw}:00` : raw;
+    return new Date(normalized).toISOString();
+  };
   const mkCommon = () => ({
     patientInfo: mkPatient(),
-     scheduledAt: form.scheduledAt 
-    ? new Date(form.scheduledAt).toISOString()  // ← THIS converts local to UTC ISO properly
-    : undefined,
+    scheduledAt: toISOSafe(form.scheduledAt),
     paymentMethod: form.paymentMethod,
     couponCode: form.couponCode || undefined,
     slotId: form.slotId || undefined,
@@ -5397,6 +5474,7 @@ useEffect(() => {
           !form.selectedPackages?.length
         )
           e.selectedTests = "Select at least one test or package";
+
         if (bt?.needsDoctor && !form.doctorId)
           e.doctorId = "Select a doctor to continue";
         if (
@@ -5436,7 +5514,7 @@ useEffect(() => {
       setErrors(e);
       return Object.keys(e).length === 0;
     },
-    [form, followUpCheck],
+    [form, followUpCheck, labDetail],
   );
 
   // ─── SUBMIT ───────────────────────────────────────────────────────────────
@@ -5489,8 +5567,22 @@ useEffect(() => {
           createDiagnosticCenter({
             ...common,
             labId: form.labId,
-            tests: (form.selectedTests || []).map(String).filter(Boolean),
-packages: (form.selectedPackages || []).map(String).filter(Boolean),
+            tests: (form.selectedTests || [])
+              .map(String)
+              .filter(
+                (id) =>
+                  id &&
+                  !id.startsWith("test-idx-") &&
+                  !id.startsWith("pkg-idx-"),
+              ),
+            packages: (form.selectedPackages || [])
+              .map(String)
+              .filter(
+                (id) =>
+                  id &&
+                  !id.startsWith("pkg-idx-") &&
+                  !id.startsWith("test-idx-"),
+              ),
             reportDeliveryMode: form.reportDeliveryMode,
           }),
         ),
@@ -5499,8 +5591,22 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
           createDiagnosticHome({
             ...common,
             labId: form.labId,
-            tests: (form.selectedTests || []).map(String).filter(Boolean),
-packages: (form.selectedPackages || []).map(String).filter(Boolean),
+            tests: (form.selectedTests || [])
+              .map(String)
+              .filter(
+                (id) =>
+                  id &&
+                  !id.startsWith("test-idx-") &&
+                  !id.startsWith("pkg-idx-"),
+              ),
+            packages: (form.selectedPackages || [])
+              .map(String)
+              .filter(
+                (id) =>
+                  id &&
+                  !id.startsWith("pkg-idx-") &&
+                  !id.startsWith("test-idx-"),
+              ),
             patientLocation: mkLoc(form.patientLocation),
             reportDeliveryMode: form.reportDeliveryMode,
           }),
@@ -5540,8 +5646,24 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
     const fareBreakdown = bookingData.fareBreakdown;
     const totalAmount = fareBreakdown?.totalAmount ?? 0;
 
-    // ── RAZORPAY FULL PAYMENT ──────────────────────────────────────────────────
     if (form.paymentMethod === "Razorpay") {
+      if (!razorpayOrder && totalAmount > 0) {
+        setPaymentState("idle");
+        setPaymentError(
+          "Payment gateway unavailable. Booking was not created. Please try again or choose Wallet / Cash.",
+        );
+        if (targetBookingId) {
+          try {
+            await dispatch(
+              deleteFailedBooking({
+                bookingId: targetBookingId,
+                walletApplied: 0,
+              }),
+            );
+          } catch {}
+        }
+        return;
+      }
       if (razorpayOrder && totalAmount > 0) {
         setPaymentState("opening");
         setPaymentError(null);
@@ -5550,7 +5672,6 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
           razorpayOrder,
           targetBookingId,
         });
-
         await openRazorpay({
           order: razorpayOrder,
           bookingId: targetBookingId,
@@ -5558,11 +5679,14 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
           description: `${form.bookingType?.replace(/_/g, " ")} booking`,
           prefill: {
             name: form.patientName || "",
-            contact: form.patientPhone || "",
+            contact: form.patientPhone
+              ? `+91${form.patientPhone.replace(/\D/g, "").slice(-10)}`
+              : "",
           },
           onSuccess: () => {
             setPaymentState("done");
             setPendingPaymentBooking(null);
+            toast.success("Payment verified! Booking confirmed.");
             dispatch(
               checkConsultationCoverage({
                 consultationType: form.consultationType || "inPerson",
@@ -5577,7 +5701,6 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
             setPaymentState("failed");
             setIsRetryingPayment(false);
             setPendingPaymentBooking(null);
-            // Pure Razorpay — no wallet applied, just hard delete
             if (targetBookingId) {
               try {
                 await dispatch(
@@ -5597,8 +5720,6 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
         });
         return;
       }
-
-      // Zero amount — sub covers full, no Razorpay needed
       setPendingPaymentBooking(null);
       dispatch(
         checkConsultationCoverage({
@@ -5612,13 +5733,10 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
       return;
     }
 
-    // ── WALLET PAYMENT ─────────────────────────────────────────────────────────
     if (form.paymentMethod === "Wallet") {
       if (walletSplit?.needsRazorpay && razorpayOrder) {
-        // Partial wallet — Razorpay opens for remainder
         const walletApplied = walletSplit.walletApplied || 0;
         const razorpayPortion = walletSplit.razorpayPortion || 0;
-
         setPaymentState("opening");
         setPaymentError(null);
         setPendingPaymentBooking({
@@ -5628,7 +5746,6 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
           isWalletSplit: true,
           walletSplit,
         });
-
         await openRazorpay({
           order: razorpayOrder,
           bookingId: targetBookingId,
@@ -5636,7 +5753,9 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
           description: `${form.bookingType?.replace(/_/g, " ")} booking (₹${razorpayPortion} remaining after wallet)`,
           prefill: {
             name: form.patientName || "",
-            contact: form.patientPhone || "",
+            contact: form.patientPhone
+              ? `+91${form.patientPhone.replace(/\D/g, "").slice(-10)}`
+              : "",
           },
           onSuccess: () => {
             setPaymentState("done");
@@ -5649,14 +5768,13 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
             dispatch(fetchSubscriptionBenefitConsultations());
             dispatch(fetchSubscriptionBenefitCareAssistant());
             dispatch(fetchSubscriptionBenefitLabs());
-            dispatch(fetchWalletDetails()); // refresh wallet after partial deduction
+            dispatch(fetchWalletDetails());
             setSuccess(true);
           },
           onFailure: async (msg) => {
             setPaymentState("failed");
             setIsRetryingPayment(false);
             setPendingPaymentBooking(null);
-            // Auto-refund wallet portion + hard delete booking via Redux action
             if (targetBookingId) {
               try {
                 await dispatch(
@@ -5672,7 +5790,6 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
                 );
               }
             }
-            // Refresh wallet balance after refund
             dispatch(fetchWalletDetails());
             setPaymentError(
               walletApplied > 0
@@ -5683,8 +5800,6 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
         });
         return;
       }
-
-      // Wallet fully covers — no Razorpay needed, booking already confirmed server-side
       setPendingPaymentBooking(null);
       dispatch(
         checkConsultationCoverage({
@@ -5694,12 +5809,11 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
       dispatch(fetchSubscriptionBenefitConsultations());
       dispatch(fetchSubscriptionBenefitCareAssistant());
       dispatch(fetchSubscriptionBenefitLabs());
-      dispatch(fetchWalletDetails()); // refresh wallet balance
+      dispatch(fetchWalletDetails());
       setSuccess(true);
       return;
     }
 
-    // ── CASH PAYMENT ───────────────────────────────────────────────────────────
     if (form.paymentMethod === "Cash") {
       setPendingPaymentBooking(null);
       dispatch(
@@ -5711,7 +5825,6 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
       return;
     }
 
-    // Fallback
     setSuccess(true);
   }, [dispatch, form]);
 
@@ -5749,21 +5862,18 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
         const walletApplied = walletSplit?.walletApplied || 0;
         if (targetBookingId) {
           try {
-            await fetch(
-              `${process.env.NEXT_PUBLIC_API_URL}/bookings/delete-failed-booking`,
-              {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  Authorization: `Bearer ${localStorage.getItem("token") || ""}`,
-                },
-                body: JSON.stringify({
-                  bookingId: targetBookingId,
-                  walletApplied,
-                }),
-              },
+            await dispatch(
+              deleteFailedBooking({
+                bookingId: targetBookingId,
+                walletApplied,
+              }),
             );
-          } catch {}
+          } catch (e) {
+            console.error(
+              "[handleRetryPayment] deleteFailedBooking failed:",
+              e,
+            );
+          }
         }
         setPaymentError(
           walletApplied > 0
@@ -5833,13 +5943,14 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
     setSuccess(false);
     setPaymentState("idle");
     setPaymentError(null);
-    dispatch(resetCreateBooking());
+    setPendingPaymentBooking(null);
     dispatch(resetHospitals());
     dispatch(resetDoctorsByHospital());
     dispatch(resetHospitalAvailability());
     dispatch(resetDoctorAvailability());
     dispatch(resetTransportEstimate());
     dispatch(resetFollowUpCheck());
+    dispatch(resetCreateBooking());
   }, [dispatch]);
 
   const isSubmitting = createLoading || paymentState === "opening";
@@ -5917,7 +6028,8 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
         followUpCheck={followUpCheck}
         caTiers={caTiers}
         walletBalance={walletBalance}
-        walletData={walletData} // ← ADD THIS
+        walletData={walletData}
+        labDetail={labDetail}
       />
     ),
     confirm: (
@@ -5933,6 +6045,7 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
         pendingPaymentBooking={pendingPaymentBooking}
         handleRetryPayment={handleRetryPayment}
         isRetryingPayment={isRetryingPayment}
+        labDetail={labDetail}
       />
     ),
   };
@@ -5944,12 +6057,28 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
     >
       <div className="max-w-xl mx-auto w-full">
         <div className="text-center mb-4">
-          <div
-            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest mb-2 border bg-primary/5 text-primary border-primary/20"
-            style={PP}
-          >
-            <HeartPulse size={9} />
-            Likeson.in — Book Care
+          <div className="flex flex-col items-center gap-2 mb-2">
+            <img
+              src="https://ik.imagekit.io/4wja0s7p9/%20favicon.ico"
+              alt="Likeson.in"
+              className="w-8 h-8 rounded-lg object-contain"
+              onError={(e) => {
+                e.currentTarget.style.display = "none";
+              }}
+            />
+            <div
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border bg-primary/5 text-primary border-primary/20"
+              style={PP}
+            >
+              <HeartPulse size={9} />
+              Likeson.in — Healthcare Platform, Vijayawada
+            </div>
+            <p
+              className="text-[9px] text-base-content/35 font-semibold"
+              style={PP}
+            >
+              ABDM-compliant · Verified Doctors · Secure Payments
+            </p>
           </div>
           {!success && (
             <h1 className="text-xl font-black tracking-tight" style={PP}>
@@ -5959,11 +6088,6 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
           )}
         </div>
 
-        {/*
-          OUTER CARD — overflow-visible so the step bar tooltip
-          (which pops ABOVE the bar) is not clipped by border-radius.
-          We set overflow-visible on the card itself.
-        */}
         <div
           ref={stepContentRef}
           className="rounded-2xl border-2 border-base-300 shadow-sm"
@@ -5977,12 +6101,6 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
             />
           ) : (
             <>
-              {/*
-                STEP BAR WRAPPER — overflow-visible is critical here.
-                Without it, the tooltip (position:absolute, bottom:100%)
-                gets clipped by the parent's overflow:hidden.
-                We remove overflow:hidden from this header section.
-              */}
               <div
                 className="bg-base-200 border-b border-base-300"
                 style={{
@@ -5998,7 +6116,6 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
                   onStepClick={handleStepClick}
                 />
               </div>
-
               <div className="relative" style={{ minHeight: 420 }}>
                 <AnimatePresence custom={direction} mode="wait">
                   <motion.div
@@ -6014,8 +6131,6 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
                   </motion.div>
                 </AnimatePresence>
               </div>
-
-              {/* Bottom nav */}
               <div className="flex items-center justify-between gap-2 px-3 py-3 sm:px-4 sm:py-4 border-t border-base-300 bg-base-200">
                 <motion.button
                   type="button"
@@ -6028,7 +6143,6 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
                   <ChevronLeft size={14} />
                   Back
                 </motion.button>
-
                 <div className="flex flex-col items-center gap-0.5 flex-shrink-0">
                   <p
                     className="text-[9px] font-black uppercase tracking-widest text-base-content/35"
@@ -6052,7 +6166,6 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
                     ))}
                   </div>
                 </div>
-
                 <motion.button
                   type="button"
                   whileTap={{ scale: 0.97 }}
@@ -6066,7 +6179,7 @@ packages: (form.selectedPackages || []).map(String).filter(Boolean),
                 >
                   {isSubmitting ? (
                     <>
-                      <Loader2 size={13} className="animate-spin" />
+                      {<Loader2 size={13} className="animate-spin" />}
                       {paymentState === "opening" ? "Payment…" : "Booking…"}
                     </>
                   ) : isLast ? (

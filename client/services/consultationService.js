@@ -77,3 +77,21 @@ export const triggerRemindersAPI = (cronKey) =>
   API.post("/consultations/cron/reminders", {}, { headers: { "x-cron-key": cronKey } });
 export const triggerExpirePrescriptionsAPI = (cronKey) =>
   API.post("/consultations/cron/expire-prescriptions", {}, { headers: { "x-cron-key": cronKey } });
+
+export const muteParticipantAPI = (id, userId) =>
+  API.post(`/consultations/${id}/participants/${userId}/mute`);
+
+export const unmuteParticipantAPI = (id, userId) =>
+  API.post(`/consultations/${id}/participants/${userId}/unmute`);
+
+export const kickParticipantAPI = (id, userId, reason) =>
+  API.post(`/consultations/${id}/participants/${userId}/kick`, { reason });
+
+export const getConsultationTimerAPI = (id) =>
+  API.get(`/consultations/${id}/timer`);
+
+export const triggerAutoEndAPI = (cronKey) =>
+  API.post("/consultations/cron/auto-end", {}, { headers: { "x-cron-key": cronKey } });
+
+export const triggerTimerReminderAPI = (cronKey) =>
+  API.post("/consultations/cron/timer-reminder", {}, { headers: { "x-cron-key": cronKey } });

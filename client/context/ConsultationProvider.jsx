@@ -59,68 +59,85 @@ export default function ConsultationProvider({
   userId,
 }) {
   const dispatch = useDispatch();
-  const token = useSelector(selectToken);
-  const consultation = useSelector(selectConsultation);
-  const status = useSelector(selectConsultationStatus);
-  const agora = useSelector(selectAgora);
-  const myTokens = useSelector(selectMyTokens);
-  const chatMessages = useSelector(selectChatMessages);
-  const participants = useSelector(selectParticipants);
-  const waitingRoom = useSelector(selectWaitingRoom);
-  const sessionLoading = useSelector(selectLoading('session'));
-  const fetchLoading = useSelector(selectLoading('fetch'));
-  const hasJoinedRef = useRef(false);
+  const token    = useSelector(selectToken);
 
-  // ── Bootstrap consultation data ───────────────────────────────────────────
+  const consultation  = useSelector(selectConsultation);
+  const status        = useSelector(selectConsultationStatus);
+  const agora         = useSelector(selectAgora);
+  const myTokens      = useSelector(selectMyTokens);
+  const chatMessages  = useSelector(selectChatMessages);
+  const participants  = useSelector(selectParticipants);
+  const waitingRoom   = useSelector(selectWaitingRoom);
+  const sessionLoading = useSelector(selectLoading('session'));
+  const fetchLoading   = useSelector(selectLoading('fetch'));
+
+  // Tracks whether REST join was called — reset on leave so re-join works
+  const hasJoinedRef  = useRef(false);
+  // Tracks whether socket was initialised — init only once per mount
+  const socketInitRef = useRef(false);
+  // Tracks whether leave was already dispatched — prevents double-fire
+  const hasLeftRef    = useRef(false);
+
+  // ── Bootstrap consultation data ───────────────────────────────────────
   useEffect(() => {
     if (!consultationId) return;
-
     dispatch(fetchConsultationById(consultationId));
     dispatch(fetchChatHistory(consultationId));
     dispatch(fetchParticipants(consultationId));
     dispatch(fetchWaitingRoomStatus(consultationId));
   }, [consultationId, dispatch]);
 
-  // ── Socket connection ─────────────────────────────────────────────────────
+  // ── Socket — init once, connect when token ready ──────────────────────
   useEffect(() => {
     if (!token || !consultationId) return;
 
-    initConsultationSocket(store);
-    const socket = connectConsultationSocket(token);
+    // Init store binding only once
+    if (!socketInitRef.current) {
+      initConsultationSocket(store);
+      socketInitRef.current = true;
+    }
+
+    connectConsultationSocket(token);
 
     return () => {
       disconnectConsultationSocket();
     };
-  }, [token, consultationId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, consultationId]); // intentional: reconnect if token rotates
 
-  // ── Join consultation (REST + socket) ─────────────────────────────────────
+  // ── handleJoin ────────────────────────────────────────────────────────
   const handleJoin = useCallback(async (deviceInfo = {}) => {
     if (hasJoinedRef.current) return;
     hasJoinedRef.current = true;
+    hasLeftRef.current   = false;
 
     try {
-      // 1. REST join → gets tokens back
+      // 1. REST join
       await dispatch(joinConsultation({ id: consultationId, deviceInfo }));
 
-      // 2. Fetch Agora tokens if not provisioned
+      // 2. Fetch Agora tokens — provision if missing (both roles)
       const result = await dispatch(fetchAgoraTokens(consultationId));
       if (result.error) {
-        // Provision if doctor and tokens missing
-        if (userRole === 'doctor') {
-          await dispatch(provisionAgoraTokens(consultationId));
-        }
+        await dispatch(provisionAgoraTokens(consultationId));
+        // Fetch again after provisioning
+        await dispatch(fetchAgoraTokens(consultationId));
       }
 
-      // 3. Socket join
+      // 3. Emit socket join
       socketJoin(consultationId, deviceInfo);
     } catch (err) {
       console.error('[ConsultationProvider] Join failed:', err);
+      // Reset so caller can retry
       hasJoinedRef.current = false;
     }
-  }, [consultationId, userRole, dispatch]);
+  }, [consultationId, dispatch]);
 
-  // ── Leave consultation ────────────────────────────────────────────────────
+  // ── handleLeave ───────────────────────────────────────────────────────
   const handleLeave = useCallback(async (metrics = {}) => {
+    if (hasLeftRef.current) return;
+    hasLeftRef.current  = true;
+    hasJoinedRef.current = false; // allow re-join if needed
+
     try {
       socketLeave(consultationId, metrics);
       await dispatch(leaveConsultation({ id: consultationId, metrics }));
@@ -129,24 +146,52 @@ export default function ConsultationProvider({
     }
   }, [consultationId, dispatch]);
 
-  // ── Start session (doctor only) ───────────────────────────────────────────
+  // ── handleStart (doctor only) ─────────────────────────────────────────
   const handleStart = useCallback(async () => {
-    await dispatch(startConsultation(consultationId));
+    try {
+      await dispatch(startConsultation(consultationId));
+    } catch (err) {
+      console.error('[ConsultationProvider] Start failed:', err);
+    }
   }, [consultationId, dispatch]);
 
-  // ── End session (doctor only) ─────────────────────────────────────────────
+  // ── handleEnd (doctor only) ───────────────────────────────────────────
   const handleEnd = useCallback(async () => {
-    await dispatch(endConsultation(consultationId));
+    try {
+      await dispatch(endConsultation(consultationId));
+    } catch (err) {
+      console.error('[ConsultationProvider] End failed:', err);
+    }
   }, [consultationId, dispatch]);
 
-  // ── Cleanup on unmount ────────────────────────────────────────────────────
+  // ── Leave + cleanup on unmount ────────────────────────────────────────
+  // Fire handleLeave before Redux state is cleared so socket/REST still work
   useEffect(() => {
     return () => {
+      // Only fire if user actually joined and hasn't already left
+      if (hasJoinedRef.current && !hasLeftRef.current) {
+        handleLeave({ reason: 'unmount' });
+      }
+      // Clear Redux after leave dispatched
       dispatch(clearCurrent());
     };
-  }, [dispatch]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // empty — intentional, only runs on unmount
 
-  // ── Context value ─────────────────────────────────────────────────────────
+  // ── beforeunload: fire leave synchronously on tab close ───────────────
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (hasJoinedRef.current && !hasLeftRef.current) {
+        hasLeftRef.current = true;
+        // Synchronous socket emit only — no await in beforeunload
+        socketLeave(consultationId, { reason: 'beforeunload' });
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [consultationId]);
+
+  // ── Context value ─────────────────────────────────────────────────────
   const value = useMemo(() => ({
     consultationId,
     consultation,

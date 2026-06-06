@@ -81,6 +81,14 @@ const fareBreakdownSchema = new Schema(
     homeCollectionFee: { type: Number, default: 0, min: 0 },
     platformFee:       { type: Number, default: 0, min: 0 },
     taxes:             { type: Number, default: 0, min: 0 },
+    // Per-service GST breakdown (mixed rates: transport 5%, CA 18%, consult 0%, diag 5%)
+    taxBreakdown: {
+      consultationGst:   { type: Number, default: 0 },
+      transportGst:      { type: Number, default: 0 },
+      careAssistantGst:  { type: Number, default: 0 },
+      diagnosticGst:     { type: Number, default: 0 },
+      homeCollectionGst: { type: Number, default: 0 },
+    },
     discount:          { type: Number, default: 0, min: 0 },
     couponDiscount:    { type: Number, default: 0, min: 0 },
     walletApplied:     { type: Number, default: 0, min: 0 },
@@ -137,9 +145,10 @@ const documentSchema = new Schema(
 const diagnosticDetailsSchema = new Schema(
   {
     labPartner:         { type: Schema.Types.ObjectId, ref: 'LabPartnerProfile' },
-    tests:              [{ type: Schema.Types.ObjectId }],
+ tests:    [{ type: Schema.Types.Mixed }],
+packages: [{ type: Schema.Types.Mixed }],
     testNames:          [{ type: String, trim: true }],
-    packages:           [{ type: Schema.Types.ObjectId }],
+     
     packageNames:       [{ type: String, trim: true }],
     sampleCollectedAt:  { type: Date },
     reportDeliveryMode: { type: String, enum: ['Digital (App)', 'Email', 'WhatsApp', 'Physical Copy'] },
@@ -550,10 +559,10 @@ bookingSchema.pre('validate', function () {
   const t = this.bookingType;
 
   if (t === 'full_care_ride') {
-    if (!this.doctor)          throw new Error('full_care_ride requires doctor');
-    if (!this.careAssistant)   throw new Error('full_care_ride requires careAssistant');
-    if (!this.patientLocation) throw new Error('full_care_ride requires patientLocation');
-  }
+  if (!this.doctor)          throw new Error('full_care_ride requires doctor');
+  // CHANGE: careAssistant optional — admin assigns manually after booking
+  if (!this.patientLocation) throw new Error('full_care_ride requires patientLocation');
+}
 
   if (t === 'doctor_consultation' && !this.doctor) {
     throw new Error('doctor_consultation requires doctor');
@@ -567,9 +576,7 @@ bookingSchema.pre('validate', function () {
     throw new Error('physiotherapist requires doctor (physiotherapist profile)');
   }
 
-  if (t === 'care_assistant' && !this.careAssistant) {
-    throw new Error('care_assistant booking requires careAssistant');
-  }
+  
 
   if (t === 'follow_up') {
     if (!this.followUpParentBooking) throw new Error('follow_up requires followUpParentBooking');

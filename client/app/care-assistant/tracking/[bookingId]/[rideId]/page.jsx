@@ -93,10 +93,6 @@ const MANEUVER_ICONS = {
 // POLYLINE HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Draw driver route from encoded polyline string.
- * Returns the google.maps.Polyline instance so caller can remove it.
- */
 function drawDriverPolyline(map, encodedPolyline) {
   if (!map || !encodedPolyline || !window.google?.maps?.geometry?.encoding) return null;
   try {
@@ -115,10 +111,6 @@ function drawDriverPolyline(map, encodedPolyline) {
   }
 }
 
-/**
- * Draw CA→joinPoint route as a dashed magenta line.
- * Uses an array of {lat,lng} points (from Directions API steps).
- */
 function drawCaToJoinPolyline(map, pathPoints) {
   if (!map || !pathPoints?.length) return null;
   try {
@@ -637,8 +629,6 @@ export default function CareAssistantLiveTracking() {
   const staticMadeRef      = useRef(false);
 
   // ── Polyline refs for manual overlays ────────────────────────────────────
-  // driverPolylineRef: blue solid line = driver's route (from expectedPolyline)
-  // caToJoinPolylineRef: pink dashed line = CA walking route to join point
   const driverPolylineRef   = useRef(null);
   const caToJoinPolylineRef = useRef(null);
 
@@ -727,12 +717,8 @@ export default function CareAssistantLiveTracking() {
   }, [reduxJoinPoint, joinPointData]);
 
   // ── Navigation target ─────────────────────────────────────────────────────
-  // care_assistant: navigate to patient (ride.dropoff = patient location per backend)
-  // full_care_ride: navigate to join point
   const navTarget = useMemo(() => {
     if (isCareOnly) {
-      // Backend: route.patientLocation = ride.dropoff, caStart = ride.pickup
-      // So target = ride.dropoff (patient) OR route.patientLocation
       const patientLoc = snap?.route?.patientLocation;
       if (patientLoc?.coordinates) {
         const c = patientLoc.coordinates;
@@ -750,8 +736,6 @@ export default function CareAssistantLiveTracking() {
   }, [isCareOnly, isFullCare, ride, joinPointData, snap]);
 
   // ── Pickup coords for static marker ──────────────────────────────────────
-  // care_assistant: pickup = patient location (ride.dropoff from backend)
-  // full_care_ride: pickup = ride.pickup (patient)
   const pickupCoords = useMemo(() => {
     if (isCareOnly) {
       const patientLoc = snap?.route?.patientLocation;
@@ -762,7 +746,6 @@ export default function CareAssistantLiveTracking() {
       const c = ride?.dropoff?.coordinates || ride?.pickup?.coordinates;
       return c ? { lat: c[1], lng: c[0] } : null;
     }
-    // full_care_ride: show patient pickup
     const c = snap?.route?.pickup?.coordinates || ride?.pickup?.coordinates;
     return c ? { lat: c[1], lng: c[0] } : null;
   }, [isCareOnly, isFullCare, ride, snap]);
@@ -796,7 +779,6 @@ export default function CareAssistantLiveTracking() {
         if (data?.route?.caJoinWaypoint)  setJoinPointData(data.route.caJoinWaypoint);
         if (data?.rideStatus)  setRideStatus(data.rideStatus);
         if (data?.rideStage)   setRideStage(data.rideStage);
-        // Seed driver position from snapshot
         if (data?.driver?.liveLocation) {
           const loc = data.driver.liveLocation;
           setDriverPos({ lat: loc.lat, lng: loc.lng, heading: loc.heading ?? 0, speed: loc.speedKmh ?? 0 });
@@ -826,7 +808,6 @@ export default function CareAssistantLiveTracking() {
     if (!EV) return;
     const unsubs = [
       on(EV.LOCATION_UPDATE, (d) => {
-        // Driver GPS update (full_care_ride)
         if (!mountedRef.current) return;
         setDriverPos({ lat: d.lat, lng: d.lng, heading: d.heading, speed: d.speed });
         setEtaUpdate(d);
@@ -887,7 +868,6 @@ export default function CareAssistantLiveTracking() {
         if (d.tracking?.careAssistantStatus) setCaStatus(d.tracking.careAssistantStatus);
         if (d.ride?.status) setRideStatus(d.ride.status);
         if (d.ride?.rideStage) setRideStage(d.ride.rideStage);
-        // Update driver pos from snapshot
         if (d.ride?.liveLocation) {
           const loc = d.ride.liveLocation;
           if (loc?.coordinates?.length === 2) {
@@ -964,7 +944,6 @@ export default function CareAssistantLiveTracking() {
       [caMarkerRef, joinPointMarkerRef, pickupMarkerRef].forEach(ref => {
         if (ref.current) { ref.current.map = null; ref.current = null; }
       });
-      // Remove manual polylines
       if (driverPolylineRef.current) { driverPolylineRef.current.setMap(null); driverPolylineRef.current = null; }
       if (caToJoinPolylineRef.current) { caToJoinPolylineRef.current.setMap(null); caToJoinPolylineRef.current = null; }
       clearRoute();
@@ -997,12 +976,11 @@ export default function CareAssistantLiveTracking() {
   }, [initCameraListeners]);
 
   // ── Static markers ────────────────────────────────────────────────────────
-// Pickup marker — draw once when coords ready
-useEffect(() => {
-  if (!mapLoaded || !pickupCoords || pickupMarkerRef.current) return;
-  if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
-  pickupMarkerRef.current = createStaticMarker(mapRef.current, pickupCoords.lat, pickupCoords.lng, 'pickup');
-}, [mapLoaded, pickupCoords]);
+  useEffect(() => {
+    if (!mapLoaded || !pickupCoords || pickupMarkerRef.current) return;
+    if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
+    pickupMarkerRef.current = createStaticMarker(mapRef.current, pickupCoords.lat, pickupCoords.lng, 'pickup');
+  }, [mapLoaded, pickupCoords]);
 
   // ── Update join point marker when joinPointData changes ──────────────────
   useEffect(() => {
@@ -1018,7 +996,6 @@ useEffect(() => {
       joinPointMarkerRef.current.position = { lat, lng };
     } else if (mapRef.current) {
       joinPointMarkerRef.current = createJoinPointMarker(mapRef.current, lat, lng);
-      // Reset static guard so pickup marker also renders if not yet done
       if (!pickupMarkerRef.current && pickupCoords) {
         pickupMarkerRef.current = createStaticMarker(mapRef.current, pickupCoords.lat, pickupCoords.lng, 'pickup');
       }
@@ -1026,12 +1003,10 @@ useEffect(() => {
   }, [mapLoaded, isFullCare, joinPointData, pickupCoords]);
 
   // ── Draw driver route polyline (full_care_ride) ───────────────────────────
-  // Uses expectedPolyline from snapshot. Redraws when polyline string changes.
   useEffect(() => {
     if (!mapLoaded || !isFullCare || !expectedPolyline) return;
     if (!window.google?.maps?.geometry?.encoding) return;
 
-    // Remove old polyline first
     if (driverPolylineRef.current) {
       driverPolylineRef.current.setMap(null);
       driverPolylineRef.current = null;
@@ -1055,15 +1030,14 @@ useEffect(() => {
   // ── Update driver marker (full_care_ride) ─────────────────────────────────
   useEffect(() => {
     if (!mapLoaded || !isFullCare) return;
-    // Use live driverPos (from socket) or fall back to snapshotDriverLoc
     const pos = driverPos || snapshotDriverLoc;
     if (!pos) return;
     updateDriverMarker(pos.lat, pos.lng, pos.heading ?? 0, mapBearingRef.current, pos.speed ?? 0);
   }, [mapLoaded, isFullCare, driverPos, snapshotDriverLoc, updateDriverMarker, mapBearingRef]);
 
   // ── Route calculation (CA walking route) ──────────────────────────────────
-  // For care_assistant: CA current pos → patient (navTarget = ride.dropoff)
-  // For full_care_ride: CA current pos → join point (navTarget = joinPointData coords)
+  // FIX: decode step polylines via geometry.encoding instead of relying on
+  // step.path (SDK LatLng objects — not always present in directions response).
   const calculateRoute = useCallback(async (origin, destination) => {
     if (!dirServiceRef.current || !origin || !destination) return;
     if (!mapLoaded) return;
@@ -1081,40 +1055,52 @@ useEffect(() => {
         setCurrentStepIdx(0);
         resetManeuverBands();
 
-        // For care_assistant: use useRouteRenderer (it handles the CA route polyline)
-        // For full_care_ride: draw as dashed pink line, keep driver blue line intact
         if (isCareOnly) {
-          // care_assistant mode: render as primary route via hook
+          // care_assistant: render as primary route via hook (traversed/remaining lines)
           setRoute(result, 'toPickup');
         } else {
-          // full_care_ride: draw CA→joinPoint as separate dashed polyline
-          // Remove old CA→join polyline first
+          // full_care_ride: draw CA→joinPoint as dashed pink polyline separately
+          // Remove old line first
           if (caToJoinPolylineRef.current) {
             caToJoinPolylineRef.current.setMap(null);
             caToJoinPolylineRef.current = null;
           }
-          // Extract path points from Directions result
+
+          // Extract path — decode from encoded polyline string (works in all envs)
           const leg = result.routes?.[0]?.legs?.[0];
           if (leg?.steps) {
             const pathPoints = [];
             leg.steps.forEach(step => {
-              if (step.path) {
+              if (step.polyline?.points && window.google?.maps?.geometry?.encoding) {
+                // Decode encoded polyline — most reliable approach
+                const decoded = window.google.maps.geometry.encoding.decodePath(step.polyline.points);
+                decoded.forEach(pt => pathPoints.push({ lat: pt.lat(), lng: pt.lng() }));
+              } else if (step.path?.length) {
+                // SDK LatLng array (sometimes present)
                 step.path.forEach(pt => pathPoints.push({ lat: pt.lat(), lng: pt.lng() }));
-              } else if (step.start_location) {
-                pathPoints.push({ lat: step.start_location.lat(), lng: step.start_location.lng() });
+              } else {
+                // Fallback: start + end of each step
+                if (step.start_location) {
+                  const slat = typeof step.start_location.lat === 'function' ? step.start_location.lat() : step.start_location.lat;
+                  const slng = typeof step.start_location.lng === 'function' ? step.start_location.lng() : step.start_location.lng;
+                  pathPoints.push({ lat: slat, lng: slng });
+                }
+                if (step.end_location) {
+                  const elat = typeof step.end_location.lat === 'function' ? step.end_location.lat() : step.end_location.lat;
+                  const elng = typeof step.end_location.lng === 'function' ? step.end_location.lng() : step.end_location.lng;
+                  pathPoints.push({ lat: elat, lng: elng });
+                }
               }
             });
-            // Add end location of last step
-            const lastStep = leg.steps[leg.steps.length - 1];
-            if (lastStep?.end_location) {
-              pathPoints.push({ lat: lastStep.end_location.lat(), lng: lastStep.end_location.lng() });
-            }
+
             if (pathPoints.length > 1) {
               caToJoinPolylineRef.current = drawCaToJoinPolyline(mapRef.current, pathPoints);
             }
           }
-          // Also feed to routePointsRef for off-route detection via setRoute
-          setRoute(result, 'caToJoin');
+
+          // Also populate routePointsRef for off-route detection
+          // Use 'toPickup' — valid routeType (avoids silent no-op from unknown 'caToJoin')
+          setRoute(result, 'toPickup');
         }
 
         routeCalculatedRef.current = true;
@@ -1127,38 +1113,37 @@ useEffect(() => {
   }, [mapLoaded, setRoute, resetManeuverBands, isCareOnly]);
 
   // ── Calculate initial route when map + position + target ready ───────────
- useEffect(() => {
-  if (!mapLoaded || !caPosition || !navTarget) return;
-  if (routeCalculatedRef.current) return;
-  calculateRoute({ lat: caPosition.lat, lng: caPosition.lng }, navTarget);
-}, [mapLoaded, caPosition, navTarget, joinPointData, calculateRoute]);
-// joinPointData in deps → re-triggers when async join point arrives
+  useEffect(() => {
+    if (!mapLoaded || !caPosition || !navTarget) return;
+    if (routeCalculatedRef.current) return;
+    calculateRoute({ lat: caPosition.lat, lng: caPosition.lng }, navTarget);
+  }, [mapLoaded, caPosition, navTarget, joinPointData, calculateRoute]);
 
- // Reset routeCalculatedRef when navTarget changes OR joinPointData first arrives
-const prevNavTargetRef = useRef(null);
-useEffect(() => {
-  if (!navTarget) return;
-  const prev = prevNavTargetRef.current;
-  if (!prev || Math.abs(prev.lat - navTarget.lat) > 0.0001 || Math.abs(prev.lng - navTarget.lng) > 0.0001) {
-    routeCalculatedRef.current = false;
-  }
-  prevNavTargetRef.current = navTarget;
-}, [navTarget]);
+  // Reset routeCalculatedRef when navTarget changes
+  const prevNavTargetRef = useRef(null);
+  useEffect(() => {
+    if (!navTarget) return;
+    const prev = prevNavTargetRef.current;
+    if (!prev || Math.abs(prev.lat - navTarget.lat) > 0.0001 || Math.abs(prev.lng - navTarget.lng) > 0.0001) {
+      routeCalculatedRef.current = false;
+    }
+    prevNavTargetRef.current = navTarget;
+  }, [navTarget]);
 
-// Also reset when joinPointData coordinates change (full_care_ride async arrival)
-const prevJoinPointRef = useRef(null);
-useEffect(() => {
-  if (!isFullCare || !joinPointData?.coordinates) return;
-  const c = joinPointData.coordinates;
-  const lat = Array.isArray(c) ? c[1] : c.lat;
-  const lng = Array.isArray(c) ? c[0] : c.lng;
-  if (!lat || !lng) return;
-  const prev = prevJoinPointRef.current;
-  if (!prev || Math.abs(prev.lat - lat) > 0.0001 || Math.abs(prev.lng - lng) > 0.0001) {
-    routeCalculatedRef.current = false;
-  }
-  prevJoinPointRef.current = { lat, lng };
-}, [isFullCare, joinPointData]);
+  // Also reset when joinPointData coordinates change (full_care_ride async arrival)
+  const prevJoinPointRef = useRef(null);
+  useEffect(() => {
+    if (!isFullCare || !joinPointData?.coordinates) return;
+    const c = joinPointData.coordinates;
+    const lat = Array.isArray(c) ? c[1] : c.lat;
+    const lng = Array.isArray(c) ? c[0] : c.lng;
+    if (!lat || !lng) return;
+    const prev = prevJoinPointRef.current;
+    if (!prev || Math.abs(prev.lat - lat) > 0.0001 || Math.abs(prev.lng - lng) > 0.0001) {
+      routeCalculatedRef.current = false;
+    }
+    prevJoinPointRef.current = { lat, lng };
+  }, [isFullCare, joinPointData]);
 
   // ── Main GPS → marker + camera + nav ─────────────────────────────────────
   useEffect(() => {
@@ -1250,7 +1235,6 @@ useEffect(() => {
   const speedKmh     = caPosition?.speed ?? 0;
   const statusCfg    = CA_STATUS_CFG[caStatus] || CA_STATUS_CFG.not_joined;
 
-  // Distance from CA to join point (live)
   const distToJoin = useMemo(() => {
     if (!caPosition || !joinPointData?.coordinates) return null;
     const c   = joinPointData.coordinates;
@@ -1260,7 +1244,6 @@ useEffect(() => {
     return distanceKm(caPosition.lat, caPosition.lng, lat, lng);
   }, [caPosition, joinPointData]);
 
-  // Distance from CA to patient/pickup (live) — for care_assistant type
   const distToPickup = useMemo(() => {
     if (!caPosition || !pickupCoords) return null;
     return distanceKm(caPosition.lat, caPosition.lng, pickupCoords.lat, pickupCoords.lng);
@@ -1349,7 +1332,6 @@ useEffect(() => {
             animate={{ opacity: 1, y: 0 }}
             className="flex items-center gap-2 px-3 py-2 bg-base-100"
           >
-            {/* Back */}
             <motion.button
               whileTap={{ scale: 0.88 }}
               onClick={handleBack}
@@ -1359,15 +1341,12 @@ useEffect(() => {
               <ChevronLeft size={17} />
             </motion.button>
 
-            {/* Live indicator */}
             <div className={`w-2 h-2 rounded-full flex-shrink-0 ${connected ? 'bg-success animate-pulse' : 'bg-error animate-pulse'}`} />
 
-            {/* Booking type badge */}
             <span className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full bg-base-300 text-base-content/60 flex-shrink-0">
               {isCareOnly ? '♥ Care' : '⚡ Full Care Ride'}
             </span>
 
-            {/* CA Status badge */}
             {caStatus && (
               <span
                 className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full flex-shrink-0 text-[10px] font-bold uppercase tracking-widest border"
@@ -1378,7 +1357,6 @@ useEffect(() => {
               </span>
             )}
 
-            {/* ETA */}
             {etaMinutes != null && (
               <div className="flex items-center gap-1 flex-shrink-0">
                 <Clock size={11} className="text-base-content/40" />
@@ -1386,7 +1364,6 @@ useEffect(() => {
               </div>
             )}
 
-            {/* Speed */}
             {speedKmh > 2 && (
               <div className="flex items-center gap-1 ml-auto flex-shrink-0">
                 <Zap size={11} style={{ color: '#facc15' }} />
@@ -1500,7 +1477,6 @@ useEffect(() => {
 
         {/* ── LEFT FABs ─────────────────────────────────────────────── */}
         <div className="absolute z-20 flex flex-col gap-2.5" style={{ top: 180, left: 12 }}>
-          {/* Recenter */}
           <motion.button
             whileTap={{ scale: 0.88 }}
             onClick={handleRecenter}
@@ -1519,7 +1495,6 @@ useEffect(() => {
             <Maximize2 size={16} />
           </motion.button>
 
-          {/* North-up */}
           <motion.button
             whileTap={{ scale: 0.88 }}
             onClick={() => { resetToNorth(); setFollowMode(false); }}
@@ -1537,13 +1512,11 @@ useEffect(() => {
             <Compass size={16} />
           </motion.button>
 
-          {/* Zoom in */}
           <motion.button whileTap={{ scale: 0.88 }} onClick={zoomIn} aria-label="Zoom in"
             style={{ width: 44, height: 44, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', background: 'rgba(20,26,40,0.88)', border: '1.5px solid rgba(255,255,255,0.12)', boxShadow: '0 4px 16px rgba(0,0,0,0.45)', color: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(10px)' }}>
             <Plus size={16} />
           </motion.button>
 
-          {/* Zoom out */}
           <motion.button whileTap={{ scale: 0.88 }} onClick={zoomOut} aria-label="Zoom out"
             style={{ width: 44, height: 44, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', background: 'rgba(20,26,40,0.88)', border: '1.5px solid rgba(255,255,255,0.12)', boxShadow: '0 4px 16px rgba(0,0,0,0.45)', color: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(10px)' }}>
             <Minus size={16} />
@@ -1552,7 +1525,6 @@ useEffect(() => {
 
         {/* ── RIGHT FABs ────────────────────────────────────────────── */}
         <div className="absolute z-20 flex flex-col gap-2.5" style={{ top: 180, right: 12 }}>
-          {/* Voice toggle */}
           <motion.button
             whileTap={{ scale: 0.88 }}
             onClick={toggleVoice}
@@ -1571,7 +1543,6 @@ useEffect(() => {
             {voiceEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
           </motion.button>
 
-          {/* SOS */}
           <motion.button
             whileTap={{ scale: 0.88 }}
             onClick={() => {
@@ -1595,7 +1566,6 @@ useEffect(() => {
             {sosActive ? <ShieldAlert size={16} /> : <Shield size={16} />}
           </motion.button>
 
-          {/* Distance to target */}
           {navTarget && caPosition && (
             <motion.div
               initial={{ opacity: 0 }}
@@ -1625,7 +1595,6 @@ useEffect(() => {
         </div>
 
         {/* ── STATUS CONTEXT PILL ───────────────────────────────────── */}
-        {/* care_assistant: en route to patient */}
         <AnimatePresence>
           {isCareOnly && caStatus === 'en_route_to_pickup' && caPosition && pickupCoords && (
             <motion.div
@@ -1657,7 +1626,6 @@ useEffect(() => {
           )}
         </AnimatePresence>
 
-        {/* full_care_ride: en route to join point */}
         <AnimatePresence>
           {isFullCare && caStatus === 'en_route_to_pickup' && caPosition && joinPointData && (
             <motion.div

@@ -1,11 +1,10 @@
 // routes/consultation.routes.js
- 
 
 import express from 'express';
 import Consultation from '../models/Consultation.js';
 import { protect, authorize } from '../middleware/authMiddleware.js';
 import asyncHandler from '../utils/asyncHandler.js';
-import upload from '../middleware/upload.js'; // Ensure this maps to your Multer S3/Local config
+import upload from '../middleware/upload.js';
 import DoctorProfile from '../models/DoctorProfile.js';
 import { emitToConsultation, emitToDoctor } from '../sockets/consultationSocket.js';
 import {
@@ -32,6 +31,10 @@ import {
   removeExtraParticipant,
   getParticipantEvents,
   updateParticipantNetworkQuality,
+  muteParticipant,
+  unmuteParticipant,
+  kickParticipant,
+  getConsultationTimer,
   saveVitals,
   saveNotes,
   getNotes,
@@ -56,6 +59,8 @@ import {
   assignAdmin,
   overrideStatus,
   runAutoMiss,
+  runAutoEnd,
+  runTimerReminder,
   runTokenRefresh,
   runReminders,
   runExpirePrescriptions,
@@ -82,7 +87,7 @@ const ok   = (res, data, status = 200) => res.status(status).json({ success: tru
 const fail = (res, message, status = 400) => res.status(status).json({ success: false, message });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ── AGORA WEBHOOK (no auth — Agora sends raw POST) ────────────────────────────
+// AGORA WEBHOOK (no auth — Agora sends raw POST)
 // Must be FIRST before any protect middleware to get rawBody
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -93,10 +98,9 @@ router.post(
     const signature = req.headers['agora-signature'];
     const timestamp = req.headers['agora-timestamp'];
     const rawBody   = req.body;
-
-    const result = await handleAgoraWebhook(rawBody.toString(), signature, timestamp);
+    const result    = await handleAgoraWebhook(rawBody.toString(), signature, timestamp);
     ok(res, result);
-  })
+  }),
 );
 
 // ── All routes below require JWT auth ─────────────────────────────────────────
@@ -106,23 +110,46 @@ router.use(protect);
 // CRON JOBS (x-cron-key header, no JWT role check)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-router.post('/cron/auto-miss',           cronAuth, asyncHandler(async (req, res) => {
+router.post('/cron/auto-miss', cronAuth, asyncHandler(async (req, res) => {
   const result = await runAutoMiss();
   ok(res, result);
 }));
 
-router.post('/cron/token-refresh',       cronAuth, asyncHandler(async (req, res) => {
+router.post('/cron/token-refresh', cronAuth, asyncHandler(async (req, res) => {
   const result = await runTokenRefresh();
   ok(res, result);
 }));
 
-router.post('/cron/reminders',           cronAuth, asyncHandler(async (req, res) => {
+router.post('/cron/reminders', cronAuth, asyncHandler(async (req, res) => {
   const result = await runReminders();
   ok(res, result);
 }));
 
-router.post('/cron/expire-prescriptions',cronAuth, asyncHandler(async (req, res) => {
+router.post('/cron/expire-prescriptions', cronAuth, asyncHandler(async (req, res) => {
   const result = await runExpirePrescriptions();
+  ok(res, result);
+}));
+
+// ── NEW: Timer cron jobs ──────────────────────────────────────────────────────
+
+/**
+ * POST /cron/auto-end
+ * Fires every minute. Auto-completes consultations that exceeded CONSULTATION_MAX_TIME_MIN.
+ * Sends email + push to doctor & patient.
+ * Protected by x-cron-key header.
+ */
+router.post('/cron/auto-end', cronAuth, asyncHandler(async (req, res) => {
+  const result = await runAutoEnd();
+  ok(res, result);
+}));
+
+/**
+ * POST /cron/timer-reminder
+ * Fires every minute. Sends 15-min-remaining reminder email + push to both parties.
+ * Protected by x-cron-key header.
+ */
+router.post('/cron/timer-reminder', cronAuth, asyncHandler(async (req, res) => {
+  const result = await runTimerReminder();
   ok(res, result);
 }));
 
@@ -133,18 +160,18 @@ router.post('/cron/expire-prescriptions',cronAuth, asyncHandler(async (req, res)
 router.get('/admin/all', authorize(...ADMIN_ROLES), asyncHandler(async (req, res) => {
   const { page = 1, limit = 20, status, type, doctorId, patientId, from, to } = req.query;
   const filter = {};
-  if (status) filter.status = status;
-  if (type) filter.consultationType = type;
+  if (status)   filter.status = status;
+  if (type)     filter.consultationType = type;
   if (doctorId) filter.doctor = doctorId;
-  if (patientId) filter.patient = patientId;
+  if (patientId)filter.patient = patientId;
   if (from || to) {
     filter.scheduledAt = {};
     if (from) filter.scheduledAt.$gte = new Date(from);
-    if (to) filter.scheduledAt.$lte = new Date(to);
+    if (to)   filter.scheduledAt.$lte = new Date(to);
   }
   const result = await listConsultations({
     filter, page: +page, limit: +limit,
-    cacheKeyPrefix: `consultations:admin`,
+    cacheKeyPrefix: 'consultations:admin',
   });
   ok(res, result);
 }));
@@ -326,24 +353,24 @@ router.post('/:id/agora/provision', authorize(...ADMIN_ROLES, ...DOCTOR_ROLES), 
 }));
 
 router.get('/:id/agora/tokens', asyncHandler(async (req, res) => {
-  const tokens = await getTokensForParticipant(req.params.id, req.user._id.toString(), req.user.role);
+  const tokens = await getTokensForParticipant(
+    req.params.id,
+    req.user._id.toString(),
+    req.user.role,
+  );
   ok(res, { tokens });
 }));
 
-// NEW: Endpoint to fetch dedicated screen-share token
 router.post('/:id/agora/screen-token', asyncHandler(async (req, res) => {
   const { uid } = req.body;
   if (!uid) return fail(res, 'Screen UID is required', 400);
-
-  const role = req.user.role === 'doctor' ? 'doctor' : 'patient';
-  
+  const role      = req.user.role === 'doctor' ? 'doctor' : 'patient';
   const tokenData = await getScreenShareToken(
-    req.params.id, 
-    uid, 
-    req.user._id.toString(), 
-    role
+    req.params.id,
+    uid,
+    req.user._id.toString(),
+    role,
   );
-  
   ok(res, tokenData);
 }));
 
@@ -354,8 +381,10 @@ router.post('/:id/agora/refresh', asyncHandler(async (req, res) => {
 
 router.post('/:id/agora/recording-consent', asyncHandler(async (req, res) => {
   const { consented } = req.body;
-  const who = req.user.role === 'doctor' ? 'doctor' : 'patient';
-  const result = await handleRecordingConsent(req.params.id, who, consented, req.user._id.toString());
+  const who    = req.user.role === 'doctor' ? 'doctor' : 'patient';
+  const result = await handleRecordingConsent(
+    req.params.id, who, consented, req.user._id.toString(),
+  );
   ok(res, result);
 }));
 
@@ -382,8 +411,8 @@ router.post('/:id/waiting-room/enter', authorize(...PATIENT_ROLES), asyncHandler
   const c = await enterWaitingRoom(req.params.id, req.user._id.toString());
   emitToDoctor(c.doctorUser?.toString(), 'consultation:patient-waiting', {
     consultationId: req.params.id,
-    patientId: req.user._id,
-    patientName: req.user.name,
+    patientId:      req.user._id,
+    patientName:    req.user.name,
   });
   ok(res, { status: c.status, waitingRoom: c.waitingRoom });
 }));
@@ -400,7 +429,7 @@ router.post('/:id/waiting-room/status', asyncHandler(async (req, res) => {
 
 router.post('/:id/join', asyncHandler(async (req, res) => {
   const { deviceInfo } = req.body;
-  const role = ['doctor', 'admin'].includes(req.user.role) ? 'doctor' : 'patient';
+  const role           = ['doctor', 'admin'].includes(req.user.role) ? 'doctor' : 'patient';
   const { consultation, tokens } = await participantJoin(
     req.params.id,
     req.user._id.toString(),
@@ -417,30 +446,43 @@ router.post('/:id/join', asyncHandler(async (req, res) => {
 
 router.post('/:id/leave', asyncHandler(async (req, res) => {
   const role = req.user.role === 'doctor' ? 'doctor' : 'patient';
-  const c = await participantLeave(req.params.id, req.user._id.toString(), role, req.body?.metrics || {});
+  const c    = await participantLeave(
+    req.params.id,
+    req.user._id.toString(),
+    role,
+    req.body?.metrics || {},
+  );
   ok(res, { status: c.status });
 }));
 
 router.post('/:id/start', authorize(...DOCTOR_ROLES, ...ADMIN_ROLES), asyncHandler(async (req, res) => {
-  const c = await transitionStatus(req.params.id, 'in_progress', { actor: req.user._id.toString() });
+  const c = await transitionStatus(req.params.id, 'in_progress', {
+    actor: req.user._id.toString(),
+  });
   emitToConsultation(req.params.id, 'consultation:status', { status: c.status });
   ok(res, { status: c.status });
 }));
 
 router.post('/:id/end', authorize(...DOCTOR_ROLES, ...ADMIN_ROLES), asyncHandler(async (req, res) => {
-  const c = await transitionStatus(req.params.id, 'completed', { actor: req.user._id.toString() });
+  const c = await transitionStatus(req.params.id, 'completed', {
+    actor: req.user._id.toString(),
+  });
   emitToConsultation(req.params.id, 'consultation:status', { status: c.status });
   ok(res, { status: c.status, actualDurationSec: c.actualDurationSec });
 }));
 
 router.post('/:id/pause', asyncHandler(async (req, res) => {
-  const c = await transitionStatus(req.params.id, 'paused', { actor: req.user._id.toString() });
+  const c = await transitionStatus(req.params.id, 'paused', {
+    actor: req.user._id.toString(),
+  });
   emitToConsultation(req.params.id, 'consultation:status', { status: c.status });
   ok(res, { status: c.status });
 }));
 
 router.post('/:id/resume', asyncHandler(async (req, res) => {
-  const c = await transitionStatus(req.params.id, 'in_progress', { actor: req.user._id.toString() });
+  const c = await transitionStatus(req.params.id, 'in_progress', {
+    actor: req.user._id.toString(),
+  });
   emitToConsultation(req.params.id, 'consultation:status', { status: c.status });
   ok(res, { status: c.status });
 }));
@@ -449,7 +491,7 @@ router.post('/:id/cancel', asyncHandler(async (req, res) => {
   const { reason } = req.body;
   const cancelledBy = req.user.role === 'customer' ? 'patient' : req.user.role;
   const c = await transitionStatus(req.params.id, 'cancelled', {
-    actor: req.user._id.toString(),
+    actor:    req.user._id.toString(),
     reason,
     metadata: { cancelledBy, refundable: req.body.refundable ?? false },
   });
@@ -461,7 +503,7 @@ router.post('/:id/no-show', authorize(...ADMIN_ROLES, ...DOCTOR_ROLES), asyncHan
   const { who = 'patient' } = req.body;
   const toStatus = who === 'doctor' ? 'no_show_doctor' : 'no_show_patient';
   const c = await transitionStatus(req.params.id, toStatus, {
-    actor: req.user._id.toString(),
+    actor:  req.user._id.toString(),
     reason: req.body.reason,
   });
   ok(res, { status: c.status });
@@ -470,7 +512,7 @@ router.post('/:id/no-show', authorize(...ADMIN_ROLES, ...DOCTOR_ROLES), asyncHan
 router.post('/:id/technical-failure', asyncHandler(async (req, res) => {
   const { errorDetails } = req.body;
   const c = await transitionStatus(req.params.id, 'technical_failure', {
-    actor: req.user._id.toString(),
+    actor:  req.user._id.toString(),
     reason: errorDetails || 'Technical failure reported',
   });
   emitToConsultation(req.params.id, 'consultation:status', { status: c.status, errorDetails });
@@ -489,14 +531,20 @@ router.get('/:id/participants', asyncHandler(async (req, res) => {
 router.post('/:id/participants', authorize(...ADMIN_ROLES, ...DOCTOR_ROLES), asyncHandler(async (req, res) => {
   const { userId, role } = req.body;
   if (!userId || !role) return fail(res, 'userId and role required');
-  const tokens = await addExtraParticipant(req.params.id, userId, role, req.user._id.toString());
+  const tokens = await addExtraParticipant(
+    req.params.id, userId, role, req.user._id.toString(),
+  );
   emitToConsultation(req.params.id, 'consultation:participant-added', { userId, role });
   ok(res, { tokens }, 201);
 }));
 
 router.delete('/:id/participants/:userId', authorize(...ADMIN_ROLES, ...DOCTOR_ROLES), asyncHandler(async (req, res) => {
-  const result = await removeExtraParticipant(req.params.id, req.params.userId, req.user._id.toString());
-  emitToConsultation(req.params.id, 'consultation:participant-removed', { userId: req.params.userId });
+  const result = await removeExtraParticipant(
+    req.params.id, req.params.userId, req.user._id.toString(),
+  );
+  emitToConsultation(req.params.id, 'consultation:participant-removed', {
+    userId: req.params.userId,
+  });
   ok(res, result);
 }));
 
@@ -508,19 +556,122 @@ router.get('/:id/participants/events', asyncHandler(async (req, res) => {
 router.patch('/:id/participants/:userId/network-quality', asyncHandler(async (req, res) => {
   const { quality } = req.body;
   if (quality === undefined) return fail(res, 'quality required');
-  const result = await updateParticipantNetworkQuality(req.params.id, req.params.userId, quality);
+  const result = await updateParticipantNetworkQuality(
+    req.params.id, req.params.userId, quality,
+  );
   ok(res, result);
 }));
+
+// ── Doctor participant controls ────────────────────────────────────────────────
+
+/**
+ * POST /:id/participants/:userId/mute
+ * Doctor mutes a participant's audio.
+ * Persists isMutedByDoctor=true on participantEvent + emits socket event so
+ * target client calls localAudioTrack.setEnabled(false) in Agora SDK.
+ */
+router.post(
+  '/:id/participants/:userId/mute',
+  authorize(...DOCTOR_ROLES),
+  asyncHandler(async (req, res) => {
+    const result = await muteParticipant(
+      req.params.id,
+      req.params.userId,
+      req.user._id.toString(),
+    );
+    emitToConsultation(req.params.id, 'consultation:muted', {
+      targetUserId: result.mutedUserId,
+      mutedBy:      { userId: req.user._id, name: req.user.name, role: 'doctor' },
+      isMuted:      true,
+      at:           new Date(),
+    });
+    ok(res, result);
+  }),
+);
+
+/**
+ * POST /:id/participants/:userId/unmute
+ * Doctor unmutes a participant's audio.
+ * Emits same socket event with isMuted=false so client re-enables mic.
+ */
+router.post(
+  '/:id/participants/:userId/unmute',
+  authorize(...DOCTOR_ROLES),
+  asyncHandler(async (req, res) => {
+    const result = await unmuteParticipant(
+      req.params.id,
+      req.params.userId,
+      req.user._id.toString(),
+    );
+    emitToConsultation(req.params.id, 'consultation:muted', {
+      targetUserId: result.mutedUserId,
+      mutedBy:      { userId: req.user._id, name: req.user.name, role: 'doctor' },
+      isMuted:      false,
+      at:           new Date(),
+    });
+    ok(res, result);
+  }),
+);
+
+/**
+ * POST /:id/participants/:userId/kick
+ * Doctor kicks a participant from session.
+ * Marks participant as kicked in DB (leftAt = now), emits consultation:kicked
+ * so target client leaves Agora channel and socket room.
+ * Body: { reason?: string }
+ */
+router.post(
+  '/:id/participants/:userId/kick',
+  authorize(...DOCTOR_ROLES),
+  asyncHandler(async (req, res) => {
+    const { reason } = req.body;
+    const result = await kickParticipant(
+      req.params.id,
+      req.params.userId,
+      req.user._id.toString(),
+      reason || '',
+    );
+    emitToConsultation(req.params.id, 'consultation:kicked', {
+      targetUserId: result.kickedUserId,
+      kickedBy:     { userId: req.user._id, name: req.user.name, role: 'doctor' },
+      reason:       result.reason,
+      at:           new Date(),
+    });
+    ok(res, result);
+  }),
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSULTATION TIMER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /:id/timer
+ * Returns current timer snapshot: elapsed, remaining, hardDeadlineAt, segments.
+ * Clients call this on join/rejoin to sync the countdown UI.
+ * Also called by cron-triggered emitTimerUpdate via socket.
+ */
+router.get(
+  '/:id/timer',
+  asyncHandler(async (req, res) => {
+    const timer = await getConsultationTimer(req.params.id);
+    ok(res, { timer });
+  }),
+);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CLINICAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
-router.put('/:id/vitals', authorize(...DOCTOR_ROLES, ...ADMIN_ROLES, 'care_assistant'), asyncHandler(async (req, res) => {
-  const vitals = await saveVitals(req.params.id, req.body, req.user._id.toString());
-  emitToConsultation(req.params.id, 'consultation:vitals:update', { vitals });
-  ok(res, { vitals });
-}));
+router.put(
+  '/:id/vitals',
+  authorize(...DOCTOR_ROLES, ...ADMIN_ROLES, 'care_assistant'),
+  asyncHandler(async (req, res) => {
+    const vitals = await saveVitals(req.params.id, req.body, req.user._id.toString());
+    emitToConsultation(req.params.id, 'consultation:vitals:update', { vitals });
+    ok(res, { vitals });
+  }),
+);
 
 router.put('/:id/notes', authorize(...DOCTOR_ROLES), asyncHandler(async (req, res) => {
   const notes = await saveNotes(req.params.id, req.body, req.user._id.toString());
@@ -536,7 +687,7 @@ router.post('/:id/prescriptions', authorize(...DOCTOR_ROLES), asyncHandler(async
   const rx = await issuePrescription(req.params.id, req.body, req.user._id.toString());
   emitToConsultation(req.params.id, 'consultation:prescription:ready', {
     rxNumber: rx.rxNumber,
-    rxId: rx._id,
+    rxId:     rx._id,
   });
   ok(res, { prescription: rx }, 201);
 }));
@@ -560,31 +711,32 @@ router.get('/:id/referral', asyncHandler(async (req, res) => {
 // IN-SESSION CHAT & DOCUMENTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Uses upload.single('attachment') to handle files via multipart/form-data.
-router.post('/:id/chat', upload.single('attachment'), asyncHandler(async (req, res) => {
-  const role = req.user.role === 'doctor' ? 'doctor' : 'patient';
-  
-  let messageType = req.body.messageType || 'text';
-  let attachmentUrl = null;
-  let attachmentName = null;
+router.post(
+  '/:id/chat',
+  upload.single('attachment'),
+  asyncHandler(async (req, res) => {
+    const role = req.user.role === 'doctor' ? 'doctor' : 'patient';
 
-  if (req.file) {
-    attachmentUrl = req.file.path || req.file.location;
-    attachmentName = req.file.originalname;
-    messageType = req.file.mimetype.startsWith('image/') ? 'image' : 'file';
-  }
+    let messageType    = req.body.messageType || 'text';
+    let attachmentUrl  = null;
+    let attachmentName = null;
 
-  const messageData = {
-    content: req.body.content,
-    messageType,
-    attachmentUrl,
-    attachmentName,
-  };
+    if (req.file) {
+      attachmentUrl  = req.file.path || req.file.location;
+      attachmentName = req.file.originalname;
+      messageType    = req.file.mimetype.startsWith('image/') ? 'image' : 'file';
+    }
 
-  const msg = await sendChatMessage(req.params.id, req.user._id.toString(), role, messageData);
-  emitToConsultation(req.params.id, 'consultation:chat:message', msg);
-  ok(res, { message: msg }, 201);
-}));
+    const msg = await sendChatMessage(
+      req.params.id,
+      req.user._id.toString(),
+      role,
+      { content: req.body.content, messageType, attachmentUrl, attachmentName },
+    );
+    emitToConsultation(req.params.id, 'consultation:chat:message', msg);
+    ok(res, { message: msg }, 201);
+  }),
+);
 
 router.get('/:id/chat', asyncHandler(async (req, res) => {
   const messages = await getChatHistory(req.params.id);
@@ -592,29 +744,31 @@ router.get('/:id/chat', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/:id/chat/:messageId', asyncHandler(async (req, res) => {
-  const result = await deleteChatMessage(req.params.id, req.params.messageId, req.user._id.toString());
+  const result = await deleteChatMessage(
+    req.params.id, req.params.messageId, req.user._id.toString(),
+  );
   ok(res, result);
 }));
 
-// Generic Document Upload (e.g. previous lab reports)
-router.post('/:id/documents', authorize(...DOCTOR_ROLES, ...PATIENT_ROLES), upload.array('documents', 5), asyncHandler(async (req, res) => {
-  if (!req.files || req.files.length === 0) {
-    return fail(res, 'No files uploaded', 400);
-  }
-  
-  const uploadedDocs = req.files.map(file => ({
-    url: file.path || file.location,
-    originalName: file.originalname,
-    docType: req.body.docType || 'other',
-  }));
-
-  // Append to clinicalNotes.attachments (assuming schema allows mixed data or specific paths)
-  await Consultation.findByIdAndUpdate(req.params.id, {
-    $push: { 'clinicalNotes.attachments': { $each: uploadedDocs } }
-  });
-
-  ok(res, { documents: uploadedDocs });
-}));
+router.post(
+  '/:id/documents',
+  authorize(...DOCTOR_ROLES, ...PATIENT_ROLES),
+  upload.array('documents', 5),
+  asyncHandler(async (req, res) => {
+    if (!req.files || req.files.length === 0) {
+      return fail(res, 'No files uploaded', 400);
+    }
+    const uploadedDocs = req.files.map((file) => ({
+      url:          file.path || file.location,
+      originalName: file.originalname,
+      docType:      req.body.docType || 'other',
+    }));
+    await Consultation.findByIdAndUpdate(req.params.id, {
+      $push: { 'clinicalNotes.attachments': { $each: uploadedDocs } },
+    });
+    ok(res, { documents: uploadedDocs });
+  }),
+);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // RATING
@@ -653,10 +807,16 @@ router.get('/:id/metrics', authorize(...ADMIN_ROLES, ...DOCTOR_ROLES), asyncHand
 // FOLLOW-UP
 // ═══════════════════════════════════════════════════════════════════════════════
 
-router.post('/:id/follow-up', authorize(...ADMIN_ROLES, ...DOCTOR_ROLES, ...PATIENT_ROLES), asyncHandler(async (req, res) => {
-  const { consultation, agoraTokens } = await createFollowUp(req.params.id, req.body, req.user._id.toString());
-  ok(res, { consultation, agoraTokens }, 201);
-}));
+router.post(
+  '/:id/follow-up',
+  authorize(...ADMIN_ROLES, ...DOCTOR_ROLES, ...PATIENT_ROLES),
+  asyncHandler(async (req, res) => {
+    const { consultation, agoraTokens } = await createFollowUp(
+      req.params.id, req.body, req.user._id.toString(),
+    );
+    ok(res, { consultation, agoraTokens }, 201);
+  }),
+);
 
 router.get('/:id/follow-up/history', asyncHandler(async (req, res) => {
   const history = await getFollowUpHistory(req.params.id);

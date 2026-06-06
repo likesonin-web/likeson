@@ -79,7 +79,8 @@ router.get('/pharmacy-orders', protect, authorize('superadmin'), handleAsync(asy
     const [orders, total] = await Promise.all([
         PharmacyOrder.find(filter)
             .populate('customer', 'name email phone')
-            .populate('store', 'name location')
+            // Removed the duplicate .populate() line here
+            .populate('store', 'storeName contact address status legal')
             .sort({ createdAt: -1 })
             .limit(limit)
             .skip(skip),
