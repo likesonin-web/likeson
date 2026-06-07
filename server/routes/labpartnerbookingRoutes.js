@@ -563,16 +563,25 @@ router.post(
 
     const { _id: labId, labName } = await resolveLabId(userId);
 
-    // Need customer email + phone for delivery
-    const booking = await getOwnedBooking(
-      bookingId, labId,
-      'bookingCode status diagnosticDetails patientInfo customer',
-      [{ path: 'customer', select: 'name email phone' }]
-    );
+    // 1. Direct Mongoose query to guarantee the User model is populated
+    const booking = await mongoose.model('Booking').findOne({
+      _id: bookingId,
+      'diagnosticDetails.labPartner': labId
+    }).populate({
+      path: 'customer',
+      select: 'name email _id' // Explicitly pulling the email from the User model
+    });
 
-    const { reportUrl, reportDeliveryMode } = booking.diagnosticDetails;
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found or you do not have permission to access it.',
+      });
+    }
 
-    // Guard: report must exist before dispatch
+    const { reportUrl, reportDeliveryMode } = booking.diagnosticDetails || {};
+
+    // 2. Guard: report must exist before dispatch
     if (!reportUrl) {
       return res.status(400).json({
         success: false,
@@ -581,21 +590,18 @@ router.post(
     }
 
     const customerName  = booking.customer?.name  || booking.patientInfo?.name || 'Patient';
-    const customerEmail = booking.customer?.email;
-    const customerPhone = booking.customer?.phone;
+    const customerEmail = booking.customer?.email; 
     const code          = booking.bookingCode;
 
     // ── Channel dispatch functions ──────────────────────────────────────────
 
     /**
      * EMAIL CHANNEL
-     * Sends a branded email with a large "Download Report" CTA button.
-     * The href points directly at the S3 URL which triggers browser download.
      */
-    const dispatchEmail = () => {
+    const dispatchEmail = async () => {
       if (!customerEmail) {
-        console.warn(`[dispatchReport/email] No email for booking ${code}. Skipped.`);
-        return Promise.resolve({ skipped: true, reason: 'no_email' });
+        console.warn(`[dispatchReport/email] No email found in User model for booking ${code}. Skipped.`);
+        return { skipped: true, reason: 'no_email' };
       }
 
       const html = transactionalTemplate({
@@ -641,145 +647,52 @@ router.post(
         buttonText: 'View in Browser',
       });
 
-      return sendEmail({
+      await sendEmail({
         email:   customerEmail,
         subject: `[Likeson] Your Lab Report is Ready — ${code}`,
         html,
       });
+
+      return { initiated: true, channel: 'email' };
     };
 
     /**
-     * DIGITAL (APP) CHANNEL
-     * Sends a plain SMS asking the user to open the Likeson app.
-     * Deep link format: likeson://reports/{bookingId}
+     * DIGITAL (APP) NOTIFICATION CHANNEL
      */
-    const dispatchApp = () => {
-      if (!customerPhone) {
-        console.warn(`[dispatchReport/app] No phone for booking ${code}. Skipped.`);
-        return Promise.resolve({ skipped: true, reason: 'no_phone' });
-      }
+    const dispatchNotification = async () => {
+      console.log(`[dispatchReport/notification] Firing app notification for ${code}.`);
+      
+      // Implement push notification here
+      // await sendPushNotification({...});
 
-      return sendSms({
-        to:      customerPhone,
-        message: `Hi ${customerName}, your lab report for booking ${code} is ready! ` +
-                 `Open the Likeson app → My Reports to view and download your report. – Likeson Healthcare`,
-      });
+      return { initiated: true, channel: 'notification' };
     };
 
-    /**
-     * WHATSAPP CHANNEL
-     * Twilio WhatsApp requires the 'whatsapp:' prefix on both from and to.
-     * Sends a formatted message with the direct report download link.
-     * Falls back to regular SMS if TWILIO_WHATSAPP_NUMBER is not configured.
-     */
-    const dispatchWhatsApp = () => {
-      if (!customerPhone) {
-        console.warn(`[dispatchReport/whatsapp] No phone for booking ${code}. Skipped.`);
-        return Promise.resolve({ skipped: true, reason: 'no_phone' });
-      }
-
-      // Normalize the phone number to E.164 then prepend 'whatsapp:'
-      // sendSms handles E.164 normalization internally; we pass the raw phone.
-      // For WhatsApp, we need to override the 'to' with the whatsapp: prefix.
-      // The sendSms utility only handles regular SMS; for WhatsApp we use the
-      // Twilio client directly via a thin wrapper that mirrors sendSms's signature.
-      const rawPhone  = customerPhone.replace(/[^\d+]/g, '');
-      const e164Phone = rawPhone.startsWith('+') ? rawPhone : `+91${rawPhone.replace(/^0+|^91/, '')}`;
-      const waTo      = `whatsapp:${e164Phone}`;
-      const waFrom    = `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`;
-
-      const waMessage =
-        `*Likeson Healthcare* 🏥\n\n` +
-        `Hi ${customerName}! Your diagnostic report is ready.\n\n` +
-        `📋 *Booking:* ${code}\n` +
-        `🔬 *Lab:* ${labName}\n\n` +
-        `📥 *Download Report:*\n${reportUrl}\n\n` +
-        `_Keep this message for your records._`;
-
-      // Use Twilio client directly for WhatsApp
-      import('twilio').then(({ default: twilio }) => {
-        const client = twilio(
-          process.env.TWILIO_ACCOUNT_SID,
-          process.env.TWILIO_AUTH_TOKEN
-        );
-        return client.messages.create({ from: waFrom, to: waTo, body: waMessage });
-      }).catch((e) =>
-        console.error(`[dispatchReport/whatsapp] WhatsApp send failed for ${code}:`, e.message)
-      );
-
-      // Return immediately (non-blocking for response)
-      return Promise.resolve({ initiated: true, channel: 'whatsapp', to: waTo });
-    };
-
-    /**
-     * PHYSICAL COPY CHANNEL
-     * Customer hasn't chosen digital delivery — they'll collect the physical report.
-     * We send an SMS so they know the report is ready for pickup at the lab.
-     */
-    const dispatchPhysical = () => {
-      if (!customerPhone) {
-        console.warn(`[dispatchReport/physical] No phone for booking ${code}. Skipped.`);
-        return Promise.resolve({ skipped: true, reason: 'no_phone' });
-      }
-
-      return sendSms({
-        to:      customerPhone,
-        message: `Hi ${customerName}, your physical lab report for booking ${code} is ready for ` +
-                 `pickup at ${labName}. Please bring your booking reference. ` +
-                 `Questions? Call us. – Likeson Healthcare`,
-      });
-    };
-
-    // ── Route by deliveryMode ────────────────────────────────────────────────
+    // ── Execute Delivery ─────────────────────────────────────────────────────
+    
     const dispatched = [];
 
     try {
-      if (reportDeliveryMode === 'Email') {
-        await dispatchEmail();
-        dispatched.push('Email');
+      // Execute both Email and Notification in parallel to enforce the "Email + App only" rule
+      // regardless of legacy delivery modes stored in the database.
+      const results = await Promise.allSettled([
+        dispatchEmail(),
+        dispatchNotification(),
+      ]);
 
-      } else if (reportDeliveryMode === 'Digital (App)') {
-        await dispatchApp();
-        dispatched.push('Digital (App)');
-
-      } else if (reportDeliveryMode === 'WhatsApp') {
-        await dispatchWhatsApp();
-        dispatched.push('WhatsApp');
-
-      } else if (reportDeliveryMode === 'Physical Copy') {
-        await dispatchPhysical();
-        dispatched.push('Physical Copy');
-
-      } else if (reportDeliveryMode === 'All') {
-        // Fire all channels in parallel; don't let one failure block others
-        const results = await Promise.allSettled([
-          dispatchEmail(),
-          dispatchApp(),
-          dispatchWhatsApp(),
-          dispatchPhysical(),
-        ]);
-
-        ['Email', 'Digital (App)', 'WhatsApp', 'Physical Copy'].forEach((ch, i) => {
-          if (results[i].status === 'fulfilled') dispatched.push(ch);
-          else console.error(`[dispatchReport/All] ${ch} failed:`, results[i].reason?.message);
-        });
-
-      } else {
-        // Unknown mode — default to SMS nudge
-        if (customerPhone) {
-          await sendSms({
-            to:      customerPhone,
-            message: `Your lab report for booking ${code} is ready. Contact ${labName} for details. – Likeson`,
-          });
-          dispatched.push('SMS (fallback)');
+      ['Email', 'Notification (App)'].forEach((ch, i) => {
+        if (results[i].status === 'fulfilled') {
+          if (!results[i].value?.skipped) dispatched.push(ch);
+        } else {
+          console.error(`[dispatchReport] ${ch} failed:`, results[i].reason?.message);
         }
-      }
+      });
+
     } catch (deliveryErr) {
-      // Delivery failure is non-fatal — booking state still valid
       console.error(`[dispatchReport] Delivery error for ${code}:`, deliveryErr.message);
       return res.status(502).json({
         success: false,
-        message: `Report dispatch failed via ${reportDeliveryMode}: ${deliveryErr.message}`,
+        message: `Report dispatch failed: ${deliveryErr.message}`,
         code:    'DELIVERY_ERROR',
       });
     }

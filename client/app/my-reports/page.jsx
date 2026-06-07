@@ -1,1175 +1,772 @@
-// PatientRecord.jsx
-// Full patient profile & history page — Redux-wired, no mock data
-// Stack: React + Framer Motion + Lucide icons + Tailwind CSS + Redux Toolkit
-"use client"
-import { useState, useEffect } from "react";
-import { useDispatch, useSelector } from "react-redux";
-import { motion, AnimatePresence } from "framer-motion";
+'use client';
+
+import { useEffect, useState, useCallback } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { useRouter } from 'next/navigation';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
-  User,
-  Calendar,
-  Clock,
-  FileText,
-  MessageSquare,
-  Pill,
-  Activity,
-  Star,
-  ChevronDown,
-  ChevronUp,
-  Phone,
-  Heart,
-  Thermometer,
-  Droplets,
-  Wind,
-  Scale,
-  Ruler,
-  Video,
-  AudioLines,
-  CheckCircle2,
-  XCircle,
-  AlertCircle,
-  Timer,
-  Download,
-  RefreshCw,
-  Users,
-  Stethoscope,
-  ClipboardList,
-  FilePlus,
-  MoreHorizontal,
-  Shield,
-  Zap,
-  TrendingUp,
-  Eye,
-  Mic,
-  MicOff,
-  LogOut,
-} from "lucide-react";
+  ArrowLeft, FileText, Pill, Download, Eye,
+  ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
+  Calendar, User, Hospital, Clock,
+  CheckCircle2, XCircle, AlertCircle, RefreshCw,
+  Trash2, Upload, X, Search, Stethoscope, FlaskConical,
+  Shield, Loader2, FolderOpen, BadgeCheck, Activity, ZoomIn,
+} from 'lucide-react';
 
-// ── Redux imports ─────────────────────────────────────────────────────────────
 import {
-  fetchConsultationById,
-  fetchNotes,
-  fetchPrescriptions,
-  fetchChatHistory,
-  fetchFollowUpHistory,
-  fetchParticipants,
-  fetchPatientHistory,
-  muteParticipant,
-  unmuteParticipant,
-  kickParticipant,
-  selectConsultation,
-  selectConsultationStatus,
-  selectVitals,
-  selectNotes,
-  selectPrescriptions,
-  selectChatMessages,
-  selectFollowUp,
-  selectDocuments,
-  selectMutedParticipants,
-  selectPatientHistory,
-  selectLoading,
-  selectError,
-} from "@/store/slices/consultationSlice";
+  fetchPrescriptions, fetchPrescriptionByRx,
+  fetchReports, uploadReportFiles, deleteReportFile, fetchKyc,
+  selectPrescriptions, selectPrescriptionsMeta, selectActivePrescription,
+  selectReports, selectReportsTotal, selectKyc, selectSectionLoading,
+} from '@/store/slices/customerProfileSlice';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-const fmtDate = (iso) =>
-  iso
-    ? new Date(iso).toLocaleDateString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      })
-    : "—";
+const TABS = [
+  { id: 'prescriptions', label: 'Prescriptions', icon: Pill },
+  { id: 'reports',       label: 'Lab Reports',   icon: FlaskConical },
+  { id: 'kyc',           label: 'KYC Docs',      icon: Shield },
+];
 
-const fmtTime = (iso) =>
-  iso
-    ? new Date(iso).toLocaleTimeString("en-IN", {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : "—";
-
-const fmtDuration = (sec) => {
-  if (!sec) return "—";
-  return `${Math.floor(sec / 60)} min`;
+const RX_STATUS_MAP = {
+  issued:    { label: 'Issued',    cls: 'badge-info' },
+  dispensed: { label: 'Dispensed', cls: 'badge-success' },
+  expired:   { label: 'Expired',   cls: 'badge-error' },
+  cancelled: { label: 'Cancelled', cls: 'badge-error' },
+  draft:     { label: 'Draft',     cls: 'badge-warning' },
 };
 
-const STATUS_CONFIG = {
-  completed:       { label: "Completed",  color: "bg-success/10 text-success border-success/30",  icon: CheckCircle2 },
-  scheduled:       { label: "Scheduled",  color: "bg-info/10 text-info border-info/30",           icon: Calendar },
-  cancelled:       { label: "Cancelled",  color: "bg-error/10 text-error border-error/30",        icon: XCircle },
-  in_progress:     { label: "Live",       color: "bg-warning/10 text-warning border-warning/30",  icon: Zap },
-  waiting:         { label: "Waiting",    color: "bg-info/10 text-info border-info/30",           icon: Clock },
-  missed:          { label: "Missed",     color: "bg-error/10 text-error border-error/30",        icon: AlertCircle },
-  no_show_patient: { label: "No Show",    color: "bg-error/10 text-error border-error/30",        icon: AlertCircle },
-  paused:          { label: "Paused",     color: "bg-warning/10 text-warning border-warning/30",  icon: Timer },
+const KYC_STATUS_MAP = {
+  Pending:  { label: 'Pending',  cls: 'badge-warning', icon: AlertCircle },
+  Approved: { label: 'Approved', cls: 'badge-success', icon: CheckCircle2 },
+  Rejected: { label: 'Rejected', cls: 'badge-error',   icon: XCircle },
 };
 
-const TYPE_ICON = {
-  video:      Video,
-  audio:      AudioLines,
-  chat:       MessageSquare,
-  in_person:  Users,
-  home_visit: Shield,
+const FREQ_LABELS = {
+  OD: 'Once Daily', BD: 'Twice Daily', TDS: 'Thrice Daily',
+  QID: '4x Daily', SOS: 'As Needed', HS: 'At Bedtime',
+  AC: 'Before Food', PC: 'After Food', STAT: 'Immediately',
+  Weekly: 'Weekly', Monthly: 'Monthly', 'As Directed': 'As Directed',
 };
 
-// ── Animation variants ────────────────────────────────────────────────────────
+// ─── Animation variants ───────────────────────────────────────────────────────
 
 const fadeUp = {
-  hidden:  { opacity: 0, y: 18 },
-  visible: (i = 0) => ({
-    opacity: 1,
-    y: 0,
-    transition: { delay: i * 0.07, duration: 0.4, ease: "easeOut" },
-  }),
+  hidden:  { opacity: 0, y: 20 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.35, ease: 'easeOut' } },
 };
 
-const collapseVariants = {
-  open:   { height: "auto", opacity: 1, transition: { duration: 0.3, ease: "easeOut" } },
-  closed: { height: 0,      opacity: 0, transition: { duration: 0.25, ease: "easeIn" } },
+const stagger = {
+  visible: { transition: { staggerChildren: 0.07 } },
 };
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+const tabPanel = {
+  hidden:  { opacity: 0, x: 16 },
+  visible: { opacity: 1, x: 0, transition: { duration: 0.3 } },
+  exit:    { opacity: 0, x: -16, transition: { duration: 0.2 } },
+};
 
-function StatusBadge({ status }) {
-  const cfg = STATUS_CONFIG[status] || {
-    label: status,
-    color: "bg-base-300 text-base-content",
-    icon: Clock,
-  };
-  const Icon = cfg.icon;
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function PageLoader() {
   return (
-    <span
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold border ${cfg.color}`}
-    >
-      <Icon className="w-3 h-3" />
-      {cfg.label}
-    </span>
+    <div className="flex flex-col items-center justify-center gap-3 py-16">
+      <div className="loading loading-md loading-spinner" />
+      <span className="text-sm text-base-content/50">Loading…</span>
+    </div>
   );
 }
 
-function VitalCard({ icon: Icon, label, value, unit, color = "text-primary" }) {
+function EmptyState({ icon: Icon, title, subtitle }) {
   return (
     <motion.div
-      variants={fadeUp}
-      className="bg-base-200 rounded-xl p-3.5 flex flex-col gap-1.5 border border-base-300 hover:border-primary/30 transition-colors"
+      className="flex flex-col items-center gap-3 py-16 text-center"
+      variants={fadeUp} initial="hidden" animate="visible"
     >
-      <div
-        className={`w-7 h-7 rounded-lg flex items-center justify-center bg-base-300 ${color}`}
-      >
-        <Icon className="w-3.5 h-3.5" />
+      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+        <Icon size={32} />
       </div>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">
-        {label}
-      </p>
-      <p className="text-xl font-black font-montserrat text-base-content">
-        {value ?? "—"}
-        {unit && (
-          <span className="text-xs font-medium text-base-content/50 ml-1">
-            {unit}
-          </span>
-        )}
-      </p>
+      <p className="font-montserrat text-base font-bold text-base-content">{title}</p>
+      <p className="max-w-xs text-sm text-base-content/50">{subtitle}</p>
     </motion.div>
   );
 }
 
-function CollapsibleSection({ title, icon, count, defaultOpen = false, children }) {
-  const [open, setOpen] = useState(defaultOpen);
+function MedicineChip({ med }) {
   return (
-    <div className="bg-base-100 border border-base-300 rounded-2xl overflow-hidden">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-5 py-4 hover:bg-base-200/50 transition-colors"
-      >
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
-            {icon}
-          </div>
-          <span className="text-base font-bold text-base-content font-montserrat">
-            {title}
-            {count !== undefined && (
-              <span className="ml-2 text-xs font-semibold px-1.5 py-0.5 rounded-full bg-primary/10 text-primary">
-                {count}
-              </span>
-            )}
-          </span>
-        </div>
-        {open ? (
-          <ChevronUp className="w-4 h-4 text-base-content/40" />
-        ) : (
-          <ChevronDown className="w-4 h-4 text-base-content/40" />
-        )}
-      </button>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            key="content"
-            initial="closed"
-            animate="open"
-            exit="closed"
-            variants={collapseVariants}
-            className="overflow-hidden"
-          >
-            <div className="px-5 pb-5 pt-1">{children}</div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+    <div className="flex flex-col rounded-selector border border-primary/20 bg-primary/10 px-2 py-1">
+      <span className="text-xs font-bold text-primary">{med.medicineName}</span>
+      <span className="text-[0.65rem] text-base-content/55">
+        {med.dosage} · {FREQ_LABELS[med.frequency] || med.frequency}
+        {med.durationDays ? ` · ${med.durationDays}d` : ''}
+      </span>
     </div>
   );
 }
 
-function LoadingSpinner() {
-  return (
-    <div className="flex items-center justify-center py-8">
-      <div className="loading loading-md loading-spinner" />
-    </div>
-  );
-}
-
-function EmptyState({ message = "No data." }) {
-  return (
-    <p className="text-sm text-base-content/40 text-center py-6">{message}</p>
-  );
-}
-
-// ── Panels ────────────────────────────────────────────────────────────────────
-
-function PatientHeader({ snapshot, prescriptionsCount = 0 }) {
-  const patient = snapshot ?? {};
-  const name = patient.name ?? "Unknown Patient";
-  const initials = name
-    .split(" ")
-    .map((w) => w[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+function PrescriptionCard({ rx, onOpen }) {
+  const status = RX_STATUS_MAP[rx.status] || { label: rx.status, cls: 'badge-primary' };
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: -16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.45, ease: "easeOut" }}
-      className="bg-base-100 border border-base-300 rounded-2xl p-5 md:p-6"
+      className="card flex flex-col overflow-hidden"
+      variants={fadeUp} layout
     >
-      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
-        {/* Avatar */}
-        <div className="w-16 h-16 rounded-2xl bg-primary/15 flex items-center justify-center flex-shrink-0 border-2 border-primary/20">
-          <span className="text-2xl font-black font-montserrat text-primary">
-            {initials}
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-300 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="font-montserrat text-xs font-extrabold tracking-widest text-primary">
+            {rx.rxNumber}
           </span>
+          <span className={`badge badge-sm ${status.cls}`}>{status.label}</span>
+        </div>
+        <span className="flex items-center gap-1 text-xs text-base-content/50">
+          <Calendar size={12} />
+          {new Date(rx.issuedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+        </span>
+      </div>
+
+      {/* Body */}
+      <div className="flex flex-1 flex-col gap-2 px-4 py-3">
+        <div className="flex items-center gap-1.5 text-sm text-base-content">
+          <Stethoscope size={13} className="text-primary" />
+          <span>{rx.doctor?.name}</span>
+          {rx.doctor?.specialization && (
+            <span className="text-base-content/55">· {rx.doctor.specialization}</span>
+          )}
+        </div>
+        {rx.diagnosis && (
+          <div className="flex items-center gap-1.5 text-sm text-base-content">
+            <Activity size={13} className="text-primary" />
+            <span className="font-medium">{rx.diagnosis}</span>
+          </div>
+        )}
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {rx.medicines?.slice(0, 3).map((m) => (
+            <MedicineChip key={m._id} med={m} />
+          ))}
+          {rx.medicines?.length > 3 && (
+            <span className="self-center text-xs text-base-content/50">
+              +{rx.medicines.length - 3} more
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between gap-2 border-t border-base-300 bg-base-200 px-4 py-2">
+        {rx.followUpDate ? (
+          <span className="flex items-center gap-1 text-xs text-base-content/55">
+            <Clock size={11} />
+            Follow-up: {new Date(rx.followUpDate).toLocaleDateString('en-IN')}
+          </span>
+        ) : <span />}
+        <button
+          className="btn btn-sm btn-outline ml-auto"
+          onClick={() => onOpen(rx.rxNumber)}
+        >
+          <Eye size={14} /> View
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
+function PrescriptionDetail({ rx, onClose }) {
+  if (!rx) return null;
+  const status = RX_STATUS_MAP[rx.status] || { label: rx.status, cls: 'badge-primary' };
+
+  return (
+    <motion.div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-sm sm:items-center sm:p-4"
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+    >
+      <motion.div
+        className="flex max-h-[90vh] w-full flex-col overflow-hidden rounded-box rounded-b-none bg-base-100 sm:max-w-2xl sm:rounded-box"
+        initial={{ y: 40, opacity: 0 }} animate={{ y: 0, opacity: 1 }}
+        exit={{ y: 40, opacity: 0 }}
+        transition={{ type: 'spring', stiffness: 260, damping: 28 }}
+      >
+        {/* Header */}
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-base-300 bg-base-100 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-montserrat text-base font-extrabold tracking-widest text-primary">
+              {rx.rxNumber}
+            </span>
+            <span className={`badge ${status.cls}`}>{status.label}</span>
+          </div>
+          <button className="btn btn-ghost btn-circle btn-sm" onClick={onClose}>
+            <X size={16} />
+          </button>
         </div>
 
-        {/* Info */}
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-2 mb-1">
-            <h1 className="text-xl font-black font-montserrat text-base-content">
-              {name}
-            </h1>
-            {patient.bloodGroup && (
-              <span className="badge badge-primary text-[10px]">
-                {patient.bloodGroup}
-              </span>
-            )}
+        {/* Scrollable body */}
+        <div className="flex flex-col gap-4 overflow-y-auto p-4">
+
+          {/* Doctor + Date */}
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              {
+                label: <><User size={12} /> Doctor</>,
+                value: rx.doctor?.name,
+                subs: [rx.doctor?.specialization, rx.doctor?.registrationNumber ? `Reg: ${rx.doctor.registrationNumber}` : null],
+              },
+              {
+                label: <><Calendar size={12} /> Issued</>,
+                value: new Date(rx.issuedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }),
+                subs: [rx.expiresAt ? `Expires: ${new Date(rx.expiresAt).toLocaleDateString('en-IN')}` : null],
+              },
+            ].map((s, i) => (
+              <div key={i} className="flex flex-col gap-0.5">
+                <p className="flex items-center gap-1 text-[0.7rem] font-bold uppercase tracking-widest text-base-content/45">
+                  {s.label}
+                </p>
+                <p className="text-sm font-semibold text-base-content">{s.value}</p>
+                {s.subs.filter(Boolean).map((sub, j) => (
+                  <p key={j} className="text-xs text-base-content/55">{sub}</p>
+                ))}
+              </div>
+            ))}
           </div>
-          <div className="flex flex-wrap gap-3 text-sm text-base-content/60">
-            {(patient.age || patient.gender) && (
-              <span className="flex items-center gap-1">
-                <User className="w-3.5 h-3.5" />
-                {patient.age && `${patient.age}y`}
-                {patient.age && patient.gender && " · "}
-                {patient.gender}
-              </span>
-            )}
-            {patient.phone && (
-              <span className="flex items-center gap-1">
-                <Phone className="w-3.5 h-3.5" /> {patient.phone}
-              </span>
-            )}
-          </div>
-          {patient.allergies?.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              <span className="text-xs text-error/70 font-semibold flex items-center gap-1">
-                <AlertCircle className="w-3 h-3" /> Allergies:
-              </span>
-              {patient.allergies.map((a) => (
-                <span
-                  key={a}
-                  className="text-xs px-2 py-0.5 rounded-full bg-error/10 text-error border border-error/25 font-medium"
-                >
-                  {a}
-                </span>
-              ))}
+
+          {/* Diagnosis */}
+          {rx.diagnosis && (
+            <div className="flex flex-col gap-2 rounded-field border border-base-300 bg-base-200 p-3">
+              <p className="flex items-center gap-1 text-[0.7rem] font-bold uppercase tracking-widest text-base-content/45">
+                <Activity size={12} /> Diagnosis
+              </p>
+              <p className="text-sm font-semibold text-base-content">{rx.diagnosis}</p>
+              {rx.diagnosisCode && (
+                <span className="badge badge-xs badge-secondary">{rx.diagnosisCode}</span>
+              )}
+            </div>
+          )}
+
+          {/* Vitals */}
+          {rx.vitals && Object.values(rx.vitals).some(Boolean) && (
+            <div className="flex flex-col gap-2 rounded-field border border-base-300 bg-base-200 p-3">
+              <p className="flex items-center gap-1 text-[0.7rem] font-bold uppercase tracking-widest text-base-content/45">
+                <Activity size={12} /> Vitals
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {rx.vitals.bloodPressure && <span className="rounded-selector border border-info/30 bg-info/10 px-2 py-0.5 text-xs font-semibold text-info">BP: {rx.vitals.bloodPressure}</span>}
+                {rx.vitals.pulseRate    && <span className="rounded-selector border border-info/30 bg-info/10 px-2 py-0.5 text-xs font-semibold text-info">Pulse: {rx.vitals.pulseRate}</span>}
+                {rx.vitals.temperature  && <span className="rounded-selector border border-info/30 bg-info/10 px-2 py-0.5 text-xs font-semibold text-info">Temp: {rx.vitals.temperature}°C</span>}
+                {rx.vitals.spO2         && <span className="rounded-selector border border-info/30 bg-info/10 px-2 py-0.5 text-xs font-semibold text-info">SpO₂: {rx.vitals.spO2}%</span>}
+                {rx.vitals.weightKg     && <span className="rounded-selector border border-info/30 bg-info/10 px-2 py-0.5 text-xs font-semibold text-info">Wt: {rx.vitals.weightKg}kg</span>}
+              </div>
+            </div>
+          )}
+
+          {/* Medicines */}
+          {rx.medicines?.length > 0 && (
+            <div className="flex flex-col gap-2 rounded-field border border-base-300 bg-base-200 p-3">
+              <p className="flex items-center gap-1 text-[0.7rem] font-bold uppercase tracking-widest text-base-content/45">
+                <Pill size={12} /> Medicines ({rx.medicines.length})
+              </p>
+              <div className="flex flex-col gap-2">
+                {rx.medicines.map((m, i) => (
+                  <div
+                    key={m._id || i}
+                    className="flex flex-col gap-1.5 rounded-field border border-base-300 bg-base-100 p-3"
+                  >
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-sm font-bold text-base-content">{m.medicineName}</span>
+                      {m.genericName && (
+                        <span className="text-xs text-base-content/55">({m.genericName})</span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="badge badge-xs badge-primary">{m.dosage}</span>
+                      <span className="badge badge-xs badge-secondary">{FREQ_LABELS[m.frequency] || m.frequency}</span>
+                      {m.timing && <span className="badge badge-xs badge-accent">{m.timing}</span>}
+                      {m.durationDays && (
+                        <span className="text-xs text-base-content/55">{m.durationDays}d</span>
+                      )}
+                    </div>
+                    {m.instructions && (
+                      <p className="text-xs italic text-base-content/55">{m.instructions}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Lab Tests */}
+          {rx.labTests?.length > 0 && (
+            <div className="flex flex-col gap-2 rounded-field border border-base-300 bg-base-200 p-3">
+              <p className="flex items-center gap-1 text-[0.7rem] font-bold uppercase tracking-widest text-base-content/45">
+                <FlaskConical size={12} /> Lab Tests
+              </p>
+              <div className="flex flex-col divide-y divide-base-300">
+                {rx.labTests.map((t, i) => (
+                  <div key={i} className="flex items-center justify-between py-2">
+                    <span className="text-sm font-medium text-base-content">{t.testName}</span>
+                    {t.urgency !== 'routine' && (
+                      <span className="badge badge-xs badge-warning">{t.urgency}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Advice / Follow-up */}
+          {(rx.advice || rx.followUpDate) && (
+            <div className="flex flex-col gap-2 rounded-field border border-base-300 bg-base-200 p-3">
+              {rx.advice && (
+                <>
+                  <p className="text-[0.7rem] font-bold uppercase tracking-widest text-base-content/45">
+                    Advice
+                  </p>
+                  <p className="text-sm leading-relaxed text-base-content">{rx.advice}</p>
+                </>
+              )}
+              {rx.followUpDate && (
+                <div className="mt-1 inline-flex items-center gap-1.5 rounded-selector border border-info/30 bg-info/10 px-2.5 py-1 text-xs font-semibold text-info">
+                  <Clock size={12} />
+                  Follow-up: {new Date(rx.followUpDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })}
+                  {rx.followUpInstructions && <span>· {rx.followUpInstructions}</span>}
+                </div>
+              )}
             </div>
           )}
         </div>
-
-        {/* Stats */}
-        <div className="flex flex-row sm:flex-col gap-3 sm:gap-2 text-right">
-          <div>
-            <p className="text-2xl font-black font-montserrat text-primary">
-              {prescriptionsCount}
-            </p>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">
-              Prescriptions
-            </p>
-          </div>
-        </div>
-      </div>
+      </motion.div>
     </motion.div>
   );
 }
 
-function VitalsPanel({ vitals }) {
-  const isLoading = useSelector(selectLoading("clinical"));
+function ReportEventCard({ report, onUpload, onDeleteFile }) {
+  const [expanded, setExpanded] = useState(false);
+  const [lightbox, setLightbox] = useState(null);
+  const loading = useSelector(selectSectionLoading('reports'));
 
-  const items = vitals
-    ? [
-        {
-          icon: Heart,
-          label: "Blood Pressure",
-          value:
-            vitals.bloodPressureSystolic && vitals.bloodPressureDiastolic
-              ? `${vitals.bloodPressureSystolic}/${vitals.bloodPressureDiastolic}`
-              : null,
-          unit: "mmHg",
-          color: "text-error",
-        },
-        { icon: Activity,    label: "Pulse Rate",   value: vitals.pulseRate,        unit: "bpm",   color: "text-primary" },
-        { icon: Thermometer, label: "Temperature",  value: vitals.temperatureC,     unit: "°C",    color: "text-warning" },
-        { icon: Droplets,    label: "SpO₂",         value: vitals.spO2 != null ? `${vitals.spO2}%` : null, unit: "", color: "text-info" },
-        { icon: Wind,        label: "Resp. Rate",   value: vitals.respiratoryRate,  unit: "/min",  color: "text-accent" },
-        { icon: Scale,       label: "Weight",       value: vitals.weightKg,         unit: "kg",    color: "text-success" },
-        { icon: Ruler,       label: "Height",       value: vitals.heightCm,         unit: "cm",    color: "text-secondary" },
-        { icon: Zap,         label: "Blood Glucose",value: vitals.bloodGlucose,     unit: "mg/dL", color: "text-warning" },
-      ]
-    : [];
+  const isImage = (url) => /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
 
-  return (
-    <CollapsibleSection
-      title="Vitals (Active Session)"
-      icon={<Activity className="w-4 h-4 text-primary" />}
-      defaultOpen
-    >
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : !vitals ? (
-        <EmptyState message="No vitals recorded for the selected session." />
-      ) : (
-        <>
-          <p className="text-xs text-base-content/40 mb-3">
-            Recorded {fmtDate(vitals.recordedAt)} · {fmtTime(vitals.recordedAt)}
-          </p>
-          <motion.div
-            initial="hidden"
-            animate="visible"
-            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5"
-          >
-            {items.map((v, i) => (
-              <motion.div key={v.label} custom={i} variants={fadeUp}>
-                <VitalCard {...v} />
-              </motion.div>
-            ))}
-          </motion.div>
-        </>
-      )}
-    </CollapsibleSection>
-  );
-}
-
-function ConsultationCard({ c, index, isActive, onClick }) {
-  const TypeIcon = TYPE_ICON[c.consultationType] || Video;
-  const isLive = c.status === "in_progress";
+  const handleUpload = (e) => {
+    const files = e.target.files;
+    if (!files?.length) return;
+    const fd = new FormData();
+    Array.from(files).forEach((f) => fd.append('reportFiles', f));
+    onUpload(report.eventId, fd);
+  };
 
   return (
     <motion.div
-      onClick={onClick}
-      custom={index}
-      variants={fadeUp}
-      initial="hidden"
-      animate="visible"
-      className={`relative border rounded-xl p-4 transition-all cursor-pointer hover:shadow-sm ${
-        isActive
-          ? "border-primary ring-1 ring-primary shadow-md"
-          : "hover:border-primary/40 border-base-300"
-      } ${isLive ? "bg-warning/5" : "bg-base-100"}`}
+      className="overflow-hidden rounded-box border border-base-300 bg-base-100 transition-colors hover:border-primary/30"
+      variants={fadeUp} layout
     >
-      {isLive && (
-        <div className="absolute top-3 right-3 flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-warning animate-pulse" />
-          <span className="text-[10px] font-bold uppercase tracking-wider text-warning">
-            Live
+      {/* Accordion header */}
+      <div
+        className="flex cursor-pointer items-center gap-3 px-4 py-3"
+        onClick={() => setExpanded((p) => !p)}
+      >
+        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-field bg-primary/10 text-primary">
+          <FileText size={16} />
+        </div>
+        <div className="flex flex-1 flex-col gap-0.5 min-w-0">
+          <p className="truncate text-sm font-bold text-base-content">{report.eventTitle}</p>
+          <div className="flex flex-wrap gap-2">
+            {report.hospitalName && (
+              <span className="flex items-center gap-1 text-[0.7rem] text-base-content/50">
+                <Hospital size={11} /> {report.hospitalName}
+              </span>
+            )}
+            {report.doctorName && (
+              <span className="flex items-center gap-1 text-[0.7rem] text-base-content/50">
+                <User size={11} /> {report.doctorName}
+              </span>
+            )}
+            <span className="flex items-center gap-1 text-[0.7rem] text-base-content/50">
+              <Calendar size={11} />
+              {new Date(report.date).toLocaleDateString('en-IN')}
+            </span>
+          </div>
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-2 text-base-content/50">
+          <span className="badge badge-sm badge-primary">
+            {report.reportUrls.length} file{report.reportUrls.length !== 1 ? 's' : ''}
           </span>
+          {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
         </div>
-      )}
+      </div>
 
-      <div className="flex flex-col sm:flex-row sm:items-start gap-3">
-        <div
-          className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
-            isActive
-              ? "bg-primary text-primary-content"
-              : isLive
-              ? "bg-warning/15 text-warning"
-              : "bg-primary/10 text-primary"
-          }`}
-        >
-          <TypeIcon className="w-4 h-4" />
-        </div>
+      {/* Files panel */}
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            className="overflow-hidden border-t border-base-300"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25 }}
+          >
+            <div className="flex flex-wrap gap-3 p-4">
+              {report.reportUrls.map((url, i) => (
+                <div
+                  key={i}
+                  className="group relative h-[90px] w-[90px] flex-shrink-0 overflow-hidden rounded-field border border-base-300 bg-base-200"
+                >
+                  {isImage(url) ? (
+                    <img src={url} alt={`report-${i}`} className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-primary">
+                      <FileText size={28} />
+                      <span className="text-[0.65rem] font-bold">PDF</span>
+                    </div>
+                  )}
+                  {/* Hover actions */}
+                  <div className="absolute inset-0 flex items-center justify-center gap-1.5 bg-black/55 opacity-0 transition-opacity group-hover:opacity-100">
+                    {isImage(url) && (
+                      <button
+                        className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15 text-white transition-colors hover:bg-white/30"
+                        onClick={() => setLightbox(url)}
+                      >
+                        <ZoomIn size={13} />
+                      </button>
+                    )}
+                    <a
+                      href={url} target="_blank" rel="noopener noreferrer"
+                      className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15 text-white transition-colors hover:bg-white/30"
+                    >
+                      <Download size={13} />
+                    </a>
+                    <button
+                      className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15 text-white transition-colors hover:bg-error/70"
+                      onClick={() => onDeleteFile(report.eventId, url)}
+                      disabled={loading}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
 
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-2 mb-0.5">
-            <p className="text-xs font-mono text-base-content/40">
-              {c.consultationCode}
-            </p>
-            <StatusBadge status={c.status} />
-            {c.isFollowUp && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/25 font-bold uppercase tracking-wider">
-                Follow-up
-              </span>
-            )}
-          </div>
-          <p className="font-bold text-base-content text-sm truncate">
-            {c.doctorSnapshot?.name ?? "—"}
-          </p>
-          <p className="text-xs text-base-content/50">
-            {c.doctorSnapshot?.specialization ?? ""}
-          </p>
-
-          <div className="flex flex-wrap gap-3 mt-2 text-xs text-base-content/50">
-            <span className="flex items-center gap-1">
-              <Calendar className="w-3.5 h-3.5" /> {fmtDate(c.scheduledAt)}
-            </span>
-            <span className="flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5" /> {fmtTime(c.scheduledAt)}
-            </span>
-            {c.actualDurationSec && (
-              <span className="flex items-center gap-1">
-                <Timer className="w-3.5 h-3.5" />{" "}
-                {fmtDuration(c.actualDurationSec)}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {c.isRated && c.rating && (
-          <div className="flex items-center gap-1 flex-shrink-0">
-            {[1, 2, 3, 4, 5].map((s) => (
-              <Star
-                key={s}
-                className={`w-3.5 h-3.5 ${
-                  s <= c.rating.overallRating
-                    ? "text-warning fill-warning"
-                    : "text-base-300"
-                }`}
-              />
-            ))}
-          </div>
+              {/* Upload slot */}
+              <label className="flex h-[90px] w-[90px] flex-shrink-0 cursor-pointer flex-col items-center justify-center gap-1 rounded-field border-2 border-dashed border-primary/40 bg-primary/5 text-primary transition-colors hover:border-primary hover:bg-primary/10">
+                <input
+                  type="file" multiple
+                  accept="image/jpeg,image/png,image/webp,application/pdf"
+                  onChange={handleUpload}
+                  disabled={loading}
+                  className="hidden"
+                />
+                {loading
+                  ? <Loader2 size={20} className="animate-spin" />
+                  : <Upload size={20} />
+                }
+                <span className="text-[0.65rem] font-bold">Add Files</span>
+              </label>
+            </div>
+          </motion.div>
         )}
+      </AnimatePresence>
+
+      {/* Lightbox */}
+      <AnimatePresence>
+        {lightbox && (
+          <motion.div
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/88 p-4"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            onClick={() => setLightbox(null)}
+          >
+            <motion.img
+              src={lightbox} alt="report"
+              className="max-h-[90vh] max-w-full rounded-box object-contain shadow-2xl"
+              initial={{ scale: 0.85 }} animate={{ scale: 1 }} exit={{ scale: 0.85 }}
+              onClick={(e) => e.stopPropagation()}
+            />
+            <button
+              className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-white transition-colors hover:bg-white/30"
+              onClick={() => setLightbox(null)}
+            >
+              <X size={20} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+function KycCard({ doc }) {
+  const statusInfo = KYC_STATUS_MAP[doc.verificationStatus] || { label: doc.verificationStatus, cls: 'badge-primary', icon: AlertCircle };
+  const StatusIcon = statusInfo.icon;
+
+  return (
+    <motion.div
+      className="flex flex-wrap items-start justify-between gap-3 rounded-box border border-base-300 bg-base-100 p-4 transition-all hover:border-primary/30 hover:shadow-depth"
+      variants={fadeUp}
+    >
+      <div className="flex items-start gap-3">
+        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-field bg-gradient-to-br from-primary to-secondary text-primary-content">
+          <BadgeCheck size={18} />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <p className="font-montserrat text-sm font-extrabold text-base-content">{doc.type}</p>
+          {doc.holderName && (
+            <p className="text-xs font-medium text-base-content">{doc.holderName}</p>
+          )}
+          {doc.documentNumber && (
+            <p className="font-mono text-[0.7rem] text-base-content/50">#{doc.documentNumber}</p>
+          )}
+        </div>
+      </div>
+      <div className="flex flex-col items-end gap-2">
+        <span className={`badge badge-sm ${statusInfo.cls}`}>
+          <StatusIcon size={11} /> {statusInfo.label}
+        </span>
+        <div className="flex gap-1.5">
+          {doc.documentUrl && (
+            <a
+              href={doc.documentUrl} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-selector border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary transition-colors hover:bg-primary/20"
+            >
+              <Eye size={13} /> Front
+            </a>
+          )}
+          {doc.backSideUrl && (
+            <a
+              href={doc.backSideUrl} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-selector border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary transition-colors hover:bg-primary/20"
+            >
+              <Eye size={13} /> Back
+            </a>
+          )}
+        </div>
       </div>
     </motion.div>
   );
 }
 
-// Display patient's overall history fetched from Redux
-function ConsultationsPanel({ history, activeId, onSelect }) {
-  const [filter, setFilter] = useState("all");
-  const filters = ["all", "completed", "scheduled", "in_progress", "cancelled"];
-  const isLoading = useSelector(selectLoading("fetch"));
+// ─── Main Page ────────────────────────────────────────────────────────────────
 
-  const visible =
-    filter === "all"
-      ? history
-      : history.filter((c) => c.status === filter);
+export default function MyReports() {
+  const dispatch = useDispatch();
+  const router   = useRouter();
+
+  const [activeTab, setActiveTab] = useState('prescriptions');
+  const [rxStatus,  setRxStatus]  = useState('');
+  const [rxSearch,  setRxSearch]  = useState('');
+  const [detailRx,  setDetailRx]  = useState(false);
+  const [rxPage,    setRxPage]    = useState(1);
+
+  const prescriptions      = useSelector(selectPrescriptions);
+  const prescriptionsMeta  = useSelector(selectPrescriptionsMeta);
+  const activePrescription = useSelector(selectActivePrescription);
+  const reports            = useSelector(selectReports);
+  const reportsTotal       = useSelector(selectReportsTotal);
+  const kyc                = useSelector(selectKyc);
+
+  const rxLoading      = useSelector(selectSectionLoading('prescriptions'));
+  const reportsLoading = useSelector(selectSectionLoading('reports'));
+  const kycLoading     = useSelector(selectSectionLoading('kyc'));
+
+  useEffect(() => {
+    if (activeTab === 'prescriptions') {
+      dispatch(fetchPrescriptions({ page: rxPage, limit: 8, status: rxStatus || undefined }));
+    } else if (activeTab === 'reports') {
+      dispatch(fetchReports());
+    } else if (activeTab === 'kyc') {
+      dispatch(fetchKyc());
+    }
+  }, [activeTab, rxPage, rxStatus, dispatch]);
+
+  const handleOpenDetail = useCallback(async (rxNumber) => {
+    await dispatch(fetchPrescriptionByRx(rxNumber));
+    setDetailRx(true);
+  }, [dispatch]);
+
+  const handleUploadFiles = useCallback((eventId, formData) => {
+    dispatch(uploadReportFiles({ eventId, formData }));
+  }, [dispatch]);
+
+  const handleDeleteFile = useCallback((eventId, url) => {
+    if (window.confirm('Remove this file?')) {
+      dispatch(deleteReportFile({ eventId, url }));
+    }
+  }, [dispatch]);
+
+  const filteredRx = rxSearch
+    ? prescriptions.filter((rx) =>
+        rx.rxNumber.toLowerCase().includes(rxSearch.toLowerCase()) ||
+        rx.doctor?.name?.toLowerCase().includes(rxSearch.toLowerCase()) ||
+        rx.diagnosis?.toLowerCase().includes(rxSearch.toLowerCase())
+      )
+    : prescriptions;
 
   return (
-    <CollapsibleSection
-      title="Consultation History"
-      icon={<Stethoscope className="w-4 h-4 text-primary" />}
-      count={history.length}
-      defaultOpen
-    >
-      <div className="flex flex-wrap gap-1.5 mb-4">
-        {filters.map((f) => (
+    <div data-theme="customer" className="min-h-screen bg-base-100 pb-12">
+
+      {/* ── Sticky Header ── */}
+      <div className="sticky top-0 z-30 flex items-start gap-3 border-b border-base-300 bg-base-100/90 px-4 py-4 backdrop-blur-soft md:px-8 md:py-5">
+        <button
+          className="btn btn-ghost btn-sm mt-0.5 flex-shrink-0 gap-1.5"
+          onClick={() => router.back()}
+        >
+          <ArrowLeft size={16} /> Back
+        </button>
+        <div className="flex flex-col gap-0.5">
+          <h3 className="font-montserrat text-xl font-black tracking-tight text-base-content md:text-2xl">
+            My Health Records
+          </h3>
+          <p className="text-xs text-base-content/50">Prescriptions, lab reports &amp; documents</p>
+        </div>
+      </div>
+
+      {/* ── Tabs ── */}
+      <div className="flex gap-1 overflow-x-auto border-b border-base-300 bg-base-100 px-4 scrollbar-thin md:px-8">
+        {TABS.map(({ id, label, icon: Icon }) => (
           <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all capitalize ${
-              filter === f
-                ? "bg-primary text-primary-content"
-                : "bg-base-200 text-base-content/60 hover:bg-base-300"
-            }`}
+            key={id}
+            onClick={() => setActiveTab(id)}
+            className={[
+              'inline-flex flex-shrink-0 items-center gap-1.5 rounded-t-field border-b-2 px-4 py-3 text-xs font-semibold transition-all',
+              activeTab === id
+                ? 'border-primary bg-primary/8 text-primary'
+                : 'border-transparent text-base-content/60 hover:bg-primary/5 hover:text-primary',
+            ].join(' ')}
           >
-            {f === "all" ? "All" : STATUS_CONFIG[f]?.label ?? f}
+            <Icon size={14} /> {label}
           </button>
         ))}
       </div>
 
-      <div className="flex flex-col gap-2.5 max-h-[500px] overflow-y-auto pr-1 scrollbar-thin">
-        {isLoading && history.length === 0 ? (
-           <LoadingSpinner />
-        ) : (
-          <AnimatePresence mode="popLayout">
-            {visible.length === 0 ? (
-              <EmptyState message="No consultations found." />
-            ) : (
-              visible.map((c, i) => (
-                <ConsultationCard
-                  key={c._id}
-                  c={c}
-                  index={i}
-                  isActive={c._id === activeId}
-                  onClick={() => onSelect(c._id)}
-                />
-              ))
-            )}
-          </AnimatePresence>
-        )}
-      </div>
-    </CollapsibleSection>
-  );
-}
-
-function PrescriptionsPanel() {
-  const prescriptions = useSelector(selectPrescriptions);
-  const isLoading = useSelector(selectLoading("clinical"));
-  const [expanded, setExpanded] = useState(null);
-
-  return (
-    <CollapsibleSection
-      title="Prescriptions"
-      icon={<Pill className="w-4 h-4 text-primary" />}
-      count={prescriptions.length}
-      defaultOpen
-    >
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : prescriptions.length === 0 ? (
-        <EmptyState message="No prescriptions." />
-      ) : (
-        <div className="flex flex-col gap-3">
-          {prescriptions.map((rx, i) => (
-            <motion.div
-              key={rx._id}
-              custom={i}
-              variants={fadeUp}
-              initial="hidden"
-              animate="visible"
-            >
-              <div className="border border-base-300 rounded-xl overflow-hidden">
-                <button
-                  onClick={() =>
-                    setExpanded(expanded === rx._id ? null : rx._id)
-                  }
-                  className="w-full flex items-center justify-between p-3.5 hover:bg-base-200/50 transition-colors text-left"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                        rx.status === "issued" ? "bg-success/10" : "bg-base-300"
-                      }`}
-                    >
-                      <Pill
-                        className={`w-4 h-4 ${
-                          rx.status === "issued"
-                            ? "text-success"
-                            : "text-base-content/40"
-                        }`}
-                      />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-mono text-base-content/40">
-                        {rx.rxNumber}
-                      </p>
-                      <p className="text-sm font-bold text-base-content truncate">
-                        {rx.diagnosis ?? "—"}
-                      </p>
-                      <p className="text-xs text-base-content/50">
-                        {rx.doctor?.name ?? "—"} · {fmtDate(rx.issuedAt)}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-                    <span
-                      className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${
-                        rx.status === "issued"
-                          ? "bg-success/10 text-success border-success/30"
-                          : rx.status === "expired"
-                          ? "bg-error/10 text-error border-error/30"
-                          : "bg-base-300 text-base-content/50 border-base-300"
-                      }`}
-                    >
-                      {rx.status}
-                    </span>
-                    {expanded === rx._id ? (
-                      <ChevronUp className="w-4 h-4 text-base-content/40" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4 text-base-content/40" />
-                    )}
-                  </div>
-                </button>
-
-                <AnimatePresence initial={false}>
-                  {expanded === rx._id && (
-                    <motion.div
-                      initial="closed"
-                      animate="open"
-                      exit="closed"
-                      variants={collapseVariants}
-                      className="overflow-hidden"
-                    >
-                      <div className="border-t border-base-300 px-4 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-base-content/40 mb-2">
-                          Medicines ({rx.medicines?.length ?? 0})
-                        </p>
-                        <div className="flex flex-col gap-2">
-                          {(rx.medicines ?? []).map((m, idx) => (
-                            <div
-                              key={idx}
-                              className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 p-2.5 bg-base-200 rounded-lg"
-                            >
-                              <p className="text-sm font-semibold text-base-content flex-1">
-                                {m.medicineName}
-                              </p>
-                              <div className="flex flex-wrap gap-1.5">
-                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-bold">
-                                  {m.frequency}
-                                </span>
-                                {m.durationDays && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-base-300 text-base-content/60 font-medium">
-                                    {m.durationDays}d
-                                  </span>
-                                )}
-                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-base-300 text-base-content/60 font-medium">
-                                  {m.timing}
-                                </span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="flex items-center justify-between mt-3 pt-3 border-t border-base-300">
-                          <p className="text-xs text-base-content/40">
-                            Expires {fmtDate(rx.expiresAt)}
-                          </p>
-                          <button className="btn btn-xs btn-outline flex items-center gap-1">
-                            <Download className="w-3 h-3" /> Download
-                          </button>
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-            </motion.div>
-          ))}
-        </div>
-      )}
-    </CollapsibleSection>
-  );
-}
-
-function ChatPanel() {
-  const messages = useSelector(selectChatMessages);
-  const isLoading = useSelector(selectLoading("chat"));
-
-  return (
-    <CollapsibleSection
-      title="Session Chat"
-      icon={<MessageSquare className="w-4 h-4 text-primary" />}
-      count={messages.length}
-    >
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : messages.length === 0 ? (
-        <EmptyState message="No chat messages." />
-      ) : (
-        <div className="flex flex-col gap-2.5 max-h-72 overflow-y-auto pr-1 scrollbar-thin">
-          {messages
-            .filter((m) => !m.isDeleted)
-            .map((msg, i) => {
-              const isDoctor = msg.senderRole === "doctor";
-              return (
-                <motion.div
-                  key={msg._id}
-                  custom={i}
-                  variants={fadeUp}
-                  initial="hidden"
-                  animate="visible"
-                  className={`flex ${isDoctor ? "justify-start" : "justify-end"}`}
-                >
-                  <div
-                    className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 ${
-                      isDoctor
-                        ? "bg-base-200 text-base-content rounded-tl-none"
-                        : "bg-primary text-primary-content rounded-tr-none"
-                    }`}
-                  >
-                    <p
-                      className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${
-                        isDoctor ? "text-primary" : "text-primary-content/70"
-                      }`}
-                    >
-                      {isDoctor ? "Doctor" : "Patient"}
-                    </p>
-                    <p className="text-sm leading-relaxed">{msg.content}</p>
-                    <p
-                      className={`text-[10px] mt-1 ${
-                        isDoctor
-                          ? "text-base-content/40"
-                          : "text-primary-content/60"
-                      }`}
-                    >
-                      {fmtTime(msg.sentAt)}
-                    </p>
-                  </div>
-                </motion.div>
-              );
-            })}
-        </div>
-      )}
-    </CollapsibleSection>
-  );
-}
-
-function DocumentsPanel() {
-  const documents = useSelector(selectDocuments);
-
-  const DOC_ICONS = {
-    lab_report:   { icon: ClipboardList, color: "text-info" },
-    imaging:      { icon: Eye,           color: "text-accent" },
-    prescription: { icon: FileText,      color: "text-success" },
-    other:        { icon: FileText,      color: "text-base-content/50" },
-  };
-
-  return (
-    <CollapsibleSection
-      title="Documents"
-      icon={<FileText className="w-4 h-4 text-primary" />}
-      count={documents.length}
-    >
-      {documents.length === 0 ? (
-        <EmptyState message="No documents uploaded." />
-      ) : (
-        <div className="flex flex-col gap-2">
-          {documents.map((doc, i) => {
-            const dcfg = DOC_ICONS[doc.docType] || DOC_ICONS.other;
-            const DocIcon = dcfg.icon;
-            return (
-              <motion.div
-                key={doc._id ?? i}
-                custom={i}
-                variants={fadeUp}
-                initial="hidden"
-                animate="visible"
-                className="flex items-center gap-3 p-3 bg-base-200 rounded-xl hover:bg-base-300/50 transition-colors group"
-              >
-                <div className="w-8 h-8 rounded-lg bg-base-300 flex items-center justify-center flex-shrink-0">
-                  <DocIcon className={`w-4 h-4 ${dcfg.color}`} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-base-content truncate">
-                    {doc.originalName}
-                  </p>
-                  <p className="text-xs text-base-content/40 capitalize">
-                    {doc.docType?.replace("_", " ")} · {fmtDate(doc.uploadedAt)}
-                  </p>
-                </div>
-                <a
-                  href={doc.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="opacity-0 group-hover:opacity-100 transition-opacity btn btn-xs btn-ghost"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                </a>
-              </motion.div>
-            );
-          })}
-        </div>
-      )}
-      <button className="mt-3 w-full btn btn-outline btn-sm flex items-center gap-2">
-        <FilePlus className="w-4 h-4" /> Upload Document
-      </button>
-    </CollapsibleSection>
-  );
-}
-
-function ClinicalNotesPanel() {
-  const notes = useSelector(selectNotes);
-  const isLoading = useSelector(selectLoading("clinical"));
-
-  const sections = notes
-    ? [
-        { label: "Chief Complaint", value: notes.chiefComplaint },
-        { label: "Subjective",      value: notes.subjective },
-        { label: "Objective",       value: notes.objective },
-        { label: "Assessment",      value: notes.assessment },
-        { label: "Plan",            value: notes.plan },
-        { label: "Lifestyle",       value: notes.lifestyleAdvice },
-      ]
-    : [];
-
-  return (
-    <CollapsibleSection
-      title="Clinical Notes"
-      icon={<ClipboardList className="w-4 h-4 text-primary" />}
-    >
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : !notes ? (
-        <EmptyState message="No clinical notes for this session." />
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {sections.map((s, i) => (
-            <motion.div
-              key={s.label}
-              custom={i}
-              variants={fadeUp}
-              initial="hidden"
-              animate="visible"
-            >
-              <div className="bg-base-200 rounded-xl p-3.5 h-full">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-base-content/40 mb-1">
-                  {s.label}
-                </p>
-                <p className="text-sm text-base-content leading-relaxed">
-                  {s.value || "—"}
-                </p>
-              </div>
-            </motion.div>
-          ))}
-        </div>
-      )}
-    </CollapsibleSection>
-  );
-}
-
-function FollowUpPanel() {
-  const { chain } = useSelector(selectFollowUp);
-  const isLoading = useSelector(selectLoading("followUp"));
-
-  return (
-    <CollapsibleSection
-      title="Follow-up Chain"
-      icon={<RefreshCw className="w-4 h-4 text-primary" />}
-      count={chain.length}
-    >
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : chain.length === 0 ? (
-        <EmptyState message="No follow-up chain established." />
-      ) : (
-        <div className="relative">
-          <div className="absolute left-4 top-4 bottom-4 w-0.5 bg-base-300" />
-          <div className="flex flex-col gap-3 pl-10">
-            {chain.map((c, i) => (
-              <motion.div
-                key={c._id}
-                custom={i}
-                variants={fadeUp}
-                initial="hidden"
-                animate="visible"
-                className="relative"
-              >
-                <div
-                  className={`absolute -left-10 top-3.5 w-4 h-4 rounded-full border-2 flex items-center justify-center ${
-                    c.status === "completed"
-                      ? "bg-success border-success"
-                      : "bg-base-100 border-primary"
-                  }`}
-                >
-                  {c.status === "completed" ? (
-                    <CheckCircle2 className="w-2.5 h-2.5 text-white" />
-                  ) : (
-                    <div className="w-1.5 h-1.5 rounded-full bg-primary" />
-                  )}
-                </div>
-
-                <div
-                  className={`border rounded-xl p-3.5 ${
-                    c.status === "completed"
-                      ? "bg-base-100 border-base-300"
-                      : "bg-primary/5 border-primary/25"
-                  }`}
-                >
-                  <div className="flex flex-wrap items-center gap-2 mb-1">
-                    <p className="text-xs font-mono text-base-content/40">
-                      {c.consultationCode}
-                    </p>
-                    <StatusBadge status={c.status} />
-                    {c.isFollowUp && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/25 font-bold uppercase">
-                        Follow-up
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-sm font-bold text-base-content">
-                    {c.doctorSnapshot?.name ?? "—"}
-                  </p>
-                  <p className="text-xs text-base-content/50 mt-0.5">
-                    {fmtDate(c.scheduledAt)} · {fmtTime(c.scheduledAt)}
-                  </p>
-                </div>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <button className="mt-4 w-full btn btn-outline btn-sm flex items-center gap-2">
-        <FilePlus className="w-4 h-4" /> Schedule Follow-up
-      </button>
-    </CollapsibleSection>
-  );
-}
-
-function ParticipantControls({ consultationId }) {
-  const dispatch = useDispatch();
-  const mutedParticipants = useSelector(selectMutedParticipants);
-  const consultation = useSelector(selectConsultation);
-
-  const pId = consultation?.patient?.toString?.() ?? consultation?.patient;
-  const isPatientMuted = pId ? mutedParticipants.includes(pId) : false;
-
-  const handleMuteToggle = () => {
-    if (!pId || !consultationId) return;
-    if (isPatientMuted) {
-      dispatch(unmuteParticipant({ id: consultationId, userId: pId }));
-    } else {
-      dispatch(muteParticipant({ id: consultationId, userId: pId }));
-    }
-  };
-
-  const handleKick = () => {
-    if (!pId || !consultationId) return;
-    dispatch(kickParticipant({ id: consultationId, userId: pId, reason: "Removed by doctor" }));
-  };
-
-  return (
-    <CollapsibleSection
-      title="Session Controls"
-      icon={<Users className="w-4 h-4 text-primary" />}
-    >
-      <p className="text-xs text-base-content/40 mb-3">
-        Doctor controls for active session participants
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <button
-          onClick={handleMuteToggle}
-          disabled={!pId || !consultationId}
-          className={`btn btn-sm flex items-center gap-1.5 ${
-            isPatientMuted ? "btn-warning" : "btn-outline"
-          }`}
-        >
-          {isPatientMuted ? (
-            <MicOff className="w-3.5 h-3.5" />
-          ) : (
-            <Mic className="w-3.5 h-3.5" />
-          )}
-          {isPatientMuted ? "Unmute" : "Mute"} Patient
-        </button>
-        <button
-          onClick={handleKick}
-          disabled={!pId || !consultationId}
-          className="btn btn-sm btn-error btn-outline flex items-center gap-1.5"
-        >
-          <LogOut className="w-3.5 h-3.5" /> Kick Participant
-        </button>
-      </div>
-    </CollapsibleSection>
-  );
-}
-
-// ── Main Page ─────────────────────────────────────────────────────────────────
-
-export default function PatientRecord() {
-  const dispatch = useDispatch();
-  const [activeTab, setActiveTab] = useState("overview");
-  const [activeConsultId, setActiveConsultId] = useState(null);
-
-  // Retrieve the logged-in user to derive the patientId
-  const user = useSelector((state) => state.user?.user);
-  const patientId = user?._id || user?.id;
-
-  const patientHistory = useSelector(selectPatientHistory);
-  const consultation = useSelector(selectConsultation);
-  const vitals = useSelector(selectVitals);
-  const isFetchLoading = useSelector(selectLoading("fetch"));
-  const error = useSelector(selectError);
-
-  // 1. Bootstrap: fetch complete patient history on mount
-  useEffect(() => {
-    if (!patientId) return;
-    dispatch(fetchPatientHistory({ patient: patientId }));
-  }, [dispatch, patientId]);
-
-  // 2. Select initial active consultation if none selected
-  useEffect(() => {
-    if (patientHistory?.length > 0 && !activeConsultId) {
-      setActiveConsultId(patientHistory[0]._id);
-    }
-  }, [patientHistory, activeConsultId]);
-
-  // 3. Fetch specific consultation details when active ID changes
-  useEffect(() => {
-    if (!activeConsultId) return;
-    dispatch(fetchConsultationById(activeConsultId));
-    dispatch(fetchNotes(activeConsultId));
-    dispatch(fetchPrescriptions(activeConsultId));
-    dispatch(fetchChatHistory(activeConsultId));
-    dispatch(fetchFollowUpHistory(activeConsultId));
-    dispatch(fetchParticipants(activeConsultId));
-  }, [dispatch, activeConsultId]);
-
-  const tabs = [
-    { id: "overview",  label: "Overview",  icon: TrendingUp },
-    { id: "clinical",  label: "Clinical",  icon: Stethoscope },
-    { id: "documents", label: "Documents", icon: FileText },
-    { id: "followup",  label: "Follow-up", icon: RefreshCw },
-  ];
-
-  if (isFetchLoading && !patientHistory.length) {
-    return (
-      <div className="min-h-screen bg-base-200 flex items-center justify-center">
-        <div className="loading loading-lg loading-spinner" />
-      </div>
-    );
-  }
-
-  if (error && !patientHistory.length) {
-    return (
-      <div className="min-h-screen bg-base-200 flex items-center justify-center">
-        <div className="alert alert-error max-w-sm">
-          <AlertCircle className="w-5 h-5" />
-          <span>{error}</span>
-        </div>
-      </div>
-    );
-  }
-
-  // Derive patient info fallback since we fetch via history now
-  const patientSnapshot =
-    consultation?.patientSnapshot || patientHistory[0]?.patientSnapshot;
-  const patientName = patientSnapshot?.name ?? "Unknown Patient";
-
-  return (
-    <div className="min-h-screen bg-base-200">
-      {/* Top bar */}
-      <div className="bg-base-100 border-b border-base-300 px-4 md:px-8 py-3 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-            <Stethoscope className="w-4 h-4 text-primary-content" />
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-base-content/50 leading-none">
-              Patient Record
-            </p>
-            <p className="text-sm font-bold text-base-content font-montserrat">
-              {patientName}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button className="btn btn-xs btn-ghost">
-            <MoreHorizontal className="w-4 h-4" />
-          </button>
-          <button className="btn btn-xs btn-primary flex items-center gap-1">
-            <FilePlus className="w-3.5 h-3.5" /> New Consultation
-          </button>
-        </div>
-      </div>
-
-      <div className="max-w-5xl mx-auto px-4 md:px-6 py-6 flex flex-col gap-5">
-        {/* Patient header */}
-        <PatientHeader 
-          snapshot={patientSnapshot} 
-          prescriptionsCount={consultation?.prescriptions?.length ?? 0} 
-        />
-
-        {/* Tabs */}
-        <div className="flex gap-1 bg-base-100 border border-base-300 rounded-xl p-1 overflow-x-auto">
-          {tabs.map((tab) => {
-            const TabIcon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-all flex-1 justify-center ${
-                  activeTab === tab.id
-                    ? "bg-primary text-primary-content shadow-sm"
-                    : "text-base-content/60 hover:text-base-content hover:bg-base-200"
-                }`}
-              >
-                <TabIcon className="w-4 h-4" />
-                <span className="hidden sm:inline">{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Tab content */}
+      {/* ── Content ── */}
+      <div className="mx-auto max-w-3xl px-4 py-5 md:px-8">
         <AnimatePresence mode="wait">
-          {activeTab === "overview" && (
-            <motion.div
-              key="overview"
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.25 }}
-              className="flex flex-col gap-4"
-            >
-              <ConsultationsPanel 
-                history={patientHistory} 
-                activeId={activeConsultId} 
-                onSelect={(id) => setActiveConsultId(id)} 
-              />
-              <VitalsPanel vitals={vitals} />
-              <ParticipantControls consultationId={activeConsultId} />
+
+          {/* ══ PRESCRIPTIONS ══ */}
+          {activeTab === 'prescriptions' && (
+            <motion.div key="prescriptions" variants={tabPanel} initial="hidden" animate="visible" exit="exit">
+              {/* Filters */}
+              <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div className="relative flex-1">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/45 pointer-events-none" />
+                  <input
+                    type="text"
+                    placeholder="Search RX, doctor, diagnosis…"
+                    value={rxSearch}
+                    onChange={(e) => setRxSearch(e.target.value)}
+                    className="input-field pl-9"
+                  />
+                </div>
+                <select
+                  value={rxStatus}
+                  onChange={(e) => { setRxStatus(e.target.value); setRxPage(1); }}
+                  className="input-field sm:w-40"
+                >
+                  <option value="">All Status</option>
+                  {Object.entries(RX_STATUS_MAP).map(([k, v]) => (
+                    <option key={k} value={k}>{v.label}</option>
+                  ))}
+                </select>
+                <button
+                  className="btn btn-ghost btn-sm flex-shrink-0"
+                  onClick={() => dispatch(fetchPrescriptions({ page: rxPage, limit: 8, status: rxStatus || undefined }))}
+                >
+                  <RefreshCw size={14} />
+                </button>
+              </div>
+
+              {rxLoading ? (
+                <PageLoader />
+              ) : filteredRx.length === 0 ? (
+                <EmptyState icon={Pill} title="No prescriptions found" subtitle="Your prescriptions will appear here after a consultation." />
+              ) : (
+                <motion.div
+                  className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+                  variants={stagger} initial="hidden" animate="visible"
+                >
+                  {filteredRx.map((rx) => (
+                    <PrescriptionCard key={rx._id} rx={rx} onOpen={handleOpenDetail} />
+                  ))}
+                </motion.div>
+              )}
+
+              {/* Pagination */}
+              {!rxSearch && prescriptionsMeta.totalPages > 1 && (
+                <div className="mt-6 flex items-center justify-center gap-3">
+                  <button
+                    className="btn btn-ghost btn-circle btn-sm"
+                    disabled={rxPage === 1}
+                    onClick={() => setRxPage((p) => p - 1)}
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <span className="text-sm font-semibold text-base-content">
+                    {rxPage} / {prescriptionsMeta.totalPages}
+                  </span>
+                  <button
+                    className="btn btn-ghost btn-circle btn-sm"
+                    disabled={rxPage === prescriptionsMeta.totalPages}
+                    onClick={() => setRxPage((p) => p + 1)}
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              )}
             </motion.div>
           )}
 
-          {activeTab === "clinical" && (
-            <motion.div
-              key="clinical"
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.25 }}
-              className="flex flex-col gap-4"
-            >
-              <ClinicalNotesPanel />
-              <PrescriptionsPanel />
-              <ChatPanel />
+          {/* ══ REPORTS ══ */}
+          {activeTab === 'reports' && (
+            <motion.div key="reports" variants={tabPanel} initial="hidden" animate="visible" exit="exit">
+              <div className="mb-4 flex items-center justify-between">
+                <span className="text-xs font-semibold text-base-content/55">
+                  {reportsTotal} event{reportsTotal !== 1 ? 's' : ''} with reports
+                </span>
+                <button className="btn btn-ghost btn-sm" onClick={() => dispatch(fetchReports())}>
+                  <RefreshCw size={14} />
+                </button>
+              </div>
+
+              {reportsLoading ? (
+                <PageLoader />
+              ) : reports.length === 0 ? (
+                <EmptyState icon={FolderOpen} title="No reports uploaded" subtitle="Add report files to your medical timeline events." />
+              ) : (
+                <motion.div className="flex flex-col gap-3" variants={stagger} initial="hidden" animate="visible">
+                  {reports.map((r) => (
+                    <ReportEventCard
+                      key={r.eventId} report={r}
+                      onUpload={handleUploadFiles}
+                      onDeleteFile={handleDeleteFile}
+                    />
+                  ))}
+                </motion.div>
+              )}
             </motion.div>
           )}
 
-          {activeTab === "documents" && (
-            <motion.div
-              key="documents"
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.25 }}
-              className="flex flex-col gap-4"
-            >
-              <DocumentsPanel />
+          {/* ══ KYC ══ */}
+          {activeTab === 'kyc' && (
+            <motion.div key="kyc" variants={tabPanel} initial="hidden" animate="visible" exit="exit">
+              {kycLoading ? (
+                <PageLoader />
+              ) : kyc.length === 0 ? (
+                <EmptyState icon={Shield} title="No KYC documents" subtitle="Upload your ID documents to verify your account." />
+              ) : (
+                <motion.div className="flex flex-col gap-3" variants={stagger} initial="hidden" animate="visible">
+                  {kyc.map((doc) => (
+                    <KycCard key={doc._id} doc={doc} />
+                  ))}
+                </motion.div>
+              )}
             </motion.div>
           )}
 
-          {activeTab === "followup" && (
-            <motion.div
-              key="followup"
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.25 }}
-              className="flex flex-col gap-4"
-            >
-              <FollowUpPanel />
-            </motion.div>
-          )}
         </AnimatePresence>
       </div>
+
+      {/* ── Prescription Detail Overlay ── */}
+      <AnimatePresence>
+        {detailRx && (
+          <PrescriptionDetail rx={activePrescription} onClose={() => setDetailRx(false)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

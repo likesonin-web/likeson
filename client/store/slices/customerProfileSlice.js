@@ -303,6 +303,102 @@ export const updateSnapshot = createAsyncThunk(
   },
 );
 
+
+// ── 14. GET /me/prescriptions ─────────────────────────────────────────────────
+export const fetchPrescriptions = createAsyncThunk(
+  'customerProfile/fetchPrescriptions',
+  async ({ page = 1, limit = 10, status } = {}, { rejectWithValue }) => {
+    try {
+      const params = new URLSearchParams({ page, limit });
+      if (status) params.set('status', status);
+      const { data } = await API.get(`/customer/me/prescriptions?${params}`);
+      return data; // { data, page, totalPages, total }
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch prescriptions');
+    }
+  },
+);
+
+// ── 15. GET /me/prescriptions/:rxNumber ───────────────────────────────────────
+export const fetchPrescriptionByRx = createAsyncThunk(
+  'customerProfile/fetchPrescriptionByRx',
+  async (rxNumber, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`/customer/me/prescriptions/${rxNumber}`);
+      return data.data;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || 'Prescription not found');
+    }
+  },
+);
+
+// ── 16. GET /me/reports ───────────────────────────────────────────────────────
+export const fetchReports = createAsyncThunk(
+  'customerProfile/fetchReports',
+  async (_, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get('/customer/me/reports');
+      return data; // { data, total }
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch reports');
+    }
+  },
+);
+
+// ── 17. POST /me/reports/:eventId/upload ──────────────────────────────────────
+export const uploadReportFiles = createAsyncThunk(
+  'customerProfile/uploadReportFiles',
+  async ({ eventId, formData }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.post(`/customer/me/reports/${eventId}/upload`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return data.data; // updated event
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || 'Report upload failed');
+    }
+  },
+);
+
+// ── 18. DELETE /me/reports/:eventId/file ──────────────────────────────────────
+export const deleteReportFile = createAsyncThunk(
+  'customerProfile/deleteReportFile',
+  async ({ eventId, url }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.delete(`/customer/me/reports/${eventId}/file`, { data: { url } });
+      return data.data; // updated event
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || 'Failed to delete report file');
+    }
+  },
+);
+
+// ── 19. GET /me/kyc ───────────────────────────────────────────────────────────
+export const fetchKyc = createAsyncThunk(
+  'customerProfile/fetchKyc',
+  async (_, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get('/customer/me/kyc');
+      return data.data;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || 'Failed to fetch KYC');
+    }
+  },
+);
+
+// ── 20. DELETE /me/kyc/:type ──────────────────────────────────────────────────
+export const deleteKycByType = createAsyncThunk(
+  'customerProfile/deleteKycByType',
+  async (type, { rejectWithValue }) => {
+    try {
+      const { data } = await API.delete(`/customer/me/kyc/${type}`);
+      return data.data;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || 'Failed to delete KYC');
+    }
+  },
+);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // INITIAL STATE
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -330,11 +426,21 @@ const initialState = {
   notifTotal:         0,
   unreadCount:        0,
 
+prescriptions:        [],
+prescriptionsMeta:    { page: 1, totalPages: 1, total: 0 },
+activePrescription:   null,
+
+// Reports (flattened)
+reports:              [],
+reportsTotal:         0,
+
   // Global loading / error
   loading:        false,
   sectionLoading: {
     profile:           false,
     kyc:               false,
+     prescriptions:  false,
+  reports:        false,
     schemes:           false,
     medicalTimeline:   false,
     medicineHistory:   false,
@@ -619,7 +725,89 @@ const customerProfileSlice = createSlice({
         toast.success('Health snapshot updated');
       })
       .addCase(updateSnapshot.rejected, sectionRejected('snapshot', 'Failed to update snapshot'));
-  },
+
+// ── 14. fetchPrescriptions ───────────────────────────────────────────────────
+builder
+  .addCase(fetchPrescriptions.pending,    sectionPending('prescriptions'))
+  .addCase(fetchPrescriptions.fulfilled, (state, { payload }) => {
+    state.sectionLoading.prescriptions = false;
+    state.prescriptions     = payload.data;
+    state.prescriptionsMeta = {
+      page:       payload.page,
+      totalPages: payload.totalPages,
+      total:      payload.total,
+    };
+  })
+  .addCase(fetchPrescriptions.rejected, sectionRejected('prescriptions', 'Failed to fetch prescriptions'));
+
+// ── 15. fetchPrescriptionByRx ────────────────────────────────────────────────
+builder
+  .addCase(fetchPrescriptionByRx.pending,    sectionPending('prescriptions'))
+  .addCase(fetchPrescriptionByRx.fulfilled, (state, { payload }) => {
+    state.sectionLoading.prescriptions = false;
+    state.activePrescription = payload;
+  })
+  .addCase(fetchPrescriptionByRx.rejected, sectionRejected('prescriptions', 'Prescription not found'));
+
+// ── 16. fetchReports ─────────────────────────────────────────────────────────
+builder
+  .addCase(fetchReports.pending,    sectionPending('reports'))
+  .addCase(fetchReports.fulfilled, (state, { payload }) => {
+    state.sectionLoading.reports = false;
+    state.reports      = payload.data;
+    state.reportsTotal = payload.total;
+  })
+  .addCase(fetchReports.rejected, sectionRejected('reports', 'Failed to fetch reports'));
+
+// ── 17. uploadReportFiles ─────────────────────────────────────────────────────
+builder
+  .addCase(uploadReportFiles.pending,    sectionPending('reports'))
+  .addCase(uploadReportFiles.fulfilled, (state, { payload }) => {
+    state.sectionLoading.reports = false;
+    // Sync updated event back into medicalTimeline
+    const idx = state.medicalTimeline.findIndex((e) => e._id === payload._id);
+    if (idx !== -1) state.medicalTimeline[idx] = payload;
+    // Sync into reports list
+    const rIdx = state.reports.findIndex((r) => r.eventId === payload._id);
+    if (rIdx !== -1) state.reports[rIdx].reportUrls = payload.reportUrls;
+    toast.success('Reports uploaded');
+  })
+  .addCase(uploadReportFiles.rejected, sectionRejected('reports', 'Report upload failed'));
+
+// ── 18. deleteReportFile ──────────────────────────────────────────────────────
+builder
+  .addCase(deleteReportFile.pending,    sectionPending('reports'))
+  .addCase(deleteReportFile.fulfilled, (state, { payload }) => {
+    state.sectionLoading.reports = false;
+    const idx = state.medicalTimeline.findIndex((e) => e._id === payload._id);
+    if (idx !== -1) state.medicalTimeline[idx] = payload;
+    const rIdx = state.reports.findIndex((r) => r.eventId === payload._id);
+    if (rIdx !== -1) state.reports[rIdx].reportUrls = payload.reportUrls;
+    toast.success('File removed');
+  })
+  .addCase(deleteReportFile.rejected, sectionRejected('reports', 'Failed to delete file'));
+
+// ── 19. fetchKyc ─────────────────────────────────────────────────────────────
+builder
+  .addCase(fetchKyc.pending,    sectionPending('kyc'))
+  .addCase(fetchKyc.fulfilled, (state, { payload }) => {
+    state.sectionLoading.kyc = false;
+    state.kyc = payload;
+  })
+  .addCase(fetchKyc.rejected, sectionRejected('kyc', 'Failed to fetch KYC'));
+
+// ── 20. deleteKycByType ───────────────────────────────────────────────────────
+builder
+  .addCase(deleteKycByType.pending,    sectionPending('kyc'))
+  .addCase(deleteKycByType.fulfilled, (state, { payload }) => {
+    state.sectionLoading.kyc = false;
+    state.kyc = payload;
+    toast.success('KYC document removed');
+  })
+  .addCase(deleteKycByType.rejected, sectionRejected('kyc', 'Failed to delete KYC'));
+
+
+    },
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -651,5 +839,9 @@ export const selectNotifMeta               = (s) => ({
 export const selectProfileLoading          = (s) => s.customerProfile.loading;
 export const selectSectionLoading          = (key) => (s) => s.customerProfile.sectionLoading[key];
 export const selectProfileError            = (s) => s.customerProfile.error;
-
+export const selectPrescriptions      = (s) => s.customerProfile.prescriptions;
+export const selectPrescriptionsMeta  = (s) => s.customerProfile.prescriptionsMeta;
+export const selectActivePrescription = (s) => s.customerProfile.activePrescription;
+export const selectReports            = (s) => s.customerProfile.reports;
+export const selectReportsTotal       = (s) => s.customerProfile.reportsTotal;
 export default customerProfileSlice.reducer;

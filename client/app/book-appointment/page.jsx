@@ -2424,9 +2424,8 @@ function StepProvider({
                         discPct > 0
                           ? +(basePrice * (1 - discPct / 100)).toFixed(0)
                           : basePrice;
-                     const testIdStr = t._id
-  ? normalizeId(t._id)
-  : t.testCode || `idx-${i}`; 
+                      const testIdStr =
+                        t.testCode || (t._id ? normalizeId(t._id) : `idx-${i}`);
                       if (!testIdStr) return null;
                       return (
                         <option key={`test-${i}`} value={testIdStr}>
@@ -2465,9 +2464,11 @@ function StepProvider({
                     }
                   >
                     {labDetail.labPackages?.map((p, pi) => {
-                      const pkgIdStr = p._id
-  ? (p._id?.toString?.() ?? String(p._id))
-  : (p.packageCode || `idx-${pi}`);
+                      const pkgIdStr =
+                        p.packageCode ||
+                        (p._id
+                          ? (p._id?.toString?.() ?? String(p._id))
+                          : `idx-${pi}`);
                       if (!pkgIdStr) return null;
                       const discPct =
                         form.subCoverage?.diagnosticsDiscountPercent || 0;
@@ -5182,10 +5183,9 @@ export default function BookingSystem() {
       if (!testId) continue;
       // FIX: use module-level normalizeId
       const t = labDetail.labTests?.find((lt, idx) => {
-        const id = lt._id
-          ? normalizeId(lt._id)
-          : `testcode-${lt.testCode || idx}`;
-        return id === testId;
+        const byCode = lt.testCode && lt.testCode === testId;
+        const byId = lt._id && normalizeId(lt._id) === testId;
+        return byCode || byId;
       });
       if (t) {
         const base = t.discountedPrice ?? t.mrpPrice ?? 0;
@@ -5196,10 +5196,10 @@ export default function BookingSystem() {
     // REPLACE WITH:
     for (const pkgId of (form.selectedPackages || []).filter(Boolean)) {
       const p = labDetail.labPackages?.find((lp, pidx) => {
-        const id = lp._id
-          ? (lp._id?.toString?.() ?? String(lp._id))
-          : `pkgcode-${lp.packageCode || pidx}`;
-        return id === pkgId;
+        const byCode = lp.packageCode && lp.packageCode === pkgId;
+        const byId =
+          lp._id && (lp._id?.toString?.() ?? String(lp._id)) === pkgId;
+        return byCode || byId;
       });
       if (p) {
         const base = p.mrpPrice ?? 0;
@@ -5567,14 +5567,15 @@ export default function BookingSystem() {
           createDiagnosticCenter({
             ...common,
             labId: form.labId,
-            tests: (form.selectedTests || [])
-              .map(String)
-              .filter(
-                (id) =>
-                  id &&
-                  !id.startsWith("test-idx-") &&
-                  !id.startsWith("pkg-idx-"),
-              ),
+tests: (form.selectedTests || [])
+  .map(String)
+  .filter(
+    (id) =>
+      id &&
+      !id.startsWith("idx-") &&
+      !id.startsWith("test-idx-") &&
+      !id.startsWith("pkg-idx-"),
+  ),
             packages: (form.selectedPackages || [])
               .map(String)
               .filter(

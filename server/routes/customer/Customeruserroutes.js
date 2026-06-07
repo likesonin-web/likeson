@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import multer from 'multer';
 import ImageKit from 'imagekit';
 import fs from 'fs';
-
+import EPrescription from '../../models/EPrescription.js';
 import User from '../../models/User.js';
 import CustomerProfile from '../../models/CustomerProfile.js';
 import Notification from '../../models/Notification.js';
@@ -628,6 +628,185 @@ router.put('/me/snapshot', async (req, res) => {
     ).select('snapshot');
 
     res.status(200).json({ success: true, data: profile.snapshot });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 14. GET /me/prescriptions  —  All prescriptions for logged-in customer
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get('/me/prescriptions', async (req, res) => {
+  try {
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit = Math.min(50, parseInt(req.query.limit) || 10);
+    const skip  = (page - 1) * limit;
+
+    const filter = {
+      'patient.userId': req.user._id,
+      ...(req.query.status && { status: req.query.status }),
+    };
+
+    const [prescriptions, total] = await Promise.all([
+      EPrescription.find(filter)
+        .sort({ issuedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .select('-medicines.instructions -doctor.signatureUrl'), // trim sensitive
+      EPrescription.countDocuments(filter),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      page,
+      totalPages: Math.ceil(total / limit),
+      total,
+      data: prescriptions,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 15. GET /me/prescriptions/:rxNumber  —  Single prescription by RX number
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get('/me/prescriptions/:rxNumber', async (req, res) => {
+  try {
+    const rx = await EPrescription.findOne({
+      rxNumber:          req.params.rxNumber,
+      'patient.userId':  req.user._id,
+    });
+
+    if (!rx) return res.status(404).json({ success: false, message: 'Prescription not found' });
+
+    res.status(200).json({ success: true, data: rx });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 16. GET /me/reports  —  All uploaded report files (across medicalTimeline)
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get('/me/reports', async (req, res) => {
+  try {
+    const profile = await CustomerProfile.findOne({ user: req.user._id })
+      .select('medicalTimeline');
+
+    if (!profile) return res.status(404).json({ success: false, message: 'Profile not found' });
+
+    // Flatten all events that have reportUrls
+    const reports = profile.medicalTimeline
+      .filter(e => e.reportUrls?.length)
+      .map(e => ({
+        eventId:      e._id,
+        eventTitle:   e.eventTitle,
+        hospitalName: e.hospitalName,
+        doctorName:   e.doctorName,
+        date:         e.date,
+        reportUrls:   e.reportUrls,
+      }))
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    res.status(200).json({
+      success: true,
+      total:   reports.length,
+      data:    reports,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 17. POST /me/reports/:eventId/upload  —  Add more report files to existing event
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post(
+  '/me/reports/:eventId/upload',
+  upload.array('reportFiles', 5),
+  async (req, res) => {
+    try {
+      if (!req.files?.length)
+        return res.status(400).json({ success: false, message: 'No files uploaded' });
+
+      const newUrls = await Promise.all(
+        req.files.map((f, i) =>
+          uploadToImageKit(
+            f.buffer,
+            `report-${req.user._id}-${Date.now()}-${i}`,
+            'Likeson/reports',
+          ),
+        ),
+      );
+
+      const profile = await CustomerProfile.findOneAndUpdate(
+        { user: req.user._id, 'medicalTimeline._id': req.params.eventId },
+        { $push: { 'medicalTimeline.$.reportUrls': { $each: newUrls } } },
+        { new: true },
+      );
+
+      if (!profile) return res.status(404).json({ success: false, message: 'Event not found' });
+
+      const event = profile.medicalTimeline.id(req.params.eventId);
+      res.status(200).json({ success: true, data: event });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 18. DELETE /me/reports/:eventId/file  —  Remove one report URL from event
+//     Body: { url: "https://ik.imagekit.io/..." }
+// ═══════════════════════════════════════════════════════════════════════════════
+router.delete('/me/reports/:eventId/file', async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ success: false, message: 'url required in body' });
+
+    const profile = await CustomerProfile.findOneAndUpdate(
+      { user: req.user._id, 'medicalTimeline._id': req.params.eventId },
+      { $pull: { 'medicalTimeline.$.reportUrls': url } },
+      { new: true },
+    );
+
+    if (!profile) return res.status(404).json({ success: false, message: 'Event not found' });
+
+    const event = profile.medicalTimeline.id(req.params.eventId);
+    res.status(200).json({ success: true, data: event });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 19. GET /me/kyc  —  All KYC docs
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get('/me/kyc', async (req, res) => {
+  try {
+    const profile = await CustomerProfile.findOne({ user: req.user._id }).select('kyc');
+    if (!profile) return res.status(404).json({ success: false, message: 'Profile not found' });
+    res.status(200).json({ success: true, data: profile.kyc });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 20. DELETE /me/kyc/:type  —  Remove KYC entry by type (e.g. "Aadhaar")
+// ═══════════════════════════════════════════════════════════════════════════════
+router.delete('/me/kyc/:type', async (req, res) => {
+  try {
+    const profile = await CustomerProfile.findOneAndUpdate(
+      { user: req.user._id },
+      { $pull: { kyc: { type: req.params.type } } },
+      { new: true },
+    );
+    if (!profile) return res.status(404).json({ success: false, message: 'Profile not found' });
+    res.status(200).json({ success: true, data: profile.kyc });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

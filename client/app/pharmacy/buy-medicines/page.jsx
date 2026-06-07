@@ -90,7 +90,7 @@ const DEFAULT_FILTERS = {
   hideDiscontinued:  false,
 };
 
-const RZP_KEY_PUBLIC = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '';
+const RZP_KEY_PUBLIC = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_SV43jVcrs5wKAM';
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -120,7 +120,7 @@ const openRazorpayModal = ({ rzpKey, rzpOrderId, amount, name, description }) =>
     if (typeof window === 'undefined' || !window.Razorpay) {
       reject(new Error('Razorpay SDK not loaded. Please refresh.')); return;
     }
-    const key = RZP_KEY_PUBLIC || rzpKey;
+const key = RZP_KEY_PUBLIC;
     if (!key) { reject(new Error('Razorpay key missing.')); return; }
     const rzp = new window.Razorpay({
       key, order_id: rzpOrderId, amount: Math.round(amount * 100),
@@ -506,7 +506,7 @@ const BuyNowModal = ({
         let payResp;
         try {
           payResp = await openRazorpayModal({
-            rzpKey:      r.razorpayKey,
+            rzpKey:      RZP_KEY_PUBLIC,
             rzpOrderId:  r.order.payment.razorpayOrderId,
             amount:      r.order.billing.totalPayable,
             description: `${med.brandName} × ${quantity}`,
@@ -1056,14 +1056,23 @@ const MedicineCard = ({ medicine, viewMode, onViewDetail, onAddToCart, onBuyNow,
           <div className="flex items-center justify-between mb-3">
             <div>
               <div className="flex items-baseline gap-1.5">
-                <span className="text-lg font-black text-primary tracking-tight">
-                  ₹{bestInv?.pricePerUnit ?? medicine.mrp}
-                </span>
-                {medicine.gstPercentage > 0 && (
-                  <span className="text-[9px] text-base-content/30 font-bold">
-                    +{medicine.gstPercentage}% GST
-                  </span>
-                )}
+             {(() => {
+  const base   = bestInv?.pricePerUnit ?? medicine.mrp;
+  const gstPct = medicine.gstPercentage ?? 0;
+  const final  = parseFloat((base * (1 + gstPct / 100)).toFixed(2));
+  return (
+    <>
+      <span className="text-lg font-black text-primary tracking-tight">
+        ₹{final}
+      </span>
+      {gstPct > 0 && (
+        <span className="text-[9px] text-base-content/30 font-bold">
+          incl. {gstPct}% GST
+        </span>
+      )}
+    </>
+  );
+})()}
               </div>
               <p className="text-[9px] font-bold text-success flex items-center gap-1">
                 <ShieldCheck size={9} /> Verified Authentic
@@ -1444,9 +1453,11 @@ const subscriptionDiscountPct = mySub?.limits?.pharmacyDiscountPercent ?? 0;
 // Fix buyNowBaseTotal
 const buyNowBaseTotal = useMemo(() => {
   if (!buyNowMed) return 0;
-  const price = buyNowBestInv?.pricePerUnit ?? buyNowMed.mrp;
-  const raw   = price * buyNowQty;
-  const disc  = raw * (subscriptionDiscountPct / 100);
+  const price   = buyNowBestInv?.pricePerUnit ?? buyNowMed.mrp;
+  const gstPct  = buyNowMed.gstPercentage ?? 0;
+  const priceWithGst = parseFloat((price * (1 + gstPct / 100)).toFixed(2));
+  const raw     = priceWithGst * buyNowQty;
+  const disc    = raw * (subscriptionDiscountPct / 100);
   return parseFloat((raw - disc).toFixed(2));
 }, [buyNowMed, buyNowBestInv, buyNowQty, subscriptionDiscountPct]);
 

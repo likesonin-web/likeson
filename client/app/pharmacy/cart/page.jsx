@@ -67,7 +67,7 @@ import BackButton from '../../../components/BackButton';
 // § CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const RAZORPAY_KEY = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID ?? 'rzp_test_SJTh9WQJSGGnIT';
+const RAZORPAY_KEY = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID ?? 'rzp_test_SV43jVcrs5wKAM';
 
 const PAYMENT_METHODS = [
   {
@@ -1078,7 +1078,7 @@ export default function CartPage() {
  const mySub           = useSelector(selectMySubscription);
 const pharmacyDiscount = mySub?.limits?.pharmacyDiscountPercent ?? 0;
 const subscriptionName = useSelector(selectMySubPlanName) ?? '';
-  const razorpayKeyId    = useSelector((s) => s.user?.razorpayKey) ?? RAZORPAY_KEY;
+ const razorpayKeyId = RAZORPAY_KEY;
 
   // ── Local state ───────────────────────────────────────────────────────────────
   const [address,        setAddress]        = useState(DEFAULT_ADDRESS);
@@ -1216,7 +1216,7 @@ const subscriptionName = useSelector(selectMySubPlanName) ?? '';
         const loaded = await loadRazorpayScript();
         if (!loaded) { toast.error('Payment gateway unavailable.'); return; }
         const options = {
-          key: result.razorpayKey ?? razorpayKeyId,
+          key: razorpayKeyId,
           amount: Math.round((result.order.billing.totalPayable ?? finalPayable) * 100),
           currency: 'INR', name: 'Likeson Healthcare', description: 'Medicine Order',
           order_id: result.order.payment.razorpayOrderId,
