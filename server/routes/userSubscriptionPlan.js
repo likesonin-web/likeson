@@ -1,13 +1,14 @@
-import express                         from 'express';
+import express                     from 'express';
 import { body, param, validationResult } from 'express-validator';
-import Razorpay                        from 'razorpay';
-import crypto                          from 'crypto';
-import dotenv                          from 'dotenv';
+import Razorpay                    from 'razorpay';
+import crypto                      from 'crypto';
+import dotenv                      from 'dotenv';
 
-import sendEmail                       from '../utils/sendEmail.js';
-import { transactionalTemplate }       from '../utils/emailTemplates.js';
+import sendEmail                   from '../utils/sendEmail.js';
+import { transactionalTemplate }   from '../utils/emailTemplates.js';
 
 // ── Models ────────────────────────────────────────────────────────────────────
+import User                  from '../models/User.js'; // <-- ADD THIS IMPORT
 import UserSubscription      from '../models/UserSubscription.js';
 import SubscriptionPlan      from '../models/SubscriptionPlan.js';
 import PlatformPricingConfig from '../models/PlatformPricingConfig.js';
@@ -85,7 +86,7 @@ const resolveCustomOptionUnitPrice = (optionPrices, optionKey, quantity, extras 
         case 'transport': {
             const slabs = optionPrices?.transport?.kmSlabs ?? [];
             if (slabs.length > 0) {
-                const idx  = Math.max(0, Math.min(Math.floor(Number(extras.slabIndex ?? quantity ?? 0)), slabs.length - 1));
+                const idx  = Math.max(0, Math.min(Math.floor(Number(extras.slabIndex ?? 0)), slabs.length - 1));
                 const slab = slabs[idx];
                 if (slab) {
                     unitPrice = slab.packagePrice ?? 0;
@@ -154,8 +155,7 @@ const resolveCustomOptionUnitPrice = (optionPrices, optionKey, quantity, extras 
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  FIX #1 + #2: snapshotLimits — reads customOptions for custom plans
-//               + snapshots careAssistant tier fields
+//  snapshotLimits
 // ─────────────────────────────────────────────────────────────────────────────
 const snapshotLimits = (plan) => {
     let consultationsPerMonth       = plan.consultations?.freePerMonth        ?? 0;
@@ -166,7 +166,6 @@ const snapshotLimits = (plan) => {
     let diagnosticsDiscountPercent  = plan.diagnostics?.discountPercent       ?? 0;
     let homeSampleCollection        = plan.diagnostics?.homeSampleCollection  ?? false;
 
-    // FIX #1: careAssistant tier snapshot vars
     let careAssistantTierIndex      = null;
     let careAssistantTierLabel      = null;
     let careAssistantChargePerVisit = null;
@@ -180,8 +179,6 @@ const snapshotLimits = (plan) => {
         const caOpt = plan.customOptions.find(o => o.optionKey === 'careAssistant');
         if (caOpt?.quantity > 0) {
             careAssistantVisitsPerMonth = caOpt.quantity;
-
-            // FIX #1: snapshot tier index, label, charge from snapshotted option
             const tierIdx               = caOpt.careAssistantTierIndex ?? 0;
             careAssistantTierIndex      = tierIdx;
             careAssistantTierLabel      = caOpt.label ?? `Tier ${tierIdx}`;
@@ -190,7 +187,8 @@ const snapshotLimits = (plan) => {
 
         const tOpt = plan.customOptions.find(o => o.optionKey === 'transport');
         if (tOpt?.unitPrice > 0) {
-            transportRatePerKm = -1; // sentinel: custom transport active, resolve at booking time
+            transportRatePerKm     = -1; // sentinel: resolve at booking time
+            transportRidesPerMonth = tOpt.quantity ?? null;
         }
 
         const diagOpt = plan.customOptions.find(o => o.optionKey === 'diagnostics');
@@ -209,18 +207,19 @@ const snapshotLimits = (plan) => {
         }
     }
 
-    return {
+  return {
         consultationsPerMonth,
         transportRidesPerMonth,
         careAssistantVisitsPerMonth,
-        careAssistantTierIndex,       // FIX #1
-        careAssistantTierLabel,       // FIX #1
-        careAssistantChargePerVisit,  // FIX #1
+        careAssistantTierIndex,
+        careAssistantTierLabel,
+        careAssistantChargePerVisit,
         labTestsPerMonth:            0,
         pharmacyDiscountPercent,
         diagnosticsDiscountPercent,
         transportRatePerKm,
         homeSampleCollection,
+        homeCollectionUsedOnce:      false, // always reset on new sub / renewal
     };
 };
 
@@ -458,10 +457,8 @@ router.post(
 
             // ─────────────────────────────────────────────
             // TRANSPORT
-            // IMPORTANT:
-            // quantity = rides per month
-            // slabIndex = selected pricing slab
-            // NEVER overwrite quantity using slabIndex
+            // quantity = rides per month (never overwrite)
+            // slabIndex = pricing slab selection
             // ─────────────────────────────────────────────
 
             let slabIndex = 0;
@@ -497,6 +494,7 @@ router.post(
                 }
 
                 slabIndex = requestedSlabIdx;
+                // qty stays as rides/month — do NOT overwrite
             }
 
             // ─────────────────────────────────────────────
@@ -517,18 +515,7 @@ router.post(
                 );
 
             // ─────────────────────────────────────────────
-            // PACKAGE-BASED OPTIONS
-            // DO NOT multiply qty × unitPrice
-            //
-            // diagnostics:
-            // quantity = selected discount %
-            //
-            // pharmacy:
-            // quantity = selected discount %
-            //
-            // transport:
-            // quantity = rides count
-            // price already represents package/slab price
+            // LINE TOTAL
             // ─────────────────────────────────────────────
 
             const packageBasedOptions = [
@@ -539,53 +526,22 @@ router.post(
 
             let lineTotal = 0;
 
-            if (
-                packageBasedOptions.includes(optionKey)
-            ) {
-
-                lineTotal =
-                    +Number(unitPrice).toFixed(2);
-
-            } else if (
-                ['homeSampleCollection', 'prioritySupport']
-                    .includes(optionKey)
-            ) {
-
-                lineTotal =
-                    qty > 0
-                        ? +Number(unitPrice).toFixed(2)
-                        : 0;
-
+            if (packageBasedOptions.includes(optionKey)) {
+                lineTotal = +Number(unitPrice).toFixed(2);
+            } else if (['homeSampleCollection', 'prioritySupport'].includes(optionKey)) {
+                lineTotal = qty > 0 ? +Number(unitPrice).toFixed(2) : 0;
             } else {
-
-                // consultations
-                // careAssistant
-
-                lineTotal = +(
-                    Number(qty) * Number(unitPrice)
-                ).toFixed(2);
+                lineTotal = +(Number(qty) * Number(unitPrice)).toFixed(2);
             }
 
             builtOptions.push({
-
                 optionKey,
-
-                label:
-                    label || optionKey,
-
+                label:    label || optionKey,
                 quantity: qty,
-
                 unitPrice,
-
                 lineTotal,
-
-                ...(optionKey === 'careAssistant' && {
-                    careAssistantTierIndex,
-                }),
-
-                ...(optionKey === 'transport' && {
-                    slabIndex,
-                }),
+                ...(optionKey === 'careAssistant' && { careAssistantTierIndex }),
+                ...(optionKey === 'transport'     && { slabIndex }),
             });
         }
 
@@ -601,8 +557,7 @@ router.post(
             )
             .toFixed(2);
 
-        const slug =
-            `custom-${req.user._id}-${Date.now()}`;
+        const slug = `custom-${req.user._id}-${Date.now()}`;
 
         // ─────────────────────────────────────────────
         // DEACTIVATE OLD CUSTOM PLANS
@@ -610,15 +565,11 @@ router.post(
 
         await SubscriptionPlan.updateMany(
             {
-                planType: 'custom',
+                planType:          'custom',
                 createdByCustomer: req.user._id,
-                isActive: true,
+                isActive:          true,
             },
-            {
-                $set: {
-                    isActive: false,
-                },
-            }
+            { $set: { isActive: false } }
         );
 
         // ─────────────────────────────────────────────
@@ -626,71 +577,34 @@ router.post(
         // ─────────────────────────────────────────────
 
         const plan = await SubscriptionPlan.create({
-
             name,
-
             slug,
-
-            planType: 'custom',
-
-            fixedTier: null,
-
+            planType:              'custom',
+            fixedTier:             null,
             visibleToCustomerOnly: true,
-
-            createdByCustomer: req.user._id,
-
-            isActive: true,
-
+            createdByCustomer:     req.user._id,
+            isActive:              true,
             pricing: {
-                monthly: totalMonthly,
+                monthly:      totalMonthly,
                 billingCycle: 'custom',
                 billingLabel: '/month',
-                currency: 'INR',
+                currency:     'INR',
             },
-
             customOptions: builtOptions,
-
-            createdBy: req.user._id,
+            createdBy:     req.user._id,
         });
-
-        // ─────────────────────────────────────────────
-        // LOG
-        // ─────────────────────────────────────────────
 
         await log({
-
-            level: 'success',
-
+            level:    'success',
             category: 'user',
-
-            message:
-                `Custom plan created by customer: ${plan.name}`,
-
-            actor: buildActor(req),
-
-            relatedEntity: {
-                model: 'SubscriptionPlan',
-                entityId: plan._id,
-                label: plan.name,
-            },
-
-            request: {
-                method: 'POST',
-                path: req.originalUrl,
-                statusCode: 201,
-            },
-
-            metadata: {
-                planId: plan._id,
-                totalMonthly,
-                optionCount: builtOptions.length,
-            },
+            message:  `Custom plan created by customer: ${plan.name}`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'SubscriptionPlan', entityId: plan._id, label: plan.name },
+            request:  { method: 'POST', path: req.originalUrl, statusCode: 201 },
+            metadata: { planId: plan._id, totalMonthly, optionCount: builtOptions.length },
         });
 
-        return res.status(201).json({
-            success: true,
-            data: plan,
-        });
+        return res.status(201).json({ success: true, data: plan });
     })
 );
 
@@ -753,15 +667,15 @@ router.put(
             const { optionKey, label = '' } = opt;
             let qty = Number(opt.quantity);
 
-            if (optionKey === 'pharmacy' && qty > caps.pharmacyDiscountMax)
+            if (optionKey === 'pharmacy'      && qty > caps.pharmacyDiscountMax)
                 return res.status(400).json({ success: false, message: `Pharmacy discount cannot exceed ${caps.pharmacyDiscountMax}%.` });
-            if (optionKey === 'diagnostics' && qty > caps.diagnosticsDiscountMax)
+            if (optionKey === 'diagnostics'   && qty > caps.diagnosticsDiscountMax)
                 return res.status(400).json({ success: false, message: `Diagnostics discount cannot exceed ${caps.diagnosticsDiscountMax}%.` });
             if (optionKey === 'consultations' && qty > caps.consultationsMaxPerMonth)
                 return res.status(400).json({ success: false, message: `Consultations cannot exceed ${caps.consultationsMaxPerMonth}/month.` });
             if (optionKey === 'careAssistant' && qty > caps.careAssistantMaxVisitsPerMonth)
                 return res.status(400).json({ success: false, message: `Care-assistant visits cannot exceed ${caps.careAssistantMaxVisitsPerMonth}/month.` });
-            if (optionKey === 'transport' && qty > caps.transportMaxRidesPerMonth)
+            if (optionKey === 'transport'     && qty > caps.transportMaxRidesPerMonth)
                 return res.status(400).json({ success: false, message: `Transport rides cannot exceed ${caps.transportMaxRidesPerMonth}/month.` });
 
             if (['homeSampleCollection', 'prioritySupport'].includes(optionKey))
@@ -786,15 +700,20 @@ router.put(
                 if (requestedSlabIdx < 0 || requestedSlabIdx >= totalSlabs)
                     return res.status(400).json({ success: false, message: `slabIndex must be between 0 and ${totalSlabs - 1}.` });
                 slabIndex = requestedSlabIdx;
-                qty       = slabIndex;
             }
 
             const extras    = { careAssistantTierIndex, slabIndex };
             const unitPrice = resolveCustomOptionUnitPrice(optionPrices, optionKey, qty, extras);
 
-            const lineTotal = optionKey === 'transport'
-                ? unitPrice
-                : +(qty * unitPrice).toFixed(2);
+            const packageBasedOptions = ['transport', 'diagnostics', 'pharmacy'];
+            let lineTotal;
+            if (packageBasedOptions.includes(optionKey)) {
+                lineTotal = +Number(unitPrice).toFixed(2);
+            } else if (['homeSampleCollection', 'prioritySupport'].includes(optionKey)) {
+                lineTotal = qty > 0 ? +Number(unitPrice).toFixed(2) : 0;
+            } else {
+                lineTotal = +(qty * unitPrice).toFixed(2);
+            }
 
             builtOptions.push({
                 optionKey,
@@ -934,13 +853,13 @@ router.post(
             });
 
             await Notification.create({
-    recipient: req.user._id,
-    title:     'Subscription Activated 🎉',
-    body:      `Your ${plan.name} plan is now active until ${expiry.toLocaleDateString()}.`,
-    type:      'Account_Status',
-    priority:  'Normal',
-    dedupeKey: `sub_activate_${req.user._id}_${Date.now()}` // <-- Add this line
-});
+                recipient: req.user._id,
+                title:     'Subscription Activated 🎉',
+                body:      `Your ${plan.name} plan is now active until ${expiry.toLocaleDateString()}.`,
+                type:      'Account_Status',
+                priority:  'Normal',
+                dedupeKey: `sub_activate_${req.user._id}_${Date.now()}`,
+            });
 
             await log({
                 level:    'success',
@@ -965,7 +884,7 @@ router.post(
             amount:   Math.round(finalAmount * 100),
             currency: 'INR',
             receipt:  `rcpt_${Date.now()}`,
-            notes:    { userId: req.user._id.toString(), planId: planId.toString() },
+            notes:    { userId: req.user._id.toString(), planId: planId.toString(), isUpgrade: 'false' },
         });
 
         await log({
@@ -1020,15 +939,16 @@ router.post(
             return res.status(400).json({ success: false, message: 'Invalid payment signature.' });
         }
 
-        // Resolve planId / amount from Razorpay order notes when not in body
-        if (!planId || amount === undefined) {
-            try {
-                const rzpOrder = await razorpay.orders.fetch(razorpay_order_id);
-                if (!planId)              planId = rzpOrder.notes?.planId;
-                if (amount === undefined) amount = rzpOrder.amount / 100;
-            } catch {
-                return res.status(400).json({ success: false, message: 'Could not resolve plan details from Razorpay order. Please supply planId and amount.' });
-            }
+        let isUpgradeOrder = false;
+
+        // Resolve planId / amount / isUpgrade from Razorpay order notes
+        try {
+            const rzpOrder = await razorpay.orders.fetch(razorpay_order_id);
+            if (!planId)              planId = rzpOrder.notes?.planId;
+            if (amount === undefined) amount = rzpOrder.amount / 100;
+            if (rzpOrder.notes?.isUpgrade === 'true') isUpgradeOrder = true;
+        } catch {
+            return res.status(400).json({ success: false, message: 'Could not resolve plan details from Razorpay order. Please supply planId and amount.' });
         }
 
         if (!planId)
@@ -1041,14 +961,16 @@ router.post(
         if (plan.planType === 'custom' && String(plan.createdByCustomer) !== String(req.user._id))
             return res.status(403).json({ success: false, message: 'Access denied to this custom plan.' });
 
-        // FIX #3: duplicate sub guard — prevent race condition double-activate
-        const dupeSub = await UserSubscription.findOne({
+        const activeSub = await UserSubscription.findOne({
             user:       req.user._id,
             status:     { $in: ['Active', 'Trial'] },
             expiryDate: { $gt: new Date() },
         });
-        if (dupeSub)
+
+        // Duplicate sub guard (Ignore if this is an upgrade)
+        if (activeSub && !isUpgradeOrder) {
             return res.status(400).json({ success: false, message: 'Subscription already active. Possible duplicate payment — contact support if amount was deducted.' });
+        }
 
         const expiry = new Date();
         if (plan.pricing.billingCycle === 'till_delivery') {
@@ -1057,43 +979,90 @@ router.post(
             expiry.setDate(expiry.getDate() + 30);
         }
 
-        const sub = await UserSubscription.create({
-            user:       req.user._id,
-            plan:       planId,
-            planName:   plan.name,
-            planType:   plan.planType,
-            fixedTier:  plan.fixedTier ?? null,
-            status:     'Active',
-            expiryDate: expiry,
-            autoRenew:  plan.pricing.billingCycle !== 'till_delivery',
-            limits:     snapshotLimits(plan),
-            paymentHistory: [{
+        if (isUpgradeOrder && activeSub) {
+            // === PROCESS UPGRADE: UPDATE EXISTING SUBSCRIPTION ===
+            const previousStatus = activeSub.status;
+            
+            activeSub.plan = planId;
+            activeSub.planName = plan.name;
+            activeSub.planType = plan.planType;
+            activeSub.fixedTier = plan.fixedTier ?? null;
+            activeSub.status = 'Active';
+            activeSub.expiryDate = expiry;
+            activeSub.autoRenew = plan.pricing.billingCycle !== 'till_delivery';
+            activeSub.limits = snapshotLimits(plan);
+
+            if (previousStatus === 'Trial') activeSub.trialUsed = true;
+
+            activeSub.paymentHistory.push({
                 transactionId: razorpay_payment_id,
                 amount:        Number(amount),
                 paidAt:        new Date(),
-            }],
-        });
+            });
 
-        await Notification.create({
-    recipient: req.user._id,
-    title:     'Subscription Activated 🎉',
-    body:      `Your ${plan.name} plan is now active until ${expiry.toLocaleDateString()}.`,
-    type:      'Account_Status',
-    priority:  'Normal',
-    dedupeKey: `sub_verify_${razorpay_payment_id}` // <-- Add this line
-});
+            await activeSub.save();
 
-        await log({
-            level:    'success',
-            category: 'payment',
-            message:  `Subscription activated via Razorpay: ${plan.name}`,
-            actor:    buildActor(req),
-            relatedEntity: { model: 'UserSubscription', entityId: sub._id, label: plan.name },
-            request:  { method: 'POST', path: req.originalUrl, statusCode: 201 },
-            metadata: { planId, amount, razorpay_payment_id, razorpay_order_id },
-        });
+            await Notification.create({
+                recipient: req.user._id,
+                title:     'Plan Upgraded 🎉',
+                body:      `Your plan has been upgraded to ${plan.name}. New expiry: ${expiry.toLocaleDateString()}.`,
+                type:      'Account_Status',
+                priority:  'Normal',
+                dedupeKey: `sub_verify_${razorpay_payment_id}`,
+            });
 
-        res.status(201).json({ success: true, data: sub });
+            await log({
+                level:    'success',
+                category: 'payment',
+                message:  `Subscription upgraded via Razorpay: ${plan.name}`,
+                actor:    buildActor(req),
+                relatedEntity: { model: 'UserSubscription', entityId: activeSub._id, label: plan.name },
+                request:  { method: 'POST', path: req.originalUrl, statusCode: 200 },
+                metadata: { planId, amount, razorpay_payment_id, razorpay_order_id, isUpgrade: true },
+            });
+
+            return res.status(200).json({ success: true, data: activeSub });
+            
+        } else {
+            // === PROCESS NEW BUY: CREATE NEW SUBSCRIPTION ===
+            const sub = await UserSubscription.create({
+                user:       req.user._id,
+                plan:       planId,
+                planName:   plan.name,
+                planType:   plan.planType,
+                fixedTier:  plan.fixedTier ?? null,
+                status:     'Active',
+                expiryDate: expiry,
+                autoRenew:  plan.pricing.billingCycle !== 'till_delivery',
+                limits:     snapshotLimits(plan),
+                paymentHistory: [{
+                    transactionId: razorpay_payment_id,
+                    amount:        Number(amount),
+                    paidAt:        new Date(),
+                }],
+            });
+
+            await Notification.create({
+                recipient: req.user._id,
+                title:     'Subscription Activated 🎉',
+                body:      `Your ${plan.name} plan is now active until ${expiry.toLocaleDateString()}.`,
+                type:      'Account_Status',
+                priority:  'Normal',
+                dedupeKey: `sub_verify_${razorpay_payment_id}`,
+            });
+
+            await log({
+                level:    'success',
+                category: 'payment',
+                message:  `Subscription activated via Razorpay: ${plan.name}`,
+                actor:    buildActor(req),
+                relatedEntity: { model: 'UserSubscription', entityId: sub._id, label: plan.name },
+                request:  { method: 'POST', path: req.originalUrl, statusCode: 201 },
+                metadata: { planId, amount, razorpay_payment_id, razorpay_order_id, isUpgrade: false },
+            });
+
+            return res.status(201).json({ success: true, data: sub });
+        }
     })
 );
 
@@ -1176,17 +1145,59 @@ router.get(
     protect,
     authorize('customer'),
     asyncHandler(async (req, res) => {
-        const sub = await UserSubscription.findOne({ user: req.user._id })
+        // 1. Primary holder — active/trial sub
+        const sub = await UserSubscription.findOne({
+            user:   req.user._id,
+            status: { $in: ['Active', 'Trial'] },
+        })
             .populate('plan')
-            .sort({ createdAt: -1 });
+            .lean();
 
-        if (!sub)
+        if (sub) {
+            return res.status(200).json({ success: true, isShared: false, data: sub });
+        }
+
+        // 2. Family member on someone else's sub
+        // Query both raw lowercase AND dot-stripped variant to handle normalizeEmail() mismatch
+        const rawEmail        = req.user.email.toLowerCase().trim();
+        const dotStripped     = rawEmail.replace(/\./g, '').replace(/@/, (m, o, s) => {
+            // only strip dots before @
+            const [local, domain] = rawEmail.split('@');
+            return '@';
+        });
+        const localStripped   = rawEmail.split('@')[0].replace(/\./g, '') + '@' + rawEmail.split('@')[1];
+
+        const emailVariants = [...new Set([rawEmail, localStripped])];
+
+        const sharedSub = await UserSubscription.findOne({
+            'members.memberEmail': { $in: emailVariants },
+            status: { $in: ['Active', 'Trial'] },
+        })
+            .populate('plan')
+            .populate('user', 'name email phone avatar')
+            .lean();
+
+        if (sharedSub) {
+            return res.status(200).json({
+                success:              true,
+                isShared:             true,
+                primaryAccountHolder: sharedSub.user,
+                data:                 sharedSub,
+            });
+        }
+
+        // 3. Fallback — latest any-status sub for this user
+        const latest = await UserSubscription.findOne({ user: req.user._id })
+            .populate('plan')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        if (!latest)
             return res.status(404).json({ success: false, message: 'No subscription found.' });
 
-        res.status(200).json({ success: true, data: sub });
+        return res.status(200).json({ success: true, isShared: false, data: latest });
     })
 );
-
 router.get(
     '/my/history',
     protect,
@@ -1216,9 +1227,15 @@ router.put(
     '/upgrade',
     protect,
     authorize('customer'),
-    [body('newPlanId').isMongoId().withMessage('newPlanId must be a valid Mongo ID')],
+    [
+        body('newPlanId').isMongoId().withMessage('newPlanId must be a valid Mongo ID'),
+        body('amount').optional().isFloat({ min: 0 }),
+        body('couponCode').optional().isString()
+    ],
     validate,
     asyncHandler(async (req, res) => {
+        const { newPlanId, amount, couponCode } = req.body;
+
         const sub = await UserSubscription.findOne({
             user:   req.user._id,
             status: { $in: ['Active', 'Trial'] },
@@ -1226,50 +1243,104 @@ router.put(
         if (!sub)
             return res.status(400).json({ success: false, message: 'No active or trial subscription found.' });
 
-        const newPlan = await SubscriptionPlan.findOne({ _id: req.body.newPlanId, isActive: true });
+        const newPlan = await SubscriptionPlan.findOne({ _id: newPlanId, isActive: true });
         if (!newPlan)
             return res.status(404).json({ success: false, message: 'New plan not found.' });
 
         if (newPlan.planType === 'custom' && String(newPlan.createdByCustomer) !== String(req.user._id))
             return res.status(403).json({ success: false, message: 'You do not have access to this custom plan.' });
 
-        const previousPlan   = sub.plan;
-        const previousStatus = sub.status;
+        let discount = 0;
+        let baseAmount = amount !== undefined ? amount : newPlan.pricing.monthly;
 
-        sub.plan      = newPlan._id;
-        sub.planName  = newPlan.name;
-        sub.planType  = newPlan.planType;
-        sub.fixedTier = newPlan.fixedTier ?? null;
-        sub.status    = 'Active';
-        sub.limits    = snapshotLimits(newPlan);
+        if (couponCode) {
+            const coupon = await PromotionCoupon.findOne({
+                code:          couponCode,
+                isActive:      true,
+                'validity.to': { $gt: new Date() },
+            });
+            if (coupon) {
+                discount = coupon.benefit.type === 'Flat_Amount'
+                    ? coupon.benefit.value
+                    : (Number(baseAmount) * coupon.benefit.value) / 100;
+            }
+        }
 
-        const newExpiry = new Date();
-        newExpiry.setDate(newExpiry.getDate() + 30);
-        sub.expiryDate = newExpiry;
+        const finalAmount = Math.max(Number(baseAmount) - discount, 0);
 
-        if (previousStatus === 'Trial') sub.trialUsed = true;
+        // Path B: ₹0 — activate immediately (Free Upgrade)
+        if (finalAmount === 0) {
+            const previousPlan   = sub.plan;
+            const previousStatus = sub.status;
 
-        await sub.save();
+            sub.plan      = newPlan._id;
+            sub.planName  = newPlan.name;
+            sub.planType  = newPlan.planType;
+            sub.fixedTier = newPlan.fixedTier ?? null;
+            sub.status    = 'Active';
+            sub.limits    = snapshotLimits(newPlan);
 
-        await Notification.create({
-            recipient: req.user._id,
-            title:     'Plan Upgraded',
-            body:      `Your plan has been switched to ${newPlan.name}. New expiry: ${newExpiry.toLocaleDateString()}.`,
-            type:      'Account_Status',
-            priority:  'Normal',
+            const newExpiry = new Date();
+            if (newPlan.pricing.billingCycle === 'till_delivery') {
+                newExpiry.setDate(newExpiry.getDate() + 280);
+            } else {
+                newExpiry.setDate(newExpiry.getDate() + 30);
+            }
+            sub.expiryDate = newExpiry;
+
+            if (previousStatus === 'Trial') sub.trialUsed = true;
+
+            await sub.save();
+
+            await Notification.create({
+                recipient: req.user._id,
+                title:     'Plan Upgraded 🎉',
+                body:      `Your plan has been switched to ${newPlan.name}. New expiry: ${newExpiry.toLocaleDateString()}.`,
+                type:      'Account_Status',
+                priority:  'Normal',
+                dedupeKey: `sub_upgrade_${req.user._id}_${Date.now()}`,
+            });
+
+            await log({
+                level:    'info',
+                category: 'user',
+                message:  `Subscription plan upgraded (Free): ${newPlan.name}`,
+                actor:    buildActor(req),
+                relatedEntity: { model: 'UserSubscription', entityId: sub._id, label: newPlan.name },
+                request:  { method: 'PUT', path: req.originalUrl, statusCode: 200 },
+                metadata: { previousPlan, previousStatus, newPlanId: newPlan._id, finalAmount: 0 },
+            });
+
+            return res.status(200).json({ success: true, activated: true, data: sub });
+        }
+
+        // Path A: Paid Upgrade - Generate Razorpay Order
+        const razorpayOrder = await razorpay.orders.create({
+            amount:   Math.round(finalAmount * 100),
+            currency: 'INR',
+            receipt:  `upg_${Date.now()}`,
+            notes:    { userId: req.user._id.toString(), planId: newPlanId.toString(), isUpgrade: 'true' },
         });
 
         await log({
             level:    'info',
-            category: 'user',
-            message:  `Subscription plan upgraded: ${newPlan.name}`,
+            category: 'payment',
+            message:  `Razorpay order created for upgrade: ${newPlan.name}`,
             actor:    buildActor(req),
-            relatedEntity: { model: 'UserSubscription', entityId: sub._id, label: newPlan.name },
             request:  { method: 'PUT', path: req.originalUrl, statusCode: 200 },
-            metadata: { previousPlan, previousStatus, newPlanId: newPlan._id },
+            metadata: { newPlanId, finalAmount, discount, orderId: razorpayOrder.id },
         });
 
-        res.status(200).json({ success: true, data: sub });
+        res.status(200).json({
+            success:   true,
+            activated: false,
+            orderId:   razorpayOrder.id,
+            amount:    finalAmount,
+            discount,
+            planName:  newPlan.name,
+            planType:  newPlan.planType,
+            planId:    newPlanId,
+        });
     })
 );
 
@@ -1290,13 +1361,14 @@ router.put(
         sub.cancelledAt        = new Date();
         sub.cancellationReason = req.body.reason ?? null;
         await sub.save();
-
+        
         await Notification.create({
             recipient: req.user._id,
             title:     'Subscription Cancelled',
             body:      'Your subscription has been cancelled. You retain access until the current period ends.',
             type:      'Account_Status',
             priority:  'Normal',
+            dedupeKey: `sub_cancel_${req.user._id}_${Date.now()}`,
         });
 
         await log({
@@ -1401,13 +1473,13 @@ router.post(
         });
 
         await Notification.create({
-    recipient: req.user._id,
-    title:     `Your ${trialDays}-Day Free Trial Has Started!`,
-    body:      `Enjoy full access to ${plan.name} until ${trialExpiry.toLocaleDateString()}. Subscribe before your trial ends to continue uninterrupted.`,
-    type:      'Account_Status',
-    priority:  'Normal',
-    dedupeKey: `trial_start_${req.user._id}_${Date.now()}` // <-- Add this line
-});
+            recipient: req.user._id,
+            title:     `Your ${trialDays}-Day Free Trial Has Started!`,
+            body:      `Enjoy full access to ${plan.name} until ${trialExpiry.toLocaleDateString()}. Subscribe before your trial ends to continue uninterrupted.`,
+            type:      'Account_Status',
+            priority:  'Normal',
+            dedupeKey: `trial_start_${req.user._id}_${Date.now()}`,
+        });
 
         await log({
             level:    'success',
@@ -1561,6 +1633,7 @@ router.post(
                 body:      `Your ${plan.name} subscription is now fully active until ${newExpiry.toLocaleDateString()}.`,
                 type:      'Account_Status',
                 priority:  'Normal',
+                dedupeKey: `trial_convert_free_${req.user._id}_${Date.now()}`,
             });
 
             await log({
@@ -1580,7 +1653,7 @@ router.post(
             amount:   Math.round(finalAmount * 100),
             currency: 'INR',
             receipt:  `trial_conv_${Date.now()}`,
-            notes:    { userId: req.user._id.toString(), planId: plan._id.toString(), isTrialConvert: 'true' },
+            notes:    { userId: req.user._id.toString(), planId: plan._id.toString(), isTrialConvert: 'true', isUpgrade: 'false' },
         });
 
         res.status(200).json({
@@ -1593,6 +1666,168 @@ router.post(
             planName:   plan.name,
             trialSubId: trial._id,
         });
+    })
+);
+
+
+router.post(
+    '/my/members',
+    protect,
+    authorize('customer'),
+    [
+        body('email').isEmail().normalizeEmail().withMessage('A valid email is required'),
+        body('relation').trim().notEmpty().withMessage('Relation (e.g., Spouse, Child, Parent) is required'),
+    ],
+    validate,
+    asyncHandler(async (req, res) => {
+        const { email, relation } = req.body;
+
+        // 1. Find the user's active subscription
+        const sub = await UserSubscription.findOne({
+            user:   req.user._id,
+            status: { $in: ['Active', 'Trial'] },
+        }).populate('plan');
+
+        if (!sub) {
+            return res.status(400).json({ success: false, message: 'You do not have an active subscription to add members to.' });
+        }
+
+        // 2. Enforce Plan Constraints
+        const maxMembers = sub.plan?.membership?.maxMembers || 1;
+        if (maxMembers <= 1) {
+            return res.status(403).json({ success: false, message: `Your current plan (${sub.planName}) does not support adding family members. Please upgrade to a Family or NRI plan.` });
+        }
+
+        const allowedSlots = maxMembers - 1; // Primary user counts as 1
+        if (sub.members.length >= allowedSlots) {
+            return res.status(400).json({ success: false, message: `Member limit reached. Your plan allows a maximum of ${maxMembers} members (including you).` });
+        }
+
+        // 3. Validate the invitee
+        if (email === req.user.email) {
+            return res.status(400).json({ success: false, message: 'You cannot add yourself as a family member.' });
+        }
+
+        const alreadyExists = sub.members.some(m => m.memberEmail === email);
+        if (alreadyExists) {
+            return res.status(400).json({ success: false, message: 'This email is already added to your plan.' });
+        }
+
+        // 4. Resolve Invitee Account Status
+        const inviteeAccount = await User.findOne({ email });
+
+        if (inviteeAccount) {
+            // Guard: Prevent adding someone who already has their own active plan
+            const inviteeHasOwnPlan = await UserSubscription.exists({
+                user:   inviteeAccount._id,
+                status: { $in: ['Active', 'Trial'] },
+            });
+            if (inviteeHasOwnPlan) {
+                return res.status(400).json({ success: false, message: 'This user already has their own active subscription on the platform.' });
+            }
+
+            // Guard: Prevent adding someone who is already part of another family plan
+            const inviteeInAnotherPlan = await UserSubscription.exists({
+                'members.memberEmail': email,
+                status: { $in: ['Active', 'Trial'] },
+            });
+            if (inviteeInAnotherPlan) {
+                return res.status(400).json({ success: false, message: 'This user is already covered under another family plan.' });
+            }
+        }
+
+        // 5. Add Member
+        sub.members.push({
+            memberId:    inviteeAccount ? inviteeAccount._id : null,
+            memberEmail: email,
+            relation:    relation,
+            addedAt:     new Date(),
+        });
+
+        await sub.save();
+
+        // 6. Notifications & Logs
+        if (inviteeAccount) {
+            await Notification.create({
+                recipient: inviteeAccount._id,
+                title:     'You have been added to a Family Plan! 🎉',
+                body:      `${req.user.name} has added you to their ${sub.planName}. You can now access plan benefits from your dashboard.`,
+                type:      'Account_Status',
+                priority:  'Normal',
+                dedupeKey: `member_add_${sub._id}_${inviteeAccount._id}_${Date.now()}`,
+            });
+        }
+
+        await log({
+            level:    'info',
+            category: 'user',
+            message:  `Family member added to subscription: ${email}`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'UserSubscription', entityId: sub._id, label: sub.planName },
+            request:  { method: 'POST', path: req.originalUrl, statusCode: 200 },
+            metadata: { addedEmail: email, relation, totalMembers: sub.members.length + 1 },
+        });
+
+        res.status(200).json({ 
+            success: true, 
+            message: inviteeAccount 
+                ? 'Member added successfully. They can now access your plan.' 
+                : 'Member added successfully. They will gain access once they create an account with this email.',
+            data: sub.members 
+        });
+    })
+);
+
+router.delete(
+    '/my/members/:email',
+    protect,
+    authorize('customer'),
+    [param('email').isEmail().normalizeEmail().withMessage('Valid email parameter required')],
+    validate,
+    asyncHandler(async (req, res) => {
+        const targetEmail = req.params.email;
+
+        const sub = await UserSubscription.findOne({
+            user:   req.user._id,
+            status: { $in: ['Active', 'Trial'] },
+        });
+
+        if (!sub) {
+            return res.status(400).json({ success: false, message: 'No active subscription found.' });
+        }
+
+        const initialLength = sub.members.length;
+        sub.members = sub.members.filter(m => m.memberEmail !== targetEmail);
+
+        if (sub.members.length === initialLength) {
+            return res.status(404).json({ success: false, message: 'Member not found in your plan.' });
+        }
+
+        await sub.save();
+
+        const removedUser = await User.findOne({ email: targetEmail });
+        if (removedUser) {
+            await Notification.create({
+                recipient: removedUser._id,
+                title:     'Removed from Family Plan',
+                body:      `You have been removed from ${req.user.name}'s ${sub.planName}.`,
+                type:      'Account_Status',
+                priority:  'Normal',
+                dedupeKey: `member_remove_${sub._id}_${removedUser._id}_${Date.now()}`,
+            });
+        }
+
+        await log({
+            level:    'info',
+            category: 'user',
+            message:  `Family member removed from subscription: ${targetEmail}`,
+            actor:    buildActor(req),
+            relatedEntity: { model: 'UserSubscription', entityId: sub._id, label: sub.planName },
+            request:  { method: 'DELETE', path: req.originalUrl, statusCode: 200 },
+            metadata: { removedEmail: targetEmail },
+        });
+
+        res.status(200).json({ success: true, message: 'Member removed successfully.', data: sub.members });
     })
 );
 
@@ -1653,6 +1888,7 @@ router.post(
             body:      `Your ${trial.plan?.name} subscription is now fully active until ${newExpiry.toLocaleDateString()}.`,
             type:      'Account_Status',
             priority:  'Normal',
+            dedupeKey: `trial_convert_paid_${razorpay_payment_id}`,
         });
 
         await log({
@@ -1703,12 +1939,13 @@ router.post(
             await trial.save();
             expiredCount++;
 
-            await Notification.create({
+await Notification.create({
                 recipient: trial.user._id,
                 title:     'Your Free Trial Has Ended',
                 body:      `Your free trial for ${trial.plan?.name || 'your plan'} has expired. Subscribe now to continue enjoying all benefits.`,
                 type:      'Account_Status',
                 priority:  'High',
+                dedupeKey: `trial_expired_${trial.user._id}_${Date.now()}`,
             });
 
             try {
@@ -1795,12 +2032,13 @@ router.post(
         for (const sub of expiringSoon) {
             const daysLeft = Math.ceil((sub.expiryDate - today) / (1000 * 60 * 60 * 24));
 
-            await Notification.create({
+await Notification.create({
                 recipient: sub.user._id,
                 title:     'Subscription Expiring Soon!',
                 body:      `Your ${sub.plan?.name || 'Membership'} expires in ${daysLeft} day(s). Renew now to avoid interruption.`,
                 type:      'Account_Status',
                 priority:  'High',
+                dedupeKey: `sub_expiring_${sub.user._id}_${daysLeft}_${Date.now()}`,
             });
 
             try {
@@ -1858,17 +2096,18 @@ router.post(
 
             if (wallet && wallet.balance >= renewalAmount) {
                 wallet.balance -= renewalAmount;
-                sub.expiryDate  = new Date(sub.expiryDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+              sub.expiryDate                        = new Date(sub.expiryDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+                sub.limits.homeCollectionUsedOnce     = false; // reset one-time benefit for new cycle
 
                 await wallet.save();
                 await sub.save();
-
-                await Notification.create({
+await Notification.create({
                     recipient: sub.user,
                     title:     'Subscription Auto-Renewed',
                     body:      `₹${renewalAmount} deducted from your wallet. Your plan is active until ${sub.expiryDate.toLocaleDateString()}.`,
                     type:      'Account_Status',
                     priority:  'Normal',
+                    dedupeKey: `auto_renew_success_${sub.user}_${Date.now()}`,
                 });
 
                 summary.renewed.push(sub._id);
@@ -1877,12 +2116,13 @@ router.post(
                 sub.autoRenew = false;
                 await sub.save();
 
-                await Notification.create({
+await Notification.create({
                     recipient: sub.user,
                     title:     'Subscription Expired',
                     body:      'Insufficient wallet balance for auto-renewal. Your subscription has expired.',
                     type:      'Account_Status',
                     priority:  'High',
+                    dedupeKey: `auto_renew_failed_${sub.user}_${Date.now()}`,
                 });
 
                 summary.expired.push(sub._id);

@@ -2537,6 +2537,12 @@ router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadm
     booking.updatedBy = req.user._id;
     await booking.save();
 
+    if (status === 'cancelled') {
+  await recoverSubscriptionUsageOnCancel(booking).catch(e =>
+    console.error('[admin/status] recovery failed:', e.message)
+  );
+}
+
     // ── AUTO-CREATE CONSULTATION on confirm for online booking types ──────────
     if (
       status === 'confirmed' &&
@@ -3584,6 +3590,9 @@ router.post('/admin/bookings/:id/refund', protect, authorize('admin', 'superadmi
     booking.fareBreakdown.refundAmount = amount;
     booking.paymentStatus              = 'refunded';
     booking.status                     = 'refunded';
+    await recoverSubscriptionUsageOnCancel(booking).catch(e =>
+  console.error('[admin/refund] recovery failed:', e.message)
+);
     booking.statusLog.push({
       fromStatus: prevStatus, toStatus: 'refunded',
       changedBy: req.user._id, reason: reason || 'Admin initiated refund',

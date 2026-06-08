@@ -1,29 +1,10 @@
-/**
- * subscriptionSlice.js — Likeson.in
- *
- * Corrections vs previous version:
- *  1. fetchCustomPlanPricing stores `optionPricing` (not `unitPrices`) —
- *     matches updated router response: { data: { optionPricing, caps } }
- *  2. All 22 router routes covered — none missing
- *  3. selectCustomPlanPricing / selectCustomPlanCaps selectors added
- *  4. Duplicate-request guard added via thunk condition checks
- *  5. adminFetchAllSubscriptions supports planType filter param
- *  6. trialStatus cleared correctly on cancel/upgrade
- *  7. trialStartStatus separated from trialStatusFetchStatus (were merged)
- */
+ 
 
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import API   from '../api';
 import toast from 'react-hot-toast';
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  INTERNAL HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Safely extracts a user-safe error message from an Axios error.
- * Never leaks stack traces or DB internals into the Redux store.
- */
+ 
 const extractError = (error) => {
   if (error?.response?.data?.errors) {
     return error.response.data.errors.map((e) => e.msg).join(', ');
@@ -444,6 +425,30 @@ export const adminUpdateSubscription = makeThunk(
   { successMsg: 'Subscription updated.' }
 );
 
+
+/** * POST /subscriptions/my/members 
+ * payload: { email, relation }
+ */
+export const addFamilyMember = makeThunk(
+  'subscriptions/addFamilyMember',
+  async (payload) => {
+    const { data } = await API.post('/subscriptions/my/members', payload);
+    return data; // { success, message, data: memberSlot[] }
+  },
+  { successMsg: 'Family member added successfully!' }
+);
+
+/** * DELETE /subscriptions/my/members/:email 
+ */
+export const removeFamilyMember = makeThunk(
+  'subscriptions/removeFamilyMember',
+  async (email) => {
+    const { data } = await API.delete(`/subscriptions/my/members/${email}`);
+    return data; // { success, message, data: memberSlot[] }
+  },
+  { successMsg: 'Family member removed.' }
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  INITIAL STATE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -493,6 +498,8 @@ const initialState = {
   upgradeStatus:         asyncStatus(),
   cancelStatus:          asyncStatus(),
   toggleAutoRenewStatus: asyncStatus(),
+  mySubIsShared:         false,
+  mySubPrimaryHolder:    null,
 
   // ── § 5 Free Trial ────────────────────────────────────────────────────────
   /**
@@ -702,9 +709,12 @@ const subscriptionSlice = createSlice({
           state.mySubStatus.error = payload ?? null;
         }
       })
-      .addCase(fetchMySubscription.fulfilled, (state, { payload }) => {
+     .addCase(fetchMySubscription.fulfilled, (state, { payload }) => {
         state.mySubStatus.loading = false;
-        state.mySubscription = payload.data ?? null;
+        console.log('[SUB DEBUG] payload:', JSON.stringify(payload, null, 2));
+        state.mySubscription      = payload.data ?? null;
+        state.mySubIsShared       = payload.isShared ?? false;
+        state.mySubPrimaryHolder  = payload.primaryAccountHolder ?? null;
       })
 
       .addCase(fetchMySubscriptionHistory.pending,   pending('myHistoryStatus'))
@@ -936,6 +946,24 @@ const subscriptionSlice = createSlice({
         state.plans = state.plans.filter((p) => p._id !== payload.planId);
       })
 
+      .addCase(addFamilyMember.pending,   pending('mySubStatus')) // Reusing mySubStatus for consistency
+      .addCase(addFamilyMember.rejected,  rejected('mySubStatus'))
+      .addCase(addFamilyMember.fulfilled, (state, { payload }) => {
+        state.mySubStatus.loading = false;
+        if (state.mySubscription) {
+          state.mySubscription.members = payload.data;
+        }
+      })
+
+      .addCase(removeFamilyMember.pending,   pending('mySubStatus'))
+      .addCase(removeFamilyMember.rejected,  rejected('mySubStatus'))
+      .addCase(removeFamilyMember.fulfilled, (state, { payload }) => {
+        state.mySubStatus.loading = false;
+        if (state.mySubscription) {
+          state.mySubscription.members = payload.data;
+        }
+      })
+
       .addCase(adminUpdateSubscription.pending,   pending('adminSubUpdateStatus'))
       .addCase(adminUpdateSubscription.rejected,  rejected('adminSubUpdateStatus'))
       .addCase(adminUpdateSubscription.fulfilled, (state, { payload }) => {
@@ -949,6 +977,7 @@ const subscriptionSlice = createSlice({
           if (state.mySubscription?._id === updated._id) state.mySubscription = updated;
         }
       });
+      
   },
 });
 
@@ -1022,6 +1051,8 @@ export const selectCancelLoading          = (state) => sel(state).cancelStatus.l
 export const selectCancelError            = (state) => sel(state).cancelStatus.error;
 export const selectToggleAutoRenewLoading = (state) => sel(state).toggleAutoRenewStatus.loading;
 export const selectToggleAutoRenewError   = (state) => sel(state).toggleAutoRenewStatus.error;
+export const selectMySubIsShared          = (state) => sel(state).mySubIsShared;
+export const selectMySubPrimaryHolder     = (state) => sel(state).mySubPrimaryHolder;
 
 // § 5 Free Trial
 export const selectTrialEligibility          = (state) => sel(state).trialEligibility;
@@ -1065,7 +1096,8 @@ export const selectAdminPlanMutateLoading = (state) => sel(state).adminPlanMutat
 export const selectAdminPlanMutateError   = (state) => sel(state).adminPlanMutateStatus.error;
 export const selectAdminSubUpdateLoading  = (state) => sel(state).adminSubUpdateStatus.loading;
 export const selectAdminSubUpdateError    = (state) => sel(state).adminSubUpdateStatus.error;
-
+// § 4 Family Members
+export const selectMySubMembers = (state) => sel(state).mySubscription?.members ?? [];
 // ─────────────────────────────────────────────────────────────────────────────
 //  DEFAULT EXPORT
 // ─────────────────────────────────────────────────────────────────────────────

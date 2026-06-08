@@ -1,6 +1,4 @@
-/**
- * bookingRouterShared.js — Likeson.in
-/** */
+ 
 
 import crypto   from 'crypto';
 import axios    from 'axios';
@@ -78,6 +76,36 @@ export const CUSTOMER_BOOKING_TYPES = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// FIX D — FAMILY-AWARE SUBSCRIPTION LOOKUP
+// Single module-level helper used by all subscription check functions.
+// First checks if userId is a primary holder; falls back to memberEmail lookup
+// so family plan members get full subscription benefits.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const findActiveSub = async (userId) => {
+  // 1. Primary holder check
+  const primarySub = await UserSubscription.findOne({
+    user:       userId,
+    status:     { $in: ['Active', 'Trial'] },
+    expiryDate: { $gt: new Date() },
+  }).lean();
+  if (primarySub) return primarySub;
+
+  // 2. Family member fallback — look up user's email then query members array
+  const user = await User.findById(userId).select('email').lean();
+  if (!user?.email) return null;
+
+  const email        = user.email.toLowerCase().trim();
+  const localStripped = email.split('@')[0].replace(/\./g, '') + '@' + email.split('@')[1];
+
+  return UserSubscription.findOne({
+    'members.memberEmail': { $in: [email, localStripped] },
+    status:                { $in: ['Active', 'Trial'] },
+    expiryDate:            { $gt: new Date() },
+  }).lean();
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // sendBookingConfirmationEmail
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -136,7 +164,6 @@ export const sendBookingConfirmationEmail = async ({
   }
 };
 
-
 export const calculateEtaMinutes = (distanceKm, avgSpeed = 28) => {
   if (!distanceKm || distanceKm <= 0) return 0;
   return Math.ceil((distanceKm / avgSpeed) * 60);
@@ -147,10 +174,7 @@ export const findNearestHospital = async (coordinates) => {
     const hospitals = await Hospital.find({
       location: {
         $near: {
-          $geometry: {
-            type: 'Point',
-            coordinates,
-          },
+          $geometry: { type: 'Point', coordinates },
           $maxDistance: 30000,
         },
       },
@@ -160,12 +184,8 @@ export const findNearestHospital = async (coordinates) => {
 
     if (!hospitals.length) return null;
 
-    const hospital = hospitals[0];
-
-    const distanceKm = haversineKm(
-      coordinates,
-      hospital.location.coordinates
-    );
+    const hospital   = hospitals[0];
+    const distanceKm = haversineKm(coordinates, hospital.location.coordinates);
 
     return {
       hospital,
@@ -176,7 +196,7 @@ export const findNearestHospital = async (coordinates) => {
     console.error('[findNearestHospital]', err.message);
     return null;
   }
-}; 
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BASIC HELPERS
@@ -370,11 +390,8 @@ export const resolveKmRate = async (userId) => {
   const config     = await PlatformPricingConfig.getGlobal();
   const configRate = config?.transport?.defaultRatePerKm ?? DEFAULT_KM_RATE;
 
-  const sub = await UserSubscription.findOne({
-    user:       userId,
-    status:     { $in: ['Active', 'Trial'] },
-    expiryDate: { $gt: new Date() },
-  }).lean();
+  // FIX D: use family-aware lookup
+  const sub = await findActiveSub(userId);
 
   if (!sub) return { ratePerKm: configRate, source: 'default' };
 
@@ -542,10 +559,11 @@ export const getHospitals = async (filters = {}) => {
 };
 
 const checkHospitalHours = (hospital, scheduledAt) => {
-  const dayNames  = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  const scheduled = new Date(scheduledAt);
-  const dayName   = dayNames[scheduled.getDay()];
-  const reqMins   = scheduled.getHours() * 60 + scheduled.getMinutes();
+  const dayNames      = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const istDate       = new Date(new Date(scheduledAt).getTime() + IST_OFFSET_MS);
+  const dayName       = dayNames[istDate.getUTCDay()];
+  const reqMins       = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
 
   if (hospital.is24x7) return { available: true };
   const opDay = hospital.operatingHours?.find(h => h.day === dayName);
@@ -568,10 +586,10 @@ export const checkDoctorAvailability = async (doctorProfileId, scheduledAt) => {
   if (doctor.partnershipStatus !== 'Active' || !doctor.isActive)
     return { available: false, reason: 'Doctor not active' };
 
-  const dayNames  = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  const scheduled = new Date(scheduledAt);
-  const dayName   = dayNames[scheduled.getDay()];
-  const reqMins   = scheduled.getHours() * 60 + scheduled.getMinutes();
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const istDate       = new Date(new Date(scheduledAt).getTime() + IST_OFFSET_MS);
+  const dayName       = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][istDate.getUTCDay()];
+  const reqMins       = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
 
   const dayEntry = doctor.weeklyAvailability?.find(d => d.day === dayName);
   if (!dayEntry?.isAvailable) return { available: false, reason: `Unavailable on ${dayName}` };
@@ -584,12 +602,19 @@ export const checkDoctorAvailability = async (doctorProfileId, scheduledAt) => {
   });
   if (!matchedSlot) return { available: false, reason: `No slot at that time on ${dayName}` };
 
-  const CONSULT_DURATION_MIN = 20;
-  const slotDate = new Date(scheduled);
   const [slotSh, slotSm] = matchedSlot.startTime.split(':').map(Number);
   const [slotEh, slotEm] = matchedSlot.endTime.split(':').map(Number);
-  const slotStart = new Date(new Date(slotDate).setHours(slotSh, slotSm, 0, 0));
-  const slotEnd   = new Date(new Date(slotDate).setHours(slotEh, slotEm, 0, 0));
+
+  const CONSULT_DURATION_MIN = 20;
+  const baseUTC   = new Date(scheduledAt);
+  const slotStart = new Date(Date.UTC(
+    istDate.getUTCFullYear(), istDate.getUTCMonth(), istDate.getUTCDate(),
+    slotSh, slotSm, 0, 0
+  ) - IST_OFFSET_MS);
+  const slotEnd   = new Date(Date.UTC(
+    istDate.getUTCFullYear(), istDate.getUTCMonth(), istDate.getUTCDate(),
+    slotEh, slotEm, 0, 0
+  ) - IST_OFFSET_MS);
 
   const existingInSlot = await OutPatientRecord.find({
     doctor:      doctorProfileId,
@@ -605,8 +630,9 @@ export const checkDoctorAvailability = async (doctorProfileId, scheduledAt) => {
   }
 
   const overlap = existingInSlot.find(r =>
-    Math.abs(new Date(r.scheduledAt).getTime() - scheduled.getTime()) < CONSULT_DURATION_MIN * 60 * 1000
+    Math.abs(new Date(r.scheduledAt).getTime() - baseUTC.getTime()) < CONSULT_DURATION_MIN * 60 * 1000
   );
+
   if (overlap) {
     const next = new Date(new Date(overlap.scheduledAt).getTime() + CONSULT_DURATION_MIN * 60 * 1000);
     const fmt  = next.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
@@ -687,31 +713,10 @@ export const getDoctorsByHospital = async (hospitalId) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════════════════
 // SUBSCRIPTION HELPERS — CORE
-// ═══════════════════════════════════════════════════════════════════════════
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * snapshotLimits  (FIX F)
- *
- * Snapshots plan benefit limits into UserSubscription.limits at subscribe time.
- *
- * CHANGE: now accepts optional `pricingConfig` for custom plan care assistant
- * tier snapshot. If not provided, fetched internally.
- *
- * New fields populated:
- *   careAssistantTierIndex      — tier index chosen (custom plan) or null (fixed)
- *   careAssistantTierLabel      — tier label snapshotted (e.g. "2–4 Hours")
- *   careAssistantChargePerVisit — ₹ per visit snapshotted
- *
- * transportRatePerKm:
- *   null = N/A (NRI plan / no transport)
- *   > 0  = fixed plan per-km rate
- *   -1   = sentinel: custom transport active, resolve from plan at booking time
- */
 export const snapshotLimits = async (plan, pricingConfig = null) => {
-  // ── Base defaults (fixed plan fields) ─────────────────────────────────────
   let consultationsPerMonth       = plan.consultations?.freePerMonth        ?? 0;
   let careAssistantVisitsPerMonth = plan.careAssistant?.visitsPerMonth      ?? null;
   let transportRatePerKm          = plan.transport?.ratePerKm               ?? null;
@@ -720,34 +725,27 @@ export const snapshotLimits = async (plan, pricingConfig = null) => {
   let diagnosticsDiscountPercent  = plan.diagnostics?.discountPercent       ?? 0;
   let homeSampleCollection        = plan.diagnostics?.homeSampleCollection  ?? false;
 
-  // Care assistant tier snapshot (null for fixed plans by default)
   let careAssistantTierIndex      = null;
   let careAssistantTierLabel      = null;
   let careAssistantChargePerVisit = null;
 
-  // Fixed plan: snapshot care assistant service type label
   if (plan.planType === 'fixed') {
     const serviceType = plan.careAssistant?.serviceType ?? 'None';
     if (serviceType !== 'None') {
-      careAssistantTierLabel = serviceType; // 'Standard' or 'Dedicated'
-      // chargePerVisit null for fixed plans — resolved live at booking time via platform tiers
+      careAssistantTierLabel = serviceType;
     }
   }
 
-  // ── Custom plan: override with values from customOptions ──────────────────
   if (plan.planType === 'custom' && Array.isArray(plan.customOptions)) {
-
     const consultOpt = plan.customOptions.find(o => o.optionKey === 'consultations');
     if (consultOpt?.quantity > 0) {
       consultationsPerMonth = consultOpt.quantity;
     }
 
-    // ── Care assistant tier snapshot (FIX F) ─────────────────────────────
     const caOpt = plan.customOptions.find(o => o.optionKey === 'careAssistant');
     if (caOpt?.quantity > 0) {
       careAssistantVisitsPerMonth = caOpt.quantity;
 
-      // Fetch config if not provided
       const config = pricingConfig ?? await PlatformPricingConfig.getGlobal();
       const tiers  = config?.customPlanOptions?.careAssistant?.pricingTiers ?? [];
       const idx    = Number(caOpt.careAssistantTierIndex ?? 0);
@@ -758,27 +756,22 @@ export const snapshotLimits = async (plan, pricingConfig = null) => {
       careAssistantChargePerVisit = tier?.chargeToUser ?? caOpt.unitPrice ?? null;
     }
 
-    // ── Transport ─────────────────────────────────────────────────────────
     const tOpt = plan.customOptions.find(o => o.optionKey === 'transport');
     if (tOpt?.unitPrice > 0) {
-      // -1 sentinel = custom transport active; actual pricePerKm resolved at booking
-      transportRatePerKm    = -1;
+      transportRatePerKm     = -1;
       transportRidesPerMonth = tOpt.quantity ?? null;
     }
 
-    // ── Diagnostics ───────────────────────────────────────────────────────
     const diagOpt = plan.customOptions.find(o => o.optionKey === 'diagnostics');
     if (diagOpt?.quantity > 0) {
-      diagnosticsDiscountPercent = diagOpt.quantity; // quantity = discount %
+      diagnosticsDiscountPercent = diagOpt.quantity;
     }
 
-    // ── Pharmacy ──────────────────────────────────────────────────────────
     const pharmOpt = plan.customOptions.find(o => o.optionKey === 'pharmacy');
     if (pharmOpt?.quantity > 0) {
       pharmacyDiscountPercent = pharmOpt.quantity;
     }
 
-    // ── Home sample collection ────────────────────────────────────────────
     const homeOpt = plan.customOptions.find(o => o.optionKey === 'homeSampleCollection');
     if (homeOpt?.quantity > 0) {
       homeSampleCollection = true;
@@ -794,7 +787,6 @@ export const snapshotLimits = async (plan, pricingConfig = null) => {
     diagnosticsDiscountPercent,
     transportRatePerKm,
     homeSampleCollection,
-    // ── FIX F: new tier snapshot fields ─────────────────────────────────
     careAssistantTierIndex,
     careAssistantTierLabel,
     careAssistantChargePerVisit,
@@ -802,100 +794,135 @@ export const snapshotLimits = async (plan, pricingConfig = null) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// checkSubscriptionConsultation  (FIX A)
-//
-// homeVisit NEVER free via quota. Only 'inPerson' and 'video' covered.
+// CONSULTATION MODE HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const resolvePlanModes = (plan) => {
+  if (!plan || plan.planType === 'custom') {
+    return { inPerson: true, video: true, home: true };
+  }
+  const modes = plan.consultations?.modes || {};
+  return {
+    inPerson: modes.inPerson !== false,
+    video:    modes.video    === true,
+    home:     modes.home     === true,
+  };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// checkSubscriptionConsultation — FIX A + FIX D
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const checkSubscriptionConsultation = async (userId, consultationType = null) => {
   const isHomeVisit = consultationType === 'homeVisit';
+  const isVideo     = consultationType === 'video';
 
-  const sub = await UserSubscription.findOne({
-    user:       userId,
-    status:     { $in: ['Active', 'Trial'] },
-    expiryDate: { $gt: new Date() },
-  }).lean();
+  // FIX D: family-aware lookup
+  const sub = await findActiveSub(userId);
 
-  if (!sub)
-    return { allowed: false, sub: null, remaining: 0, isFree: false, reason: 'No active subscription' };
-
-  // Mode check (inPerson / video only for fixed plans)
-  if (!isHomeVisit && sub.plan) {
-    const plan = await SubscriptionPlan.findById(sub.plan)
-      .select('planType consultations').lean();
-    if (plan && plan.planType !== 'custom') {
-      const modes   = plan.consultations?.modes || {};
-      const modeKey = consultationType === 'video' ? 'video' : 'inPerson';
-      if (Object.keys(modes).length > 0 && modes[modeKey] === false) {
-        return {
-          allowed: false, sub, remaining: 0, isFree: false,
-          reason: `Subscription does not support ${consultationType === 'video' ? 'video' : 'in-person'} consultations`,
-        };
-      }
-    }
+  if (!sub) {
+    return {
+      allowed: false, sub: null, remaining: 0, isFree: false,
+      reason: 'No active subscription',
+      videoBlocked: false,
+      homeBlocked:  false,
+    };
   }
 
-  // Resolve quota
+  let plan = null;
+  if (sub.plan) {
+    plan = await SubscriptionPlan.findById(sub.plan)
+      .select('planType fixedTier consultations customOptions onlineModeAllowed')
+      .lean();
+  }
+
+  const planType  = sub.planType  || plan?.planType  || 'fixed';
+  const fixedTier = sub.fixedTier || plan?.fixedTier || null;
+
+  const modes = resolvePlanModes(plan);
+
+  const modeKey           = isHomeVisit ? 'home' : isVideo ? 'video' : 'inPerson';
+  const modeCoveredByPlan = modes[modeKey];
+
+  const videoBlocked = isVideo     && !modes.video;
+  const homeBlocked  = isHomeVisit && !modes.home;
+
   let limit = sub.limits?.consultationsPerMonth ?? null;
 
-  if ((limit == null || limit === 0) && sub.plan) {
-    const plan = await SubscriptionPlan.findById(sub.plan)
-      .select('planType customOptions consultations').lean();
-    if (plan?.planType === 'custom' && Array.isArray(plan.customOptions)) {
-      const consultOpt = plan.customOptions.find(o => o.optionKey === 'consultations');
-      if (consultOpt?.quantity > 0) limit = consultOpt.quantity;
-    } else if (plan?.consultations?.freePerMonth != null) {
+  if ((limit == null || limit === 0) && plan) {
+    if (plan.planType === 'custom' && Array.isArray(plan.customOptions)) {
+      const co = plan.customOptions.find(o => o.optionKey === 'consultations');
+      if (co?.quantity > 0) limit = co.quantity;
+    } else if (plan.consultations?.freePerMonth != null) {
       limit = plan.consultations.freePerMonth;
     }
   }
 
-  if (!limit || limit === 0)
-    return { allowed: false, sub, remaining: 0, isFree: false, reason: 'No consultation quota in plan' };
+  if (!limit || limit === 0) {
+    return {
+      allowed: true, sub, remaining: 0, isFree: false,
+      videoBlocked, homeBlocked,
+      reason: 'No consultation quota in plan',
+    };
+  }
+
+  if (!modeCoveredByPlan) {
+    return {
+      allowed: true, sub, remaining: 0, isFree: false,
+      videoBlocked, homeBlocked,
+      reason: isVideo
+        ? `Your ${fixedTier || 'current'} plan covers in-person consultations only. Video fee applies.`
+        : isHomeVisit
+          ? `Your ${fixedTier || 'current'} plan does not cover home visits via quota. Home visit fee applies.`
+          : 'Mode not covered by plan',
+    };
+  }
 
   const now   = new Date();
-  const usage = sub.usageHistory?.find(
-    u => u.month === now.getMonth() + 1 && u.year === now.getFullYear()
+  const usage = sub.usageHistory?.find(u =>
+    u.month === now.getMonth() + 1 && u.year === now.getFullYear()
   );
   const used = usage?.consultationsUsed ?? 0;
 
   if (limit === -1) {
     return {
-      allowed: true, sub, remaining: Infinity,
-      isFree:  !isHomeVisit,
-      reason: isHomeVisit
-        ? 'Home visit fee applies — not covered by subscription quota'
-        : 'Unlimited consultations',
+      allowed: true, sub, remaining: Infinity, isFree: true,
+      videoBlocked: false, homeBlocked: false,
+      reason: 'Unlimited consultations',
     };
   }
 
-  if (used >= limit)
+  if (used >= limit) {
     return {
-      allowed: false, sub, remaining: 0, isFree: false,
+      allowed: true, sub, remaining: 0, isFree: false,
+      videoBlocked, homeBlocked,
       reason: `Monthly quota exhausted (${used}/${limit} used)`,
     };
+  }
 
   const remaining = limit - used;
   return {
-    allowed: true, sub, remaining,
-    isFree:  !isHomeVisit,
-    reason: isHomeVisit
-      ? `Home visit fee applies — not covered by subscription (${remaining}/${limit} quota available for in-person/video)`
-      : `${remaining} of ${limit} consultations remaining this month`,
+    allowed: true, sub, remaining, isFree: true,
+    videoBlocked: false, homeBlocked: false,
+    reason: `${remaining} of ${limit} consultations remaining this month`,
   };
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// checkSubscriptionCareAssistant — FIX D
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ── checkSubscriptionCareAssistant ── add planType to result
-// REPLACE existing checkSubscriptionCareAssistant with this:
 export const checkSubscriptionCareAssistant = async (userId) => {
-  const sub = await UserSubscription.findOne({
-    user:       userId,
-    status:     { $in: ['Active', 'Trial'] },
-    expiryDate: { $gt: new Date() },
-  }).lean();
+  // FIX D: family-aware lookup
+  const sub = await findActiveSub(userId);
 
-  if (!sub)
-    return { allowed: false, sub: null, remaining: 0, isFree: false, planType: null, tierSnapshot: null, reason: 'No active subscription' };
+  if (!sub) {
+    return {
+      allowed: false, sub: null, remaining: 0, isFree: false,
+      planType: null, tierSnapshot: null,
+      reason: 'No active subscription',
+    };
+  }
 
   let limit    = sub.limits?.careAssistantVisitsPerMonth ?? null;
   let planType = sub.planType ?? 'fixed';
@@ -914,17 +941,21 @@ export const checkSubscriptionCareAssistant = async (userId) => {
     }
   }
 
-  // Build tier snapshot from limits (snapshotted at subscribe time)
   const tierSnapshot = (sub.limits?.careAssistantTierIndex != null || sub.limits?.careAssistantTierLabel)
     ? {
-        tierIndex:      sub.limits.careAssistantTierIndex   ?? null,
-        tierLabel:      sub.limits.careAssistantTierLabel   ?? null,
+        tierIndex:      sub.limits.careAssistantTierIndex      ?? null,
+        tierLabel:      sub.limits.careAssistantTierLabel      ?? null,
         chargePerVisit: sub.limits.careAssistantChargePerVisit ?? null,
       }
     : null;
 
-  if (!limit || limit === 0)
-    return { allowed: false, sub, remaining: 0, isFree: false, planType, tierSnapshot, reason: 'No care assistant quota in plan' };
+  if (!limit || limit === 0) {
+    return {
+      allowed: false, sub, remaining: 0, isFree: false,
+      planType, tierSnapshot,
+      reason: 'No care assistant quota in plan',
+    };
+  }
 
   const now   = new Date();
   const usage = sub.usageHistory?.find(
@@ -932,14 +963,20 @@ export const checkSubscriptionCareAssistant = async (userId) => {
   );
   const used = usage?.careAssistantVisitsUsed ?? 0;
 
-  if (limit === -1)
-    return { allowed: true, sub, remaining: Infinity, isFree: planType !== 'custom', planType, tierSnapshot, reason: 'Unlimited care assistant visits' };
+  if (limit === -1) {
+    return {
+      allowed: true, sub, remaining: Infinity,
+      isFree: planType !== 'custom', planType, tierSnapshot,
+      reason: 'Unlimited care assistant visits',
+    };
+  }
 
-  if (used >= limit)
+  if (used >= limit) {
     return {
       allowed: false, sub, remaining: 0, isFree: false, planType, tierSnapshot,
       reason: `Care assistant quota exhausted (${used}/${limit} used this month)`,
     };
+  }
 
   return {
     allowed:   true,
@@ -953,61 +990,32 @@ export const checkSubscriptionCareAssistant = async (userId) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// checkConsultationModeAllowed
+// checkConsultationModeAllowed — soft gate, no change needed
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const checkConsultationModeAllowed = async (userId, consultationType) => {
-  if (!consultationType) return { allowed: true };
-  if (consultationType === 'homeVisit') return { allowed: true };
-
-  const sub = await UserSubscription.findOne({
-    user:       userId,
-    status:     { $in: ['Active', 'Trial'] },
-    expiryDate: { $gt: new Date() },
-  }).lean();
-
-  if (!sub) return { allowed: true, reason: 'No subscription — all modes available' };
-  if (!sub.plan) return { allowed: true };
-
-  const plan = await SubscriptionPlan.findById(sub.plan)
-    .select('planType consultations').lean();
-  if (!plan || plan.planType === 'custom') return { allowed: true };
-
-  const modes   = plan.consultations?.modes || {};
-  const modeMap = { inPerson: 'inPerson', video: 'video' };
-  const modeKey = modeMap[consultationType];
-
-  if (!modeKey || Object.keys(modes).length === 0) return { allowed: true };
-
-  const isAllowed = modes[modeKey] !== false;
-  if (!isAllowed) {
-    const label = {
-      video:    'video consultations',
-      inPerson: 'in-person consultations',
-    }[consultationType] || consultationType;
-    return {
-      allowed: false,
-      reason:  `Your subscription does not support ${label}. Please upgrade or choose a different type.`,
-    };
-  }
-  return { allowed: true };
+  return { allowed: true, blockedByPlan: false };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// checkSubscriptionDiagnostics  (FIX C)
-//
-// Reads discount% and homeSampleCollection from BOTH sub.limits (fixed plans)
-// AND plan.customOptions (custom plans).
+// checkSubscriptionDiagnostics — FIX B + FIX D
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const checkSubscriptionDiagnostics = async (userId) => {
-  const sub = await UserSubscription.findOne({
-    user:       userId,
-    status:     { $in: ['Active', 'Trial'] },
-    expiryDate: { $gt: new Date() },
-  }).lean();
+  // FIX D: family-aware lookup
+  const sub = await findActiveSub(userId);
 
-  if (!sub) return { discountPercent: 0, homeSampleCollection: false, sub: null };
+  if (!sub) {
+    return {
+      discountPercent:        0,
+      homeSampleCollection:   false,
+      homeCollectionFreeNow:  false,
+      homeCollectionUsedOnce: false,
+      homeVisitsUsed:         0,
+      homeVisitLimit:         null,
+      sub:                    null,
+    };
+  }
 
   let discountPercent      = sub.limits?.diagnosticsDiscountPercent ?? null;
   let homeSampleCollection = sub.limits?.homeSampleCollection       ?? null;
@@ -1016,7 +1024,8 @@ export const checkSubscriptionDiagnostics = async (userId) => {
 
   if (needsFallback && sub.plan) {
     const plan = await SubscriptionPlan.findById(sub.plan)
-      .select('planType customOptions diagnostics').lean();
+      .select('planType customOptions diagnostics')
+      .lean();
 
     if (plan?.planType === 'custom' && Array.isArray(plan.customOptions)) {
       if (discountPercent == null) {
@@ -1035,43 +1044,58 @@ export const checkSubscriptionDiagnostics = async (userId) => {
     }
   }
 
- // Count home collection visits used this month
-  const now2   = new Date();
-  const usage2 = sub?.usageHistory?.find(
-    u => u.month === now2.getMonth() + 1 && u.year === now2.getFullYear()
+  discountPercent      = discountPercent      ?? 0;
+  homeSampleCollection = homeSampleCollection ?? false;
+
+  const now        = new Date();
+  const usage      = sub.usageHistory?.find(
+    u => u.month === now.getMonth() + 1 && u.year === now.getFullYear()
   );
-  const homeVisitsUsed      = usage2?.diagnosticBookingsMade ?? 0;
-  const homeVisitLimit      = (sub?.limits?.labTestsPerMonth ?? null); // null = unlimited if included
+  const homeVisitsUsed = usage?.diagnosticBookingsMade ?? 0;
+
+  let homeVisitLimit = null;
+  if (homeSampleCollection) {
+    const limitsHome = sub.limits?.homeSampleCollection;
+    if (limitsHome) {
+      homeVisitLimit = 1;
+    }
+    if (homeVisitLimit == null) homeVisitLimit = 1;
+  }
+
+  const homeCollectionUsedOnce = sub.limits?.homeCollectionUsedOnce ?? false;
+  const homeCollectionFreeNow  = homeSampleCollection && !homeCollectionUsedOnce;
 
   return {
-    discountPercent:      discountPercent      ?? 0,
-    homeSampleCollection: homeSampleCollection ?? false,
+    discountPercent,
+    homeSampleCollection,
+    homeCollectionFreeNow,
+    homeCollectionUsedOnce,
     homeVisitsUsed,
-    homeVisitLimit,          // null = unlimited when homeSampleCollection=true
+    homeVisitLimit,
     sub,
   };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// markHomeCollectionUsed
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const markHomeCollectionUsed = async (subscriptionId) => {
+  if (!subscriptionId) return;
+  try {
+    await UserSubscription.findByIdAndUpdate(subscriptionId, {
+      $set: { 'limits.homeCollectionUsedOnce': true },
+    });
+    console.log(`[markHomeCollectionUsed] ✅ marked for sub:${subscriptionId}`);
+  } catch (e) {
+    console.error('[markHomeCollectionUsed] ❌ failed:', e.message);
+  }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SUBSCRIPTION USAGE TRACKING
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CENTRALIZED SUBSCRIPTION USAGE ENGINE
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * applySubscriptionUsage — ONE helper to rule all quota changes.
- *
- * Finds or creates current-month entry in usageHistory[].
- * delta = +1 to consume, -1 to restore.
- * Never goes negative.
- *
- * @param {string|ObjectId} subscriptionId
- * @param {string} field  — 'consultationsUsed' | 'careAssistantVisitsUsed' |
- *                          'transportRidesUsed' | 'diagnosticBookingsMade'
- * @param {number} delta  — +1 or -1
- */
 export const applySubscriptionUsage = async (subscriptionId, field, delta) => {
   const ALLOWED = [
     'consultationsUsed',
@@ -1088,10 +1112,9 @@ export const applySubscriptionUsage = async (subscriptionId, field, delta) => {
   const month = now.getMonth() + 1;
   const year  = now.getFullYear();
 
-  // Try increment on existing month entry
   const result = await UserSubscription.findOneAndUpdate(
     {
-      _id: subscriptionId,
+      _id:                  subscriptionId,
       'usageHistory.month': month,
       'usageHistory.year':  year,
       ...(delta < 0 ? { [`usageHistory.$.${field}`]: { $gt: 0 } } : {}),
@@ -1102,7 +1125,6 @@ export const applySubscriptionUsage = async (subscriptionId, field, delta) => {
 
   if (!result) {
     if (delta > 0) {
-      // No entry yet — create it
       await UserSubscription.findByIdAndUpdate(subscriptionId, {
         $push: {
           usageHistory: {
@@ -1118,7 +1140,6 @@ export const applySubscriptionUsage = async (subscriptionId, field, delta) => {
       });
       console.log(`[applySubscriptionUsage] ✅ Created month entry & set ${field}+=${delta} for sub:${subscriptionId}`);
     } else {
-      // delta < 0 but entry missing or already 0 — nothing to decrement
       console.warn(`[applySubscriptionUsage] ⚠️ Nothing to decrement for sub:${subscriptionId} field:${field}`);
     }
     return;
@@ -1127,26 +1148,16 @@ export const applySubscriptionUsage = async (subscriptionId, field, delta) => {
   console.log(`[applySubscriptionUsage] ✅ ${field} delta=${delta} for sub:${subscriptionId}`);
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// incrementSubscriptionUsage — thin wrapper (AFTER payment confirmed only)
-// ─────────────────────────────────────────────────────────────────────────────
 export const incrementSubscriptionUsage = async (subId, field) => {
   console.log(`[incrementSubscriptionUsage] subId:${subId} field:${field}`);
   await applySubscriptionUsage(subId, field, 1);
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// decrementSubscriptionUsage — used on cancel to restore already-flushed quota
-// ─────────────────────────────────────────────────────────────────────────────
 export const decrementSubscriptionUsage = async (subId, field) => {
   console.log(`[decrementSubscriptionUsage] subId:${subId} field:${field}`);
   await applySubscriptionUsage(subId, field, -1);
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// queueSubscriptionUsage — push deferred item onto Booking.subscriptionUsagePending
-// NEVER increments actual counter. Flush happens after payment confirmed.
-// ─────────────────────────────────────────────────────────────────────────────
 export const queueSubscriptionUsage = async (bookingId, subId, field) => {
   const ALLOWED = [
     'consultationsUsed',
@@ -1172,13 +1183,7 @@ export const queueSubscriptionUsage = async (bookingId, subId, field) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// flushSubscriptionUsage — internal. Called by flushAndRecord only.
-// Idempotent: clears pending after flush so double-call is safe.
-// NOT exported — use flushAndRecord instead.
-// ─────────────────────────────────────────────────────────────────────────────
 const flushSubscriptionUsage = async (booking) => {
-  // Re-fetch fresh copy to avoid stale pending array
   const fresh = await Booking.findById(booking._id)
     .select('subscriptionUsagePending confirmedSubscriptionUsage')
     .lean();
@@ -1202,19 +1207,9 @@ const flushSubscriptionUsage = async (booking) => {
     }
   }
 
-  return pending; // return flushed items for confirmedSubscriptionUsage
+  return pending;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// flushAndRecord — CALL THIS after payment success (Razorpay, Wallet, zero-amount, cash confirm)
-//
-// Atomically:
-//   1. flushes pending usage into usageHistory
-//   2. moves items to confirmedSubscriptionUsage (for cancel recovery)
-//   3. clears pending array
-//
-// Idempotent: safe to call multiple times (pending empty after first flush).
-// ─────────────────────────────────────────────────────────────────────────────
 export const flushAndRecord = async (booking) => {
   console.log(`[flushAndRecord] booking:${booking._id}`);
 
@@ -1225,7 +1220,6 @@ export const flushAndRecord = async (booking) => {
     return;
   }
 
-  // Atomic: push to confirmed + clear pending
   await Booking.findByIdAndUpdate(booking._id, {
     $push: { confirmedSubscriptionUsage: { $each: flushed } },
     $set:  { subscriptionUsagePending: [] },
@@ -1234,15 +1228,7 @@ export const flushAndRecord = async (booking) => {
   console.log(`[flushAndRecord] ✅ recorded ${flushed.length} items for booking:${booking._id}`);
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// recoverSubscriptionUsageOnCancel — call on cancel route
-//
-// Case A: pending not flushed → clear pending, no decrement (quota never consumed)
-// Case B: already flushed → decrement confirmedSubscriptionUsage items
-// Case C: neither → no-op
-// ─────────────────────────────────────────────────────────────────────────────
 export const recoverSubscriptionUsageOnCancel = async (booking) => {
-  // Re-fetch fresh to avoid stale data
   const fresh = await Booking.findById(booking._id)
     .select('subscriptionUsagePending confirmedSubscriptionUsage')
     .lean();
@@ -1252,7 +1238,6 @@ export const recoverSubscriptionUsageOnCancel = async (booking) => {
 
   console.log(`[recoverSubscriptionUsageOnCancel] booking:${booking._id} pending:${pending.length} confirmed:${confirmed.length}`);
 
-  // Case A: payment never confirmed — just clear pending
   if (pending.length > 0) {
     await Booking.findByIdAndUpdate(booking._id, {
       $set: { subscriptionUsagePending: [] },
@@ -1261,7 +1246,6 @@ export const recoverSubscriptionUsageOnCancel = async (booking) => {
     return { recovered: false, reason: 'pending cleared — quota was never consumed' };
   }
 
-  // Case B: already flushed — restore quota
   if (confirmed.length > 0) {
     for (const { subId, field } of confirmed) {
       if (!subId || !field) continue;
@@ -1275,7 +1259,6 @@ export const recoverSubscriptionUsageOnCancel = async (booking) => {
     return { recovered: true, decremented: confirmed.length };
   }
 
-  // Case C: nothing recorded
   console.log(`[recoverSubscriptionUsageOnCancel] no usage recorded — nothing to recover`);
   return { recovered: false, reason: 'no subscription usage on this booking' };
 };
@@ -1288,16 +1271,30 @@ export const resolveConsultationFee = async ({
   isFollowUp, followUpFee, isCoveredBySubscription,
   doctorId, hospitalId, consultationType,
 }) => {
-  if (isFollowUp)              return { fee: followUpFee || 0, source: 'follow_up' };
-  if (isCoveredBySubscription) return { fee: 0,               source: 'subscription' };
+  const gstRateMap = {
+    inPerson:  0.00,
+    video:     0.05,
+    homeVisit: 0.05,
+  };
+  const gstRate = gstRateMap[consultationType] ?? 0.00;
+
+  if (isFollowUp)
+    return { fee: followUpFee || 0, source: 'follow_up', gstRate };
+
+  if (isCoveredBySubscription)
+    return { fee: 0, source: 'subscription', gstRate: 0 };
 
   if (hospitalId) {
     const hosp = await Hospital.findById(hospitalId)
       .select('managementModel consultationPricing').lean();
     if (hosp?.managementModel === 'hospital-manager' && hosp.consultationPricing) {
       const cp     = hosp.consultationPricing;
-      const feeMap = { inPerson: cp.inPersonFee, video: cp.videoFee, homeVisit: cp.homeVisitFee };
-      return { fee: feeMap[consultationType] ?? cp.inPersonFee ?? 0, source: 'hospital' };
+      const feeMap = {
+        inPerson:  cp.inPersonFee,
+        video:     cp.videoFee,
+        homeVisit: cp.homeVisitFee,
+      };
+      return { fee: feeMap[consultationType] ?? cp.inPersonFee ?? 0, source: 'hospital', gstRate };
     }
   }
 
@@ -1309,24 +1306,24 @@ export const resolveConsultationFee = async ({
         video:     doc.fees.videoFee,
         homeVisit: doc.fees.homeVisitFee,
       };
-      if (feeMap[consultationType] != null) return { fee: feeMap[consultationType], source: 'doctor' };
+      if (feeMap[consultationType] != null)
+        return { fee: feeMap[consultationType], source: 'doctor', gstRate };
     }
   }
 
-  return { fee: 600, source: 'default' };
+  return { fee: 600, source: 'default', gstRate };
 };
 
- 
- 
+// ─────────────────────────────────────────────────────────────────────────────
+// CARE ASSISTANT FEE RESOLVER
+// ─────────────────────────────────────────────────────────────────────────────
 
 export const resolveCareAssistantFee = async ({ userId, durationHours, config }) => {
   const resolvedConfig = config || await PlatformPricingConfig.getGlobal();
   const parsedDuration = parseInt(durationHours, 10) || 4;
   const subCheck       = await checkSubscriptionCareAssistant(userId);
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // 1. FIXED plan sub → visit free, count quota
-  // ─────────────────────────────────────────────────────────────────────────
+  // 1. FIXED plan → free, consume quota
   if (subCheck.allowed && subCheck.isFree && subCheck.planType !== 'custom') {
     const platformTier = PlatformPricingConfig.resolveCareAssistantTier?.(resolvedConfig, parsedDuration) ?? null;
     return {
@@ -1340,37 +1337,26 @@ export const resolveCareAssistantFee = async ({ userId, durationHours, config })
     };
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
   // 2. CUSTOM plan
-  // ─────────────────────────────────────────────────────────────────────────
   if (subCheck.planType === 'custom') {
     const sub       = subCheck.sub;
     const remaining = subCheck.remaining ?? 0;
 
-    // ── 2a. Quota remaining ───────────────────────────────────────────────
     if (subCheck.allowed && (remaining > 0 || remaining === Infinity)) {
+      const planTierIdx   = sub.limits?.careAssistantTierIndex ?? 0;
+      const customTiers   = resolvedConfig?.customPlanOptions?.careAssistant?.pricingTiers ?? [];
 
-      // Plan tier index snapshotted at subscribe time
-      const planTierIdx = sub.limits?.careAssistantTierIndex ?? 0;
-
-      // Resolve all custom tiers from platform config
-      const customTiers = resolvedConfig?.customPlanOptions?.careAssistant?.pricingTiers ?? [];
-
-      // Find which tier index the selected duration falls into
-      // Match: minHours <= parsedDuration < maxHours (or maxHours null = open-ended)
       let selectedTierIdx = customTiers.findIndex(
         (t) =>
           parsedDuration >= (t.minHours ?? 0) &&
           (t.maxHours == null || parsedDuration < t.maxHours)
       );
-      // Fallback: exact minHours match
       if (selectedTierIdx < 0) {
         selectedTierIdx = customTiers.findIndex((t) => t.minHours === parsedDuration);
       }
-      // Final fallback: tier 0
       if (selectedTierIdx < 0) selectedTierIdx = 0;
 
-      // ── 2a-i. PLAN TIER selected → FREE, consume quota ──────────────────
+      // 2a. PLAN TIER selected → FREE
       if (selectedTierIdx === planTierIdx) {
         const snapshotTierIndex = sub.limits?.careAssistantTierIndex;
         const snapshotCharge    = sub.limits?.careAssistantChargePerVisit;
@@ -1395,12 +1381,10 @@ export const resolveCareAssistantFee = async ({ userId, durationHours, config })
             tierIndex:         selectedTierIdx,
           };
         } else {
-          // Fallback: read from plan.customOptions
           try {
             const plan = await SubscriptionPlan.findById(sub.plan)
               .select('planType customOptions')
               .lean();
-
             if (plan?.planType === 'custom' && Array.isArray(plan.customOptions)) {
               const caOpt = plan.customOptions.find((o) => o.optionKey === 'careAssistant');
               if (caOpt) {
@@ -1430,21 +1414,18 @@ export const resolveCareAssistantFee = async ({ userId, durationHours, config })
         }
 
         return {
-          fee:                     0,           // FREE — plan tier, quota covers
+          fee:                     0,
           source:                  'custom_plan_quota',
           isCoveredBySubscription: true,
-          quotaTracked:            true,         // quota WILL be consumed
+          quotaTracked:            true,
           sub,
           subQuotaInfo:            subCheck,
           tier,
         };
       }
 
-      // ── 2a-ii. DIFFERENT tier selected → charge platform rate, NO quota ──
-      // User picked a higher/lower tier than their plan covers.
-      // Charge that tier's platform rate. Quota is NOT consumed.
+      // 2b. DIFFERENT tier → charge platform rate, no quota
       const chargeTier = customTiers[selectedTierIdx] ?? null;
-
       console.log(
         `[resolveCareAssistantFee] custom plan: selected tier ${selectedTierIdx} ≠ plan tier ${planTierIdx}` +
         ` — charging platform rate ${chargeTier?.chargeToUser ?? 0}`
@@ -1454,18 +1435,15 @@ export const resolveCareAssistantFee = async ({ userId, durationHours, config })
         fee:                     chargeTier?.chargeToUser ?? 0,
         source:                  'platform',
         isCoveredBySubscription: false,
-        quotaTracked:            false,          // quota NOT consumed — different tier
+        quotaTracked:            false,
         sub,
         subQuotaInfo:            subCheck,
-        tier:                    chargeTier
-          ? { ...chargeTier, tierIndex: selectedTierIdx }
-          : null,
+        tier:                    chargeTier ? { ...chargeTier, tierIndex: selectedTierIdx } : null,
       };
     }
 
-    // ── 2b. Quota exhausted or not allowed → platform tier rate ──────────
+    // 2c. Quota exhausted
     const platformTier = PlatformPricingConfig.resolveCareAssistantTier?.(resolvedConfig, parsedDuration) ?? null;
-
     return {
       fee:                     platformTier?.chargeToUser ?? 0,
       source:                  'platform',
@@ -1477,11 +1455,8 @@ export const resolveCareAssistantFee = async ({ userId, durationHours, config })
     };
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // 3. No sub / no plan / quota exhausted → platform tiers by duration
-  // ─────────────────────────────────────────────────────────────────────────
+  // 3. No sub / exhausted
   const platformTier = PlatformPricingConfig.resolveCareAssistantTier?.(resolvedConfig, parsedDuration) ?? null;
-
   return {
     fee:                     platformTier?.chargeToUser ?? 0,
     source:                  'platform',
@@ -1493,26 +1468,12 @@ export const resolveCareAssistantFee = async ({ userId, durationHours, config })
   };
 };
 
-export const isPointNearRoute = ({
-  point,
-  polyline,
-  thresholdKm = 3,
-}) => {
-
+export const isPointNearRoute = ({ point, polyline, thresholdKm = 3 }) => {
   if (!polyline?.length) return false;
-
   for (const coord of polyline) {
-
-    const dist = haversineKm(
-      point,
-      coord
-    );
-
-    if (dist <= thresholdKm) {
-      return true;
-    }
+    const dist = haversineKm(point, coord);
+    if (dist <= thresholdKm) return true;
   }
-
   return false;
 };
 
@@ -1526,17 +1487,15 @@ export const buildFareBreakdown = ({
   homeCollectionFee = 0, platformFee       = 0, taxPercent      = 0,
   discount          = 0, couponDiscount    = 0, walletApplied   = 0,
 } = {}) => {
- const subtotal    = +(
+  const subtotal      = +(
     consultationFee + careAssistantFee + transportFee + diagnosticFee +
     pharmacyFee + bloodBankFee + homeCollectionFee + platformFee
   ).toFixed(2);
   const discountTotal = +((discount || 0) + (couponDiscount || 0)).toFixed(2);
   const taxableBase   = +Math.max(0, subtotal - discountTotal).toFixed(2);
-  // GST applies on discounted base (Indian GST rules)
-  const taxes       = taxPercent ? +(taxableBase * (taxPercent / 100)).toFixed(2) : 0;
-  const totalAmount = +(taxableBase + taxes).toFixed(2);
-  // amountPaid = totalAmount at creation; wallet/partial updated by payment routes
-  const amountPaid  = totalAmount;
+  const taxes         = taxPercent ? +(taxableBase * (taxPercent / 100)).toFixed(2) : 0;
+  const totalAmount   = +(taxableBase + taxes).toFixed(2);
+  const amountPaid    = totalAmount;
   return {
     consultationFee, careAssistantFee, transportFee, diagnosticFee,
     pharmacyFee, bloodBankFee, homeCollectionFee, platformFee,
@@ -1655,8 +1614,8 @@ export const getLabWithTests = async (labId) => {
     )
     .lean();
   if (!lab) throw new Error('Lab not found or not operational');
-  lab.labTests    = (lab.labTests    || []).filter(t => t.isActive);
-  lab.labPackages = (lab.labPackages || []).filter(p => p.isActive);
+  lab.labTests    = (lab.labTests    || []).filter(t => t.isActive && t.slug);
+  lab.labPackages = (lab.labPackages || []).filter(p => p.isActive && p.slug);
   return lab;
 };
 
@@ -1677,3 +1636,6 @@ export const resolveServiceComponents = (bookingType) => ({
   needsWaitingOption: bookingType === 'patient_transport',
   canAddDoctor:       bookingType === 'patient_transport',
 });
+
+export { resolvePlanModes };
+ 

@@ -53,6 +53,10 @@ import {
   ChevronUp,
   LocateFixed,
   Star,
+  Ban,
+  IndianRupee,
+  TrendingDown,
+  Package,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import {
@@ -117,12 +121,6 @@ import {
   deleteFailedBooking,
   fetchSubscriptionBenefitLabs,
   selectSubBenefitLabs,
-  selectSubLabsDiscountPercent,
-  selectSubLabsIncluded,
-  selectSubHomeCollectionIncluded,
-  selectSubHomeCollectionRemaining,
-  selectSubHomeCollectionUsed,
-  selectSubHomeCollectionUnlimited,
 } from "@/store/slices/bookingSlice";
 
 import {
@@ -139,6 +137,16 @@ const GMAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || "";
 const RAZORPAY_KEY = (process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "").trim();
 const VIJAYAWADA = { lat: 16.5062, lng: 80.648 };
 const GMAPS_LIBRARIES = ["places", "geometry"];
+
+// Plans that only cover in-person consultations via subscription quota.
+// Video consultations still bookable but charged at full fee + 5% GST.
+// Source of truth = plan.consultations.modes.video in DB (via checkConsultationCoverage).
+// IN_PERSON_ONLY_PLAN_TIERS used as UI-side fallback for banner display only.
+const IN_PERSON_ONLY_PLAN_TIERS = new Set([
+  "Basic Care",
+  "Standard Care",
+  "Premium Care",
+]);
 
 const ALL_STEP_DEFS = {
   service: { id: "service", label: "Service", icon: Zap },
@@ -310,9 +318,9 @@ const BOOKING_TYPES = [
     educationNotes: [
       "We assign a verified care assistant to accompany you from your home.",
       "Doctor consultation happens at the hospital you select.",
-      "Transport fare calculated based on distance — pickup to hospital and optionally back home.",
-      "Care assistant fee is duration-based (2–12 hrs).",
-      "Payment happens after service confirmation.",
+      "Transport fare: ₹/km (plan rate or platform default ₹21/km) + 5% GST. Base fare ₹50 applies.",
+      "Care assistant fee is duration-based (tiered pricing). Fixed plan subscribers get CA free.",
+      "18% GST on care assistant. Consultation fee is GST exempt (0%).",
     ],
     steps: [
       { step: "Care Type", note: "Choose Full Care Ride." },
@@ -341,10 +349,10 @@ const BOOKING_TYPES = [
       "⚠️ Non-emergency only. Serious conditions — go directly to emergency ward.",
     educationNotes: [
       "Book a slot with your preferred doctor at a hospital or clinic.",
-      "Consultation fee set by hospital or doctor — shown before you confirm.",
+      "Consultation fee set by hospital or doctor. In-person = 0% GST (healthcare exempt).",
+      "Subscription holders: consultation counted against monthly free quota.",
       "You travel to the hospital on your own (add transport separately if needed).",
-      "Confirmation SMS sent after booking — carry it to the hospital.",
-      "Follow-up bookings at discounted rates available after your visit.",
+      "Follow-up bookings at discounted rates available after your visit (within policy window).",
     ],
     steps: [
       { step: "Service", note: "Choose Doctor Consultation." },
@@ -358,7 +366,7 @@ const BOOKING_TYPES = [
     value: "doctor_online",
     label: "Online Consultation",
     icon: Video,
-    desc: "Video or audio call with your doctor from anywhere",
+    desc: "Video call with your doctor from anywhere",
     color: "#8b5cf6",
     bg: "rgba(139,92,246,0.08)",
     needsDoctor: true,
@@ -369,18 +377,18 @@ const BOOKING_TYPES = [
     tooltip:
       "⚠️ Non-emergency only. Physical symptoms requiring examination — book in-person instead.",
     educationNotes: [
-      "Speak to a doctor via video or audio call from your home.",
-      "Doctor sends prescription digitally to your app after call.",
-      "No travel needed — available anywhere with internet.",
-      "Video fee is typically lower than in-person consultation.",
-      "Best for follow-ups, minor illnesses, second opinions.",
+      "Speak to a doctor via video call from your home.",
+      "Video consultation attracts 5% GST (unlike in-person which is exempt).",
+      "Basic/Standard/Premium plan holders: video not covered by in-person quota. Full fee + 5% GST charged.",
+      "Family Care, Pregnant Women Care, NRI Care plans: check your plan's video mode coverage.",
+      "Cash payment NOT available for video consultations. Use Wallet or Razorpay.",
     ],
     steps: [
       { step: "Service", note: "Choose Online Consultation." },
       { step: "Select Doctor", note: "Pick your doctor — no hospital needed." },
       { step: "Patient Info", note: "Enter patient details." },
       { step: "Call Time", note: "Set call date & time." },
-      { step: "Video Fee & Pay", note: "Review video fee & pay." },
+      { step: "Video Fee & Pay", note: "Review video fee + 5% GST & pay." },
     ],
   },
   {
@@ -400,9 +408,9 @@ const BOOKING_TYPES = [
     educationNotes: [
       "Book a physiotherapy session at a clinic or get a home visit.",
       "Home visit fee is higher than clinic session — factored into fare.",
-      "Therapist brings equipment needed for standard sessions.",
+      "Physiotherapy consultation = 0% GST (healthcare exempt).",
       "Ideal for post-surgery recovery, sports injuries, chronic pain.",
-      "Multiple sessions can be booked as a package for discount.",
+      "Subscription quota not consumed for physiotherapist bookings.",
     ],
     steps: [
       { step: "Service", note: "Choose Physiotherapist." },
@@ -427,16 +435,16 @@ const BOOKING_TYPES = [
     tooltip: "⚠️ Non-emergency only. Medical emergencies — call 108 first.",
     educationNotes: [
       "We auto-assign the nearest verified, available care assistant to you.",
-      "Care assistants are trained in basic first aid and patient mobility.",
-      "Pricing is tiered by session duration — 2, 4, 6, 8, or 12 hours.",
-      "Great for elderly care, post-operative assistance, hospital companions.",
+      "Pricing is tiered by session duration. 18% GST applies on care assistant fee.",
+      "Fixed plan subscribers: CA visit free (quota consumed on assignment by admin).",
+      "Custom plan subscribers: only your subscribed tier is free. Other tiers = platform rate.",
       "You cannot manually select an assistant — system picks nearest for fastest dispatch.",
     ],
     steps: [
       { step: "Service", note: "Choose Care Assistant." },
       { step: "Patient Info", note: "Enter patient details." },
       { step: "Location & Hours", note: "Set date, location & duration." },
-      { step: "Assistant Fee", note: "Review fee & pay." },
+      { step: "Assistant Fee", note: "Review fee + 18% GST & pay." },
     ],
   },
   {
@@ -455,9 +463,9 @@ const BOOKING_TYPES = [
       "⚠️ Non-emergency only. Urgent diagnostic needs — visit hospital emergency.",
     educationNotes: [
       "Search for labs in your city and book tests or health packages.",
-      "You travel to the lab on your appointment date.",
+      "5% GST applies on diagnostic tests/packages.",
+      "Subscription holders get up to 25% discount on diagnostics (admin-capped).",
       "Reports delivered digitally to your app, email, or WhatsApp.",
-      "Lab prices shown before you confirm — no hidden charges.",
       "Fasting requirements for certain tests — lab will notify you.",
     ],
     steps: [
@@ -465,7 +473,7 @@ const BOOKING_TYPES = [
       { step: "Select Lab", note: "Select lab & tests." },
       { step: "Patient Info", note: "Enter patient details." },
       { step: "Lab Appointment", note: "Set appointment date." },
-      { step: "Test Charges", note: "Review charges & pay." },
+      { step: "Test Charges", note: "Review charges + 5% GST & pay." },
     ],
   },
   {
@@ -484,17 +492,17 @@ const BOOKING_TYPES = [
       "⚠️ Non-emergency only. Critical samples — visit diagnostic centre directly.",
     educationNotes: [
       "A certified lab technician comes to your home to collect samples.",
-      "Available for most blood, urine and basic diagnostic tests.",
-      "Home collection fee may apply — shown clearly before you confirm.",
+      "Home collection fee set by lab + 5% GST. Waived if your plan includes it (one-time per subscription period).",
+      "5% GST on diagnostic tests. 5% GST on home collection fee (if charged).",
+      "Subscription: home collection once free per active period. After that, lab fee applies.",
       "Reports sent digitally — no need to visit lab at all.",
-      "Best for elderly, bedridden patients, or those with mobility issues.",
     ],
     steps: [
       { step: "Service", note: "Choose Home Diagnostics." },
       { step: "Select Lab", note: "Select lab & tests." },
       { step: "Patient Info", note: "Enter patient details." },
       { step: "Home Collection", note: "Set date & home address." },
-      { step: "Collection Fee", note: "Review charges & pay." },
+      { step: "Collection Fee", note: "Review charges + GST & pay." },
     ],
   },
   {
@@ -513,16 +521,16 @@ const BOOKING_TYPES = [
       "⚠️ Non-emergency transport only. Ambulance emergencies — call 108.",
     educationNotes: [
       "Book a dedicated vehicle to transport a patient from one location to another.",
-      "Fare calculated by distance — set pickup and drop-off on map.",
-      "Return trip option available — vehicle waits and brings patient back.",
-      "Waiting charges apply after first 5 minutes at destination.",
-      "Suitable for hospital transfers, clinic visits, home discharge.",
+      "Fare = base fare ₹50 + (distance km × rate/km). 5% GST on total transport.",
+      "Subscription plan rate overrides default ₹21/km (lower for higher plans).",
+      "Return trip option: vehicle picks up from destination and returns patient home.",
+      "Waiting charges: first 5 min free, then ₹2/min.",
     ],
     steps: [
       { step: "Service", note: "Choose Patient Transport." },
       { step: "Patient Info", note: "Enter patient details." },
       { step: "Route & Timing", note: "Set pickup & drop-off." },
-      { step: "Transport Fare", note: "Review fare & pay." },
+      { step: "Transport Fare", note: "Review fare + 5% GST & pay." },
     ],
   },
   {
@@ -541,9 +549,9 @@ const BOOKING_TYPES = [
       "⚠️ Non-emergency only. Must have a prior consultation with same doctor.",
     educationNotes: [
       "Book a follow-up with the same doctor from a previous Likeson booking.",
-      "Follow-up fee is discounted — typically lower than first consultation.",
-      "Eligibility is automatically verified — must be within allowed follow-up window.",
-      "Your previous OP number is linked automatically.",
+      "Follow-up fee is set by hospital/doctor policy — typically lower than first consultation.",
+      "Follow-up fee is independent of subscription quota (quota NOT consumed).",
+      "Eligibility auto-verified — must be within allowed follow-up window (usually 7 days).",
       "Not applicable for new conditions — book Doctor Consultation instead.",
     ],
     steps: [
@@ -562,22 +570,31 @@ const CONSULT_TYPES = [
     label: "In-Person",
     icon: Stethoscope,
     feeKey: "inPersonFee",
+    gstNote: "0% GST (exempt)",
   },
-  { value: "video", label: "Video Call", icon: Video, feeKey: "videoFee" },
+  {
+    value: "video",
+    label: "Video Call",
+    icon: Video,
+    feeKey: "videoFee",
+    gstNote: "5% GST",
+  },
   {
     value: "homeVisit",
     label: "Home Visit",
     icon: Home,
     feeKey: "homeVisitFee",
+    gstNote: "5% GST · no sub",
   },
 ];
 
-const PAYMENT_METHODS = [
+// Cash hidden for doctor_online — backend returns 400 for Cash on video
+const ALL_PAYMENT_METHODS = [
   {
     value: "Razorpay",
     label: "Razorpay",
     icon: CreditCard,
-    desc: "Pay via UPI, Card or Net Banking",
+    desc: "UPI, Card, Net Banking · secure",
   },
   {
     value: "Wallet",
@@ -593,6 +610,11 @@ const PAYMENT_METHODS = [
   },
 ];
 
+const getPaymentMethods = (bookingType) =>
+  bookingType === "doctor_online"
+    ? ALL_PAYMENT_METHODS.filter((m) => m.value !== "Cash")
+    : ALL_PAYMENT_METHODS;
+
 const GENDER_OPTIONS = ["Male", "Female", "Other", "Prefer Not to Say"];
 const BLOOD_GROUPS = [
   "A+",
@@ -607,12 +629,33 @@ const BLOOD_GROUPS = [
 ];
 const REPORT_MODES = ["Digital (App)", "Email", "WhatsApp", "Physical Copy"];
 
+// GST rates by consultation type (Indian GST rules 2024)
+// In-person: Section 9 healthcare exempt → 0%
+// Video/audio tele-consultation → 5%
+// Home visit → 5%
+const CONSULT_GST_RATE = {
+  inPerson: 0.0,
+  video: 0.05,
+  homeVisit: 0.05,
+};
+
+// Platform GST rates reference
+const GST_RATES = {
+  transport: 0.05, // 5% on transport
+  careAssistant: 0.18, // 18% on care assistant
+  diagnostics: 0.05, // 5% on diagnostics
+  homeCollection: 0.05, // 5% on home sample collection
+  pharmacy: 0.12, // 12% on pharmacy
+  consultation: 0.0, // 0% in-person (exempt), 5% video/home
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
 const fmt = (n = 0) =>
   `₹${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+
 const fmtDate = (d) =>
   d
     ? new Date(d).toLocaleString("en-IN", {
@@ -621,7 +664,6 @@ const fmtDate = (d) =>
       })
     : "—";
 
-// FIX: normalizeId moved to module scope — used in diag fee calc + test selection
 const normalizeId = (id) => {
   if (!id) return "";
   if (typeof id === "object" && id.$oid) return id.$oid;
@@ -680,10 +722,6 @@ const openRazorpay = async ({
     !RAZORPAY_KEY.startsWith("rzp_test_") &&
     !RAZORPAY_KEY.startsWith("rzp_live_")
   ) {
-    console.error(
-      "[openRazorpay] Invalid key format:",
-      JSON.stringify(RAZORPAY_KEY),
-    );
     onFailure?.("Payment configuration error — invalid key. Contact support.");
     return;
   }
@@ -692,6 +730,7 @@ const openRazorpay = async ({
     onFailure?.("Razorpay failed to load. Check your internet connection.");
     return;
   }
+
   const options = {
     key: RAZORPAY_KEY,
     amount: Math.round((order.amount || 0) * 100),
@@ -719,7 +758,7 @@ const openRazorpay = async ({
           ) {
             onFailure?.(
               verifyResult?.error?.message ||
-                "Payment verification failed — contact support with your payment ID: " +
+                "Payment verification failed — contact support with payment ID: " +
                   response.razorpay_payment_id,
             );
             return;
@@ -745,61 +784,118 @@ const openRazorpay = async ({
   rz.open();
 };
 
-// ─── Subscription coverage helpers ─────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// SUBSCRIPTION FEE RESOLVERS
+// ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * resolveConsultFee
+ *
+ * Returns { fee, isFree, gstRate, reason, videoBlocked? }
+ *
+ * GST rules (India):
+ *   in-person  → 0%  (Section 9 healthcare exempt)
+ *   video      → 5%  (tele-consultation taxable)
+ *   home visit → 5%  (taxable)
+ *
+ * Subscription coverage logic:
+ *   home visit  → NEVER free via quota (always charged at full fee + 5% GST)
+ *   video + plan that blocks video → NOT free, booking still allowed, full fee + 5% GST
+ *   follow_up   → independent of subscription quota
+ */
 const resolveConsultFee = (form, followUpCheck) => {
   if (form.bookingType === "follow_up") {
     const fee = followUpCheck?.isEligible ? followUpCheck.followUpFee || 0 : 0;
     return {
       fee,
       isFree: fee === 0 && followUpCheck?.isEligible,
-      reason: "Follow-up fee (independent of subscription)",
+      gstRate: 0.0,
+      reason: "Follow-up fee",
     };
   }
+
   const sub = form.subCoverage;
-  if (form.consultationType === "homeVisit") {
-    let fee =
-      form.doctorFees?.homeVisitFee != null
-        ? form.doctorFees.homeVisitFee
-        : 600;
+  const isVideo =
+    form.bookingType === "doctor_online" || form.consultationType === "video";
+  const isHome = form.consultationType === "homeVisit";
+
+  const gstRate = isHome || isVideo ? 0.05 : 0.0;
+
+  // Home visit: never free via subscription quota
+  if (isHome) {
+    const fee = form.doctorFees?.homeVisitFee ?? 600;
     return {
       fee,
       isFree: false,
-      reason: sub
-        ? `Home visit always charged${sub.consultationQuota ? ` (${sub.consultationQuota})` : ""}`
-        : "Home visit fee applies",
+      gstRate: 0.05,
+      reason:
+        "Home visit always charged — subscription quota covers in-person/video only",
     };
   }
+
+  // Video: check if plan blocks video from quota
+  const fixedTier = sub?.fixedTier ?? null;
+  const videoBlocked =
+    isVideo && !!fixedTier && IN_PERSON_ONLY_PLAN_TIERS.has(fixedTier);
+
+  if (videoBlocked) {
+    const fee = form.doctorFees?.videoFee ?? 600;
+    return {
+      fee,
+      isFree: false,
+      gstRate: 0.05,
+      reason: `Your ${fixedTier} plan covers in-person only. Video fee + 5% GST charged.`,
+      videoBlocked: true,
+    };
+  }
+
+  // Check if subscription covers this consultation
   const isCovered = !!(
     sub?.isFree === true ||
     sub?.consultationFree === true ||
-    (sub?.allowed === true && sub?.remaining > 0)
+    (sub?.allowed === true && (sub?.remaining == null || sub?.remaining > 0))
   );
-  if (isCovered)
+
+  if (isCovered) {
     return {
       fee: 0,
       isFree: true,
+      gstRate: 0,
       reason:
         sub?.reason || sub?.consultationQuota || "Covered by subscription",
     };
+  }
+
+  // Not covered — resolve fee from doctor/hospital data
   let fee = 0;
   if (form.doctorFees) {
-    fee =
-      form.bookingType === "doctor_online" || form.consultationType === "video"
-        ? form.doctorFees.videoFee || 0
-        : form.doctorFees.inPersonFee || 0;
+    fee = isVideo
+      ? form.doctorFees.videoFee || 0
+      : form.doctorFees.inPersonFee || 0;
   } else {
-    fee = 600;
+    fee = 600; // platform default
   }
+
   return {
     fee,
     isFree: false,
+    gstRate,
     reason: sub?.consultationQuota || sub?.reason || null,
   };
 };
 
+/**
+ * resolveCaFee
+ * Returns { fee, isFree, isCustomPlan, reason }
+ *
+ * Fixed plan: CA free (quota consumed on admin assignment)
+ * Custom plan: Only subscribed tier free. Different tier = platform rate (no quota).
+ * No sub / exhausted: platform tier rate applies. 18% GST on all non-free CA.
+ */
 const resolveCaFee = (form, caTiers) => {
   const sub = form.subCoverage;
+
+  // Fixed plan — CA free via subscription
   if (sub?.careAssistantFree && !sub?.isCustomPlan) {
     return {
       fee: 0,
@@ -808,6 +904,8 @@ const resolveCaFee = (form, caTiers) => {
       reason: sub.careAssistantQuota || "Covered by subscription",
     };
   }
+
+  // Custom plan with quota remaining
   if (
     sub?.isCustomPlan &&
     sub?.careAssistantAllowed &&
@@ -816,21 +914,23 @@ const resolveCaFee = (form, caTiers) => {
     const planTierIdx = sub?.careAssistantTierIndex ?? 0;
     const durHours = form.durationHours ?? caTiers[0]?.hours ?? 1;
     const selectedTierIdx = caTiers.findIndex((t) => t.hours === durHours);
-    const effectiveSelectedIdx = selectedTierIdx >= 0 ? selectedTierIdx : 0;
-    if (effectiveSelectedIdx === planTierIdx) {
+    const effectiveIdx = selectedTierIdx >= 0 ? selectedTierIdx : 0;
+
+    if (effectiveIdx === planTierIdx) {
       return {
         fee: 0,
         isFree: true,
         isCustomPlan: true,
-        reason: `Included in your plan · ${sub.careAssistantRemaining} visit(s) remaining this month`,
+        reason: `Plan tier included · ${sub.careAssistantRemaining} visit(s) remaining this month`,
       };
     }
+
+    // Different tier selected → charge platform rate for that tier
     const allTiers = sub?.careAssistantAllTiers;
-    const selectedPlatformTier = allTiers
-      ? allTiers[effectiveSelectedIdx]
-      : caTiers[effectiveSelectedIdx];
-    const extraFee =
-      selectedPlatformTier?.chargeToUser ?? selectedPlatformTier?.price ?? 0;
+    const selectedTier = allTiers
+      ? allTiers[effectiveIdx]
+      : caTiers[effectiveIdx];
+    const extraFee = selectedTier?.chargeToUser ?? selectedTier?.price ?? 0;
     return {
       fee: extraFee,
       isFree: false,
@@ -838,6 +938,8 @@ const resolveCaFee = (form, caTiers) => {
       reason: `Plan covers tier 0 only — this tier charges platform rate`,
     };
   }
+
+  // No sub or quota exhausted — platform tier rate
   const durHours = form.durationHours || (caTiers[0]?.hours ?? 4);
   const caTier = caTiers.find((t) => t.hours === durHours) || caTiers[0];
   return {
@@ -858,14 +960,24 @@ const resolveTransportFee = (transportEstimate) => {
   };
 };
 
-// FIX: helper to check if lab supports home collection
+const resolveHomeCollectionFree = (subCoverage) => {
+  if (!subCoverage?.homeCollectionIncluded) return false;
+  // homeCollectionAvailable = included AND homeCollectionUsedOnce === false
+  // Prefer explicit backend flag; fall back to homeSampleCollectionFree
+  if (subCoverage.homeCollectionAvailable != null)
+    return subCoverage.homeCollectionAvailable === true;
+  return subCoverage.homeSampleCollectionFree === true;
+};
+
 const labSupportsHomeCollection = (lab) => {
   if (!lab) return false;
   const mode = lab.sampleCollectionMode || "";
   return mode === "Both" || mode === "Home Collection" || mode === "Home";
 };
 
-// ─── Animation ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// ANIMATIONS
+// ─────────────────────────────────────────────────────────────────────────────
 
 const slide = {
   enter: (d) => ({ x: d > 0 ? 40 : -40, opacity: 0 }),
@@ -1015,6 +1127,23 @@ function SubTag({ isFree, reason, className = "" }) {
   );
 }
 
+// Pricing info pill — shows GST rate / tax note inline
+function GstPill({ rate, label }) {
+  const pct = rate != null ? `${Math.round(rate * 100)}%` : null;
+  const display = label || (pct ? `GST ${pct}` : null);
+  if (!display) return null;
+  const isExempt = rate === 0;
+  return (
+    <span
+      className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[8px] font-black border ${isExempt ? "bg-success/8 text-success/70 border-success/20" : "bg-warning/8 text-warning/70 border-warning/20"}`}
+      style={PP}
+    >
+      <IndianRupee size={6} />
+      {display}
+    </span>
+  );
+}
+
 function FareRow({
   label,
   value,
@@ -1025,6 +1154,8 @@ function FareRow({
   sub,
   isFree,
   freeReason,
+  gstRate,
+  gstLabel,
 }) {
   return (
     <div
@@ -1043,6 +1174,9 @@ function FareRow({
             {label}
           </p>
           {isFree && <SubTag isFree={isFree} reason={freeReason} />}
+          {gstRate != null && !isFree && (
+            <GstPill rate={gstRate} label={gstLabel} />
+          )}
         </div>
         {note && (
           <p
@@ -1066,7 +1200,61 @@ function FareRow({
   );
 }
 
-// ─── Wallet split banner ────────────────────────────────────────────────────
+// ─── Pricing breakdown info box ─────────────────────────────────────────────
+
+function GstReferenceBox() {
+  return (
+    <div className="rounded-xl border border-base-300 bg-base-200/50 overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-base-300">
+        <IndianRupee size={11} className="text-base-content/40 flex-shrink-0" />
+        <p
+          className="text-[10px] font-black uppercase tracking-widest text-base-content/40"
+          style={PP}
+        >
+          GST Reference
+        </p>
+      </div>
+      <div className="px-3 py-2 grid grid-cols-2 gap-x-4 gap-y-1">
+        {[
+          { label: "Consultation (in-person)", rate: "0% — exempt" },
+          { label: "Video / tele-consultation", rate: "5%" },
+          { label: "Home visit", rate: "5%" },
+          { label: "Transport", rate: "5%" },
+          { label: "Care assistant", rate: "18%" },
+          { label: "Diagnostics / lab tests", rate: "5%" },
+          { label: "Home sample collection", rate: "5%" },
+          { label: "Pharmacy", rate: "12%" },
+        ].map((item) => (
+          <div
+            key={item.label}
+            className="flex items-center justify-between gap-2"
+          >
+            <p className="text-[9px] text-base-content/45 truncate" style={PP}>
+              {item.label}
+            </p>
+            <p
+              className="text-[9px] font-black text-base-content/60 flex-shrink-0"
+              style={PP}
+            >
+              {item.rate}
+            </p>
+          </div>
+        ))}
+      </div>
+      <div className="px-3 py-2 border-t border-base-300">
+        <p
+          className="text-[9px] text-base-content/35 leading-relaxed"
+          style={PP}
+        >
+          Subscription discounts: pharmacy max 25%, diagnostics max 25%
+          (admin-capped). Transport plan rates override default ₹21/km.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Wallet split banner ─────────────────────────────────────────────────────
 
 function WalletSplitBanner({
   walletBalance,
@@ -1149,7 +1337,7 @@ function WalletSplitBanner({
               className="text-[9px] text-warning font-bold leading-snug"
               style={PP}
             >
-              If Razorpay payment fails, ₹{fmt(walletPays)} wallet amount is
+              If Razorpay payment fails, {fmt(walletPays)} wallet amount is
               automatically refunded and booking is deleted.
             </p>
           </div>
@@ -1216,15 +1404,38 @@ function CashPaymentBanner({ totalAmount }) {
   );
 }
 
-// ─── Subscription coverage banners ─────────────────────────────────────────
+function OnlineCashNotAvailableBanner() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex items-start gap-2 p-3 rounded-xl border border-base-300 bg-base-200/60"
+    >
+      <Ban size={13} className="text-base-content/40 flex-shrink-0 mt-0.5" />
+      <p className="text-[10px] text-base-content/50 font-semibold" style={PP}>
+        Cash payment is not available for video consultations. Please use Wallet
+        or Razorpay.
+      </p>
+    </motion.div>
+  );
+}
 
-function SubCoverageBanner({ subCoverage, consultationType }) {
+// ─── Subscription coverage banners ──────────────────────────────────────────
+
+function SubCoverageBanner({ form, subCoverage, consultationType }) {
   if (!subCoverage) return null;
+
   const isHomeVisit = consultationType === "homeVisit";
+  const isVideo =
+    form?.bookingType === "doctor_online" || consultationType === "video";
+  const fixedTier = subCoverage?.fixedTier ?? null;
+  const videoBlocked =
+    isVideo && !!fixedTier && IN_PERSON_ONLY_PLAN_TIERS.has(fixedTier);
+
   if (
     isHomeVisit &&
     (subCoverage.consultationFree ||
-      subCoverage.remaining > 0 ||
+      (subCoverage.remaining ?? 0) > 0 ||
       subCoverage.isFree)
   ) {
     return (
@@ -1245,8 +1456,8 @@ function SubCoverageBanner({ subCoverage, consultationType }) {
             className="text-[10px] text-warning font-semibold mt-0.5 opacity-80"
             style={PP}
           >
-            Home visit fee always charged. Subscription covers in-person &amp;
-            video only.
+            Home visit fee (+ 5% GST) always charged. Subscription covers
+            in-person &amp; video only.
             {subCoverage.consultationQuota
               ? ` (${subCoverage.consultationQuota})`
               : ""}
@@ -1255,6 +1466,7 @@ function SubCoverageBanner({ subCoverage, consultationType }) {
       </motion.div>
     );
   }
+
   const hasConsultFree = !isHomeVisit && subCoverage.consultationFree;
   const hasCaFree = subCoverage.careAssistantFree && !subCoverage.isCustomPlan;
   const hasCaCustomQuota = !!(
@@ -1272,14 +1484,14 @@ function SubCoverageBanner({ subCoverage, consultationType }) {
     (!subCoverage.careAssistantAllowed ||
       subCoverage.careAssistantRemaining <= 0);
 
-  if (
+  const nothingToShow =
+    !videoBlocked &&
     !hasConsultFree &&
     !hasCaFree &&
     !hasCaCustomQuota &&
     !hasSubRate &&
-    !hasConsultQuota
-  )
-    return null;
+    !hasConsultQuota;
+  if (nothingToShow) return null;
 
   return (
     <motion.div
@@ -1294,6 +1506,26 @@ function SubCoverageBanner({ subCoverage, consultationType }) {
         </p>
       </div>
       <div className="px-3 py-2.5 space-y-2">
+        {videoBlocked && (
+          <div className="flex items-start gap-2 p-2 rounded-lg border border-warning/20 bg-warning/5">
+            <AlertTriangle
+              size={10}
+              className="text-warning flex-shrink-0 mt-0.5"
+            />
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-black text-warning" style={PP}>
+                Video not covered by {fixedTier}
+              </p>
+              <p
+                className="text-[9px] text-warning font-semibold mt-0.5 opacity-80"
+                style={PP}
+              >
+                Plan covers in-person (0% GST) only. Full video fee + 5% GST
+                charged.
+              </p>
+            </div>
+          </div>
+        )}
         {hasConsultFree && (
           <div className="flex items-start gap-2">
             <div className="w-4 h-4 rounded-full bg-success/10 flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -1301,7 +1533,7 @@ function SubCoverageBanner({ subCoverage, consultationType }) {
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-[11px] font-black text-success" style={PP}>
-                Consultation FREE
+                Consultation FREE · 0% GST
               </p>
               {subCoverage.consultationQuota && (
                 <p
@@ -1337,7 +1569,7 @@ function SubCoverageBanner({ subCoverage, consultationType }) {
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-[11px] font-black text-success" style={PP}>
-                Care Assistant FREE
+                Care Assistant FREE · 0% GST (quota)
               </p>
               {subCoverage.careAssistantQuota && (
                 <p
@@ -1347,6 +1579,9 @@ function SubCoverageBanner({ subCoverage, consultationType }) {
                   {subCoverage.careAssistantQuota}
                 </p>
               )}
+              <p className="text-[9px] text-base-content/40 mt-0.5" style={PP}>
+                Quota consumed when admin assigns CA to booking
+              </p>
             </div>
             <span
               className="flex-shrink-0 px-1.5 py-0.5 rounded-md text-[8px] font-black border bg-success/10 text-success border-success/30"
@@ -1392,7 +1627,8 @@ function SubCoverageBanner({ subCoverage, consultationType }) {
                   className="text-[9px] text-warning font-bold italic"
                   style={PP}
                 >
-                  ⚠ Selecting a different duration tier charges platform rate.
+                  ⚠ Selecting a different duration tier charges platform rate
+                  (18% GST).
                 </p>
               </div>
             </div>
@@ -1411,13 +1647,13 @@ function SubCoverageBanner({ subCoverage, consultationType }) {
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-[11px] font-black text-success" style={PP}>
-                Transport at ₹{subCoverage.ratePerKm}/km
+                Transport at ₹{subCoverage.ratePerKm}/km · 5% GST
               </p>
               <p
                 className="text-[9px] text-success font-semibold mt-0.5 opacity-80"
                 style={PP}
               >
-                Subscription plan rate — lower than standard
+                Subscription plan rate — lower than standard ₹21/km
               </p>
             </div>
           </div>
@@ -1430,7 +1666,7 @@ function SubCoverageBanner({ subCoverage, consultationType }) {
             />
             <p className="text-[9px] text-warning font-semibold" style={PP}>
               Care assistant quota exhausted for this month. Standard platform
-              rate applies.
+              rate + 18% GST applies.
             </p>
           </div>
         )}
@@ -1443,20 +1679,13 @@ function DiagSubBanner({ subCoverage }) {
   if (!subCoverage) return null;
   const discount = subCoverage.diagnosticsDiscountPercent || 0;
   const homeIncluded = subCoverage.homeCollectionIncluded ?? false;
-  const homeWaived = subCoverage.homeSampleCollectionFree === true;
+  const homeStillFree = resolveHomeCollectionFree(subCoverage);
   const homeUsed = subCoverage.homeCollectionUsed ?? 0;
   const homeRemaining = subCoverage.homeCollectionRemaining;
-  const homeUnlimited = subCoverage.homeCollectionUnlimited ?? false;
-  const homeLimit = subCoverage.homeCollectionLimit ?? null;
+  const homeUnlimited =
+    (subCoverage.homeCollectionUnlimited ?? false) && homeStillFree;
 
   if (!discount && !homeIncluded) return null;
-
-  const homePercentUsed =
-    homeUnlimited || homeLimit == null
-      ? null
-      : homeLimit === 0
-        ? 100
-        : Math.min(100, Math.round((homeUsed / homeLimit) * 100));
 
   return (
     <motion.div
@@ -1471,15 +1700,20 @@ function DiagSubBanner({ subCoverage }) {
         </p>
       </div>
       <div className="px-3 py-2.5 space-y-2">
-        {discount > 0 && (
+        {discount > 0 ? (
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5">
               <div className="w-4 h-4 rounded-full bg-info/15 flex items-center justify-center flex-shrink-0">
-                <Check size={8} className="text-info" strokeWidth={3} />
+                <TrendingDown size={8} className="text-info" />
               </div>
-              <p className="text-[11px] text-info font-semibold" style={PP}>
-                {discount}% off all tests & packages
-              </p>
+              <div>
+                <p className="text-[11px] text-info font-semibold" style={PP}>
+                  {discount}% off all tests & packages
+                </p>
+                <p className="text-[9px] text-info/70 font-medium" style={PP}>
+                  5% GST still applies on discounted price · max cap 25%
+                </p>
+              </div>
             </div>
             <span
               className="text-[9px] font-black px-1.5 py-0.5 rounded-md bg-info/10 text-info border border-info/30 flex-shrink-0"
@@ -1487,76 +1721,6 @@ function DiagSubBanner({ subCoverage }) {
             >
               ACTIVE
             </span>
-          </div>
-        )}
-        {!discount && (
-          <div className="flex items-center gap-1.5">
-            <div className="w-4 h-4 rounded-full bg-base-300 flex items-center justify-center flex-shrink-0">
-              <X size={8} className="text-base-content/40" />
-            </div>
-            <p
-              className="text-[10px] text-base-content/45 font-semibold"
-              style={PP}
-            >
-              No diagnostic discount — full price applies
-            </p>
-          </div>
-        )}
-        {homeIncluded ? (
-          <div className="rounded-lg border border-success/25 bg-success/5 px-2.5 py-2 space-y-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5">
-                <div className="w-4 h-4 rounded-full bg-success/15 flex items-center justify-center flex-shrink-0">
-                  <Home size={8} className="text-success" />
-                </div>
-                <p className="text-[11px] font-black text-success" style={PP}>
-                  Home Collection
-                </p>
-              </div>
-              <span
-                className={`text-[9px] font-black px-1.5 py-0.5 rounded-md border flex-shrink-0 ${homeWaived ? "bg-success/10 text-success border-success/30" : "bg-warning/10 text-warning border-warning/30"}`}
-                style={PP}
-              >
-                {homeWaived ? "WAIVED" : "QUOTA USED"}
-              </span>
-            </div>
-            {!homeUnlimited && homeLimit != null && homeLimit > 0 && (
-              <div className="space-y-1">
-                <div className="flex justify-between text-[9px]" style={PP}>
-                  <span className="text-base-content/50 font-semibold">
-                    Used this month
-                  </span>
-                  <span className="font-black text-success">
-                    {homeUsed} / {homeLimit}
-                  </span>
-                </div>
-                <div className="w-full h-1.5 bg-base-300 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${homePercentUsed >= 100 ? "bg-error" : homePercentUsed >= 70 ? "bg-warning" : "bg-success"}`}
-                    style={{ width: `${Math.min(100, homePercentUsed ?? 0)}%` }}
-                  />
-                </div>
-                <p
-                  className="text-[9px] font-semibold"
-                  style={{
-                    color:
-                      (homeRemaining ?? 0) <= 0
-                        ? "var(--error)"
-                        : "var(--success)",
-                    ...PP,
-                  }}
-                >
-                  {(homeRemaining ?? 0) <= 0
-                    ? "Quota exhausted — home collection fee applies"
-                    : `${homeRemaining} home visit${homeRemaining !== 1 ? "s" : ""} remaining this month`}
-                </p>
-              </div>
-            )}
-            {homeUnlimited && (
-              <p className="text-[9px] font-semibold text-success" style={PP}>
-                Unlimited home collection included
-              </p>
-            )}
           </div>
         ) : (
           <div className="flex items-center gap-1.5">
@@ -1567,7 +1731,49 @@ function DiagSubBanner({ subCoverage }) {
               className="text-[10px] text-base-content/45 font-semibold"
               style={PP}
             >
-              Home collection not in plan — standard fee applies
+              No diagnostic discount in your plan · 5% GST on full price
+            </p>
+          </div>
+        )}
+        {homeIncluded ? (
+          <div className="rounded-lg border border-success/25 bg-success/5 px-2.5 py-2 space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                <div className="w-4 h-4 rounded-full bg-success/15 flex items-center justify-center flex-shrink-0">
+                  <Home size={8} className="text-success" />
+                </div>
+                <p className="text-[11px] font-black text-success" style={PP}>
+                  Home Collection
+                </p>
+              </div>
+              <span
+                className={`text-[9px] font-black px-1.5 py-0.5 rounded-md border flex-shrink-0 ${homeStillFree ? "bg-success/10 text-success border-success/30" : "bg-warning/10 text-warning border-warning/30"}`}
+                style={PP}
+              >
+                {homeStillFree
+                  ? `FREE · 1 use remaining this cycle`
+                  : "USED — FEE + 5% GST"}
+              </span>
+            </div>
+            <p
+              className={`text-[10px] font-semibold leading-snug ${homeStillFree ? "text-success" : "text-warning"}`}
+              style={PP}
+            >
+              {homeStillFree
+                ? "1 free home collection remaining this billing cycle."
+                : "Home collection used this cycle. Lab fee + 5% GST applies."}
+            </p>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <div className="w-4 h-4 rounded-full bg-base-300 flex items-center justify-center flex-shrink-0">
+              <X size={8} className="text-base-content/40" />
+            </div>
+            <p
+              className="text-[10px] text-base-content/45 font-semibold"
+              style={PP}
+            >
+              Home collection not in plan — lab fee + 5% GST applies
             </p>
           </div>
         )}
@@ -2031,7 +2237,7 @@ function StepBar({ steps, currentId, visitedIds, onStepClick }) {
           const active = s.id === currentId;
           const ok = visitedIds.includes(s.id) || active;
           const canClick = visitedIds.includes(s.id) && s.id !== currentId;
-          const isHovered = hoveredId === s.id;
+          const isHov = hoveredId === s.id;
           return (
             <div key={s.id} className="flex items-center flex-shrink-0">
               <div
@@ -2041,7 +2247,7 @@ function StepBar({ steps, currentId, visitedIds, onStepClick }) {
                 onMouseLeave={() => setHoveredId(null)}
                 onClick={() => canClick && onStepClick?.(s.id)}
               >
-                {isHovered && (
+                {isHov && (
                   <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 pointer-events-none flex flex-col items-center">
                     <div
                       className={`px-2 py-1 rounded-lg text-[10px] font-black text-center whitespace-nowrap shadow-lg ${active ? "bg-primary text-primary-content" : done ? "bg-success text-success-content" : "bg-base-300 text-base-content"}`}
@@ -2057,7 +2263,7 @@ function StepBar({ steps, currentId, visitedIds, onStepClick }) {
                 )}
                 <motion.div
                   animate={{ scale: active ? 1.12 : 1 }}
-                  className={`w-5 h-5 rounded-full flex items-center justify-center transition-colors duration-300 cursor-${canClick ? "pointer" : "default"} ${done ? "bg-success text-success-content" : active ? "bg-primary text-primary-content" : "bg-base-300 text-base-content"} ${ok ? "opacity-100" : "opacity-30"} ${isHovered && canClick ? "ring-2 ring-primary/30" : ""}`}
+                  className={`w-5 h-5 rounded-full flex items-center justify-center transition-colors duration-300 cursor-${canClick ? "pointer" : "default"} ${done ? "bg-success text-success-content" : active ? "bg-primary text-primary-content" : "bg-base-300 text-base-content"} ${ok ? "opacity-100" : "opacity-30"} ${isHov && canClick ? "ring-2 ring-primary/30" : ""}`}
                 >
                   {done ? (
                     <Check size={9} strokeWidth={3} />
@@ -2233,19 +2439,19 @@ function StepProvider({
   const providerIcon = isDiag ? FlaskConical : Stethoscope;
 
   useEffect(() => {
-    if (isOnline && !allDoctors?.length && !allDoctorsLoading) {
+    if (isOnline && !allDoctors?.length && !allDoctorsLoading)
       onLoadAllDoctors?.({ consultationType: "video", isOnline: "true" });
-    }
   }, [isOnline]);
+
   useEffect(() => {
-    if (isDiag && !labs?.length) {
-      onLoadLabs(form.labCity || "");
-    }
+    if (isDiag && !labs?.length) onLoadLabs(form.labCity || "");
   }, [isDiag]);
+
   useEffect(() => {
     if (form.bookingType === "follow_up" && form.doctorId)
       onCheckFollowUp(form.doctorId, form.hospitalId);
   }, [form.doctorId, form.hospitalId, form.bookingType]);
+
   useEffect(() => {
     if (isOnline) set("consultationType", "video");
   }, [isOnline]);
@@ -2286,14 +2492,15 @@ function StepProvider({
         </h2>
         <p className="text-xs text-base-content/45" style={PP}>
           {isDiag
-            ? "Find a lab and choose tests or packages."
+            ? "Find a lab and choose tests or packages. Prices shown include subscription discount if applicable."
             : isOnline
-              ? "Search for a doctor available for video consultation."
+              ? "Search for a doctor available for video consultation. 5% GST applies on video fee."
               : "Search for a hospital, then choose your doctor and consultation type."}
         </p>
       </div>
 
       <SubCoverageBanner
+        form={form}
         subCoverage={form.subCoverage}
         consultationType={form.consultationType}
       />
@@ -2306,12 +2513,13 @@ function StepProvider({
             className="text-[11px] font-semibold text-primary leading-snug"
             style={PP}
           >
-            Online consultation is video-only. No hospital selection needed.
+            Online consultation is video-only. 5% GST applies. Cash payment not
+            available. No hospital selection needed.
           </p>
         </div>
       )}
 
-      {/* Diagnostic Lab */}
+      {/* ─── Diagnostic Lab ─────────────────────────────────────────────── */}
       {isDiag && (
         <SCard title="Find a Lab" icon={providerIcon} accent={providerAccent}>
           <Field label="Search by City" note="Type city and click Find">
@@ -2337,10 +2545,11 @@ function StepProvider({
               </button>
             </div>
           </Field>
+
           {labs?.length > 0 && (
             <Field
               label="Select Lab"
-              note="Home ✓ = home collection"
+              note="Home ✓ = home collection available"
               error={errors.labId}
             >
               <Sel
@@ -2360,7 +2569,6 @@ function StepProvider({
                 <option value="">— Choose a lab —</option>
                 {labs.map((l) => (
                   <option key={l._id} value={l._id}>
-                    {/* FIX: use labSupportsHomeCollection helper for accurate Home ✓ label */}
                     {l.labName} — {l.registeredAddress?.city}
                     {labSupportsHomeCollection(l) ? " (Home ✓)" : ""}
                   </option>
@@ -2368,6 +2576,7 @@ function StepProvider({
               </Sel>
             </Field>
           )}
+
           {labDetailLoading && (
             <div
               className="flex items-center gap-2 text-xs text-base-content/40 py-1"
@@ -2386,37 +2595,25 @@ function StepProvider({
               Failed to load lab tests. Try selecting lab again.
             </div>
           )}
+
           {labDetail && (
             <>
               <Field
                 label="Select Tests"
-                note="Long-press for multi-select"
+                note="Tap to select/deselect · prices after sub discount"
                 error={errors.selectedTests}
               >
-                <select
-                  multiple
-                  size={Math.min(labDetail.labTests?.length || 4, 6)}
-                  style={PP}
-                  className="w-full bg-base-200/60 border border-base-300 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 transition-all"
-                  value={form.selectedTests || []}
-                  onChange={(e) =>
-                    set(
-                      "selectedTests",
-                      Array.from(
-                        e.target.selectedOptions,
-                        (o) => o.value,
-                      ).filter(Boolean),
-                    )
-                  }
-                >
+                <div className="w-full bg-base-200/60 border border-base-300 rounded-xl max-h-48 overflow-y-auto p-1 space-y-0.5 custom-scrollbar">
                   {labDetail.labTests
                     ?.filter((t) =>
                       form.bookingType === "diagnostic_home"
-                        ? t.homeCollectionAvailable === true ||
-                          t.homeCollectionAvailable == null
+                        ? t.homeCollectionAvailable === true
                         : true,
                     )
-                    .map((t, i) => {
+                    .map((t) => {
+                      const testSlug = t.slug;
+                      if (!testSlug) return null;
+
                       const discPct =
                         form.subCoverage?.diagnosticsDiscountPercent || 0;
                       const basePrice = t.discountedPrice ?? t.mrpPrice;
@@ -2424,66 +2621,125 @@ function StepProvider({
                         discPct > 0
                           ? +(basePrice * (1 - discPct / 100)).toFixed(0)
                           : basePrice;
-                      const testIdStr =
-                        t.testCode || (t._id ? normalizeId(t._id) : `idx-${i}`);
-                      if (!testIdStr) return null;
+
+                      const isSelected = (form.selectedTests || []).includes(
+                        testSlug,
+                      );
+
                       return (
-                        <option key={`test-${i}`} value={testIdStr}>
-                          {t.testName} — {fmt(displayPrice)}
-                          {discPct > 0 ? ` (${discPct}% off)` : ""}
-                        </option>
+                        <button
+                          key={testSlug}
+                          type="button"
+                          onClick={() => {
+                            const current = form.selectedTests || [];
+                            if (current.includes(testSlug)) {
+                              set(
+                                "selectedTests",
+                                current.filter((v) => v !== testSlug),
+                              );
+                            } else {
+                              set("selectedTests", [...current, testSlug]);
+                            }
+                          }}
+                          style={PP}
+                          className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-all ${
+                            isSelected
+                              ? "bg-primary/15 text-primary"
+                              : "hover:bg-base-300/50 text-base-content"
+                          }`}
+                        >
+                          <span className="text-left flex-1 pr-2">
+                            {t.testName} — {fmt(displayPrice)}
+                            {discPct > 0
+                              ? ` (was ${fmt(basePrice)}, ${discPct}% off)`
+                              : ""}{" "}
+                            · +5% GST
+                          </span>
+                          {isSelected && (
+                            <Check
+                              size={14}
+                              className="flex-shrink-0"
+                              strokeWidth={3}
+                            />
+                          )}
+                        </button>
                       );
                     })}
-                </select>
+                </div>
                 {form.selectedTests?.length > 0 && (
-                  <p className="text-[10px] text-primary font-bold" style={PP}>
+                  <p
+                    className="text-[10px] text-primary font-bold mt-1"
+                    style={PP}
+                  >
                     {form.selectedTests.length} test
-                    {form.selectedTests.length > 1 ? "s" : ""} selected
+                    {form.selectedTests.length > 1 ? "s" : ""} selected · 5% GST
+                    on each
                   </p>
                 )}
               </Field>
+
               {labDetail.labPackages?.length > 0 && (
                 <Field
                   label="Packages (optional)"
-                  note="Health bundles at discount"
+                  note="Tap to select/deselect · prices after sub discount"
                 >
-                  <select
-                    multiple
-                    size={Math.min(labDetail.labPackages.length, 3)}
-                    style={PP}
-                    className="w-full bg-base-200/60 border border-base-300 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-                    value={form.selectedPackages || []}
-                    onChange={(e) =>
-                      set(
-                        "selectedPackages",
-                        Array.from(
-                          e.target.selectedOptions,
-                          (o) => o.value,
-                        ).filter(Boolean),
-                      )
-                    }
-                  >
-                    {labDetail.labPackages?.map((p, pi) => {
-                      const pkgIdStr =
-                        p.packageCode ||
-                        (p._id
-                          ? (p._id?.toString?.() ?? String(p._id))
-                          : `idx-${pi}`);
-                      if (!pkgIdStr) return null;
+                  <div className="w-full bg-base-200/60 border border-base-300 rounded-xl max-h-48 overflow-y-auto p-1 space-y-0.5 custom-scrollbar">
+                    {labDetail.labPackages?.map((p) => {
+                      const pkgSlug = p.slug;
+                      if (!pkgSlug) return null;
+
                       const discPct =
                         form.subCoverage?.diagnosticsDiscountPercent || 0;
+                      const basePrice = p.mrpPrice;
                       const displayPrice =
                         discPct > 0
-                          ? +(p.mrpPrice * (1 - discPct / 100)).toFixed(0)
-                          : p.mrpPrice;
+                          ? +(basePrice * (1 - discPct / 100)).toFixed(0)
+                          : basePrice;
+
+                      const isSelected = (form.selectedPackages || []).includes(
+                        pkgSlug,
+                      );
+
                       return (
-                        <option key={`pkg-${pi}`} value={pkgIdStr}>
-                          {p.packageName} — {fmt(displayPrice)}
-                          {discPct > 0 ? ` (${discPct}% off)` : ""}
-                        </option>
+                        <button
+                          key={pkgSlug}
+                          type="button"
+                          onClick={() => {
+                            const current = form.selectedPackages || [];
+                            if (current.includes(pkgSlug)) {
+                              set(
+                                "selectedPackages",
+                                current.filter((v) => v !== pkgSlug),
+                              );
+                            } else {
+                              set("selectedPackages", [...current, pkgSlug]);
+                            }
+                          }}
+                          style={PP}
+                          className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-all ${
+                            isSelected
+                              ? "bg-primary/15 text-primary"
+                              : "hover:bg-base-300/50 text-base-content"
+                          }`}
+                        >
+                          <span className="text-left flex-1 pr-2">
+                            {p.packageName} — {fmt(displayPrice)}
+                            {discPct > 0
+                              ? ` (was ${fmt(basePrice)}, ${discPct}% off)`
+                              : ""}{" "}
+                            · +5% GST
+                          </span>
+                          {isSelected && (
+                            <Check
+                              size={14}
+                              className="flex-shrink-0"
+                              strokeWidth={3}
+                            />
+                          )}
+                        </button>
                       );
                     })}
-                  </select>
+                  </div>
                 </Field>
               )}
 
@@ -2502,7 +2758,7 @@ function StepProvider({
         </SCard>
       )}
 
-      {/* Doctor / Hospital */}
+      {/* ─── Doctor / Hospital ────────────────────────────────────────────── */}
       {bt?.needsDoctor && (
         <SCard
           title={isOnline ? "Find Doctor for Video Call" : "Hospital & Doctor"}
@@ -2782,11 +3038,11 @@ function StepProvider({
               >
                 {form.doctorName || "Doctor"} — Fee Schedule
               </p>
-              <div className="grid grid-cols-3 gap-0 px-3 pb-3">
+              <div className="grid grid-cols-3 gap-0 px-3 pb-2">
                 {[
-                  { key: "inPersonFee", label: "In-Person" },
-                  { key: "videoFee", label: "Video" },
-                  { key: "followUpFee", label: "Follow-Up" },
+                  { key: "inPersonFee", label: "In-Person", gst: "0% GST" },
+                  { key: "videoFee", label: "Video", gst: "+5% GST" },
+                  { key: "followUpFee", label: "Follow-Up", gst: "0% GST" },
                 ].map((item, idx) => (
                   <div
                     key={item.key}
@@ -2806,6 +3062,12 @@ function StepProvider({
                         <span className="text-base-content/30">—</span>
                       )}
                     </p>
+                    <p
+                      className="text-[8px] text-base-content/35 font-semibold"
+                      style={PP}
+                    >
+                      {item.gst}
+                    </p>
                   </div>
                 ))}
               </div>
@@ -2822,65 +3084,67 @@ function StepProvider({
           )}
 
           {showConsultTypes && (
-            <Field label="Consultation Type" note="Fee shown per type">
+            <Field label="Consultation Type" note="GST differs by type">
               <div className="grid grid-cols-3 gap-1.5">
-                {CONSULT_TYPES.map(({ value, label, icon: Icon, feeKey }) => {
-                  const on = form.consultationType === value;
-                  const fee = form.doctorFees ? form.doctorFees[feeKey] : null;
-                  const notAvailable =
-                    form.doctorFees != null && (fee == null || fee === 0);
-                  const isHomeVisit = value === "homeVisit";
-                  return (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() =>
-                        !notAvailable && set("consultationType", value)
-                      }
-                      disabled={notAvailable}
-                      className={`flex flex-col items-center gap-1 py-2 px-1 rounded-xl border-2 transition-all text-center relative ${on ? "border-primary bg-primary/10 text-primary" : notAvailable ? "border-base-300 bg-base-100 opacity-40 cursor-not-allowed" : "border-base-300 bg-base-200 text-base-content"}`}
-                      style={PP}
-                    >
-                      <Icon size={13} />
-                      <span
-                        className="text-[9px] font-black uppercase tracking-wide leading-tight"
+                {CONSULT_TYPES.map(
+                  ({ value, label, icon: Icon, feeKey, gstNote }) => {
+                    const on = form.consultationType === value;
+                    const fee = form.doctorFees
+                      ? form.doctorFees[feeKey]
+                      : null;
+                    const notAvailable =
+                      form.doctorFees != null && (fee == null || fee === 0);
+                    const isHome = value === "homeVisit";
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() =>
+                          !notAvailable && set("consultationType", value)
+                        }
+                        disabled={notAvailable}
+                        className={`flex flex-col items-center gap-1 py-2 px-1 rounded-xl border-2 transition-all text-center relative ${on ? "border-primary bg-primary/10 text-primary" : notAvailable ? "border-base-300 bg-base-100 opacity-40 cursor-not-allowed" : "border-base-300 bg-base-200 text-base-content"}`}
                         style={PP}
                       >
-                        {label}
-                      </span>
-                      {fee != null && fee > 0 ? (
+                        <Icon size={13} />
                         <span
-                          className={`text-[8px] font-bold ${on ? "text-primary" : "text-base-content/60"}`}
+                          className="text-[9px] font-black uppercase tracking-wide leading-tight"
                           style={PP}
                         >
-                          {fmt(fee)}
+                          {label}
                         </span>
-                      ) : notAvailable ? (
+                        {fee != null && fee > 0 ? (
+                          <span
+                            className={`text-[8px] font-bold ${on ? "text-primary" : "text-base-content/60"}`}
+                            style={PP}
+                          >
+                            {fmt(fee)}
+                          </span>
+                        ) : notAvailable ? (
+                          <span
+                            className="text-[8px] font-bold text-error/60"
+                            style={PP}
+                          >
+                            N/A
+                          </span>
+                        ) : (
+                          <span
+                            className="text-[8px] text-base-content/30"
+                            style={PP}
+                          >
+                            —
+                          </span>
+                        )}
                         <span
-                          className="text-[8px] font-bold text-error/60"
+                          className={`text-[7px] font-black leading-none ${on ? "text-primary/60" : "text-base-content/30"}`}
                           style={PP}
                         >
-                          N/A
+                          {gstNote}
                         </span>
-                      ) : (
-                        <span
-                          className="text-[8px] text-base-content/30"
-                          style={PP}
-                        >
-                          —
-                        </span>
-                      )}
-                      {isHomeVisit && !notAvailable && (
-                        <span
-                          className="text-[7px] font-black text-warning leading-none mt-0.5"
-                          style={PP}
-                        >
-                          no sub
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
+                      </button>
+                    );
+                  },
+                )}
               </div>
             </Field>
           )}
@@ -2889,9 +3153,17 @@ function StepProvider({
             <div className="flex items-center justify-between p-2.5 rounded-xl bg-primary/5 border border-primary/20">
               <div className="flex items-center gap-2">
                 <Video size={13} className="text-primary" />
-                <p className="text-xs font-black text-primary" style={PP}>
-                  Video Fee
-                </p>
+                <div>
+                  <p className="text-xs font-black text-primary" style={PP}>
+                    Video Fee
+                  </p>
+                  <p
+                    className="text-[9px] text-primary/60 font-semibold"
+                    style={PP}
+                  >
+                    +5% GST on video
+                  </p>
+                </div>
               </div>
               <p className="text-base font-black text-primary" style={PP}>
                 {form.doctorFees.videoFee != null &&
@@ -2904,7 +3176,7 @@ function StepProvider({
         </SCard>
       )}
 
-      {/* Follow-up eligibility */}
+      {/* ─── Follow-up eligibility ─────────────────────────────────────────── */}
       {form.bookingType === "follow_up" && form.doctorId && (
         <div className="space-y-2">
           {followUpCheckLoading && (
@@ -2934,18 +3206,19 @@ function StepProvider({
                     : followUpCheck.reason}
                 </p>
                 {followUpCheck.isEligible && (
-                  <p className="text-[10px] opacity-70 mt-0.5" style={PP}>
-                    {followUpCheck.daysRemaining} days remaining · Ref:{" "}
-                    {followUpCheck.parentOpNumber}
-                  </p>
-                )}
-                {followUpCheck.isEligible && (
-                  <p
-                    className="text-[10px] opacity-60 mt-0.5 italic"
-                    style={PP}
-                  >
-                    Follow-up fee is independent of subscription quota.
-                  </p>
+                  <>
+                    <p className="text-[10px] opacity-70 mt-0.5" style={PP}>
+                      {followUpCheck.daysRemaining} days remaining · Ref:{" "}
+                      {followUpCheck.parentOpNumber}
+                    </p>
+                    <p
+                      className="text-[10px] opacity-60 mt-0.5 italic"
+                      style={PP}
+                    >
+                      Follow-up fee is independent of subscription quota. 0%
+                      GST.
+                    </p>
+                  </>
                 )}
               </div>
             </motion.div>
@@ -3192,6 +3465,14 @@ function StepSchedule({
                 {fmt(price)}
               </span>
             )}
+            {!caFreeViaSub && !isQuotaTier && (
+              <span
+                className="text-[7px] text-base-content/30 font-semibold"
+                style={PP}
+              >
+                +18% GST
+              </span>
+            )}
           </button>
         );
       })}
@@ -3212,6 +3493,7 @@ function StepSchedule({
         subCoverage={form.subCoverage}
         consultationType={form.consultationType}
       />
+
       <SCard
         title="Appointment Date & Time"
         icon={Calendar}
@@ -3289,6 +3571,7 @@ function StepSchedule({
             <Info size={11} className="text-info flex-shrink-0" />
             <p className="text-[10px] font-semibold text-info" style={PP}>
               Drop-off auto-set to selected hospital. Set your pickup below.
+              Transport = ₹/km × distance + 5% GST.
             </p>
           </div>
           <SCard
@@ -3348,6 +3631,20 @@ function StepSchedule({
             </Field>
           </SCard>
           <SCard title="Care Assistant Duration" icon={Timer} accent="#f59e0b">
+            <div className="flex items-start gap-1.5 mb-2 p-2 rounded-lg bg-warning/5 border border-warning/15">
+              <Info
+                size={10}
+                className="text-warning/70 flex-shrink-0 mt-0.5"
+              />
+              <p
+                className="text-[9px] text-warning/80 font-semibold leading-snug"
+                style={PP}
+              >
+                Fixed plan: CA free (quota consumed on admin assignment). Custom
+                plan: only your subscribed tier is free. Other tiers charge
+                platform rate + 18% GST.
+              </p>
+            </div>
             {caTiersLoading ? (
               <div
                 className="flex items-center gap-2 text-xs text-base-content/40 py-2"
@@ -3396,13 +3693,15 @@ function StepSchedule({
                       sub
                       note={
                         transportEstimate.kmRateSource === "subscription"
-                          ? "Subscription plan rate"
-                          : "Standard rate"
+                          ? "Subscription plan rate (lower than ₹21/km default)"
+                          : "Standard rate ₹21/km"
                       }
                     />
                     <FareRow
                       label="Transport (outbound)"
                       value={fmt(transportEstimate.outbound?.totalFare)}
+                      gstRate={0}
+                      gstLabel="excl. GST"
                     />
                     {form.includeReturnHome && transportEstimate.returnLeg && (
                       <FareRow
@@ -3418,13 +3717,12 @@ function StepSchedule({
                           ? "FREE"
                           : caResolved.fee > 0
                             ? fmt(caResolved.fee)
-                            : caResolved.serverResolved
-                              ? "Confirmed at booking"
-                              : fmt(caTier?.price || 0)
+                            : fmt(caTier?.price || 0)
                       }
                       note={`${form.durationHours || caTiers[0]?.hours || 4} hrs`}
                       isFree={caResolved.isFree}
                       freeReason={caResolved.reason}
+                      gstRate={caResolved.isFree ? null : 0.18}
                     />
                     <div className="border-t border-base-300 pt-1">
                       <FareRow
@@ -3438,7 +3736,8 @@ function StepSchedule({
                       className="text-[9px] text-base-content/35 px-2"
                       style={PP}
                     >
-                      + 5% GST on transport · 18% GST on care assistant
+                      + 5% GST on transport · 18% GST on care assistant (if not
+                      free)
                     </p>
                   </div>
                 ) : (
@@ -3461,7 +3760,7 @@ function StepSchedule({
             <LocationPicker
               label="Drop-off Address"
               required
-              note="Fare is distance-based"
+              note="Fare is distance-based + 5% GST"
               value={form.destinationLocation}
               onChange={(loc) => set("destinationLocation", loc)}
               error={errors.destinationLocation}
@@ -3489,7 +3788,7 @@ function StepSchedule({
                   })}
                 </div>
               </Field>
-              <Field label="Wait (min)" note="5 min free">
+              <Field label="Wait (min)" note="5 min free · ₹2/min after">
                 <Inp
                   type="number"
                   min="0"
@@ -3548,8 +3847,8 @@ function StepSchedule({
                       value={tFee.ratePerKm ? `₹${tFee.ratePerKm}/km` : "—"}
                       note={
                         transportEstimate.kmRateSource === "subscription"
-                          ? "Subscription plan rate (lower)"
-                          : "Standard rate"
+                          ? "Subscription plan rate · base ₹50 applies"
+                          : "Standard rate · base ₹50 applies"
                       }
                       sub
                     />
@@ -3565,7 +3864,7 @@ function StepSchedule({
                     )}
                     {form.waitingMinutes > 5 && (
                       <FareRow
-                        label={`Waiting (${form.waitingMinutes - 5} billable min)`}
+                        label={`Waiting (${form.waitingMinutes - 5} billable min × ₹2)`}
                         value={fmt(transportEstimate.outbound?.waitingCharge)}
                         sub
                       />
@@ -3628,7 +3927,7 @@ function StepSchedule({
           />
           <Field
             label="Care Duration"
-            note="Tiered pricing — select hours needed"
+            note="Tiered pricing · 18% GST on CA fee"
           >
             {caTiersLoading ? (
               <div
@@ -3705,6 +4004,14 @@ function StepSchedule({
                             {fmt(price)}
                           </span>
                         )}
+                        {!caFreeViaSub && !isQuotaTier && (
+                          <span
+                            className="text-[7px] text-base-content/30 font-semibold"
+                            style={PP}
+                          >
+                            +18% GST
+                          </span>
+                        )}
                       </button>
                     );
                   },
@@ -3719,13 +4026,18 @@ function StepSchedule({
         <SCard title="Visit Type" icon={HeartPulse} accent="#10b981">
           <Field
             label="How would you like the session?"
-            note="Home visit fee differs"
+            note="0% GST on consultation"
           >
             <div className="grid grid-cols-2 gap-2">
               {[
-                { v: "inPerson", l: "At Clinic", icon: Building2 },
-                { v: "homeVisit", l: "Home Visit", icon: Home },
-              ].map(({ v, l, icon: Icon }) => {
+                {
+                  v: "inPerson",
+                  l: "At Clinic",
+                  icon: Building2,
+                  note: "0% GST",
+                },
+                { v: "homeVisit", l: "Home Visit", icon: Home, note: "5% GST" },
+              ].map(({ v, l, icon: Icon, note }) => {
                 const on = form.consultationType === v;
                 return (
                   <button
@@ -3735,9 +4047,17 @@ function StepSchedule({
                     className={`flex items-center gap-2 p-3 rounded-xl border-2 text-left transition-all ${on ? "border-success bg-success/10 text-success" : "border-base-300 bg-base-200 text-base-content"}`}
                   >
                     <Icon size={14} className="flex-shrink-0" />
-                    <span className="font-black text-xs" style={PP}>
-                      {l}
-                    </span>
+                    <div className="flex-1 min-w-0">
+                      <span className="font-black text-xs" style={PP}>
+                        {l}
+                      </span>
+                      <p
+                        className="text-[8px] opacity-50 font-semibold"
+                        style={PP}
+                      >
+                        {note}
+                      </p>
+                    </div>
                     {on && (
                       <Check
                         size={11}
@@ -3800,7 +4120,7 @@ function StepPayment({
 
   const consultResolved = bt?.needsDoctor
     ? resolveConsultFee(form, followUpCheck)
-    : { fee: 0, isFree: false };
+    : { fee: 0, isFree: false, gstRate: 0 };
   const caResolved = bt?.needsCare
     ? resolveCaFee(form, caTiers)
     : { fee: 0, isFree: false };
@@ -3812,43 +4132,46 @@ function StepPayment({
   const hasDiag = bt?.isDiag;
 
   const diagDiscountPct = form.subCoverage?.diagnosticsDiscountPercent || 0;
+  // resolveHomeCollectionFree: true only if plan includes AND not yet used this period
   const homeCollectionFree =
-    form.subCoverage?.homeSampleCollectionFree === true;
+    hasDiag && form.bookingType === "diagnostic_home"
+      ? resolveHomeCollectionFree(form.subCoverage)
+      : false;
 
-  // FIX: diagFee now always comes from computed estimatedDiagFee (post-discount)
   const diagFee = hasDiag ? form.estimatedDiagFee || 0 : 0;
-  const diagGstAmt = hasDiag ? +(diagFee * 0.05).toFixed(2) : 0;
+  const diagGstAmt = hasDiag
+    ? +(diagFee * GST_RATES.diagnostics).toFixed(2)
+    : 0;
 
-  // Home collection fee: free if sub covers it AND visits remaining, else lab's fee
   const rawHomeColFee = labDetail?.homeCollectionFee ?? 0;
-  const homeColFree = homeCollectionFree; // already computed above from subCoverage
   const homeColFeeToCharge =
     form.bookingType === "diagnostic_home"
-      ? homeColFree
+      ? homeCollectionFree
         ? 0
         : rawHomeColFee
       : 0;
-  const homeColGstAmt = +(homeColFeeToCharge * 0.05).toFixed(2);
+  const homeColGstAmt = +(
+    homeColFeeToCharge * GST_RATES.homeCollection
+  ).toFixed(2);
 
-  const consultGstRate = form.bookingType === "doctor_online" ? 0.05 : 0.0;
-  const transportGstRate = 0.05;
-  const caGstRate = 0.18;
-
+  const consultGstRate = consultResolved.gstRate ?? 0;
   const consultGstAmt = bt?.needsDoctor
     ? +(consultFee * consultGstRate).toFixed(2)
     : 0;
   const transportGstAmt = bt?.needsTransport
-    ? +(transportFee * transportGstRate).toFixed(2)
+    ? +(transportFee * GST_RATES.transport).toFixed(2)
     : 0;
   const caGstAmt =
-    bt?.needsCare && !caResolved.isFree ? +(caFee * caGstRate).toFixed(2) : 0;
+    bt?.needsCare && !caResolved.isFree
+      ? +(caFee * GST_RATES.careAssistant).toFixed(2)
+      : 0;
 
   const subtotal =
     consultFee + transportFee + caFee + diagFee + homeColFeeToCharge;
   const totalGst =
     consultGstAmt + transportGstAmt + caGstAmt + diagGstAmt + homeColGstAmt;
   const estimatedTotal = +(subtotal + totalGst).toFixed(2);
-  // FIX: hasKnownTotal — show total only when tests selected or other service components present
+
   const hasKnownTotal =
     subtotal > 0 ||
     consultResolved.isFree ||
@@ -3861,6 +4184,16 @@ function StepPayment({
   const durHours = form.durationHours || (caTiers[0]?.hours ?? 4);
   const caTier = caTiers.find((t) => t.hours === durHours) || caTiers[0];
 
+  // Available payment methods filtered by booking type (Cash hidden for doctor_online)
+  const paymentMethods = getPaymentMethods(form.bookingType);
+
+  // Reset Cash→Razorpay if switched to doctor_online
+  useEffect(() => {
+    if (form.bookingType === "doctor_online" && form.paymentMethod === "Cash") {
+      set("paymentMethod", "Razorpay");
+    }
+  }, [form.bookingType, form.paymentMethod]);
+
   return (
     <div className="space-y-3">
       <div>
@@ -3868,7 +4201,7 @@ function StepPayment({
           Payment & Fare Breakdown
         </h2>
         <p className="text-xs text-base-content/45" style={PP}>
-          Review all charges before confirming.
+          Review all charges before confirming. GST rates vary by service type.
         </p>
       </div>
       <SubCoverageBanner
@@ -3876,6 +4209,7 @@ function StepPayment({
         consultationType={form.consultationType}
       />
       {hasDiag && <DiagSubBanner subCoverage={form.subCoverage} />}
+
       <SCard title="Fare Breakdown" icon={Receipt} accent="var(--primary)">
         {bt?.needsDoctor && (
           <>
@@ -3884,9 +4218,10 @@ function StepPayment({
               value={fmt(consultFee)}
               isFree={consultResolved.isFree}
               freeReason={consultResolved.reason}
+              gstRate={consultResolved.isFree ? null : consultGstRate}
               note={
                 form.bookingType === "follow_up"
-                  ? "Follow-up fee"
+                  ? "Follow-up fee — independent of subscription quota"
                   : form.consultationType === "homeVisit"
                     ? "Home visit — sub quota not applicable"
                     : undefined
@@ -3907,7 +4242,7 @@ function StepPayment({
                     className="text-[9px] text-base-content/35 italic"
                     style={PP}
                   >
-                    In-person consultation: GST exempt (0%)
+                    In-person consultation: 0% GST (Section 9 healthcare exempt)
                   </p>
                 </div>
               )}
@@ -3919,12 +4254,13 @@ function StepPayment({
                     style={PP}
                   >
                     ⚠ Home visit always charged — sub quota covers
-                    in-person/video only
+                    in-person/video only · 5% GST
                   </p>
                 </div>
               )}
           </>
         )}
+
         {bt?.needsTransport && (
           <>
             <div className="border-t border-base-300/40 pt-1" />
@@ -3935,9 +4271,10 @@ function StepPayment({
                   ? fmt(transportFee)
                   : "Set pickup & destination"
               }
+              gstRate={transportFee > 0 ? GST_RATES.transport : null}
               note={
                 transportEstimate
-                  ? `${transportEstimate.distanceKm} km · ₹${tResolved.ratePerKm || "—"}/km${transportEstimate.kmRateSource === "subscription" ? " (plan rate)" : ""}`
+                  ? `${transportEstimate.distanceKm} km · ₹${tResolved.ratePerKm || "—"}/km${transportEstimate.kmRateSource === "subscription" ? " (plan rate)" : " (default)"}  · base ₹50`
                   : "Calculated from your location"
               }
             />
@@ -3950,6 +4287,7 @@ function StepPayment({
             )}
           </>
         )}
+
         {bt?.needsCare && (
           <>
             <div className="border-t border-base-300/40 pt-1" />
@@ -3960,9 +4298,7 @@ function StepPayment({
                   ? "FREE"
                   : caResolved.fee > 0
                     ? fmt(caResolved.fee)
-                    : caResolved.serverResolved
-                      ? "Confirmed at booking"
-                      : fmt(caTier?.price || 0)
+                    : fmt(caTier?.price || 0)
               }
               note={
                 caTier
@@ -3971,6 +4307,7 @@ function StepPayment({
               }
               isFree={caResolved.isFree}
               freeReason={caResolved.reason}
+              gstRate={caResolved.isFree ? null : GST_RATES.careAssistant}
             />
             {!caResolved.isFree && caGstAmt > 0 && (
               <FareRow
@@ -3979,33 +4316,65 @@ function StepPayment({
                 sub
               />
             )}
+            {!caResolved.isFree && (
+              <div className="px-2.5">
+                <p
+                  className="text-[9px] text-base-content/35 italic"
+                  style={PP}
+                >
+                  Care assistant services attract 18% GST (non-medical support
+                  service)
+                </p>
+              </div>
+            )}
           </>
         )}
+
         {hasDiag && (
           <>
             <div className="border-t border-base-300/40 pt-1" />
-            {/* FIX: show actual price when diagFee > 0, "No tests selected" when none chosen, never "Calculating..." */}
             <FareRow
               label="Diagnostic Tests / Packages"
               value={
-                diagFee > 0
-                  ? fmt(diagFee)
-                  : form.selectedTests?.length > 0 ||
-                      form.selectedPackages?.length > 0
-                    ? fmt(0)
-                    : "No tests selected"
+                diagFee > 0 ? (
+                  (form.subCoverage?.diagnosticsDiscountPercent || 0) > 0 ? (
+                    <span className="flex items-center gap-1.5 justify-end">
+                      <span className="line-through text-[10px] opacity-50 font-medium">
+                        {fmt(
+                          Math.round(
+                            diagFee /
+                              (1 -
+                                (form.subCoverage?.diagnosticsDiscountPercent ||
+                                  0) /
+                                  100),
+                          ),
+                        )}
+                      </span>
+                      <span>{fmt(diagFee)}</span>
+                    </span>
+                  ) : (
+                    fmt(diagFee)
+                  )
+                ) : form.selectedTests?.length > 0 ||
+                  form.selectedPackages?.length > 0 ? (
+                  fmt(0)
+                ) : (
+                  "No tests selected"
+                )
               }
-              note={`${(form.selectedTests?.length || 0) + (form.selectedPackages?.length || 0)} item(s) selected`}
+              note={`${(form.selectedTests?.length || 0) + (form.selectedPackages?.length || 0)} item(s) selected${(form.subCoverage?.diagnosticsDiscountPercent || 0) > 0 ? ` · ${form.subCoverage?.diagnosticsDiscountPercent || 0}% sub discount applied` : ""}`}
+              gstRate={diagFee > 0 ? GST_RATES.diagnostics : null}
             />
-            {diagDiscountPct > 0 && diagFee > 0 && (
-              <FareRow
-                label={`Subscription discount (${diagDiscountPct}%)`}
-                value={`−${fmt(+((diagFee * diagDiscountPct) / (100 - diagDiscountPct)).toFixed(2))}`}
-                sub
-                note="Already applied in price above"
-                accent="var(--success)"
-              />
-            )}
+            {(form.subCoverage?.diagnosticsDiscountPercent || 0) > 0 &&
+              diagFee > 0 && (
+                <FareRow
+                  label={`Subscription discount (${form.subCoverage?.diagnosticsDiscountPercent || 0}%)`}
+                  value={`-${fmt(Math.round(diagFee / (1 - (form.subCoverage?.diagnosticsDiscountPercent || 0) / 100)) - diagFee)}`}
+                  sub
+                  note="Applied to base price · max cap 25%"
+                  accent="var(--success)"
+                />
+              )}
             {diagFee > 0 && (
               <FareRow
                 label="GST on Diagnostics (5%)"
@@ -4015,8 +4384,8 @@ function StepPayment({
             )}
           </>
         )}
+
         {form.bookingType === "diagnostic_home" && (
-          // REPLACE WITH:
           <FareRow
             label="Home Collection Fee"
             value={
@@ -4030,8 +4399,8 @@ function StepPayment({
               !homeCollectionFree && labDetail?.homeCollectionFee != null
                 ? form.subCoverage?.homeCollectionIncluded &&
                   (form.subCoverage?.homeCollectionRemaining ?? 0) <= 0
-                  ? "Quota exhausted — fee applies"
-                  : "Charged by lab for technician visit"
+                  ? "Quota exhausted — lab fee + 5% GST applies"
+                  : "Charged by lab for technician visit · 5% GST"
                 : undefined
             }
             sub={!homeCollectionFree}
@@ -4040,22 +4409,32 @@ function StepPayment({
               homeCollectionFree
                 ? form.subCoverage?.homeCollectionUnlimited
                   ? "Unlimited home collection — included in plan"
-                  : `${form.subCoverage?.homeCollectionRemaining ?? ""} visit(s) remaining this month`
+                  : `${form.subCoverage?.homeCollectionRemaining ?? ""} use(s) remaining this subscription period`
                 : undefined
+            }
+            gstRate={
+              homeCollectionFree
+                ? null
+                : labDetail?.homeCollectionFee
+                  ? GST_RATES.homeCollection
+                  : null
             }
           />
         )}
-        {hasKnownTotal &&
-          subtotal > 0 &&
-          !caResolved.isCustomPlan &&
-          !caResolved.serverResolved && (
-            <div className="border-t border-base-300 pt-1 mt-1 space-y-0.5">
-              <FareRow label="Subtotal (before GST)" value={fmt(subtotal)} />
-              {totalGst > 0 && (
-                <FareRow label="Total GST" value={fmt(totalGst)} sub />
-              )}
-            </div>
-          )}
+
+        {hasKnownTotal && subtotal > 0 && !caResolved.isCustomPlan && (
+          <div className="border-t border-base-300 pt-1 mt-1 space-y-0.5">
+            <FareRow label="Subtotal (before GST)" value={fmt(subtotal)} />
+            {totalGst > 0 && (
+              <FareRow
+                label="Total GST (mixed rates)"
+                value={fmt(totalGst)}
+                sub
+                note="Transport 5% + CA 18% + Diag 5% + Consult varies"
+              />
+            )}
+          </div>
+        )}
         {hasKnownTotal &&
           subtotal === 0 &&
           (consultResolved.isFree || caResolved.isFree) && (
@@ -4066,10 +4445,11 @@ function StepPayment({
               </p>
             </div>
           )}
+
         <div className="border-t border-base-300 pt-1 mt-1" />
         <FareRow
           label={
-            caResolved.isCustomPlan || caResolved.serverResolved
+            caResolved.isCustomPlan
               ? "Partial Estimated Total"
               : "Estimated Total"
           }
@@ -4077,13 +4457,16 @@ function StepPayment({
           note={
             estimatedTotal === 0
               ? "Fully covered by subscription"
-              : "May vary ±5% after subscription & coupon"
+              : "May vary ±5% after subscription & coupon application"
           }
           accent="var(--primary)"
           bold
           highlight
         />
       </SCard>
+
+      {/* GST Reference box */}
+      <GstReferenceBox />
 
       <SCard title="Coupon & Discounts" icon={Percent} accent="var(--success)">
         <Field
@@ -4110,7 +4493,7 @@ function StepPayment({
 
       <SCard title="Payment Method" icon={CreditCard} accent="var(--secondary)">
         <div className="space-y-2">
-          {PAYMENT_METHODS.map(({ value, label, icon: Icon, desc }) => {
+          {paymentMethods.map(({ value, label, icon: Icon, desc }) => {
             const on = form.paymentMethod === value;
             return (
               <motion.button
@@ -4155,7 +4538,11 @@ function StepPayment({
               </motion.button>
             );
           })}
+          {form.bookingType === "doctor_online" && (
+            <OnlineCashNotAvailableBanner />
+          )}
         </div>
+
         {form.paymentMethod === "Wallet" && (
           <div className="mt-2">
             <WalletSplitBanner
@@ -4179,6 +4566,7 @@ function StepPayment({
             />
             <p className="text-[10px] text-primary font-semibold" style={PP}>
               Razorpay opens after you confirm. Supports UPI, Card, Net Banking.
+              Secured by RBI-regulated gateway.
             </p>
           </div>
         )}
@@ -4194,7 +4582,7 @@ function StepPayment({
           style={PP}
         >
           Cancellations 24+ hrs before: 100% refund. Within 24 hrs: 50% refund.
-          Same-day no-show: no refund.
+          Same-day no-show: no refund. Refund processing: 5–12 business days.
         </p>
       </div>
     </div>
@@ -4226,45 +4614,53 @@ function StepReview({
 
   const consultResolved = bt?.needsDoctor
     ? resolveConsultFee(form, followUpCheck)
-    : { fee: 0, isFree: false };
+    : { fee: 0, isFree: false, gstRate: 0 };
   const caResolved = bt?.needsCare
     ? resolveCaFee(form, caTiers)
     : { fee: 0, isFree: false };
   const tResolved = resolveTransportFee(transportEstimate);
+
   const consultFee = consultResolved.fee;
   const caFee = caResolved.fee;
   const transportFee = bt?.needsTransport ? tResolved.fee : 0;
   const diagFee = bt?.isDiag ? form.estimatedDiagFee || 0 : 0;
-  const diagGstAmt = bt?.isDiag ? +(diagFee * 0.05).toFixed(2) : 0;
+  const diagGstAmt = bt?.isDiag
+    ? +(diagFee * GST_RATES.diagnostics).toFixed(2)
+    : 0;
 
+  const homeCollectionFree2 =
+    bt?.isDiag && form.bookingType === "diagnostic_home"
+      ? resolveHomeCollectionFree(form.subCoverage)
+      : false;
   const rawHomeColFee2 = labDetail?.homeCollectionFee ?? 0;
-  const homeColFree2 = form.subCoverage?.homeSampleCollectionFree === true;
   const homeColFeeToCharge2 =
     form.bookingType === "diagnostic_home"
-      ? homeColFree2
+      ? homeCollectionFree2
         ? 0
         : rawHomeColFee2
       : 0;
-  const homeColGstAmt2 = +(homeColFeeToCharge2 * 0.05).toFixed(2);
+  const homeColGstAmt2 = +(
+    homeColFeeToCharge2 * GST_RATES.homeCollection
+  ).toFixed(2);
 
-  const consultGstRate = form.bookingType === "doctor_online" ? 0.05 : 0.0;
-  const transportGstRate = 0.05;
-  const caGstRate = 0.18;
-
+  const consultGstRate = consultResolved.gstRate ?? 0;
   const consultGstAmt = bt?.needsDoctor
     ? +(consultFee * consultGstRate).toFixed(2)
     : 0;
   const transportGstAmt = bt?.needsTransport
-    ? +(transportFee * transportGstRate).toFixed(2)
+    ? +(transportFee * GST_RATES.transport).toFixed(2)
     : 0;
   const caGstAmt =
-    bt?.needsCare && !caResolved.isFree ? +(caFee * caGstRate).toFixed(2) : 0;
+    bt?.needsCare && !caResolved.isFree
+      ? +(caFee * GST_RATES.careAssistant).toFixed(2)
+      : 0;
 
   const subtotal =
     consultFee + transportFee + caFee + diagFee + homeColFeeToCharge2;
   const totalGst =
     consultGstAmt + transportGstAmt + caGstAmt + diagGstAmt + homeColGstAmt2;
   const total = +(subtotal + totalGst).toFixed(2);
+
   const consultTypeLabel =
     CONSULT_TYPES.find((c) => c.value === form.consultationType)?.label ||
     "In-Person";
@@ -4299,7 +4695,7 @@ function StepReview({
     caTier
       ? {
           l: "Care duration",
-          v: `${caTier.label} (${caTier.hours}${caTier.maxHours ? `–${caTier.maxHours}` : "+"} hrs)`,
+          v: `${caTier.label} (${caTier.hours}${caTier.maxHours ? `–${caTier.maxHours}` : "+"}  hrs)`,
         }
       : null,
     form.labName ? { l: "Lab", v: form.labName } : null,
@@ -4313,12 +4709,14 @@ function StepReview({
       ? { l: "Return trip", v: "Yes — included" }
       : null,
     {
-      l: "Payment method",
-      v: PAYMENT_METHODS.find((p) => p.value === form.paymentMethod)?.label,
+      l: "Payment",
+      v: getPaymentMethods(form.bookingType).find(
+        (p) => p.value === form.paymentMethod,
+      )?.label,
     },
     form.couponCode ? { l: "Coupon code", v: form.couponCode } : null,
     form.subCoverage?.consultationFree && form.consultationType !== "homeVisit"
-      ? { l: "Sub benefit", v: "Consultation FREE" }
+      ? { l: "Sub benefit", v: "Consultation FREE · 0% GST" }
       : null,
     form.subCoverage?.careAssistantFree
       ? { l: "Sub benefit", v: "Care Assistant FREE" }
@@ -4343,6 +4741,7 @@ function StepReview({
           Double-check everything before confirming.
         </p>
       </div>
+
       <div
         className="flex items-center gap-2.5 p-3 rounded-2xl"
         style={{ background: bt?.bg || "var(--base-200)" }}
@@ -4368,6 +4767,7 @@ function StepReview({
           </p>
         </div>
       </div>
+
       <div className="rounded-2xl border border-base-300">
         {summaryItems.map((item, i) => (
           <div
@@ -4395,13 +4795,14 @@ function StepReview({
           </div>
         ))}
       </div>
+
       <div className="rounded-2xl border border-primary/20 bg-primary/5">
         <div className="px-3 py-2 border-b border-primary/15">
           <p
             className="text-[10px] font-black uppercase tracking-widest text-primary"
             style={PP}
           >
-            Estimated Charges
+            Estimated Charges (incl. GST)
           </p>
         </div>
         <div className="p-3 space-y-1">
@@ -4412,11 +4813,12 @@ function StepReview({
                 value={consultFee > 0 ? fmt(consultFee) : "FREE"}
                 isFree={consultResolved.isFree}
                 freeReason={consultResolved.reason}
+                gstRate={consultResolved.isFree ? null : consultGstRate}
                 note={
                   form.bookingType === "follow_up"
-                    ? "Follow-up fee — independent of subscription"
+                    ? "Follow-up fee — independent of subscription · 0% GST"
                     : form.consultationType === "homeVisit"
-                      ? "Home visit — subscription quota not applicable"
+                      ? "Home visit — subscription quota not applicable · 5% GST"
                       : undefined
                 }
               />
@@ -4434,9 +4836,10 @@ function StepReview({
               <FareRow
                 label="Transport"
                 value={fmt(transportFee)}
+                gstRate={GST_RATES.transport}
                 note={
                   transportEstimate
-                    ? `${transportEstimate.distanceKm} km · ₹${tResolved.ratePerKm}/km${transportEstimate.kmRateSource === "subscription" ? " (plan)" : ""}`
+                    ? `${transportEstimate.distanceKm} km · ₹${tResolved.ratePerKm}/km${transportEstimate.kmRateSource === "subscription" ? " (plan)" : " (default)"} · base ₹50`
                     : undefined
                 }
               />
@@ -4453,8 +4856,28 @@ function StepReview({
             <>
               <FareRow
                 label="Diagnostic Tests / Packages"
-                value={fmt(diagFee)}
-                note={`${(form.selectedTests?.length || 0) + (form.selectedPackages?.length || 0)} item(s)${form.subCoverage?.diagnosticsDiscountPercent > 0 ? ` · ${form.subCoverage.diagnosticsDiscountPercent}% sub discount applied` : ""}`}
+                value={
+                  (form.subCoverage?.diagnosticsDiscountPercent || 0) > 0 ? (
+                    <span className="flex items-center gap-1.5 justify-end">
+                      <span className="line-through text-[10px] opacity-50 font-medium">
+                        {fmt(
+                          Math.round(
+                            diagFee /
+                              (1 -
+                                (form.subCoverage?.diagnosticsDiscountPercent ||
+                                  0) /
+                                  100),
+                          ),
+                        )}
+                      </span>
+                      <span>{fmt(diagFee)}</span>
+                    </span>
+                  ) : (
+                    fmt(diagFee)
+                  )
+                }
+                gstRate={GST_RATES.diagnostics}
+                note={`${(form.selectedTests?.length || 0) + (form.selectedPackages?.length || 0)} item(s)${(form.subCoverage?.diagnosticsDiscountPercent || 0) > 0 ? ` · ${form.subCoverage?.diagnosticsDiscountPercent || 0}% sub discount applied` : ""}`}
               />
               {diagGstAmt > 0 && (
                 <FareRow
@@ -4465,6 +4888,32 @@ function StepReview({
               )}
             </>
           )}
+          {bt?.isDiag && form.bookingType === "diagnostic_home" && (
+            <FareRow
+              label="Home Collection Fee"
+              value={homeCollectionFree2 ? "WAIVED" : fmt(homeColFeeToCharge2)}
+              isFree={homeCollectionFree2}
+              freeReason={
+                homeCollectionFree2
+                  ? form.subCoverage?.homeCollectionUnlimited
+                    ? "Unlimited — included in plan"
+                    : `${form.subCoverage?.homeCollectionRemaining ?? ""} use(s) remaining`
+                  : undefined
+              }
+              gstRate={
+                homeCollectionFree2
+                  ? null
+                  : homeColFeeToCharge2 > 0
+                    ? GST_RATES.homeCollection
+                    : null
+              }
+              note={
+                !homeCollectionFree2
+                  ? "Lab technician visit charge · 5% GST"
+                  : undefined
+              }
+            />
+          )}
           {bt?.needsCare && (
             <>
               <FareRow
@@ -4474,39 +4923,40 @@ function StepReview({
                     ? "FREE"
                     : caResolved.fee > 0
                       ? fmt(caResolved.fee)
-                      : caResolved.serverResolved
-                        ? "Confirmed at booking"
-                        : fmt(caTier?.price || 0)
+                      : fmt(caTier?.price || 0)
                 }
                 note={
                   caTier
-                    ? `${caTier.label} · ${caTier.hours}${caTier.maxHours ? `–${caTier.maxHours}` : "+"} hrs`
+                    ? `${caTier.label} · ${caTier.hours}${caTier.maxHours ? `–${caTier.maxHours}` : "+"}  hrs`
                     : undefined
                 }
                 isFree={caResolved.isFree}
                 freeReason={caResolved.reason}
+                gstRate={caResolved.isFree ? null : GST_RATES.careAssistant}
               />
               {!caResolved.isFree &&
                 !caResolved.isCustomPlan &&
-                !caResolved.serverResolved &&
                 caGstAmt > 0 && (
                   <FareRow label="GST on CA (18%)" value={fmt(caGstAmt)} sub />
                 )}
             </>
           )}
-          {totalGst > 0 &&
-            !caResolved.isCustomPlan &&
-            !caResolved.serverResolved && (
-              <div className="border-t border-primary/15 pt-1">
-                <FareRow label="Total GST" value={fmt(totalGst)} sub />
-              </div>
-            )}
+          {totalGst > 0 && !caResolved.isCustomPlan && (
+            <div className="border-t border-primary/15 pt-1">
+              <FareRow
+                label="Total GST"
+                value={fmt(totalGst)}
+                sub
+                note="Mixed rates: transport 5%, CA 18%, diagnostics 5%"
+              />
+            </div>
+          )}
           <div className="border-t border-primary/20 pt-1 mt-1">
             <FareRow
               label={
-                caResolved.isCustomPlan || caResolved.serverResolved
+                caResolved.isCustomPlan
                   ? "Partial Estimated Total"
-                  : "Estimated Total"
+                  : "Total (incl. GST)"
               }
               value={fmt(total)}
               bold
@@ -4554,6 +5004,7 @@ function StepReview({
           )}
         </div>
       </div>
+
       {form.paymentMethod === "Razorpay" && total > 0 && (
         <div className="flex items-start gap-2 p-3 rounded-xl border border-primary/20 bg-primary/5">
           <CreditCard size={13} className="text-primary flex-shrink-0 mt-0.5" />
@@ -4562,14 +5013,13 @@ function StepReview({
             style={PP}
           >
             Clicking <strong>Confirm</strong> opens Razorpay. Complete payment
-            to finalise booking.
+            to finalise booking. Amount includes all GST.
           </p>
         </div>
       )}
       {form.paymentMethod === "Razorpay" &&
         total === 0 &&
-        !caResolved.isCustomPlan &&
-        !caResolved.serverResolved && (
+        !caResolved.isCustomPlan && (
           <div className="flex items-start gap-2 p-3 rounded-xl border border-success/30 bg-success/5">
             <ShieldCheck
               size={13}
@@ -4584,6 +5034,7 @@ function StepReview({
             </p>
           </div>
         )}
+
       {error && (
         <motion.div
           initial={{ opacity: 0, y: 6 }}
@@ -4596,6 +5047,7 @@ function StepReview({
           </p>
         </motion.div>
       )}
+
       {isLoading && (
         <div className="flex items-center gap-3 p-3 rounded-xl border border-primary/20 bg-primary/5">
           <Loader2
@@ -4612,6 +5064,7 @@ function StepReview({
           </div>
         </div>
       )}
+
       {paymentState === "failed" && pendingPaymentBooking && (
         <motion.div
           initial={{ opacity: 0, y: 6 }}
@@ -4642,6 +5095,7 @@ function StepReview({
           </div>
         </motion.div>
       )}
+
       <div className="space-y-1 text-center">
         <p
           className="text-[9px] text-base-content/30 leading-relaxed"
@@ -4684,7 +5138,8 @@ function StepReview({
           </a>
         </p>
         <p className="text-[9px] text-base-content/20" style={PP}>
-          Payments secured by Razorpay · Data protected under IT Act 2000
+          Payments secured by Razorpay · Data protected under IT Act 2000 · GST
+          compliant
         </p>
       </div>
     </div>
@@ -4788,7 +5243,7 @@ function BookingSuccess({ data, onReset, router }) {
           {totalCharged != null && (
             <div className="flex justify-between border-t border-base-300 pt-2 mt-1 gap-2">
               <span className="font-black" style={PP}>
-                Total Charged
+                Total Charged (incl. GST)
               </span>
               <span className="font-black text-primary" style={PP}>
                 {totalCharged === 0 ? "FREE (subscription)" : fmt(totalCharged)}
@@ -4802,6 +5257,9 @@ function BookingSuccess({ data, onReset, router }) {
           src="https://ik.imagekit.io/4wja0s7p9/%20favicon.ico"
           alt="Likeson"
           className="w-5 h-5 rounded object-contain flex-shrink-0"
+          onError={(e) => {
+            e.currentTarget.style.display = "none";
+          }}
         />
         <div className="min-w-0">
           <p
@@ -4858,8 +5316,8 @@ const INIT = {
   labCity: "",
   labId: "",
   labName: "",
-  selectedTests: [],
-  selectedPackages: [],
+  selectedTests: [], // array of test slugs (not _ids)
+  selectedPackages: [], // array of package slugs (not _ids)
   reportDeliveryMode: "Digital (App)",
   patientIsSelf: true,
   patientName: "",
@@ -4893,14 +5351,6 @@ export default function BookingSystem() {
   const searchParams = useSearchParams();
 
   const subBenefitLabs = useSelector(selectSubBenefitLabs);
-  const subLabsDiscountPercent = useSelector(selectSubLabsDiscountPercent);
-  const subHomeCollection = useSelector(
-    (state) => state.booking.subscriptionBenefitLabs?.homeCollection ?? null,
-  );
-  const [pendingPaymentBooking, setPendingPaymentBooking] = useState(null);
-  const [isRetryingPayment, setIsRetryingPayment] = useState(false);
-
-  const consultationCoverage = useSelector(selectConsultationCoverage);
   const { isLoaded } = useGoogleMaps();
 
   const hospitals = useSelector(selectHospitals);
@@ -4925,6 +5375,7 @@ export default function BookingSystem() {
   const createStatus = useSelector(selectCreateBookingStatus);
   const platformPricing = useSelector(selectPlatformPricing);
   const platformPricingLoading = useSelector(selectPlatformPricingLoading);
+  const consultationCoverage = useSelector(selectConsultationCoverage);
   const subBenefitConsultations = useSelector(selectSubBenefitConsultations);
   const subBenefitCareAssistant = useSelector(selectSubBenefitCareAssistant);
   const allDoctors = useSelector(selectAllDoctors);
@@ -4943,6 +5394,11 @@ export default function BookingSystem() {
   const [paymentError, setPaymentError] = useState(null);
   const [caTiers, setCaTiers] = useState([]);
   const [caTiersLoading, setCaTiersLoading] = useState(true);
+  const [pendingPaymentBooking, setPendingPaymentBooking] = useState(null);
+  const [isRetryingPayment, setIsRetryingPayment] = useState(false);
+
+  // Ref to track estimatedDiagFee — prevents infinite setState loop
+  const prevDiagFeeRef = useRef(0);
 
   useEffect(() => {
     dispatch(fetchWalletDetails());
@@ -4974,6 +5430,7 @@ export default function BookingSystem() {
   useEffect(() => {
     dispatch(fetchPlatformPricing());
   }, [dispatch]);
+
   useEffect(() => {
     dispatch(fetchSubscriptionBenefitConsultations());
     dispatch(fetchSubscriptionBenefitCareAssistant());
@@ -4984,6 +5441,7 @@ export default function BookingSystem() {
       }),
     );
   }, [dispatch]);
+
   useEffect(() => {
     if (!form.consultationType) return;
     dispatch(
@@ -5005,12 +5463,17 @@ export default function BookingSystem() {
         patientWeight: p.patientWeight,
         emergencyContact: p.emergencyContact,
         subCoverage: p.subCoverage,
-        paymentMethod: p.paymentMethod || "Razorpay",
+        // Reset paymentMethod to Razorpay when switching to doctor_online (Cash not allowed)
+        paymentMethod:
+          btValue === "doctor_online"
+            ? "Razorpay"
+            : p.paymentMethod || "Razorpay",
         bookingType: btValue,
         durationHours: null,
         estimatedDiagFee: 0,
       }));
       setErrors({});
+      prevDiagFeeRef.current = 0;
       dispatch(resetHospitals());
       dispatch(resetDoctorsByHospital());
       dispatch(resetHospitalAvailability());
@@ -5021,6 +5484,7 @@ export default function BookingSystem() {
     [form.bookingType, dispatch],
   );
 
+  // Sync subscription coverage into form.subCoverage
   useEffect(() => {
     if (
       !consultationCoverage &&
@@ -5029,6 +5493,7 @@ export default function BookingSystem() {
       !subBenefitLabs
     )
       return;
+
     setForm((p) => {
       const consult = subBenefitConsultations?.consultations ?? null;
       const care = subBenefitCareAssistant?.careAssistant ?? null;
@@ -5067,11 +5532,23 @@ export default function BookingSystem() {
         coverage.homeSampleCollectionFree ??
         false;
       const homeColUsed = labsBenefit?.homeCollection?.homeVisitsUsed ?? 0;
+      // homeCollectionRemaining from /subscription-benefits/labs route
+      // null = unlimited, 0 = exhausted, >0 = remaining
       const homeColRemaining =
         labsBenefit?.homeCollection?.homeVisitsRemaining ?? null;
       const homeColUnlimited =
         labsBenefit?.homeCollection?.homeVisitUnlimited ?? false;
       const homeColLimit = labsBenefit?.homeCollection?.homeVisitLimit ?? null;
+
+      const homeCollectionAvailable =
+        labsBenefit?.homeCollection?.homeCollectionAvailable ?? null;
+      const homeCollectionUsedOnce =
+        labsBenefit?.homeCollection?.homeCollectionUsedOnce ?? false;
+      // homeSampleCollectionFree kept as fallback for older API responses
+      const homeSampleCollectionFree =
+        homeCollectionAvailable != null
+          ? homeCollectionAvailable === true
+          : homeColIncluded && !homeCollectionUsedOnce;
 
       return {
         ...p,
@@ -5100,17 +5577,27 @@ export default function BookingSystem() {
             subBenefitCareAssistant?.careAssistant?.allTiers ?? null,
           isCustomPlan,
           diagnosticsDiscountPercent: diagDiscount,
-          homeSampleCollectionFree:
-            homeColIncluded &&
-            (homeColUnlimited ||
-              (homeColRemaining !== null && homeColRemaining > 0)),
+          // homeSampleCollectionFree: true = this period's free use still available
+          homeSampleCollectionFree,
+          homeCollectionAvailable:
+            homeCollectionAvailable ?? homeSampleCollectionFree,
+          homeCollectionUsedOnce,
           homeCollectionUsed: homeColUsed,
           homeCollectionRemaining: homeColRemaining,
-          homeCollectionUnlimited: homeColUnlimited,
+          homeCollectionUnlimited: false, // always one-time — never unlimited
           homeCollectionLimit: homeColLimit,
           homeCollectionIncluded: homeColIncluded,
           labsMessage: labsBenefit?.labs?.message ?? null,
           homeCollectionMessage: labsBenefit?.homeCollection?.message ?? null,
+          // fixedTier / planType used for video-gate logic in resolveConsultFee
+          fixedTier:
+            subBenefitConsultations?.fixedTier ??
+            subBenefitCareAssistant?.fixedTier ??
+            null,
+          planType:
+            subBenefitConsultations?.planType ??
+            subBenefitCareAssistant?.planType ??
+            "fixed",
           kmRateSource: p.subCoverage?.kmRateSource ?? null,
           ratePerKm: p.subCoverage?.ratePerKm ?? null,
         },
@@ -5123,6 +5610,7 @@ export default function BookingSystem() {
     subBenefitLabs,
   ]);
 
+  // Sync care assistant tiers from platform pricing
   useEffect(() => {
     setCaTiersLoading(platformPricingLoading);
     if (!platformPricing) return;
@@ -5151,6 +5639,7 @@ export default function BookingSystem() {
     if (!platformPricingLoading) setCaTiersLoading(false);
   }, [platformPricing, platformPricingLoading]);
 
+  // Sync km rate from transport estimate into subCoverage
   useEffect(() => {
     if (!transportEstimate) return;
     setForm((p) => ({
@@ -5163,61 +5652,62 @@ export default function BookingSystem() {
     }));
   }, [transportEstimate]);
 
-  // FIX: estimatedDiagFee calculation — use module-level normalizeId, guard empty IDs
+  // estimatedDiagFee calculation
+  // CRITICAL: uses test/package SLUG (not _id) to match — backend looks up by slug
+  // Uses ref to avoid infinite setState loop — only updates when value changes
   useEffect(() => {
     const bt = BOOKING_TYPES.find((b) => b.value === form.bookingType);
     if (!bt?.isDiag || !labDetail) {
-      if (form.estimatedDiagFee !== 0) set("estimatedDiagFee", 0);
+      if (prevDiagFeeRef.current !== 0) {
+        prevDiagFeeRef.current = 0;
+        setForm((p) => ({ ...p, estimatedDiagFee: 0 }));
+      }
       return;
     }
     const hasSelections =
-      form.selectedTests?.length || form.selectedPackages?.length;
+      (form.selectedTests?.length ?? 0) > 0 ||
+      (form.selectedPackages?.length ?? 0) > 0;
     if (!hasSelections) {
-      if (form.estimatedDiagFee !== 0) set("estimatedDiagFee", 0);
+      if (prevDiagFeeRef.current !== 0) {
+        prevDiagFeeRef.current = 0;
+        setForm((p) => ({ ...p, estimatedDiagFee: 0 }));
+      }
       return;
     }
     const discPct = form.subCoverage?.diagnosticsDiscountPercent || 0;
     let total = 0;
-
-    for (const testId of form.selectedTests || []) {
-      if (!testId) continue;
-      // FIX: use module-level normalizeId
-      const t = labDetail.labTests?.find((lt, idx) => {
-        const byCode = lt.testCode && lt.testCode === testId;
-        const byId = lt._id && normalizeId(lt._id) === testId;
-        return byCode || byId;
-      });
+    for (const testSlug of form.selectedTests || []) {
+      if (!testSlug) continue;
+      // Match by slug — same as backend: lab.labTests.find(lt => lt.slug === slug)
+      const t = labDetail.labTests?.find((lt) => lt.slug === testSlug);
       if (t) {
         const base = t.discountedPrice ?? t.mrpPrice ?? 0;
         total += discPct > 0 ? +(base * (1 - discPct / 100)) : base;
       }
     }
-
-    // REPLACE WITH:
-    for (const pkgId of (form.selectedPackages || []).filter(Boolean)) {
-      const p = labDetail.labPackages?.find((lp, pidx) => {
-        const byCode = lp.packageCode && lp.packageCode === pkgId;
-        const byId =
-          lp._id && (lp._id?.toString?.() ?? String(lp._id)) === pkgId;
-        return byCode || byId;
-      });
-      if (p) {
-        const base = p.mrpPrice ?? 0;
-        // Apply sub discount to packages same as tests
+    for (const pkgSlug of form.selectedPackages || []) {
+      if (!pkgSlug) continue;
+      // Match by slug — same as backend: lab.labPackages.find(lp => lp.slug === slug)
+      const pkg = labDetail.labPackages?.find((lp) => lp.slug === pkgSlug);
+      if (pkg) {
+        const base = pkg.mrpPrice ?? 0;
         total += discPct > 0 ? +(base * (1 - discPct / 100)) : base;
       }
     }
-
     const computed = +total.toFixed(2);
-    if (computed !== form.estimatedDiagFee) set("estimatedDiagFee", computed);
+    if (computed !== prevDiagFeeRef.current) {
+      prevDiagFeeRef.current = computed;
+      setForm((p) => ({ ...p, estimatedDiagFee: computed }));
+    }
   }, [
     form.bookingType,
-    form.selectedTests,
-    form.selectedPackages,
+    JSON.stringify(form.selectedTests),
+    JSON.stringify(form.selectedPackages),
     form.subCoverage?.diagnosticsDiscountPercent,
     labDetail,
   ]);
 
+  // Reset step if booking type changes and current step is invalid
   useEffect(() => {
     if (!form.bookingType) return;
     const newStepIds = getSteps(form.bookingType).map((s) => s.id);
@@ -5227,6 +5717,7 @@ export default function BookingSystem() {
     }
   }, [form.bookingType]);
 
+  // Force video consultation type for doctor_online
   useEffect(() => {
     if (form.bookingType === "doctor_online")
       setForm((p) => ({ ...p, consultationType: "video" }));
@@ -5237,6 +5728,7 @@ export default function BookingSystem() {
       setForm((p) => ({ ...p, consultationType: "inPerson" }));
   }, [form.bookingType, form.consultationType]);
 
+  // Handle URL query params for pre-filling
   useEffect(() => {
     const doctorId = searchParams.get("doctor"),
       hospitalId = searchParams.get("hospital"),
@@ -5277,8 +5769,8 @@ export default function BookingSystem() {
     const labId = searchParams.get("lab");
     if (!labId) return;
     dispatch(fetchLabById({ labId })).then((res) => {
-      if (res.payload?.labName)
-        setForm((p) => ({ ...p, labName: res.payload.labName }));
+      const lab = res?.payload?.data || res?.payload;
+      if (lab?.labName) setForm((p) => ({ ...p, labName: lab.labName }));
     });
   }, [searchParams, dispatch]);
 
@@ -5289,6 +5781,7 @@ export default function BookingSystem() {
     [dispatch],
   );
 
+  // On booking success — refresh subscription benefits
   useEffect(() => {
     if (createStatus === "succeeded" && createData) {
       if (createData.subscriptionCoverage) {
@@ -5321,7 +5814,7 @@ export default function BookingSystem() {
     }
   }, [createStatus, createData, dispatch, form.consultationType]);
 
-  // ─── ACTIONS ─────────────────────────────────────────────────────────────
+  // ─── ACTIONS ──────────────────────────────────────────────────────────────
 
   const onLoadHospitals = useCallback(
     (city) => dispatch(fetchHospitals({ city })),
@@ -5345,17 +5838,16 @@ export default function BookingSystem() {
       ),
     [dispatch, form.bookingType],
   );
+
   const onLoadLabDetail = useCallback(
     async (labId) => {
       const result = await dispatch(fetchLabById({ labId }));
-      // If payload wraps in {data: lab}, store may need unwrapping
-      // This is handled by the slice — no change needed here
-      // But set labName from result if available
       const lab = result?.payload?.data || result?.payload;
       if (lab?.labName) set("labName", lab.labName);
     },
     [dispatch, set],
   );
+
   const onCheckHospAvail = useCallback(() => {
     if (form.hospitalId && form.scheduledAt)
       dispatch(
@@ -5365,6 +5857,7 @@ export default function BookingSystem() {
         }),
       );
   }, [dispatch, form.hospitalId, form.scheduledAt]);
+
   const onCheckDocAvail = useCallback(() => {
     if (form.doctorId && form.scheduledAt)
       dispatch(
@@ -5375,6 +5868,7 @@ export default function BookingSystem() {
         }),
       );
   }, [dispatch, form.doctorId, form.scheduledAt, form.hospitalId]);
+
   const onCheckFollowUp = useCallback(
     (doctorId, hospitalId) => {
       if (doctorId)
@@ -5382,6 +5876,7 @@ export default function BookingSystem() {
     },
     [dispatch],
   );
+
   const onResetHospAvail = useCallback(
     () => dispatch(resetHospitalAvailability()),
     [dispatch],
@@ -5441,6 +5936,7 @@ export default function BookingSystem() {
     bloodGroup: form.patientBloodGroup || undefined,
     weight: form.patientWeight || undefined,
   });
+
   const toISOSafe = (dtLocal) => {
     if (!dtLocal) return undefined;
     const raw = String(dtLocal).trim();
@@ -5449,6 +5945,7 @@ export default function BookingSystem() {
     const normalized = raw.length === 16 ? `${raw}:00` : raw;
     return new Date(normalized).toISOString();
   };
+
   const mkCommon = () => ({
     patientInfo: mkPatient(),
     scheduledAt: toISOSafe(form.scheduledAt),
@@ -5474,7 +5971,6 @@ export default function BookingSystem() {
           !form.selectedPackages?.length
         )
           e.selectedTests = "Select at least one test or package";
-
         if (bt?.needsDoctor && !form.doctorId)
           e.doctorId = "Select a doctor to continue";
         if (
@@ -5514,7 +6010,7 @@ export default function BookingSystem() {
       setErrors(e);
       return Object.keys(e).length === 0;
     },
-    [form, followUpCheck, labDetail],
+    [form, followUpCheck],
   );
 
   // ─── SUBMIT ───────────────────────────────────────────────────────────────
@@ -5567,23 +6063,9 @@ export default function BookingSystem() {
           createDiagnosticCenter({
             ...common,
             labId: form.labId,
-tests: (form.selectedTests || [])
-  .map(String)
-  .filter(
-    (id) =>
-      id &&
-      !id.startsWith("idx-") &&
-      !id.startsWith("test-idx-") &&
-      !id.startsWith("pkg-idx-"),
-  ),
-            packages: (form.selectedPackages || [])
-              .map(String)
-              .filter(
-                (id) =>
-                  id &&
-                  !id.startsWith("pkg-idx-") &&
-                  !id.startsWith("test-idx-"),
-              ),
+            // Send slugs — backend looks up by slug in lab.labTests/labPackages
+            tests: (form.selectedTests || []).filter(Boolean),
+            packages: (form.selectedPackages || []).filter(Boolean),
             reportDeliveryMode: form.reportDeliveryMode,
           }),
         ),
@@ -5592,22 +6074,9 @@ tests: (form.selectedTests || [])
           createDiagnosticHome({
             ...common,
             labId: form.labId,
-            tests: (form.selectedTests || [])
-              .map(String)
-              .filter(
-                (id) =>
-                  id &&
-                  !id.startsWith("test-idx-") &&
-                  !id.startsWith("pkg-idx-"),
-              ),
-            packages: (form.selectedPackages || [])
-              .map(String)
-              .filter(
-                (id) =>
-                  id &&
-                  !id.startsWith("pkg-idx-") &&
-                  !id.startsWith("test-idx-"),
-              ),
+            // Send slugs — backend looks up by slug
+            tests: (form.selectedTests || []).filter(Boolean),
+            packages: (form.selectedPackages || []).filter(Boolean),
             patientLocation: mkLoc(form.patientLocation),
             reportDeliveryMode: form.reportDeliveryMode,
           }),
@@ -5646,6 +6115,17 @@ tests: (form.selectedTests || [])
     const walletSplit = bookingData.walletSplit;
     const fareBreakdown = bookingData.fareBreakdown;
     const totalAmount = fareBreakdown?.totalAmount ?? 0;
+
+    const refreshAfterSuccess = () => {
+      dispatch(
+        checkConsultationCoverage({
+          consultationType: form.consultationType || "inPerson",
+        }),
+      );
+      dispatch(fetchSubscriptionBenefitConsultations());
+      dispatch(fetchSubscriptionBenefitCareAssistant());
+      dispatch(fetchSubscriptionBenefitLabs());
+    };
 
     if (form.paymentMethod === "Razorpay") {
       if (!razorpayOrder && totalAmount > 0) {
@@ -5688,14 +6168,7 @@ tests: (form.selectedTests || [])
             setPaymentState("done");
             setPendingPaymentBooking(null);
             toast.success("Payment verified! Booking confirmed.");
-            dispatch(
-              checkConsultationCoverage({
-                consultationType: form.consultationType || "inPerson",
-              }),
-            );
-            dispatch(fetchSubscriptionBenefitConsultations());
-            dispatch(fetchSubscriptionBenefitCareAssistant());
-            dispatch(fetchSubscriptionBenefitLabs());
+            refreshAfterSuccess();
             setSuccess(true);
           },
           onFailure: async (msg) => {
@@ -5711,7 +6184,7 @@ tests: (form.selectedTests || [])
                   }),
                 );
               } catch (e) {
-                console.error("[handleSubmit] deleteFailedBooking failed:", e);
+                console.error(e);
               }
             }
             setPaymentError(
@@ -5722,14 +6195,7 @@ tests: (form.selectedTests || [])
         return;
       }
       setPendingPaymentBooking(null);
-      dispatch(
-        checkConsultationCoverage({
-          consultationType: form.consultationType || "inPerson",
-        }),
-      );
-      dispatch(fetchSubscriptionBenefitConsultations());
-      dispatch(fetchSubscriptionBenefitCareAssistant());
-      dispatch(fetchSubscriptionBenefitLabs());
+      refreshAfterSuccess();
       setSuccess(true);
       return;
     }
@@ -5761,14 +6227,7 @@ tests: (form.selectedTests || [])
           onSuccess: () => {
             setPaymentState("done");
             setPendingPaymentBooking(null);
-            dispatch(
-              checkConsultationCoverage({
-                consultationType: form.consultationType || "inPerson",
-              }),
-            );
-            dispatch(fetchSubscriptionBenefitConsultations());
-            dispatch(fetchSubscriptionBenefitCareAssistant());
-            dispatch(fetchSubscriptionBenefitLabs());
+            refreshAfterSuccess();
             dispatch(fetchWalletDetails());
             setSuccess(true);
           },
@@ -5785,10 +6244,7 @@ tests: (form.selectedTests || [])
                   }),
                 );
               } catch (e) {
-                console.error(
-                  "[handleSubmit] deleteFailedBooking (wallet split) failed:",
-                  e,
-                );
+                console.error(e);
               }
             }
             dispatch(fetchWalletDetails());
@@ -5802,14 +6258,7 @@ tests: (form.selectedTests || [])
         return;
       }
       setPendingPaymentBooking(null);
-      dispatch(
-        checkConsultationCoverage({
-          consultationType: form.consultationType || "inPerson",
-        }),
-      );
-      dispatch(fetchSubscriptionBenefitConsultations());
-      dispatch(fetchSubscriptionBenefitCareAssistant());
-      dispatch(fetchSubscriptionBenefitLabs());
+      refreshAfterSuccess();
       dispatch(fetchWalletDetails());
       setSuccess(true);
       return;
@@ -5817,15 +6266,10 @@ tests: (form.selectedTests || [])
 
     if (form.paymentMethod === "Cash") {
       setPendingPaymentBooking(null);
-      dispatch(
-        checkConsultationCoverage({
-          consultationType: form.consultationType || "inPerson",
-        }),
-      );
+      refreshAfterSuccess();
       setSuccess(true);
       return;
     }
-
     setSuccess(true);
   }, [dispatch, form]);
 
@@ -5870,10 +6314,7 @@ tests: (form.selectedTests || [])
               }),
             );
           } catch (e) {
-            console.error(
-              "[handleRetryPayment] deleteFailedBooking failed:",
-              e,
-            );
+            console.error(e);
           }
         }
         setPaymentError(
@@ -5945,6 +6386,7 @@ tests: (form.selectedTests || [])
     setPaymentState("idle");
     setPaymentError(null);
     setPendingPaymentBooking(null);
+    prevDiagFeeRef.current = 0;
     dispatch(resetHospitals());
     dispatch(resetDoctorsByHospital());
     dispatch(resetHospitalAvailability());
@@ -6078,7 +6520,8 @@ tests: (form.selectedTests || [])
               className="text-[9px] text-base-content/35 font-semibold"
               style={PP}
             >
-              ABDM-compliant · Verified Doctors · Secure Payments
+              ABDM-compliant · Verified Doctors · Secure Payments · GST
+              Compliant
             </p>
           </div>
           {!success && (

@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 const { Schema } = mongoose;
 
 /**
@@ -32,13 +32,13 @@ const customPlanOptionSchema = new Schema(
       type: String,
       required: true,
       enum: [
-        'consultations',        // doctor consultations quota
-        'transport',            // discounted rides quota
-        'diagnostics',          // diagnostic discount %
-        'pharmacy',             // pharmacy discount % (max 25%)
-        'careAssistant',        // care-assistant visits quota
-        'homeSampleCollection', // home sample collection add-on
-        'prioritySupport',      // upgrade to Priority support tier
+        "consultations", // doctor consultations quota
+        "transport", // discounted rides quota
+        "diagnostics", // diagnostic discount %
+        "pharmacy", // pharmacy discount % (max 25%)
+        "careAssistant", // care-assistant visits quota
+        "homeSampleCollection", // home sample collection add-on
+        "prioritySupport", // upgrade to Priority support tier
       ],
     },
 
@@ -75,10 +75,8 @@ const customPlanOptionSchema = new Schema(
      * Default 0 = first tier.
      */
     careAssistantTierIndex: { type: Number, default: 0, min: 0 },
-
-   
   },
-  { _id: false }
+  { _id: false },
 );
 
 // ─── Main Schema ──────────────────────────────────────────────────────────────
@@ -112,8 +110,8 @@ const subscriptionPlanSchema = new Schema(
     planType: {
       type: String,
       required: true,
-      enum: ['fixed', 'custom'],
-      default: 'fixed',
+      enum: ["fixed", "custom"],
+      default: "fixed",
     },
 
     /**
@@ -122,15 +120,15 @@ const subscriptionPlanSchema = new Schema(
      */
     fixedTier: {
       type: String,
-    enum: [
-  'Basic Care',
-  'Standard Care',   // ← ADD THIS
-  'Premium Care',
-  'Family Care',
-  'Pregnant Women Care',
-  "NRI's Care",
-  null,
-],
+      enum: [
+        "Basic Care",
+        "Standard Care", // ← ADD THIS
+        "Premium Care",
+        "Family Care",
+        "Pregnant Women Care",
+        "NRI's Care",
+        null,
+      ],
       default: null,
     },
 
@@ -146,7 +144,7 @@ const subscriptionPlanSchema = new Schema(
      */
     createdByCustomer: {
       type: Schema.Types.ObjectId,
-      ref: 'User',
+      ref: "User",
       default: null,
       index: true,
     },
@@ -169,41 +167,42 @@ const subscriptionPlanSchema = new Schema(
        */
       billingCycle: {
         type: String,
-        enum: ['monthly', 'till_delivery', 'custom'],
-        default: 'monthly',
+        enum: ["monthly", "till_delivery", "custom"],
+        default: "monthly",
       },
 
       /** Display string for pricing cards: "/month", "Till Delivery" */
-      billingLabel: { type: String, default: '/month' },
+      billingLabel: { type: String, default: "/month" },
 
-      currency: { type: String, default: 'INR' },
+      currency: { type: String, default: "INR" },
     },
 
     // ── Free Trial ────────────────────────────────────────────────────────────
     freeTrial: {
-      enabled:               { type: Boolean, default: true },
-      durationDays:          { type: Number, default: 7 },
+      enabled: { type: Boolean, default: true },
+      durationDays: { type: Number, default: 7 },
       requiresPaymentMethod: { type: Boolean, default: false },
     },
 
     // ── Membership ────────────────────────────────────────────────────────────
     membership: {
       /** 1 for most; 4 for Family Care; 2 for NRI's Care */
-      maxMembers:     { type: Number, default: 1, min: 1 },
+      maxMembers: { type: Number, default: 1, min: 1 },
       membershipNote: { type: String },
     },
 
-    // ── Doctor Consultations ──────────────────────────────────────────────────
-  consultations: {
-  freePerMonth:  { type: Number, default: 0 },
-  modes: {
-    inPerson: { type: Boolean, default: true },
-    video:    { type: Boolean, default: false },
-    home:     { type: Boolean, default: false },
-  },
-  specialNote: { type: String },
-},
-  
+    // ── Doctor Consultations ──────────────────────────────────────────────────────
+    consultations: {
+      freePerMonth: { type: Number, default: 0 },
+      modes: {
+        inPerson: { type: Boolean, default: true },
+        video: { type: Boolean, default: false },
+        home: { type: Boolean, default: false },
+      },
+ 
+      onlineModeAllowed: { type: Boolean, default: false },
+      specialNote: { type: String },
+    },
 
     // ── Pharmacy ──────────────────────────────────────────────────────────────
     pharmacy: {
@@ -211,9 +210,9 @@ const subscriptionPlanSchema = new Schema(
        * Discount % on online medicine purchases (online booking only).
        * Admin hard-cap: max 25% (enforced via PlatformPricingConfig.caps.pharmacyDiscountMax).
        */
-      discountMin:  { type: Number, default: 0, min: 0, max: 25 },
-      discountMax:  { type: Number, default: 0, min: 0, max: 25 },
-      isFlat:       { type: Boolean, default: false },
+      discountMin: { type: Number, default: 0, min: 0, max: 25 },
+      discountMax: { type: Number, default: 0, min: 0, max: 25 },
+      isFlat: { type: Boolean, default: false },
 
       /** For NRI plan: "International standard e-Prescription" */
       specialOffer: { type: String },
@@ -224,7 +223,7 @@ const subscriptionPlanSchema = new Schema(
        * 10       = Basic Care
        */
       deliveryChargePerOrder: { type: Number, default: null },
-      deliveryNote:           { type: String },
+      deliveryNote: { type: String },
     },
 
     // ── Diagnostics ───────────────────────────────────────────────────────────
@@ -233,8 +232,8 @@ const subscriptionPlanSchema = new Schema(
        * Discount % on diagnostic bookings.
        * Admin hard-cap: max 25% (PlatformPricingConfig.caps.diagnosticsDiscountMax).
        */
-      discountPercent:      { type: Number, default: 0, min: 0, max: 25 },
-      isApplicable:         { type: Boolean, default: true },
+      discountPercent: { type: Number, default: 0, min: 0, max: 25 },
+      isApplicable: { type: Boolean, default: true },
       homeSampleCollection: { type: Boolean, default: false },
     },
 
@@ -244,7 +243,7 @@ const subscriptionPlanSchema = new Schema(
        * Per-km rate (₹) for this plan.
        * null = not applicable (NRI plan).
        */
-      ratePerKm:    { type: Number, default: null },
+      ratePerKm: { type: Number, default: null },
       isApplicable: { type: Boolean, default: true },
 
       /** Rides included/discounted per month (used for custom plan quotas) */
@@ -257,13 +256,13 @@ const subscriptionPlanSchema = new Schema(
        * included: true = standard service price applies (not free)
        * isDedicated: true = Pregnant Women Care — exclusive dedicated assistant
        */
-      included:      { type: Boolean, default: false },
-      isDedicated:   { type: Boolean, default: false },
+      included: { type: Boolean, default: false },
+      isDedicated: { type: Boolean, default: false },
 
       serviceType: {
         type: String,
-        enum: ['None', 'Standard', 'Dedicated'],
-        default: 'None',
+        enum: ["None", "Standard", "Dedicated"],
+        default: "None",
       },
 
       /** Visits/month for custom plan */
@@ -278,19 +277,19 @@ const subscriptionPlanSchema = new Schema(
 
       tier: {
         type: String,
-        enum: ['Standard', 'Priority', 'Dedicated Executive', '24/7 Service'],
-        default: 'Standard',
+        enum: ["Standard", "Priority", "Dedicated Executive", "24/7 Service"],
+        default: "Standard",
       },
     },
 
     // ── Feature Flags ─────────────────────────────────────────────────────────
     features: {
-      noHiddenCharges:       { type: Boolean, default: true },
-      monthlyHealthSummary:  { type: Boolean, default: false },
+      noHiddenCharges: { type: Boolean, default: true },
+      monthlyHealthSummary: { type: Boolean, default: false },
       noCancellationCharges: { type: Boolean, default: false },
-      autoRefillReminders:   { type: Boolean, default: false },
-      digitalReportAccess:   { type: Boolean, default: false },
-      additionalFeatures:    [{ type: String }],
+      autoRefillReminders: { type: Boolean, default: false },
+      digitalReportAccess: { type: Boolean, default: false },
+      additionalFeatures: [{ type: String }],
     },
 
     // ── Custom Plan Option Blocks ─────────────────────────────────────────────
@@ -301,63 +300,51 @@ const subscriptionPlanSchema = new Schema(
      * creation time so future admin price changes don't mutate old plans.
      */
     customOptions: {
-      type:    [customPlanOptionSchema],
+      type: [customPlanOptionSchema],
       default: undefined,
     },
 
     // ── UI / Display ──────────────────────────────────────────────────────────
-    idealFor:     { type: String },
+    idealFor: { type: String },
     displayOrder: { type: Number, default: 0 },
-    isFeatured:   { type: Boolean, default: false },
-    badgeLabel:   { type: String },
+    isFeatured: { type: Boolean, default: false },
+    badgeLabel: { type: String },
 
     // ── Audit ─────────────────────────────────────────────────────────────────
-    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
-    updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    createdBy: { type: Schema.Types.ObjectId, ref: "User" },
+    updatedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   {
     timestamps: true,
-    toJSON:   { virtuals: true },
+    toJSON: { virtuals: true },
     toObject: { virtuals: true },
-  }
+  },
 );
 
 // ─── Virtual: human-readable price label ─────────────────────────────────────
-subscriptionPlanSchema.virtual('priceLabel').get(function () {
-  if (this.pricing.billingCycle === 'till_delivery')
+subscriptionPlanSchema.virtual("priceLabel").get(function () {
+  if (this.pricing.billingCycle === "till_delivery")
     return `₹${this.pricing.monthly} Till Delivery`;
   return `₹${this.pricing.monthly}/month`;
 });
 
 // ─── Pre-save: recompute custom plan total from option lineTotals ─────────────
-subscriptionPlanSchema.pre('save', async function () {
-
+subscriptionPlanSchema.pre("save", async function () {
   if (
-    this.planType === 'custom' &&
+    this.planType === "custom" &&
     Array.isArray(this.customOptions) &&
     this.customOptions.length > 0
   ) {
-
     this.customOptions.forEach((opt) => {
-
-      const packageBasedOptions = [
-        'transport',
-        'diagnostics',
-        'pharmacy',
-      ];
+      const packageBasedOptions = ["transport", "diagnostics", "pharmacy"];
 
       // ─────────────────────────────────────
       // PACKAGE-BASED OPTIONS
       // DO NOT MULTIPLY
       // ─────────────────────────────────────
 
-      if (
-        packageBasedOptions.includes(opt.optionKey)
-      ) {
-
-        opt.lineTotal = +Number(
-          opt.unitPrice || 0
-        ).toFixed(2);
+      if (packageBasedOptions.includes(opt.optionKey)) {
+        opt.lineTotal = +Number(opt.unitPrice || 0).toFixed(2);
 
         return;
       }
@@ -366,17 +353,9 @@ subscriptionPlanSchema.pre('save', async function () {
       // BOOLEAN ADDONS
       // ─────────────────────────────────────
 
-      if (
-        [
-          'homeSampleCollection',
-          'prioritySupport',
-        ].includes(opt.optionKey)
-      ) {
-
+      if (["homeSampleCollection", "prioritySupport"].includes(opt.optionKey)) {
         opt.lineTotal =
-          Number(opt.quantity) > 0
-            ? +Number(opt.unitPrice || 0).toFixed(2)
-            : 0;
+          Number(opt.quantity) > 0 ? +Number(opt.unitPrice || 0).toFixed(2) : 0;
 
         return;
       }
@@ -388,28 +367,23 @@ subscriptionPlanSchema.pre('save', async function () {
       // ─────────────────────────────────────
 
       opt.lineTotal = +(
-        Number(opt.quantity || 0) *
-        Number(opt.unitPrice || 0)
+        Number(opt.quantity || 0) * Number(opt.unitPrice || 0)
       ).toFixed(2);
-
     });
 
     // ─────────────────────────────────────
     // TOTAL MONTHLY
     // ─────────────────────────────────────
 
-    const total = this.customOptions.reduce(
-      (sum, opt) => {
-        return sum + Number(opt.lineTotal || 0);
-      },
-      0
-    );
+    const total = this.customOptions.reduce((sum, opt) => {
+      return sum + Number(opt.lineTotal || 0);
+    }, 0);
 
     this.pricing.monthly = +total.toFixed(2);
 
-    this.pricing.billingCycle = 'custom';
+    this.pricing.billingCycle = "custom";
 
-    this.pricing.billingLabel = '/month';
+    this.pricing.billingLabel = "/month";
 
     this.visibleToCustomerOnly = true;
   }
@@ -420,5 +394,8 @@ subscriptionPlanSchema.index({ planType: 1, isActive: 1, displayOrder: 1 });
 subscriptionPlanSchema.index({ fixedTier: 1 });
 subscriptionPlanSchema.index({ createdByCustomer: 1, planType: 1 });
 
-const SubscriptionPlan = mongoose.model('SubscriptionPlan', subscriptionPlanSchema);
+const SubscriptionPlan = mongoose.model(
+  "SubscriptionPlan",
+  subscriptionPlanSchema,
+);
 export default SubscriptionPlan;

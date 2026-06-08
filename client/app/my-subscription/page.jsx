@@ -9,7 +9,8 @@ import {
   BadgeCheck, RefreshCw, X, Clock, ChevronDown,
   Gift, CreditCard, AlertCircle, ArrowRight,
   Zap, Activity, Calendar, TrendingUp, Info,
-  BarChart3, Sparkles, HelpCircle, CheckCircle2, ShoppingBag
+  BarChart3, Sparkles, HelpCircle, CheckCircle2, ShoppingBag,
+  UserPlus, Trash2, Mail, Heart, User2, UserMinus, Phone
 } from "lucide-react";
 
 import {
@@ -22,6 +23,8 @@ import {
   verifyTrialConversion,
   optimisticToggleAutoRenew,
   clearTrialOrder,
+  addFamilyMember,
+  removeFamilyMember,
   selectMySubscription,
   selectMySubIsActive,
   selectMySubIsOnTrial,
@@ -39,6 +42,9 @@ import {
   selectTrialOrder,
   selectTrialConvertLoading,
   selectTrialVerifyConvertLoading,
+  selectMySubMembers,
+  selectMySubIsShared,
+  selectMySubPrimaryHolder,
 } from "@/store/slices/subscriptionSlice";
 import BackButton from "../../components/BackButton";
 
@@ -78,7 +84,6 @@ const TIER_THEMES = {
   },
 };
 
-// Icon map separate — used by getTierTheme callers
 const TIER_ICONS = {
   "Basic Care": Shield,
   "Standard Care": Activity,
@@ -123,7 +128,7 @@ function StructuralPattern({ id, name }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UTILITY: RAZORPAY GATEWAY LOADER
+// RAZORPAY GATEWAY LOADER
 // ─────────────────────────────────────────────────────────────────────────────
 function callRazorpayGateway() {
   return new Promise((resolve) => {
@@ -143,7 +148,6 @@ function callRazorpayGateway() {
 function PremiumConfirmModal({ isOpen, title, text, actionText = "Confirm", cancelText = "Dismiss", onProceed, onDismiss, variant = "primary" }) {
   if (!isOpen) return null;
 
-  // variant: "primary" | "error" | "warning"
   const iconBg    = variant === "error" ? "bg-error/10"   : variant === "warning" ? "bg-warning/10"   : "bg-primary/10";
   const iconColor = variant === "error" ? "text-error"    : variant === "warning" ? "text-warning"    : "text-primary";
   const btnClass  = variant === "error" ? "btn btn-error" : variant === "warning" ? "btn btn-warning" : "btn btn-primary";
@@ -151,7 +155,7 @@ function PremiumConfirmModal({ isOpen, title, text, actionText = "Confirm", canc
   return (
     <div className="fixed inset-0 z-[600] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-base-content/40 backdrop-blur-md" onClick={onDismiss} />
-      <div className="relative   bg-base-200 border border-base-300 w-full max-w-md rounded-xl p-6 shadow-depth-lg space-y-5 animate-in fade-in zoom-in-95 duration-200">
+      <div className="relative bg-base-200 border border-base-300 w-full max-w-md rounded-xl p-6 shadow-depth-lg space-y-5 animate-in fade-in zoom-in-95 duration-200">
         <div className="flex items-start gap-4">
           <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${iconBg}`}>
             <AlertCircle size={22} className={iconColor} />
@@ -197,15 +201,14 @@ function LiveSubscriptionHeroCard({ activeSub, theme, IconEngine, residualDays, 
   const architectureMode     = activeSub.planType === "custom";
 
   return (
-    <div className="card overflow-hidden border border-base-300 shadow-depth   relative">
-      {/* Banner — gradient is dynamic/theme-based, unavoidable inline */}
+    <div className="card overflow-hidden border border-base-300 shadow-depth relative">
       <div className="relative p-6 text-white overflow-hidden" style={{ background: theme.gradient }}>
         <StructuralPattern id={theme.patternId} name={canonicalName} />
 
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-3 flex-1">
             <div className="flex flex-wrap gap-2 items-center">
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider  /20 backdrop-blur-md text-white border border-white/10">
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-white/20 backdrop-blur-md text-white border border-white/10">
                 {activeSub.status === "Trial" ? <Gift size={11} /> : <BadgeCheck size={11} />}
                 {activeSub.status === "Trial" ? "Evaluation Cycle" : "Authorized Coverage"}
               </span>
@@ -217,14 +220,14 @@ function LiveSubscriptionHeroCard({ activeSub, theme, IconEngine, residualDays, 
               )}
 
               {activeSub.autoRenew && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider  /10 text-white">
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-white/10 text-white">
                   <RefreshCw size={10} /> Auto-Renew Enabled
                 </span>
               )}
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl  /15 backdrop-blur-md border border-white/10 flex items-center justify-center flex-shrink-0">
+              <div className="w-12 h-12 rounded-xl bg-white/15 backdrop-blur-md border border-white/10 flex items-center justify-center flex-shrink-0">
                 <IconEngine size={24} className="text-white" />
               </div>
               <div className="space-y-0.5">
@@ -244,7 +247,6 @@ function LiveSubscriptionHeroCard({ activeSub, theme, IconEngine, residualDays, 
         </div>
       </div>
 
-      {/* Metrics */}
       <div className="p-6 space-y-6 bg-base-100">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <StructuralMetricField
@@ -268,7 +270,6 @@ function LiveSubscriptionHeroCard({ activeSub, theme, IconEngine, residualDays, 
           />
         </div>
 
-        {/* Progress bar */}
         <div className="space-y-2">
           <div className="flex justify-between items-center text-xs">
             <span className="text-base-content/50 font-medium flex items-center gap-1">
@@ -282,7 +283,6 @@ function LiveSubscriptionHeroCard({ activeSub, theme, IconEngine, residualDays, 
               animate={{ width: `${progressRate}%` }}
               transition={{ duration: 1.2, ease: "easeOut" }}
               className={`progress-bar-fill ${thresholdReached ? "bg-error" : ""}`}
-              /* gradient fill only when not alert — gradient is theme-dynamic */
               style={thresholdReached ? {} : { background: theme.gradient }}
             />
           </div>
@@ -295,8 +295,7 @@ function LiveSubscriptionHeroCard({ activeSub, theme, IconEngine, residualDays, 
         </div>
       </div>
 
-      {/* Benefits */}
-      <div className="p-6 border-t border-base-300   bg-base-200">
+      <div className="p-6 border-t border-base-300 bg-base-200">
         <h4 className="text-xs font-black tracking-widest text-base-content/40 uppercase mb-4">Contractual Care Benefits Blueprint</h4>
 
         {architectureMode && activeSub.plan?.customOptions?.length > 0 ? (
@@ -324,7 +323,7 @@ function LiveSubscriptionHeroCard({ activeSub, theme, IconEngine, residualDays, 
               { icon: Home,        tag: "Domiciliary Diagnostic Collection", text: activeSub.plan?.diagnostics?.homeSampleCollection ? "Home Access Vector Active" : "Clinical Site Operations Only" },
             ].map((benefit, idx) => (
               <div key={idx} className="flex items-start gap-3 p-3 rounded-lg bg-base-200 border border-base-300">
-                <div className="p-1.5 rounded-md   bg-base-200 border border-base-300 flex-shrink-0 text-primary">
+                <div className="p-1.5 rounded-md bg-base-200 border border-base-300 flex-shrink-0 text-primary">
                   <benefit.icon size={14} />
                 </div>
                 <div className="space-y-0.5 min-w-0">
@@ -344,21 +343,21 @@ function LiveSubscriptionHeroCard({ activeSub, theme, IconEngine, residualDays, 
 // USAGE TRACKER
 // ─────────────────────────────────────────────────────────────────────────────
 function LiveConsumptionTracker({ subscriptionState }) {
-  const currentUsageMatrix   = subscriptionState.currentMonthUsage;
-  const dynamicLimits        = subscriptionState.limits;
+  const currentUsageMatrix = subscriptionState.currentMonthUsage;
+  const dynamicLimits      = subscriptionState.limits;
   if (!dynamicLimits) return null;
 
   const operationalUsageVector = [
-    { label: "Clinical Consultations",       consumed: currentUsageMatrix?.consultationsUsed ?? 0,    ceiling: dynamicLimits.consultationsPerMonth ?? 0,       icon: Stethoscope },
-    { label: "Laboratory Diagnostic Tests",  consumed: currentUsageMatrix?.labTestsUsed ?? 0,          ceiling: dynamicLimits.labTestsPerMonth ?? 0,             icon: Microscope },
-    { label: "Emergency Logistics Transports",consumed: currentUsageMatrix?.transportRidesUsed ?? 0,   ceiling: dynamicLimits.transportRidesPerMonth ?? null,    icon: Truck },
-    { label: "Assigned Home Care Visits",    consumed: currentUsageMatrix?.careAssistantVisitsUsed ?? 0,ceiling: dynamicLimits.careAssistantVisitsPerMonth ?? null,icon: UserCheck },
+    { label: "Clinical Consultations",        consumed: currentUsageMatrix?.consultationsUsed ?? 0,     ceiling: dynamicLimits.consultationsPerMonth ?? 0,        icon: Stethoscope },
+    { label: "Laboratory Diagnostic Tests",   consumed: currentUsageMatrix?.labTestsUsed ?? 0,           ceiling: dynamicLimits.labTestsPerMonth ?? 0,              icon: Microscope },
+    { label: "Emergency Logistics Transports",consumed: currentUsageMatrix?.transportRidesUsed ?? 0,    ceiling: dynamicLimits.transportRidesPerMonth ?? null,     icon: Truck },
+    { label: "Assigned Home Care Visits",     consumed: currentUsageMatrix?.careAssistantVisitsUsed ?? 0,ceiling: dynamicLimits.careAssistantVisitsPerMonth ?? null, icon: UserCheck },
   ].filter((item) => item.ceiling !== null && item.ceiling > 0);
 
   if (!operationalUsageVector.length) return null;
 
   return (
-    <div className="p-5 rounded-xl border border-base-300   bg-base-200 space-y-4 shadow-sm">
+    <div className="p-5 rounded-xl border border-base-300 bg-base-200 space-y-4 shadow-sm">
       <div className="flex items-center gap-2">
         <BarChart3 size={16} className="text-primary" />
         <h4 className="text-xs font-black uppercase tracking-widest text-base-content/40">Current Quota Ledger Balance</h4>
@@ -404,6 +403,278 @@ function LiveConsumptionTracker({ subscriptionState }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// FAMILY MEMBER MANAGER
+// ─────────────────────────────────────────────────────────────────────────────
+
+const RELATION_OPTIONS = ["Spouse", "Child", "Parent", "Sibling", "Other"];
+
+const RELATION_COLORS = {
+  Spouse:  { bg: "bg-pink-500/10",   text: "text-pink-600",   border: "border-pink-500/20"   },
+  Child:   { bg: "bg-blue-500/10",   text: "text-blue-600",   border: "border-blue-500/20"   },
+  Parent:  { bg: "bg-amber-500/10",  text: "text-amber-600",  border: "border-amber-500/20"  },
+  Sibling: { bg: "bg-violet-500/10", text: "text-violet-600", border: "border-violet-500/20" },
+  Other:   { bg: "bg-base-300/60",   text: "text-base-content/60", border: "border-base-300" },
+};
+
+const RELATION_ICONS = {
+  Spouse:  Heart,
+  Child:   User2,
+  Parent:  Users,
+  Sibling: Users,
+  Other:   UserCheck,
+};
+
+function MemberAvatar({ email, relation }) {
+  const initials = email ? email.slice(0, 2).toUpperCase() : "??";
+  const colors   = RELATION_COLORS[relation] || RELATION_COLORS.Other;
+  return (
+    <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm flex-shrink-0 border ${colors.bg} ${colors.text} ${colors.border}`}>
+      {initials}
+    </div>
+  );
+}
+
+function FamilyMemberCard({ member, onRemove, removeLoading }) {
+  const colors      = RELATION_COLORS[member.relation] || RELATION_COLORS.Other;
+  const RelIcon     = RELATION_ICONS[member.relation]   || UserCheck;
+  const addedDate   = member.addedAt
+    ? new Date(member.addedAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+    : "—";
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, x: -20 }}
+      className="flex items-center gap-3 p-3 rounded-xl border border-base-300 bg-base-100 group"
+    >
+      <MemberAvatar email={member.memberEmail} relation={member.relation} />
+
+      <div className="flex-1 min-w-0 space-y-0.5">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-black text-base-content truncate">{member.memberEmail}</span>
+          {member.memberId && (
+            <span className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded bg-success/10 text-success border border-success/20 uppercase tracking-wide">
+              <BadgeCheck size={9} /> Registered
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md border ${colors.bg} ${colors.text} ${colors.border}`}>
+            <RelIcon size={9} /> {member.relation}
+          </span>
+          <span className="text-[10px] text-base-content/40 font-medium">Added {addedDate}</span>
+        </div>
+      </div>
+
+      <button
+        onClick={() => onRemove(member.memberEmail)}
+        disabled={removeLoading}
+        className="p-2 rounded-lg border border-error/20 bg-error/5 text-error hover:bg-error hover:text-white transition-all opacity-0 group-hover:opacity-100 flex-shrink-0 disabled:opacity-40"
+        title="Remove member"
+      >
+        {removeLoading ? <RefreshCw size={14} className="animate-spin" /> : <UserMinus size={14} />}
+      </button>
+    </motion.div>
+  );
+}
+
+function AddMemberForm({ onAdd, loading, maxMembers, currentCount }) {
+  const [email,    setEmail]    = useState("");
+  const [relation, setRelation] = useState("Spouse");
+  const [error,    setError]    = useState("");
+
+  const slotsLeft = Math.max(0, (maxMembers - 1) - currentCount);
+
+  const handleSubmit = () => {
+    setError("");
+    if (!email.trim()) { setError("Email required."); return; }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) { setError("Invalid email format."); return; }
+    if (slotsLeft <= 0) { setError("Member slot limit reached."); return; }
+    onAdd({ email: email.trim().toLowerCase(), relation });
+    setEmail("");
+    setRelation("Spouse");
+  };
+
+  if (slotsLeft <= 0) return null;
+
+  return (
+    <div className="p-4 rounded-xl border border-primary/20 bg-primary/5 space-y-3">
+      <div className="flex items-center gap-2">
+        <UserPlus size={14} className="text-primary" />
+        <span className="text-xs font-black text-primary uppercase tracking-wider">Add Member Slot</span>
+        <span className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded bg-primary/10 text-primary">{slotsLeft} slot{slotsLeft !== 1 ? "s" : ""} left</span>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-2">
+        <div className="relative">
+          <Mail size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+            placeholder="member@email.com"
+            className="input-field pl-8 text-xs h-9"
+          />
+        </div>
+
+        <select
+          value={relation}
+          onChange={(e) => setRelation(e.target.value)}
+          className="input-field text-xs h-9 pr-6 min-w-[110px]"
+        >
+          {RELATION_OPTIONS.map((r) => (
+            <option key={r} value={r}>{r}</option>
+          ))}
+        </select>
+
+        <button
+          onClick={handleSubmit}
+          disabled={loading}
+          className="btn btn-primary h-9 px-4 text-xs font-bold rounded-lg flex items-center gap-1.5 whitespace-nowrap"
+        >
+          {loading ? <RefreshCw size={13} className="animate-spin" /> : <UserPlus size={13} />}
+          Add
+        </button>
+      </div>
+
+      {error && (
+        <p className="text-xs text-error font-semibold flex items-center gap-1">
+          <AlertCircle size={12} /> {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function FamilyMemberManager({ activeSub, members, subLoading }) {
+  const dispatch = useDispatch();
+  const [removingEmail, setRemovingEmail] = useState(null);
+  const [confirmRemove, setConfirmRemove] = useState(null); // email to confirm
+
+  const maxMembers    = activeSub?.plan?.membership?.maxMembers ?? 1;
+  const isMultiMember = maxMembers > 1;
+
+  const handleAdd = useCallback(async ({ email, relation }) => {
+    await dispatch(addFamilyMember({ email, relation }));
+  }, [dispatch]);
+
+  const handleRemoveConfirm = useCallback((email) => {
+    setConfirmRemove(email);
+  }, []);
+
+  const handleRemoveProceed = useCallback(async () => {
+    if (!confirmRemove) return;
+    setRemovingEmail(confirmRemove);
+    setConfirmRemove(null);
+    await dispatch(removeFamilyMember(confirmRemove));
+    setRemovingEmail(null);
+  }, [dispatch, confirmRemove]);
+
+  // Plan doesn't support members
+  if (!isMultiMember) {
+    return (
+      <div className="p-5 rounded-xl border border-base-300 bg-base-200 space-y-3 shadow-sm">
+        <div className="flex items-center gap-2">
+          <Users size={16} className="text-base-content/40" />
+          <h4 className="text-xs font-black uppercase tracking-widest text-base-content/40">Family Member Registry</h4>
+        </div>
+        <div className="p-4 rounded-lg border border-dashed border-base-300 bg-base-100 text-center space-y-1.5">
+          <Users size={20} className="text-base-content/20 mx-auto" />
+          <p className="text-xs font-bold text-base-content/40">Current plan supports single-member access only.</p>
+          <a href="/subscriptions" className="inline-flex items-center gap-1 text-[11px] font-black text-primary hover:underline mt-1">
+            <Sparkles size={11} /> Upgrade to Family or NRI plan
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  const totalSlots  = maxMembers - 1; // primary doesn't count
+  const usedSlots   = members.length;
+  const slotPercent = totalSlots > 0 ? Math.round((usedSlots / totalSlots) * 100) : 0;
+
+  return (
+    <>
+      <div className="p-5 rounded-xl border border-base-300 bg-base-200 space-y-4 shadow-sm">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Users size={16} className="text-primary" />
+            <h4 className="text-xs font-black uppercase tracking-widest text-base-content/40">Family Member Registry</h4>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-black text-base-content/50">{usedSlots}/{totalSlots} slots used</span>
+            <div className="w-16 h-1.5 rounded-full bg-base-300 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${slotPercent >= 100 ? "bg-error" : "bg-primary"}`}
+                style={{ width: `${slotPercent}%` }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Add form */}
+        <AddMemberForm
+          onAdd={handleAdd}
+          loading={subLoading}
+          maxMembers={maxMembers}
+          currentCount={usedSlots}
+        />
+
+        {/* Member list */}
+        {members.length === 0 ? (
+          <div className="p-6 rounded-xl border border-dashed border-base-300 bg-base-100 text-center space-y-2">
+            <div className="w-10 h-10 rounded-xl bg-base-300/60 flex items-center justify-center mx-auto">
+              <Users size={18} className="text-base-content/30" />
+            </div>
+            <p className="text-xs font-bold text-base-content/40">No members added yet.</p>
+            <p className="text-[11px] text-base-content/30 font-medium">Add family members above to share plan benefits.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 text-[10px] font-bold text-base-content/40 uppercase tracking-wider px-1">
+              <BadgeCheck size={11} /> Active Member Roster
+            </div>
+            <AnimatePresence>
+              {members.map((member) => (
+                <FamilyMemberCard
+                  key={member.memberEmail}
+                  member={member}
+                  onRemove={handleRemoveConfirm}
+                  removeLoading={removingEmail === member.memberEmail}
+                />
+              ))}
+            </AnimatePresence>
+          </div>
+        )}
+
+        {/* Slot summary footer */}
+        <div className="flex items-center gap-2 pt-1 text-[11px] text-base-content/40 font-medium border-t border-base-300">
+          <Info size={11} />
+          <span>Plan supports {maxMembers} total members — you (primary) + {totalSlots} additional slot{totalSlots !== 1 ? "s" : ""}.</span>
+        </div>
+      </div>
+
+      {/* Remove confirm modal */}
+      <PremiumConfirmModal
+        isOpen={!!confirmRemove}
+        title="Remove Family Member?"
+        text={`This will revoke plan access for ${confirmRemove}. They will receive a notification. Access is terminated immediately.`}
+        actionText="Remove Member"
+        cancelText="Cancel"
+        variant="error"
+        onProceed={handleRemoveProceed}
+        onDismiss={() => setConfirmRemove(null)}
+      />
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ACTION PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 function InteractiveActionPanel({ activeSub, executeRenewalToggle, executeCancellation, executeTrialConversion, cancellationLoading, toggleLoading, conversionLoading }) {
@@ -415,7 +686,6 @@ function InteractiveActionPanel({ activeSub, executeRenewalToggle, executeCancel
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {/* Trial conversion */}
         {activeSub.status === "Trial" && (
           <button
             onClick={executeTrialConversion}
@@ -427,13 +697,12 @@ function InteractiveActionPanel({ activeSub, executeRenewalToggle, executeCancel
           </button>
         )}
 
-        {/* Auto-renew toggle */}
         <button
           onClick={executeRenewalToggle}
           disabled={toggleLoading}
           className={`p-4 rounded-lg border text-left flex items-start justify-between gap-4 transition-all ${
             activeSub.autoRenew
-              ? "  bg-base-200 border-primary/30 shadow-sm"
+              ? "bg-base-200 border-primary/30 shadow-sm"
               : "bg-base-100 border-base-300 opacity-70"
           }`}
         >
@@ -451,15 +720,14 @@ function InteractiveActionPanel({ activeSub, executeRenewalToggle, executeCancel
             </div>
           </div>
           <div className={`w-8 h-5 rounded-full relative flex-shrink-0 p-0.5 transition-colors duration-200 ${activeSub.autoRenew ? "bg-primary" : "bg-base-300"}`}>
-            <div className={`w-4 h-4   rounded-full shadow-sm transition-transform duration-200 ${activeSub.autoRenew ? "transform bg-white translate-x-3" : "bg-gray-500"}`} />
+            <div className={`w-4 h-4 rounded-full shadow-sm transition-transform duration-200 ${activeSub.autoRenew ? "transform bg-white translate-x-3" : "bg-gray-500"}`} />
           </div>
         </button>
 
-        {/* Cancellation */}
         <button
           onClick={executeCancellation}
           disabled={cancellationLoading}
-          className="p-4 rounded-lg border border-error/20   bg-base-200 hover:bg-error/5 text-left flex items-start gap-3 transition-all group"
+          className="p-4 rounded-lg border border-error/20 bg-base-200 hover:bg-error/5 text-left flex items-start gap-3 transition-all group"
         >
           <div className="p-2 rounded-md bg-error/10 text-error mt-0.5 group-hover:bg-error group-hover:text-white transition-colors">
             {cancellationLoading ? <RefreshCw size={15} className="animate-spin" /> : <X size={15} />}
@@ -482,17 +750,14 @@ function InteractiveActionPanel({ activeSub, executeRenewalToggle, executeCancel
 // ─────────────────────────────────────────────────────────────────────────────
 // HISTORY LEDGER
 // ─────────────────────────────────────────────────────────────────────────────
-
-// Status → status-dot modifier class
 const STATUS_DOT_CLASS = {
   Active:    "status-dot-success",
   Trial:     "status-dot-warning",
-  Cancelled: "status-dot",          // neutral — no color modifier
+  Cancelled: "status-dot",
   Expired:   "status-dot-error",
   Paused:    "status-dot-info",
 };
 
-// Status → badge modifier class
 const STATUS_BADGE_CLASS = {
   Active:    "badge badge-success",
   Trial:     "badge badge-warning",
@@ -521,7 +786,7 @@ function HistoricLedgerPipeline({ dataset, pagination, activeLoading, triggerPag
 
   return (
     <div className="space-y-3">
-      <div className="overflow-x-auto border border-base-300 rounded-xl   bg-base-200">
+      <div className="overflow-x-auto border border-base-300 rounded-xl bg-base-200">
         <table className="table w-full text-left border-collapse">
           <thead>
             <tr>
@@ -533,11 +798,11 @@ function HistoricLedgerPipeline({ dataset, pagination, activeLoading, triggerPag
           </thead>
           <tbody>
             {dataset.map((entry, index) => {
-              const coreTitle       = entry.plan?.fixedTier || entry.plan?.name || "Standard Level Asset";
-              const SystemIcon      = getTierIcon(coreTitle);
+              const coreTitle          = entry.plan?.fixedTier || entry.plan?.name || "Standard Level Asset";
+              const SystemIcon         = getTierIcon(coreTitle);
               const architectureCustom = entry.planType === "custom";
-              const dotClass        = STATUS_DOT_CLASS[entry.status]  || "status-dot";
-              const badgeClass      = STATUS_BADGE_CLASS[entry.status] || "badge";
+              const dotClass           = STATUS_DOT_CLASS[entry.status]  || "status-dot";
+              const badgeClass         = STATUS_BADGE_CLASS[entry.status] || "badge";
 
               return (
                 <tr key={entry._id || index}>
@@ -583,7 +848,7 @@ function HistoricLedgerPipeline({ dataset, pagination, activeLoading, triggerPag
           <button
             onClick={() => triggerPageChange(Math.max(1, pagination.page - 1))}
             disabled={pagination.page === 1}
-            className="btn btn-sm   bg-base-200 border-base-300 text-xs font-bold px-3 py-1.5 rounded-lg disabled:opacity-40 shadow-sm"
+            className="btn btn-sm bg-base-200 border-base-300 text-xs font-bold px-3 py-1.5 rounded-lg disabled:opacity-40 shadow-sm"
           >
             Previous Channel
           </button>
@@ -591,7 +856,7 @@ function HistoricLedgerPipeline({ dataset, pagination, activeLoading, triggerPag
           <button
             onClick={() => triggerPageChange(Math.min(pagination.pages, pagination.page + 1))}
             disabled={pagination.page === pagination.pages}
-            className="btn btn-sm   bg-base-200 border-base-300 text-xs font-bold px-3 py-1.5 rounded-lg disabled:opacity-40 shadow-sm"
+            className="btn btn-sm bg-base-200 border-base-300 text-xs font-bold px-3 py-1.5 rounded-lg disabled:opacity-40 shadow-sm"
           >
             Next Channel
           </button>
@@ -606,7 +871,7 @@ function HistoricLedgerPipeline({ dataset, pagination, activeLoading, triggerPag
 // ─────────────────────────────────────────────────────────────────────────────
 function DefaultEmptyViewport() {
   return (
-    <div className="border border-base-300 rounded-2xl   bg-base-200 p-12 text-center max-w-xl mx-auto space-y-6 shadow-sm">
+    <div className="border border-base-300 rounded-2xl bg-base-200 p-12 text-center max-w-xl mx-auto space-y-6 shadow-sm">
       <div className="w-16 h-16 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mx-auto shadow-sm">
         <HeartPulse size={32} />
       </div>
@@ -652,19 +917,22 @@ function UIArchitectureSkeleton() {
 export default function MySubscriptionPage() {
   const dispatch = useDispatch();
 
-  const dataCore              = useSelector(selectMySubscription);
-  const statusActive          = useSelector(selectMySubIsActive);
-  const evaluationState       = useSelector(selectMySubIsOnTrial);
-  const autoRenewalLoop       = useSelector(selectMySubAutoRenew);
-  const pipelineLoading       = useSelector(selectMySubLoading);
-  const processingCancellation= useSelector(selectCancelLoading);
+  const dataCore               = useSelector(selectMySubscription);
+  const statusActive           = useSelector(selectMySubIsActive);
+  const evaluationState        = useSelector(selectMySubIsOnTrial);
+  const autoRenewalLoop        = useSelector(selectMySubAutoRenew);
+  const pipelineLoading        = useSelector(selectMySubLoading);
+  const processingCancellation = useSelector(selectCancelLoading);
   const processingRenewalToggle= useSelector(selectToggleAutoRenewLoading);
-  const archiveDataset        = useSelector(selectMyHistory);
-  const archivePagination     = useSelector(selectMyHistoryPagination);
-  const archiveLoading        = useSelector(selectMyHistoryLoading);
-  const checkoutToken         = useSelector(selectTrialOrder);
-  const executingConversion   = useSelector(selectTrialConvertLoading);
-  const executingVerification = useSelector(selectTrialVerifyConvertLoading);
+  const archiveDataset         = useSelector(selectMyHistory);
+  const archivePagination      = useSelector(selectMyHistoryPagination);
+  const archiveLoading         = useSelector(selectMyHistoryLoading);
+  const checkoutToken          = useSelector(selectTrialOrder);
+  const executingConversion    = useSelector(selectTrialConvertLoading);
+  const executingVerification  = useSelector(selectTrialVerifyConvertLoading);
+  const familyMembers          = useSelector(selectMySubMembers);
+  const isShared               = useSelector(selectMySubIsShared);
+  const primaryHolder          = useSelector(selectMySubPrimaryHolder);
 
   const [expandArchive, setExpandArchive] = useState(false);
   const [archivePage,   setArchivePage]   = useState(1);
@@ -702,20 +970,20 @@ export default function MySubscriptionPage() {
       const structuralPaise  = checkoutToken.amount < 100000 ? Math.round(checkoutToken.amount * 100) : Math.round(checkoutToken.amount);
 
       const transactionalParams = {
-        key: GATEWAY_KEY_ID,
-        amount: structuralPaise,
-        currency: checkoutToken.currency || "INR",
-        name: "Likeson Unified Care Platform",
+        key:         GATEWAY_KEY_ID,
+        amount:      structuralPaise,
+        currency:    checkoutToken.currency || "INR",
+        name:        "Likeson Unified Care Platform",
         description: `Authorization Stage Conversion — ${activePlanTitle}`,
-        order_id: checkoutToken.orderId,
-        image: "/logo.png",
+        order_id:    checkoutToken.orderId,
+        image:       "/logo.png",
         handler: async (paymentResponse) => {
           try {
             await dispatch(verifyTrialConversion({
               razorpay_order_id:   paymentResponse.razorpay_order_id,
               razorpay_payment_id: paymentResponse.razorpay_payment_id,
               razorpay_signature:  paymentResponse.razorpay_signature,
-              amount: checkoutToken.amount,
+              amount:              checkoutToken.amount,
             }));
             dispatch(clearTrialOrder());
             dispatch(fetchMySubscription());
@@ -725,8 +993,8 @@ export default function MySubscriptionPage() {
           }
         },
         prefill: { name: "", email: "", contact: "" },
-        theme: { color: layoutTheme.gradient },   // Razorpay API requires hex/color string — keep
-        modal: { ondismiss: () => dispatch(clearTrialOrder()) },
+        theme:   { color: layoutTheme.gradient },
+        modal:   { ondismiss: () => dispatch(clearTrialOrder()) },
       };
 
       const nativeInstance = new window.Razorpay(transactionalParams);
@@ -736,7 +1004,7 @@ export default function MySubscriptionPage() {
       });
       nativeInstance.open();
     })();
-  }, [checkoutToken?.orderId]); 
+  }, [checkoutToken?.orderId]);
 
   // Actions
   const triggerRevocationWorkflow = useCallback(() => {
@@ -781,15 +1049,18 @@ export default function MySubscriptionPage() {
   const closeModal = useCallback(() => setModalState((prev) => ({ ...prev, visible: false })), []);
 
   // Derived values
-  const targetTitle        = dataCore?.plan?.fixedTier || dataCore?.plan?.name || "";
-  const planTheme          = getTierTheme(targetTitle);
-  const AssociatedIcon     = getTierIcon(targetTitle);
-  const structuralExpiry   = dataCore?.expiryDate ? new Date(dataCore.expiryDate) : null;
-  const daysRemaining      = structuralExpiry ? Math.max(0, Math.ceil((structuralExpiry - Date.now()) / 86400000)) : 0;
-  const expiryThreshold    = daysRemaining <= 7 && daysRemaining > 0;
-  const progressRatio      = structuralExpiry ? Math.min(100, Math.max(0, (1 - daysRemaining / 30) * 100)) : 0;
-  const validSubActive     = dataCore && (statusActive || evaluationState);
-  const formattedExpiry    = structuralExpiry ? structuralExpiry.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" }) : "—";
+  const targetTitle      = dataCore?.plan?.fixedTier || dataCore?.plan?.name || "";
+  const planTheme        = getTierTheme(targetTitle);
+  const AssociatedIcon   = getTierIcon(targetTitle);
+  const structuralExpiry = dataCore?.expiryDate ? new Date(dataCore.expiryDate) : null;
+  const daysRemaining    = structuralExpiry ? Math.max(0, Math.ceil((structuralExpiry - Date.now()) / 86400000)) : 0;
+  const expiryThreshold  = daysRemaining <= 7 && daysRemaining > 0;
+  const progressRatio    = structuralExpiry ? Math.min(100, Math.max(0, (1 - daysRemaining / 30) * 100)) : 0;
+  const validSubActive   = dataCore && (statusActive || evaluationState || isShared);
+  const formattedExpiry  = structuralExpiry ? structuralExpiry.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" }) : "—";
+
+  // Show family manager only on multi-member plans that are active
+  const showFamilyManager = validSubActive && (dataCore?.plan?.membership?.maxMembers ?? 1) > 1;
 
   if (pipelineLoading && !dataCore) return <UIArchitectureSkeleton />;
 
@@ -797,7 +1068,8 @@ export default function MySubscriptionPage() {
     <>
       <div className="min-h-screen bg-base-100 font-sans antialiased text-base-content selection:bg-primary/10">
         <div className="max-w-4xl mx-auto px-4 pb-12 pt-3 space-y-8">
-          <BackButton className=" "  />
+          <BackButton className=" " />
+
           {/* Page header */}
           <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-base-300 pb-6">
             <div className="space-y-1">
@@ -806,7 +1078,7 @@ export default function MySubscriptionPage() {
             </div>
 
             {validSubActive && (
-              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-wider   bg-base-200 border border-base-300 shadow-sm">
+              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-wider bg-base-200 border border-base-300 shadow-sm">
                 <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
                 <span className="text-base-content/70">{evaluationState ? "Evaluation Phase" : "Operational Allocation Continuous"}</span>
               </div>
@@ -821,6 +1093,21 @@ export default function MySubscriptionPage() {
               {validSubActive && (
                 <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }} className="space-y-6">
 
+                 {/* Shared plan notice */}
+                  {isShared && primaryHolder && (
+                    <div className="flex items-center gap-3 p-4 rounded-xl border border-info/30 bg-info/5">
+                      <div className="p-2 rounded-lg bg-info/10 text-info flex-shrink-0">
+                        <Users size={16} />
+                      </div>
+                      <div className="space-y-0.5 min-w-0">
+                        <span className="text-xs font-black text-base-content block">Shared Family Plan Access</span>
+                        <p className="text-[11px] text-base-content/50 font-medium">
+                          You are covered under {primaryHolder.name || primaryHolder.email}'s plan. Contact them to manage membership.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   <LiveSubscriptionHeroCard
                     activeSub={dataCore}
                     theme={planTheme}
@@ -833,18 +1120,30 @@ export default function MySubscriptionPage() {
 
                   <LiveConsumptionTracker subscriptionState={dataCore} />
 
-                  <InteractiveActionPanel
-                    activeSub={dataCore}
-                    executeRenewalToggle={triggerRenewalToggleWorkflow}
-                    executeCancellation={triggerRevocationWorkflow}
-                    executeTrialConversion={triggerEvaluationConversion}
-                    cancellationLoading={processingCancellation}
-                    toggleLoading={processingRenewalToggle}
-                    conversionLoading={executingConversion || executingVerification}
-                  />
+                  {/* ── FAMILY MEMBER MANAGER — primary only ── */}
+                  {!isShared && (
+                    <FamilyMemberManager
+                      activeSub={dataCore}
+                      members={familyMembers}
+                      subLoading={pipelineLoading}
+                    />
+                  )}
+
+                  {/* ── ACTION PANEL — primary only ── */}
+                  {!isShared && (
+                    <InteractiveActionPanel
+                      activeSub={dataCore}
+                      executeRenewalToggle={triggerRenewalToggleWorkflow}
+                      executeCancellation={triggerRevocationWorkflow}
+                      executeTrialConversion={triggerEvaluationConversion}
+                      cancellationLoading={processingCancellation}
+                      toggleLoading={processingRenewalToggle}
+                      conversionLoading={executingConversion || executingVerification}
+                    />
+                  )}
 
                   {/* History accordion */}
-                  <div className="border border-base-300 rounded-xl overflow-hidden   bg-base-200 shadow-sm">
+                  <div className="border border-base-300 rounded-xl overflow-hidden bg-base-200 shadow-sm">
                     <button
                       onClick={() => setExpandArchive((prev) => !prev)}
                       aria-expanded={expandArchive}
@@ -857,7 +1156,7 @@ export default function MySubscriptionPage() {
                         <span className="text-sm font-black text-base-content">System Historic Transaction Record Registry</span>
                       </div>
                       {archivePagination.total > 0 && (
-                        <span className="text-[10px] font-black px-2.5 py-1   border border-base-300 text-base-content/60 rounded-md">
+                        <span className="text-[10px] font-black px-2.5 py-1 border border-base-300 text-base-content/60 rounded-md">
                           {archivePagination.total} Logs Verified
                         </span>
                       )}
@@ -888,7 +1187,7 @@ export default function MySubscriptionPage() {
                   <motion.a
                     href="/subscriptions"
                     whileHover={{ y: -2 }}
-                    className="flex items-center justify-between p-5 rounded-xl border border-base-300  hover:border-primary/40 transition-all group shadow-sm"
+                    className="flex items-center justify-between p-5 rounded-xl border border-base-300 hover:border-primary/40 transition-all group shadow-sm"
                   >
                     <div className="flex items-start gap-4">
                       <div className="w-10 h-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center flex-shrink-0 group-hover:bg-primary group-hover:text-white transition-colors">

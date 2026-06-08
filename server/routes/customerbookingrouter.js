@@ -2,7 +2,6 @@ import express from "express";
 import axios from "axios";
 
 import {
-  // Models
   Booking,
   Ride,
   RideTracking,
@@ -10,56 +9,33 @@ import {
   UserSubscription,
   DoctorProfile,
   Hospital,
-
-  // Auth
   protect,
   authorize,
-
-  // Discovery
   getHospitals,
   getDoctorsByHospital,
   checkHospitalOrDoctorAvailability,
   getLabs,
   getLabWithTests,
-
-  // Transport
   resolveKmRate,
   resolveTransportFare,
   autoAssignCareAssistant,
-
-  // Consultation + follow-up
   checkFollowUpEligibility,
   checkSubscriptionConsultation,
   resolveConsultationFee,
-
-  // Mode check
   checkConsultationModeAllowed,
-
-  // Subscription usage
   incrementSubscriptionUsage,
   queueSubscriptionUsage,
   flushAndRecord,
   recoverSubscriptionUsageOnCancel,
-
-  // Care assistant
+  markHomeCollectionUsed,
   checkSubscriptionCareAssistant,
   resolveCareAssistantFee,
-
-  // Diagnostics helper
   checkSubscriptionDiagnostics,
-
-  // Fare
   buildFareBreakdown,
   buildRidePayload,
-
-  // OP
   generateOpNumber,
-
-  // Payment
   createRazorpayOrder,
   processWalletPayment,
-
-  // Refund + misc
   computeRefundAmount,
   resolveServiceComponents,
   hashOtp,
@@ -68,20 +44,14 @@ import {
   createNotification,
   CUSTOMER_BOOKING_TYPES,
   verifyRazorpaySignature,
-
-  // Canonical route
   calculateCanonicalRoute,
   SubscriptionPlan,
-
-  // Email (existing helper kept for backward-compat)
   sendBookingConfirmationEmail,
 } from "./bookingRouterShared.js";
 
 import PlatformPricingConfig from "../models/PlatformPricingConfig.js";
-
 import { provisionConsultationTokens } from "../services/agoraToken.js";
 import { createConsultation } from "../services/consultationService.js";
-// ✉️ EMAIL — sendEmail util + all templates
 import sendEmail from "../utils/sendEmail.js";
 import {
   otpTemplate,
@@ -93,11 +63,24 @@ import {
   buildRefundEmail,
   buildInvoiceHtml,
 } from "../utils/emailTemplates.js";
-
 import User from "../models/User.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ✉️ HELPER: resolve recipient emails for a booking
+// HELPER: processHomeCollectionUsage (Centralized for all payment methods)
+// ─────────────────────────────────────────────────────────────────────────────
+const processHomeCollectionUsage = async (booking) => {
+  if (booking.bookingType === "diagnostic_home" && booking.internalNotes) {
+    const match = String(booking.internalNotes).match(/homeCollectionFreeSubId:([a-f0-9]{24})/i);
+    if (match?.[1]) {
+      await markHomeCollectionUsed(match[1]).catch((e) =>
+        console.error("[processHomeCollectionUsage] failed:", e.message)
+      );
+    }
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: resolve recipient emails
 // ─────────────────────────────────────────────────────────────────────────────
 const resolveBookingEmails = async (booking) => {
   try {
@@ -115,7 +98,6 @@ const resolveBookingEmails = async (booking) => {
         ? Hospital.findById(booking.hospital).select("contact name").lean()
         : null,
     ]);
-
     return {
       customerEmail: customerDoc?.email ?? null,
       customerName: customerDoc?.name ?? "Valued Customer",
@@ -131,8 +113,7 @@ const resolveBookingEmails = async (booking) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 💳 HELPER: wallet payment with auto Razorpay top-up for shortfall
-// Returns { paymentStatus, payments, walletApplied, amountPaid, razorpayOrder, needsRazorpay, razorpayPortion }
+// HELPER: wallet payment with auto Razorpay top-up for shortfall
 // ─────────────────────────────────────────────────────────────────────────────
 const processWalletOrPartialPayment = async ({
   userId,
@@ -150,7 +131,6 @@ const processWalletOrPartialPayment = async ({
       needsRazorpay: false,
     };
   }
-
   const { default: Wallet } = await import("../models/Wallet.js");
   const wallet = await Wallet.findOne({ user: userId });
   const available = wallet
@@ -158,7 +138,6 @@ const processWalletOrPartialPayment = async ({
     : 0;
 
   if (available >= amount) {
-    // Full wallet
     const wp = await processWalletPayment({
       userId,
       amount,
@@ -176,10 +155,8 @@ const processWalletOrPartialPayment = async ({
   }
 
   if (available > 0) {
-    // Partial wallet + Razorpay for remainder
     const walletPortion = available;
     const razorpayPortion = +(amount - walletPortion).toFixed(2);
-
     const wp = await processWalletPayment({
       userId,
       amount: walletPortion,
@@ -197,7 +174,6 @@ const processWalletOrPartialPayment = async ({
         },
       },
     );
-
     return {
       paymentStatus: "payment_pending",
       payments: [wp],
@@ -209,7 +185,6 @@ const processWalletOrPartialPayment = async ({
     };
   }
 
-  // Zero wallet — full Razorpay
   const razorpayOrder = await createRazorpayOrder(amount, bookingCode, {
     customerId: userId.toString(),
   });
@@ -225,8 +200,7 @@ const processWalletOrPartialPayment = async ({
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 🗑️ HELPER: hard-delete booking + rides on payment failure
-// Also refunds wallet if wallet was partially applied
+// HELPER: hard-delete booking + rides on payment failure
 // ─────────────────────────────────────────────────────────────────────────────
 const deleteBookingHard = async (
   bookingId,
@@ -236,16 +210,10 @@ const deleteBookingHard = async (
   try {
     const booking = await Booking.findById(bookingId).lean();
     if (!booking) return;
-
-    // Cancel + delete rides
     if (booking.rides?.length) {
       await Ride.deleteMany({ _id: { $in: booking.rides } });
-      const rideIds = booking.rides;
       await RideTracking.deleteMany({ booking: bookingId });
-      // Also delete tracking docs linked to rides
     }
-
-    // Refund wallet if wallet was deducted
     if (walletApplied > 0 && userId) {
       try {
         const { default: Wallet } = await import("../models/Wallet.js");
@@ -265,8 +233,6 @@ const deleteBookingHard = async (
         );
       }
     }
-
-    // Hard delete booking
     await Booking.findByIdAndDelete(bookingId);
     console.log(
       `[deleteBookingHard] ✅ booking:${bookingId} hard deleted. walletRefunded:${walletApplied}`,
@@ -277,12 +243,7 @@ const deleteBookingHard = async (
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ✉️ HELPER: booking-created email — customer + doctor + hospital
-//   Includes full cash "Pay at Service" amount block when paymentMethod=Cash
-// ─────────────────────────────────────────────────────────────────────────────
-// ─────────────────────────────────────────────────────────────────────────────
-// ✉️ HELPER: booking-created email — customer + doctor + hospital
-//   GST shown per line item AND as combined total. Cash block included.
+// HELPER: booking-created email
 // ─────────────────────────────────────────────────────────────────────────────
 const sendBookingCreatedEmails = async ({
   booking,
@@ -299,20 +260,17 @@ const sendBookingCreatedEmails = async ({
       doctorName,
       hospitalEmail,
     } = await resolveBookingEmails(booking);
-
     const fb = billing || booking.fareBreakdown || {};
     const fmt = (n) =>
       `₹${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 
-    // Per-item GST rates
     const GST = {
-      consultation: 0, // 0% — exempt
-      transport: 0.05, // 5%
-      careAssistant: 0.18, // 18%
-      diagnostic: 0.05, // 5%
-      homeCollection: 0.05, // 5%
+      consultation: 0,
+      transport: 0.05,
+      careAssistant: 0.18,
+      diagnostic: 0.05,
+      homeCollection: 0.05,
     };
-
     const consultGst = +((fb.consultationFee || 0) * GST.consultation).toFixed(
       2,
     );
@@ -359,60 +317,24 @@ const sendBookingCreatedEmails = async ({
         })
       : "—";
 
-    // Build line items table rows with per-item GST
     const lineItemRows = [
       fb.consultationFee > 0
-        ? `
-        <tr style="border-bottom:1px solid #f1f5f9;">
-          <td style="padding:6px 0;color:#374151;font-size:13px;">Consultation Fee</td>
-          <td style="text-align:right;font-size:13px;">${fmt(fb.consultationFee)}</td>
-          <td style="text-align:right;font-size:11px;color:#6b7280;">0% GST (exempt)</td>
-          <td style="text-align:right;font-size:13px;color:#6b7280;">${fmt(consultGst)}</td>
-        </tr>`
+        ? `<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:6px 0;color:#374151;font-size:13px;">Consultation Fee</td><td style="text-align:right;font-size:13px;">${fmt(fb.consultationFee)}</td><td style="text-align:right;font-size:11px;color:#6b7280;">0% GST (exempt)</td><td style="text-align:right;font-size:13px;color:#6b7280;">${fmt(consultGst)}</td></tr>`
         : "",
       fb.transportFee > 0
-        ? `
-        <tr style="border-bottom:1px solid #f1f5f9;">
-          <td style="padding:6px 0;color:#374151;font-size:13px;">Transport</td>
-          <td style="text-align:right;font-size:13px;">${fmt(fb.transportFee)}</td>
-          <td style="text-align:right;font-size:11px;color:#6b7280;">5% GST</td>
-          <td style="text-align:right;font-size:13px;color:#6b7280;">${fmt(transportGst)}</td>
-        </tr>`
+        ? `<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:6px 0;color:#374151;font-size:13px;">Transport</td><td style="text-align:right;font-size:13px;">${fmt(fb.transportFee)}</td><td style="text-align:right;font-size:11px;color:#6b7280;">5% GST</td><td style="text-align:right;font-size:13px;color:#6b7280;">${fmt(transportGst)}</td></tr>`
         : "",
       fb.careAssistantFee > 0
-        ? `
-        <tr style="border-bottom:1px solid #f1f5f9;">
-          <td style="padding:6px 0;color:#374151;font-size:13px;">Care Assistant</td>
-          <td style="text-align:right;font-size:13px;">${fmt(fb.careAssistantFee)}</td>
-          <td style="text-align:right;font-size:11px;color:#6b7280;">18% GST</td>
-          <td style="text-align:right;font-size:13px;color:#6b7280;">${fmt(caGst)}</td>
-        </tr>`
+        ? `<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:6px 0;color:#374151;font-size:13px;">Care Assistant</td><td style="text-align:right;font-size:13px;">${fmt(fb.careAssistantFee)}</td><td style="text-align:right;font-size:11px;color:#6b7280;">18% GST</td><td style="text-align:right;font-size:13px;color:#6b7280;">${fmt(caGst)}</td></tr>`
         : "",
       fb.diagnosticFee > 0
-        ? `
-        <tr style="border-bottom:1px solid #f1f5f9;">
-          <td style="padding:6px 0;color:#374151;font-size:13px;">Diagnostic Tests</td>
-          <td style="text-align:right;font-size:13px;">${fmt(fb.diagnosticFee)}</td>
-          <td style="text-align:right;font-size:11px;color:#6b7280;">5% GST</td>
-          <td style="text-align:right;font-size:13px;color:#6b7280;">${fmt(diagGst)}</td>
-        </tr>`
+        ? `<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:6px 0;color:#374151;font-size:13px;">Diagnostic Tests</td><td style="text-align:right;font-size:13px;">${fmt(fb.diagnosticFee)}</td><td style="text-align:right;font-size:11px;color:#6b7280;">5% GST</td><td style="text-align:right;font-size:13px;color:#6b7280;">${fmt(diagGst)}</td></tr>`
         : "",
       fb.homeCollectionFee > 0
-        ? `
-        <tr style="border-bottom:1px solid #f1f5f9;">
-          <td style="padding:6px 0;color:#374151;font-size:13px;">Home Collection</td>
-          <td style="text-align:right;font-size:13px;">${fmt(fb.homeCollectionFee)}</td>
-          <td style="text-align:right;font-size:11px;color:#6b7280;">5% GST</td>
-          <td style="text-align:right;font-size:13px;color:#6b7280;">${fmt(homeColGst)}</td>
-        </tr>`
+        ? `<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:6px 0;color:#374151;font-size:13px;">Home Collection</td><td style="text-align:right;font-size:13px;">${fmt(fb.homeCollectionFee)}</td><td style="text-align:right;font-size:11px;color:#6b7280;">5% GST</td><td style="text-align:right;font-size:13px;color:#6b7280;">${fmt(homeColGst)}</td></tr>`
         : "",
       (fb.discount || 0) + (fb.couponDiscount || 0) > 0
-        ? `
-        <tr style="border-bottom:1px solid #f1f5f9;">
-          <td style="padding:6px 0;color:#059669;font-size:13px;">Discounts</td>
-          <td style="text-align:right;font-size:13px;color:#059669;">−${fmt((fb.discount || 0) + (fb.couponDiscount || 0))}</td>
-          <td></td><td></td>
-        </tr>`
+        ? `<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:6px 0;color:#059669;font-size:13px;">Discounts</td><td style="text-align:right;font-size:13px;color:#059669;">−${fmt((fb.discount || 0) + (fb.couponDiscount || 0))}</td><td></td><td></td></tr>`
         : "",
     ]
       .filter(Boolean)
@@ -422,40 +344,22 @@ const sendBookingCreatedEmails = async ({
       <div style="margin:16px 0;padding:14px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
         <p style="margin:0 0 8px;font-weight:800;font-size:13px;color:#374151;font-family:sans-serif;">GST Breakdown</p>
         <table width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;color:#374151;border-collapse:collapse;">
-          <thead>
-            <tr style="border-bottom:2px solid #e2e8f0;">
-              <th style="text-align:left;padding:4px 0;color:#6b7280;font-weight:600;">Item</th>
-              <th style="text-align:right;padding:4px 0;color:#6b7280;font-weight:600;">Base</th>
-              <th style="text-align:right;padding:4px 0;color:#6b7280;font-weight:600;">Rate</th>
-              <th style="text-align:right;padding:4px 0;color:#6b7280;font-weight:600;">GST</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${lineItemRows}
-          </tbody>
+          <thead><tr style="border-bottom:2px solid #e2e8f0;"><th style="text-align:left;padding:4px 0;color:#6b7280;font-weight:600;">Item</th><th style="text-align:right;padding:4px 0;color:#6b7280;font-weight:600;">Base</th><th style="text-align:right;padding:4px 0;color:#6b7280;font-weight:600;">Rate</th><th style="text-align:right;padding:4px 0;color:#6b7280;font-weight:600;">GST</th></tr></thead>
+          <tbody>${lineItemRows}</tbody>
           <tfoot>
-            <tr style="border-top:2px solid #e2e8f0;">
-              <td style="padding:8px 0;font-weight:900;font-size:13px;" colspan="2">Total GST</td>
-              <td></td>
-              <td style="text-align:right;font-weight:900;font-size:14px;color:#4f46e5;">${fmt(totalItemGst)}</td>
-            </tr>
-            <tr>
-              <td style="padding:4px 0;font-weight:900;font-size:14px;" colspan="2">Grand Total (incl. GST)</td>
-              <td></td>
-              <td style="text-align:right;font-weight:900;font-size:16px;color:#4f46e5;">${fmt(fb.totalAmount)}</td>
-            </tr>
+            <tr style="border-top:2px solid #e2e8f0;"><td style="padding:8px 0;font-weight:900;font-size:13px;" colspan="2">Total GST</td><td></td><td style="text-align:right;font-weight:900;font-size:14px;color:#4f46e5;">${fmt(totalItemGst)}</td></tr>
+            <tr><td style="padding:4px 0;font-weight:900;font-size:14px;" colspan="2">Grand Total (incl. GST)</td><td></td><td style="text-align:right;font-weight:900;font-size:16px;color:#4f46e5;">${fmt(fb.totalAmount)}</td></tr>
           </tfoot>
         </table>
       </div>`;
 
-    // Cash "Pay at Service" block
     const cashBlock = isCash
       ? `
       <div style="margin:16px 0;padding:14px 16px;background:#fffbeb;border:2px solid #f59e0b;border-radius:10px;">
         <p style="margin:0 0 6px;font-weight:800;font-size:14px;color:#b45309;font-family:sans-serif;">💵 Pay at Service — Amount Due</p>
         <p style="margin:0 0 8px;font-size:26px;font-weight:900;color:#b45309;font-family:sans-serif;">${fmt(amountDue)}</p>
-        <p style="margin:0 0 10px;font-size:11px;color:#d97706;font-family:sans-serif;">Keep this amount ready at time of service. Show this email as reference.</p>
-        <p style="margin:10px 0 0;font-size:10px;color:#d97706;font-family:sans-serif;">Payment collected by assigned provider. No advance payment needed.</p>
+        <p style="margin:0 0 10px;font-size:11px;color:#d97706;font-family:sans-serif;">Keep this amount ready at time of service.</p>
+        <p style="margin:10px 0 0;font-size:10px;color:#d97706;font-family:sans-serif;">Payment collected by assigned provider.</p>
       </div>`
       : "";
 
@@ -468,12 +372,7 @@ const sendBookingCreatedEmails = async ({
       </div>`
         : "";
 
-    const headerNote = `
-      Booking <strong>#${booking.bookingCode}</strong> confirmed for <strong>${scheduledStr}</strong>.<br>
-      Payment Status: <strong style="color:${isPaid ? "#15803d" : isCash ? "#d97706" : "#dc2626"}">${billingPayload.paymentStatus}</strong>
-      ${!isPaid ? ` — Amount Due: <strong>${billingPayload.amountDue}</strong>` : ""}
-    `;
-
+    const headerNote = `Booking <strong>#${booking.bookingCode}</strong> confirmed for <strong>${scheduledStr}</strong>.<br>Payment Status: <strong style="color:${isPaid ? "#15803d" : isCash ? "#d97706" : "#dc2626"}">${billingPayload.paymentStatus}</strong>${!isPaid ? ` — Amount Due: <strong>${billingPayload.amountDue}</strong>` : ""}`;
     const emailHtmlBody = gstSummaryBlock + cashBlock + razorpayBlock;
 
     if (customerEmail) {
@@ -504,19 +403,7 @@ const sendBookingCreatedEmails = async ({
         html: transactionalTemplate({
           header: "NEW APPOINTMENT",
           title: `New booking from ${customerName}`,
-          body: `
-            Booking <strong>#${booking.bookingCode}</strong> scheduled for <strong>${scheduledStr}</strong>.<br><br>
-            Patient: <strong>${booking.patientInfo?.name ?? customerName}</strong><br>
-            Type: <strong>${booking.bookingType?.replace(/_/g, " ")}</strong><br>
-            Consultation Fee: <strong>${fmt(fb.consultationFee)}</strong> (GST 0% — exempt)<br>
-            ${fb.transportFee > 0 ? `Transport: <strong>${fmt(fb.transportFee)}</strong> + GST ${fmt(transportGst)} (5%)<br>` : ""}
-            ${fb.careAssistantFee > 0 ? `Care Assistant: <strong>${fmt(fb.careAssistantFee)}</strong> + GST ${fmt(caGst)} (18%)<br>` : ""}
-            Total GST: <strong>${fmt(totalItemGst)}</strong><br>
-            Grand Total: <strong>${fmt(fb.totalAmount)}</strong><br><br>
-            Payment Method: <strong>${isCash ? "Cash at Service" : paymentMethod}</strong><br>
-            Payment Status: <strong>${billingPayload.paymentStatus}</strong>
-            ${isCash ? `<br><br><strong style="color:#d97706;">⚠ Patient will pay ${fmt(amountDue)} cash at time of service.</strong>` : ""}
-          `,
+          body: `Booking <strong>#${booking.bookingCode}</strong> scheduled for <strong>${scheduledStr}</strong>.<br><br>Patient: <strong>${booking.patientInfo?.name ?? customerName}</strong><br>Type: <strong>${booking.bookingType?.replace(/_/g, " ")}</strong><br>Consultation Fee: <strong>${fmt(fb.consultationFee)}</strong> (GST 0% — exempt)<br>${fb.transportFee > 0 ? `Transport: <strong>${fmt(fb.transportFee)}</strong> + GST ${fmt(transportGst)} (5%)<br>` : ""}${fb.careAssistantFee > 0 ? `Care Assistant: <strong>${fmt(fb.careAssistantFee)}</strong> + GST ${fmt(caGst)} (18%)<br>` : ""}Total GST: <strong>${fmt(totalItemGst)}</strong><br>Grand Total: <strong>${fmt(fb.totalAmount)}</strong><br><br>Payment Method: <strong>${isCash ? "Cash at Service" : paymentMethod}</strong><br>Payment Status: <strong>${billingPayload.paymentStatus}</strong>${isCash ? `<br><br><strong style="color:#d97706;">⚠ Patient will pay ${fmt(amountDue)} cash at time of service.</strong>` : ""}`,
           buttonText: "View Appointment",
           buttonLink: `${process.env.FRONTEND_URL}/doctor/bookings/${booking._id}`,
         }),
@@ -532,20 +419,7 @@ const sendBookingCreatedEmails = async ({
         html: transactionalTemplate({
           header: "NEW PATIENT BOOKING",
           title: `Booking #${booking.bookingCode} received`,
-          body: `
-            Customer: <strong>${customerName}</strong><br>
-            Scheduled: <strong>${scheduledStr}</strong><br>
-            Doctor: <strong>${doctorName}</strong><br>
-            Service: <strong>${booking.bookingType?.replace(/_/g, " ")}</strong><br><br>
-            Consultation: <strong>${fmt(fb.consultationFee)}</strong> (0% GST exempt)<br>
-            ${fb.transportFee > 0 ? `Transport: <strong>${fmt(fb.transportFee)}</strong> + ${fmt(transportGst)} GST<br>` : ""}
-            ${fb.careAssistantFee > 0 ? `Care Assistant: <strong>${fmt(fb.careAssistantFee)}</strong> + ${fmt(caGst)} GST<br>` : ""}
-            ${fb.diagnosticFee > 0 ? `Diagnostics: <strong>${fmt(fb.diagnosticFee)}</strong> + ${fmt(diagGst)} GST<br>` : ""}
-            Total GST: <strong>${fmt(totalItemGst)}</strong><br>
-            Grand Total: <strong>${fmt(fb.totalAmount)}</strong><br><br>
-            Payment: <strong>${billingPayload.paymentStatus}</strong>
-            ${isCash ? `<br><strong style="color:#d97706;">Cash payment of ${fmt(amountDue)} to be collected at service.</strong>` : ""}
-          `,
+          body: `Customer: <strong>${customerName}</strong><br>Scheduled: <strong>${scheduledStr}</strong><br>Doctor: <strong>${doctorName}</strong><br>Service: <strong>${booking.bookingType?.replace(/_/g, " ")}</strong><br><br>Consultation: <strong>${fmt(fb.consultationFee)}</strong> (0% GST exempt)<br>${fb.transportFee > 0 ? `Transport: <strong>${fmt(fb.transportFee)}</strong> + ${fmt(transportGst)} GST<br>` : ""}${fb.careAssistantFee > 0 ? `Care Assistant: <strong>${fmt(fb.careAssistantFee)}</strong> + ${fmt(caGst)} GST<br>` : ""}${fb.diagnosticFee > 0 ? `Diagnostics: <strong>${fmt(fb.diagnosticFee)}</strong> + ${fmt(diagGst)} GST<br>` : ""}Total GST: <strong>${fmt(totalItemGst)}</strong><br>Grand Total: <strong>${fmt(fb.totalAmount)}</strong><br><br>Payment: <strong>${billingPayload.paymentStatus}</strong>${isCash ? `<br><strong style="color:#d97706;">Cash payment of ${fmt(amountDue)} to be collected at service.</strong>` : ""}`,
           buttonText: "View Booking",
           buttonLink: `${process.env.FRONTEND_URL}/hospital/bookings/${booking._id}`,
         }),
@@ -559,7 +433,7 @@ const sendBookingCreatedEmails = async ({
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ✉️ HELPER: payment confirmed email
+// HELPER: payment confirmed email
 // ─────────────────────────────────────────────────────────────────────────────
 const sendPaymentConfirmedEmails = async ({
   booking,
@@ -568,11 +442,9 @@ const sendPaymentConfirmedEmails = async ({
   try {
     const { customerEmail, customerName, doctorEmail, hospitalEmail } =
       await resolveBookingEmails(booking);
-
     const fb = booking.fareBreakdown || {};
     const fmt = (n) =>
       `₹${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
-
     const scheduledStr = booking.scheduledAt
       ? new Date(booking.scheduledAt).toLocaleString("en-IN", {
           dateStyle: "medium",
@@ -580,8 +452,7 @@ const sendPaymentConfirmedEmails = async ({
         })
       : "—";
 
-    // Per-item GST
-    const consultGst = 0; // 0% exempt
+    const consultGst = 0;
     const transportGst = +((fb.transportFee || 0) * 0.05).toFixed(2);
     const caGst = +((fb.careAssistantFee || 0) * 0.18).toFixed(2);
     const diagGst = +((fb.diagnosticFee || 0) * 0.05).toFixed(2);
@@ -595,24 +466,11 @@ const sendPaymentConfirmedEmails = async ({
     ).toFixed(2);
 
     const body = `
-      Payment of <strong>${fmt(fb.totalAmount)}</strong> received via <strong>${paymentMethod}</strong>
-      for booking <strong>#${booking.bookingCode}</strong>.<br><br>
-
-      <table width="100%" cellpadding="0" cellspacing="0"
-             style="font-size:13px;color:#374151;border-collapse:collapse;">
-        <thead>
-          <tr style="border-bottom:2px solid #e2e8f0;">
-            <th style="text-align:left;padding:5px 0;color:#6b7280;font-weight:600;">Item</th>
-            <th style="text-align:right;padding:5px 0;color:#6b7280;font-weight:600;">Base</th>
-            <th style="text-align:right;padding:5px 0;color:#6b7280;font-weight:600;">GST Rate</th>
-            <th style="text-align:right;padding:5px 0;color:#6b7280;font-weight:600;">GST Amt</th>
-          </tr>
-        </thead>
+      Payment of <strong>${fmt(fb.totalAmount)}</strong> received via <strong>${paymentMethod}</strong> for booking <strong>#${booking.bookingCode}</strong>.<br><br>
+      <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;color:#374151;border-collapse:collapse;">
+        <thead><tr style="border-bottom:2px solid #e2e8f0;"><th style="text-align:left;padding:5px 0;color:#6b7280;font-weight:600;">Item</th><th style="text-align:right;padding:5px 0;color:#6b7280;font-weight:600;">Base</th><th style="text-align:right;padding:5px 0;color:#6b7280;font-weight:600;">GST Rate</th><th style="text-align:right;padding:5px 0;color:#6b7280;font-weight:600;">GST Amt</th></tr></thead>
         <tbody>
-          <tr style="border-bottom:1px solid #f1f5f9;">
-            <td style="padding:5px 0;color:#6b7280;">Scheduled At</td>
-            <td style="text-align:right;font-weight:600;" colspan="3">${scheduledStr}</td>
-          </tr>
+          <tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:5px 0;color:#6b7280;">Scheduled At</td><td style="text-align:right;font-weight:600;" colspan="3">${scheduledStr}</td></tr>
           ${fb.consultationFee > 0 ? `<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:5px 0;">Consultation Fee</td><td style="text-align:right;">${fmt(fb.consultationFee)}</td><td style="text-align:right;color:#6b7280;font-size:11px;">0% (exempt)</td><td style="text-align:right;color:#6b7280;">—</td></tr>` : ""}
           ${fb.careAssistantFee > 0 ? `<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:5px 0;">Care Assistant</td><td style="text-align:right;">${fmt(fb.careAssistantFee)}</td><td style="text-align:right;color:#6b7280;font-size:11px;">18%</td><td style="text-align:right;color:#6b7280;">${fmt(caGst)}</td></tr>` : ""}
           ${fb.transportFee > 0 ? `<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:5px 0;">Transport</td><td style="text-align:right;">${fmt(fb.transportFee)}</td><td style="text-align:right;color:#6b7280;font-size:11px;">5%</td><td style="text-align:right;color:#6b7280;">${fmt(transportGst)}</td></tr>` : ""}
@@ -622,22 +480,13 @@ const sendPaymentConfirmedEmails = async ({
           ${fb.walletApplied > 0 ? `<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:5px 0;color:#6b7280;">Wallet Applied</td><td style="text-align:right;color:#059669;" colspan="3">−${fmt(fb.walletApplied)}</td></tr>` : ""}
         </tbody>
         <tfoot>
-          <tr style="border-top:2px solid #e2e8f0;">
-            <td style="padding:6px 0;font-weight:700;color:#374151;">Total GST</td>
-            <td></td><td></td>
-            <td style="text-align:right;font-weight:700;color:#4f46e5;">${fmt(totalItemGst)}</td>
-          </tr>
-          <tr style="border-top:1px solid #e2e8f0;">
-            <td style="padding:8px 0;font-weight:800;font-size:14px;" colspan="3">Grand Total Paid</td>
-            <td style="text-align:right;font-weight:800;font-size:14px;color:#4f46e5;">${fmt(fb.totalAmount)}</td>
-          </tr>
+          <tr style="border-top:2px solid #e2e8f0;"><td style="padding:6px 0;font-weight:700;color:#374151;">Total GST</td><td></td><td></td><td style="text-align:right;font-weight:700;color:#4f46e5;">${fmt(totalItemGst)}</td></tr>
+          <tr style="border-top:1px solid #e2e8f0;"><td style="padding:8px 0;font-weight:800;font-size:14px;" colspan="3">Grand Total Paid</td><td style="text-align:right;font-weight:800;font-size:14px;color:#4f46e5;">${fmt(fb.totalAmount)}</td></tr>
         </tfoot>
       </table>
-
       <div style="margin-top:12px;padding:10px 14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;font-size:12px;color:#15803d;font-family:sans-serif;">
         ✅ Payment confirmed via <strong>${paymentMethod}</strong>. Your booking is fully confirmed.
-      </div>
-    `;
+      </div>`;
 
     if (customerEmail) {
       sendEmail({
@@ -654,7 +503,6 @@ const sendPaymentConfirmedEmails = async ({
         console.error("[email] customer payment-confirmed:", e.message),
       );
     }
-
     if (hospitalEmail) {
       sendEmail({
         email: hospitalEmail,
@@ -676,7 +524,7 @@ const sendPaymentConfirmedEmails = async ({
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ✉️ HELPER: status update email
+// HELPER: status update email
 // ─────────────────────────────────────────────────────────────────────────────
 const sendStatusUpdateEmails = async ({
   booking,
@@ -688,7 +536,6 @@ const sendStatusUpdateEmails = async ({
   try {
     const { customerEmail, customerName, doctorEmail, hospitalEmail } =
       await resolveBookingEmails(booking);
-
     const html = buildStatusUpdateEmail({
       userName: customerName,
       order: { orderId: booking.bookingCode },
@@ -708,7 +555,6 @@ const sendStatusUpdateEmails = async ({
         console.error("[email] customer status-update:", e.message),
       );
     }
-
     if (doctorEmail && ["Confirmed", "Cancelled"].includes(newStatus)) {
       sendEmail({
         email: doctorEmail,
@@ -724,7 +570,6 @@ const sendStatusUpdateEmails = async ({
         console.error("[email] doctor status-update:", e.message),
       );
     }
-
     if (
       hospitalEmail &&
       ["Confirmed", "Cancelled", "Delivered"].includes(newStatus)
@@ -749,7 +594,7 @@ const sendStatusUpdateEmails = async ({
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ✉️ HELPER: cancellation + refund emails
+// HELPER: cancellation + refund emails
 // ─────────────────────────────────────────────────────────────────────────────
 const sendCancellationEmails = async ({
   booking,
@@ -759,7 +604,6 @@ const sendCancellationEmails = async ({
   try {
     const { customerEmail, customerName, doctorEmail, hospitalEmail } =
       await resolveBookingEmails(booking);
-
     const fmt = (n) =>
       `₹${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 
@@ -774,7 +618,6 @@ const sendCancellationEmails = async ({
           newStatus: "Cancelled",
         }),
       }).catch((e) => console.error("[email] customer cancel:", e.message));
-
       if (refundAmount > 0) {
         sendEmail({
           email: customerEmail,
@@ -792,7 +635,6 @@ const sendCancellationEmails = async ({
         }).catch((e) => console.error("[email] customer refund:", e.message));
       }
     }
-
     if (doctorEmail) {
       sendEmail({
         email: doctorEmail,
@@ -806,7 +648,6 @@ const sendCancellationEmails = async ({
         }),
       }).catch((e) => console.error("[email] doctor cancel:", e.message));
     }
-
     if (hospitalEmail) {
       sendEmail({
         email: hospitalEmail,
@@ -834,32 +675,24 @@ const router = express.Router();
 router.get("/hospitals", protect, async (req, res) => {
   try {
     const { city, hospitalType } = req.query;
-
     const queryFilter = {};
     if (city) queryFilter["address.city"] = city;
     if (hospitalType) queryFilter.hospitalType = hospitalType;
-
     const hospitals = await Hospital.find(queryFilter)
       .populate({
         path: "linkedDoctors",
         model: "DoctorProfile",
         select:
           "user specialization qualifications experienceYears profilePhotoUrl rating fees weeklyAvailability consultationTypes isOnline primaryHospital",
-        populate: {
-          path: "user",
-          model: "User",
-          select: "name email phone",
-        },
+        populate: { path: "user", model: "User", select: "name email phone" },
       })
       .exec();
-
     res.json({ success: true, count: hospitals.length, data: hospitals });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// GET /doctors — all doctors, used for online consultation picker + general search
 router.get("/doctors", protect, async (req, res) => {
   try {
     const {
@@ -870,20 +703,17 @@ router.get("/doctors", protect, async (req, res) => {
       page = "1",
       limit = "20",
     } = req.query;
-
     const filter = {
       partnershipStatus: "Active",
       isActive: true,
       isVerified: true,
     };
-
     if (specialization) filter.specialization = specialization;
     if (isOnline === "true") filter.isOnline = true;
     if (consultationType === "video") filter["consultationTypes.video"] = true;
 
     const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const total = await DoctorProfile.countDocuments(filter);
-
     const doctors = await DoctorProfile.find(filter)
       .populate("user", "name email phone")
       .populate(
@@ -898,11 +728,9 @@ router.get("/doctors", protect, async (req, res) => {
       .sort({ "rating.averageRating": -1, isOnline: -1 })
       .lean();
 
-    // Resolve effective pricing per doctor (hospital-manager vs doctor-owner)
     const doctorsWithPricing = doctors.map((d) => {
       let effectiveFees = d.fees || {};
       let pricingSource = "doctor";
-
       if (
         d.primaryHospital?.managementModel === "hospital-manager" &&
         d.primaryHospital?.consultationPricing
@@ -918,7 +746,6 @@ router.get("/doctors", protect, async (req, res) => {
         };
         pricingSource = "hospital";
       }
-
       return {
         ...d,
         effectiveFees,
@@ -928,7 +755,6 @@ router.get("/doctors", protect, async (req, res) => {
       };
     });
 
-    // Optional city filter via primary hospital address
     const filtered = city
       ? doctorsWithPricing.filter((d) =>
           d.primaryHospital?.address?.city
@@ -936,7 +762,6 @@ router.get("/doctors", protect, async (req, res) => {
             .includes(city.toLowerCase()),
         )
       : doctorsWithPricing;
-
     res.json({
       success: true,
       total,
@@ -1023,18 +848,17 @@ router.get("/labs/:labId", protect, async (req, res) => {
 router.get("/booking-options/:type", protect, (req, res) => {
   const { type } = req.params;
   if (!CUSTOMER_BOOKING_TYPES.includes(type)) {
-    return res.status(400).json({
-      success: false,
-      message: `Invalid booking type. Allowed: ${CUSTOMER_BOOKING_TYPES.join(", ")}`,
-    });
+    return res
+      .status(400)
+      .json({
+        success: false,
+        message: `Invalid booking type. Allowed: ${CUSTOMER_BOOKING_TYPES.join(", ")}`,
+      });
   }
   const components = resolveServiceComponents(type);
   res.json({ success: true, data: { bookingType: type, components } });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /transport/estimate
-// ─────────────────────────────────────────────────────────────────────────────
 router.get("/transport/estimate", protect, async (req, res) => {
   try {
     const {
@@ -1046,19 +870,17 @@ router.get("/transport/estimate", protect, async (req, res) => {
       waitingMinutes = "0",
       bookingType = "patient_transport",
     } = req.query;
-
     if (!pickupLng || !pickupLat || !dropoffLng || !dropoffLat) {
-      return res.status(400).json({
-        success: false,
-        message: "pickupLng, pickupLat, dropoffLng, dropoffLat required",
-      });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "pickupLng, pickupLat, dropoffLng, dropoffLat required",
+        });
     }
-
     const pickupCoords = [parseFloat(pickupLng), parseFloat(pickupLat)];
     const dropoffCoords = [parseFloat(dropoffLng), parseFloat(dropoffLat)];
-
     const { ratePerKm, source } = await resolveKmRate(req.user._id);
-
     const fareResult = resolveTransportFare({
       bookingType,
       pickupCoords,
@@ -1067,7 +889,6 @@ router.get("/transport/estimate", protect, async (req, res) => {
       includeReturn: includeReturn === "true",
       waitingMinutes: parseInt(waitingMinutes, 10),
     });
-
     res.json({
       success: true,
       data: { ...fareResult, kmRateSource: source, ratePerKm },
@@ -1077,9 +898,6 @@ router.get("/transport/estimate", protect, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /consultation-check
-// ─────────────────────────────────────────────────────────────────────────────
 router.get(
   "/consultation-check",
   protect,
@@ -1092,7 +910,6 @@ router.get(
         checkSubscriptionCareAssistant(req.user._id),
         checkSubscriptionDiagnostics(req.user._id),
       ]);
-
       const config = await PlatformPricingConfig.getGlobal();
       let careAssistantCustomFee = null;
       if (
@@ -1117,7 +934,6 @@ router.get(
           }
         }
       }
-
       return res.json({
         success: true,
         data: {
@@ -1188,7 +1004,6 @@ router.post(
         coinsToRedeem = 0,
       } = req.body;
 
-      // ── 1. Validation ─────────────────────────────────────────────────────────
       if (
         !hospitalId ||
         !doctorId ||
@@ -1196,22 +1011,24 @@ router.post(
         !patientInfo ||
         !patientLocation
       ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "hospitalId, doctorId, scheduledAt, patientInfo, patientLocation required",
-        });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "hospitalId, doctorId, scheduledAt, patientInfo, patientLocation required",
+          });
       }
       if (!patientLocation?.coordinates?.length) {
-        return res.status(400).json({
-          success: false,
-          message: "patientLocation.coordinates [lng, lat] required",
-        });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "patientLocation.coordinates [lng, lat] required",
+          });
       }
 
       const scheduledDate = new Date(scheduledAt);
-
-      // ── 2. Availability checks ────────────────────────────────────────────────
       const avail = await checkHospitalOrDoctorAvailability({
         hospitalId,
         doctorId,
@@ -1229,7 +1046,6 @@ router.post(
           .status(403)
           .json({ success: false, message: modeCheck.reason });
 
-      // ── 3. Hospital coords ────────────────────────────────────────────────────
       const hospital = await Hospital.findById(hospitalId)
         .select("location address name managementModel consultationPricing")
         .lean();
@@ -1241,19 +1057,19 @@ router.post(
       const hospCoords =
         destinationLocation?.coordinates || hospital.location?.coordinates;
       if (!hospCoords?.length)
-        return res.status(400).json({
-          success: false,
-          message:
-            "Hospital location unavailable. Provide destinationLocation.",
-        });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "Hospital location unavailable. Provide destinationLocation.",
+          });
 
-      // ── 4. Subscription + consultation fee ───────────────────────────────────
       const subCheck = await checkSubscriptionConsultation(
         req.user._id,
         consultationType,
       );
       const isCoveredBySubscription = subCheck.allowed && subCheck.isFree;
-
       const { fee: consultationFee, source: pricingSource } =
         await resolveConsultationFee({
           isFollowUp: false,
@@ -1264,13 +1080,11 @@ router.post(
           consultationType,
         });
 
-      // ── 5. Transport fare ─────────────────────────────────────────────────────
       const { ratePerKm, source: kmRateSource } = await resolveKmRate(
         req.user._id,
       );
       const pickupCoords = patientLocation.coordinates;
       const dropoffCoords = hospCoords;
-
       const transportCalc = resolveTransportFare({
         bookingType: "full_care_ride",
         pickupCoords,
@@ -1279,9 +1093,6 @@ router.post(
         includeReturn: includeReturnHome,
       });
 
-      // ── 6. Care assistant fee — resolved for fare display only ────────────────
-      // CHANGE: CA not auto-assigned. Fee resolved from subscription/platform
-      // for fare breakdown display. Actual CA assigned by admin later.
       const config = await PlatformPricingConfig.getGlobal();
       const careResult = await resolveCareAssistantFee({
         userId: req.user._id,
@@ -1289,25 +1100,20 @@ router.post(
         config,
       });
 
-      // ── 7. Fare breakdown ─────────────────────────────────────────────────────
       const transportGst = +(transportCalc.totalTransportFee * 0.05).toFixed(2);
       const caGst = !careResult.isCoveredBySubscription
         ? +(careResult.fee * 0.18).toFixed(2)
         : 0;
-      const consultGst = 0; // in-person consultation GST exempt
-
+      const consultGst = 0;
       const fareBreakdown = buildFareBreakdown({
         consultationFee,
         careAssistantFee: careResult.fee,
         transportFee: transportCalc.totalTransportFee,
-        taxPercent: 0, // zero here — taxes applied manually below (mixed GST rates)
+        taxPercent: 0,
       });
-
-      // Override with correct mixed-rate GST
-      // Override with correct mixed-rate GST breakdown
       fareBreakdown.taxBreakdown = {
         consultationGst: consultGst,
-        transportGst: transportGst,
+        transportGst,
         careAssistantGst: caGst,
         diagnosticGst: 0,
         homeCollectionGst: 0,
@@ -1321,7 +1127,6 @@ router.post(
       ).toFixed(2);
       fareBreakdown.amountPaid = fareBreakdown.totalAmount;
 
-      // ── 8. Create booking — careAssistant: null (admin assigns later) ─────────
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -1333,7 +1138,7 @@ router.post(
         patientInfo,
         doctor: doctorId,
         hospital: hospitalId,
-        careAssistant: null, // CHANGE: admin assigns manually
+        careAssistant: null,
         consultationType,
         scheduledAt: scheduledDate,
         slotId: slotId || null,
@@ -1364,12 +1169,11 @@ router.post(
         coinsRedeemed: coinsToRedeem,
         status: initialStatus,
         createdBy: req.user._id,
-        careAssistantSnapshot: null, // CHANGE: null until admin assigns
+        careAssistantSnapshot: null,
         subscriptionUsagePending: [],
         confirmedSubscriptionUsage: [],
       });
 
-      // ── 9. Queue consultation subscription usage (deferred until payment) ─────
       if (isCoveredBySubscription && subCheck.sub) {
         await queueSubscriptionUsage(
           booking._id,
@@ -1377,10 +1181,7 @@ router.post(
           "consultationsUsed",
         );
       }
-      // CHANGE: CA subscription usage NOT queued here.
-      // Admin assignment route must queue careAssistantVisitsUsed when CA is assigned.
 
-      // ── 10. Payment handling ──────────────────────────────────────────────────
       let razorpayOrder = null;
       let walletResult = null;
 
@@ -1424,14 +1225,11 @@ router.post(
         );
       }
 
-      // ── 11. Build TRANSPORT rides (outbound + optional return) ────────────────
-      // CHANGE: NO CA ride created here. Only patient transport rides.
       const {
         distanceKm: outDistKm,
         durationMin: outDurMin,
         polyline: outPolyline,
       } = await calculateCanonicalRoute(pickupCoords, dropoffCoords);
-
       const outboundRide = await Ride.create({
         ...buildRidePayload({
           bookingId: booking._id,
@@ -1451,7 +1249,6 @@ router.post(
         estimatedDistanceKm: outDistKm,
         estimatedDurationMin: outDurMin,
       });
-
       const outTracking = await RideTracking.create({
         ride: outboundRide._id,
         booking: booking._id,
@@ -1465,7 +1262,6 @@ router.post(
         retDistKm = null,
         retDurMin = null,
         retPolyline = null;
-
       if (includeReturnHome) {
         const retRoute = await calculateCanonicalRoute(
           dropoffCoords,
@@ -1474,7 +1270,6 @@ router.post(
         retDistKm = retRoute.distanceKm;
         retDurMin = retRoute.durationMin;
         retPolyline = retRoute.polyline;
-
         returnRide = await Ride.create({
           ...buildRidePayload({
             bookingId: booking._id,
@@ -1494,7 +1289,6 @@ router.post(
           estimatedDistanceKm: retDistKm,
           estimatedDurationMin: retDurMin,
         });
-
         const retTracking = await RideTracking.create({
           ride: returnRide._id,
           booking: booking._id,
@@ -1513,13 +1307,11 @@ router.post(
       }
       await booking.save();
 
-      // ── 12. OP record ─────────────────────────────────────────────────────────
       const followUpValidDays =
         hospital.managementModel === "hospital-manager"
           ? (hospital.consultationPricing?.followUpValidDays ?? 7)
           : 7;
       const opNumber = await generateOpNumber(hospitalId);
-
       await OutPatientRecord.create({
         opNumber,
         booking: booking._id,
@@ -1545,7 +1337,6 @@ router.post(
         createdBy: req.user._id,
       });
 
-      // ── 13. Notifications + emails ────────────────────────────────────────────
       await createNotification({
         recipient: req.user._id,
         title: "Booking Confirmed",
@@ -1553,7 +1344,6 @@ router.post(
         type: "BOOKING",
         bookingId: booking._id,
       });
-
       sendBookingCreatedEmails({ booking, billing: fareBreakdown });
 
       const [doctorUser, hospitalDoc] = await Promise.all([
@@ -1582,7 +1372,6 @@ router.post(
         console.error("[full-care-ride] email failed:", e.message),
       );
 
-      // ── 14. Response ──────────────────────────────────────────────────────────
       return res.status(201).json({
         success: true,
         message:
@@ -1593,7 +1382,6 @@ router.post(
           status: booking.status,
           scheduledAt: booking.scheduledAt,
           fareBreakdown,
-
           walletSplit: walletResult?.needsRazorpay
             ? {
                 walletApplied: walletResult.walletApplied,
@@ -1601,17 +1389,14 @@ router.post(
                 message: `₹${walletResult.walletApplied} deducted from wallet. Pay remaining ₹${walletResult.razorpayPortion} via Razorpay.`,
               }
             : null,
-
           subscriptionCoverage: {
             consultationFree: isCoveredBySubscription,
             consultationQuota: subCheck.reason,
-            // CHANGE: CA coverage shown for info only — usage queued at admin assignment
             careAssistantFree: careResult.isCoveredBySubscription,
             careAssistantQuota: careResult.subQuotaInfo?.reason,
             careAssistantNote:
               "Care assistant quota will be consumed when admin assigns a CA to this booking.",
           },
-
           transportSummary: {
             distanceKm: outDistKm,
             ratePerKm,
@@ -1621,7 +1406,6 @@ router.post(
             includeReturn: includeReturnHome,
             totalTransport: transportCalc.totalTransportFee,
           },
-
           mapRoutes: {
             outbound: {
               polyline: outPolyline,
@@ -1641,12 +1425,9 @@ router.post(
                 }
               : null,
           },
-
-          // CHANGE: null — admin assigns later
           careAssistantAssigned: null,
           careAssistantNote:
             "A care assistant will be assigned by admin before your service date. You will be notified once assigned.",
-
           rides: {
             outbound: outboundRide._id,
             return: returnRide?._id ?? null,
@@ -1691,9 +1472,7 @@ router.post(
             success: false,
             message: "doctorId, scheduledAt, patientInfo required",
           });
-
       const scheduledDate = new Date(scheduledAt);
-
       const avail = await checkHospitalOrDoctorAvailability({
         hospitalId,
         doctorId,
@@ -1716,23 +1495,23 @@ router.post(
         consultationType,
       );
       const isCoveredBySubscription = subCheck.allowed && subCheck.isFree;
-
-      const { fee: consultationFee, source: pricingSource } =
-        await resolveConsultationFee({
-          isFollowUp: false,
-          followUpFee: 0,
-          isCoveredBySubscription,
-          doctorId,
-          hospitalId,
-          consultationType,
-        });
-
-      const config = await PlatformPricingConfig.getGlobal();
+      const {
+        fee: consultationFee,
+        source: pricingSource,
+        gstRate,
+      } = await resolveConsultationFee({
+        isFollowUp: false,
+        followUpFee: 0,
+        isCoveredBySubscription,
+        doctorId,
+        hospitalId,
+        consultationType,
+      });
       const fareBreakdown = buildFareBreakdown({
         consultationFee,
-        taxPercent: config?.tax?.consultationGstPercent ?? 0,
+        taxPercent:
+          pricingSource === "subscription" ? 0 : Math.round(gstRate * 100),
       });
-
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -1794,7 +1573,6 @@ router.post(
         }
         razorpayOrder = walletResult.razorpayOrder;
       }
-
       if (fareBreakdown.totalAmount === 0 && paymentMethod === "Razorpay") {
         booking.paymentStatus = "paid";
         booking.status = "pending";
@@ -1802,12 +1580,10 @@ router.post(
         await flushAndRecord(booking);
         sendPaymentConfirmedEmails({ booking, paymentMethod: "Free (₹0)" });
       }
-
       if (paymentMethod === "Cash") {
         booking.paymentStatus = "pending_cash";
         await booking.save();
       }
-
       if (paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0) {
         razorpayOrder = await createRazorpayOrder(
           fareBreakdown.totalAmount,
@@ -1842,7 +1618,6 @@ router.post(
         type: "BOOKING",
         bookingId: booking._id,
       });
-
       sendBookingCreatedEmails({ booking, billing: fareBreakdown });
 
       const [doctorUser, hospitalDoc] = await Promise.all([
@@ -1896,9 +1671,7 @@ router.post(
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BOOKING — DOCTOR ONLINE (video)
-// POST /api/bookings/doctor-online
 // ═════════════════════════════════════════════════════════════════════════════
-
 router.post(
   "/doctor-online",
   protect,
@@ -1915,103 +1688,79 @@ router.post(
         coinsToRedeem = 0,
         slotId,
       } = req.body;
-
-      // ── 1. Input validation ──────────────────────────────────────────────────
       if (!doctorId || !scheduledAt || !patientInfo) {
-        return res.status(400).json({
-          success: false,
-          message: "doctorId, scheduledAt, patientInfo required",
-        });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "doctorId, scheduledAt, patientInfo required",
+          });
       }
-
-      // ── DATE PARSING (timezone-safe) ─────────────────────────────────────────
-      // Problem: frontend may send "2026-06-01" (date-only).
-      // JS parses date-only strings as UTC midnight → in IST (+5:30) that's
-      // already 5h30m in the past → false "past date" error.
-      //
-      // Fix:
-      //  • If string has no time component → treat as start-of-day IST (UTC+5:30)
-      //    by appending T00:00:00+05:30
-      //  • Allow a 5-minute grace window for clock skew / processing lag
-      //  • Only reject dates more than 5 min in the past
 
       let scheduledDate;
       const rawStr = String(scheduledAt).trim();
-
-      // Detect date-only format: "YYYY-MM-DD" (10 chars, no T)
-      const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(rawStr);
-
-      if (isDateOnly) {
-        // Treat as start-of-day IST
+      if (/^\d{4}-\d{2}-\d{2}$/.test(rawStr)) {
         scheduledDate = new Date(`${rawStr}T00:00:00+05:30`);
       } else {
         scheduledDate = new Date(rawStr);
       }
-
       if (isNaN(scheduledDate.getTime())) {
-        return res.status(400).json({
-          success: false,
-          message:
-            'Invalid scheduledAt — use ISO 8601 format e.g. "2026-06-15T10:30:00+05:30"',
-        });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              'Invalid scheduledAt — use ISO 8601 format e.g. "2026-06-15T10:30:00+05:30"',
+          });
+      }
+      const GRACE_MS = 10 * 60 * 1000;
+      if (scheduledDate < new Date(Date.now() - GRACE_MS)) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: `scheduledAt is in the past. Provided: ${scheduledDate.toISOString()}, Server time: ${new Date().toISOString()}`,
+          });
       }
 
-      const GRACE_MS = 10 * 60 * 1000; // 10-min grace for clock skew / processing lag
-      const earliestAllow = new Date(Date.now() - GRACE_MS);
-
-      if (scheduledDate < earliestAllow) {
-        return res.status(400).json({
-          success: false,
-          message: `scheduledAt is in the past. Provided: ${scheduledDate.toISOString()}, Server time: ${new Date().toISOString()}`,
-        });
-      }
-
-      // ── 2a. Doctor availability ──────────────────────────────────────────────
       const avail = await checkHospitalOrDoctorAvailability({
         doctorId,
         scheduledAt: scheduledDate,
       });
-      if (!avail.available) {
+      if (!avail.available)
         return res.status(400).json({ success: false, message: avail.reason });
-      }
 
-      // ── 2b. Video mode allowed for this user / plan ──────────────────────────
-      const modeCheck = await checkConsultationModeAllowed(
-        req.user._id,
-        "video",
-      );
-      if (!modeCheck.allowed) {
+      if (paymentMethod === "Cash") {
         return res
-          .status(403)
-          .json({ success: false, message: modeCheck.reason });
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "Cash payment not available for video consultations. Please use Wallet or online payment.",
+          });
       }
 
-      // ── 3. Subscription coverage ─────────────────────────────────────────────
       const subCheck = await checkSubscriptionConsultation(
         req.user._id,
         "video",
       );
       const isCoveredBySubscription = subCheck.allowed && subCheck.isFree;
-
-      // ── 4. Resolve consultation fee ──────────────────────────────────────────
-      const { fee: consultationFee, source: pricingSource } =
-        await resolveConsultationFee({
-          isFollowUp: false,
-          followUpFee: 0,
-          isCoveredBySubscription,
-          doctorId,
-          hospitalId: null,
-          consultationType: "video",
-        });
-
-      // ── 5. Build fare breakdown ──────────────────────────────────────────────
-      const config = await PlatformPricingConfig.getGlobal();
+      const {
+        fee: consultationFee,
+        source: pricingSource,
+        gstRate,
+      } = await resolveConsultationFee({
+        isFollowUp: false,
+        followUpFee: 0,
+        isCoveredBySubscription,
+        doctorId,
+        hospitalId: null,
+        consultationType: "video",
+      });
       const fareBreakdown = buildFareBreakdown({
         consultationFee,
-        taxPercent: config?.tax?.consultationGstPercent ?? 0,
+        taxPercent: isCoveredBySubscription ? 0 : Math.round(gstRate * 100),
       });
-
-      // ── 6. Create Booking ────────────────────────────────────────────────────
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -2039,7 +1788,6 @@ router.post(
         confirmedSubscriptionUsage: [],
       });
 
-      // ── 7. Queue subscription usage (deferred — confirmed on payment) ────────
       if (isCoveredBySubscription && subCheck.sub) {
         await queueSubscriptionUsage(
           booking._id,
@@ -2048,11 +1796,9 @@ router.post(
         );
       }
 
-      // ── 8. Payment handling ──────────────────────────────────────────────────
       let razorpayOrder = null;
       let walletResult = null;
 
-      // 8a. Wallet (full or partial + Razorpay for shortfall)
       if (paymentMethod === "Wallet") {
         walletResult = await processWalletOrPartialPayment({
           userId: req.user._id,
@@ -2060,21 +1806,17 @@ router.post(
           bookingId: booking._id,
           bookingCode: booking.bookingCode,
         });
-
         booking.paymentStatus = walletResult.paymentStatus;
         booking.payments = walletResult.payments;
         booking.fareBreakdown.walletApplied = walletResult.walletApplied;
         booking.fareBreakdown.amountPaid = walletResult.amountPaid;
         await booking.save();
-
         if (!walletResult.needsRazorpay) {
           await flushAndRecord(booking);
           sendPaymentConfirmedEmails({ booking, paymentMethod: "Wallet" });
         }
         razorpayOrder = walletResult.razorpayOrder;
       }
-
-      // 8b. Free (₹0) — subscription-covered or zero-fee doctor
       if (fareBreakdown.totalAmount === 0 && paymentMethod === "Razorpay") {
         booking.paymentStatus = "paid";
         booking.status = "pending";
@@ -2082,14 +1824,6 @@ router.post(
         await flushAndRecord(booking);
         sendPaymentConfirmedEmails({ booking, paymentMethod: "Free (₹0)" });
       }
-
-      // 8c. Cash — collect at service
-      if (paymentMethod === "Cash") {
-        booking.paymentStatus = "pending_cash";
-        await booking.save();
-      }
-
-      // 8d. Razorpay — create order
       if (paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0) {
         razorpayOrder = await createRazorpayOrder(
           fareBreakdown.totalAmount,
@@ -2098,9 +1832,6 @@ router.post(
         );
       }
 
-      // ── 9. Auto-create Consultation + provision Agora tokens ─────────────────
-      // Non-fatal — booking is valid even if this step fails.
-      // Tokens re-provisioned on-demand: GET /api/consultations/:id/agora/tokens
       let consultationSession = null;
       try {
         const { consultation } = await createConsultation(
@@ -2117,10 +1848,7 @@ router.post(
           },
           req.user._id.toString(),
         );
-
         consultationSession = consultation;
-        // createConsultation already sets booking.consultationSessionId internally
-        // Refresh local ref for response
         booking.consultationSessionId = consultation._id;
       } catch (consultErr) {
         console.error(
@@ -2129,7 +1857,6 @@ router.post(
         );
       }
 
-      // ── 10. Notifications + emails ────────────────────────────────────────────
       await createNotification({
         recipient: req.user._id,
         title: "Video Consultation Booked",
@@ -2137,10 +1864,7 @@ router.post(
         type: "BOOKING",
         bookingId: booking._id,
       });
-
-      // Non-blocking — do not await
       sendBookingCreatedEmails({ booking, billing: fareBreakdown });
-
       DoctorProfile.findById(doctorId)
         .populate("user", "name")
         .select("user")
@@ -2164,7 +1888,6 @@ router.post(
           ),
         );
 
-      // ── Response ──────────────────────────────────────────────────────────────
       return res.status(201).json({
         success: true,
         message: "Video consultation booked successfully",
@@ -2173,9 +1896,7 @@ router.post(
           bookingCode: booking.bookingCode,
           status: booking.status,
           scheduledAt: booking.scheduledAt,
-
           fareBreakdown,
-
           walletSplit: walletResult?.needsRazorpay
             ? {
                 walletApplied: walletResult.walletApplied,
@@ -2183,17 +1904,20 @@ router.post(
                 message: `₹${walletResult.walletApplied} deducted from wallet. Pay remaining ₹${walletResult.razorpayPortion} via Razorpay.`,
               }
             : null,
-
           subscriptionCoverage: {
             consultationFree: isCoveredBySubscription,
             quotaInfo: subCheck.reason,
             remaining: subCheck.remaining ?? null,
+            videoSupportedByPlan: subCheck.allowed,
+            subscriptionNote: subCheck.videoBlocked
+              ? `Your ${subCheck.sub?.fixedTier || "current"} plan covers in-person consultations only. Full video fee (+ 5% GST) charged.`
+              : isCoveredBySubscription
+                ? "Video consultation covered by your subscription."
+                : subCheck.allowed
+                  ? "Subscription quota exhausted. Full video fee (+ 5% GST) charged."
+                  : "No active subscription. Full video fee (+ 5% GST) charged.",
           },
-
           razorpayOrder,
-
-          // Agora consultation session info
-          // RTC/RTM tokens: GET /api/consultations/:consultationId/agora/tokens
           consultationSession: consultationSession
             ? {
                 consultationId: consultationSession._id,
@@ -2248,22 +1972,23 @@ router.post(
         !patientLocation?.coordinates ||
         !destinationLocation?.coordinates ||
         !scheduledAt
-      )
-        return res.status(400).json({
-          success: false,
-          message:
-            "patientInfo, patientLocation.coordinates, destinationLocation.coordinates, scheduledAt required",
-        });
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "patientInfo, patientLocation.coordinates, destinationLocation.coordinates, scheduledAt required",
+          });
+      }
 
       const scheduledDate = new Date(scheduledAt);
       const pickupCoords = patientLocation.coordinates;
       const dropoffCoords = destinationLocation.coordinates;
       const parsedWaitingMinutes = parseInt(waitingMinutes, 10) || 0;
-
       const { ratePerKm, source: kmRateSource } = await resolveKmRate(
         req.user._id,
       );
-
       const config = await PlatformPricingConfig.getGlobal();
       const freeWaitingMinutes = config?.transport?.waitingFreeMinutes ?? 5;
       const waitingRatePerMin = config?.transport?.waitingChargePerMinute ?? 2;
@@ -2293,7 +2018,6 @@ router.post(
               success: false,
               message: "doctorId required when addConsultation=true",
             });
-
         const consultationAvail = await checkHospitalOrDoctorAvailability({
           hospitalId,
           doctorId,
@@ -2303,7 +2027,6 @@ router.post(
           return res
             .status(400)
             .json({ success: false, message: consultationAvail.reason });
-
         const modeCheck = await checkConsultationModeAllowed(
           req.user._id,
           consultationType,
@@ -2312,14 +2035,12 @@ router.post(
           return res
             .status(403)
             .json({ success: false, message: modeCheck.reason });
-
         const subCheck = await checkSubscriptionConsultation(
           req.user._id,
           consultationType,
         );
         isCoveredBySub = subCheck.allowed && subCheck.isFree;
         subRef = subCheck.sub;
-
         const feeResult = await resolveConsultationFee({
           isFollowUp: false,
           followUpFee: 0,
@@ -2337,7 +2058,6 @@ router.post(
         transportFee: transportCalc.totalTransportFee,
         taxPercent: config?.tax?.transportGstPercent ?? 5,
       });
-
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -2415,7 +2135,6 @@ router.post(
         }
         razorpayOrder = walletResult.razorpayOrder;
       }
-
       if (fareBreakdown.totalAmount === 0 && paymentMethod === "Razorpay") {
         booking.paymentStatus = "paid";
         booking.status = "pending";
@@ -2423,7 +2142,6 @@ router.post(
         await flushAndRecord(booking);
         sendPaymentConfirmedEmails({ booking, paymentMethod: "Free (₹0)" });
       }
-
       if (paymentMethod === "Cash") {
         booking.paymentStatus = "pending_cash";
         await booking.save();
@@ -2434,7 +2152,6 @@ router.post(
         durationMin: outDurMin,
         polyline: outPolyline,
       } = await calculateCanonicalRoute(pickupCoords, dropoffCoords);
-
       const outboundRide = await Ride.create({
         ...buildRidePayload({
           bookingId: booking._id,
@@ -2453,7 +2170,6 @@ router.post(
         estimatedDistanceKm: outDistKm,
         estimatedDurationMin: outDurMin,
       });
-
       const outTracking = await RideTracking.create({
         ride: outboundRide._id,
         booking: booking._id,
@@ -2467,7 +2183,6 @@ router.post(
         retDistKm = null,
         retDurMin = null,
         retPolyline = null;
-
       if (includeReturn) {
         const retRoute = await calculateCanonicalRoute(
           dropoffCoords,
@@ -2476,7 +2191,6 @@ router.post(
         retDistKm = retRoute.distanceKm;
         retDurMin = retRoute.durationMin;
         retPolyline = retRoute.polyline;
-
         returnRide = await Ride.create({
           ...buildRidePayload({
             bookingId: booking._id,
@@ -2495,7 +2209,6 @@ router.post(
           estimatedDistanceKm: retDistKm,
           estimatedDurationMin: retDurMin,
         });
-
         const retTracking = await RideTracking.create({
           ride: returnRide._id,
           booking: booking._id,
@@ -2623,7 +2336,6 @@ router.post(
         documents = [],
         paymentMethod = "Razorpay",
       } = req.body;
-
       if (!doctorId || !scheduledAt || !patientInfo)
         return res
           .status(400)
@@ -2650,13 +2362,11 @@ router.post(
           consultationType:
             visitType === "homeVisit" ? "homeVisit" : "inPerson",
         });
-
       const config = await PlatformPricingConfig.getGlobal();
       const fareBreakdown = buildFareBreakdown({
         consultationFee,
         taxPercent: config?.tax?.consultationGstPercent ?? 0,
       });
-
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -2702,7 +2412,6 @@ router.post(
         }
         razorpayOrder = walletResult.razorpayOrder;
       }
-
       if (fareBreakdown.totalAmount === 0 && paymentMethod === "Razorpay") {
         booking.paymentStatus = "paid";
         booking.status = "pending";
@@ -2710,12 +2419,10 @@ router.post(
         await flushAndRecord(booking);
         sendPaymentConfirmedEmails({ booking, paymentMethod: "Free (₹0)" });
       }
-
       if (paymentMethod === "Cash") {
         booking.paymentStatus = "pending_cash";
         await booking.save();
       }
-
       if (paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0) {
         razorpayOrder = await createRazorpayOrder(
           fareBreakdown.totalAmount,
@@ -2730,7 +2437,6 @@ router.post(
         type: "BOOKING",
         bookingId: booking._id,
       });
-
       sendBookingCreatedEmails({ booking, billing: fareBreakdown });
 
       return res.status(201).json({
@@ -2771,7 +2477,6 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
       slotId,
       paymentMethod = "Razorpay",
     } = req.body;
-
     if (!doctorId || !scheduledAt || !patientInfo)
       return res
         .status(400)
@@ -2807,13 +2512,11 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
       hospitalId,
       consultationType,
     });
-
     const config = await PlatformPricingConfig.getGlobal();
     const fareBreakdown = buildFareBreakdown({
       consultationFee,
       taxPercent: config?.tax?.consultationGstPercent ?? 0,
     });
-
     const initialStatus =
       paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
         ? "payment_pending"
@@ -2861,7 +2564,6 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
       }
       razorpayOrder = walletResult.razorpayOrder;
     }
-
     if (fareBreakdown.totalAmount === 0 && paymentMethod === "Razorpay") {
       booking.paymentStatus = "paid";
       booking.status = "pending";
@@ -2869,7 +2571,6 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
       await flushAndRecord(booking);
       sendPaymentConfirmedEmails({ booking, paymentMethod: "Free (₹0)" });
     }
-
     if (paymentMethod === "Cash") {
       booking.paymentStatus = "pending_cash";
       await booking.save();
@@ -2960,21 +2661,17 @@ router.post(
         !scheduledAt ||
         !patientInfo ||
         (!tests.length && !packages.length)
-      )
-        return res.status(400).json({
-          success: false,
-          message:
-            "labId, scheduledAt, patientInfo, and tests or packages required",
-        });
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "labId, scheduledAt, patientInfo, and tests or packages required",
+          });
+      }
 
       const lab = await getLabWithTests(labId);
-
-      // ── Normalize + validate IDs ──────────────────────────────────────────────
-      // FIX: cleanId strips known prefixes; also keep raw for testCode fallback
-      const cleanId = (raw) => {
-        const s = String(raw ?? "").trim();
-        return s.replace(/^(testcode-|pkgcode-)/, "");
-      };
 
       const resolvedTests = [];
       const resolvedPackages = [];
@@ -2982,91 +2679,48 @@ router.post(
       const packageNames = [];
       let diagnosticFee = 0;
 
-      // DEBUG — remove after confirming fix
-      console.log("[diagnostic-center] raw tests:", tests);
-      console.log("[diagnostic-center] raw packages:", packages);
-      console.log(
-        "[diagnostic-center] lab.labTests sample:",
-        lab.labTests?.slice(0, 3).map((t) => ({
-          _id: t._id?.toString?.(),
-          testCode: t.testCode,
-          isActive: t.isActive,
-        }))
-      );
-      console.log(
-        "[diagnostic-center] lab.labPackages sample:",
-        lab.labPackages?.slice(0, 3).map((p) => ({
-          _id: p._id?.toString?.(),
-          packageCode: p.packageCode,
-          isActive: p.isActive,
-        }))
-      );
-
-      for (const rawId of tests) {
-        const idStr = cleanId(rawId);
-        if (!idStr) continue;
-
-        // FIX: robust match — by _id string, testCode from cleanId, or testCode
-        // directly from rawId (frontend may send testCode without prefix)
-        const t = lab.labTests?.find((lt) => {
-          if (!lt.isActive) return false;
-          const ltId = lt._id?.toString?.() ?? String(lt._id ?? "");
-          return (
-            ltId === idStr ||
-            lt.testCode === idStr ||
-            lt.testCode === String(rawId ?? "").trim()
+      for (const rawSlug of tests) {
+        const slug = String(rawSlug ?? "").trim();
+        if (!slug) continue;
+        const t = lab.labTests?.find((lt) => lt.isActive && lt.slug === slug);
+        if (!t) {
+          console.warn(
+            `[diagnostic-center] no active test with slug="${slug}"`,
           );
-        });
-
-  if (!t) {
-  console.log("[diagnostic-center] no match for test rawId:", rawId, "idStr:", idStr);
-  continue;
-}
-
-diagnosticFee += t.discountedPrice ?? t.mrpPrice;
-testNames.push(t.testName);
-resolvedTests.push(t._id ?? t.testCode);
-     
+          continue;
+        }
+        diagnosticFee += t.discountedPrice ?? t.mrpPrice;
+        testNames.push(t.testName);
+        resolvedTests.push(t.slug);
       }
 
-      for (const rawId of packages) {
-        const idStr = String(rawId ?? "").trim();
-        if (!idStr) continue;
-
-        // FIX: robust match — by _id string or packageCode
-        const p = lab.labPackages?.find((lp) => {
-          if (!lp.isActive) return false;
-          const lpId = lp._id?.toString?.() ?? String(lp._id ?? "");
-          return lpId === idStr || lp.packageCode === idStr;
-        });
-
-      if (!p) {
-  console.log("[diagnostic-center] no match for package rawId:", rawId);
-  continue;
-}
-
-diagnosticFee += p.mrpPrice;
-packageNames.push(p.packageName);
-resolvedPackages.push(p._id ?? p.packageCode);
+      for (const rawSlug of packages) {
+        const slug = String(rawSlug ?? "").trim();
+        if (!slug) continue;
+        const p = lab.labPackages?.find(
+          (lp) => lp.isActive && lp.slug === slug,
+        );
+        if (!p) {
+          console.warn(
+            `[diagnostic-center] no active package with slug="${slug}"`,
+          );
+          continue;
+        }
+        diagnosticFee += p.mrpPrice;
+        packageNames.push(p.packageName);
+        resolvedPackages.push(p.slug);
       }
-
-      // DEBUG — remove after confirming fix
-      console.log(
-        "[diagnostic-center] resolvedTests:",
-        resolvedTests.length,
-        "resolvedPackages:",
-        resolvedPackages.length
-      );
 
       if (resolvedTests.length === 0 && resolvedPackages.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "No valid tests or packages found. Check IDs match lab catalogue.",
-        });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "No valid tests or packages found. Ensure slugs match the lab catalogue.",
+          });
       }
 
-      // ── Subscription discount ─────────────────────────────────────────────────
       const diagSub = await checkSubscriptionDiagnostics(req.user._id);
       const discountPercent = diagSub.discountPercent;
       const discount = discountPercent
@@ -3079,7 +2733,6 @@ resolvedPackages.push(p._id ?? p.packageCode);
         discount,
         taxPercent: config?.tax?.diagnosticsGstPercent ?? 5,
       });
-
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -3124,11 +2777,11 @@ resolvedPackages.push(p._id ?? p.packageCode);
         booking.fareBreakdown.amountPaid = walletResult.amountPaid;
         await booking.save();
         if (!walletResult.needsRazorpay) {
+          await flushAndRecord(booking);
           sendPaymentConfirmedEmails({ booking, paymentMethod: "Wallet" });
         }
         razorpayOrder = walletResult.razorpayOrder;
       }
-
       if (fareBreakdown.totalAmount === 0 && paymentMethod === "Razorpay") {
         booking.paymentStatus = "paid";
         booking.status = "pending";
@@ -3136,12 +2789,10 @@ resolvedPackages.push(p._id ?? p.packageCode);
         await flushAndRecord(booking);
         sendPaymentConfirmedEmails({ booking, paymentMethod: "Free (₹0)" });
       }
-
       if (paymentMethod === "Cash") {
         booking.paymentStatus = "pending_cash";
         await booking.save();
       }
-
       if (paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0) {
         razorpayOrder = await createRazorpayOrder(
           fareBreakdown.totalAmount,
@@ -3197,37 +2848,30 @@ router.post(
         paymentMethod = "Razorpay",
       } = req.body;
 
-      if (
-        !labId ||
-        !scheduledAt ||
-        !patientInfo ||
-        !patientLocation?.coordinates
-      )
+      if (!labId || !scheduledAt || !patientInfo || !patientLocation?.coordinates) {
         return res.status(400).json({
           success: false,
-          message:
-            "labId, scheduledAt, patientInfo, patientLocation.coordinates required",
+          message: "labId, scheduledAt, patientInfo, patientLocation.coordinates required",
         });
+      }
 
       const lab = await getLabWithTests(labId);
-
-      if (!["Home Collection", "Both"].includes(lab.sampleCollectionMode))
+      if (!["Home Collection", "Both"].includes(lab.sampleCollectionMode)) {
         return res.status(400).json({
           success: false,
           message: "This lab does not offer home collection",
         });
+      }
 
-      // ── Subscription diagnostics check ────────────────────────────────────────
       const diagSub = await checkSubscriptionDiagnostics(req.user._id);
       const discountPercent = diagSub.discountPercent;
       const hasHomeSampleCollectionInPlan = diagSub.homeSampleCollection;
+      const diagSubId = diagSub.sub?._id ?? null;
 
-      // ── Normalize + validate IDs ──────────────────────────────────────────────
-      // FIX: cleanId strips known prefixes; also keep raw for testCode fallback
-      const cleanId = (raw) => {
-        const s = String(raw ?? "").trim();
-        return s.replace(/^(testcode-|pkgcode-)/, "");
-      };
+      // ONE-TIME gate: free only if plan has it AND not yet used this cycle
+      const homeCollectionUsedOnce = diagSub.sub?.limits?.homeCollectionUsedOnce ?? false;
+      const homeCollectionFreeNow =
+        hasHomeSampleCollectionInPlan === true && homeCollectionUsedOnce === false;
 
       const resolvedTests = [];
       const resolvedPackages = [];
@@ -3236,116 +2880,87 @@ router.post(
       let diagnosticFee = 0;
       const skippedTests = [];
 
-      // DEBUG — remove after confirming fix
-      console.log("[diagnostic-home] raw tests:", tests);
-      console.log("[diagnostic-home] raw packages:", packages);
-      console.log(
-        "[diagnostic-home] lab.labTests sample:",
-        lab.labTests?.slice(0, 3).map((t) => ({
-          _id: t._id?.toString?.(),
-          testCode: t.testCode,
-          isActive: t.isActive,
-          homeCollectionAvailable: t.homeCollectionAvailable,
-        }))
-      );
-
-      for (const rawId of tests) {
-        const idStr = cleanId(rawId);
-        if (!idStr) continue;
-
-        // FIX: robust match — by _id string, testCode from cleanId, or testCode
-        // directly from rawId (frontend may send testCode without prefix)
-        const t = lab.labTests?.find((lt) => {
-          if (!lt.isActive) return false;
-          const ltId = lt._id?.toString?.() ?? String(lt._id ?? "");
-          return (
-            ltId === idStr ||
-            lt.testCode === idStr ||
-            lt.testCode === String(rawId ?? "").trim()
-          );
-        });
-
-        if (!t || !t._id) {
-          console.log("[diagnostic-home] no match for test rawId:", rawId, "idStr:", idStr);
+      for (const rawSlug of tests) {
+        const slug = String(rawSlug ?? "").trim();
+        if (!slug) continue;
+        const t = lab.labTests?.find((lt) => lt.isActive && lt.slug === slug);
+        if (!t) { console.warn(`[diagnostic-home] no active test slug="${slug}"`); continue; }
+        if (t.homeCollectionAvailable === false) {
+          skippedTests.push(t.testName);
+          console.warn(`[diagnostic-home] test "${t.testName}" homeCollectionAvailable=false — skipping`);
           continue;
         }
-
-        if (!t.homeCollectionAvailable) {
-          console.warn(
-            `[diagnostic-home] test "${t.testName}" homeCollectionAvailable=false — including anyway`
-          );
-          skippedTests.push(t.testName);
-        }
-
         diagnosticFee += t.discountedPrice ?? t.mrpPrice;
         testNames.push(t.testName);
-        resolvedTests.push(t._id);
+        resolvedTests.push(t.slug);
       }
 
-      for (const rawId of packages) {
-        const idStr = String(rawId ?? "").trim();
-        if (!idStr) continue;
-
-        // FIX: robust match — by _id string or packageCode
-        const p = lab.labPackages?.find((lp) => {
-          if (!lp.isActive) return false;
-          const lpId = lp._id?.toString?.() ?? String(lp._id ?? "");
-          return lpId === idStr || lp.packageCode === idStr;
-        });
-
-        if (!p || !p._id) {
-          console.log("[diagnostic-home] no match for package rawId:", rawId);
-          continue;
-        }
-
+      for (const rawSlug of packages) {
+        const slug = String(rawSlug ?? "").trim();
+        if (!slug) continue;
+        const p = lab.labPackages?.find((lp) => lp.isActive && lp.slug === slug);
+        if (!p) { console.warn(`[diagnostic-home] no active package slug="${slug}"`); continue; }
         diagnosticFee += p.mrpPrice;
         packageNames.push(p.packageName);
-        resolvedPackages.push(p._id);
+        resolvedPackages.push(p.slug);
       }
-
-      // DEBUG — remove after confirming fix
-      console.log(
-        "[diagnostic-home] resolvedTests:",
-        resolvedTests.length,
-        "resolvedPackages:",
-        resolvedPackages.length
-      );
 
       if (resolvedTests.length === 0 && resolvedPackages.length === 0) {
         return res.status(400).json({
           success: false,
-          message: "No matching tests or packages found for selected lab.",
+          message: "No valid tests or packages found. Ensure slugs match the lab catalogue.",
         });
       }
 
-      // ── Apply subscription discount ───────────────────────────────────────────
       const discount = discountPercent
         ? +((diagnosticFee * discountPercent) / 100).toFixed(2)
         : 0;
-
       const homeCollectionFee = lab.homeCollectionFee ?? 0;
-      const homeVisitsUsed = diagSub.homeVisitsUsed ?? 0;
-      const homeVisitLimit = diagSub.homeVisitLimit;
-
-      const homeVisitFree =
-        hasHomeSampleCollectionInPlan &&
-        (homeVisitLimit === null || homeVisitsUsed < homeVisitLimit);
-
+      const homeVisitFree = homeCollectionFreeNow;
       const effectiveHomeCollectionFee = homeVisitFree ? 0 : homeCollectionFee;
+      const homeCollectionGstRate = homeVisitFree ? 0 : 0.05;
 
       const config = await PlatformPricingConfig.getGlobal();
+      const diagGstBase = +Math.max(0, diagnosticFee - discount).toFixed(2);
+      const diagGstAmt = +(diagGstBase * 0.05).toFixed(2);
+      const homeColGstAmt = +(effectiveHomeCollectionFee * homeCollectionGstRate).toFixed(2);
+      const totalGstManual = +(diagGstAmt + homeColGstAmt).toFixed(2);
+
       const fareBreakdown = buildFareBreakdown({
         diagnosticFee,
         homeCollectionFee: effectiveHomeCollectionFee,
         discount,
-        taxPercent: config?.tax?.diagnosticsGstPercent ?? 5,
+        taxPercent: 0,
       });
+      fareBreakdown.taxBreakdown = {
+        consultationGst: 0,
+        transportGst: 0,
+        careAssistantGst: 0,
+        diagnosticGst: diagGstAmt,
+        homeCollectionGst: homeColGstAmt,
+      };
+      fareBreakdown.taxes = totalGstManual;
+      fareBreakdown.totalAmount = +(
+        fareBreakdown.diagnosticFee +
+        fareBreakdown.homeCollectionFee -
+        fareBreakdown.discount -
+        fareBreakdown.couponDiscount +
+        totalGstManual
+      ).toFixed(2);
+      fareBreakdown.amountPaid = fareBreakdown.totalAmount;
 
       const scheduledDate = new Date(scheduledAt);
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
           : "pending";
+
+      // Build internalNotes upfront if home visit is free — used by all payment paths
+      // to defer markHomeCollectionUsed until payment actually confirmed
+      const homeCollectionNote =
+        homeVisitFree && diagSubId
+          ? `homeCollectionFreeSubId:${diagSubId.toString()}`
+          : undefined;
 
       const booking = await Booking.create({
         bookingType: "diagnostic_home",
@@ -3372,6 +2987,8 @@ router.post(
         paymentStatus: "unpaid",
         payments: [],
         status: initialStatus,
+        // Store note on booking so all payment completion paths can mark used
+        internalNotes: homeCollectionNote,
         createdBy: req.user._id,
         subscriptionUsagePending: [],
         confirmedSubscriptionUsage: [],
@@ -3380,6 +2997,7 @@ router.post(
       let razorpayOrder = null;
       let walletResult = null;
 
+      // ── WALLET ──────────────────────────────────────────────────────────────
       if (paymentMethod === "Wallet") {
         walletResult = await processWalletOrPartialPayment({
           userId: req.user._id,
@@ -3392,29 +3010,38 @@ router.post(
         booking.fareBreakdown.walletApplied = walletResult.walletApplied;
         booking.fareBreakdown.amountPaid = walletResult.amountPaid;
         await booking.save();
+
         if (!walletResult.needsRazorpay) {
+          // Fully paid by wallet — mark immediately
+          await flushAndRecord(booking);
+          await processHomeCollectionUsage(booking); // Centralized Usage Marker
           sendPaymentConfirmedEmails({ booking, paymentMethod: "Wallet" });
         }
+        // If needsRazorpay=true (partial wallet), verify-payment will handle
+        // markHomeCollectionUsed via internalNotes on booking
         razorpayOrder = walletResult.razorpayOrder;
       }
 
+      // ── FREE (₹0) via Razorpay path ─────────────────────────────────────────
       if (fareBreakdown.totalAmount === 0 && paymentMethod === "Razorpay") {
         booking.paymentStatus = "paid";
         booking.status = "pending";
         await booking.save();
         await flushAndRecord(booking);
+        await processHomeCollectionUsage(booking); // Centralized Usage Marker
         sendPaymentConfirmedEmails({ booking, paymentMethod: "Free (₹0)" });
       }
 
+      // ── CASH ────────────────────────────────────────────────────────────────
+      // internalNotes already saved on booking above with diagSubId
+      // confirm-cash-payment route reads internalNotes and calls markHomeCollectionUsed
       if (paymentMethod === "Cash") {
         booking.paymentStatus = "pending_cash";
         await booking.save();
       }
 
-      // ── Technician ride ───────────────────────────────────────────────────────
-      const labCoords = lab.registeredAddress?.location?.coordinates || [
-        80.648, 16.506,
-      ];
+      // ── Build ride ────────────────────────────────────────────────────────────
+      const labCoords = lab.registeredAddress?.location?.coordinates || [80.648, 16.506];
       const {
         distanceKm: techDistKm,
         durationMin: techDurMin,
@@ -3438,20 +3065,18 @@ router.post(
         estimatedDistanceKm: techDistKm,
         estimatedDurationMin: techDurMin,
       });
-
       const techTracking = await RideTracking.create({
         ride: techRide._id,
         booking: booking._id,
         expectedRoutePolyline: techPolyline,
       });
-      await Ride.findByIdAndUpdate(techRide._id, {
-        $set: { trackingId: techTracking._id },
-      });
-
+      await Ride.findByIdAndUpdate(techRide._id, { $set: { trackingId: techTracking._id } });
       booking.primaryRide = techRide._id;
       booking.rides = [techRide._id];
       await booking.save();
 
+      // ── Razorpay order (paid flow) ───────────────────────────────────────────
+      // internalNotes already on booking — verify-payment will read it
       if (paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0) {
         razorpayOrder = await createRazorpayOrder(
           fareBreakdown.totalAmount,
@@ -3469,7 +3094,8 @@ router.post(
           fareBreakdown,
           testNames,
           packageNames,
-          homeCollectionFeeWaived: hasHomeSampleCollectionInPlan,
+          homeCollectionFeeWaived: homeCollectionFreeNow,
+          skippedTests: skippedTests.length ? skippedTests : undefined,
           walletSplit: walletResult?.needsRazorpay
             ? {
                 walletApplied: walletResult.walletApplied,
@@ -3512,18 +3138,16 @@ router.post(
         durationHours = 4,
         paymentMethod = "Razorpay",
       } = req.body;
-
-      // ── 1. Validation ─────────────────────────────────────────────────────────
       if (!patientInfo || !patientLocation?.coordinates || !scheduledAt) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "patientInfo, patientLocation.coordinates, scheduledAt required",
-        });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "patientInfo, patientLocation.coordinates, scheduledAt required",
+          });
       }
 
-      // ── 2. Resolve CA fee from subscription / platform ────────────────────────
-      // CHANGE: No CA auto-assign. Fee resolved for fare display only.
       const config = await PlatformPricingConfig.getGlobal();
       const careResult = await resolveCareAssistantFee({
         userId: req.user._id,
@@ -3531,7 +3155,6 @@ router.post(
         config,
       });
 
-      // ── 3. Fare breakdown ─────────────────────────────────────────────────────
       const careAssistantGst = +(
         careResult.fee *
         ((config?.tax?.careAssistantGstPercent ?? 18) / 100)
@@ -3548,7 +3171,6 @@ router.post(
         homeCollectionGst: 0,
       };
 
-      // ── 4. Create booking — careAssistant: null (admin assigns later) ─────────
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -3558,7 +3180,7 @@ router.post(
         bookingType: "care_assistant",
         customer: req.user._id,
         patientInfo,
-        careAssistant: null, // CHANGE: admin assigns manually
+        careAssistant: null,
         scheduledAt: new Date(scheduledAt),
         patientLocation: {
           type: "Point",
@@ -3573,17 +3195,11 @@ router.post(
         payments: [],
         status: initialStatus,
         createdBy: req.user._id,
-        careAssistantSnapshot: null, // CHANGE: null until admin assigns
+        careAssistantSnapshot: null,
         subscriptionUsagePending: [],
         confirmedSubscriptionUsage: [],
       });
 
-      // CHANGE: CA subscription usage NOT queued here.
-      // Admin assignment route must call:
-      //   queueSubscriptionUsage(booking._id, careResult.sub._id, 'careAssistantVisitsUsed')
-      //   then flushAndRecord(booking) after payment confirmed.
-
-      // ── 5. Payment handling ───────────────────────────────────────────────────
       let razorpayOrder = null;
       let walletResult = null;
 
@@ -3610,7 +3226,6 @@ router.post(
         if (walletResult?.razorpayOrder)
           razorpayOrder = walletResult.razorpayOrder;
       }
-
       if (fareBreakdown.totalAmount === 0 && paymentMethod === "Razorpay") {
         booking.paymentStatus = "paid";
         booking.status = "pending";
@@ -3618,12 +3233,10 @@ router.post(
         await flushAndRecord(booking);
         sendPaymentConfirmedEmails({ booking, paymentMethod: "Free (₹0)" });
       }
-
       if (paymentMethod === "Cash") {
         booking.paymentStatus = "pending_cash";
         await booking.save();
       }
-
       if (paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0) {
         razorpayOrder = await createRazorpayOrder(
           fareBreakdown.totalAmount,
@@ -3632,10 +3245,6 @@ router.post(
         );
       }
 
-      // CHANGE: NO rides created here.
-      // Admin creates CA ride when assigning a care assistant to this booking.
-
-      // ── 6. Notifications + emails ─────────────────────────────────────────────
       await createNotification({
         recipient: req.user._id,
         title: "Care Assistant Booking Received",
@@ -3643,10 +3252,8 @@ router.post(
         type: "BOOKING",
         bookingId: booking._id,
       });
-
       sendBookingCreatedEmails({ booking, billing: fareBreakdown });
 
-      // ── 7. Response ───────────────────────────────────────────────────────────
       return res.status(201).json({
         success: true,
         message:
@@ -3657,7 +3264,6 @@ router.post(
           status: booking.status,
           scheduledAt: booking.scheduledAt,
           fareBreakdown,
-
           walletSplit: walletResult?.needsRazorpay
             ? {
                 walletApplied: walletResult.walletApplied,
@@ -3665,33 +3271,27 @@ router.post(
                 message: `₹${walletResult.walletApplied} deducted from wallet. Pay remaining ₹${walletResult.razorpayPortion} via Razorpay.`,
               }
             : null,
-
           subscriptionCoverage: {
             careAssistantFree: careResult.isCoveredBySubscription,
             quotaInfo: careResult.subQuotaInfo?.reason,
             visitsRemaining: careResult.subQuotaInfo?.remaining,
-            // CHANGE: quota consumed at admin assignment, not at booking
             careAssistantNote:
               "Care assistant quota will be consumed when admin assigns a CA to this booking.",
           },
-
-          // CHANGE: both null — admin creates ride + assigns CA
           rides: null,
           caRoute: null,
           careAssistantAssigned: null,
           careAssistantNote:
             "A care assistant will be assigned by our team before your service date. You will receive a notification with their details once assigned.",
-
           durationHours: parseInt(durationHours, 10) || 4,
           pricingSource: careResult.source,
           pricingTier: careResult.tier?.label ?? "Standard",
           razorpayOrder,
-
           socketHint: {
             room: `booking:${booking._id}`,
             events: [
-              "care_assistant_assigned", // fired when admin assigns CA
-              "care_assistant_location_update", // fired after CA starts traveling
+              "care_assistant_assigned",
+              "care_assistant_location_update",
               "care_assistant_status_change",
               "booking_status_change",
             ],
@@ -3707,7 +3307,7 @@ router.post(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /verify-payment — Razorpay signature verification
+// POST /verify-payment
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/verify-payment", protect, async (req, res) => {
   try {
@@ -3718,55 +3318,40 @@ router.post("/verify-payment", protect, async (req, res) => {
       razorpay_signature,
     } = req.body;
 
-    if (
-      !bookingId ||
-      !razorpay_order_id ||
-      !razorpay_payment_id ||
-      !razorpay_signature
-    )
+    if (!bookingId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return res.status(400).json({
         success: false,
-        message:
-          "bookingId, razorpay_order_id, razorpay_payment_id, razorpay_signature required",
+        message: "bookingId, razorpay_order_id, razorpay_payment_id, razorpay_signature required",
       });
+    }
 
     const isValid = verifyRazorpaySignature(
       razorpay_order_id,
       razorpay_payment_id,
       razorpay_signature,
     );
-    if (!isValid)
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid payment signature" });
+    if (!isValid) {
+      return res.status(400).json({ success: false, message: "Invalid payment signature" });
+    }
 
-    // Atomic update — only succeeds if not already paid (race-safe)
-    const booking = await Booking.findOneAndUpdate(
-      {
-        _id: bookingId,
-        customer: req.user._id,
-        paymentStatus: { $ne: "paid" },
-      },
-      { $set: { paymentStatus: "paid" } },
-      { new: true },
-    );
+const booking = await Booking.findOneAndUpdate(
+  {
+    _id: bookingId,
+    customer: req.user._id,
+    paymentStatus: { $ne: "paid" },
+  },
+  { $set: { paymentStatus: "paid" } },
+  { new: true, select: "+internalNotes" },
+);
 
     if (!booking) {
-      // Either not found or already paid
-      const existing = await Booking.findOne({
-        _id: bookingId,
-        customer: req.user._id,
-      })
+      const existing = await Booking.findOne({ _id: bookingId, customer: req.user._id })
         .select("paymentStatus")
         .lean();
-      if (!existing)
-        return res
-          .status(404)
-          .json({ success: false, message: "Booking not found" });
-      // Already paid — idempotent success
-      console.log(
-        `[verify-payment] ⚠️ already paid — skip duplicate for booking:${bookingId}`,
-      );
+      if (!existing) {
+        return res.status(404).json({ success: false, message: "Booking not found" });
+      }
+      console.log(`[verify-payment] ⚠️ already paid — skip duplicate for booking:${bookingId}`);
       return res.json({
         success: true,
         message: "Already verified",
@@ -3776,10 +3361,8 @@ router.post("/verify-payment", protect, async (req, res) => {
 
     if (booking.status === "payment_pending") booking.status = "pending";
 
-    // Razorpay portion = total minus any wallet already applied
     const razorpayPortion = +(
-      booking.fareBreakdown.totalAmount -
-      (booking.fareBreakdown.walletApplied || 0)
+      booking.fareBreakdown.totalAmount - (booking.fareBreakdown.walletApplied || 0)
     ).toFixed(2);
 
     booking.payments.push({
@@ -3791,17 +3374,16 @@ router.post("/verify-payment", protect, async (req, res) => {
       status: "success",
       paidAt: new Date(),
     });
-
-    booking.fareBreakdown.amountPaid = booking.fareBreakdown.totalAmount; // fully paid now
+    booking.fareBreakdown.amountPaid = booking.fareBreakdown.totalAmount;
     booking.updatedBy = req.user._id;
     await booking.save();
 
     await flushAndRecord(booking);
-    console.log(
-      `[verify-payment] ✅ payment verified + usage flushed for booking:${bookingId}`,
-    );
+    
+    // Centralized Usage Marker for home collection
+    await processHomeCollectionUsage(booking);
 
-    // Send confirmation emails ONLY after payment verified
+    console.log(`[verify-payment] ✅ payment verified + usage flushed for booking:${bookingId}`);
     sendPaymentConfirmedEmails({ booking, paymentMethod: "Razorpay" });
     sendStatusUpdateEmails({ booking, newStatus: "Confirmed" });
 
@@ -3817,8 +3399,7 @@ router.post("/verify-payment", protect, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /delete-failed-booking — called by frontend when Razorpay fails/cancelled
-// Hard deletes booking, auto-refunds wallet if wallet was partially applied
+// POST /delete-failed-booking
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/delete-failed-booking", protect, async (req, res) => {
   try {
@@ -3827,7 +3408,6 @@ router.post("/delete-failed-booking", protect, async (req, res) => {
       return res
         .status(400)
         .json({ success: false, message: "bookingId required" });
-
     const booking = await Booking.findOne({
       _id: bookingId,
       customer: req.user._id,
@@ -3836,23 +3416,18 @@ router.post("/delete-failed-booking", protect, async (req, res) => {
       return res
         .status(404)
         .json({ success: false, message: "Booking not found" });
-
-    // Only delete if still in payment_pending / unpaid — not if already paid
-    if (booking.paymentStatus === "paid") {
+    if (booking.paymentStatus === "paid")
       return res
         .status(400)
         .json({
           success: false,
           message: "Booking already paid — cannot delete",
         });
-    }
-
     const walletToRefund =
       walletApplied > 0
         ? walletApplied
         : booking.fareBreakdown?.walletApplied || 0;
     await deleteBookingHard(bookingId, walletToRefund, req.user._id);
-
     return res.json({
       success: true,
       message: `Booking deleted. Wallet refunded: ₹${walletToRefund}`,
@@ -3865,7 +3440,7 @@ router.post("/delete-failed-booking", protect, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /confirm-cash-payment — admin confirms cash collected
+// POST /confirm-cash-payment
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
   "/confirm-cash-payment",
@@ -3878,11 +3453,10 @@ router.post(
         return res
           .status(400)
           .json({ success: false, message: "bookingId required" });
-
-      const booking = await Booking.findOne({
-        _id: bookingId,
-        paymentStatus: "pending_cash",
-      });
+   const booking = await Booking.findOne({
+  _id: bookingId,
+  paymentStatus: "pending_cash",
+}).select("+internalNotes");
       if (!booking)
         return res
           .status(404)
@@ -3890,7 +3464,6 @@ router.post(
             success: false,
             message: "Booking not found or not in pending_cash status",
           });
-
       if (booking.paymentStatus === "paid") {
         console.log(
           `[confirm-cash-payment] ⚠️ already confirmed for booking:${bookingId}`,
@@ -3901,7 +3474,6 @@ router.post(
           data: { bookingId },
         });
       }
-
       booking.paymentStatus = "paid";
       booking.payments.push({
         gateway: "Cash",
@@ -3915,15 +3487,17 @@ router.post(
         amountCollected ?? booking.fareBreakdown.totalAmount;
       booking.updatedBy = req.user._id;
       await booking.save();
-
+      
       await flushAndRecord(booking);
+      
+      // Centralized Usage Marker for home collection
+      await processHomeCollectionUsage(booking);
+
       console.log(
         `[confirm-cash-payment] ✅ cash confirmed + usage flushed for booking:${bookingId}`,
       );
-
       sendPaymentConfirmedEmails({ booking, paymentMethod: "Cash" });
       sendStatusUpdateEmails({ booking, newStatus: "Confirmed" });
-
       return res.json({
         success: true,
         message: "Cash payment confirmed. Subscription usage flushed.",
@@ -3939,17 +3513,14 @@ router.post(
 // ═════════════════════════════════════════════════════════════════════════════
 // BOOKING MANAGEMENT
 // ═════════════════════════════════════════════════════════════════════════════
-
 router.get("/my-bookings", protect, authorize("customer"), async (req, res) => {
   try {
     const { status, bookingType, page = "1", limit = "10" } = req.query;
     const filter = { customer: req.user._id };
     if (status) filter.status = status;
     if (bookingType) filter.bookingType = bookingType;
-
     const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const total = await Booking.countDocuments(filter);
-
     const bookings = await Booking.find(filter)
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -3969,7 +3540,6 @@ router.get("/my-bookings", protect, authorize("customer"), async (req, res) => {
         "-internalNotes -__v -subscriptionUsagePending -confirmedSubscriptionUsage",
       )
       .lean();
-
     res.json({
       success: true,
       total,
@@ -4003,16 +3573,14 @@ router.get(
           "status rideCode driverSnapshot scheduledPickupAt liveLocation estimatedDistanceKm estimatedDurationMin trackingId pickup dropoff",
         )
         .populate("diagnosticDetails.labPartner", "labName registeredAddress")
-        // 👇 ADD THIS LINE 👇
         .populate(
           "consultationSessionId",
-          "consultationId status meetingLink roomId scheduledStartTime actualDurationMinutes", // 👈 Added consultationId here
+          "consultationId status meetingLink roomId scheduledStartTime actualDurationMinutes",
         )
         .select(
           "-internalNotes -__v -subscriptionUsagePending -confirmedSubscriptionUsage",
         )
         .lean();
-
       if (!booking)
         return res
           .status(404)
@@ -4035,7 +3603,6 @@ router.get(
           };
         }
       }
-
       res.json({ success: true, data: { ...booking, mapRoute } });
     } catch (err) {
       res.status(500).json({ success: false, message: err.message });
@@ -4043,9 +3610,6 @@ router.get(
   },
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /my-bookings/:bookingId/cancel
-// ─────────────────────────────────────────────────────────────────────────────
 router.post(
   "/my-bookings/:bookingId/cancel",
   protect,
@@ -4060,18 +3624,18 @@ router.post(
         return res
           .status(404)
           .json({ success: false, message: "Booking not found" });
-
       if (
         !["pending", "confirmed", "pending_cash", "payment_pending"].includes(
           booking.status,
         )
-      )
+      ) {
         return res
           .status(400)
           .json({
             success: false,
             message: `Cannot cancel booking in status: ${booking.status}`,
           });
+      }
 
       let refundPercent = 0,
         refundAmount = 0;
@@ -4080,7 +3644,6 @@ router.post(
       }
 
       const recoveryResult = await recoverSubscriptionUsageOnCancel(booking);
-
       booking.status = "cancelled";
       booking.cancellation = {
         cancelledBy: "customer",
@@ -4120,9 +3683,7 @@ router.post(
         type: "BOOKING",
         bookingId: booking._id,
       });
-
       sendCancellationEmails({ booking, refundAmount, refundPercent });
-
       console.log(
         `[cancel] ✅ booking:${booking._id} cancelled. recovery:`,
         recoveryResult,
@@ -4183,7 +3744,6 @@ router.post(
         labRating,
         labComment,
       } = req.body;
-
       if (!overallRating || overallRating < 1 || overallRating > 5)
         return res
           .status(400)
@@ -4206,7 +3766,6 @@ router.post(
       booking.isRated = true;
       booking.updatedBy = req.user._id;
       await booking.save();
-
       res.json({ success: true, message: "Rating submitted successfully" });
     } catch (err) {
       res.status(500).json({ success: false, message: err.message });
@@ -4214,7 +3773,6 @@ router.post(
   },
 );
 
-// GET /my-bookings/:bookingId/op-download
 router.get(
   "/my-bookings/:bookingId/op-download",
   protect,
@@ -4231,7 +3789,6 @@ router.get(
         return res
           .status(404)
           .json({ success: false, message: "Booking not found" });
-
       const op = await OutPatientRecord.findOne({
         booking: req.params.bookingId,
       }).lean();
@@ -4265,7 +3822,6 @@ router.get(
       });
       const zip = await buildOpZipBuffer(html, op.opNumber);
       const fname = `${op.opNumber.replace(/[^a-zA-Z0-9\-_]/g, "_")}.zip`;
-
       res.setHeader("Content-Type", "application/zip");
       res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
       return res.send(zip);
@@ -4276,7 +3832,6 @@ router.get(
   },
 );
 
-// GET /platform-pricing
 router.get("/platform-pricing", async (req, res) => {
   try {
     const config = await PlatformPricingConfig.findOne({
@@ -4297,7 +3852,7 @@ router.get("/platform-pricing", async (req, res) => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// GET /subscription-benefits/consultations
+// SUBSCRIPTION BENEFIT ENDPOINTS
 // ═════════════════════════════════════════════════════════════════════════════
 router.get(
   "/subscription-benefits/consultations",
@@ -4312,14 +3867,12 @@ router.get(
       })
         .populate("plan", "name planType consultations customOptions fixedTier")
         .lean();
-
       if (!sub)
         return res
           .status(404)
           .json({ success: false, message: "No active subscription found." });
 
       let perMonth = sub.limits?.consultationsPerMonth ?? 0;
-
       if (perMonth === 0 && sub.plan) {
         if (
           sub.plan.planType === "custom" &&
@@ -4346,7 +3899,6 @@ router.get(
         : perMonth === 0
           ? 100
           : Math.min(100, Math.round((used / perMonth) * 100));
-
       const modes = sub.plan?.consultations?.modes ?? {
         inPerson: true,
         video: false,
@@ -4380,9 +3932,6 @@ router.get(
   },
 );
 
-// ═════════════════════════════════════════════════════════════════════════════
-// GET /subscription-benefits/care-assistant
-// ═════════════════════════════════════════════════════════════════════════════
 router.get(
   "/subscription-benefits/care-assistant",
   protect,
@@ -4396,14 +3945,12 @@ router.get(
       })
         .populate("plan", "name planType careAssistant customOptions fixedTier")
         .lean();
-
       if (!sub)
         return res
           .status(404)
           .json({ success: false, message: "No active subscription found." });
 
       let visitsPerMonth = sub.limits?.careAssistantVisitsPerMonth ?? null;
-
       if (visitsPerMonth == null && sub.plan) {
         if (
           sub.plan.planType === "custom" &&
@@ -4460,7 +4007,6 @@ router.get(
                 source: "snapshotted",
               }
             : null;
-
         const customTiers =
           config?.customPlanOptions?.careAssistant?.pricingTiers ?? [];
         allTiers = customTiers.map((t, idx) => ({
@@ -4484,7 +4030,6 @@ router.get(
             chargeToUser: t.chargeToUser,
             isActive: true,
           }));
-
         const serviceType = sub.plan?.careAssistant?.serviceType ?? "Standard";
         activeTier = {
           label:
@@ -4540,9 +4085,6 @@ router.get(
   },
 );
 
-// ═══════════════════════════════════════════════════════════════════════
-// GET /subscription-benefits/labs
-// ═══════════════════════════════════════════════════════════════════════
 router.get(
   "/subscription-benefits/labs",
   protect,
@@ -4556,13 +4098,11 @@ router.get(
       })
         .populate("plan", "name planType diagnostics customOptions fixedTier")
         .lean();
-
       if (!sub)
         return res
           .status(404)
           .json({ success: false, message: "No active subscription found." });
 
-      // ── Resolve discount % ───────────────────────────────────────────────────
       let discountPercent = sub.limits?.diagnosticsDiscountPercent ?? null;
       let homeSampleCollection = sub.limits?.homeSampleCollection ?? null;
 
@@ -4598,11 +4138,7 @@ router.get(
       discountPercent = discountPercent ?? 0;
       homeSampleCollection = homeSampleCollection ?? false;
 
-      // ── Resolve home-visit usage (track via diagnosticBookingsMade for home) ─
-      // Home collection visits tracked in usageHistory.diagnosticBookingsMade
-      // Home visit limit: derive from plan or sub.limits
       let homeVisitLimit = null;
-
       if (sub.plan) {
         if (
           sub.plan.planType === "custom" &&
@@ -4618,7 +4154,7 @@ router.get(
                 : hscOpt.quantity
               : null;
         } else {
-          homeVisitLimit = homeSampleCollection ? -1 : null; // fixed plan: unlimited if included
+          homeVisitLimit = homeSampleCollection ? -1 : null;
         }
       }
 
@@ -4626,25 +4162,25 @@ router.get(
       const usage = sub.usageHistory?.find(
         (u) => u.month === now.getMonth() + 1 && u.year === now.getFullYear(),
       );
-
       const homeVisitsUsed = usage?.diagnosticBookingsMade ?? 0;
-      const homeVisitUnlimited = homeVisitLimit === -1;
+      const homeCollectionUsedOnce = sub.limits?.homeCollectionUsedOnce ?? false;
+
+      // HOME COLLECTION FIX:
+      // All plans (fixed + custom) treat home sample as ONE-TIME per billing cycle.
+      // homeCollectionUsedOnce is the canonical flag — use it for all plan types.
+      // homeVisitLimit -1 = "included" for fixed plans (not truly unlimited — still one-time).
+      const homeVisitUnlimited = false; // never unlimited — always one-time per cycle
+      const homeCollectionAvailable = homeSampleCollection === true && homeCollectionUsedOnce === false;
       const homeVisitsRemaining = !homeSampleCollection
         ? 0
-        : homeVisitUnlimited
-          ? null // null = unlimited
-          : Math.max(0, (homeVisitLimit ?? 0) - homeVisitsUsed);
-
+        : homeCollectionAvailable
+          ? 1   // one use remaining
+          : 0;  // already used or not included
       const homeVisitPercentUsed = !homeSampleCollection
         ? 100
-        : homeVisitUnlimited
-          ? null
-          : homeVisitLimit === 0
-            ? 100
-            : Math.min(
-                100,
-                Math.round((homeVisitsUsed / homeVisitLimit) * 100),
-              );
+        : homeCollectionUsedOnce
+          ? 100
+          : 0;
 
       return res.json({
         success: true,
@@ -4664,16 +4200,15 @@ router.get(
           },
           homeCollection: {
             included: homeSampleCollection,
-            homeVisitLimit,
-            homeVisitsUsed,
+            homeCollectionUsedOnce,
+            homeCollectionAvailable,
             homeVisitsRemaining,
-            homeVisitUnlimited,
             homeVisitPercentUsed,
-            message: homeSampleCollection
-              ? homeVisitUnlimited
-                ? "Home sample collection included — unlimited"
-                : `Home collection: ${homeVisitsRemaining} visit(s) remaining this month`
-              : "Home collection not in your plan — standard fee applies",
+            message: !homeSampleCollection
+              ? "Home collection not in your plan — standard fee applies"
+              : homeCollectionAvailable
+                ? "Home sample collection available — 1 free visit remaining this cycle"
+                : "Home sample collection already used this billing cycle — standard fee applies",
           },
         },
       });

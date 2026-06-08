@@ -1,211 +1,246 @@
- 
-
-import mongoose from 'mongoose';
-import { customAlphabet } from 'nanoid';
+import mongoose from "mongoose";
+import { customAlphabet } from "nanoid";
 
 const { Schema } = mongoose;
 
-const generateBookingCode = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 8);
+const generateBookingCode = customAlphabet(
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+  8,
+);
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 export const BOOKING_TYPES = [
-  'full_care_ride',
-  'doctor_consultation',
-  'doctor_online',
-  'physiotherapist',
-  'care_assistant',
-  'diagnostic_center',
-  'diagnostic_home',
-  'patient_transport',
-  'follow_up',
+  "full_care_ride",
+  "doctor_consultation",
+  "doctor_online",
+  "physiotherapist",
+  "care_assistant",
+  "diagnostic_center",
+  "diagnostic_home",
+  "patient_transport",
+  "follow_up",
 ];
 
 export const BOOKING_STATUSES = [
-  'draft',
-  'payment_pending', 
-  'pending',
-  'confirmed',
-  'in_progress',
-  'completed',
-  'cancelled',
-  'no_show',
-  'refund_pending',
-  'refunded',
+  "draft",
+  "payment_pending",
+  "pending",
+  "confirmed",
+  "in_progress",
+  "completed",
+  "cancelled",
+  "no_show",
+  "refund_pending",
+  "refunded",
 ];
 
 export const PAYMENT_STATUSES = [
-  'unpaid',
-  'pending',
-  'payment_pending',
-  'paid',
-  'partially_paid',
-  'failed',
-  'refunded',
-  'pending_cash',
-  'partially_refunded',
-  'waived',
+  "unpaid",
+  "pending",
+  "payment_pending",
+  "paid",
+  "partially_paid",
+  "failed",
+  "refunded",
+  "pending_cash",
+  "partially_refunded",
+  "waived",
 ];
 
 export const CANCELLATION_ACTORS = [
-  'customer',
-  'doctor',
-  'hospital',
-  'care_assistant',
-  'driver',
-  'lab_partner',
-  'admin',
-  'system',
+  "customer",
+  "doctor",
+  "hospital",
+  "care_assistant",
+  "driver",
+  "lab_partner",
+  "admin",
+  "system",
 ];
 
 // ── Sub-Schemas ───────────────────────────────────────────────────────────────
 
 const geoPointSchema = new Schema(
   {
-    type:        { type: String, enum: ['Point'], default: 'Point' },
+    type: { type: String, enum: ["Point"], default: "Point" },
     coordinates: { type: [Number], required: true },
-    label:       { type: String, trim: true },
-    address:     { type: String, trim: true },
-    city:        { type: String, trim: true },
-    pincode:     { type: String, trim: true },
+    label: { type: String, trim: true },
+    address: { type: String, trim: true },
+    city: { type: String, trim: true },
+    pincode: { type: String, trim: true },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const fareBreakdownSchema = new Schema(
   {
-    consultationFee:   { type: Number, default: 0, min: 0 },
-    careAssistantFee:  { type: Number, default: 0, min: 0 },
-    transportFee:      { type: Number, default: 0, min: 0 },
-    diagnosticFee:     { type: Number, default: 0, min: 0 },
+    consultationFee: { type: Number, default: 0, min: 0 },
+    careAssistantFee: { type: Number, default: 0, min: 0 },
+    transportFee: { type: Number, default: 0, min: 0 },
+    diagnosticFee: { type: Number, default: 0, min: 0 },
     homeCollectionFee: { type: Number, default: 0, min: 0 },
-    platformFee:       { type: Number, default: 0, min: 0 },
-    taxes:             { type: Number, default: 0, min: 0 },
+    platformFee: { type: Number, default: 0, min: 0 },
+    taxes: { type: Number, default: 0, min: 0 },
     // Per-service GST breakdown (mixed rates: transport 5%, CA 18%, consult 0%, diag 5%)
     taxBreakdown: {
-      consultationGst:   { type: Number, default: 0 },
-      transportGst:      { type: Number, default: 0 },
-      careAssistantGst:  { type: Number, default: 0 },
-      diagnosticGst:     { type: Number, default: 0 },
+      consultationGst: { type: Number, default: 0 },
+      transportGst: { type: Number, default: 0 },
+      careAssistantGst: { type: Number, default: 0 },
+      diagnosticGst: { type: Number, default: 0 },
       homeCollectionGst: { type: Number, default: 0 },
     },
-    discount:          { type: Number, default: 0, min: 0 },
-    couponDiscount:    { type: Number, default: 0, min: 0 },
-    walletApplied:     { type: Number, default: 0, min: 0 },
-    totalAmount:       { type: Number, default: 0, min: 0 },
-    amountPaid:        { type: Number, default: 0, min: 0 },
-    refundAmount:      { type: Number, default: 0, min: 0 },
-    currency:          { type: String, default: 'INR' },
+    discount: { type: Number, default: 0, min: 0 },
+    couponDiscount: { type: Number, default: 0, min: 0 },
+    walletApplied: { type: Number, default: 0, min: 0 },
+    totalAmount: { type: Number, default: 0, min: 0 },
+    amountPaid: { type: Number, default: 0, min: 0 },
+    refundAmount: { type: Number, default: 0, min: 0 },
+    currency: { type: String, default: "INR" },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const paymentSchema = new Schema(
   {
-    gateway:       { type: String, enum: ['Razorpay', 'Cashfree', 'PayU', 'PhonePe', 'Wallet', 'Cash', 'Manual'] },
+    gateway: {
+      type: String,
+      enum: [
+        "Razorpay",
+        "Cashfree",
+        "PayU",
+        "PhonePe",
+        "Wallet",
+        "Cash",
+        "Manual",
+      ],
+    },
     transactionId: { type: String, trim: true },
-    orderId:       { type: String, trim: true },
-    paymentMode:   { type: String, enum: ['UPI', 'Card', 'NetBanking', 'Wallet', 'Cash', 'EMI', 'Other'] },
-    amount:        { type: Number, required: true, min: 0 },
-    status:        { type: String, enum: ['initiated', 'success', 'failed', 'refunded'], default: 'initiated' },
-    paidAt:        { type: Date },
-    refundedAt:    { type: Date },
-    refundId:      { type: String },
-    notes:         { type: String },
+    orderId: { type: String, trim: true },
+    paymentMode: {
+      type: String,
+      enum: ["UPI", "Card", "NetBanking", "Wallet", "Cash", "EMI", "Other"],
+    },
+    amount: { type: Number, required: true, min: 0 },
+    status: {
+      type: String,
+      enum: ["initiated", "success", "failed", "refunded"],
+      default: "initiated",
+    },
+    paidAt: { type: Date },
+    refundedAt: { type: Date },
+    refundId: { type: String },
+    notes: { type: String },
   },
-  { _id: true, timestamps: true }
+  { _id: true, timestamps: true },
 );
 
 const patientInfoSchema = new Schema(
   {
-    name:       { type: String, required: true, trim: true },
-    age:        { type: Number, min: 0, max: 150 },
-    gender:     { type: String, enum: ['Male', 'Female', 'Other', 'Prefer Not to Say'] },
-    phone:      { type: String },
-    bloodGroup: { type: String, enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'Unknown'] },
-    weight:     { type: Number, min: 0 },
-    isSelf:     { type: Boolean, default: true },
+    name: { type: String, required: true, trim: true },
+    age: { type: Number, min: 0, max: 150 },
+    gender: {
+      type: String,
+      enum: ["Male", "Female", "Other", "Prefer Not to Say"],
+    },
+    phone: { type: String },
+    bloodGroup: {
+      type: String,
+      enum: ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-", "Unknown"],
+    },
+    weight: { type: Number, min: 0 },
+    isSelf: { type: Boolean, default: true },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const documentSchema = new Schema(
   {
     docType: {
       type: String,
-      enum: ['prescription', 'lab_report', 'discharge_summary', 'id_proof', 'insurance', 'other'],
+      enum: [
+        "prescription",
+        "lab_report",
+        "discharge_summary",
+        "id_proof",
+        "insurance",
+        "other",
+      ],
     },
-    url:          { type: String, required: true },
+    url: { type: String, required: true },
     originalName: { type: String },
-    uploadedAt:   { type: Date, default: Date.now },
+    uploadedAt: { type: Date, default: Date.now },
   },
-  { _id: true }
+  { _id: true },
 );
 
 const diagnosticDetailsSchema = new Schema(
   {
-    labPartner:         { type: Schema.Types.ObjectId, ref: 'LabPartnerProfile' },
- tests:    [{ type: Schema.Types.Mixed }],
-packages: [{ type: Schema.Types.Mixed }],
-    testNames:          [{ type: String, trim: true }],
-     
-    packageNames:       [{ type: String, trim: true }],
-    sampleCollectedAt:  { type: Date },
-    reportDeliveryMode: { type: String, enum: ['Digital (App)', 'Email', 'WhatsApp', 'Physical Copy'] },
-    reportUrl:          { type: String },
-    reportReadyAt:      { type: Date },
-    technicianName:     { type: String },
+    labPartner: { type: Schema.Types.ObjectId, ref: "LabPartnerProfile" },
+    tests: [{ type: Schema.Types.Mixed }],
+    packages: [{ type: Schema.Types.Mixed }],
+    testNames: [{ type: String, trim: true }],
+
+    packageNames: [{ type: String, trim: true }],
+    sampleCollectedAt: { type: Date },
+    reportDeliveryMode: {
+      type: String,
+      enum: ["Digital (App)", "Email", "WhatsApp", "Physical Copy"],
+    },
+    reportUrl: { type: String },
+    reportReadyAt: { type: Date },
+    technicianName: { type: String },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const cancellationSchema = new Schema(
   {
-    cancelledBy:       { type: String, enum: CANCELLATION_ACTORS },
-    cancelledByUserId: { type: Schema.Types.ObjectId, ref: 'User' },
-    reason:            { type: String, trim: true },
-    refundEligible:    { type: Boolean, default: false },
-    refundPercent:     { type: Number, min: 0, max: 100 },
-    cancelledAt:       { type: Date, default: Date.now },
+    cancelledBy: { type: String, enum: CANCELLATION_ACTORS },
+    cancelledByUserId: { type: Schema.Types.ObjectId, ref: "User" },
+    reason: { type: String, trim: true },
+    refundEligible: { type: Boolean, default: false },
+    refundPercent: { type: Number, min: 0, max: 100 },
+    cancelledAt: { type: Date, default: Date.now },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const statusLogSchema = new Schema(
   {
     fromStatus: { type: String },
-    toStatus:   { type: String, required: true },
-    changedBy:  { type: Schema.Types.ObjectId, ref: 'User' },
-    reason:     { type: String },
-    changedAt:  { type: Date, default: Date.now },
+    toStatus: { type: String, required: true },
+    changedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    reason: { type: String },
+    changedAt: { type: Date, default: Date.now },
   },
-  { _id: true }
+  { _id: true },
 );
 
 const ratingSchema = new Schema(
   {
-    doctorRating:         { type: Number, min: 1, max: 5 },
-    doctorComment:        { type: String, trim: true },
-    careAssistantRating:  { type: Number, min: 1, max: 5 },
+    doctorRating: { type: Number, min: 1, max: 5 },
+    doctorComment: { type: String, trim: true },
+    careAssistantRating: { type: Number, min: 1, max: 5 },
     careAssistantComment: { type: String, trim: true },
-    driverRating:         { type: Number, min: 1, max: 5 },
-    driverComment:        { type: String, trim: true },
-    labRating:            { type: Number, min: 1, max: 5 },
-    labComment:           { type: String, trim: true },
-    overallRating:        { type: Number, min: 1, max: 5 },
-    overallComment:       { type: String, trim: true },
-    ratedAt:              { type: Date },
-    isPublic:             { type: Boolean, default: true },
+    driverRating: { type: Number, min: 1, max: 5 },
+    driverComment: { type: String, trim: true },
+    labRating: { type: Number, min: 1, max: 5 },
+    labComment: { type: String, trim: true },
+    overallRating: { type: Number, min: 1, max: 5 },
+    overallComment: { type: String, trim: true },
+    ratedAt: { type: Date },
+    isPublic: { type: Boolean, default: true },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const subscriptionUsagePendingSchema = new Schema(
   {
-    subId:  { type: String, required: true },
-    field:  { type: String, required: true },
+    subId: { type: String, required: true },
+    field: { type: String, required: true },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // ── Main Schema ───────────────────────────────────────────────────────────────
@@ -214,99 +249,99 @@ const bookingSchema = new Schema(
   {
     // ── Identity ──────────────────────────────────────────────────────────────
     bookingCode: {
-      type:      String,
-      unique:    true,
-      sparse:    true,
+      type: String,
+      unique: true,
+      sparse: true,
       uppercase: true,
-      trim:      true,
-      index:     true,
+      trim: true,
+      index: true,
     },
 
     bookingType: {
-      type:     String,
+      type: String,
       required: true,
-      enum:     BOOKING_TYPES,
-      index:    true,
+      enum: BOOKING_TYPES,
+      index: true,
     },
 
     // ── Parties ───────────────────────────────────────────────────────────────
     customer: {
-      type:     Schema.Types.ObjectId,
-      ref:      'User',
+      type: Schema.Types.ObjectId,
+      ref: "User",
       required: true,
-      index:    true,
+      index: true,
     },
 
     patientInfo: {
-      type:     patientInfoSchema,
+      type: patientInfoSchema,
       required: true,
     },
 
     // ── Medical Service Providers ─────────────────────────────────────────────
     doctor: {
-      type:    Schema.Types.ObjectId,
-      ref:     'DoctorProfile',
+      type: Schema.Types.ObjectId,
+      ref: "DoctorProfile",
       default: null,
-      index:   true,
+      index: true,
     },
 
     hospital: {
-      type:    Schema.Types.ObjectId,
-      ref:     'Hospital',
+      type: Schema.Types.ObjectId,
+      ref: "Hospital",
       default: null,
-      index:   true,
+      index: true,
     },
 
     careAssistant: {
-      type:    Schema.Types.ObjectId,
-      ref:     'CareAssistantProfile',
+      type: Schema.Types.ObjectId,
+      ref: "CareAssistantProfile",
       default: null,
-      index:   true,
+      index: true,
     },
 
     transportPartner: {
-      type:    Schema.Types.ObjectId,
-      ref:     'TransportPartner',
+      type: Schema.Types.ObjectId,
+      ref: "TransportPartner",
       default: null,
-      index:   true,
+      index: true,
     },
 
     driver: {
-      type:    Schema.Types.ObjectId,
-      ref:     'DriverProfile',
+      type: Schema.Types.ObjectId,
+      ref: "DriverProfile",
       default: null,
-      index:   true,
+      index: true,
     },
 
     solodriverpartner: {
-      type:    Schema.Types.ObjectId,
-      ref:     'SoloDriverPartner',
+      type: Schema.Types.ObjectId,
+      ref: "SoloDriverPartner",
       default: null,
-      index:   true,
+      index: true,
     },
 
     labPartner: {
-      type:    Schema.Types.ObjectId,
-      ref:     'LabPartnerProfile',
+      type: Schema.Types.ObjectId,
+      ref: "LabPartnerProfile",
       default: null,
-      index:   true,
+      index: true,
     },
 
     // ── Consultation Details ──────────────────────────────────────────────────
     consultationType: {
-      type:    String,
-      enum:    ['inPerson', 'video', 'homeVisit', null],
+      type: String,
+      enum: ["inPerson", "video", "homeVisit", null],
       default: null,
     },
 
     scheduledAt: {
-      type:     Date,
+      type: Date,
       required: true,
-      index:    true,
+      index: true,
     },
 
     slotId: {
-      type:    Schema.Types.ObjectId,
+      type: Schema.Types.ObjectId,
       default: null,
     },
 
@@ -316,24 +351,24 @@ const bookingSchema = new Schema(
      *
     /** */
     consultationSessionId: {
-      type:    Schema.Types.ObjectId,
-      ref:     'Consultation',
+      type: Schema.Types.ObjectId,
+      ref: "Consultation",
       default: null,
-      index:   true,
+      index: true,
     },
 
     // ── Location ──────────────────────────────────────────────────────────────
     patientLocation: {
-      type:    geoPointSchema,
+      type: geoPointSchema,
       default: null,
     },
 
     destinationLocation: {
-      type:    geoPointSchema,
+      type: geoPointSchema,
       default: null,
     },
 
-        careAssistantPickupLocation: {
+    careAssistantPickupLocation: {
       type: geoPointSchema,
       default: null,
     },
@@ -341,7 +376,7 @@ const bookingSchema = new Schema(
     nearestHospitalSnapshot: {
       hospital: {
         type: Schema.Types.ObjectId,
-        ref: 'Hospital',
+        ref: "Hospital",
         default: null,
       },
 
@@ -363,23 +398,23 @@ const bookingSchema = new Schema(
 
     // ── Diagnostic Details ────────────────────────────────────────────────────
     diagnosticDetails: {
-      type:    diagnosticDetailsSchema,
+      type: diagnosticDetailsSchema,
       default: null,
     },
 
     // ── Follow-up Chain ───────────────────────────────────────────────────────
     followUpParentBooking: {
-      type:    Schema.Types.ObjectId,
-      ref:     'Booking',
+      type: Schema.Types.ObjectId,
+      ref: "Booking",
       default: null,
-      index:   true,
+      index: true,
     },
 
     followUpDiscountPercent: {
-      type:    Number,
+      type: Number,
       default: 0,
-      min:     0,
-      max:     100,
+      min: 0,
+      max: 100,
     },
 
     confirmedSubscriptionUsage: {
@@ -396,280 +431,308 @@ const bookingSchema = new Schema(
     rides: [
       {
         type: Schema.Types.ObjectId,
-        ref:  'Ride',
+        ref: "Ride",
       },
     ],
 
     primaryRide: {
-      type:    Schema.Types.ObjectId,
-      ref:     'Ride',
+      type: Schema.Types.ObjectId,
+      ref: "Ride",
       default: null,
-      index:   true,
+      index: true,
     },
 
     returnRide: {
-      type:    Schema.Types.ObjectId,
-      ref:     'Ride',
+      type: Schema.Types.ObjectId,
+      ref: "Ride",
       default: null,
     },
 
     // ── Patient Documents ─────────────────────────────────────────────────────
     documents: {
-      type:    [documentSchema],
+      type: [documentSchema],
       default: [],
     },
 
     // ── Pricing & Payment ─────────────────────────────────────────────────────
     fareBreakdown: {
-      type:    fareBreakdownSchema,
+      type: fareBreakdownSchema,
       default: () => ({}),
     },
 
     pricingSource: {
       type: String,
-      enum: ['hospital', 'doctor', 'platform', 'subscription'],
+      enum: ["hospital", "doctor", "platform", "subscription"],
     },
 
     paymentStatus: {
-      type:    String,
-      enum:    PAYMENT_STATUSES,
-      default: 'unpaid',
-      index:   true,
+      type: String,
+      enum: PAYMENT_STATUSES,
+      default: "unpaid",
+      index: true,
     },
 
     payments: {
-      type:    [paymentSchema],
+      type: [paymentSchema],
       default: [],
     },
 
-    couponCode:    { type: String, uppercase: true, trim: true },
+    couponCode: { type: String, uppercase: true, trim: true },
     coinsRedeemed: { type: Number, default: 0, min: 0 },
 
     // ── Status & Lifecycle ────────────────────────────────────────────────────
     status: {
-      type:    String,
-      enum:    BOOKING_STATUSES,
-      default: 'pending',
-      index:   true,
+      type: String,
+      enum: BOOKING_STATUSES,
+      default: "pending",
+      index: true,
     },
 
     statusLog: {
-      type:    [statusLogSchema],
+      type: [statusLogSchema],
       default: [],
     },
 
     cancellation: {
-      type:    cancellationSchema,
+      type: cancellationSchema,
       default: null,
     },
 
     completedAt: { type: Date },
 
     // ── Rating ────────────────────────────────────────────────────────────────
-    rating:  { type: ratingSchema, default: null },
+    rating: { type: ratingSchema, default: null },
     isRated: { type: Boolean, default: false, index: true },
 
     // ── Staff Snapshots ───────────────────────────────────────────────────────
     doctorSnapshot: {
-      name:               { type: String },
-      specialization:     { type: String },
+      name: { type: String },
+      specialization: { type: String },
       registrationNumber: { type: String },
-      profilePhotoUrl:    { type: String },
+      profilePhotoUrl: { type: String },
     },
 
     careAssistantSnapshot: {
-      name:     { type: String },
+      name: { type: String },
       photoUrl: { type: String },
-      phone:    { type: String },
+      phone: { type: String },
     },
 
     // ── Notifications ─────────────────────────────────────────────────────────
     notificationsSent: {
       bookingConfirmation: { type: Boolean, default: false },
-      reminderSent:        { type: Boolean, default: false },
-      rideStarted:         { type: Boolean, default: false },
-      completionSummary:   { type: Boolean, default: false },
+      reminderSent: { type: Boolean, default: false },
+      rideStarted: { type: Boolean, default: false },
+      completionSummary: { type: Boolean, default: false },
     },
 
     // ── Deferred subscription usage increments ────────────────────────────────
     subscriptionUsagePending: {
-      type:    [subscriptionUsagePendingSchema],
+      type: [subscriptionUsagePendingSchema],
       default: [],
     },
 
     // ── Admin / Internal ──────────────────────────────────────────────────────
-    assignedAdminId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
-    internalNotes:   { type: String, trim: true, select: false },
-    isTestBooking:   { type: Boolean, default: false },
+    assignedAdminId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    internalNotes: { type: String, trim: true, select: false },
+    isTestBooking: { type: Boolean, default: false },
 
-    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
-    updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    createdBy: { type: Schema.Types.ObjectId, ref: "User" },
+    updatedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   {
     timestamps: true,
-    toJSON:     { virtuals: true },
-    toObject:   { virtuals: true },
-  }
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  },
 );
 
 // ── Virtuals ──────────────────────────────────────────────────────────────────
 
-bookingSchema.virtual('isActive').get(function () {
-  return ['pending', 'confirmed', 'in_progress'].includes(this.status);
+bookingSchema.virtual("isActive").get(function () {
+  return ["pending", "confirmed", "in_progress"].includes(this.status);
 });
 
-bookingSchema.virtual('isCompleted').get(function () {
-  return this.status === 'completed';
+bookingSchema.virtual("isCompleted").get(function () {
+  return this.status === "completed";
 });
 
-bookingSchema.virtual('isCancelled').get(function () {
-  return ['cancelled', 'no_show'].includes(this.status);
+bookingSchema.virtual("isCancelled").get(function () {
+  return ["cancelled", "no_show"].includes(this.status);
 });
 
-bookingSchema.virtual('requiresTransport').get(function () {
-  return ['full_care_ride', 'patient_transport', 'diagnostic_home'].includes(this.bookingType);
+bookingSchema.virtual("requiresTransport").get(function () {
+  return ["full_care_ride", "patient_transport", "diagnostic_home"].includes(
+    this.bookingType,
+  );
 });
 
-bookingSchema.virtual('requiresDoctor').get(function () {
-  return ['full_care_ride', 'doctor_consultation', 'doctor_online', 'physiotherapist', 'follow_up']
-    .includes(this.bookingType);
+bookingSchema.virtual("requiresDoctor").get(function () {
+  return [
+    "full_care_ride",
+    "doctor_consultation",
+    "doctor_online",
+    "physiotherapist",
+    "follow_up",
+  ].includes(this.bookingType);
 });
 
-bookingSchema.virtual('requiresCareAssistant').get(function () {
-  return ['full_care_ride', 'care_assistant'].includes(this.bookingType);
+bookingSchema.virtual("requiresCareAssistant").get(function () {
+  return ["full_care_ride", "care_assistant"].includes(this.bookingType);
 });
 
-bookingSchema.virtual('amountDue').get(function () {
+bookingSchema.virtual("amountDue").get(function () {
   const total = this.fareBreakdown?.totalAmount ?? 0;
-  const paid  = this.fareBreakdown?.amountPaid  ?? 0;
+  const paid = this.fareBreakdown?.amountPaid ?? 0;
   return Math.max(0, total - paid);
 });
 
-bookingSchema.virtual('hasSubscriptionUsagePending').get(function () {
-  return Array.isArray(this.subscriptionUsagePending) && this.subscriptionUsagePending.length > 0;
+bookingSchema.virtual("hasSubscriptionUsagePending").get(function () {
+  return (
+    Array.isArray(this.subscriptionUsagePending) &&
+    this.subscriptionUsagePending.length > 0
+  );
 });
 
-bookingSchema.virtual('hasActiveConsultation').get(function () {
+bookingSchema.virtual("hasActiveConsultation").get(function () {
   return !!this.consultationSessionId;
 });
 
 // ── Pre-validate ──────────────────────────────────────────────────────────────
 
-bookingSchema.pre('validate', function () {
+bookingSchema.pre("validate", function () {
   const t = this.bookingType;
 
-  if (t === 'full_care_ride') {
-  if (!this.doctor)          throw new Error('full_care_ride requires doctor');
-  // CHANGE: careAssistant optional — admin assigns manually after booking
-  if (!this.patientLocation) throw new Error('full_care_ride requires patientLocation');
-}
-
-  if (t === 'doctor_consultation' && !this.doctor) {
-    throw new Error('doctor_consultation requires doctor');
+  if (t === "full_care_ride") {
+    if (!this.doctor) throw new Error("full_care_ride requires doctor");
+    // CHANGE: careAssistant optional — admin assigns manually after booking
+    if (!this.patientLocation)
+      throw new Error("full_care_ride requires patientLocation");
   }
 
-  if (t === 'doctor_online' && !this.doctor) {
-    throw new Error('doctor_online requires doctor');
+  if (t === "doctor_consultation" && !this.doctor) {
+    throw new Error("doctor_consultation requires doctor");
   }
 
-  if (t === 'physiotherapist' && !this.doctor) {
-    throw new Error('physiotherapist requires doctor (physiotherapist profile)');
+  if (t === "doctor_online" && !this.doctor) {
+    throw new Error("doctor_online requires doctor");
   }
 
-  
-
-  if (t === 'follow_up') {
-    if (!this.followUpParentBooking) throw new Error('follow_up requires followUpParentBooking');
-    if (!this.doctor)                throw new Error('follow_up requires doctor');
+  if (t === "physiotherapist" && !this.doctor) {
+    throw new Error(
+      "physiotherapist requires doctor (physiotherapist profile)",
+    );
   }
 
-  if (t === 'diagnostic_home' && !this.patientLocation) {
-    throw new Error('diagnostic_home requires patientLocation');
+  if (t === "follow_up") {
+    if (!this.followUpParentBooking)
+      throw new Error("follow_up requires followUpParentBooking");
+    if (!this.doctor) throw new Error("follow_up requires doctor");
   }
 
-  if (t === 'patient_transport') {
-    if (!this.patientLocation)     throw new Error('patient_transport requires patientLocation (pickup)');
-    if (!this.destinationLocation) throw new Error('patient_transport requires destinationLocation (dropoff)');
+  if (t === "diagnostic_home" && !this.patientLocation) {
+    throw new Error("diagnostic_home requires patientLocation");
+  }
+
+  if (t === "patient_transport") {
+    if (!this.patientLocation)
+      throw new Error("patient_transport requires patientLocation (pickup)");
+    if (!this.destinationLocation)
+      throw new Error(
+        "patient_transport requires destinationLocation (dropoff)",
+      );
   }
 
   if (this.returnRide && !this.primaryRide) {
-    throw new Error('returnRide requires primaryRide to be set first');
+    throw new Error("returnRide requires primaryRide to be set first");
   }
 });
 
 // ── Pre-save ──────────────────────────────────────────────────────────────────
 
-bookingSchema.pre('save', async function () {
+bookingSchema.pre("save", async function () {
   // Auto-generate bookingCode
   if (this.isNew && !this.bookingCode) {
     let code, exists;
     let attempts = 0;
     do {
-      if (attempts++ > 10) throw new Error('bookingCode generation failed');
-      code   = `BK-${generateBookingCode()}`;
-      exists = await mongoose.model('Booking').exists({ bookingCode: code });
+      if (attempts++ > 10) throw new Error("bookingCode generation failed");
+      code = `BK-${generateBookingCode()}`;
+      exists = await mongoose.model("Booking").exists({ bookingCode: code });
     } while (exists);
     this.bookingCode = code;
   }
 
   // statusLog fromStatus
-  if (this.isModified('status') && !this.isNew) {
-    const lastLog    = this.statusLog?.[this.statusLog.length - 1];
+  if (this.isModified("status") && !this.isNew) {
+    const lastLog = this.statusLog?.[this.statusLog.length - 1];
     const fromStatus = lastLog?.toStatus ?? null;
     this.statusLog.push({
       fromStatus,
-      toStatus:  this.status,
+      toStatus: this.status,
       changedBy: this.updatedBy || null,
       changedAt: new Date(),
     });
   }
 
   // Sync isRated
-  if (this.isModified('rating') && this.rating?.overallRating) {
-    this.isRated        = true;
+  if (this.isModified("rating") && this.rating?.overallRating) {
+    this.isRated = true;
     this.rating.ratedAt = this.rating.ratedAt ?? new Date();
   }
 
   // Auto-set completedAt
-  if (this.isModified('status') && this.status === 'completed' && !this.completedAt) {
+  if (
+    this.isModified("status") &&
+    this.status === "completed" &&
+    !this.completedAt
+  ) {
     this.completedAt = new Date();
   }
 
   // On cancellation, clear pending subscription usage
-  if (this.isModified('status') && this.status === 'cancelled') {
+  if (this.isModified("status") && this.status === "cancelled") {
     if (this.subscriptionUsagePending?.length > 0) {
       this.subscriptionUsagePending = [];
     }
   }
 
   // Doctor snapshot on first assignment
-  if (this.isModified('doctor') && this.doctor && !this.doctorSnapshot?.name) {
-    const DoctorProfile = mongoose.model('DoctorProfile');
+  if (this.isModified("doctor") && this.doctor && !this.doctorSnapshot?.name) {
+    const DoctorProfile = mongoose.model("DoctorProfile");
     const doc = await DoctorProfile.findById(this.doctor)
-      .populate('user', 'name')
-      .select('specialization registrationNumber profilePhotoUrl')
+      .populate("user", "name")
+      .select("specialization registrationNumber profilePhotoUrl")
       .lean();
     if (doc) {
       this.doctorSnapshot = {
-        name:               doc.user?.name,
-        specialization:     doc.specialization,
+        name: doc.user?.name,
+        specialization: doc.specialization,
         registrationNumber: doc.registrationNumber,
-        profilePhotoUrl:    doc.profilePhotoUrl,
+        profilePhotoUrl: doc.profilePhotoUrl,
       };
     }
   }
 
   // Care assistant snapshot on first assignment
-  if (this.isModified('careAssistant') && this.careAssistant && !this.careAssistantSnapshot?.name) {
-    const CareAssistantProfile = mongoose.model('CareAssistantProfile');
+  if (
+    this.isModified("careAssistant") &&
+    this.careAssistant &&
+    !this.careAssistantSnapshot?.name
+  ) {
+    const CareAssistantProfile = mongoose.model("CareAssistantProfile");
     const ca = await CareAssistantProfile.findById(this.careAssistant)
-      .select('fullName photoUrl phone')
+      .select("fullName photoUrl phone")
       .lean();
     if (ca) {
       this.careAssistantSnapshot = {
-        name:     ca.fullName,
+        name: ca.fullName,
         photoUrl: ca.photoUrl,
-        phone:    ca.phone,
+        phone: ca.phone,
       };
     }
   }
@@ -688,11 +751,11 @@ bookingSchema.index({ paymentStatus: 1 });
 bookingSchema.index({ scheduledAt: 1 });
 bookingSchema.index({ followUpParentBooking: 1 });
 bookingSchema.index({ rides: 1 });
-bookingSchema.index({ 'diagnosticDetails.labPartner': 1 });
+bookingSchema.index({ "diagnosticDetails.labPartner": 1 });
 bookingSchema.index({ createdAt: -1 });
 bookingSchema.index({ bookingType: 1, status: 1, scheduledAt: 1 });
-bookingSchema.index({ 'subscriptionUsagePending.0': 1, paymentStatus: 1 });
+bookingSchema.index({ "subscriptionUsagePending.0": 1, paymentStatus: 1 });
 bookingSchema.index({ consultationSessionId: 1 }); // join to Consultation
 
-const Booking = mongoose.model('Booking', bookingSchema);
+const Booking = mongoose.model("Booking", bookingSchema);
 export default Booking;

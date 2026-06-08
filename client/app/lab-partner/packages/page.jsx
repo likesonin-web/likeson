@@ -8,11 +8,12 @@ import {
   ChevronDown, ChevronUp, X, ToggleLeft, ToggleRight,
   AlertCircle, CheckCircle2, DollarSign, Activity,
   RefreshCw, Loader2, Tag, Calendar, TestTube,
-  Layers, TrendingUp, Star, Sparkles, BadgeCheck,
-  Package2, ArrowUpRight,
+  Layers, TrendingUp, Sparkles, BadgeCheck,
+  Package2, Users, HeartPulse, Image as ImageIcon, Info,
+  CheckCircle
 } from "lucide-react";
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from "recharts";
 
 import {
@@ -35,10 +36,18 @@ const fadeUp  = { hidden: { opacity: 0, y: 24 }, visible: (i = 0) => ({ opacity:
 const fadeIn  = { hidden: { opacity: 0 },         visible: { opacity: 1, transition: { duration: 0.3 } } };
 const scaleIn = { hidden: { opacity: 0, scale: 0.92 }, visible: { opacity: 1, scale: 1, transition: { duration: 0.35, ease: [0.22, 1, 0.36, 1] } } };
 
-const CHART_COLORS = ["var(--chart-1)","var(--chart-2)","var(--chart-3)","var(--chart-4)","var(--chart-5)"];
+// ─── Constants (Mapped to Mongoose Model) ─────────────────────────────────
+const PANEL_TYPES = [
+  'Wellness', 'Preventive', 'Disease Management', 'Pre-operative',
+  'Organ Function', 'Hormonal', 'Cardiac', 'Diabetic', 'Pediatric',
+  'Senior', 'Women Health', 'Men Health', 'Custom'
+];
+
+const GENDERS = ['Male', 'Female', 'All'];
 
 const emptyForm = {
-  packageCode: "", packageName: "", description: "",
+  packageName: "", panelType: "", description: "", highlights: "",
+  forAgeGroup: "", forGender: "All", imageUrl: "",
   tests: [], mrpPrice: "", partnerPrice: "", discountedPrice: "", validUntil: "", isActive: true,
 };
 
@@ -71,13 +80,12 @@ function PackageCard({ pkg, index, tests, onEdit, onToggle, onDelete, actionLoad
     .map(id => tests.find(t => t._id === id || t._id === id?.toString()))
     .filter(Boolean);
 
- // REPLACE these two lines near top of PackageCard:
-const savings = pkg.discountedPrice
-  ? Number(pkg.mrpPrice) - Number(pkg.discountedPrice)
-  : 0;
-const savingsPct = pkg.discountedPrice
-  ? Math.round((savings / pkg.mrpPrice) * 100)
-  : 0;
+  const savings = pkg.discountedPrice
+    ? Number(pkg.mrpPrice) - Number(pkg.discountedPrice)
+    : 0;
+  const savingsPct = pkg.discountedPrice
+    ? Math.round((savings / pkg.mrpPrice) * 100)
+    : 0;
 
   const isExpired = pkg.validUntil && new Date(pkg.validUntil) < new Date();
 
@@ -108,8 +116,8 @@ const savingsPct = pkg.discountedPrice
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="font-bold text-base-content text-sm">{pkg.packageName}</h3>
-                  {pkg.packageCode && (
-                    <span className="text-[10px] font-mono bg-base-200 text-base-content/50 px-2 py-0.5 rounded-full border border-base-300">{pkg.packageCode}</span>
+                  {pkg.panelType && (
+                    <span className="text-[10px] font-bold bg-secondary/10 text-secondary px-2 py-0.5 rounded-md border border-secondary/20">{pkg.panelType}</span>
                   )}
                 </div>
 
@@ -140,20 +148,19 @@ const savingsPct = pkg.discountedPrice
               </div>
 
               {/* Price block */}
-           
-<div className="text-right shrink-0">
-  <p className="text-lg font-black text-primary">
-    ₹{Number(pkg.discountedPrice || pkg.mrpPrice).toLocaleString("en-IN")}
-  </p>
-  {pkg.discountedPrice && Number(pkg.discountedPrice) < Number(pkg.mrpPrice) && (
-    <p className="text-xs text-base-content/40 line-through">₹{Number(pkg.mrpPrice).toLocaleString("en-IN")}</p>
-  )}
-  {pkg.partnerPrice && (
-    <p className="text-[10px] text-accent font-semibold">
-      Margin: ₹{((pkg.discountedPrice ?? pkg.mrpPrice) - pkg.partnerPrice).toLocaleString("en-IN")}
-    </p>
-  )}
-</div>
+              <div className="text-right shrink-0">
+                <p className="text-lg font-black text-primary">
+                  ₹{Number(pkg.discountedPrice || pkg.mrpPrice).toLocaleString("en-IN")}
+                </p>
+                {pkg.discountedPrice && Number(pkg.discountedPrice) < Number(pkg.mrpPrice) && (
+                  <p className="text-xs text-base-content/40 line-through">₹{Number(pkg.mrpPrice).toLocaleString("en-IN")}</p>
+                )}
+                {pkg.partnerPrice && (
+                  <p className="text-[10px] text-accent font-semibold">
+                    Margin: ₹{((pkg.discountedPrice ?? pkg.mrpPrice) - pkg.partnerPrice).toLocaleString("en-IN")}
+                  </p>
+                )}
+              </div>
             </div>
 
             {pkg.description && (
@@ -168,8 +175,23 @@ const savingsPct = pkg.discountedPrice
         {expanded && (
           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.3, ease: "easeInOut" }}>
             <div className="px-5 pb-5 border-t border-base-300/50 pt-4 space-y-4">
-              {/* Meta row */}
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              
+              {/* Demographics row */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {pkg.forGender && (
+                  <div className="p-3 rounded-xl bg-base-200">
+                    <Users size={12} className="text-info mb-1" />
+                    <p className="text-[10px] font-semibold text-base-content/50 uppercase tracking-wide">Target Gender</p>
+                    <p className="text-xs font-bold">{pkg.forGender}</p>
+                  </div>
+                )}
+                {pkg.forAgeGroup && (
+                  <div className="p-3 rounded-xl bg-base-200">
+                    <HeartPulse size={12} className="text-error mb-1" />
+                    <p className="text-[10px] font-semibold text-base-content/50 uppercase tracking-wide">Age Group</p>
+                    <p className="text-xs font-bold">{pkg.forAgeGroup}</p>
+                  </div>
+                )}
                 {pkg.validUntil && (
                   <div className="p-3 rounded-xl bg-base-200">
                     <Calendar size={12} className="text-warning mb-1" />
@@ -179,24 +201,31 @@ const savingsPct = pkg.discountedPrice
                     </p>
                   </div>
                 )}
-                {pkg.partnerPrice && (
+                 {pkg.partnerPrice && (
                   <div className="p-3 rounded-xl bg-base-200">
                     <DollarSign size={12} className="text-success mb-1" />
-                    <p className="text-[10px] font-semibold text-base-content/50 uppercase tracking-wide">You Save</p>
+                    <p className="text-[10px] font-semibold text-base-content/50 uppercase tracking-wide">Customer Saves</p>
                     <p className="text-xs font-bold text-success">₹{savings.toLocaleString("en-IN")} ({savingsPct}%)</p>
                   </div>
                 )}
-                <div className="p-3 rounded-xl bg-base-200">
-                  <Layers size={12} className="text-primary mb-1" />
-                  <p className="text-[10px] font-semibold text-base-content/50 uppercase tracking-wide">Tests Included</p>
-                  <p className="text-xs font-bold">{resolvedTests.length}</p>
-                </div>
               </div>
+
+              {/* Highlights */}
+              {pkg.highlights && pkg.highlights.length > 0 && (
+                <div>
+                   <p className="text-[10px] font-bold uppercase tracking-widest text-base-content/40 mb-2">Package Highlights</p>
+                   <ul className="text-xs space-y-1 text-base-content/70">
+                     {pkg.highlights.map((h, i) => (
+                       <li key={i} className="flex items-center gap-1.5"><CheckCircle size={10} className="text-success"/>{h}</li>
+                     ))}
+                   </ul>
+                </div>
+              )}
 
               {/* Included tests list */}
               {resolvedTests.length > 0 && (
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-base-content/40 mb-2">Included Tests</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-base-content/40 mb-2">Included Tests ({resolvedTests.length})</p>
                   <div className="flex flex-wrap gap-1.5">
                     {resolvedTests.map(t => (
                       <span key={t._id} className="inline-flex items-center gap-1 text-[10px] font-semibold px-2.5 py-1 rounded-full bg-primary/8 text-primary border border-primary/20">
@@ -249,6 +278,7 @@ function PackageFormModal({ open, onClose, editPkg, onSubmit, actionLoading, tes
       setForm({
         ...emptyForm, ...editPkg,
         tests:        editPkg.tests ?? [],
+        highlights:   editPkg.highlights?.join(", ") || "",
         validUntil:   editPkg.validUntil ? editPkg.validUntil.slice(0, 10) : "",
         partnerPrice: editPkg.partnerPrice ?? "",
       });
@@ -269,6 +299,7 @@ function PackageFormModal({ open, onClose, editPkg, onSubmit, actionLoading, tes
   const validate = () => {
     const e = {};
     if (!form.packageName.trim()) e.packageName = "Package name is required.";
+    if (!form.panelType) e.panelType = "Panel type classification is required.";
     if (!form.mrpPrice || isNaN(form.mrpPrice) || Number(form.mrpPrice) < 0) e.mrpPrice = "Valid MRP is required.";
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -277,7 +308,11 @@ function PackageFormModal({ open, onClose, editPkg, onSubmit, actionLoading, tes
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!validate()) return;
+    
+    // Transform data for API
     const payload = { ...form };
+    payload.highlights = form.highlights.split(',').map(s => s.trim()).filter(Boolean);
+    
     if (editPkg) payload.pkgId = editPkg._id;
     onSubmit(payload);
   };
@@ -296,18 +331,17 @@ function PackageFormModal({ open, onClose, editPkg, onSubmit, actionLoading, tes
         onClick={(e) => e.target === e.currentTarget && onClose()}
       >
         <motion.div variants={scaleIn} initial="hidden" animate="visible" exit="hidden"
-          className="w-full max-w-2xl max-h-[600px] mt-auto overflow-y-auto rounded-3xl border border-base-300 bg-base-100"
-          style={{ boxShadow: "0 40px 80px rgba(0,0,0,0.28)" }}
+          className="w-full max-w-3xl max-h-[90vh] mt-auto overflow-y-auto rounded-3xl border border-base-300 bg-base-100 shadow-2xl"
         >
           {/* Header */}
-          <div className="sticky top-0 z-10 flex items-center justify-between px-8 py-6 border-b border-base-300 bg-base-100 rounded-t-3xl">
+          <div className="sticky top-0 z-20 flex items-center justify-between px-8 py-6 border-b border-base-300 bg-base-100/95 backdrop-blur rounded-t-3xl">
             <div className="flex items-center gap-3">
               <div className="p-2.5 rounded-xl bg-primary/10">
                 <Package2 size={20} className="text-primary" />
               </div>
               <div>
                 <h2 className="text-lg font-black text-base-content">{editPkg ? "Edit Package" : "Create Package"}</h2>
-                <p className="text-xs text-base-content/50">{editPkg ? "Update package details" : "Bundle tests into a package"}</p>
+                <p className="text-xs text-base-content/50">{editPkg ? "Update package details & catalog inclusion" : "Bundle tests to boost booking volume"}</p>
               </div>
             </div>
             <button onClick={onClose} className="p-2 rounded-xl hover:bg-base-200 transition-colors">
@@ -315,112 +349,160 @@ function PackageFormModal({ open, onClose, editPkg, onSubmit, actionLoading, tes
             </button>
           </div>
 
-          <form onSubmit={handleSubmit} className="p-8 space-y-6">
-            {/* Name + Code */}
-          
-<div className="grid grid-cols-1 md:grid-cols-4 gap-5">
-  <div>
-    <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">MRP (₹) *</label>
-    <input type="number" min="0" value={form.mrpPrice} onChange={e => set("mrpPrice", e.target.value)}
-      placeholder="2000" className={`input-field w-full ${errors.mrpPrice ? "border-error" : ""}`} />
-    {errors.mrpPrice && <p className="text-xs text-error mt-1.5 flex items-center gap-1"><AlertCircle size={11}/>{errors.mrpPrice}</p>}
-  </div>
-  <div>
-    <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">Discounted (₹)</label>
-    <input type="number" min="0" value={form.discountedPrice} onChange={e => set("discountedPrice", e.target.value)}
-      placeholder="1700" className="input-field w-full" />
-    {form.mrpPrice && form.discountedPrice && (
-      <p className="text-[10px] text-success mt-1 font-semibold">
-        {Math.round(((form.mrpPrice - form.discountedPrice) / form.mrpPrice) * 100)}% off
-      </p>
-    )}
-  </div>
-  <div>
-    <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">Partner Cost (₹)</label>
-    <input type="number" min="0" value={form.partnerPrice} onChange={e => set("partnerPrice", e.target.value)}
-      placeholder="1400" className="input-field w-full" />
-    {form.partnerPrice && (form.discountedPrice || form.mrpPrice) && (
-      <p className="text-[10px] text-accent mt-1 font-semibold">
-        Margin: ₹{((form.discountedPrice || form.mrpPrice) - form.partnerPrice)}
-      </p>
-    )}
-  </div>
-  <div>
-    <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">Valid Until</label>
-    <input type="date" value={form.validUntil} onChange={e => set("validUntil", e.target.value)}
-      min={new Date().toISOString().slice(0,10)} className="input-field w-full" />
-  </div>
-</div>
-
-            {/* Description */}
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">Description</label>
-              <textarea value={form.description} onChange={e => set("description", e.target.value)}
-                rows={3} placeholder="Brief description of this package…"
-                className="input-field w-full resize-none" />
+          <form onSubmit={handleSubmit} className="p-8 space-y-8">
+            
+            {/* Small Note Label */}
+            <div className="flex items-start gap-3 bg-info/10 border border-info/20 text-info px-4 py-3 rounded-xl">
+              <Info size={18} className="shrink-0 mt-0.5" />
+              <p className="text-[11px] font-medium leading-relaxed">
+                <strong>Discovery Tip:</strong> Ensure you categorize your package using the correct <strong>Panel Type</strong> and define accurate <strong>Demographics</strong>. Well-classified packages rank much higher in customer search results.
+              </p>
             </div>
 
-            {/* Pricing */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">MRP Price (₹) *</label>
-                <input type="number" min="0" value={form.mrpPrice} onChange={e => set("mrpPrice", e.target.value)}
-                  placeholder="2000"
-                  className={`input-field w-full ${errors.mrpPrice ? "border-error" : ""}`} />
-                {errors.mrpPrice && <p className="text-xs text-error mt-1.5 flex items-center gap-1"><AlertCircle size={11} />{errors.mrpPrice}</p>}
+            {/* ── SECTION 1: Identity & Marketing ── */}
+            <div>
+              <h3 className="text-sm font-bold text-base-content flex items-center gap-2 mb-4">
+                <BadgeCheck size={16} className="text-primary"/> Identity & Discovery
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-base-content/60 mb-2">Package Name *</label>
+                  <input value={form.packageName} onChange={e => set("packageName", e.target.value)}
+                    placeholder="e.g. Advanced Full Body Checkup"
+                    className={`input-field w-full ${errors.packageName ? "border-error" : ""}`} />
+                  {errors.packageName && <p className="text-[10px] text-error mt-1 flex items-center gap-1"><AlertCircle size={10} />{errors.packageName}</p>}
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-base-content/60 mb-2">Panel Type *</label>
+                  <select value={form.panelType} onChange={e => set("panelType", e.target.value)} 
+                    className={`input-field w-full ${errors.panelType ? "border-error" : ""}`}>
+                    <option value="">Select classification</option>
+                    {PANEL_TYPES.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                  {errors.panelType && <p className="text-[10px] text-error mt-1 flex items-center gap-1"><AlertCircle size={10} />{errors.panelType}</p>}
+                </div>
               </div>
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">Partner Price (₹)</label>
-                <input type="number" min="0" value={form.partnerPrice} onChange={e => set("partnerPrice", e.target.value)}
-                  placeholder="1600"
-                  className="input-field w-full" />
-                {form.mrpPrice && form.partnerPrice && Number(form.partnerPrice) < Number(form.mrpPrice) && (
-                  <p className="text-[10px] text-success mt-1 font-semibold">
-                    Save ₹{(Number(form.mrpPrice) - Number(form.partnerPrice)).toLocaleString("en-IN")}
-                  </p>
-                )}
-              </div>
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-2">Valid Until</label>
-                <input type="date" value={form.validUntil} onChange={e => set("validUntil", e.target.value)}
-                  min={new Date().toISOString().slice(0, 10)}
-                  className="input-field w-full" />
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-base-content/60 mb-2">Description</label>
+                  <textarea value={form.description} onChange={e => set("description", e.target.value)}
+                    rows={3} placeholder="Brief summary of this health package…"
+                    className="input-field w-full resize-none" />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-base-content/60 mb-2">Highlights (Comma Separated)</label>
+                  <textarea value={form.highlights} onChange={e => set("highlights", e.target.value)}
+                    rows={3} placeholder="e.g. 72 parameters, Fasting required, Free Home Collection"
+                    className="input-field w-full resize-none" />
+                </div>
               </div>
             </div>
 
-            {/* Active toggle */}
-            <button type="button" onClick={() => set("isActive", !form.isActive)}
-              className={`w-full flex items-center gap-3 p-4 rounded-2xl border-2 transition-all duration-200 text-left ${
-                form.isActive ? "border-primary bg-primary/5" : "border-base-300 bg-base-200/50"
-              }`}>
-              <div className={`p-2 rounded-xl ${form.isActive ? "bg-primary/15" : "bg-base-300"}`}>
-                <Activity size={15} className={form.isActive ? "text-primary" : "text-base-content/40"} />
-              </div>
-              <div>
-                <p className="text-xs font-bold">Package Status</p>
-                <p className={`text-[10px] font-semibold ${form.isActive ? "text-primary" : "text-base-content/40"}`}>
-                  {form.isActive ? "Active — visible to customers" : "Inactive — hidden from customers"}
-                </p>
-              </div>
-              <div className="ml-auto">
-                {form.isActive ? <ToggleRight size={22} className="text-primary" /> : <ToggleLeft size={22} className="text-base-content/30" />}
-              </div>
-            </button>
-
-            {/* Tests selector */}
+            {/* ── SECTION 2: Demographics ── */}
             <div>
-              <label className="block text-xs font-bold uppercase tracking-widest text-base-content/60 mb-3">
-                Include Tests ({form.tests.length} selected)
+              <h3 className="text-sm font-bold text-base-content flex items-center gap-2 mb-4 pt-4 border-t border-base-300">
+                <Users size={16} className="text-secondary"/> Target Demographics
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-base-content/60 mb-2">Target Gender</label>
+                  <select value={form.forGender} onChange={e => set("forGender", e.target.value)} className="input-field w-full">
+                    {GENDERS.map(g => <option key={g} value={g}>{g}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-base-content/60 mb-2">Age Group</label>
+                  <input value={form.forAgeGroup} onChange={e => set("forAgeGroup", e.target.value)}
+                    placeholder="e.g. 18-60 years, 60+ years" className="input-field w-full" />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-base-content/60 mb-2">Banner Image URL</label>
+                  <div className="relative">
+                    <ImageIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
+                    <input value={form.imageUrl} onChange={e => set("imageUrl", e.target.value)}
+                      placeholder="https://..." className="input-field w-full pl-9" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* ── SECTION 3: Pricing & Fulfillment ── */}
+            <div>
+              <h3 className="text-sm font-bold text-base-content flex items-center gap-2 mb-4 pt-4 border-t border-base-300">
+                <DollarSign size={16} className="text-success"/> Pricing & Lifecycle
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-base-content/60 mb-2">MRP (₹) *</label>
+                  <input type="number" min="0" value={form.mrpPrice} onChange={e => set("mrpPrice", e.target.value)}
+                    placeholder="2000" className={`input-field w-full ${errors.mrpPrice ? "border-error" : ""}`} />
+                  {errors.mrpPrice && <p className="text-[10px] text-error mt-1 flex items-center gap-1"><AlertCircle size={10}/>{errors.mrpPrice}</p>}
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-base-content/60 mb-2">Discounted (₹)</label>
+                  <input type="number" min="0" value={form.discountedPrice} onChange={e => set("discountedPrice", e.target.value)}
+                    placeholder="1700" className="input-field w-full" />
+                  {form.mrpPrice && form.discountedPrice && (
+                    <p className="text-[10px] text-success mt-1 font-semibold">
+                      {Math.round(((form.mrpPrice - form.discountedPrice) / form.mrpPrice) * 100)}% off
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-base-content/60 mb-2">Partner Cost (₹)</label>
+                  <input type="number" min="0" value={form.partnerPrice} onChange={e => set("partnerPrice", e.target.value)}
+                    placeholder="1400" className="input-field w-full" />
+                  {form.partnerPrice && (form.discountedPrice || form.mrpPrice) && (
+                    <p className="text-[10px] text-accent mt-1 font-semibold">
+                      Margin: ₹{((form.discountedPrice || form.mrpPrice) - form.partnerPrice)}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-base-content/60 mb-2">Valid Until</label>
+                  <input type="date" value={form.validUntil} onChange={e => set("validUntil", e.target.value)}
+                    min={new Date().toISOString().slice(0,10)} className="input-field w-full" />
+                </div>
+              </div>
+
+              {/* Active toggle */}
+              <button type="button" onClick={() => set("isActive", !form.isActive)}
+                className={`w-full md:w-1/2 flex items-center gap-3 p-3 mt-6 rounded-xl border-2 transition-all duration-200 text-left ${
+                  form.isActive ? "border-primary bg-primary/5" : "border-base-300 bg-base-200/50"
+                }`}>
+                <div className={`p-1.5 rounded-lg ${form.isActive ? "bg-primary/15" : "bg-base-300"}`}>
+                  <Activity size={14} className={form.isActive ? "text-primary" : "text-base-content/40"} />
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold">Package Status</p>
+                </div>
+                <div className="ml-auto flex items-center gap-2">
+                  <span className={`text-[10px] font-semibold ${form.isActive ? "text-primary" : "text-base-content/40"}`}>
+                    {form.isActive ? "Active" : "Hidden"}
+                  </span>
+                  {form.isActive ? <ToggleRight size={20} className="text-primary" /> : <ToggleLeft size={20} className="text-base-content/30" />}
+                </div>
+              </button>
+            </div>
+
+            {/* ── SECTION 4: Tests Configuration ── */}
+            <div>
+              <h3 className="text-sm font-bold text-base-content flex items-center gap-2 mb-4 pt-4 border-t border-base-300">
+                <Layers size={16} className="text-info"/> Bundle Configuration
+              </h3>
+              <label className="block text-[11px] font-bold uppercase tracking-widest text-base-content/60 mb-3">
+                Included Tests ({form.tests.length} parameters mapped)
               </label>
 
               {/* Selected pills */}
               {form.tests.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mb-3">
+                <div className="flex flex-wrap gap-1.5 mb-3 bg-base-200/50 p-3 rounded-xl border border-base-300">
                   {form.tests.map(id => {
                     const t = tests.find(x => x._id === id);
                     return t ? (
-                      <span key={id} className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full bg-primary/10 text-primary border border-primary/20">
-                        <TestTube size={10} />{t.testName}
+                      <span key={id} className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full bg-base-100 text-primary shadow-sm border border-base-300">
+                        <TestTube size={10} className="text-base-content/40" />{t.testName}
                         <button type="button" onClick={() => toggleTest(id)} className="ml-0.5 hover:text-error transition-colors"><X size={10} /></button>
                       </span>
                     ) : null;
@@ -431,35 +513,38 @@ function PackageFormModal({ open, onClose, editPkg, onSubmit, actionLoading, tes
               <div className="relative mb-2">
                 <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
                 <input value={testSearch} onChange={e => setTestSearch(e.target.value)}
-                  placeholder="Search active tests…"
-                  className="input-field w-full pl-8 py-2 text-xs" />
+                  placeholder="Search and map active lab tests…"
+                  className="input-field w-full pl-8 py-2.5 text-xs bg-base-100 border-2 focus:border-primary/50" />
               </div>
 
-              <div className="max-h-48 overflow-y-auto rounded-xl border border-base-300 divide-y divide-base-300/50">
+              <div className="max-h-48 overflow-y-auto rounded-xl border-2 border-base-300 divide-y divide-base-300/50 bg-base-50">
                 {filteredTests.length === 0 ? (
-                  <div className="p-4 text-xs text-center text-base-content/40">No tests found</div>
+                  <div className="p-6 text-xs text-center text-base-content/40">No tests found matching search criteria</div>
                 ) : filteredTests.map(t => (
-                  <label key={t._id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-base-200/60 cursor-pointer transition-colors">
+                  <label key={t._id} className="flex items-center gap-3 px-4 py-3 hover:bg-base-200/80 cursor-pointer transition-colors">
                     <input type="checkbox" checked={form.tests.includes(t._id)} onChange={() => toggleTest(t._id)}
-                      className="w-4 h-4 rounded accent-primary" />
+                      className="w-4 h-4 rounded accent-primary shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold truncate">{t.testName}</p>
-                      {t.category && <p className="text-[10px] text-base-content/40">{t.category}</p>}
+                      <p className="text-xs font-semibold text-base-content truncate">{t.testName}</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {t.category && <p className="text-[10px] text-base-content/50">{t.category}</p>}
+                        {t.loincCode && <p className="text-[9px] font-mono bg-base-200 px-1 rounded text-base-content/40">L: {t.loincCode}</p>}
+                      </div>
                     </div>
-                    <span className="text-xs font-bold text-primary shrink-0">₹{Number(t.mrpPrice).toLocaleString("en-IN")}</span>
+                    <span className="text-[11px] font-bold text-primary shrink-0">₹{Number(t.mrpPrice).toLocaleString("en-IN")}</span>
                   </label>
                 ))}
               </div>
             </div>
 
             {/* Submit */}
-            <div className="flex gap-3 pt-2">
+            <div className="flex gap-3 pt-4 border-t border-base-300 sticky bottom-0 bg-base-100/90 backdrop-blur pb-4">
               <button type="button" onClick={onClose}
                 className="flex-1 py-3 rounded-2xl border-2 border-base-300 font-bold text-sm text-base-content/60 hover:bg-base-200 transition-all">
                 Cancel
               </button>
               <button type="submit" disabled={actionLoading}
-                className="flex-1 py-3 rounded-2xl font-bold text-sm text-primary-content flex items-center justify-center gap-2 transition-all"
+                className="flex-1 py-3 rounded-2xl font-bold text-sm text-primary-content flex items-center justify-center gap-2 transition-all shadow-lg hover:shadow-primary/30"
                 style={{ background: "linear-gradient(135deg, var(--primary), var(--secondary))" }}>
                 {actionLoading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
                 {actionLoading ? "Saving…" : editPkg ? "Save Changes" : "Create Package"}
@@ -511,11 +596,11 @@ function PackagePriceChart({ packages }) {
     .filter(p => p.isActive)
     .slice(0, 6)
     .map(p => ({
-  name: p.packageName.slice(0, 12),
-  mrp: Number(p.mrpPrice),
-  discounted: p.discountedPrice ? Number(p.discountedPrice) : Number(p.mrpPrice),
-  cost: p.partnerPrice ? Number(p.partnerPrice) : 0
-}));
+      name: p.packageName.slice(0, 12),
+      mrp: Number(p.mrpPrice),
+      discounted: p.discountedPrice ? Number(p.discountedPrice) : Number(p.mrpPrice),
+      cost: p.partnerPrice ? Number(p.partnerPrice) : 0
+    }));
 
   if (data.length < 2) return null;
 
@@ -539,13 +624,11 @@ function PackagePriceChart({ packages }) {
           <YAxis hide />
           <Tooltip
             contentStyle={{ background: "var(--base-100)", border: "1px solid var(--base-300)", borderRadius: 12, fontSize: 11, fontWeight: 700 }}
-            formatter={(v, n) => [`₹${Number(v).toLocaleString("en-IN")}`, n === "mrp" ? "MRP" : "Partner"]}
+            formatter={(v, n) => [`₹${Number(v).toLocaleString("en-IN")}`, n === "mrp" ? "MRP" : n === "discounted" ? "Discounted" : "Partner"]}
           />
-          // REPLACE Bar elements:
-<Bar dataKey="mrp"        radius={[6,6,0,0]} fill="var(--base-300)"  opacity={0.6} />
-<Bar dataKey="discounted" radius={[6,6,0,0]} fill="var(--primary)"   opacity={0.9} />
-<Bar dataKey="cost"       radius={[6,6,0,0]} fill="var(--success)"   opacity={0.8} />
-          <Bar dataKey="partner" radius={[6,6,0,0]} fill="var(--success)" opacity={0.8} />
+          <Bar dataKey="mrp"        radius={[6,6,0,0]} fill="var(--base-300)"  opacity={0.6} />
+          <Bar dataKey="discounted" radius={[6,6,0,0]} fill="var(--primary)"   opacity={0.9} />
+          <Bar dataKey="cost"       radius={[6,6,0,0]} fill="var(--success)"   opacity={0.8} />
         </BarChart>
       </ResponsiveContainer>
     </motion.div>
@@ -640,7 +723,7 @@ export default function PackagesPage() {
             </motion.button>
             <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
               onClick={handleAdd}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm text-primary-content transition-all"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm text-primary-content transition-all shadow-md hover:shadow-primary/30"
               style={{ background: "linear-gradient(135deg, var(--primary), var(--secondary))" }}>
               <Plus size={16} />New Package
             </motion.button>
@@ -738,7 +821,7 @@ export default function PackagesPage() {
             </div>
             {!search && filterActive === "all" && (
               <button onClick={handleAdd}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm text-primary-content mt-2 transition-all"
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm text-primary-content mt-2 transition-all shadow-md hover:shadow-primary/30"
                 style={{ background: "linear-gradient(135deg, var(--primary), var(--secondary))" }}>
                 <Plus size={15} />Create First Package
               </button>

@@ -1,42 +1,7 @@
 import mongoose from 'mongoose';
 const { Schema } = mongoose;
 
-/**
- * UserSubscription Model — Likeson.in
- *
- * CHANGES IN THIS VERSION:
- *  FEATURE: careAssistantTierSnapshot — limits now stores tier label, charge,
- *           and index snapshotted from PlatformPricingConfig at subscribe time.
- *
- *  FEATURE: consultationSummary virtual — exposes perMonth / used / remaining
- *           / unlimited flag + plan modes (after populate).
- *
- *  FEATURE: careAssistantSummary virtual — exposes tier info + visits
- *           used / remaining in one object.
- *
- *  FEATURE: transportRidesRemaining virtual — parallel to consultations.
- *
- *  BUG #2 FIX: fixedTier enum includes 'Standard Care'.
- *
- *  BUG #3 + #5 FIX: usageHistory incremented only after payment verified.
- *           Pending increments live on Booking.subscriptionUsagePending.
- *
- * Tracks an individual user's active subscription:
- *   - Which plan (fixed or custom) they are on
- *   - Free-trial window (7 days default)
- *   - Billing cycle dates & auto-renewal
- *   - Monthly benefit consumption (consultations, rides, care visits, lab tests)
- *   - Multi-member slots (Family / NRI plans)
- *   - Payment history array (Razorpay transaction records)
- *   - Cancellation details
- *
- * One user → ONE active subscription at a time.
- * Past subscriptions kept with status 'Expired' / 'Cancelled' for history.
- *
- * SYNC NOTE: Status enum, field names, and paymentHistory structure kept in
- * sync with subscriptionRouter.js (PascalCase status values, expiryDate,
- * trialUsed, savedPaymentMethodId, paymentHistory[]).
- */
+ 
 
 // ─── Sub-schema: single payment record ───────────────────────────────────────
 const paymentHistorySchema = new Schema(
@@ -215,7 +180,7 @@ const userSubscriptionSchema = new Schema(
       // null = not included, -1 = unlimited/dedicated, >0 = monthly quota
 
       /**
-       * NEW — snapshotted from PlatformPricingConfig.careAssistant.pricingTiers
+       * Snapshotted from PlatformPricingConfig.careAssistant.pricingTiers
        * (or customPlanOptions.careAssistant.pricingTiers) at subscribe time.
        *
        * careAssistantTierIndex:
@@ -240,7 +205,29 @@ const userSubscriptionSchema = new Schema(
       // ── Lab / Diagnostics ──────────────────────────────────────────────────
       labTestsPerMonth:           { type: Number, default: 0 },
       diagnosticsDiscountPercent: { type: Number, default: 0 },
-      homeSampleCollection:       { type: Boolean, default: false },
+
+      /**
+       * HOME SAMPLE COLLECTION FIX:
+       *
+       * homeSampleCollection:
+       *   true  = plan includes home sample collection as a benefit
+       *   false = not included
+       *
+       * homeCollectionUsedOnce:
+       *   Enforces ONE-TIME-PER-BILLING-CYCLE rule.
+       *   Set to true by diagnostic booking route AFTER payment verified.
+       *   Reset to false by subscription renewal route at start of new cycle.
+       *
+       * USAGE in booking route:
+       *   1. Check limits.homeSampleCollection === true  → plan includes it
+       *   2. Check limits.homeCollectionUsedOnce === false → not yet used
+       *   3. After payment verified → set homeCollectionUsedOnce = true
+       *
+       * USAGE in renewal route:
+       *   On new billing cycle start → set homeCollectionUsedOnce = false
+       */
+      homeSampleCollection:   { type: Boolean, default: false },
+      homeCollectionUsedOnce: { type: Boolean, default: false },
 
       // ── Pharmacy ──────────────────────────────────────────────────────────
       pharmacyDiscountPercent: { type: Number, default: 0 },
@@ -403,6 +390,12 @@ userSubscriptionSchema.virtual('isCurrentlyActive').get(function () {
 /**
  * Convenience object aggregating all benefit summaries.
  * Suitable for a "My Plan" dashboard screen.
+ *
+ * HOME SAMPLE COLLECTION FIX:
+ *   diagnostics now includes:
+ *     homeCollectionUsedOnce  — true if already used this cycle
+ *     homeCollectionAvailable — true only if included AND not yet used
+ *   UI should read homeCollectionAvailable to show/hide the book button.
  */
 userSubscriptionSchema.virtual('benefitSnapshot').get(function () {
   return {
@@ -424,9 +417,11 @@ userSubscriptionSchema.virtual('benefitSnapshot').get(function () {
       ordersPlaced:      this.currentMonthUsage?.pharmacyOrdersPlaced ?? 0,
     },
     diagnostics: {
-      discountPercent:   this.limits.diagnosticsDiscountPercent,
-      homeSample:        this.limits.homeSampleCollection,
-      bookingsMade:      this.currentMonthUsage?.diagnosticBookingsMade ?? 0,
+      discountPercent:        this.limits.diagnosticsDiscountPercent,
+      homeSample:             this.limits.homeSampleCollection,
+      homeCollectionUsedOnce: this.limits.homeCollectionUsedOnce,
+     homeCollectionAvailable: this.limits.homeSampleCollection === true && this.limits.homeCollectionUsedOnce === false,
+      bookingsMade:           this.currentMonthUsage?.diagnosticBookingsMade ?? 0,
     },
   };
 });
@@ -451,5 +446,3 @@ userSubscriptionSchema.index({ trialUsed: 1, user: 1 });         // trial eligib
 
 const UserSubscription = mongoose.model('UserSubscription', userSubscriptionSchema);
 export default UserSubscription;
-
- 
