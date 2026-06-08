@@ -47,6 +47,7 @@ import {
   calculateCanonicalRoute,
   SubscriptionPlan,
   sendBookingConfirmationEmail,
+  parseFrontendDateTime,
 } from "./bookingRouterShared.js";
 
 import PlatformPricingConfig from "../models/PlatformPricingConfig.js";
@@ -806,17 +807,25 @@ router.get("/hospitals/:hospitalId/availability", protect, async (req, res) => {
 router.get("/doctors/:doctorId/availability", protect, async (req, res) => {
   try {
     const { scheduledAt, hospitalId } = req.query;
-    if (!scheduledAt)
+    
+    if (!scheduledAt) {
       return res
         .status(400)
         .json({ success: false, message: "scheduledAt required" });
+    }
+
+    // FIX: Parse the incoming date string safely to prevent UTC timezone shifts
+    const scheduledDate = parseFrontendDateTime(scheduledAt);
+
     const result = await checkHospitalOrDoctorAvailability({
       hospitalId,
       doctorId: req.params.doctorId,
-      scheduledAt: new Date(scheduledAt),
+      scheduledAt: scheduledDate,
     });
+    
     res.json({ success: true, data: result });
   } catch (err) {
+    console.error("[GET /doctors/:doctorId/availability]", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });

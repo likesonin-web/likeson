@@ -686,6 +686,25 @@ const getSteps = (bookingType) => {
   }));
 };
 
+// Add this near your other helpers (around line 380)
+const toISOSafe = (dtLocal) => {
+  if (!dtLocal) return undefined;
+  let raw = String(dtLocal).trim();
+  
+  // If it's a standard datetime-local output (YYYY-MM-DDTHH:mm)
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(raw)) {
+    return `${raw}:00+05:30`; // Force IST timezone explicitly
+  }
+  
+  // If it already has seconds but no timezone (YYYY-MM-DDTHH:mm:ss)
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(raw)) {
+     return `${raw}+05:30`;
+  }
+
+  // Fallback for already formatted strings
+  return raw;
+};
+
 const loadRazorpay = () =>
   new Promise((resolve) => {
     if (typeof window === "undefined") {
@@ -3399,7 +3418,13 @@ function StepSchedule({
     isTransport,
   ]);
 
-  const minDate = new Date(Date.now() + 15 * 60000).toISOString().slice(0, 16);
+ const getIstMinDate = () => {
+    const d = new Date(Date.now() + 15 * 60000);
+    // Add 5.5 hours to align the UTC output with IST for the HTML input
+    const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+    return istTime.toISOString().slice(0, 16);
+  };
+  const minDate = getIstMinDate();
   const durHours = form.durationHours || (caTiers[0]?.hours ?? 4);
   const caTier = caTiers.find((t) => t.hours === durHours) || caTiers[0];
   const tFee = resolveTransportFee(transportEstimate);
@@ -5848,12 +5873,12 @@ export default function BookingSystem() {
     [dispatch, set],
   );
 
-  const onCheckHospAvail = useCallback(() => {
+const onCheckHospAvail = useCallback(() => {
     if (form.hospitalId && form.scheduledAt)
       dispatch(
         checkHospitalAvailability({
           hospitalId: form.hospitalId,
-          scheduledAt: form.scheduledAt,
+          scheduledAt: toISOSafe(form.scheduledAt), // <-- UPDATED
         }),
       );
   }, [dispatch, form.hospitalId, form.scheduledAt]);
@@ -5863,7 +5888,7 @@ export default function BookingSystem() {
       dispatch(
         checkDoctorAvailability({
           doctorId: form.doctorId,
-          scheduledAt: form.scheduledAt,
+          scheduledAt: toISOSafe(form.scheduledAt), // <-- UPDATED
           hospitalId: form.hospitalId,
         }),
       );
@@ -5937,23 +5962,16 @@ export default function BookingSystem() {
     weight: form.patientWeight || undefined,
   });
 
-  const toISOSafe = (dtLocal) => {
-    if (!dtLocal) return undefined;
-    const raw = String(dtLocal).trim();
-    if (raw.includes("+") || raw.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(raw))
-      return new Date(raw).toISOString();
-    const normalized = raw.length === 16 ? `${raw}:00` : raw;
-    return new Date(normalized).toISOString();
-  };
+  
 
-  const mkCommon = () => ({
-    patientInfo: mkPatient(),
-    scheduledAt: toISOSafe(form.scheduledAt),
-    paymentMethod: form.paymentMethod,
-    couponCode: form.couponCode || undefined,
-    slotId: form.slotId || undefined,
-    documents: [],
-  });
+ const mkCommon = () => ({
+      patientInfo: mkPatient(),
+      scheduledAt: toISOSafe(form.scheduledAt), // Uses the new global helper
+      paymentMethod: form.paymentMethod,
+      couponCode: form.couponCode || undefined,
+      slotId: form.slotId || undefined,
+      documents: [],
+    });
 
   // ─── VALIDATION ───────────────────────────────────────────────────────────
 

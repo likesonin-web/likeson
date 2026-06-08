@@ -560,8 +560,9 @@ export const getHospitals = async (filters = {}) => {
 
 const checkHospitalHours = (hospital, scheduledAt) => {
   const dayNames      = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+ const baseUTC       = parseFrontendDateTime(scheduledAt);
   const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-  const istDate       = new Date(new Date(scheduledAt).getTime() + IST_OFFSET_MS);
+  const istDate       = new Date(baseUTC.getTime() + IST_OFFSET_MS);
   const dayName       = dayNames[istDate.getUTCDay()];
   const reqMins       = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
 
@@ -578,18 +579,43 @@ const checkHospitalHours = (hospital, scheduledAt) => {
   return { available: true };
 };
 
+export const parseFrontendDateTime = (dateInput) => {
+  if (!dateInput) return new Date();
+  if (dateInput instanceof Date) return dateInput;
+  
+  let rawStr = String(dateInput).trim();
+  
+  // Fix 1: Frontend sending IST local time as UTC (ending in 'Z')
+  // Converts e.g., '2026-06-09T15:30:00.000Z' to '2026-06-09T15:30:00.000+05:30'
+  if (/T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(rawStr)) {
+    rawStr = rawStr.replace('Z', '+05:30');
+  } 
+  // Fix 2: Frontend sending just the date 'YYYY-MM-DD'
+  else if (/^\d{4}-\d{2}-\d{2}$/.test(rawStr)) {
+    rawStr = `${rawStr}T00:00:00+05:30`;
+  }
+  
+  const parsed = new Date(rawStr);
+  return isNaN(parsed.getTime()) ? new Date() : parsed;
+};
+
+// Replace your existing checkDoctorAvailability with this optimized version:
 export const checkDoctorAvailability = async (doctorProfileId, scheduledAt) => {
   const doctor = await DoctorProfile.findById(doctorProfileId)
     .select('weeklyAvailability primaryHospital partnershipStatus isActive')
     .lean();
+    
   if (!doctor) return { available: false, reason: 'Doctor not found' };
   if (doctor.partnershipStatus !== 'Active' || !doctor.isActive)
     return { available: false, reason: 'Doctor not active' };
 
   const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-  const istDate       = new Date(new Date(scheduledAt).getTime() + IST_OFFSET_MS);
-  const dayName       = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][istDate.getUTCDay()];
-  const reqMins       = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
+  
+  // Use the safe parser to neutralize frontend timezone strings
+  const baseUTC   = parseFrontendDateTime(scheduledAt);
+  const istDate   = new Date(baseUTC.getTime() + IST_OFFSET_MS);
+  const dayName   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][istDate.getUTCDay()];
+  const reqMins   = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
 
   const dayEntry = doctor.weeklyAvailability?.find(d => d.day === dayName);
   if (!dayEntry?.isAvailable) return { available: false, reason: `Unavailable on ${dayName}` };
@@ -600,17 +626,22 @@ export const checkDoctorAvailability = async (doctorProfileId, scheduledAt) => {
     const [eh, em] = s.endTime.split(':').map(Number);
     return reqMins >= sh * 60 + sm && reqMins < eh * 60 + em;
   });
+  
   if (!matchedSlot) return { available: false, reason: `No slot at that time on ${dayName}` };
 
   const [slotSh, slotSm] = matchedSlot.startTime.split(':').map(Number);
   const [slotEh, slotEm] = matchedSlot.endTime.split(':').map(Number);
 
-  const CONSULT_DURATION_MIN = 20;
-  const baseUTC   = new Date(scheduledAt);
+  // FIX 2: Dynamic consultation duration based on capacity to prevent artificial blocks
+  const slotTotalMins = (slotEh * 60 + slotEm) - (slotSh * 60 + slotSm);
+  const dynamicConsultMins = Math.floor(slotTotalMins / (matchedSlot.maxPatients || 1));
+  const CONSULT_DURATION_MIN = Math.min(20, Math.max(5, dynamicConsultMins)); // Caps dynamically between 5 and 20 mins
+
   const slotStart = new Date(Date.UTC(
     istDate.getUTCFullYear(), istDate.getUTCMonth(), istDate.getUTCDate(),
     slotSh, slotSm, 0, 0
   ) - IST_OFFSET_MS);
+  
   const slotEnd   = new Date(Date.UTC(
     istDate.getUTCFullYear(), istDate.getUTCMonth(), istDate.getUTCDate(),
     slotEh, slotEm, 0, 0
@@ -645,7 +676,7 @@ export const checkDoctorAvailability = async (doctorProfileId, scheduledAt) => {
     if (hospital?.managementModel === 'hospital-manager') {
       if (!hospital.isActive || !hospital.isVerified)
         return { available: false, reason: 'Hospital not operational' };
-      const hospCheck = checkHospitalHours(hospital, scheduledAt);
+      const hospCheck = checkHospitalHours(hospital, baseUTC);
       if (!hospCheck.available) return hospCheck;
     }
   }
