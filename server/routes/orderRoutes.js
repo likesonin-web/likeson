@@ -1298,17 +1298,15 @@ router.post('/order/checkout', protect, asyncHandler(async (req, res) => {
     const subscriptionDiscountPct = await resolvePharmacyDiscount(req.user._id);
 
     // ── Compute grand total (pre-coupon) for wallet preflight ────────────────
+  // ── Compute grand total (pre-coupon) for wallet preflight ────────────────
     const computeGroupTotal = (groupItems) => {
       let itemsTotal = 0;
-      let gstTotal   = 0;
       for (const item of groupItems) {
-        const price  = Number(item._resolvedInv?.pricePerUnit) || Number(item.medicine?.mrp) || Number(item.pricePerUnit) || 0;
-        const gstPct = Number(item.medicine?.gstPercentage) || Number(item.gstPercentage) || 0;
+        const price = Number(item._resolvedInv?.pricePerUnit) || Number(item.medicine?.mrp) || Number(item.pricePerUnit) || 0;
         itemsTotal += price * item.quantity;
-        gstTotal   += (price * item.quantity * gstPct) / 100;
       }
       const subDisc = (itemsTotal * subscriptionDiscountPct) / 100;
-      return Math.max(0, itemsTotal + gstTotal - subDisc);
+      return Math.max(0, itemsTotal - subDisc);
     };
 
     const grandTotal = groups.reduce((acc, g) => acc + computeGroupTotal(g.items), 0);
@@ -1350,6 +1348,7 @@ router.post('/order/checkout', protect, asyncHandler(async (req, res) => {
       const storeObjId = storeDoc._id;
 
       // ── Build order items ────────────────────────────────────────────────
+// ── Build order items ────────────────────────────────────────────────
       const orderItems = groupItems.map((item) => {
         const med = item.medicine;
 
@@ -1360,7 +1359,6 @@ router.post('/order/checkout', protect, asyncHandler(async (req, res) => {
           );
         }
 
-        // Price: inventory override → medicine mrp → cart price
         const pricePerUnit =
           Number(item._resolvedInv?.pricePerUnit) ||
           Number(med?.mrp) ||
@@ -1369,8 +1367,7 @@ router.post('/order/checkout', protect, asyncHandler(async (req, res) => {
           throw new Error(`Missing price for "${med?.brandName ?? 'Medicine'}".`);
         }
 
-        const gstPct    = Number(med?.gstPercentage) || Number(item.gstPercentage) || 0;
-        const taxAmount = parseFloat(((pricePerUnit * qty * gstPct) / 100).toFixed(2));
+        const gstPct = Number(med?.gstPercentage) || Number(item.gstPercentage) || 5;
 
         return {
           medicine:               med._id,
@@ -1382,23 +1379,32 @@ router.post('/order/checkout', protect, asyncHandler(async (req, res) => {
           gstPercentage:          gstPct,
           quantity:               qty,
           pricePerUnit:           parseFloat(pricePerUnit.toFixed(2)),
-          taxAmount,
+          taxAmount:              0, // Will be computed accurately post-deductions below
           totalPrice:             parseFloat((pricePerUnit * qty).toFixed(2)),
           isPrescriptionRequired: Boolean(item.isPrescriptionRequired ?? med.isPrescriptionRequired),
         };
       });
 
       const subTotal   = parseFloat(orderItems.reduce((s, i) => s + i.totalPrice, 0).toFixed(2));
-      const gstAmount  = parseFloat(orderItems.reduce((s, i) => s + i.taxAmount, 0).toFixed(2));
       const subDiscAmt = parseFloat(((subTotal * subscriptionDiscountPct) / 100).toFixed(2));
 
       const groupCouponDisc = remainingCouponDiscount > 0
-        ? Math.min(remainingCouponDiscount, Math.max(0, subTotal + gstAmount - subDiscAmt))
+        ? Math.min(remainingCouponDiscount, Math.max(0, subTotal - subDiscAmt))
         : 0;
       remainingCouponDiscount = parseFloat((remainingCouponDiscount - groupCouponDisc).toFixed(2));
 
       const totalDiscountAmount = parseFloat((subDiscAmt + groupCouponDisc).toFixed(2));
-      const totalPayable        = parseFloat(Math.max(0, subTotal + gstAmount - totalDiscountAmount).toFixed(2));
+      const totalPayable        = parseFloat(Math.max(0, subTotal - totalDiscountAmount).toFixed(2));
+
+      // Pro-rata discount factor to distribute price deductions and record precise GST values
+      const discountFactor = subTotal > 0 ? totalPayable / subTotal : 0;
+      let gstAmount = 0;
+      orderItems.forEach((item) => {
+        const itemPaidShare = item.totalPrice * discountFactor;
+        item.taxAmount = parseFloat((itemPaidShare * item.gstPercentage / (100 + item.gstPercentage)).toFixed(2));
+        gstAmount += item.taxAmount;
+      });
+      gstAmount = parseFloat(gstAmount.toFixed(2));
 
       const orderPrescription = buildOrderPrescription(groupItems);
 
@@ -1519,8 +1525,9 @@ router.post('/order/checkout', protect, asyncHandler(async (req, res) => {
       }
     }
 
-    res.status(201).json({
+ res.status(201).json({
       success:     true,
+      order:       createdOrders[0]?.order, // <-- ADDED: Prevents frontend 'payment' undefined crash
       orders:      createdOrders.map((o) => o.order),
       razorpayKey: RAZORPAY_KEY_ID,
       orderCount:  createdOrders.length,
@@ -1571,7 +1578,7 @@ router.post('/order/verify', protect, asyncHandler(async (req, res) => {
       await session.abortTransaction();
       return res.status(404).json({ success: false, message: 'Order not found.' });
     }
-    if (order.payment.status === 'Paid') {
+  if (order.payment?.status === 'Paid') {
       await session.abortTransaction();
       return res.status(200).json({ success: true, message: 'Already paid.', order });
     }
@@ -1614,7 +1621,7 @@ router.post('/wallet/pay', protect, asyncHandler(async (req, res) => {
       await session.abortTransaction();
       return res.status(404).json({ success: false, message: 'Order not found.' });
     }
-    if (order.payment.status === 'Paid') {
+   if (order.payment?.status === 'Paid') {
       await session.abortTransaction();
       return res.status(400).json({ success: false, message: 'Order already paid.' });
     }
@@ -1738,53 +1745,41 @@ router.post('/order/upload-prescription', protect, asyncHandler(async (req, res)
   });
 }));
 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/pharmacy/medicines/:id/similar
+// Fetch similar medicines based on the category of the provided medicine ID
 // ─────────────────────────────────────────────────────────────────────────────
-router.get('/medicines/:id/similar', cache(300), asyncHandler(async (req, res) => {
+
+router.get('/medicines/:id/similar', cache(120), asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const limitNum = parseInt(req.query.limit, 10) || 10;
+  const limit = parseInt(req.query.limit, 10) || 10;
 
-  // 1. Fetch the source medicine to get matching criteria
-  const sourceMed = await Medicine.findById(id).select('genericName therapeuticClass saltComposition').lean();
+  // 1. Find the base medicine to determine its category
+  const baseMedicine = await Medicine.findById(id).select('category').lean();
 
-  if (!sourceMed) {
+  if (!baseMedicine) {
     return res.status(404).json({ success: false, message: 'Medicine not found.' });
   }
 
-  // 2. Build a query to find similar medicines
-  // Priority: Same Generic Name > Same Salt Ingredients > Same Therapeutic Class
-  const saltIngredients = sourceMed.saltComposition.map(s => s.ingredient);
-
-  const query = {
-    _id: { $ne: id }, // Exclude the current medicine
-    isDiscontinued: false,
-    $or: [
-      { genericName: sourceMed.genericName },
-      { 'saltComposition.ingredient': { $in: saltIngredients } },
-      { therapeuticClass: sourceMed.therapeuticClass }
-    ]
-  };
-
-  // 3. Execute query with projection to keep response light
-  const similarMedicines = await Medicine.find(query)
-    .select('name slug brandName genericName images mrp packaging dosage inventory')
-    .limit(limitNum)
+  // 2. Find other active medicines in the exact same category, excluding the base medicine
+  const similarMedicines = await Medicine.find({
+    category: baseMedicine.category,
+    _id: { $ne: id },         // Exclude the currently viewed medicine
+    isDiscontinued: false     // Only show active listings
+  })
+    .sort({ 'inventory.stockQuantity': -1, createdAt: -1 }) // Prioritize items in stock
+    .limit(limit)
+    .populate('inventory.storeId', 'storeName address status') // Match your standard population
     .lean();
-
-  // 4. (Optional) Sort by availability so "In Stock" items appear first
-  const sortedMedicines = similarMedicines.sort((a, b) => {
-    const aStock = (a.inventory ?? []).reduce((sum, inv) => sum + (inv.stockQuantity || 0), 0);
-    const bStock = (b.inventory ?? []).reduce((sum, inv) => sum + (inv.stockQuantity || 0), 0);
-    return bStock - aStock;
-  });
 
   res.status(200).json({
     success: true,
-    count: sortedMedicines.length,
-    medicines: sortedMedicines,
+    category: baseMedicine.category,
+    medicines: similarMedicines,
   });
 }));
+ 
 // ─────────────────────────────────────────────────────────────────────────────
 // 11b. POST /api/pharmacy/order/upload-prescription/file
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1918,14 +1913,14 @@ router.post('/order/cancel', protect, asyncHandler(async (req, res) => {
     order.cancellation.cancelledAt = new Date();
     order.delivery.status          = 'Cancelled';
 
-    if (order.payment.status === 'Paid') {
+if (order.payment?.status === 'Paid') {
       order.cancellation.refundStatus = 'Requested';
       order.cancellation.refundMethod = 'Original_Source';
       order.cancellation.refundAmount = order.billing.totalPayable;
       await incrementStock(order.items, order.store.toString(), session);
 
       // Immediate wallet refund if paid by wallet
-      if (order.payment.method === 'Wallet') {
+      if (order.payment?.method === 'Wallet') {
         const wallet = await Wallet.findOne({ user: req.user._id }).session(session);
         if (wallet) {
           const balanceBefore = wallet.balance;
@@ -2181,15 +2176,14 @@ router.post('/order/direct', protect, asyncHandler(async (req, res) => {
   const storeIdStr      = storeObjId.toString();
   const storeOverridden = preferredStoreId && preferredStoreId !== storeIdStr;
 
-  const session = await mongoose.startSession();
+ const session = await mongoose.startSession();
   session.startTransaction();
   try {
     const subscriptionDiscountPct = await resolvePharmacyDiscount(req.user._id);
     const unitPrice      = Number(inventoryEntry.pricePerUnit) || Number(medicine.mrp);
     const subTotal       = parseFloat((unitPrice * quantityNum).toFixed(2));
-    const gstAmount      = parseFloat(((subTotal * (Number(medicine.gstPercentage) || 0)) / 100).toFixed(2));
     const subDiscAmt     = parseFloat((subTotal * (subscriptionDiscountPct / 100)).toFixed(2));
-    const preCouponTotal = parseFloat(Math.max(0, subTotal + gstAmount - subDiscAmt).toFixed(2));
+    const preCouponTotal = parseFloat(Math.max(0, subTotal - subDiscAmt).toFixed(2));
 
     let couponDiscountAmt = 0, appliedCoupon = null;
     if (couponCode) {
@@ -2204,7 +2198,10 @@ router.post('/order/direct', protect, asyncHandler(async (req, res) => {
     }
 
     const totalDiscountAmount = parseFloat((subDiscAmt + couponDiscountAmt).toFixed(2));
-    const totalPayable        = parseFloat(Math.max(0, preCouponTotal - couponDiscountAmt).toFixed(2));
+    const totalPayable        = parseFloat(Math.max(0, subTotal - totalDiscountAmount).toFixed(2));
+
+    const gstPct    = Number(medicine.gstPercentage) || 5;
+    const gstAmount = parseFloat((totalPayable * gstPct / (100 + gstPct)).toFixed(2));
 
     const orderItem = {
       medicine:               medicine._id,
@@ -2213,39 +2210,13 @@ router.post('/order/direct', protect, asyncHandler(async (req, res) => {
       genericName:            medicine.genericName,
       medicineImage:          medicine.images?.[0]?.url || null,
       hsnCode:                medicine.hsnCode,
-      gstPercentage:          Number(medicine.gstPercentage) || 0,
+      gstPercentage:          gstPct,
       quantity:               quantityNum,
       pricePerUnit:           unitPrice,
       taxAmount:              gstAmount,
       totalPrice:             subTotal,
       isPrescriptionRequired: medicine.isPrescriptionRequired ?? false,
     };
-
-    const orderPrescription = medicine.isPrescriptionRequired
-      ? {
-          isRequired:         true,
-          imageUrl:           prescription?.imageUrl ?? null,
-          uploadedAt:         prescription?.imageUrl ? new Date() : null,
-          isVerified:         false,
-          verificationStatus: prescription?.imageUrl ? 'Pending' : 'Not_Uploaded',
-        }
-      : { isRequired: false };
-
-    const order = new PharmacyOrder({
-      customer:     req.user._id,
-      store:        storeObjId,
-      items:        [orderItem],
-      prescription: orderPrescription,
-      billing: {
-        subTotal,
-        gstAmount,
-        discountAmount: totalDiscountAmount,
-        promoCode:      appliedCoupon?.code,
-        totalPayable,
-      },
-      delivery: { address },
-      payment:  { method: paymentMethod },
-    });
 
     if (paymentMethod === 'COD') {
       await decrementStock([orderItem], storeIdStr, session);
@@ -2342,7 +2313,7 @@ router.post('/order/direct/verify', protect, asyncHandler(async (req, res) => {
       await session.abortTransaction();
       return res.status(404).json({ success: false, message: 'Order not found.' });
     }
-    if (order.payment.status === 'Paid') {
+if (order.payment?.status === 'Paid') {
       await session.abortTransaction();
       return res.status(200).json({ success: true, message: 'Already paid.', order });
     }

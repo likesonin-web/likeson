@@ -2,200 +2,334 @@ import mongoose from 'mongoose';
 
 const { Schema } = mongoose;
 
-// ─────────────────────────────────────────────
-// SHARED SUB-SCHEMAS
-// ─────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────────────────
 
-const ROLES = [
-  'superadmin', 'admin', 'doctor', 'transportpartner',
-  'driver', 'lab partner', 'customer', 'finance',
-  'pharmacy', 'care assistant'
+export const DOCUMENT_TYPES = [
+  'terms_and_conditions',
+  'privacy_policy',
+  'refund_policy',
+  'cookie_policy',
+  'disclaimer',
 ];
 
-const roleOverrideSchema = new Schema(
+export const DOCUMENT_STATUS = ['draft', 'active', 'archived', 'superseded'];
+
+export const PLATFORMS = ['web', 'android', 'ios', 'all'];
+
+export const AUDIENCE_TYPES = [
+  'customer',
+  'doctor',
+  'hospital',
+  'driver',
+  'solodriverpartner',
+  'transportpartner',
+  'pharmacy',
+  'care_assistant',
+  'lab_partner',
+  'blood_bank',
+  'all',
+];
+
+export const CONSENT_METHODS = ['checkbox', 'click', 'scroll', 'api'];
+
+// ── Sub-Schemas ────────────────────────────────────────────────────────────────
+
+/** One section / clause inside the document */
+const sectionSchema = new Schema(
   {
-    role: { type: String, enum: ROLES, required: true },
-    content: { type: String, required: true },
+    sectionId: { type: String, required: true },   // e.g. "data-collection", "refund-timeline"
+    title:     { type: String, required: true },
+    body:      { type: String, required: true },   // HTML or Markdown
+    order:     { type: Number, default: 0 },
+    isKey:     { type: Boolean, default: false },  // highlight important clause (GDPR, DPDP etc.)
   },
-  { _id: false }
+  { _id: true }
 );
 
+/** Snapshot kept every time a new version goes live */
 const versionHistorySchema = new Schema(
   {
-    version: { type: String, required: true },
-    content: { type: String, required: true },
-    publishedAt: { type: Date, required: true },
-    publishedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-    changeLog: { type: String },
+    version:      { type: String, required: true },   // "1.0", "1.1"
+    effectiveDate:{ type: Date,   required: true },
+    archivedBy:   { type: Schema.Types.ObjectId, ref: 'User' },
+    changeSummary:{ type: String },                   // "Added DPDP 2023 data rights clause"
+    snapshotText: { type: String },                   // full plain text at that version
   },
-  { _id: false }
+  { _id: true, timestamps: true }
 );
 
-
-// ─────────────────────────────────────────────
-// 1. TERMS & CONDITIONS
-// ─────────────────────────────────────────────
-
-const termsAndConditionsSchema = new Schema(
+/** Per-user consent record — stored inside document (capped at 10k, else use separate collection) */
+const consentSchema = new Schema(
   {
-    version: { type: String, required: true, unique: true, trim: true },
-    title: { type: String, default: 'Terms and Conditions', trim: true },
-    slug: { type: String, unique: true, sparse: true, lowercase: true, trim: true },
-
-    content: { type: String, required: [true, 'Terms content is required'] },
-    summary: { type: String },
-    roleSpecificClauses: [roleOverrideSchema],
-
-    isActive: { type: Boolean, default: false, index: true },
-    effectiveDate: { type: Date, required: true, index: true },
-    expiresAt: { type: Date },
-    requiresReAcceptance: { type: Boolean, default: false },
-    applicableRoles: { type: [String], default: [], enum: ROLES },
-
-    previousVersions: [versionHistorySchema],
-    changeLog: { type: String },
-
-    publishedAt: { type: Date },
-    publishedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
-    updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-  },
-  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
-);
-
-// Enforce only one active document at a time
-termsAndConditionsSchema.pre('save', async function () {
-  if (this.isModified('isActive') && this.isActive) {
-    await this.constructor.updateMany(
-      { _id: { $ne: this._id }, isActive: true },
-      { $set: { isActive: false } }
-    );
-    if (!this.publishedAt) {
-      this.publishedAt = new Date();
-    }
-  }
-});
-
-termsAndConditionsSchema.index({ isActive: 1, effectiveDate: -1 });
-
-const TermsAndConditions = mongoose.model('TermsAndConditions', termsAndConditionsSchema);
-
-
-// ─────────────────────────────────────────────
-// 2. PRIVACY POLICY
-// ─────────────────────────────────────────────
-
-const privacyPolicySchema = new Schema(
-  {
-    version: { type: String, required: true, unique: true, trim: true },
-    title: { type: String, default: 'Privacy Policy', trim: true },
-    slug: { type: String, unique: true, sparse: true, lowercase: true, trim: true },
-
-    content: { type: String, required: [true, 'Privacy policy content is required'] },
-    summary: { type: String },
-    roleSpecificClauses: [roleOverrideSchema],
-
-    dataCollected: [
-      {
-        category: { type: String },           // e.g. "Location", "Health", "Financial"
-        description: { type: String },
-        purpose: { type: String },
-        retentionPeriod: { type: String },    // e.g. "2 years"
-        sharedWith: [{ type: String }],       // e.g. ["Payment Gateway"]
-        appliesTo: [{ type: String }],        // Roles this applies to
-      }
-    ],
-
-    complianceFrameworks: {
-      type: [String],
-      default: [],
-      enum: ['GDPR', 'HIPAA', 'PDPA', 'CCPA', 'PIPEDA', 'Other'],
-    },
-    dataRetentionPolicy: { type: String },
-    cookiePolicy: { type: String },
-    thirdPartySharing: { type: Boolean, default: false },
-    geolocationTracking: { type: Boolean, default: false },
-
-    isActive: { type: Boolean, default: false, index: true },
-    effectiveDate: { type: Date, required: true, index: true },
-    expiresAt: { type: Date },
-    requiresReAcceptance: { type: Boolean, default: false },
-    applicableRoles: { type: [String], default: [], enum: ROLES },
-
-    previousVersions: [versionHistorySchema],
-    changeLog: { type: String },
-
-    publishedAt: { type: Date },
-    publishedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
-    updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-  },
-  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
-);
-
-// Enforce only one active document at a time
-privacyPolicySchema.pre('save', async function () {
-  if (this.isModified('isActive') && this.isActive) {
-    await this.constructor.updateMany(
-      { _id: { $ne: this._id }, isActive: true },
-      { $set: { isActive: false } }
-    );
-    if (!this.publishedAt) {
-      this.publishedAt = new Date();
-    }
-  }
-});
-
-privacyPolicySchema.index({ isActive: 1, effectiveDate: -1 });
-
-const PrivacyPolicy = mongoose.model('PrivacyPolicy', privacyPolicySchema);
-
-
-// ─────────────────────────────────────────────
-// 3. USER CONSENT (Audit Log)
-// ─────────────────────────────────────────────
-
-/**
- * @desc Immutable legal proof of user acceptance.
- *       Never delete records — only mark withdrawals.
- */
-const userConsentSchema = new Schema(
-  {
-    user: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    userRole: { type: String }, // Snapshot of role at time of consent
-
-    termsVersion: { type: Schema.Types.ObjectId, ref: 'TermsAndConditions', index: true },
-    termsVersionNumber: { type: String },
-
-    privacyPolicyVersion: { type: Schema.Types.ObjectId, ref: 'PrivacyPolicy', index: true },
-    privacyPolicyVersionNumber: { type: String },
-
-    method: {
-      type: String,
-      required: true,
-      enum: ['explicit_checkbox', 'registration', 'forced_update', 'api', 'google_oauth'],
-    },
-    platform: { type: String, required: true, enum: ['web', 'android', 'ios'] },
-
-    ipAddress: { type: String },
-    userAgent: { type: String },
-    deviceName: { type: String },
-
-    acceptedAt: { type: Date, default: Date.now, required: true, index: true },
-
-    // GDPR: Right to Withdraw
+    userId:      { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    version:     { type: String, required: true },
+    consentedAt: { type: Date, default: Date.now },
+    ipAddress:   { type: String },
+    userAgent:   { type: String },
+    platform:    { type: String, enum: PLATFORMS, default: 'web' },
+    method:      { type: String, enum: CONSENT_METHODS, default: 'checkbox' },
     isWithdrawn: { type: Boolean, default: false },
     withdrawnAt: { type: Date },
-    withdrawalReason: { type: String },
+    // Geo — India-first (state + city enough)
+    state:       { type: String },
+    city:        { type: String },
   },
-  { timestamps: true }
+  { _id: true, timestamps: true }
 );
 
-userConsentSchema.index({ user: 1, termsVersion: 1 });
-userConsentSchema.index({ user: 1, privacyPolicyVersion: 1 });
-userConsentSchema.index({ user: 1, acceptedAt: -1 });
+// ── Main Schema ────────────────────────────────────────────────────────────────
 
-const UserConsent = mongoose.model('UserConsent', userConsentSchema);
+const legalDocumentSchema = new Schema(
+  {
+    // ── Identity ──────────────────────────────────────────────────────────────
+    documentType: {
+      type:     String,
+      required: true,
+      enum:     DOCUMENT_TYPES,
+      index:    true,
+    },
+    slug: {
+      type:     String,
+      required: true,
+      unique:   true,
+      trim:     true,
+      lowercase:true,
+    },                                                  // "privacy-policy", "terms-and-conditions"
+    title:    { type: String, required: true, trim: true },
+    subtitle: { type: String },
 
+    // ── Version ───────────────────────────────────────────────────────────────
+    currentVersion: { type: String, required: true, default: '1.0' },
+    effectiveDate:  { type: Date,   required: true },
+    lastReviewedAt: { type: Date },
+    nextReviewDue:  { type: Date },                     // set 12 months ahead on publish
+    versionHistory: { type: [versionHistorySchema], default: [] },
 
-export { TermsAndConditions, PrivacyPolicy, UserConsent };
+    // ── Status ────────────────────────────────────────────────────────────────
+    status: {
+      type:    String,
+      enum:    DOCUMENT_STATUS,
+      default: 'draft',
+      index:   true,
+    },
+    isPublished: { type: Boolean, default: false },
+    publishedAt: { type: Date },
+
+    // ── Content ───────────────────────────────────────────────────────────────
+    sections:  { type: [sectionSchema], default: [] },
+    fullText:  { type: String },                        // plain text — full-text search
+    fullHtml:  { type: String },                        // rendered HTML for frontend
+    summary:   { type: String },                        // 2-3 sentence plain-language summary
+    keyPoints: [{ type: String }],                      // bullet highlights shown on onboarding
+
+    // ── Audience & Platform ───────────────────────────────────────────────────
+    platform:     { type: String, enum: PLATFORMS,      default: 'all' },
+    audienceType: { type: String, enum: AUDIENCE_TYPES, default: 'all' },
+
+    // ── Jurisdiction (India-first, Likeson based in AP) ───────────────────────
+    governingLaw:  { type: String, default: 'India' },
+    jurisdiction:  { type: String, default: 'Andhra Pradesh, India' },
+    complianceStandards: [{ type: String }],            // ["DPDP", "IT_ACT_2000", "HIPAA_LIKE"]
+    dataProtectionOfficer: {
+      name:  { type: String },
+      email: { type: String },
+      phone: { type: String },
+    },
+
+    // ── Privacy-specific fields (used when documentType = 'privacy_policy') ──
+    dataCollected: {
+      personalData:  [{ type: String }],                // ["name","email","phone","dob"]
+      sensitiveData: [{ type: String }],                // ["health_records","prescriptions","diagnostics"]
+      financialData: [{ type: String }],                // ["upi_id","card_last4"]
+      locationData:  { type: Boolean, default: false }, // GPS for transport tracking
+      deviceData:    { type: Boolean, default: false },
+      biometricData: { type: Boolean, default: false },
+      cookies:       { type: Boolean, default: true },
+    },
+    dataPurpose:   [{ type: String }],                  // ["service_delivery","analytics","reminders"]
+    dataRetention: { type: String },                    // "3 years after account deletion"
+    dataSharing: {
+      thirdParties:         [{ type: String }],         // ["hospitals","labs","payment_gateways","transport_partners"]
+      crossBorderTransfer:  { type: Boolean, default: false },
+      soldToThirdParties:   { type: Boolean, default: false },
+    },
+    userRights: [{ type: String }],                     // ["access","rectify","delete","portability","grievance"]
+
+    // ── Refund-specific fields (used when documentType = 'refund_policy') ─────
+    refundRules: {
+      fullRefundWindowHours:    { type: Number, default: 24 },    // cancel > 24h → 100% refund
+      partialRefundPercent:     { type: Number, default: 50 },    // cancel within window → 50%
+      noRefundOnceDriverStarts: { type: Boolean, default: true },
+      doubleChargeFullRefund:   { type: Boolean, default: true },
+      processingDaysMin:        { type: Number, default: 5 },
+      processingDaysMax:        { type: Number, default: 12 },
+      refundMethods:            [{ type: String }],               // ["upi","credit_card","debit_card"]
+    },
+
+    // ── T&C-specific fields (used when documentType = 'terms_and_conditions') ─
+    minAge:                  { type: Number, default: 18 },
+    requiresParentalConsent: { type: Boolean, default: false },
+    disputeResolution:       { type: String, default: 'Arbitration, Andhra Pradesh courts' },
+
+    // ── Consent Tracking ──────────────────────────────────────────────────────
+    requiresExplicitConsent: { type: Boolean, default: true },
+    consentMethod:           { type: String, enum: CONSENT_METHODS, default: 'checkbox' },
+    totalConsents:           { type: Number, default: 0, min: 0 },
+    consents:                { type: [consentSchema], default: [] },
+
+    // ── Notifications on update ───────────────────────────────────────────────
+    notifyUsersOnUpdate:   { type: Boolean, default: true },
+    notificationChannels:  [{ type: String }],          // ["sms","email","push","whatsapp"]
+    notificationSentAt:    { type: Date },
+
+    // ── Display / SEO ─────────────────────────────────────────────────────────
+    metaTitle:       { type: String },
+    metaDescription: { type: String },
+    pdfUrl:          { type: String },                  // S3/CDN downloadable PDF
+    showInFooter:    { type: Boolean, default: true },
+    showInOnboarding:{ type: Boolean, default: false }, // shown during signup flow
+    displayOrder:    { type: Number,  default: 0 },
+
+    // ── Authoring & Approval ──────────────────────────────────────────────────
+    createdBy:        { type: Schema.Types.ObjectId, ref: 'User' },
+    updatedBy:        { type: Schema.Types.ObjectId, ref: 'User' },
+    approvedBy:       { type: Schema.Types.ObjectId, ref: 'User' },
+    approvedAt:       { type: Date },
+    legalReviewedBy:  { type: String },                 // external counsel / CA name
+    legalReviewedAt:  { type: Date },
+
+    // ── Integrity ─────────────────────────────────────────────────────────────
+    checksumSha256: { type: String },                   // SHA-256 of fullText — tamper detection
+
+    // ── Soft Delete ───────────────────────────────────────────────────────────
+    isDeleted: { type: Boolean, default: false, index: true },
+    deletedAt: { type: Date },
+    deletedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  },
+  {
+    timestamps:  true,
+    toJSON:      { virtuals: true },
+    toObject:    { virtuals: true },
+    collection:  'legal_documents',
+  }
+);
+
+// ── Indexes ────────────────────────────────────────────────────────────────────
+
+legalDocumentSchema.index({ documentType: 1, status: 1, isPublished: 1 });
+legalDocumentSchema.index({ documentType: 1, effectiveDate: -1 });
+legalDocumentSchema.index({ 'consents.userId': 1 });
+legalDocumentSchema.index({ isDeleted: 1, status: 1 });
+legalDocumentSchema.index({ fullText: 'text', title: 'text' });  // full-text search
+
+// ── Virtuals ───────────────────────────────────────────────────────────────────
+
+/** True if doc is live and not deleted */
+legalDocumentSchema.virtual('isActive').get(function () {
+  return this.isPublished && this.status === 'active' && !this.isDeleted;
+});
+
+/** Count of active (non-withdrawn) consents */
+legalDocumentSchema.virtual('activeConsentCount').get(function () {
+  return this.consents.filter((c) => !c.isWithdrawn).length;
+});
+
+// ── Statics ────────────────────────────────────────────────────────────────────
+
+/**
+ * Get the current live document by type.
+ * Usage: LegalDocument.getActive('privacy_policy')
+ */
+legalDocumentSchema.statics.getActive = function (documentType) {
+  return this.findOne({
+    documentType,
+    isPublished: true,
+    status:      'active',
+    isDeleted:   false,
+  }).sort({ effectiveDate: -1 });
+};
+
+/**
+ * Check if a specific user has consented to latest version.
+ * Usage: LegalDocument.hasUserConsented(docId, userId, '2.0')
+ */
+legalDocumentSchema.statics.hasUserConsented = async function (docId, userId, version) {
+  const doc = await this.findById(docId).select('consents');
+  if (!doc) return false;
+  return doc.consents.some(
+    (c) => c.userId.equals(userId) && c.version === version && !c.isWithdrawn
+  );
+};
+
+// ── Methods ────────────────────────────────────────────────────────────────────
+
+/**
+ * Archive current version before pushing a new one.
+ * Call before updating currentVersion + sections.
+ */
+legalDocumentSchema.methods.archiveCurrentVersion = function (adminUserId) {
+  this.versionHistory.push({
+    version:       this.currentVersion,
+    effectiveDate: this.effectiveDate,
+    archivedBy:    adminUserId,
+    snapshotText:  this.fullText,
+    changeSummary: `Archived before version update`,
+  });
+};
+
+/**
+ * Record user consent.
+ * @param {Object} data - { userId, version, ipAddress, userAgent, platform, method, state, city }
+ */
+legalDocumentSchema.methods.recordConsent = async function (data) {
+  // Remove previous consent record for same user+version if exists (re-accept case)
+  this.consents = this.consents.filter(
+    (c) => !(c.userId.equals(data.userId) && c.version === data.version)
+  );
+  this.consents.push(data);
+  this.totalConsents += 1;
+  return this.save();
+};
+
+/**
+ * Withdraw user consent (DPDP / GDPR right to withdraw).
+ * @param {ObjectId} userId
+ * @param {String} version
+ */
+legalDocumentSchema.methods.withdrawConsent = async function (userId, version) {
+  const consent = this.consents.find(
+    (c) => c.userId.equals(userId) && c.version === version && !c.isWithdrawn
+  );
+  if (!consent) throw new Error('Active consent not found');
+  consent.isWithdrawn = true;
+  consent.withdrawnAt = new Date();
+  return this.save();
+};
+
+// ── Pre-save ──────────────────────────────────────────────────────────────────
+
+legalDocumentSchema.pre('save', function (next) {
+  // Auto-set publishedAt when first published
+  if (this.isModified('isPublished') && this.isPublished && !this.publishedAt) {
+    this.publishedAt = new Date();
+  }
+
+  // Auto-set nextReviewDue = effectiveDate + 12 months (if not manually set)
+  if (this.isModified('effectiveDate') && !this.nextReviewDue) {
+    const d = new Date(this.effectiveDate);
+    d.setFullYear(d.getFullYear() + 1);
+    this.nextReviewDue = d;
+  }
+
+  // Auto-order sections by their order field
+  if (this.isModified('sections')) {
+    this.sections.sort((a, b) => a.order - b.order);
+  }
+
+  next();
+});
+
+// ── Model ─────────────────────────────────────────────────────────────────────
+
+const LegalDocument = mongoose.model('LegalDocument', legalDocumentSchema);
+export default LegalDocument;

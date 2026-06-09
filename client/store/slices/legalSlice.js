@@ -2,722 +2,912 @@ import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import API from '../api';
 import toast from 'react-hot-toast';
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// ═══════════════════════════════════════════════════════════════
-// ASYNC THUNKS — TERMS & CONDITIONS
-// ═══════════════════════════════════════════════════════════════
+export const DOCUMENT_TYPES = [
+  'terms_and_conditions',
+  'privacy_policy',
+  'refund_policy',
+  'cookie_policy',
+  'disclaimer',
+];
 
-export const fetchActiveTerms = createAsyncThunk(
-  'legal/fetchActiveTerms',
+// ═══════════════════════════════════════════════════════════════════════════════
+// INITIAL STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const initialState = {
+  // ── Public ──────────────────────────────────────────────────────────────────
+  activeDocs:      {},        // { terms_and_conditions: {...}, privacy_policy: {...} }
+  activeDocsList:  [],        // footer list — all published docs
+  activeDocsError: null,
+
+  // ── Consent ─────────────────────────────────────────────────────────────────
+  consentStatus: {
+    // { terms_and_conditions: { accepted, currentVersion, effectiveDate }, ... }
+  },
+  consentRequired:   false,
+  consentHistory:    [],
+  consentLoading:    false,
+  consentError:      null,
+
+  // ── Admin — list ────────────────────────────────────────────────────────────
+  adminDocs:    [],
+  adminTotal:   0,
+  adminPage:    1,
+  adminPages:   0,
+  adminLoading: false,
+  adminError:   null,
+
+  // ── Admin — single doc ───────────────────────────────────────────────────────
+  selectedDoc:         null,
+  selectedDocLoading:  false,
+  selectedDocError:    null,
+
+  // ── Admin — version history ──────────────────────────────────────────────────
+  versionHistory:        [],
+  versionHistoryLoading: false,
+  versionHistoryError:   null,
+
+  // ── Admin — consents ─────────────────────────────────────────────────────────
+  docConsents:        [],
+  docConsentsTotal:   0,
+  docConsentsPages:   0,
+  docConsentsLoading: false,
+  docConsentsError:   null,
+
+  // ── Admin — cross-doc consent report ─────────────────────────────────────────
+  allConsents:        [],
+  allConsentsTotal:   0,
+  allConsentsPages:   0,
+  allConsentsLoading: false,
+  allConsentsError:   null,
+
+  // ── Checksum ──────────────────────────────────────────────────────────────────
+  checksumResult:  null,
+  checksumLoading: false,
+  checksumError:   null,
+
+  // ── Mutation loading flags (keyed by action name) ────────────────────────────
+  mutating: {},   // { 'publishDoc/64abc': true }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Extract error message from axios error or plain Error */
+const extractError = (err) =>
+  err?.response?.data?.message ?? err?.message ?? 'Something went wrong.';
+
+/** Mutation key used in `mutating` map */
+const mKey = (name, id = '') => (id ? `${name}/${id}` : name);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PUBLIC THUNKS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Fetch all active published docs (footer / onboarding list)
+ * GET /api/legal/active
+ */
+export const fetchActiveDocs = createAsyncThunk(
+  'legal/fetchActiveDocs',
   async (_, { rejectWithValue }) => {
     try {
-      const { data } = await API.get('/legal/terms');
+      const { data } = await API.get('/legal/active');
       return data.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || 'Failed to fetch Terms & Conditions');
+      return rejectWithValue(extractError(err));
     }
   }
 );
 
-export const fetchAllTermsVersions = createAsyncThunk(
-  'legal/fetchAllTermsVersions',
-  async ({ page = 1, limit = 10 } = {}, { rejectWithValue }) => {
+/**
+ * Fetch single active doc by type
+ * GET /api/legal/:type?platform=&audience=
+ */
+export const fetchActiveDocByType = createAsyncThunk(
+  'legal/fetchActiveDocByType',
+  async ({ type, platform, audience } = {}, { rejectWithValue }) => {
     try {
-      const { data } = await API.get(`/legal/terms/all?page=${page}&limit=${limit}`);
-      return data;
+      const params = {};
+      if (platform) params.platform = platform;
+      if (audience) params.audience = audience;
+      const { data } = await API.get(`/legal/${type}`, { params });
+      return { type, doc: data.data };
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || 'Failed to fetch Terms versions');
+      return rejectWithValue(extractError(err));
     }
   }
 );
 
-export const fetchTermsById = createAsyncThunk(
-  'legal/fetchTermsById',
-  async (id, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(`/legal/terms/${id}`);
-      return data.data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || 'Failed to fetch Terms version');
-    }
-  }
-);
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSENT THUNKS
+// ═══════════════════════════════════════════════════════════════════════════════
 
-export const createTerms = createAsyncThunk(
-  'legal/createTerms',
-  async (payload, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post('/legal/terms', payload);
-      toast.success('Terms & Conditions draft created successfully');
-      return data.data;
-    } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to create Terms & Conditions';
-      toast.error(msg);
-      return rejectWithValue(msg);
-    }
-  }
-);
-
-export const updateTerms = createAsyncThunk(
-  'legal/updateTerms',
-  async ({ id, ...payload }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.patch(`/legal/terms/${id}`, payload);
-      toast.success('Terms & Conditions updated successfully');
-      return data.data;
-    } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to update Terms & Conditions';
-      toast.error(msg);
-      return rejectWithValue(msg);
-    }
-  }
-);
-
-export const publishTerms = createAsyncThunk(
-  'legal/publishTerms',
-  async (id, { rejectWithValue }) => {
-    try {
-      const { data } = await API.patch(`/legal/terms/${id}/publish`);
-      toast.success(data.message || 'Terms & Conditions published successfully');
-      return data.data;
-    } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to publish Terms & Conditions';
-      toast.error(msg);
-      return rejectWithValue(msg);
-    }
-  }
-);
-
-export const deleteTerms = createAsyncThunk(
-  'legal/deleteTerms',
-  async (id, { rejectWithValue }) => {
-    try {
-      await API.delete(`/legal/terms/${id}`);
-      toast.success('Draft Terms & Conditions deleted');
-      return id;
-    } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to delete Terms & Conditions';
-      toast.error(msg);
-      return rejectWithValue(msg);
-    }
-  }
-);
-
-
-// ═══════════════════════════════════════════════════════════════
-// ASYNC THUNKS — PRIVACY POLICY
-// ═══════════════════════════════════════════════════════════════
-
-export const fetchActivePrivacyPolicy = createAsyncThunk(
-  'legal/fetchActivePrivacyPolicy',
-  async (_, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get('/legal/privacy');
-      return data.data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || 'Failed to fetch Privacy Policy');
-    }
-  }
-);
-
-export const fetchAllPrivacyVersions = createAsyncThunk(
-  'legal/fetchAllPrivacyVersions',
-  async ({ page = 1, limit = 10 } = {}, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(`/legal/privacy/all?page=${page}&limit=${limit}`);
-      return data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || 'Failed to fetch Privacy Policy versions');
-    }
-  }
-);
-
-export const fetchPrivacyById = createAsyncThunk(
-  'legal/fetchPrivacyById',
-  async (id, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(`/legal/privacy/${id}`);
-      return data.data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || 'Failed to fetch Privacy Policy version');
-    }
-  }
-);
-
-export const createPrivacyPolicy = createAsyncThunk(
-  'legal/createPrivacyPolicy',
-  async (payload, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post('/legal/privacy', payload);
-      toast.success('Privacy Policy draft created successfully');
-      return data.data;
-    } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to create Privacy Policy';
-      toast.error(msg);
-      return rejectWithValue(msg);
-    }
-  }
-);
-
-export const updatePrivacyPolicy = createAsyncThunk(
-  'legal/updatePrivacyPolicy',
-  async ({ id, ...payload }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.patch(`/legal/privacy/${id}`, payload);
-      toast.success('Privacy Policy updated successfully');
-      return data.data;
-    } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to update Privacy Policy';
-      toast.error(msg);
-      return rejectWithValue(msg);
-    }
-  }
-);
-
-export const publishPrivacyPolicy = createAsyncThunk(
-  'legal/publishPrivacyPolicy',
-  async (id, { rejectWithValue }) => {
-    try {
-      const { data } = await API.patch(`/legal/privacy/${id}/publish`);
-      toast.success(data.message || 'Privacy Policy published successfully');
-      return data.data;
-    } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to publish Privacy Policy';
-      toast.error(msg);
-      return rejectWithValue(msg);
-    }
-  }
-);
-
-export const deletePrivacyPolicy = createAsyncThunk(
-  'legal/deletePrivacyPolicy',
-  async (id, { rejectWithValue }) => {
-    try {
-      await API.delete(`/legal/privacy/${id}`);
-      toast.success('Draft Privacy Policy deleted');
-      return id;
-    } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to delete Privacy Policy';
-      toast.error(msg);
-      return rejectWithValue(msg);
-    }
-  }
-);
-
-
-// ═══════════════════════════════════════════════════════════════
-// ASYNC THUNKS — USER CONSENT
-// ═══════════════════════════════════════════════════════════════
-
-export const recordConsent = createAsyncThunk(
-  'legal/recordConsent',
-  async ({ method = 'explicit_checkbox', platform = 'web', deviceName } = {}, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post('/legal/consent', { method, platform, deviceName });
-      toast.success('Your consent has been recorded. Thank you!');
-      return data.data;
-    } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to record consent';
-      toast.error(msg);
-      return rejectWithValue(msg);
-    }
-  }
-);
-
-export const fetchMyConsents = createAsyncThunk(
-  'legal/fetchMyConsents',
-  async (_, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get('/legal/consent/me');
-      return data.data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || 'Failed to fetch your consent history');
-    }
-  }
-);
-
+/**
+ * Check consent status for current user
+ * GET /api/legal/consent/status
+ */
 export const fetchConsentStatus = createAsyncThunk(
   'legal/fetchConsentStatus',
   async (_, { rejectWithValue }) => {
     try {
       const { data } = await API.get('/legal/consent/status');
-      return data.data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || 'Failed to fetch consent status');
-    }
-  }
-);
-
-export const fetchAllUserConsents = createAsyncThunk(
-  'legal/fetchAllUserConsents',
-  async ({ userId, platform, method, page = 1, limit = 20 } = {}, { rejectWithValue }) => {
-    try {
-      const params = new URLSearchParams({ page, limit });
-      if (userId) params.append('userId', userId);
-      if (platform) params.append('platform', platform);
-      if (method) params.append('method', method);
-
-      const { data } = await API.get(`/legal/consent/users?${params.toString()}`);
       return data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || 'Failed to fetch user consents');
+      return rejectWithValue(extractError(err));
     }
   }
 );
 
-export const withdrawConsent = createAsyncThunk(
-  'legal/withdrawConsent',
-  async ({ id, reason }, { rejectWithValue }) => {
+/**
+ * Fetch current user's consent history
+ * GET /api/legal/consent/me
+ */
+export const fetchMyConsentHistory = createAsyncThunk(
+  'legal/fetchMyConsentHistory',
+  async (_, { rejectWithValue }) => {
     try {
-      const { data } = await API.patch(`/legal/consent/${id}/withdraw`, { reason });
-      toast.success('Consent withdrawn successfully');
+      const { data } = await API.get('/legal/consent/me');
       return data.data;
     } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to withdraw consent';
+      return rejectWithValue(extractError(err));
+    }
+  }
+);
+
+/**
+ * Record consent for one or more document types
+ * POST /api/legal/consent
+ * @param {Object} payload { documentTypes, method, platform, state, city }
+ */
+export const recordConsent = createAsyncThunk(
+  'legal/recordConsent',
+  async (payload, { rejectWithValue, dispatch }) => {
+    try {
+      const { data } = await API.post('/legal/consent', payload);
+      toast.success('Consent recorded successfully.');
+      // Refresh consent status after recording
+      dispatch(fetchConsentStatus());
+      return data.data;
+    } catch (err) {
+      const msg = extractError(err);
       toast.error(msg);
       return rejectWithValue(msg);
     }
   }
 );
 
+/**
+ * Withdraw consent for a specific document type + version
+ * PATCH /api/legal/consent/withdraw
+ * @param {Object} payload { documentType, version, reason }
+ */
+export const withdrawConsent = createAsyncThunk(
+  'legal/withdrawConsent',
+  async (payload, { rejectWithValue, dispatch }) => {
+    try {
+      const { data } = await API.patch('/legal/consent/withdraw', payload);
+      toast.success('Consent withdrawn.');
+      dispatch(fetchConsentStatus());
+      dispatch(fetchMyConsentHistory());
+      return data;
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  }
+);
 
-// ═══════════════════════════════════════════════════════════════
-// INITIAL STATE
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN — LIST / FETCH THUNKS
+// ═══════════════════════════════════════════════════════════════════════════════
 
-const initialState = {
-  // ── Terms ──────────────────────────────────
-  terms: {
-    active: null,           // Currently published Terms document
-    selected: null,         // A single version being viewed/edited
-    allVersions: [],
-    pagination: { total: 0, page: 1, pages: 1 },
-    loading: false,
-    submitting: false,      // Create / update / publish / delete
-    error: null,
-  },
+/**
+ * List all documents with pagination + filters
+ * GET /api/legal/admin/all
+ * @param {Object} params { type, status, platform, audience, page, limit }
+ */
+export const fetchAdminDocs = createAsyncThunk(
+  'legal/fetchAdminDocs',
+  async (params = {}, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get('/legal/admin/all', { params });
+      return data;
+    } catch (err) {
+      return rejectWithValue(extractError(err));
+    }
+  }
+);
 
-  // ── Privacy Policy ─────────────────────────
-  privacy: {
-    active: null,
-    selected: null,
-    allVersions: [],
-    pagination: { total: 0, page: 1, pages: 1 },
-    loading: false,
-    submitting: false,
-    error: null,
-  },
+/**
+ * Fetch single document by ID (full, with sections + version history)
+ * GET /api/legal/admin/:id
+ */
+export const fetchAdminDocById = createAsyncThunk(
+  'legal/fetchAdminDocById',
+  async (id, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`/legal/admin/${id}`);
+      return data.data;
+    } catch (err) {
+      return rejectWithValue(extractError(err));
+    }
+  }
+);
 
-  // ── Consent ────────────────────────────────
-  consent: {
-    myHistory: [],          // Current user's consent records
-    allUsers: [],           // Admin view of all users' consents
-    pagination: { total: 0, page: 1, pages: 1 },
-    status: {               // From /consent/status
-      termsAccepted: false,
-      privacyAccepted: false,
-      consentRequired: true,
-      activeTermsVersion: null,
-      activePrivacyVersion: null,
-    },
-    loading: false,
-    submitting: false,
-    error: null,
-  },
-};
+/**
+ * Fetch version history of a document
+ * GET /api/legal/admin/:id/version-history
+ */
+export const fetchVersionHistory = createAsyncThunk(
+  'legal/fetchVersionHistory',
+  async (id, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`/legal/admin/${id}/version-history`);
+      return data.data;
+    } catch (err) {
+      return rejectWithValue(extractError(err));
+    }
+  }
+);
 
+/**
+ * Fetch consents for a specific document
+ * GET /api/legal/admin/:id/consents
+ * @param {Object} { id, page, limit, withdrawn, version }
+ */
+export const fetchDocConsents = createAsyncThunk(
+  'legal/fetchDocConsents',
+  async ({ id, ...params }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`/legal/admin/${id}/consents`, { params });
+      return data;
+    } catch (err) {
+      return rejectWithValue(extractError(err));
+    }
+  }
+);
 
-// ═══════════════════════════════════════════════════════════════
+/**
+ * Cross-doc consent report (all users)
+ * GET /api/legal/admin/consents/users
+ * @param {Object} params { userId, platform, method, page, limit }
+ */
+export const fetchAllConsents = createAsyncThunk(
+  'legal/fetchAllConsents',
+  async (params = {}, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get('/legal/admin/consents/users', { params });
+      return data;
+    } catch (err) {
+      return rejectWithValue(extractError(err));
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN — MUTATION THUNKS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Create new draft document
+ * POST /api/legal/admin
+ */
+export const createLegalDoc = createAsyncThunk(
+  'legal/createLegalDoc',
+  async (payload, { rejectWithValue }) => {
+    try {
+      const { data } = await API.post('/legal/admin', payload);
+      toast.success('Document created as draft.');
+      return data.data;
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  }
+);
+
+/**
+ * Update draft document
+ * PATCH /api/legal/admin/:id
+ */
+export const updateLegalDoc = createAsyncThunk(
+  'legal/updateLegalDoc',
+  async ({ id, ...payload }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.patch(`/legal/admin/${id}`, payload);
+      toast.success('Document updated.');
+      return data.data;
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  }
+);
+
+/**
+ * Submit draft → review
+ * PATCH /api/legal/admin/:id/submit-review
+ */
+export const submitDocForReview = createAsyncThunk(
+  'legal/submitDocForReview',
+  async (id, { rejectWithValue, dispatch }) => {
+    try {
+      const { data } = await API.patch(`/legal/admin/${id}/submit-review`);
+      toast.success('Document submitted for review.');
+      dispatch(fetchAdminDocById(id));
+      return data.data;
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  }
+);
+
+/**
+ * Approve document (review → approved)
+ * PATCH /api/legal/admin/:id/approve
+ */
+export const approveDoc = createAsyncThunk(
+  'legal/approveDoc',
+  async (id, { rejectWithValue, dispatch }) => {
+    try {
+      const { data } = await API.patch(`/legal/admin/${id}/approve`);
+      toast.success('Document approved.');
+      dispatch(fetchAdminDocById(id));
+      return data.data;
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  }
+);
+
+/**
+ * Publish document → active (auto-supersedes current active)
+ * PATCH /api/legal/admin/:id/publish
+ * @param {Object} { id, changeSummary }
+ */
+export const publishDoc = createAsyncThunk(
+  'legal/publishDoc',
+  async ({ id, changeSummary = 'Published' }, { rejectWithValue, dispatch }) => {
+    try {
+      const { data } = await API.patch(`/legal/admin/${id}/publish`, { changeSummary });
+      toast.success(`Document is now live.`);
+      dispatch(fetchAdminDocById(id));
+      dispatch(fetchActiveDocs());
+      return data.data;
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  }
+);
+
+/**
+ * Clone active doc as new draft with bumped version
+ * PATCH /api/legal/admin/:id/new-version
+ * @param {Object} { id, newVersion }
+ */
+export const createNewVersion = createAsyncThunk(
+  'legal/createNewVersion',
+  async ({ id, newVersion }, { rejectWithValue, dispatch }) => {
+    try {
+      const { data } = await API.patch(`/legal/admin/${id}/new-version`, { newVersion });
+      toast.success(`Draft v${newVersion} created.`);
+      dispatch(fetchAdminDocs());
+      return data.data;
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  }
+);
+
+/**
+ * Archive an active document
+ * PATCH /api/legal/admin/:id/archive
+ */
+export const archiveDoc = createAsyncThunk(
+  'legal/archiveDoc',
+  async (id, { rejectWithValue, dispatch }) => {
+    try {
+      const { data } = await API.patch(`/legal/admin/${id}/archive`);
+      toast.success('Document archived.');
+      dispatch(fetchAdminDocById(id));
+      return data.data;
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  }
+);
+
+/**
+ * Soft-delete a draft document
+ * DELETE /api/legal/admin/:id
+ */
+export const deleteLegalDoc = createAsyncThunk(
+  'legal/deleteLegalDoc',
+  async (id, { rejectWithValue, dispatch }) => {
+    try {
+      await API.delete(`/legal/admin/${id}`);
+      toast.success('Document deleted.');
+      dispatch(fetchAdminDocs());
+      return id;
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  }
+);
+
+/**
+ * Verify document checksum (tamper detection)
+ * GET /api/legal/admin/:id/verify-checksum
+ */
+export const verifyChecksum = createAsyncThunk(
+  'legal/verifyChecksum',
+  async (id, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`/legal/admin/${id}/verify-checksum`);
+      if (!data.intact) toast.error('⚠ Checksum mismatch! Document may be tampered.');
+      else toast.success('Document integrity verified.');
+      return data;
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SLICE
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
 
 const legalSlice = createSlice({
   name: 'legal',
   initialState,
 
   reducers: {
-    clearTermsError: (state) => { state.terms.error = null; },
-    clearPrivacyError: (state) => { state.privacy.error = null; },
-    clearConsentError: (state) => { state.consent.error = null; },
-    clearSelectedTerms: (state) => { state.terms.selected = null; },
-    clearSelectedPrivacy: (state) => { state.privacy.selected = null; },
-    resetLegalState: () => initialState,
+    /** Clear selected doc when navigating away */
+    clearSelectedDoc(state) {
+      state.selectedDoc        = null;
+      state.selectedDocError   = null;
+      state.versionHistory     = [];
+      state.checksumResult     = null;
+    },
+
+    /** Clear admin list errors */
+    clearAdminError(state) {
+      state.adminError = null;
+    },
+
+    /** Clear consent errors */
+    clearConsentError(state) {
+      state.consentError = null;
+    },
+
+    /** Reset doc consent list (on modal close) */
+    clearDocConsents(state) {
+      state.docConsents        = [];
+      state.docConsentsTotal   = 0;
+      state.docConsentsPages   = 0;
+      state.docConsentsError   = null;
+    },
+
+    /** Reset cross-doc consent report */
+    clearAllConsents(state) {
+      state.allConsents        = [];
+      state.allConsentsTotal   = 0;
+      state.allConsentsPages   = 0;
+      state.allConsentsError   = null;
+    },
+
+    /** Manually patch a doc in adminDocs list (optimistic update) */
+    patchAdminDoc(state, { payload: { id, changes } }) {
+      const idx = state.adminDocs.findIndex((d) => d._id === id);
+      if (idx !== -1) state.adminDocs[idx] = { ...state.adminDocs[idx], ...changes };
+      if (state.selectedDoc?._id === id) {
+        state.selectedDoc = { ...state.selectedDoc, ...changes };
+      }
+    },
   },
 
   extraReducers: (builder) => {
 
-    // ─────────────────────────────────────────
-    // TERMS & CONDITIONS
-    // ─────────────────────────────────────────
+    // ── Helper: generic pending/rejected for mutation thunks ────────────────────
+    const mutationPending  = (name) => (state, { meta }) => {
+      state.mutating[mKey(name, meta.arg?.id ?? meta.arg)] = true;
+    };
+    const mutationFulfilled = (name) => (state, { meta }) => {
+      delete state.mutating[mKey(name, meta.arg?.id ?? meta.arg)];
+    };
+    const mutationRejected  = (name) => (state, { meta }) => {
+      delete state.mutating[mKey(name, meta.arg?.id ?? meta.arg)];
+    };
 
-    // Fetch Active
+    // ── fetchActiveDocs ─────────────────────────────────────────────────────────
     builder
-      .addCase(fetchActiveTerms.pending, (state) => {
-        state.terms.loading = true;
-        state.terms.error = null;
+      .addCase(fetchActiveDocs.pending, (state) => {
+        state.activeDocsError = null;
       })
-      .addCase(fetchActiveTerms.fulfilled, (state, { payload }) => {
-        state.terms.loading = false;
-        state.terms.active = payload;
+      .addCase(fetchActiveDocs.fulfilled, (state, { payload }) => {
+        state.activeDocsList = payload;
+        // Also key by documentType for quick lookup
+        payload.forEach((doc) => {
+          state.activeDocs[doc.documentType] = doc;
+        });
       })
-      .addCase(fetchActiveTerms.rejected, (state, { payload }) => {
-        state.terms.loading = false;
-        state.terms.error = payload;
+      .addCase(fetchActiveDocs.rejected, (state, { payload }) => {
+        state.activeDocsError = payload;
       });
 
-    // Fetch All Versions
+    // ── fetchActiveDocByType ────────────────────────────────────────────────────
     builder
-      .addCase(fetchAllTermsVersions.pending, (state) => {
-        state.terms.loading = true;
-        state.terms.error = null;
+      .addCase(fetchActiveDocByType.fulfilled, (state, { payload }) => {
+        state.activeDocs[payload.type] = payload.doc;
       })
-      .addCase(fetchAllTermsVersions.fulfilled, (state, { payload }) => {
-        state.terms.loading = false;
-        state.terms.allVersions = payload.data;
-        state.terms.pagination = {
-          total: payload.total,
-          page: payload.page,
-          pages: payload.pages,
-        };
-      })
-      .addCase(fetchAllTermsVersions.rejected, (state, { payload }) => {
-        state.terms.loading = false;
-        state.terms.error = payload;
+      .addCase(fetchActiveDocByType.rejected, (state, { payload }) => {
+        state.activeDocsError = payload;
       });
 
-    // Fetch By ID
-    builder
-      .addCase(fetchTermsById.pending, (state) => {
-        state.terms.loading = true;
-        state.terms.error = null;
-      })
-      .addCase(fetchTermsById.fulfilled, (state, { payload }) => {
-        state.terms.loading = false;
-        state.terms.selected = payload;
-      })
-      .addCase(fetchTermsById.rejected, (state, { payload }) => {
-        state.terms.loading = false;
-        state.terms.error = payload;
-      });
-
-    // Create
-    builder
-      .addCase(createTerms.pending, (state) => {
-        state.terms.submitting = true;
-        state.terms.error = null;
-      })
-      .addCase(createTerms.fulfilled, (state, { payload }) => {
-        state.terms.submitting = false;
-        state.terms.allVersions.unshift(payload);
-      })
-      .addCase(createTerms.rejected, (state, { payload }) => {
-        state.terms.submitting = false;
-        state.terms.error = payload;
-      });
-
-    // Update
-    builder
-      .addCase(updateTerms.pending, (state) => {
-        state.terms.submitting = true;
-        state.terms.error = null;
-      })
-      .addCase(updateTerms.fulfilled, (state, { payload }) => {
-        state.terms.submitting = false;
-        state.terms.selected = payload;
-        const idx = state.terms.allVersions.findIndex((t) => t._id === payload._id);
-        if (idx !== -1) state.terms.allVersions[idx] = payload;
-      })
-      .addCase(updateTerms.rejected, (state, { payload }) => {
-        state.terms.submitting = false;
-        state.terms.error = payload;
-      });
-
-    // Publish
-    builder
-      .addCase(publishTerms.pending, (state) => {
-        state.terms.submitting = true;
-        state.terms.error = null;
-      })
-      .addCase(publishTerms.fulfilled, (state, { payload }) => {
-        state.terms.submitting = false;
-        state.terms.active = payload;
-        // Mark all others as inactive in local state
-        state.terms.allVersions = state.terms.allVersions.map((t) => ({
-          ...t,
-          isActive: t._id === payload._id,
-        }));
-      })
-      .addCase(publishTerms.rejected, (state, { payload }) => {
-        state.terms.submitting = false;
-        state.terms.error = payload;
-      });
-
-    // Delete
-    builder
-      .addCase(deleteTerms.pending, (state) => {
-        state.terms.submitting = true;
-        state.terms.error = null;
-      })
-      .addCase(deleteTerms.fulfilled, (state, { payload }) => {
-        state.terms.submitting = false;
-        state.terms.allVersions = state.terms.allVersions.filter((t) => t._id !== payload);
-        if (state.terms.selected?._id === payload) state.terms.selected = null;
-      })
-      .addCase(deleteTerms.rejected, (state, { payload }) => {
-        state.terms.submitting = false;
-        state.terms.error = payload;
-      });
-
-
-    // ─────────────────────────────────────────
-    // PRIVACY POLICY
-    // ─────────────────────────────────────────
-
-    builder
-      .addCase(fetchActivePrivacyPolicy.pending, (state) => {
-        state.privacy.loading = true;
-        state.privacy.error = null;
-      })
-      .addCase(fetchActivePrivacyPolicy.fulfilled, (state, { payload }) => {
-        state.privacy.loading = false;
-        state.privacy.active = payload;
-      })
-      .addCase(fetchActivePrivacyPolicy.rejected, (state, { payload }) => {
-        state.privacy.loading = false;
-        state.privacy.error = payload;
-      });
-
-    builder
-      .addCase(fetchAllPrivacyVersions.pending, (state) => {
-        state.privacy.loading = true;
-        state.privacy.error = null;
-      })
-      .addCase(fetchAllPrivacyVersions.fulfilled, (state, { payload }) => {
-        state.privacy.loading = false;
-        state.privacy.allVersions = payload.data;
-        state.privacy.pagination = {
-          total: payload.total,
-          page: payload.page,
-          pages: payload.pages,
-        };
-      })
-      .addCase(fetchAllPrivacyVersions.rejected, (state, { payload }) => {
-        state.privacy.loading = false;
-        state.privacy.error = payload;
-      });
-
-    builder
-      .addCase(fetchPrivacyById.pending, (state) => {
-        state.privacy.loading = true;
-        state.privacy.error = null;
-      })
-      .addCase(fetchPrivacyById.fulfilled, (state, { payload }) => {
-        state.privacy.loading = false;
-        state.privacy.selected = payload;
-      })
-      .addCase(fetchPrivacyById.rejected, (state, { payload }) => {
-        state.privacy.loading = false;
-        state.privacy.error = payload;
-      });
-
-    builder
-      .addCase(createPrivacyPolicy.pending, (state) => {
-        state.privacy.submitting = true;
-        state.privacy.error = null;
-      })
-      .addCase(createPrivacyPolicy.fulfilled, (state, { payload }) => {
-        state.privacy.submitting = false;
-        state.privacy.allVersions.unshift(payload);
-      })
-      .addCase(createPrivacyPolicy.rejected, (state, { payload }) => {
-        state.privacy.submitting = false;
-        state.privacy.error = payload;
-      });
-
-    builder
-      .addCase(updatePrivacyPolicy.pending, (state) => {
-        state.privacy.submitting = true;
-        state.privacy.error = null;
-      })
-      .addCase(updatePrivacyPolicy.fulfilled, (state, { payload }) => {
-        state.privacy.submitting = false;
-        state.privacy.selected = payload;
-        const idx = state.privacy.allVersions.findIndex((p) => p._id === payload._id);
-        if (idx !== -1) state.privacy.allVersions[idx] = payload;
-      })
-      .addCase(updatePrivacyPolicy.rejected, (state, { payload }) => {
-        state.privacy.submitting = false;
-        state.privacy.error = payload;
-      });
-
-    builder
-      .addCase(publishPrivacyPolicy.pending, (state) => {
-        state.privacy.submitting = true;
-        state.privacy.error = null;
-      })
-      .addCase(publishPrivacyPolicy.fulfilled, (state, { payload }) => {
-        state.privacy.submitting = false;
-        state.privacy.active = payload;
-        state.privacy.allVersions = state.privacy.allVersions.map((p) => ({
-          ...p,
-          isActive: p._id === payload._id,
-        }));
-      })
-      .addCase(publishPrivacyPolicy.rejected, (state, { payload }) => {
-        state.privacy.submitting = false;
-        state.privacy.error = payload;
-      });
-
-    builder
-      .addCase(deletePrivacyPolicy.pending, (state) => {
-        state.privacy.submitting = true;
-        state.privacy.error = null;
-      })
-      .addCase(deletePrivacyPolicy.fulfilled, (state, { payload }) => {
-        state.privacy.submitting = false;
-        state.privacy.allVersions = state.privacy.allVersions.filter((p) => p._id !== payload);
-        if (state.privacy.selected?._id === payload) state.privacy.selected = null;
-      })
-      .addCase(deletePrivacyPolicy.rejected, (state, { payload }) => {
-        state.privacy.submitting = false;
-        state.privacy.error = payload;
-      });
-
-
-    // ─────────────────────────────────────────
-    // USER CONSENT
-    // ─────────────────────────────────────────
-
-    builder
-      .addCase(recordConsent.pending, (state) => {
-        state.consent.submitting = true;
-        state.consent.error = null;
-      })
-      .addCase(recordConsent.fulfilled, (state, { payload }) => {
-        state.consent.submitting = false;
-        state.consent.myHistory.unshift(payload);
-        // Immediately reflect acceptance in status
-        state.consent.status.termsAccepted = true;
-        state.consent.status.privacyAccepted = true;
-        state.consent.status.consentRequired = false;
-      })
-      .addCase(recordConsent.rejected, (state, { payload }) => {
-        state.consent.submitting = false;
-        state.consent.error = payload;
-      });
-
-    builder
-      .addCase(fetchMyConsents.pending, (state) => {
-        state.consent.loading = true;
-        state.consent.error = null;
-      })
-      .addCase(fetchMyConsents.fulfilled, (state, { payload }) => {
-        state.consent.loading = false;
-        state.consent.myHistory = payload;
-      })
-      .addCase(fetchMyConsents.rejected, (state, { payload }) => {
-        state.consent.loading = false;
-        state.consent.error = payload;
-      });
-
+    // ── fetchConsentStatus ──────────────────────────────────────────────────────
     builder
       .addCase(fetchConsentStatus.pending, (state) => {
-        state.consent.loading = true;
-        state.consent.error = null;
+        state.consentLoading = true;
+        state.consentError   = null;
       })
       .addCase(fetchConsentStatus.fulfilled, (state, { payload }) => {
-        state.consent.loading = false;
-        state.consent.status = payload;
+        state.consentLoading  = false;
+        state.consentStatus   = payload.data;
+        state.consentRequired = payload.consentRequired;
       })
       .addCase(fetchConsentStatus.rejected, (state, { payload }) => {
-        state.consent.loading = false;
-        state.consent.error = payload;
+        state.consentLoading = false;
+        state.consentError   = payload;
       });
 
+    // ── fetchMyConsentHistory ───────────────────────────────────────────────────
     builder
-      .addCase(fetchAllUserConsents.pending, (state) => {
-        state.consent.loading = true;
-        state.consent.error = null;
+      .addCase(fetchMyConsentHistory.pending, (state) => {
+        state.consentLoading = true;
       })
-      .addCase(fetchAllUserConsents.fulfilled, (state, { payload }) => {
-        state.consent.loading = false;
-        state.consent.allUsers = payload.data;
-        state.consent.pagination = {
-          total: payload.total,
-          page: payload.page,
-          pages: payload.pages,
-        };
+      .addCase(fetchMyConsentHistory.fulfilled, (state, { payload }) => {
+        state.consentLoading  = false;
+        state.consentHistory  = payload;
       })
-      .addCase(fetchAllUserConsents.rejected, (state, { payload }) => {
-        state.consent.loading = false;
-        state.consent.error = payload;
+      .addCase(fetchMyConsentHistory.rejected, (state, { payload }) => {
+        state.consentLoading = false;
+        state.consentError   = payload;
       });
 
+    // ── recordConsent ───────────────────────────────────────────────────────────
+    builder
+      .addCase(recordConsent.pending, (state) => {
+        state.consentLoading = true;
+        state.consentError   = null;
+      })
+      .addCase(recordConsent.fulfilled, (state) => {
+        state.consentLoading = false;
+      })
+      .addCase(recordConsent.rejected, (state, { payload }) => {
+        state.consentLoading = false;
+        state.consentError   = payload;
+      });
+
+    // ── withdrawConsent ─────────────────────────────────────────────────────────
     builder
       .addCase(withdrawConsent.pending, (state) => {
-        state.consent.submitting = true;
-        state.consent.error = null;
+        state.consentLoading = true;
       })
-      .addCase(withdrawConsent.fulfilled, (state, { payload }) => {
-        state.consent.submitting = false;
-        const idx = state.consent.myHistory.findIndex((c) => c._id === payload._id);
-        if (idx !== -1) state.consent.myHistory[idx] = payload;
-        const adminIdx = state.consent.allUsers.findIndex((c) => c._id === payload._id);
-        if (adminIdx !== -1) state.consent.allUsers[adminIdx] = payload;
+      .addCase(withdrawConsent.fulfilled, (state) => {
+        state.consentLoading = false;
       })
       .addCase(withdrawConsent.rejected, (state, { payload }) => {
-        state.consent.submitting = false;
-        state.consent.error = payload;
+        state.consentLoading = false;
+        state.consentError   = payload;
+      });
+
+    // ── fetchAdminDocs ──────────────────────────────────────────────────────────
+    builder
+      .addCase(fetchAdminDocs.pending, (state) => {
+        state.adminLoading = true;
+        state.adminError   = null;
+      })
+      .addCase(fetchAdminDocs.fulfilled, (state, { payload }) => {
+        state.adminLoading = false;
+        state.adminDocs    = payload.data;
+        state.adminTotal   = payload.total;
+        state.adminPage    = payload.page;
+        state.adminPages   = payload.pages;
+      })
+      .addCase(fetchAdminDocs.rejected, (state, { payload }) => {
+        state.adminLoading = false;
+        state.adminError   = payload;
+      });
+
+    // ── fetchAdminDocById ───────────────────────────────────────────────────────
+    builder
+      .addCase(fetchAdminDocById.pending, (state) => {
+        state.selectedDocLoading = true;
+        state.selectedDocError   = null;
+        state.selectedDoc        = null;
+      })
+      .addCase(fetchAdminDocById.fulfilled, (state, { payload }) => {
+        state.selectedDocLoading = false;
+        state.selectedDoc        = payload;
+      })
+      .addCase(fetchAdminDocById.rejected, (state, { payload }) => {
+        state.selectedDocLoading = false;
+        state.selectedDocError   = payload;
+      });
+
+    // ── fetchVersionHistory ─────────────────────────────────────────────────────
+    builder
+      .addCase(fetchVersionHistory.pending, (state) => {
+        state.versionHistoryLoading = true;
+        state.versionHistoryError   = null;
+      })
+      .addCase(fetchVersionHistory.fulfilled, (state, { payload }) => {
+        state.versionHistoryLoading = false;
+        state.versionHistory        = payload?.versionHistory ?? [];
+      })
+      .addCase(fetchVersionHistory.rejected, (state, { payload }) => {
+        state.versionHistoryLoading = false;
+        state.versionHistoryError   = payload;
+      });
+
+    // ── fetchDocConsents ────────────────────────────────────────────────────────
+    builder
+      .addCase(fetchDocConsents.pending, (state) => {
+        state.docConsentsLoading = true;
+        state.docConsentsError   = null;
+      })
+      .addCase(fetchDocConsents.fulfilled, (state, { payload }) => {
+        state.docConsentsLoading = false;
+        state.docConsents        = payload.data;
+        state.docConsentsTotal   = payload.total;
+        state.docConsentsPages   = payload.pages;
+      })
+      .addCase(fetchDocConsents.rejected, (state, { payload }) => {
+        state.docConsentsLoading = false;
+        state.docConsentsError   = payload;
+      });
+
+    // ── fetchAllConsents ────────────────────────────────────────────────────────
+    builder
+      .addCase(fetchAllConsents.pending, (state) => {
+        state.allConsentsLoading = true;
+        state.allConsentsError   = null;
+      })
+      .addCase(fetchAllConsents.fulfilled, (state, { payload }) => {
+        state.allConsentsLoading = false;
+        state.allConsents        = payload.data;
+        state.allConsentsTotal   = payload.total;
+        state.allConsentsPages   = payload.pages;
+      })
+      .addCase(fetchAllConsents.rejected, (state, { payload }) => {
+        state.allConsentsLoading = false;
+        state.allConsentsError   = payload;
+      });
+
+    // ── createLegalDoc ──────────────────────────────────────────────────────────
+    builder
+      .addCase(createLegalDoc.pending,   mutationPending('createLegalDoc'))
+      .addCase(createLegalDoc.fulfilled, (state, { payload, meta }) => {
+        mutationFulfilled('createLegalDoc')(state, { meta });
+        state.adminDocs.unshift(payload);
+        state.adminTotal += 1;
+      })
+      .addCase(createLegalDoc.rejected,  mutationRejected('createLegalDoc'));
+
+    // ── updateLegalDoc ──────────────────────────────────────────────────────────
+    builder
+      .addCase(updateLegalDoc.pending,   mutationPending('updateLegalDoc'))
+      .addCase(updateLegalDoc.fulfilled, (state, { payload, meta }) => {
+        mutationFulfilled('updateLegalDoc')(state, { meta });
+        // Patch in list
+        const idx = state.adminDocs.findIndex((d) => d._id === payload._id);
+        if (idx !== -1) state.adminDocs[idx] = { ...state.adminDocs[idx], ...payload };
+        // Patch selected
+        if (state.selectedDoc?._id === payload._id) state.selectedDoc = payload;
+      })
+      .addCase(updateLegalDoc.rejected,  mutationRejected('updateLegalDoc'));
+
+    // ── submitDocForReview ──────────────────────────────────────────────────────
+    builder
+      .addCase(submitDocForReview.pending,   mutationPending('submitDocForReview'))
+      .addCase(submitDocForReview.fulfilled, (state, { payload, meta }) => {
+        mutationFulfilled('submitDocForReview')(state, { meta });
+        const idx = state.adminDocs.findIndex((d) => d._id === meta.arg);
+        if (idx !== -1) state.adminDocs[idx].status = 'review';
+      })
+      .addCase(submitDocForReview.rejected,  mutationRejected('submitDocForReview'));
+
+    // ── approveDoc ──────────────────────────────────────────────────────────────
+    builder
+      .addCase(approveDoc.pending,   mutationPending('approveDoc'))
+      .addCase(approveDoc.fulfilled, (state, { meta }) => {
+        mutationFulfilled('approveDoc')(state, { meta });
+        const idx = state.adminDocs.findIndex((d) => d._id === meta.arg);
+        if (idx !== -1) state.adminDocs[idx].status = 'approved';
+      })
+      .addCase(approveDoc.rejected,  mutationRejected('approveDoc'));
+
+    // ── publishDoc ──────────────────────────────────────────────────────────────
+    builder
+      .addCase(publishDoc.pending,   mutationPending('publishDoc'))
+      .addCase(publishDoc.fulfilled, (state, { payload, meta }) => {
+        mutationFulfilled('publishDoc')(state, { meta });
+        // Supersede any previously active doc of same type in list
+        state.adminDocs.forEach((d) => {
+          if (
+            d.documentType === payload.documentType &&
+            d._id !== payload._id &&
+            d.status === 'active'
+          ) {
+            d.status      = 'superseded';
+            d.isPublished = false;
+          }
+        });
+        const idx = state.adminDocs.findIndex((d) => d._id === payload._id);
+        if (idx !== -1) {
+          state.adminDocs[idx].status      = 'active';
+          state.adminDocs[idx].isPublished = true;
+          state.adminDocs[idx].publishedAt = payload.publishedAt;
+        }
+        // Update activeDocs cache
+        state.activeDocs[payload.documentType] = payload;
+      })
+      .addCase(publishDoc.rejected,  mutationRejected('publishDoc'));
+
+    // ── createNewVersion ────────────────────────────────────────────────────────
+    builder
+      .addCase(createNewVersion.pending,   mutationPending('createNewVersion'))
+      .addCase(createNewVersion.fulfilled, (state, { meta }) => {
+        mutationFulfilled('createNewVersion')(state, { meta });
+      })
+      .addCase(createNewVersion.rejected,  mutationRejected('createNewVersion'));
+
+    // ── archiveDoc ──────────────────────────────────────────────────────────────
+    builder
+      .addCase(archiveDoc.pending,   mutationPending('archiveDoc'))
+      .addCase(archiveDoc.fulfilled, (state, { meta }) => {
+        mutationFulfilled('archiveDoc')(state, { meta });
+        const idx = state.adminDocs.findIndex((d) => d._id === meta.arg);
+        if (idx !== -1) {
+          state.adminDocs[idx].status      = 'archived';
+          state.adminDocs[idx].isPublished = false;
+        }
+      })
+      .addCase(archiveDoc.rejected,  mutationRejected('archiveDoc'));
+
+    // ── deleteLegalDoc ──────────────────────────────────────────────────────────
+    builder
+      .addCase(deleteLegalDoc.pending,   mutationPending('deleteLegalDoc'))
+      .addCase(deleteLegalDoc.fulfilled, (state, { payload: id, meta }) => {
+        mutationFulfilled('deleteLegalDoc')(state, { meta });
+        state.adminDocs  = state.adminDocs.filter((d) => d._id !== id);
+        state.adminTotal = Math.max(0, state.adminTotal - 1);
+        if (state.selectedDoc?._id === id) state.selectedDoc = null;
+      })
+      .addCase(deleteLegalDoc.rejected,  mutationRejected('deleteLegalDoc'));
+
+    // ── verifyChecksum ──────────────────────────────────────────────────────────
+    builder
+      .addCase(verifyChecksum.pending, (state) => {
+        state.checksumLoading = true;
+        state.checksumResult  = null;
+        state.checksumError   = null;
+      })
+      .addCase(verifyChecksum.fulfilled, (state, { payload }) => {
+        state.checksumLoading = false;
+        state.checksumResult  = payload;
+      })
+      .addCase(verifyChecksum.rejected, (state, { payload }) => {
+        state.checksumLoading = false;
+        state.checksumError   = payload;
       });
   },
 });
 
-
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
 // ACTIONS
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
 
 export const {
-  clearTermsError,
-  clearPrivacyError,
+  clearSelectedDoc,
+  clearAdminError,
   clearConsentError,
-  clearSelectedTerms,
-  clearSelectedPrivacy,
-  resetLegalState,
+  clearDocConsents,
+  clearAllConsents,
+  patchAdminDoc,
 } = legalSlice.actions;
 
-
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
 // SELECTORS
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// Terms
-export const selectActiveTerms         = (state) => state.legal.terms.active;
-export const selectSelectedTerms       = (state) => state.legal.terms.selected;
-export const selectAllTermsVersions    = (state) => state.legal.terms.allVersions;
-export const selectTermsPagination     = (state) => state.legal.terms.pagination;
-export const selectTermsLoading        = (state) => state.legal.terms.loading;
-export const selectTermsSubmitting     = (state) => state.legal.terms.submitting;
-export const selectTermsError          = (state) => state.legal.terms.error;
+// ── Public ────────────────────────────────────────────────────────────────────
+export const selectActiveDocsList     = (s) => s.legal.activeDocsList;
+export const selectActiveDocByType    = (type) => (s) => s.legal.activeDocs[type] ?? null;
+export const selectActiveDocsError    = (s) => s.legal.activeDocsError;
 
-// Privacy
-export const selectActivePrivacy       = (state) => state.legal.privacy.active;
-export const selectSelectedPrivacy     = (state) => state.legal.privacy.selected;
-export const selectAllPrivacyVersions  = (state) => state.legal.privacy.allVersions;
-export const selectPrivacyPagination   = (state) => state.legal.privacy.pagination;
-export const selectPrivacyLoading      = (state) => state.legal.privacy.loading;
-export const selectPrivacySubmitting   = (state) => state.legal.privacy.submitting;
-export const selectPrivacyError        = (state) => state.legal.privacy.error;
+// ── Consent ───────────────────────────────────────────────────────────────────
+export const selectConsentStatus      = (s) => s.legal.consentStatus;
+export const selectConsentRequired    = (s) => s.legal.consentRequired;
+export const selectConsentHistory     = (s) => s.legal.consentHistory;
+export const selectConsentLoading     = (s) => s.legal.consentLoading;
+export const selectConsentError       = (s) => s.legal.consentError;
 
-// Consent
-export const selectMyConsents          = (state) => state.legal.consent.myHistory;
-export const selectAllUserConsents     = (state) => state.legal.consent.allUsers;
-export const selectConsentPagination   = (state) => state.legal.consent.pagination;
-export const selectConsentStatus       = (state) => state.legal.consent.status;
-export const selectConsentRequired     = (state) => state.legal.consent.status.consentRequired;
-export const selectConsentLoading      = (state) => state.legal.consent.loading;
-export const selectConsentSubmitting   = (state) => state.legal.consent.submitting;
-export const selectConsentError        = (state) => state.legal.consent.error;
+// ── Admin list ────────────────────────────────────────────────────────────────
+export const selectAdminDocs          = (s) => s.legal.adminDocs;
+export const selectAdminDocsLoading   = (s) => s.legal.adminLoading;
+export const selectAdminDocsError     = (s) => s.legal.adminError;
+export const selectAdminPagination    = (s) => ({
+  total: s.legal.adminTotal,
+  page:  s.legal.adminPage,
+  pages: s.legal.adminPages,
+});
 
+// ── Selected doc ──────────────────────────────────────────────────────────────
+export const selectSelectedDoc        = (s) => s.legal.selectedDoc;
+export const selectSelectedDocLoading = (s) => s.legal.selectedDocLoading;
+export const selectSelectedDocError   = (s) => s.legal.selectedDocError;
+
+// ── Version history ───────────────────────────────────────────────────────────
+export const selectVersionHistory        = (s) => s.legal.versionHistory;
+export const selectVersionHistoryLoading = (s) => s.legal.versionHistoryLoading;
+
+// ── Doc consents ──────────────────────────────────────────────────────────────
+export const selectDocConsents        = (s) => s.legal.docConsents;
+export const selectDocConsentsLoading = (s) => s.legal.docConsentsLoading;
+export const selectDocConsentsPagination = (s) => ({
+  total: s.legal.docConsentsTotal,
+  pages: s.legal.docConsentsPages,
+});
+
+// ── Cross-doc consent report ──────────────────────────────────────────────────
+export const selectAllConsents        = (s) => s.legal.allConsents;
+export const selectAllConsentsLoading = (s) => s.legal.allConsentsLoading;
+export const selectAllConsentsPagination = (s) => ({
+  total: s.legal.allConsentsTotal,
+  pages: s.legal.allConsentsPages,
+});
+
+// ── Checksum ──────────────────────────────────────────────────────────────────
+export const selectChecksumResult     = (s) => s.legal.checksumResult;
+export const selectChecksumLoading    = (s) => s.legal.checksumLoading;
+
+// ── Mutation loading helpers ──────────────────────────────────────────────────
+export const selectIsMutating = (name, id = '') => (s) =>
+  !!s.legal.mutating[mKey(name, id)];
+
+// Convenience per-action
+export const selectIsCreating          = (s) => selectIsMutating('createLegalDoc')(s);
+export const selectIsUpdating   = (id) => selectIsMutating('updateLegalDoc', id);
+export const selectIsSubmitting = (id) => selectIsMutating('submitDocForReview', id);
+export const selectIsApproving  = (id) => selectIsMutating('approveDoc', id);
+export const selectIsPublishing = (id) => selectIsMutating('publishDoc', id);
+export const selectIsArchiving  = (id) => selectIsMutating('archiveDoc', id);
+export const selectIsDeleting   = (id) => selectIsMutating('deleteLegalDoc', id);
+
+// ═══════════════════════════════════════════════════════════════════════════════
 
 export default legalSlice.reducer;

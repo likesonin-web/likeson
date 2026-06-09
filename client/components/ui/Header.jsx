@@ -20,7 +20,7 @@ import {
   Droplets,
 } from 'lucide-react';
 import { useSelector, useDispatch } from 'react-redux';
-
+import CookieConsent from '@/components/CookieConsent';
 import Container from './Container';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -1603,6 +1603,8 @@ const Header = () => {
           </MotionDiv>
         )}
       </AnimatePresence>
+
+      <CookieConsent />
     </>
   );
 };

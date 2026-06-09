@@ -1260,7 +1260,7 @@
    PRINT
    ============================================================ */
 @media print {
-  body        { background: white; color: black; }
+  body        { background: white; color:a black; }
   .glass-card { border: 1px solid #e5e7eb; background: white; }
   .no-print   { display: none !important; }
 }
