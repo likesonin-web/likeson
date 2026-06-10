@@ -9,15 +9,18 @@ import {
 } from 'lucide-react';
 
 import {
-  fetchActiveDocByType,
-  recordConsent,
-  selectActiveDocByType,
-  selectConsentLoading,
-} from '@/store/slices/legalSlice';
+  fetchCookiePolicy,
+  fetchCookieStatus,
+  acceptAllCookies,
+  rejectNonEssentialCookies,
+  updateCookieSettings,
+  selectCookiePolicy,
+  selectCookiePreferences,
+  selectHasCookieConsented,
+  selectCookieLoading,
+  selectCookieVersion,
+} from '@/store/slices/cookieConsentSlice';
 import { selectToken, selectUser } from '@/store/slices/userSlice';
-
-// ── Selector (stable ref — created outside component) ────────────────────────
-const selectCookieDoc = selectActiveDocByType('cookie_policy');
 
 // ── Storage key ──────────────────────────────────────────────────────────────
 const STORAGE_KEY = 'likeson_cookie_consent_v1';
@@ -25,7 +28,7 @@ const STORAGE_KEY = 'likeson_cookie_consent_v1';
 // ── Cookie category config ───────────────────────────────────────────────────
 const CATEGORIES = [
   {
-    id:          'necessary',
+    id:          'essential',
     label:       'Strictly Necessary',
     description: 'Session management, auth tokens, and CSRF protection. These cannot be disabled — the platform cannot function without them.',
     icon:        ShieldCheck,
@@ -78,8 +81,8 @@ function CategoryToggle({ category, checked, onChange }) {
     <div
       className="flex items-start gap-4 p-4 rounded-xl border transition-all duration-200"
       style={{
-        background:   checked ? `color-mix(in oklch, ${accent} 6%, var(--base-100))` : 'var(--base-100)',
-        borderColor:  checked ? `color-mix(in oklch, ${accent} 30%, transparent)`    : 'var(--base-300)',
+        background:  checked ? `color-mix(in oklch, ${accent} 6%, var(--base-100))` : 'var(--base-100)',
+        borderColor: checked ? `color-mix(in oklch, ${accent} 30%, transparent)`    : 'var(--base-300)',
       }}
     >
       {/* Icon */}
@@ -139,31 +142,54 @@ export default function CookieConsent() {
   const dispatch    = useDispatch();
   const token       = useSelector(selectToken);
   const user        = useSelector(selectUser);
-  const cookieDoc   = useSelector(selectCookieDoc);
-  const submitting  = useSelector(selectConsentLoading);
+
+  // ── Slice selectors ───────────────────────────────────────────────────────
+  const cookieDoc      = useSelector(selectCookiePolicy);
+  const submitting     = useSelector(selectCookieLoading);
+  const hasConsented   = useSelector(selectHasCookieConsented);
+  const savedPrefs     = useSelector(selectCookiePreferences);
+  const version        = useSelector(selectCookieVersion) ?? '1.0';
 
   const [visible,      setVisible]      = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [prefs, setPrefs] = useState({ necessary: true, analytics: false, marketing: false });
-  const [dismissed, setDismissed]       = useState(false);
+  const [dismissed,    setDismissed]    = useState(false);
+
+  // Local prefs mirror — initialised from slice (populated after fetchCookieStatus)
+  const [prefs, setPrefs] = useState({
+    essential: true,
+    analytics: false,
+    marketing: false,
+  });
+
+  // Sync local prefs when slice prefs load
+  useEffect(() => {
+    if (savedPrefs) {
+      setPrefs({
+        essential: true,                        // always on
+        analytics: savedPrefs.analytics ?? false,
+        marketing: savedPrefs.marketing ?? false,
+      });
+    }
+  }, [savedPrefs]);
+
   const bannerRef = useRef(null);
 
-  // ── Load cookie policy doc ────────────────────────────────────────────────
+  // ── Fetch policy doc + status on mount ───────────────────────────────────
   useEffect(() => {
-    dispatch(fetchActiveDocByType({ type: 'cookie_policy' }));
-  }, [dispatch]);
+    dispatch(fetchCookiePolicy());
+    if (token) dispatch(fetchCookieStatus());
+  }, [dispatch, token]);
 
-  // ── Show banner if no saved consent ──────────────────────────────────────
+  // ── Show banner if no local consent saved ────────────────────────────────
   useEffect(() => {
     const saved = loadSaved();
-    if (!saved) {
-      // Slight delay — don't fight with page load
+    if (!saved && !hasConsented) {
       const id = setTimeout(() => setVisible(true), 1200);
       return () => clearTimeout(id);
     }
-  }, []);
+  }, [hasConsented]);
 
-  // ── ESC to close settings panel ──────────────────────────────────────────
+  // ── ESC closes settings panel ─────────────────────────────────────────────
   useEffect(() => {
     if (!visible) return;
     const handler = (e) => { if (e.key === 'Escape') setShowSettings(false); };
@@ -175,56 +201,45 @@ export default function CookieConsent() {
     setPrefs((p) => ({ ...p, [id]: val }));
   }, []);
 
-  // ── Shared: save locally + optionally record in backend ──────────────────
-  const finalise = useCallback(async (chosenPrefs) => {
+  // ── Shared: persist locally + fire thunk ─────────────────────────────────
+  const finalise = useCallback((chosenPrefs, thunkAction) => {
     savePref(chosenPrefs);
     setDismissed(true);
     setTimeout(() => setVisible(false), 300);
-
-    // Only hit the consent API when user is logged in
-    if (token && user) {
-      const platform =
-        /iPhone|iPad|iPod/i.test(navigator.userAgent) ? 'ios'
-        : /Android/i.test(navigator.userAgent)        ? 'android'
-        : 'web';
-
-      await dispatch(recordConsent({
-        documentTypes: ['cookie_policy'],
-        method:        'click',
-        platform,
-      }));
-    }
+    if (token && user) dispatch(thunkAction);
   }, [dispatch, token, user]);
 
   const handleAcceptAll = useCallback(() => {
-    const all = { necessary: true, analytics: true, marketing: true };
+    const all = { essential: true, analytics: true, marketing: true };
     setPrefs(all);
-    finalise(all);
+    finalise(all, acceptAllCookies());
   }, [finalise]);
 
   const handleRejectAll = useCallback(() => {
-    const minimal = { necessary: true, analytics: false, marketing: false };
+    const minimal = { essential: true, analytics: false, marketing: false };
     setPrefs(minimal);
-    finalise(minimal);
+    finalise(minimal, rejectNonEssentialCookies());
   }, [finalise]);
 
   const handleSavePrefs = useCallback(() => {
-    finalise(prefs);
+    // Send only non-essential keys — essential is locked server-side
+    finalise(prefs, updateCookieSettings({
+      analytics:  prefs.analytics,
+      marketing:  prefs.marketing,
+      functional: prefs.functional ?? false,
+    }));
   }, [finalise, prefs]);
 
   const handleDismiss = useCallback(() => {
-    // Dismiss without consent = reject all non-essential (GDPR safe)
+    // Dismiss = reject non-essential (GDPR/DPDP safe)
     handleRejectAll();
   }, [handleRejectAll]);
-
-  // Version from doc or fallback
-  const version = cookieDoc?.currentVersion ?? cookieDoc?.version ?? '1.0';
 
   return (
     <AnimatePresence>
       {visible && !dismissed && (
         <>
-          {/* ── Backdrop blur overlay (subtle) ────────────────────────────── */}
+          {/* ── Backdrop ─────────────────────────────────────────────────── */}
           <motion.div
             key="cookie-backdrop"
             initial={{ opacity: 0 }}
@@ -250,9 +265,9 @@ export default function CookieConsent() {
             aria-live="polite"
             className="fixed bottom-4 left-4 right-4 md:left-auto md:right-6 md:bottom-6 md:w-[420px] z-[999] rounded-2xl border shadow-2xl overflow-hidden"
             style={{
-              background:   'var(--base-100)',
-              borderColor:  'var(--base-300)',
-              boxShadow:    '0 24px 60px -10px rgba(0,0,0,0.22), 0 4px 16px -4px rgba(0,0,0,0.10)',
+              background:  'var(--base-100)',
+              borderColor: 'var(--base-300)',
+              boxShadow:   '0 24px 60px -10px rgba(0,0,0,0.22), 0 4px 16px -4px rgba(0,0,0,0.10)',
             }}
           >
             {/* Accent top stripe */}
@@ -262,7 +277,7 @@ export default function CookieConsent() {
               aria-hidden="true"
             />
 
-            {/* ── Header row ─────────────────────────────────────────────── */}
+            {/* ── Header ───────────────────────────────────────────────── */}
             <div className="flex items-start justify-between px-5 pt-4 pb-3">
               <div className="flex items-center gap-3">
                 <div
@@ -282,7 +297,7 @@ export default function CookieConsent() {
                 </div>
               </div>
 
-              {/* Close (= reject all) */}
+              {/* Close = reject all */}
               <button
                 type="button"
                 onClick={handleDismiss}
@@ -294,14 +309,14 @@ export default function CookieConsent() {
               </button>
             </div>
 
-            {/* ── Body ───────────────────────────────────────────────────── */}
+            {/* ── Body ─────────────────────────────────────────────────── */}
             <div className="px-5 pb-2">
               <p className="text-[12px] leading-relaxed" style={{ color: 'color-mix(in oklch, var(--base-content) 62%, transparent)' }}>
                 {cookieDoc?.summary ??
                   'Likeson uses essential cookies to run the platform and optional analytics/marketing cookies to improve your experience. You can accept all, reject optional, or customise below.'}
               </p>
 
-              {/* Key points from doc (first 3) */}
+              {/* Key points — first 3 from doc */}
               {cookieDoc?.keyPoints?.length > 0 && (
                 <ul className="mt-2 space-y-1" aria-label="Cookie policy highlights">
                   {cookieDoc.keyPoints.slice(0, 3).map((pt, i) => (
@@ -314,7 +329,7 @@ export default function CookieConsent() {
               )}
             </div>
 
-            {/* ── Cookie Settings expandable panel ───────────────────────── */}
+            {/* ── Settings panel ────────────────────────────────────────── */}
             <AnimatePresence>
               {showSettings && (
                 <motion.div
@@ -344,7 +359,6 @@ export default function CookieConsent() {
                       />
                     ))}
 
-                    {/* Save prefs CTA */}
                     <button
                       type="button"
                       onClick={handleSavePrefs}
@@ -360,10 +374,8 @@ export default function CookieConsent() {
               )}
             </AnimatePresence>
 
-            {/* ── Action row ─────────────────────────────────────────────── */}
+            {/* ── Action row ───────────────────────────────────────────── */}
             <div className="px-4 pb-4 flex flex-col gap-2">
-
-              {/* Primary: Accept All */}
               <button
                 type="button"
                 onClick={handleAcceptAll}
@@ -376,7 +388,6 @@ export default function CookieConsent() {
                 Accept All
               </button>
 
-              {/* Secondary row: Reject All + Cookie Settings */}
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -416,7 +427,7 @@ export default function CookieConsent() {
               </div>
             </div>
 
-            {/* ── Footer: compliance note ─────────────────────────────────── */}
+            {/* ── Footer ───────────────────────────────────────────────── */}
             <div
               className="px-5 pb-3 flex items-center justify-between"
               style={{ borderTop: '1px solid var(--base-300)' }}

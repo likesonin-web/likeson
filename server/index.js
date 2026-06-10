@@ -69,6 +69,7 @@ import adminAnalyticsRouter     from './routes/super-admin/adminanalyticsRouter.
 import consultationRouter       from './routes/consultationrouter.js';
 import { protect , authorize }  from "./middleware/authMiddleware.js";
 import labPartnerRoutes         from './routes/labpartnerbookingRoutes.js';
+import cookieConsentRoutes      from './routes/cookieConsentRoutes.js';
 
 dotenv.config();
 
@@ -199,6 +200,7 @@ app.use("/api/blood-banks",        bloodBankRouter);
 app.use("/api/admin/analytics",    adminAnalyticsRouter);
 app.use("/api/consultations",      consultationRouter);
 app.use('/api/lab-partner/bookings', protect, authorize('lab_partner'), labPartnerRoutes);
+app.use('/api/cookie-consent', cookieConsentRoutes);
 
 // ⚠️ Warning: Three separate routers mounted to the exact same path
 // Consider combining these into a single router file in the future to avoid unexpected routing conflicts.

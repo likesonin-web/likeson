@@ -64,6 +64,12 @@ const consentSchema = new Schema(
     userId:      { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     version:     { type: String, required: true },
     consentedAt: { type: Date, default: Date.now },
+    cookiePreferences: {
+  essential:  { type: Boolean, default: true  },  // locked always true
+  analytics:  { type: Boolean, default: false },
+  marketing:  { type: Boolean, default: false },
+  functional: { type: Boolean, default: false },
+},
     ipAddress:   { type: String },
     userAgent:   { type: String },
     platform:    { type: String, enum: PLATFORMS, default: 'web' },
@@ -308,7 +314,7 @@ legalDocumentSchema.methods.withdrawConsent = async function (userId, version) {
 
 // ── Pre-save ──────────────────────────────────────────────────────────────────
 
-legalDocumentSchema.pre('save', function (next) {
+legalDocumentSchema.pre('save', async function () {
   // Auto-set publishedAt when first published
   if (this.isModified('isPublished') && this.isPublished && !this.publishedAt) {
     this.publishedAt = new Date();

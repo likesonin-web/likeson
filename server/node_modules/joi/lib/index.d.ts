@@ -2138,6 +2138,12 @@ declare namespace Joi {
      * If `ref` was not passed to the constructor, `link.ref()` must be called prior to usage.
      */
     ref(ref: string): this;
+
+    /**
+     * Limits the maximum recursion depth allowed when resolving the link.
+     * Validation fails with `link.maxRecursion` when the link is entered more than `limit` times in the same validation chain.
+     */
+    maxRecursion(limit: number): this;
   }
 
   interface Reference extends Exclude<ReferenceOptions, "prefix"> {

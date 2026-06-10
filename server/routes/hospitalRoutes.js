@@ -55,6 +55,7 @@ const hospitalUpload = upload.fields([
   { name: 'images', maxCount: 20 },
 ]);
 const doctorUpload = upload.single('photo');
+const signatureUpload = upload.single('signature'); // Added signature middleware
 
 const handleMulterError = (uploadMiddleware) => (req, res, next) => {
   uploadMiddleware(req, res, (err) => {
@@ -2052,13 +2053,14 @@ const updateDoctorProfile = asyncHandler(async (req, res) => {
     return res.status(403).json({ success: false, message: 'Access denied' });
   }
 
-  const allowedFields = [
+const allowedFields = [
     'specialization', 'qualifications', 'experienceYears',
     'registrationNumber', 'registrationCouncil',
     'biography', 'languagesSpoken', 'achievements',
     'fees', 'consultationTypes',
     'primaryHospital', 'otherHospitals',
     'notifPrefs',
+    'doctorSignature', // Added doctorSignature here
   ];
 
   allowedFields.forEach((field) => {
@@ -2361,6 +2363,47 @@ const uploadDoctorPhoto = asyncHandler(async (req, res) => {
     success:         true,
     message:         'Profile photo uploaded',
     profilePhotoUrl: result.url,
+  });
+});
+
+const uploadDoctorSignature = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return res.status(400).json({ success: false, message: 'Invalid doctor ID' });
+  }
+
+  const doctor = await DoctorProfile.findById(req.params.id);
+  if (!doctor) {
+    return res.status(404).json({ success: false, message: 'Doctor not found' });
+  }
+
+  // Ensure the doctor is only updating their own profile (unless admin)
+  if (
+    req.user.role === 'doctor' &&
+    doctor.user.toString() !== req.user._id.toString()
+  ) {
+    return res.status(403).json({ success: false, message: 'Access denied' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      message: 'No signature uploaded. Send a `signature` field as multipart/form-data.',
+    });
+  }
+
+  const folder = `Likeson/doctors/${req.params.id}/signatures`;
+  const result = await uploadToImageKit(req.file, `signature_${Date.now()}`, folder);
+
+  doctor.doctorSignature = result.url;
+  doctor.updatedBy       = req.user._id;
+  await doctor.save();
+
+  await invalidateUserCache(doctor.user);
+
+  res.json({
+    success:         true,
+    message:         'Doctor signature uploaded successfully',
+    doctorSignature: result.url,
   });
 });
 
@@ -2730,6 +2773,14 @@ router.post(
   authorize('doctor', 'admin', 'superadmin'),
   handleMulterError(doctorUpload),
   uploadDoctorPhoto
+);
+
+router.post(
+  '/doctors/:id/signature',
+  protect,
+  authorize('doctor', 'admin', 'superadmin'),
+  handleMulterError(signatureUpload),
+  uploadDoctorSignature
 );
 
 // ── F. ADMIN-ONLY DOCTOR ROUTES ───────────────────────────────────────────────

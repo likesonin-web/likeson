@@ -12,7 +12,8 @@ import CareAssistantProfile            from '../models/CareAssistantProfile.js';
 import Hospital                        from '../models/Hospital.js';  // FIX #1: import directly, not inline mongoose.model()
 import User                            from '../models/User.js';
 import generateEPrescriptionPdf        from '../utils/generateEPrescriptionPdf.js';
-
+import sendEmail from '../utils/sendEmail.js';
+import { buildEPrescriptionEmail } from '../utils/ePrescriptionEmailTemplate.js';
 const router = express.Router();
 
 // ─── Role middleware shortcuts ────────────────────────────────────────────────
@@ -31,19 +32,10 @@ const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).cat
 //  SECTION A — PRESCRIPTIONS (DOCTOR)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * POST /clinical/prescriptions
- * Doctor creates a new ePrescription.
- * Body mirrors EPrescription schema (medicines[], labTests[], vitals, etc.)
- *
- * FIX #4: hospital field — EPrescription.hospital is a hospitalSnapshotSchema
- * (object with hospitalId, name, address, phone, email, logo, licenseNo).
- * Body must send a pre-built snapshot object, NOT a raw ObjectId string.
- * Router passes it through as-is; validation relies on Mongoose schema casting.
- */
 router.post('/prescriptions', ...isDoctor, wrap(async (req, res) => {
-  const doctorProfile = await DoctorProfile.findOne({ user: req.user._id })
-    .select('_id registrationNumber registrationCouncil specialization')
+
+const doctorProfile = await DoctorProfile.findOne({ user: req.user._id })
+    .select('_id registrationNumber registrationCouncil specialization qualifications doctorSignature')
     .populate('user', 'name phone email')
     .lean();
 
@@ -60,39 +52,34 @@ router.post('/prescriptions', ...isDoctor, wrap(async (req, res) => {
     followUpDate, followUpInstructions,
   } = req.body;
 
-  // Patient snapshot is REQUIRED
   if (!patient?.name) {
     return res.status(400).json({ success: false, message: 'patient.name is required.' });
   }
   if (!medicines?.length && !labTests?.length) {
     return res.status(400).json({ success: false, message: 'Prescription must have at least one medicine or lab test.' });
   }
+  if (hospital && typeof hospital === 'string' && /^[a-f\d]{24}$/i.test(hospital)) {
+    return res.status(400).json({ success: false, message: 'hospital must be a snapshot object, not a raw ObjectId string.' });
+  }
 
-  const doctorSnap = {
+ const doctorSnap = {
     userId:              req.user._id,
     doctorProfileId:     doctorProfile._id,
     name:                doctorProfile.user.name,
     registrationNumber:  doctorProfile.registrationNumber,
     registrationCouncil: doctorProfile.registrationCouncil,
     specialization:      doctorProfile.specialization,
+    qualifications:      doctorProfile.qualifications?.map(q => q.degree).filter(Boolean).join(', ') || '',
     phone:               doctorProfile.user.phone,
     email:               doctorProfile.user.email,
+    doctorSignature:     doctorProfile.doctorSignature, // Maps the signature here
   };
 
-  // FIX #4: hospital must be a snapshot object matching hospitalSnapshotSchema,
-  // not a raw ObjectId. Caller is responsible for sending the full snapshot.
-  // If hospital is an ObjectId string (old usage), reject with clear message.
-  if (hospital && typeof hospital === 'string' && hospital.match(/^[a-f\d]{24}$/i)) {
-    return res.status(400).json({
-      success: false,
-      message: 'hospital must be a snapshot object { hospitalId, name, address, ... }, not a raw ObjectId string.',
-    });
-  }
-
-  const rx = await EPrescription.create({
+const rx = await EPrescription.create({
     booking, outPatientRecord, patientCareRecord,
     doctor:   doctorSnap,
     hospital: hospital || null,
+    isDigitallySigned: !!doctorProfile.doctorSignature, // Marks as true if signature exists
     patient,
     diagnosis, diagnosisCode,
     chiefComplaints: chiefComplaints || [],
@@ -105,8 +92,106 @@ router.post('/prescriptions', ...isDoctor, wrap(async (req, res) => {
   });
 
   res.status(201).json({ success: true, data: rx });
-}));
 
+  setImmediate(async () => {
+    try {
+   let patientEmail = patient.email || null;
+ 
+      // Fallback 1: lookup by patient.userId from request body
+      if (!patientEmail && patient.userId) {
+        const patUser = await User.findById(patient.userId).select('email').lean();
+        patientEmail = patUser?.email || null;
+      }
+ 
+      // Fallback 2: lookup via booking's customer (most reliable)
+      if (!patientEmail && booking) {
+        const bk = await Booking.findById(booking)
+          .select('customer')
+          .populate('customer', 'email')
+          .lean();
+        patientEmail = bk?.customer?.email || null;
+      }
+ 
+if (!patientEmail) {
+        console.warn(`[ePrescription] No patient email for RX ${rx.rxNumber} — skipping.`);
+        return;
+      }
+
+      // Convert Mongoose doc to plain object and explicitly force the signature field forward
+      const rxData = rx.toObject();
+      if (rxData.doctor) {
+        rxData.doctor.doctorSignature = doctorSnap.doctorSignature;
+      }
+
+      // Generate PDF with the complete data object
+      const pdfBuffer = await generateEPrescriptionPdf(rxData);
+
+      const verifyUrl   = `${process.env.FRONTEND_URL || 'https://likeson.in'}/rx/verify/${rx.rxNumber}`;
+      const downloadUrl = `${process.env.BACKEND_URL || 'https://api.likeson.in'}/api/clinical/prescriptions/${rx._id}/pdf`;
+
+      const fmtD = (d) => d
+        ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+        : '—';
+
+      const emailHtml = buildEPrescriptionEmail({
+        patientName:    patient.name,
+        doctorName:     doctorSnap.name,
+        specialization: doctorSnap.specialization,
+        rxNumber:       rx.rxNumber,
+        issuedAt:       fmtD(rx.issuedAt),
+        expiresAt:      fmtD(rx.expiresAt),
+        medicines:      rx.medicines || [],
+        verifyUrl,
+        downloadUrl,
+      });
+
+      await sendEmail({
+        email:   patientEmail,
+        subject: `Your Prescription from Dr. ${doctorSnap.name} — ${rx.rxNumber}`,
+        html:    emailHtml,
+        attachments: [{
+          filename:    `Prescription-${rx.rxNumber}.pdf`,
+          content:     pdfBuffer,           // Buffer directly — no .toString('base64')
+          contentType: 'application/pdf',   // contentType not type
+        }],
+      });
+
+      console.log(`[ePrescription] Email + PDF sent → ${patientEmail} | RX: ${rx.rxNumber}`);
+
+    } catch (err) {
+      console.error(`[ePrescription] Email failed for RX ${rx.rxNumber}:`, err.message);
+    }
+  });
+}));
+ 
+// ─── GET /clinical/prescriptions/:id/pdf ──────────────────────────────────────
+// Download prescription as PDF.
+// Doctor (own) | Admin | Care assistant (linked)
+// NOTE: No changes needed to this route — generateEPrescriptionPdf is now async,
+// so just ensure await is used:
+ 
+router.get('/prescriptions/:id/pdf', ...isAnyStaff, wrap(async (req, res) => {
+  const rx = await EPrescription.findById(req.params.id).lean();
+  if (!rx) return res.status(404).json({ success: false, message: 'Prescription not found.' });
+ 
+  if (req.user.role === 'doctor') {
+    const dp = await DoctorProfile.findOne({ user: req.user._id }).select('_id').lean();
+    if (rx.doctor?.doctorProfileId?.toString() !== dp?._id?.toString()) {
+      return res.status(403).json({ success: false, message: 'Access denied.' });
+    }
+  }
+ 
+  // generateEPrescriptionPdf is now async (needs await)
+  const pdfBuffer = await generateEPrescriptionPdf(rx);
+ 
+  res.set({
+    'Content-Type':        'application/pdf',
+    'Content-Disposition': `inline; filename="${rx.rxNumber}.pdf"`,
+    'Content-Length':      pdfBuffer.length,
+    'Cache-Control':       'no-cache',
+  });
+  res.send(pdfBuffer);
+}));
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**

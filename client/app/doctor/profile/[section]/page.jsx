@@ -16,6 +16,7 @@ import {
   fetchMyDoctorProfile,
   updateDoctorProfile,
   uploadDoctorPhoto,
+  uploadDoctorSignature, // Added signature thunk
   selectMyDoctorProfile,
   selectHospitalLoading,
   selectHospitalError,
@@ -30,8 +31,9 @@ const SECTIONS = [
   { id: "professional",   label: "Professional Info", icon: Stethoscope,      href: "/doctor/profile/professional" },
   { id: "qualifications", label: "Qualifications",    icon: Award,            href: "/doctor/profile/qualifications" },
   { id: "bio",            label: "Languages & Bio",   icon: Languages,        href: "/doctor/profile/bio" },
-  { id: "fees",           label: "Consultation Fees", icon: CircleDollarSign, href: "/doctor/profile/fees" },
+{ id: "fees",           label: "Consultation Fees", icon: CircleDollarSign, href: "/doctor/profile/fees" },
   { id: "photo",          label: "Profile Photo",     icon: Camera,           href: "/doctor/profile/photo" },
+  { id: "signature",      label: "E-Signature",       icon: Edit3,            href: "/doctor/profile/signature" },
 ];
 
 // Map the raw URL param → section id, falling back to "overview"
@@ -256,6 +258,7 @@ function OverviewSection({ profile }) {
             { label: "Consultation fee set",      done: (profile?.fees?.inPersonFee ?? 0) > 0 },
             { label: "Bank details submitted",    done: !!profile?.bankDetails?.isBankVerified },
             { label: "Profile photo uploaded",    done: !!profile?.profilePhotoUrl },
+            { label: "E-Signature uploaded",      done: !!profile?.doctorSignature },
             { label: "Partnership active",        done: profile?.partnershipStatus === "Active" },
           ].map(({ label, done }) => (
             <div key={label} className="flex items-center gap-3">
@@ -778,6 +781,90 @@ function PhotoSection({ profile, dispatch }) {
   );
 }
 
+// ─── Signature ────────────────────────────────────────────────────────────────
+function SignatureSection({ profile, dispatch }) {
+  const loading   = useSelector(selectHospitalLoading);
+  const uploading = loading.uploadDoctorSignature;
+  const fileRef   = useRef(null);
+  const [preview, setPreview] = useState(null);
+  const [file, setFile]       = useState(null);
+
+  const handleFile = (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setFile(f);
+    setPreview(URL.createObjectURL(f));
+  };
+
+  const handleUpload = async () => {
+    if (!file || !profile?._id) return;
+    await dispatch(uploadDoctorSignature({ id: profile._id, signature: file }));
+    setFile(null);
+    setPreview(null);
+  };
+
+  const cancel       = () => { setFile(null); setPreview(null); };
+  const currentSignature = profile?.doctorSignature;
+
+  return (
+    <SectionCard>
+      <SectionHeader title="E-Signature" subtitle="Upload your digital signature for prescriptions" icon={Edit3} />
+      <div className="flex flex-col sm:flex-row gap-8 items-center">
+        <div className="relative flex-shrink-0">
+          <div className="w-48 h-24 rounded-2xl overflow-hidden border-2 border-primary/20 bg-base-100 flex items-center justify-center p-2 shadow-inner">
+            {preview || currentSignature ? (
+              <img src={preview || currentSignature} alt="Signature" className="max-w-full max-h-full object-contain mix-blend-multiply dark:mix-blend-normal" />
+            ) : (
+              <div className="flex flex-col items-center justify-center gap-2">
+                <Edit3 size={24} className="text-primary/30" />
+                <p className="text-[10px] text-base-content/30">No signature</p>
+              </div>
+            )}
+          </div>
+          {preview && (
+            <div className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-warning text-warning-content flex items-center justify-center">
+              <span className="text-[10px] font-black">!</span>
+            </div>
+          )}
+        </div>
+        <div className="flex-1 space-y-3">
+          <input ref={fileRef} type="file" accept="image/png, image/jpeg, image/webp" className="hidden" onChange={handleFile} />
+          <p className="text-xs text-base-content/60 font-poppins leading-relaxed">
+            Upload a clear image of your signature on a plain white background. This will be used automatically on your generated prescriptions and medical certificates.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary/10 text-primary border border-primary/20 text-xs font-semibold hover:bg-primary/20 transition-all"
+            >
+              <ImageIcon size={15} /> Choose Signature
+            </button>
+            {file && (
+              <>
+                <button
+                  onClick={handleUpload}
+                  disabled={uploading}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-content text-xs font-semibold hover:brightness-110 transition-all disabled:opacity-50"
+                >
+                  {uploading ? <span className="spinner w-4 h-4" /> : <Upload size={15} />}
+                  {uploading ? "Uploading…" : "Upload"}
+                </button>
+                <button
+                  onClick={cancel}
+                  className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs text-base-content/50 hover:bg-base-200 transition-all"
+                >
+                  <RotateCcw size={13} /> Reset
+                </button>
+              </>
+            )}
+          </div>
+          {file && <p className="text-[10px] text-primary font-poppins">Selected: {file.name}</p>}
+        </div>
+      </div>
+    </SectionCard>
+  );
+}
+
 // ─── Navigation components ────────────────────────────────────────────────────
 function SidebarNav({ activeId }) {
   return (
@@ -945,9 +1032,10 @@ export default function MyProfile() {
                 {activeId === "overview"       && <OverviewSection       {...sectionProps} />}
                 {activeId === "professional"   && <ProfessionalSection   {...sectionProps} />}
                 {activeId === "qualifications" && <QualificationsSection {...sectionProps} />}
-                {activeId === "bio"            && <BioSection            {...sectionProps} />}
+               {activeId === "bio"            && <BioSection            {...sectionProps} />}
                 {activeId === "fees"           && <FeesSection           {...sectionProps} />}
                 {activeId === "photo"          && <PhotoSection          {...sectionProps} />}
+                {activeId === "signature"      && <SignatureSection      {...sectionProps} />}
               </motion.div>
             </AnimatePresence>
           </main>

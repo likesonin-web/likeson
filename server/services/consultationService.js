@@ -967,18 +967,50 @@ export const issuePrescription = async (consultationId, prescriptionData, actorI
   consultation.sessionMetrics.prescriptionIssued = true;
   await consultation.save();
 
+  // Async: PDF + email (non-blocking)
   if (consultation.patient?.email) {
-    sendEmail({
-      email: consultation.patient.email,
-      subject: `Your Prescription is Ready - ${rx.rxNumber}`,
-      html: transactionalTemplate({
-        header: 'PRESCRIPTION ISSUED',
-        title: `Prescription from Dr. ${rx.doctor.name}`,
-        body: `Your prescription for your recent consultation is now available. You can view, download, or order medicines directly from our platform.`,
-        buttonText: 'View Prescription',
-        buttonLink: `${process.env.FRONTEND_URL}/prescriptions/${rx._id}`,
-      }),
-    }).catch(err => console.error('Prescription email failed:', err.message));
+    setImmediate(async () => {
+      try {
+        const { default: generateEPrescriptionPdf } = await import('../utils/generateEPrescriptionPdf.js');
+        const { buildEPrescriptionEmail }           = await import('../utils/ePrescriptionEmailTemplate.js');
+
+        const pdfBuffer = await generateEPrescriptionPdf(rx);
+
+        const fmtD = (d) => d
+          ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+          : '—';
+
+        const verifyUrl   = `${process.env.FRONTEND_URL || 'https://likeson.in'}/rx/verify/${rx.rxNumber}`;
+        const downloadUrl = `${process.env.BACKEND_URL  || 'https://api.likeson.in'}/api/clinical/prescriptions/${rx._id}/pdf`;
+
+        const emailHtml = buildEPrescriptionEmail({
+          patientName:    consultation.patient.name,
+          doctorName:     doctorUser.name,
+          specialization: consultation.doctor.specialization,
+          rxNumber:       rx.rxNumber,
+          issuedAt:       fmtD(rx.issuedAt),
+          expiresAt:      fmtD(rx.expiresAt),
+          medicines:      rx.medicines || [],
+          verifyUrl,
+          downloadUrl,
+        });
+
+        await sendEmail({
+          email:   consultation.patient.email,
+          subject: `Your Prescription from Dr. ${doctorUser.name} — ${rx.rxNumber}`,
+          html:    emailHtml,
+          attachments: [{
+            filename:    `Prescription-${rx.rxNumber}.pdf`,
+            content:     pdfBuffer,
+            contentType: 'application/pdf',
+          }],
+        });
+
+        console.log(`[issuePrescription] Email + PDF sent → ${consultation.patient.email} | RX: ${rx.rxNumber}`);
+      } catch (err) {
+        console.error(`[issuePrescription] Email failed for RX ${rx.rxNumber}:`, err.message);
+      }
+    });
   }
 
   await pushNotification({

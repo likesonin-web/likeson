@@ -130,7 +130,7 @@ const hospitalSchema = new Schema(
       required: true,
       enum:     ALL_HOSPITAL_TYPES,
     },
-
+    
     /**
      * managementModel — NEVER set directly; derived from hospitalType.
      *

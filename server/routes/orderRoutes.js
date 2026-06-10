@@ -1755,22 +1755,46 @@ router.get('/medicines/:id/similar', cache(120), asyncHandler(async (req, res) =
   const { id } = req.params;
   const limit = parseInt(req.query.limit, 10) || 10;
 
-  // 1. Find the base medicine to determine its category
-  const baseMedicine = await Medicine.findById(id).select('category').lean();
+  // 1. Find the base medicine and fetch fields needed to determine similarity
+  const baseMedicine = await Medicine.findById(id)
+    .select('category genericName therapeuticClass pharmacologicalClass')
+    .lean();
 
   if (!baseMedicine) {
     return res.status(404).json({ success: false, message: 'Medicine not found.' });
   }
 
-  // 2. Find other active medicines in the exact same category, excluding the base medicine
-  const similarMedicines = await Medicine.find({
-    category: baseMedicine.category,
-    _id: { $ne: id },         // Exclude the currently viewed medicine
-    isDiscontinued: false     // Only show active listings
-  })
+  // 2. Build the similarity conditions
+  // We want to find medicines that share at least one medical trait with the base medicine.
+  const similarityConditions = [];
+  
+  if (baseMedicine.genericName) {
+    similarityConditions.push({ genericName: baseMedicine.genericName }); // Direct substitutes
+  }
+  if (baseMedicine.therapeuticClass) {
+    similarityConditions.push({ therapeuticClass: baseMedicine.therapeuticClass }); // Same use-case
+  }
+  if (baseMedicine.pharmacologicalClass) {
+    similarityConditions.push({ pharmacologicalClass: baseMedicine.pharmacologicalClass }); // Same drug family
+  }
+
+  // 3. Construct the final query
+  const matchQuery = {
+    _id: { $ne: id },                      // Exclude the currently viewed medicine
+    isDiscontinued: false,                 // Only show active listings
+    category: baseMedicine.category,       // STRICT: Must be in the exact same category
+  };
+
+  // If we have similarity conditions, apply them using $or
+  if (similarityConditions.length > 0) {
+    matchQuery.$or = similarityConditions;
+  }
+
+  // 4. Execute the query
+  const similarMedicines = await Medicine.find(matchQuery)
     .sort({ 'inventory.stockQuantity': -1, createdAt: -1 }) // Prioritize items in stock
     .limit(limit)
-    .populate('inventory.storeId', 'storeName address status') // Match your standard population
+    .populate('inventory.storeId', 'storeName address status') 
     .lean();
 
   res.status(200).json({

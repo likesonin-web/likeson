@@ -41,7 +41,7 @@ import bloodbankReducer from "./slices/bloodbankSlice";
 import adminAnalysticsReducer from "./slices/adminAnalyticsSlice";
 import consulationReducer from "./slices/consultationSlice";
 import labPartnerBookingsReducer from "./slices/labPartnerBookingSlice";
- 
+import cookieConsentReducer from "./slices/cookieConsentSlice";
 export const store = configureStore({
   reducer: {
     user: userReducer,
@@ -87,6 +87,7 @@ export const store = configureStore({
     adminAnalytics: adminAnalysticsReducer,
     consultation: consulationReducer,
     labPartnerBookings:labPartnerBookingsReducer,
+    cookieConsent: cookieConsentReducer,
   },
   devTools: process.env.NODE_ENV !== "production",
 });

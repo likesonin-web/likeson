@@ -7,17 +7,17 @@
  * Dual-mode: CREATE (new) + VIEW (existing by :id)
  *
  * URL patterns:
- *   /doctor/prescriptions/new?bookingId=xxx   → create mode
- *   /doctor/prescriptions/new?opId=xxx        → create linked to OP
- *   /doctor/prescriptions/:id                 → view/print mode
+ * /doctor/prescriptions/new?bookingId=xxx   → create mode
+ * /doctor/prescriptions/new?opId=xxx        → create linked to OP
+ * /doctor/prescriptions/:id                 → view/print mode
  *
  * Covers ALL fields from EPrescription + Booking + OutPatientRecord models:
- *   doctor snapshot, patient snapshot, diagnosis, ICD-10, chief complaints,
- *   clinical findings, vitals, medicines[], labTests[], followUp, advice,
- *   referral, digital signature flag, PDF download.
+ * doctor snapshot, patient snapshot, diagnosis, ICD-10, chief complaints,
+ * clinical findings, vitals, medicines[], labTests[], followUp, advice,
+ * referral, digital signature flag, PDF download.
  *
  * Redux: createPrescription, fetchPrescriptionById, downloadPrescriptionPdf,
- *        cancelPrescription, verifyPrescription, fetchPrescriptionById
+ * cancelPrescription, verifyPrescription, fetchPrescriptionById
  */
 
 import { useEffect, useState, useCallback, useRef } from 'react';
@@ -31,7 +31,7 @@ import {
   CalendarDays, Clock, PenLine, Shield, XCircle, Eye,
   ChevronDown, ChevronUp, Printer, RefreshCw, Save,
   BadgeCheck, ClipboardList, Info, Syringe, TestTube2,
-  BookOpen, Phone, Mail, Hospital, Hash, Star,
+  BookOpen, Phone, Mail, Hospital, Hash, Star, Wand2,
 } from 'lucide-react';
 
 import {
@@ -444,6 +444,56 @@ export default function EPrescription() {
     return () => { dispatch(clearSelectedPrescription()); };
   }, [prescriptionId, dispatch]);
 
+  // ─── Load Mockup Data ─────────────────────────────────────────────────────
+
+  const loadMockupData = () => {
+    setPatient({
+      name: 'Rajesh Kumar Reddy', age: '42', gender: 'Male', phone: '+91 99887 66554', bloodGroup: 'B+', weight: '72 kg', allergies: ['Penicillin', 'Sulfa drugs']
+    });
+    setChiefComplaints(['Persistent headache for 3 days', 'Chest discomfort on exertion', 'Fatigue']);
+    setDiagnosis('Hypertension Stage 2 with Dyslipidaemia');
+    setDiagnosisCode('I10, E78.5');
+    setClinicalFindings('BP elevated bilaterally. No cardiac murmurs. Mild pedal oedema.');
+    setAdvice('Low-salt diet (<2g/day). 30 min brisk walk daily. Avoid alcohol and smoking.');
+    setReferralNote('Refer to Nephrologist if creatinine >1.5 after 4 weeks.');
+    setVitals({
+      bloodPressure: '145/90', pulseRate: '78', temperature: '98.6',
+      spO2: '98', bloodSugar: '110', weightKg: '72', heightCm: '175', respiratoryRate: '16'
+    });
+    setMedicines([
+      {
+        medicineName: 'Amlodipine Besylate', genericName: 'Amlodipine', brandName: 'Amlokind', dosage: '5 mg', form: 'Tablet',
+        frequency: 'OD', timing: 'After Food', route: 'Oral',
+        durationDays: '30', quantity: '30', refillsAllowed: 0,
+        instructions: 'Take at the same time each day', isSubstitutable: true,
+      },
+      {
+        medicineName: 'Atorvastatin Calcium', genericName: 'Atorvastatin', brandName: 'Lipitor', dosage: '20 mg', form: 'Tablet',
+        frequency: 'HS', timing: 'Bedtime', route: 'Oral',
+        durationDays: '30', quantity: '30', refillsAllowed: 1,
+        instructions: 'Take at night before sleep', isSubstitutable: true,
+      },
+      {
+        medicineName: 'Pantoprazole Sodium', genericName: 'Pantoprazole', brandName: 'Pan 40', dosage: '40 mg', form: 'Tablet',
+        frequency: 'OD', timing: 'Empty Stomach', route: 'Oral',
+        durationDays: '14', quantity: '14', refillsAllowed: 0,
+        instructions: 'Take 30 mins before breakfast', isSubstitutable: false,
+      }
+    ]);
+    setLabTests([
+      { testName: 'Lipid Profile', testCode: 'LP001', urgency: 'routine', instructions: 'Fasting 12 hours required' },
+      { testName: 'HbA1c', testCode: 'HBA-01', urgency: 'routine', instructions: '' },
+      { testName: 'ECG', testCode: 'ECG-12', urgency: 'urgent', instructions: 'Resting ECG, 12-lead' },
+    ]);
+    
+    // Set follow up to 14 days from now formatted for datetime-local
+    const fDate = new Date();
+    fDate.setDate(fDate.getDate() + 14);
+    const localIso = new Date(fDate.getTime() - (fDate.getTimezoneOffset() * 60000)).toISOString().slice(0, 16);
+    setFollowUpDate(localIso);
+    setFollowUpInst('Bring BP log and repeat labs.');
+  };
+
   // ─── Medicine handlers ────────────────────────────────────────────────────
 
   const addMedicine = () => setMedicines((p) => [...p, { ...EMPTY_MEDICINE }]);
@@ -842,6 +892,14 @@ export default function EPrescription() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={loadMockupData}
+              className="btn btn-secondary btn-outline btn-sm gap-1.5"
+            >
+              <Wand2 size={14} />
+              Load Mockup
+            </button>
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => router.back()}>
               Discard
             </button>

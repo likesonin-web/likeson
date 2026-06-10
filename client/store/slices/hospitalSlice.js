@@ -854,6 +854,30 @@ export const uploadDoctorPhoto = createAsyncThunk(
   }
 );
 
+/**
+ * POST /hospitals/doctors/:id/signature
+ * Sends multipart/form-data with a single `signature` file field.
+ * @param {{ id: string, signature: File }} payload
+ */
+export const uploadDoctorSignature = createAsyncThunk(
+  'hospital/uploadDoctorSignature',
+  async ({ id, signature }, { rejectWithValue }) => {
+    try {
+      const fd = new FormData();
+      fd.append('signature', signature);
+      const { data } = await API.post(`/hospitals/doctors/${id}/signature`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      toast.success('Doctor signature uploaded');
+      return { id, doctorSignature: data.doctorSignature };
+    } catch (err) {
+      const msg = err.response?.data?.message || 'Signature upload failed';
+      toast.error(msg);
+      return rejectWithValue(err.response?.data || { message: msg });
+    }
+  }
+);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //  F. ADMIN-ONLY DOCTOR THUNKS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1095,9 +1119,10 @@ const initialState = {
     updateDoctorProfile:      false,
     updateDoctorSettings:     false,
     updateDoctorAvailability: false,
-    updateDoctorBankDetails:  false,
+   updateDoctorBankDetails:  false,
     updateDoctorKyc:          false,
     uploadDoctorPhoto:        false,
+    uploadDoctorSignature:    false, // Added signature loading flag
     // Doctor admin-only
     updateDoctorSecurity:    false,
     updateDoctorPlatformFee: false,
@@ -1614,17 +1639,17 @@ const hospitalSlice = createSlice({
       })
       .addCase(updateDoctorKyc.rejected, setError('updateDoctorKyc'));
 
-    builder
-      .addCase(uploadDoctorPhoto.pending,   startLoading('uploadDoctorPhoto'))
-      .addCase(uploadDoctorPhoto.fulfilled, (state, { payload: { id, profilePhotoUrl } }) => {
-        state.loading.uploadDoctorPhoto = false;
-        const patch = (d) => ({ ...d, profilePhotoUrl });
+builder
+      .addCase(uploadDoctorSignature.pending,   startLoading('uploadDoctorSignature'))
+      .addCase(uploadDoctorSignature.fulfilled, (state, { payload: { id, doctorSignature } }) => {
+        state.loading.uploadDoctorSignature = false;
+        const patch = (d) => ({ ...d, doctorSignature });
         const idx = state.doctors.findIndex((d) => d._id === id);
         if (idx !== -1) state.doctors[idx] = patch(state.doctors[idx]);
         if (state.selectedDoctor?._id  === id) state.selectedDoctor  = patch(state.selectedDoctor);
         if (state.myDoctorProfile?._id === id) state.myDoctorProfile = patch(state.myDoctorProfile);
       })
-      .addCase(uploadDoctorPhoto.rejected, setError('uploadDoctorPhoto'));
+      .addCase(uploadDoctorSignature.rejected, setError('uploadDoctorSignature'));
 
     // =========================================================================
     //  F. ADMIN-ONLY DOCTOR
@@ -1781,10 +1806,11 @@ export const selectIsUpdatingHospitalConsultationPricing = (s) => s.hospital.loa
 export const selectIsResendingHospitalCredentials        = (s) => s.hospital.loading.resendHospitalManagerCredentials;
 export const selectIsResendingDoctorCredentials          = (s) => s.hospital.loading.resendDoctorCredentials;
 export const selectIsUpdatingDoctorSecurity              = (s) => s.hospital.loading.updateDoctorSecurity;
-export const selectIsUpdatingDoctorPlatformFee           = (s) => s.hospital.loading.updateDoctorPlatformFee;
-export const selectIsUploadingDoctorPhoto                = (s) => s.hospital.loading.uploadDoctorPhoto;
-export const selectIsDownloadingHospitalForm             = (s) => s.hospital.loading.downloadHospitalForm;
-export const selectIsDownloadingDoctorForm               = (s) => s.hospital.loading.downloadDoctorForm;
+export const selectIsUpdatingDoctorPlatformFee    = (s) => s.hospital.loading.updateDoctorPlatformFee;
+export const selectIsUploadingDoctorPhoto         = (s) => s.hospital.loading.uploadDoctorPhoto;
+export const selectIsUploadingDoctorSignature     = (s) => s.hospital.loading.uploadDoctorSignature; // Added signature selector
+export const selectIsDownloadingHospitalForm      = (s) => s.hospital.loading.downloadHospitalForm;
+export const selectIsDownloadingDoctorForm        = (s) => s.hospital.loading.downloadDoctorForm;
 
 // Error
 export const selectHospitalError = (s) => s.hospital.error;

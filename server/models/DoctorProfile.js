@@ -224,7 +224,7 @@ const doctorProfileSchema = new Schema(
       comment: 'Medical Council of India (MCI) or State Medical Council Reg No.',
     },
     registrationCouncil: { type: String, trim: true },
-
+    doctorSignature:        { type: String },
     // ── KYC ───────────────────────────────────────────────────────────────────
     kyc:                { type: kycSchema, default: () => ({}) },
     kycStatus: {
