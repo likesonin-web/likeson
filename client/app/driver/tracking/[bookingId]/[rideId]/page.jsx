@@ -3,10 +3,13 @@
 import React, {
   useEffect, useRef, useCallback, useState, useMemo, memo,
 } from 'react';
-import { useParams, useRouter }   from 'next/navigation';
-import { useDispatch, useSelector } from 'react-redux';
-import { motion, AnimatePresence, useMotionValue, useTransform } from 'framer-motion';
-import { GoogleMap }               from '@react-google-maps/api';
+import { useParams, useRouter }      from 'next/navigation';
+import { useDispatch, useSelector }  from 'react-redux';
+import {
+  motion, AnimatePresence,
+  useMotionValue, useTransform,
+} from 'framer-motion';
+import { GoogleMap } from '@react-google-maps/api';
 import {
   Navigation, MapPin, Phone, User,
   CheckCircle, WifiOff, Volume2, VolumeX,
@@ -20,7 +23,7 @@ import {
 import { useGoogleMaps }      from '@/context/GoogleMapsProvider';
 import { useRideTracking }    from '@/hooks/useRideTracking';
 import { useVoiceNavigation } from '@/hooks/useVoiceNavigation';
-import { useDriverMarker, createStaticMarker } from '@/hooks/useDriverMarker';
+import { useDriverMarker }    from '@/hooks/useDriverMarker';
 import { useMapCamera }       from '@/hooks/useMapCamera';
 import { useRouteRenderer }   from '@/hooks/useRouteRenderer';
 import {
@@ -38,7 +41,6 @@ import {
   distanceKm,
 } from '@/utils/navigationUtils';
 
-// NEW: import for complete_waypoint action
 import {
   driverCompleteWaypoint,
   selectCaJoinPoint,
@@ -49,7 +51,7 @@ import {
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MAP_ID                  = process.env.NEXT_PUBLIC_MAP_ID          || '33a293614af186975a18525f';
+const MAP_ID                  = process.env.NEXT_PUBLIC_MAP_ID || '33a293614af186975a18525f';
 const STEP_ADVANCE_METERS     = 35;
 const ARRIVAL_THRESHOLD_KM    = 0.05;
 const OFF_ROUTE_THRESHOLD     = 0.7;
@@ -61,16 +63,16 @@ const OFF_ROUTE_CONFIRM_COUNT = 3;
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STATUS_CFG = {
-  SEARCHING:      { label: 'Searching',    color: 'color-mix(in srgb, var(--base-content) 60%, transparent)', bg: 'color-mix(in srgb, var(--base-content), transparent 90%)', border: 'color-mix(in srgb, var(--base-content), transparent 75%)' },
-  driver_assigned:{ label: 'Assigned',     color: 'var(--warning)',   bg: 'color-mix(in srgb, var(--warning), transparent 85%)',   border: 'color-mix(in srgb, var(--warning), transparent 65%)' },
-  driver_accepted:{ label: 'Accepted',     color: 'var(--primary)',   bg: 'color-mix(in srgb, var(--primary), transparent 85%)',   border: 'color-mix(in srgb, var(--primary), transparent 65%)' },
-  driver_en_route:{ label: 'En Route',     color: 'var(--info)',      bg: 'color-mix(in srgb, var(--info), transparent 85%)',      border: 'color-mix(in srgb, var(--info), transparent 65%)' },
-  driver_arrived: { label: 'Arrived',      color: 'var(--accent)',    bg: 'color-mix(in srgb, var(--accent), transparent 85%)',    border: 'color-mix(in srgb, var(--accent), transparent 65%)' },
-  otp_verified:   { label: 'OTP ✓',        color: 'var(--success)',   bg: 'color-mix(in srgb, var(--success), transparent 85%)',   border: 'color-mix(in srgb, var(--success), transparent 65%)' },
-  in_progress:    { label: 'In Progress',  color: 'var(--success)',   bg: 'color-mix(in srgb, var(--success), transparent 85%)',   border: 'color-mix(in srgb, var(--success), transparent 65%)' },
-  at_stop:        { label: 'At Stop',      color: 'var(--secondary)', bg: 'color-mix(in srgb, var(--secondary), transparent 85%)', border: 'color-mix(in srgb, var(--secondary), transparent 65%)' },
-  completed:      { label: 'Completed',    color: 'color-mix(in srgb, var(--base-content) 70%, transparent)', bg: 'color-mix(in srgb, var(--base-content), transparent 85%)', border: 'color-mix(in srgb, var(--base-content), transparent 65%)' },
-  cancelled:      { label: 'Cancelled',    color: 'var(--error)',     bg: 'color-mix(in srgb, var(--error), transparent 85%)',     border: 'color-mix(in srgb, var(--error), transparent 65%)' },
+  SEARCHING:       { label: 'Searching',   color: 'color-mix(in srgb, var(--base-content) 60%, transparent)', bg: 'color-mix(in srgb, var(--base-content), transparent 90%)',   border: 'color-mix(in srgb, var(--base-content), transparent 75%)' },
+  driver_assigned: { label: 'Assigned',    color: 'var(--warning)',   bg: 'color-mix(in srgb, var(--warning), transparent 85%)',   border: 'color-mix(in srgb, var(--warning), transparent 65%)' },
+  driver_accepted: { label: 'Accepted',    color: 'var(--primary)',   bg: 'color-mix(in srgb, var(--primary), transparent 85%)',   border: 'color-mix(in srgb, var(--primary), transparent 65%)' },
+  driver_en_route: { label: 'En Route',    color: 'var(--info)',      bg: 'color-mix(in srgb, var(--info), transparent 85%)',      border: 'color-mix(in srgb, var(--info), transparent 65%)' },
+  driver_arrived:  { label: 'Arrived',     color: 'var(--accent)',    bg: 'color-mix(in srgb, var(--accent), transparent 85%)',    border: 'color-mix(in srgb, var(--accent), transparent 65%)' },
+  otp_verified:    { label: 'OTP ✓',       color: 'var(--success)',   bg: 'color-mix(in srgb, var(--success), transparent 85%)',   border: 'color-mix(in srgb, var(--success), transparent 65%)' },
+  in_progress:     { label: 'In Progress', color: 'var(--success)',   bg: 'color-mix(in srgb, var(--success), transparent 85%)',   border: 'color-mix(in srgb, var(--success), transparent 65%)' },
+  at_stop:         { label: 'At Stop',     color: 'var(--secondary)', bg: 'color-mix(in srgb, var(--secondary), transparent 85%)', border: 'color-mix(in srgb, var(--secondary), transparent 65%)' },
+  completed:       { label: 'Completed',   color: 'color-mix(in srgb, var(--base-content) 70%, transparent)', bg: 'color-mix(in srgb, var(--base-content), transparent 85%)', border: 'color-mix(in srgb, var(--base-content), transparent 65%)' },
+  cancelled:       { label: 'Cancelled',   color: 'var(--error)',     bg: 'color-mix(in srgb, var(--error), transparent 85%)',     border: 'color-mix(in srgb, var(--error), transparent 65%)' },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -78,11 +80,40 @@ const STATUS_CFG = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Inject pulse keyframe into document once.
+ * AdvancedMarkerElement content is in normal DOM so document styles apply.
+ */
+function injectMarkerStyles() {
+  if (document.getElementById('__ride-marker-styles')) return;
+  const style = document.createElement('style');
+  style.id = '__ride-marker-styles';
+  style.textContent = `
+    @keyframes markerPulse {
+      0%   { transform: scale(0.9);  opacity: 0.8; }
+      70%  { transform: scale(1.8);  opacity: 0;   }
+      100% { transform: scale(1.8);  opacity: 0;   }
+    }
+    @keyframes drvPulse {
+      0%   { transform: scale(0.85); opacity: 0.75; }
+      70%  { transform: scale(2.1);  opacity: 0;    }
+      100% { transform: scale(2.1);  opacity: 0;    }
+    }
+    @keyframes sosPulse {
+      0%, 100% { box-shadow: 0 0 0 0   rgba(239,68,68,0.7); }
+      50%       { box-shadow: 0 0 0 10px rgba(239,68,68,0);   }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+/**
  * createCustomMarker
  * type: 'pickup' | 'dropoff' | 'care_join' | 'care_join_done' | 'care_live'
  */
 function createCustomMarker(map, lat, lng, type) {
   if (!window.google?.maps?.marker?.AdvancedMarkerElement) return null;
+
+  injectMarkerStyles();
 
   const configs = {
     pickup: {
@@ -93,17 +124,14 @@ function createCustomMarker(map, lat, lng, type) {
       bg: '#ef4444', border: '#dc2626', size: 14,
       pulse: false, label: 'D', zIndex: 10,
     },
-    // JP pending — amber, pulsing
     care_join: {
       bg: '#f59e0b', border: '#d97706', size: 12,
       pulse: true, label: 'J', zIndex: 9,
     },
-    // JP completed — green, no pulse
     care_join_done: {
       bg: '#22c55e', border: '#16a34a', size: 12,
       pulse: false, label: '✓', zIndex: 9,
     },
-    // CA live position — purple, pulsing
     care_live: {
       bg: '#8b5cf6', border: '#7c3aed', size: 13,
       pulse: true, label: 'CA', zIndex: 11,
@@ -113,9 +141,7 @@ function createCustomMarker(map, lat, lng, type) {
   const cfg = configs[type] || configs.pickup;
 
   const container = document.createElement('div');
-  container.style.cssText = `
-    display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;
-  `;
+  container.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;';
 
   const dot = document.createElement('div');
   dot.style.cssText = `
@@ -139,9 +165,7 @@ function createCustomMarker(map, lat, lng, type) {
   }
 
   const tail = document.createElement('div');
-  tail.style.cssText = `
-    width:3px;height:8px;background:${cfg.border};border-radius:0 0 3px 3px;
-  `;
+  tail.style.cssText = `width:3px;height:8px;background:${cfg.border};border-radius:0 0 3px 3px;`;
 
   container.appendChild(dot);
   container.appendChild(tail);
@@ -149,9 +173,26 @@ function createCustomMarker(map, lat, lng, type) {
   return new window.google.maps.marker.AdvancedMarkerElement({
     map,
     position: { lat, lng },
-    content: container,
-    zIndex: cfg.zIndex,
+    content:  container,
+    zIndex:   cfg.zIndex,
   });
+}
+
+/**
+ * FIX: safe way to read AdvancedMarkerElement position lat/lng.
+ * Position is google.maps.LatLng — has .lat() method, not .lat property.
+ */
+function getMarkerLatLng(marker) {
+  if (!marker?.position) return null;
+  const pos = marker.position;
+  // AdvancedMarkerElement stores as LatLngLiteral {lat, lng} or LatLng instance
+  if (typeof pos.lat === 'function') {
+    return { lat: pos.lat(), lng: pos.lng() };
+  }
+  if (typeof pos.lat === 'number') {
+    return { lat: pos.lat, lng: pos.lng };
+  }
+  return null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -198,8 +239,8 @@ const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
     >
       <motion.div
         initial={{ scale: 0.88, opacity: 0, y: 36 }}
-        animate={{ scale: 1, opacity: 1, y: 0 }}
-        exit={{ scale: 0.88, opacity: 0, y: 36 }}
+        animate={{ scale: 1,    opacity: 1, y: 0  }}
+        exit={{   scale: 0.88, opacity: 0, y: 36  }}
         transition={{ type: 'spring', damping: 24, stiffness: 340 }}
         className="w-full max-w-sm rounded-3xl p-7 bg-base-200 border border-base-300 shadow-[0_28px_72px_rgba(0,0,0,0.65)]"
       >
@@ -228,7 +269,7 @@ const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
                 borderRadius: 12,
                 background: d ? 'rgba(59,130,246,0.15)' : 'var(--base-300)',
                 border: `2px solid ${d ? 'var(--primary)' : 'var(--base-300)'}`,
-                color: d ? 'var(--primary)' : 'var(--base-content)',
+                color:   d ? 'var(--primary)' : 'var(--base-content)',
                 outline: 'none', fontFamily: 'inherit', caretColor: 'var(--primary)',
               }}
             />
@@ -237,8 +278,10 @@ const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
 
         <AnimatePresence>
           {error && (
-            <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-              className="flex items-center gap-2 alert alert-error rounded-xl px-3 py-2 mb-4 text-xs font-semibold" role="alert">
+            <motion.div
+              initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+              className="flex items-center gap-2 alert alert-error rounded-xl px-3 py-2 mb-4 text-xs font-semibold"
+              role="alert">
               <AlertCircle size={14} />{error}
             </motion.div>
           )}
@@ -251,7 +294,10 @@ const OtpModal = memo(function OtpModal({ onVerify, onClose, loading, error }) {
           className={`btn btn-lg w-full rounded-2xl font-bold text-base flex items-center justify-center gap-2 ${filled && !loading ? 'btn-primary' : 'btn-ghost'}`}
           style={{ fontFamily: 'inherit' }}
         >
-          {loading ? <><Loader2 size={16} className="animate-spin" /> Verifying…</> : <><CheckCircle size={16} /> Verify OTP</>}
+          {loading
+            ? <><Loader2 size={16} className="animate-spin" /> Verifying…</>
+            : <><CheckCircle size={16} /> Verify OTP</>
+          }
         </motion.button>
       </motion.div>
     </motion.div>
@@ -276,17 +322,17 @@ const MANEUVER_ICONS = {
 
 const NavInstructionCard = memo(function NavInstructionCard({ step, stepIndex, distanceMeters }) {
   if (!step) return null;
-  const type   = getManeuverIcon(step.maneuver || step.instruction || '');
-  const IconFn = MANEUVER_ICONS[type] || MANEUVER_ICONS.straight;
-  const dist   = (distanceMeters && distanceMeters > 0) ? distanceMeters : (step.distanceMeters ?? 0);
+  const type    = getManeuverIcon(step.maneuver || step.instruction || '');
+  const IconFn  = MANEUVER_ICONS[type] || MANEUVER_ICONS.straight;
+  const dist    = (distanceMeters && distanceMeters > 0) ? distanceMeters : (step.distanceMeters ?? 0);
   const distColor = dist < 50 ? 'bg-error' : dist < 200 ? 'bg-warning' : 'bg-success';
 
   return (
     <motion.div
       key={stepIndex}
       initial={{ opacity: 0, y: -10, scale: 0.97 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -10, scale: 0.97 }}
+      animate={{ opacity: 1, y: 0,   scale: 1    }}
+      exit={{   opacity: 0, y: -10, scale: 0.97  }}
       transition={{ duration: 0.2 }}
       className="flex gap-3 items-center px-3 py-2.5 rounded-md bg-base-100 border border-base-300/60"
     >
@@ -304,19 +350,17 @@ const NavInstructionCard = memo(function NavInstructionCard({ step, stepIndex, d
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CA STATUS BAR — shown on driver map for full_care_ride
+// CA STATUS BAR — full_care_ride only
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CaStatusBar = memo(function CaStatusBar({
-  caStatus, caName, caLiveCoords, jpCompleted, jpCoords,
-}) {
+const CaStatusBar = memo(function CaStatusBar({ caStatus, caName, jpCompleted }) {
   if (!caStatus || caStatus === 'not_joined') return null;
 
   const cfgMap = {
-    en_route_to_pickup: { label: `${caName} en route to join point`, color: '#3b82f6',  bg: 'rgba(59,130,246,0.12)',  border: 'rgba(59,130,246,0.30)',  dot: '#3b82f6' },
-    at_pickup:          { label: `${caName} waiting at join point`,  color: '#f59e0b',  bg: 'rgba(245,158,11,0.12)',  border: 'rgba(245,158,11,0.30)',  dot: '#f59e0b' },
-    in_ride:            { label: `${caName} joined the ride`,        color: '#22c55e',  bg: 'rgba(34,197,94,0.12)',   border: 'rgba(34,197,94,0.30)',   dot: '#22c55e' },
-    departed:           { label: `${caName} departed`,               color: '#8b5cf6',  bg: 'rgba(139,92,246,0.12)', border: 'rgba(139,92,246,0.30)', dot: '#8b5cf6' },
+    en_route_to_pickup: { label: `${caName} en route to join point`, color: '#3b82f6', bg: 'rgba(59,130,246,0.12)',  border: 'rgba(59,130,246,0.30)',  dot: '#3b82f6' },
+    at_pickup:          { label: `${caName} waiting at join point`,  color: '#f59e0b', bg: 'rgba(245,158,11,0.12)',  border: 'rgba(245,158,11,0.30)',  dot: '#f59e0b' },
+    in_ride:            { label: `${caName} joined the ride`,        color: '#22c55e', bg: 'rgba(34,197,94,0.12)',   border: 'rgba(34,197,94,0.30)',   dot: '#22c55e' },
+    departed:           { label: `${caName} departed`,               color: '#8b5cf6', bg: 'rgba(139,92,246,0.12)', border: 'rgba(139,92,246,0.30)', dot: '#8b5cf6' },
   };
 
   const cfg = cfgMap[caStatus] || cfgMap.en_route_to_pickup;
@@ -324,7 +368,7 @@ const CaStatusBar = memo(function CaStatusBar({
   return (
     <motion.div
       initial={{ opacity: 0, y: -8 }}
-      animate={{ opacity: 1, y: 0 }}
+      animate={{ opacity: 1, y: 0  }}
       className="mx-2 mt-1 px-3 py-2 rounded-xl flex items-center gap-2.5"
       style={{ background: cfg.bg, border: `1px solid ${cfg.border}` }}
     >
@@ -336,6 +380,9 @@ const CaStatusBar = memo(function CaStatusBar({
       {caStatus === 'in_ride' && (
         <Activity size={12} style={{ color: cfg.color }} className="flex-shrink-0 animate-pulse" />
       )}
+      {jpCompleted && (
+        <CheckCircle size={12} style={{ color: '#22c55e' }} className="flex-shrink-0" />
+      )}
     </motion.div>
   );
 });
@@ -346,17 +393,18 @@ const CaStatusBar = memo(function CaStatusBar({
 
 const MapLegend = memo(function MapLegend({ bookingType, caName, jpCompleted }) {
   if (bookingType !== 'full_care_ride') return null;
+
   return (
     <motion.div
       initial={{ opacity: 0, x: -20 }}
-      animate={{ opacity: 1, x: 0 }}
+      animate={{ opacity: 1, x: 0   }}
       className="absolute z-20 flex flex-col gap-1.5 px-3 py-2.5 rounded-2xl"
       style={{
         bottom: 'calc(104px + env(safe-area-inset-bottom, 0px))',
         left: 12,
-        background: 'rgba(10,15,28,0.85)',
-        border: '1px solid rgba(255,255,255,0.1)',
-        backdropFilter: 'blur(12px)',
+        background:    'rgba(10,15,28,0.85)',
+        border:        '1px solid rgba(255,255,255,0.1)',
+        backdropFilter:'blur(12px)',
         minWidth: 130,
       }}
     >
@@ -407,7 +455,11 @@ const BottomSheet = memo(function BottomSheet({ ride, booking, open, onToggle, r
       animate={{ y: open ? '0%' : 'calc(100% - 80px)' }}
       transition={{ type: 'spring', damping: 28, stiffness: 300 }}
       className="fixed bottom-0 left-0 right-0 z-30 rounded-t-[28px] bg-base-200 border border-base-300 border-b-0"
-      style={{ maxHeight: '82vh', overflow: 'hidden', boxShadow: '0 -12px 48px rgba(0,0,0,0.45)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+      style={{
+        maxHeight: '82vh', overflow: 'hidden',
+        boxShadow: '0 -12px 48px rgba(0,0,0,0.45)',
+        paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+      }}
     >
       <button onClick={onToggle}
         className="w-full bg-transparent border-none cursor-pointer px-4 pt-3.5 pb-2.5 flex flex-col items-center"
@@ -416,7 +468,8 @@ const BottomSheet = memo(function BottomSheet({ ride, booking, open, onToggle, r
         <div className="flex items-center justify-between w-full">
           <span className="text-sm font-bold text-base-content">Ride Details</span>
           <div className="flex items-center gap-2.5">
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest border"
+            <span
+              className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest border"
               style={{ background: statusCfg.bg, borderColor: statusCfg.border, color: statusCfg.color }}>
               {statusCfg.label}
             </span>
@@ -430,7 +483,8 @@ const BottomSheet = memo(function BottomSheet({ ride, booking, open, onToggle, r
       <div className="overflow-y-auto px-4 pb-8" style={{ maxHeight: 'calc(82vh - 82px)' }}>
         {(bk?.customer || bk?.patientInfo) && (
           <div className="flex items-center gap-3 p-3.5 rounded-2xl mb-3 bg-base-300/50 border border-base-300">
-            <div className="w-11 h-11 rounded-xl flex-shrink-0 flex items-center justify-center"
+            <div
+              className="w-11 h-11 rounded-xl flex-shrink-0 flex items-center justify-center"
               style={{ background: 'linear-gradient(135deg,var(--primary),var(--secondary))' }}>
               <User size={17} color="#fff" />
             </div>
@@ -494,27 +548,35 @@ const BottomSheet = memo(function BottomSheet({ ride, booking, open, onToggle, r
 
 const RideCompletedScreen = memo(function RideCompletedScreen({ ride, onBack }) {
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+    <motion.div
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }}
       className="fixed inset-0 z-[70] bg-base-100 flex flex-col items-center justify-center px-6">
-      <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }}
+      <motion.div
+        initial={{ scale: 0 }} animate={{ scale: 1 }}
         transition={{ delay: 0.2, type: 'spring', damping: 14, stiffness: 220 }}
         className="w-[92px] h-[92px] rounded-full flex items-center justify-center mb-6 bg-success/10 border-2 border-success/30">
         <CheckCircle size={46} className="text-success" />
       </motion.div>
-      <motion.h2 initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35 }}
-        className="text-2xl font-black text-base-content text-center m-0 mb-2">Ride Completed!</motion.h2>
-      <motion.p initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45 }}
+      <motion.h2
+        initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35 }}
+        className="text-2xl font-black text-base-content text-center m-0 mb-2">
+        Ride Completed!
+      </motion.h2>
+      <motion.p
+        initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45 }}
         className="text-sm text-base-content/50 text-center m-0 mb-8">
         {ride?.rideCode ? `Ride ${ride.rideCode}` : 'Ride'} completed successfully.
       </motion.p>
       {ride?.actualDistanceKm && (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.55 }}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.55 }}
           className="px-10 py-5 rounded-3xl text-center mb-8 bg-base-200 border border-base-300">
           <p className="text-[36px] font-black text-primary m-0">{ride.actualDistanceKm} km</p>
           <p className="text-[11px] text-base-content/40 mt-1 m-0 uppercase tracking-widest font-semibold">Total Distance</p>
         </motion.div>
       )}
-      <motion.button initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.65 }}
+      <motion.button
+        initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.65 }}
         whileTap={{ scale: 0.97 }} onClick={onBack}
         className="btn btn-primary btn-lg rounded-2xl px-10 font-bold" style={{ fontFamily: 'inherit' }}>
         Back to Bookings
@@ -570,9 +632,11 @@ const SwipeActionButton = memo(function SwipeActionButton({ buttonConfig }) {
     <div ref={containerRef}
       className="relative flex items-center h-[48px] rounded-full w-full max-w-[300px] overflow-hidden bg-base-300/80 border border-base-content/10"
       style={{ boxShadow: '0 8px 32px rgba(0,0,0,0.3)', backdropFilter: 'blur(12px)' }}>
-      <motion.div className="absolute left-0 top-0 bottom-0 rounded-full opacity-20 pointer-events-none"
+      <motion.div
+        className="absolute left-0 top-0 bottom-0 rounded-full opacity-20 pointer-events-none"
         style={{ width: fillWidth, background: color }} />
-      <motion.div className="absolute w-full text-center pointer-events-none font-bold text-xs tracking-wide text-base-content/80 flex items-center justify-center gap-2"
+      <motion.div
+        className="absolute w-full text-center pointer-events-none font-bold text-xs tracking-wide text-base-content/80 flex items-center justify-center gap-2"
         style={{ opacity: textOpacity }}>
         Slide to {label}
         <motion.div animate={{ x: [0, 4, 0] }} transition={{ repeat: Infinity, duration: 1.5 }} className="flex opacity-60">
@@ -588,7 +652,9 @@ const SwipeActionButton = memo(function SwipeActionButton({ buttonConfig }) {
         whileTap={{ scale: 0.95 }}
         className="absolute left-1 flex items-center justify-center w-10 h-10 rounded-full cursor-grab active:cursor-grabbing z-10"
         style={{ x, background: color, boxShadow: `0 4px 16px ${shadow}`, color: '#fff' }}>
-        {isTriggered ? <Loader2 size={16} className="animate-spin" /> : React.cloneElement(icon, { size: 16 })}
+        {isTriggered
+          ? <Loader2 size={16} className="animate-spin" />
+          : React.cloneElement(icon, { size: 16 })}
       </motion.div>
     </div>
   );
@@ -613,7 +679,7 @@ export default function RideLiveTracking() {
     navigationTarget, etaUpdate, currentPosition,
     isLoadingRide, gpsError, isOffline, connected,
     sendStatusUpdate, verifyOtp, triggerSosAlert, DRIVER_STATUS,
-    // CA-specific from useRideTracking
+    // CA-specific
     bookingType:    hookBookingType,
     caLiveLocation, caStatus, caJoinPoint, caName,
   } = useRideTracking({ rideId, bookingId });
@@ -638,18 +704,24 @@ export default function RideLiveTracking() {
   const caJoinMarkerRef      = useRef(null);
   const caLiveMarkerRef      = useRef(null);
   const staticMarkersRef     = useRef(false);
+  // FIX: split creation guard from update logic
   const caJoinMarkerCreated  = useRef(false);
+  const caJoinMarkerDone     = useRef(false); // tracks if marker already swapped to done
 
   // Kalman
   const kalmanRef = useRef(createKalmanFilter());
 
   // ── Sub-hooks ─────────────────────────────────────────────────────────────
-  const { updateMarker, destroyMarker }             = useDriverMarker(mapRef, mapLoadedRef);
+  const { updateMarker, destroyMarker }          = useDriverMarker(mapRef, mapLoadedRef);
   const { updateCamera, recenter, resetToNorth,
           zoomIn, zoomOut, initCameraListeners,
-          mapBearingRef, followModeRef }             = useMapCamera(mapRef);
-  const { setRoute, updateProgress, clearRoute,
-          routePointsRef }                          = useRouteRenderer(mapRef);
+          mapBearingRef, followModeRef }          = useMapCamera(mapRef);
+  const {
+    setRoute, updateProgress, clearRoute,
+    routePointsRef,
+    // FIX: CA route methods now used
+    setCaRoute, clearCaRoute,
+  }                                               = useRouteRenderer(mapRef);
 
   // ── Nav state ─────────────────────────────────────────────────────────────
   const [navSteps,       setNavSteps]       = useState([]);
@@ -668,12 +740,13 @@ export default function RideLiveTracking() {
   const [arrivedSpoken, setArrivedSpoken] = useState(false);
   const [followMode,    setFollowMode]    = useState(true);
 
-  // ── NEW: full_care_ride driver state ──────────────────────────────────────
-  // JP state: pending | completed
-  const [jpCompleted,          setJpCompleted]          = useState(false);
-  const [completeWpLoading,    setCompleteWpLoading]    = useState(false);
-  // Local CA status from socket events
-  const [localCaStatus,        setLocalCaStatus]        = useState(caStatus || 'not_joined');
+  // ── full_care_ride state ──────────────────────────────────────────────────
+  const [jpCompleted,       setJpCompleted]       = useState(false);
+  const [completeWpLoading, setCompleteWpLoading] = useState(false);
+
+  // FIX: localCaStatus initialised from hook value directly.
+  // Hook's returned `caStatus` is the local state inside useRideTracking.
+  const [localCaStatus, setLocalCaStatus] = useState(() => caStatus || 'not_joined');
 
   // Off-route tracking
   const offRouteCountRef   = useRef(0);
@@ -702,50 +775,37 @@ export default function RideLiveTracking() {
 
   const isFullCareRide = bookingType === 'full_care_ride';
 
-  // ── Sync caStatus from hook + socket ─────────────────────────────────────
+  // ── Sync caStatus from hook ───────────────────────────────────────────────
+  // FIX: sync whenever hook's caStatus changes (was missing initial sync)
   useEffect(() => {
     if (caStatus && caStatus !== localCaStatus) {
       setLocalCaStatus(caStatus);
     }
   }, [caStatus]); // eslint-disable-line
 
-  // Listen for CA status changes from socket via socketLive
+  // Sync from socketLive snapshot
   useEffect(() => {
     const status = socketLive?.careAssistantTracking?.caStatus;
-    if (status) setLocalCaStatus(status);
-  }, [socketLive?.careAssistantTracking?.caStatus]);
+    if (status && status !== localCaStatus) setLocalCaStatus(status);
+  }, [socketLive?.careAssistantTracking?.caStatus]); // eslint-disable-line
 
-  // ── Sync JP completed state ───────────────────────────────────────────────
-  // From Redux (set by socket event ca_join_waypoint_completed)
+  // ── Sync JP completed from Redux ──────────────────────────────────────────
   useEffect(() => {
     if (reduxJoinPoint?.isCompleted && !jpCompleted) {
       setJpCompleted(true);
-      // Update marker to green 'done' style
-      if (caJoinMarkerRef.current && mapRef.current) {
-        const pos = caJoinMarkerRef.current.position;
-        if (pos?.lat && pos?.lng) {
-          caJoinMarkerRef.current.map = null;
-          caJoinMarkerRef.current = null;
-          caJoinMarkerRef.current = createCustomMarker(
-            mapRef.current, pos.lat, pos.lng, 'care_join_done',
-          );
-        }
-      }
+      swapJoinMarkerToDone();
     }
-  }, [reduxJoinPoint?.isCompleted, jpCompleted]);
+  }, [reduxJoinPoint?.isCompleted]); // eslint-disable-line
 
   // ── CA join point coords ──────────────────────────────────────────────────
   const caJoinCoords = useMemo(() => {
     if (!isFullCareRide) return null;
-    // From hook (useRideTracking populates caJoinPoint from waypoints)
     if (caJoinPoint?.coordinates?.length >= 2) {
       return { lat: caJoinPoint.coordinates[1], lng: caJoinPoint.coordinates[0] };
     }
-    // From Redux
     if (reduxJoinPoint?.coordinates?.length >= 2) {
       return { lat: reduxJoinPoint.coordinates[1], lng: reduxJoinPoint.coordinates[0] };
     }
-    // From ride waypoints directly
     const joinWp = (rd?.waypoints || []).find(w => w.type === 'care_assistant_join');
     if (joinWp?.location?.coordinates?.length >= 2) {
       return { lat: joinWp.location.coordinates[1], lng: joinWp.location.coordinates[0] };
@@ -756,14 +816,9 @@ export default function RideLiveTracking() {
   // ── CA live coords ────────────────────────────────────────────────────────
   const caLiveCoords = useMemo(() => {
     if (!isFullCareRide) return null;
-    // From useRideTracking (populated via socket events)
-    if (caLiveLocation?.lat && caLiveLocation?.lng) {
-      return { lat: caLiveLocation.lat, lng: caLiveLocation.lng };
-    }
-    // From socketLive
+    if (caLiveLocation?.lat && caLiveLocation?.lng) return { lat: caLiveLocation.lat, lng: caLiveLocation.lng };
     const sl = socketLive?.careAssistantLiveLocation;
     if (sl?.lat && sl?.lng) return { lat: sl.lat, lng: sl.lng };
-    // From tracking snapshot
     const snapLoc = tracking?.careAssistant?.liveLocation;
     if (snapLoc?.lat && snapLoc?.lng) return { lat: snapLoc.lat, lng: snapLoc.lng };
     return null;
@@ -792,7 +847,7 @@ export default function RideLiveTracking() {
   }, [rideStatus, socketLive?.activeNavigationTarget]);
 
   const targetCoords = navTargetType === 'dropoff' ? dropoffCoords : pickupCoords;
-  const routeType    = navTargetType === 'dropoff' ? 'toDropoff' : 'toPickup';
+  const routeType    = navTargetType === 'dropoff' ? 'toDropoff'   : 'toPickup';
 
   // ── Map load ──────────────────────────────────────────────────────────────
   const onMapLoad = useCallback((map) => {
@@ -810,6 +865,7 @@ export default function RideLiveTracking() {
     return () => clearInterval(t);
   }, [followModeRef]);
 
+  // ── Ride lifecycle effects ────────────────────────────────────────────────
   useEffect(() => {
     if (rideStatus === 'completed') {
       const t = setTimeout(() => setShowCompleted(true), 1800);
@@ -846,14 +902,47 @@ export default function RideLiveTracking() {
   }, [mapLoaded, pickupCoords, dropoffCoords]);
 
   // ─────────────────────────────────────────────────────────────────────────
-  // CA JOIN POINT MARKER — full_care_ride only
-  // Created once; re-created as 'care_join_done' when JP completed
+  // CA JOIN POINT MARKER
+  // FIX: guard split into caJoinMarkerCreated (initial) + caJoinMarkerDone (swap).
+  // Creation happens once when coords appear.
+  // Swap to done happens once when jpCompleted flips.
   // ─────────────────────────────────────────────────────────────────────────
+
+  // FIX: helper extracted — avoids duplicate code and stale ref reads
+  const swapJoinMarkerToDone = useCallback(() => {
+    if (caJoinMarkerDone.current) return;
+    caJoinMarkerDone.current = true;
+    const map = mapRef.current;
+    if (!map) return;
+
+    // Destroy old marker cleanly
+    if (caJoinMarkerRef.current) {
+      caJoinMarkerRef.current.map = null;
+      caJoinMarkerRef.current = null;
+    }
+
+    // FIX: read stored coords from the ref, not from AdvancedMarkerElement.position
+    if (caJoinCoordsRef.current) {
+      caJoinMarkerRef.current = createCustomMarker(
+        map,
+        caJoinCoordsRef.current.lat,
+        caJoinCoordsRef.current.lng,
+        'care_join_done',
+      );
+    }
+  }, []);
+
+  // Keep latest caJoinCoords in a ref so swapJoinMarkerToDone can read it
+  const caJoinCoordsRef = useRef(null);
+  useEffect(() => { caJoinCoordsRef.current = caJoinCoords; }, [caJoinCoords]);
+
+  // Create JP marker when coords become available
   useEffect(() => {
     if (!mapLoaded || !isFullCareRide || caJoinMarkerCreated.current) return;
     if (!caJoinCoords) return;
     if (!window.google?.maps?.marker?.AdvancedMarkerElement) return;
 
+    // Remove stale marker if any
     if (caJoinMarkerRef.current) {
       caJoinMarkerRef.current.map = null;
       caJoinMarkerRef.current = null;
@@ -861,15 +950,26 @@ export default function RideLiveTracking() {
 
     const markerType = jpCompleted ? 'care_join_done' : 'care_join';
     caJoinMarkerRef.current = createCustomMarker(
-      mapRef.current, caJoinCoords.lat, caJoinCoords.lng, markerType,
+      mapRef.current,
+      caJoinCoords.lat,
+      caJoinCoords.lng,
+      markerType,
     );
     caJoinMarkerCreated.current = true;
-  }, [mapLoaded, isFullCareRide, caJoinCoords, jpCompleted]);
+    if (jpCompleted) caJoinMarkerDone.current = true;
+  }, [mapLoaded, isFullCareRide, caJoinCoords]); // eslint-disable-line
 
-  // Reset guard when JP coords change (admin re-assigns CA with new JP)
+  // Reset guards when JP coords change (admin re-assigns CA with new JP)
   useEffect(() => {
     caJoinMarkerCreated.current = false;
+    caJoinMarkerDone.current    = false;
   }, [caJoinCoords]);
+
+  // Swap marker when jpCompleted becomes true (after initial creation)
+  useEffect(() => {
+    if (!jpCompleted || !mapLoaded) return;
+    swapJoinMarkerToDone();
+  }, [jpCompleted, mapLoaded, swapJoinMarkerToDone]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // CA LIVE MARKER — update position on every GPS ping
@@ -880,12 +980,50 @@ export default function RideLiveTracking() {
 
     if (!caLiveMarkerRef.current) {
       caLiveMarkerRef.current = createCustomMarker(
-        mapRef.current, caLiveCoords.lat, caLiveCoords.lng, 'care_live',
+        mapRef.current,
+        caLiveCoords.lat,
+        caLiveCoords.lng,
+        'care_live',
       );
     } else {
+      // FIX: AdvancedMarkerElement accepts LatLngLiteral directly for position update
       caLiveMarkerRef.current.position = { lat: caLiveCoords.lat, lng: caLiveCoords.lng };
     }
   }, [mapLoaded, isFullCareRide, caLiveCoords]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CA ROUTE — draw CA's route to join point when available
+  // FIX: was never called in original code
+  // ─────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!mapLoaded || !isFullCareRide || !caLiveCoords || !caJoinCoords) return;
+    // Only draw CA route when CA hasn't yet reached join point
+    if (jpCompleted || localCaStatus === 'in_ride') {
+      clearCaRoute();
+      return;
+    }
+    if (!dirServiceRef.current) return;
+
+    dirServiceRef.current.route(
+      {
+        origin:      { lat: caLiveCoords.lat, lng: caLiveCoords.lng },
+        destination: { lat: caJoinCoords.lat, lng: caJoinCoords.lng },
+        travelMode:  window.google.maps.TravelMode.DRIVING,
+        provideRouteAlternatives: false,
+      },
+      (result, status) => {
+        if (status === 'OK') {
+          setCaRoute(result);
+        }
+      },
+    );
+  }, [
+    mapLoaded, isFullCareRide,
+    caLiveCoords?.lat, caLiveCoords?.lng,
+    caJoinCoords?.lat, caJoinCoords?.lng,
+    jpCompleted, localCaStatus,
+    setCaRoute, clearCaRoute,
+  ]); // eslint-disable-line
 
   // ─────────────────────────────────────────────────────────────────────────
   // CLEANUP
@@ -925,18 +1063,30 @@ export default function RideLiveTracking() {
     }
   }, [setRoute, routeType, resetManeuverBands]);
 
+  // FIX: trigger route on mapLoaded OR navTargetType change.
+  // Original used mapLoaded in dep array which doesn't retrigger on navTargetType change.
   useEffect(() => {
     if (!mapLoaded || !currentPosition || !targetCoords) return;
-    calculateRoute({ lat: currentPosition.lat, lng: currentPosition.lng }, targetCoords, routeType);
+    calculateRoute(
+      { lat: currentPosition.lat, lng: currentPosition.lng },
+      targetCoords,
+      routeType,
+    );
+    setCurrentStepIdx(0);
+    setArrivedSpoken(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapLoaded, navTargetType]);
+  }, [mapLoaded, navTargetType, routeType]);
 
+  // Navigation target pushed from server
   useEffect(() => {
     if (!navigationTarget || !mapLoaded || !currentPosition) return;
     const dest = navigationTarget.coords
       ? { lat: navigationTarget.coords[1], lng: navigationTarget.coords[0] }
       : targetCoords;
-    if (dest) { announceRerouting(); calculateRoute({ lat: currentPosition.lat, lng: currentPosition.lng }, dest, routeType); }
+    if (dest) {
+      announceRerouting();
+      calculateRoute({ lat: currentPosition.lat, lng: currentPosition.lng }, dest, routeType);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigationTarget]);
 
@@ -975,18 +1125,20 @@ export default function RideLiveTracking() {
       }
 
       if (routePointsRef.current?.length && speed > 5) {
-        const snap = snapToPolyline(lat, lng, routePointsRef.current);
-        const pts = routePointsRef.current;
-        const si  = snap.segmentIndex;
+        const snap     = snapToPolyline(lat, lng, routePointsRef.current);
+        const pts      = routePointsRef.current;
+        const si       = snap.segmentIndex;
         const segBearing = si < pts.length - 1
           ? bearingDeg(pts[si].lat, pts[si].lng, pts[si + 1].lat, pts[si + 1].lng)
           : heading;
         const score = offRouteScore(snap.distanceOffRouteKm, heading, segBearing, speed);
         if (score > OFF_ROUTE_THRESHOLD) {
           offRouteCountRef.current++;
-          if (offRouteCountRef.current >= OFF_ROUTE_CONFIRM_COUNT
+          if (
+            offRouteCountRef.current >= OFF_ROUTE_CONFIRM_COUNT
             && Date.now() - lastRerouteTimeRef.current > REROUTE_COOLDOWN_MS
-            && targetCoords) {
+            && targetCoords
+          ) {
             offRouteCountRef.current   = 0;
             lastRerouteTimeRef.current = Date.now();
             announceRerouting();
@@ -1028,21 +1180,14 @@ export default function RideLiveTracking() {
     }
   }, [verifyOtp, speak]);
 
-  // ── NEW: Driver marks CA as picked up (complete JP waypoint) ─────────────
+  // ── Driver marks CA as picked up ─────────────────────────────────────────
   const handleCompleteWaypoint = useCallback(async () => {
     if (completeWpLoading || !rideId) return;
     setCompleteWpLoading(true);
     try {
       await dispatch(driverCompleteWaypoint({ rideId, waypointType: 'care_assistant_join' })).unwrap();
       setJpCompleted(true);
-      // Swap marker to green done style
-      if (caJoinMarkerRef.current && caJoinCoords) {
-        caJoinMarkerRef.current.map = null;
-        caJoinMarkerRef.current = null;
-        caJoinMarkerRef.current = createCustomMarker(
-          mapRef.current, caJoinCoords.lat, caJoinCoords.lng, 'care_join_done',
-        );
-      }
+      // Marker swap handled by useEffect watching jpCompleted
       dispatch(setJpWaypointCompleted({ timestamp: new Date().toISOString() }));
       speak('Care assistant picked up. Continuing to destination.', { force: true });
     } catch (err) {
@@ -1050,7 +1195,7 @@ export default function RideLiveTracking() {
     } finally {
       setCompleteWpLoading(false);
     }
-  }, [completeWpLoading, rideId, dispatch, caJoinCoords, speak]);
+  }, [completeWpLoading, rideId, dispatch, speak]);
 
   // ── Recenter ──────────────────────────────────────────────────────────────
   const handleRecenter = useCallback(() => {
@@ -1066,33 +1211,36 @@ export default function RideLiveTracking() {
   }, [router]);
 
   // ── Action buttons ────────────────────────────────────────────────────────
-  // Primary swipe button
   const actionButton = useMemo(() => {
     switch (rideStatus) {
       case 'driver_assigned':
         return { label: 'Accept Ride',        icon: <CheckCircle size={17} />, color: '#22c55e',        shadow: 'rgba(34,197,94,0.45)',   action: () => sendStatusUpdate(DRIVER_STATUS.ACCEPTED) };
       case 'driver_accepted':
-        return { label: 'Navigate to Pickup', icon: <Navigation size={17} />,  color: 'var(--primary)', shadow: 'rgba(59,130,246,0.45)',  action: () => sendStatusUpdate(DRIVER_STATUS.EN_ROUTE) };
+        return { label: 'Navigate to Pickup', icon: <Navigation  size={17} />, color: 'var(--primary)', shadow: 'rgba(59,130,246,0.45)',  action: () => sendStatusUpdate(DRIVER_STATUS.EN_ROUTE) };
       case 'driver_en_route':
-        return { label: 'I Have Arrived',     icon: <MapPin size={17} />,      color: '#8b5cf6',        shadow: 'rgba(139,92,246,0.45)', action: () => sendStatusUpdate(DRIVER_STATUS.ARRIVED) };
+        return { label: 'I Have Arrived',     icon: <MapPin      size={17} />, color: '#8b5cf6',        shadow: 'rgba(139,92,246,0.45)', action: () => sendStatusUpdate(DRIVER_STATUS.ARRIVED) };
       case 'driver_arrived':
         return { label: 'Verify OTP',         icon: <CheckSquare size={17} />, color: '#f59e0b',        shadow: 'rgba(245,158,11,0.45)', action: () => setShowOtpModal(true) };
       case 'otp_verified':
-        return { label: 'Start Ride',         icon: <Play size={17} />,        color: '#22c55e',        shadow: 'rgba(34,197,94,0.45)',  action: () => sendStatusUpdate(DRIVER_STATUS.RIDE_STARTED) };
+        return { label: 'Start Ride',         icon: <Play        size={17} />, color: '#22c55e',        shadow: 'rgba(34,197,94,0.45)',  action: () => sendStatusUpdate(DRIVER_STATUS.RIDE_STARTED) };
       case 'in_progress':
-        return { label: 'Complete Ride',      icon: <Square size={17} />,      color: 'var(--primary)', shadow: 'rgba(59,130,246,0.45)', action: () => sendStatusUpdate(DRIVER_STATUS.COMPLETED) };
+        return { label: 'Complete Ride',      icon: <Square      size={17} />, color: 'var(--primary)', shadow: 'rgba(59,130,246,0.45)', action: () => sendStatusUpdate(DRIVER_STATUS.COMPLETED) };
       case 'at_stop':
-        return { label: 'Resume Ride',        icon: <Play size={17} />,        color: '#06b6d4',        shadow: 'rgba(6,182,212,0.45)',  action: () => sendStatusUpdate(DRIVER_STATUS.STOP_DEPARTED) };
+        return { label: 'Resume Ride',        icon: <Play        size={17} />, color: '#06b6d4',        shadow: 'rgba(6,182,212,0.45)',  action: () => sendStatusUpdate(DRIVER_STATUS.STOP_DEPARTED) };
       default: return null;
     }
   }, [rideStatus, sendStatusUpdate, DRIVER_STATUS]);
 
-  // Show "CA Picked Up" tap button when:
-  // full_care_ride + in_progress + CA at_pickup or en_route + JP not yet done
+  // FIX: broader condition — show CA pickup button for any status where CA could be at_pickup
+  // Also handle 'en_route_to_pickup' properly (hook returns it; socket events may set it)
   const showCaPickupButton = isFullCareRide
-    && ['in_progress', 'otp_verified'].includes(rideStatus)
+    && ['in_progress', 'otp_verified', 'driver_en_route', 'driver_arrived'].includes(rideStatus)
     && !jpCompleted
-    && (localCaStatus === 'at_pickup' || localCaStatus === 'en_route_to_pickup');
+    && (
+      localCaStatus === 'at_pickup'
+      || localCaStatus === 'en_route_to_pickup'
+      || localCaStatus === 'en_route'
+    );
 
   // ── Derived display ───────────────────────────────────────────────────────
   const currentStep = navSteps[currentStepIdx] || null;
@@ -1109,296 +1257,328 @@ export default function RideLiveTracking() {
   // RENDER
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <>
-      <style>{`
-        @keyframes drvPulse { 0%{transform:scale(0.85);opacity:0.75}70%{transform:scale(2.1);opacity:0}100%{transform:scale(2.1);opacity:0} }
-        @keyframes sosPulse { 0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,0.7)}50%{box-shadow:0 0 0 10px rgba(239,68,68,0)} }
-        @keyframes markerPulse { 0%{transform:scale(0.9);opacity:0.8}70%{transform:scale(1.8);opacity:0}100%{transform:scale(1.8);opacity:0} }
-      `}</style>
+    <div className="fixed inset-0 overflow-hidden font-poppins">
 
-      <div className="fixed inset-0 overflow-hidden font-poppins">
+      {/* ── MAP ──────────────────────────────────────────────────────────── */}
+      <div className="absolute inset-0">
+        <GoogleMap
+          mapContainerStyle={{ width: '100%', height: '100%' }}
+          center={currentPosition || pickupCoords || { lat: 16.506, lng: 80.648 }}
+          zoom={15}
+          options={{
+            mapId: MAP_ID, disableDefaultUI: true,
+            clickableIcons: false, gestureHandling: 'greedy',
+            mapTypeId: 'roadmap', tilt: 0,
+          }}
+          onLoad={onMapLoad}
+        />
+      </div>
 
-        {/* ── MAP ──────────────────────────────────────────────────────── */}
-        <div className="absolute inset-0">
-          <GoogleMap
-            mapContainerStyle={{ width: '100%', height: '100%' }}
-            center={currentPosition || pickupCoords || { lat: 16.506, lng: 80.648 }}
-            zoom={15}
-            options={{
-              mapId: MAP_ID, disableDefaultUI: true,
-              clickableIcons: false, gestureHandling: 'greedy',
-              mapTypeId: 'roadmap', tilt: 0,
-            }}
-            onLoad={onMapLoad}
-          />
-        </div>
-
-        {/* ── OFFLINE ──────────────────────────────────────────────────── */}
-        <AnimatePresence>
-          {isOffline && (
-            <motion.div initial={{ y: -44 }} animate={{ y: 0 }} exit={{ y: -44 }}
-              className="absolute top-0 left-0 right-0 z-[60] bg-error text-error-content flex items-center justify-center gap-2 py-2.5 text-xs font-bold"
-              style={{ paddingTop: 'max(env(safe-area-inset-top,0px),10px)' }} role="alert">
-              <WifiOff size={13} /> No internet — navigation paused
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* ── TOP BAR ──────────────────────────────────────────────────── */}
-        <div className="absolute top-0 left-0 right-0 z-20 flex flex-col"
-          style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
-          <motion.div initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }}
-            className="flex items-center bg-base-100 gap-2 px-3 py-2">
-            <motion.button whileTap={{ scale: 0.88 }} onClick={handleBack}
-              className="w-8 h-8 rounded-xl bg-base-200 flex-shrink-0 flex items-center justify-center cursor-pointer text-base-content/70"
-              aria-label="Go back">
-              <ChevronLeft size={17} />
-            </motion.button>
-
-            <div className={`w-2 h-2 rounded-full flex-shrink-0 ${connected ? 'bg-success/90 animate-pulse' : 'bg-error/80 animate-pulse'}`} />
-
-            {rideStatus && (
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full flex-shrink-0 text-[10px] font-bold uppercase tracking-widest border"
-                style={{ background: statusCfg.bg, borderColor: statusCfg.border, color: statusCfg.color }}>
-                {statusCfg.label}
-              </span>
-            )}
-
-            {bookingType && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded-full flex-shrink-0 text-[9px] font-bold uppercase tracking-widest border border-base-300 bg-base-200 text-base-content/50">
-                {bookingType.replace(/_/g, ' ')}
-              </span>
-            )}
-
-            {etaMinutes != null && (
-              <div className="flex items-center gap-1 flex-shrink-0">
-                <Clock size={11} style={{ color: 'rgba(255,255,255,0.4)' }} />
-                <span className="text-xs font-bold text-base-content">{formatEta(etaMinutes)}</span>
-              </div>
-            )}
-
-            {remainingKm != null && (
-              <div className="flex items-center gap-1 flex-shrink-0">
-                <Navigation size={11} style={{ color: '#60a5fa' }} />
-                <span className="text-xs font-semibold text-base-content/70">{formatDistance(remainingKm)}</span>
-              </div>
-            )}
-
-            {speedKmh > 3 && (
-              <div className="flex items-center gap-1 ml-auto flex-shrink-0">
-                <Zap size={11} style={{ color: '#facc15' }} />
-                <span className="text-[11px] font-bold tabular-nums text-base-content/80">
-                  {formatSpeed(speedKmh)}<span className="text-[9px] ml-0.5 opacity-60">km/h</span>
-                </span>
-              </div>
-            )}
+      {/* ── OFFLINE ──────────────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {isOffline && (
+          <motion.div
+            initial={{ y: -44 }} animate={{ y: 0 }} exit={{ y: -44 }}
+            className="absolute top-0 left-0 right-0 z-[60] bg-error text-error-content flex items-center justify-center gap-2 py-2.5 text-xs font-bold"
+            style={{ paddingTop: 'max(env(safe-area-inset-top,0px),10px)' }}
+            role="alert">
+            <WifiOff size={13} /> No internet — navigation paused
           </motion.div>
+        )}
+      </AnimatePresence>
 
-          {/* Nav instruction */}
-          <div className="px-2 pt-1.5">
-            <AnimatePresence mode="wait">
-              {currentStep && (
-                <NavInstructionCard key={currentStepIdx} step={currentStep}
-                  stepIndex={currentStepIdx} distanceMeters={stepDistMeters} />
-              )}
-            </AnimatePresence>
-          </div>
+      {/* ── TOP BAR ──────────────────────────────────────────────────────── */}
+      <div
+        className="absolute top-0 left-0 right-0 z-20 flex flex-col"
+        style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
+        <motion.div
+          initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }}
+          className="flex items-center bg-base-100 gap-2 px-3 py-2">
+          <motion.button
+            whileTap={{ scale: 0.88 }} onClick={handleBack}
+            className="w-8 h-8 rounded-xl bg-base-200 flex-shrink-0 flex items-center justify-center cursor-pointer text-base-content/70"
+            aria-label="Go back">
+            <ChevronLeft size={17} />
+          </motion.button>
 
-          {/* CA status bar — full_care_ride only */}
-          <AnimatePresence>
-            {isFullCareRide && (
-              <CaStatusBar
-                caStatus={localCaStatus}
-                caName={caDisplayName}
-                caLiveCoords={caLiveCoords}
-                jpCompleted={jpCompleted}
-                jpCoords={caJoinCoords}
+          <div className={`w-2 h-2 rounded-full flex-shrink-0 ${connected ? 'bg-success/90 animate-pulse' : 'bg-error/80 animate-pulse'}`} />
+
+          {rideStatus && (
+            <span
+              className="inline-flex items-center px-2.5 py-0.5 rounded-full flex-shrink-0 text-[10px] font-bold uppercase tracking-widest border"
+              style={{ background: statusCfg.bg, borderColor: statusCfg.border, color: statusCfg.color }}>
+              {statusCfg.label}
+            </span>
+          )}
+
+          {bookingType && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full flex-shrink-0 text-[9px] font-bold uppercase tracking-widest border border-base-300 bg-base-200 text-base-content/50">
+              {bookingType.replace(/_/g, ' ')}
+            </span>
+          )}
+
+          {etaMinutes != null && (
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <Clock size={11} style={{ color: 'rgba(255,255,255,0.4)' }} />
+              <span className="text-xs font-bold text-base-content">{formatEta(etaMinutes)}</span>
+            </div>
+          )}
+
+          {remainingKm != null && (
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <Navigation size={11} style={{ color: '#60a5fa' }} />
+              <span className="text-xs font-semibold text-base-content/70">{formatDistance(remainingKm)}</span>
+            </div>
+          )}
+
+          {speedKmh > 3 && (
+            <div className="flex items-center gap-1 ml-auto flex-shrink-0">
+              <Zap size={11} style={{ color: '#facc15' }} />
+              <span className="text-[11px] font-bold tabular-nums text-base-content/80">
+                {formatSpeed(speedKmh)}<span className="text-[9px] ml-0.5 opacity-60">km/h</span>
+              </span>
+            </div>
+          )}
+        </motion.div>
+
+        {/* Nav instruction */}
+        <div className="px-2 pt-1.5">
+          <AnimatePresence mode="wait">
+            {currentStep && (
+              <NavInstructionCard
+                key={currentStepIdx}
+                step={currentStep}
+                stepIndex={currentStepIdx}
+                distanceMeters={stepDistMeters}
               />
             )}
           </AnimatePresence>
-
-          {/* Rerouting banner */}
-          <AnimatePresence>
-            {isRerouting && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
-                className="flex items-center gap-2 mx-2 mt-1 px-3 py-2 rounded-xl text-xs font-semibold"
-                style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.30)', color: '#f59e0b' }}
-                role="status">
-                <RotateCcw size={12} className="animate-spin" /> Recalculating route…
-              </motion.div>
-            )}
-          </AnimatePresence>
         </div>
 
-        {/* ── GPS ERROR ─────────────────────────────────────────────────── */}
+        {/* CA status bar — full_care_ride only */}
         <AnimatePresence>
-          {gpsError && (
-            <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
-              className="absolute top-[130px] left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap"
-              style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444' }}
-              role="alert">
-              <MapPinOff size={12} /> {gpsError}
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* ── LEFT FABs ─────────────────────────────────────────────────── */}
-        <div className="absolute z-20 flex flex-col gap-2.5" style={{ top: 160, left: 12 }}>
-          {[
-            { icon: <Maximize2 size={16} />, action: handleRecenter, label: 'Re-center',
-              active: followMode, activeColor: 'var(--primary)' },
-            { icon: <Compass   size={16} />, action: () => { resetToNorth(); setFollowMode(false); }, label: 'North' },
-            { icon: <Plus      size={16} />, action: zoomIn,   label: 'Zoom in'  },
-            { icon: <Minus     size={16} />, action: zoomOut,  label: 'Zoom out' },
-          ].map(({ icon, action, label, active, activeColor }) => (
-            <motion.button key={label} whileTap={{ scale: 0.88 }} onClick={action} aria-label={label}
-              style={{
-                width: 44, height: 44, borderRadius: 13,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                cursor: 'pointer',
-                background: active ? (activeColor || 'var(--primary)') : 'rgba(20,26,40,0.88)',
-                border: `1.5px solid ${active ? (activeColor || 'var(--primary)') : 'rgba(255,255,255,0.12)'}`,
-                boxShadow: '0 4px 16px rgba(0,0,0,0.45)',
-                color: active ? '#fff' : 'rgba(255,255,255,0.6)',
-                backdropFilter: 'blur(10px)',
-              }}>
-              {icon}
-            </motion.button>
-          ))}
-        </div>
-
-        {/* ── RIGHT FABs ────────────────────────────────────────────────── */}
-        <div className="absolute z-20 flex flex-col gap-2.5" style={{ top: 160, right: 12 }}>
-          <motion.button whileTap={{ scale: 0.88 }} onClick={toggleVoice}
-            aria-label={voiceEnabled ? 'Mute voice' : 'Enable voice'}
-            style={{
-              width: 44, height: 44, borderRadius: 13,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              cursor: 'pointer',
-              background: voiceEnabled ? 'rgba(16,185,129,0.15)' : 'rgba(20,26,40,0.88)',
-              border: `1.5px solid ${voiceEnabled ? 'rgba(16,185,129,0.40)' : 'rgba(255,255,255,0.12)'}`,
-              boxShadow: '0 4px 16px rgba(0,0,0,0.45)',
-              color: voiceEnabled ? '#10b981' : 'rgba(255,255,255,0.35)',
-              backdropFilter: 'blur(10px)',
-            }}>
-            {voiceEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-          </motion.button>
-
-          <motion.button whileTap={{ scale: 0.88 }}
-            onClick={() => { setSosActive(true); triggerSosAlert('safety'); setTimeout(() => setSosActive(false), 8000); }}
-            aria-label="SOS"
-            style={{
-              width: 44, height: 44, borderRadius: 13,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              cursor: 'pointer',
-              background: sosActive ? '#ef4444' : 'rgba(239,68,68,0.12)',
-              border: `1.5px solid ${sosActive ? '#ef4444' : 'rgba(239,68,68,0.35)'}`,
-              boxShadow: '0 4px 16px rgba(0,0,0,0.45)',
-              color: sosActive ? '#fff' : '#ef4444',
-              backdropFilter: 'blur(10px)',
-              animation: sosActive ? 'sosPulse 1s ease-in-out infinite' : 'none',
-            }}>
-            {sosActive ? <ShieldAlert size={16} /> : <Shield size={16} />}
-          </motion.button>
-        </div>
-
-        {/* ── MAP LEGEND (full_care_ride) ───────────────────────────────── */}
-        <MapLegend bookingType={bookingType} caName={caDisplayName} jpCompleted={jpCompleted} />
-
-        {/* ── CA LIVE CHIP ──────────────────────────────────────────────── */}
-        {isFullCareRide && caLiveCoords && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-            className="absolute z-20"
-            style={{ bottom: `calc(104px + env(safe-area-inset-bottom, 0px))`, right: 12 }}>
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-2xl text-xs font-bold"
-              style={{ background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.4)', color: '#8b5cf6', backdropFilter: 'blur(10px)' }}>
-              <div className="w-2 h-2 rounded-full bg-[#8b5cf6] animate-pulse" />
-              {caDisplayName} live
-            </div>
-          </motion.div>
-        )}
-
-        {/* ── CA PICKED UP BUTTON (full_care_ride) ──────────────────────── */}
-        {/*
-          Shown when: full_care_ride + ride in_progress/otp_verified
-            + CA is at join point or en route + JP not yet completed.
-          Driver taps this after physically picking up CA from join point.
-          JP marker then turns green (completed), button disappears.
-        */}
-        <AnimatePresence>
-          {showCaPickupButton && (
-            <motion.div
-              initial={{ y: 80, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 80, opacity: 0 }}
-              transition={{ type: 'spring', damping: 26, stiffness: 320 }}
-              className="absolute z-30 flex justify-center w-full px-4"
-              style={{ bottom: `calc(148px + env(safe-area-inset-bottom, 0px))` }}
-            >
-              <motion.button
-                whileTap={{ scale: 0.96 }}
-                onClick={handleCompleteWaypoint}
-                disabled={completeWpLoading}
-                className="flex items-center gap-2.5 px-6 py-3 rounded-2xl font-bold text-sm"
-                style={{
-                  background:    'rgba(139,92,246,0.92)',
-                  border:        '1.5px solid rgba(139,92,246,0.5)',
-                  color:         '#fff',
-                  boxShadow:     '0 6px 24px rgba(139,92,246,0.45)',
-                  backdropFilter:'blur(10px)',
-                  cursor:        completeWpLoading ? 'not-allowed' : 'pointer',
-                  opacity:       completeWpLoading ? 0.7 : 1,
-                }}
-                aria-label="Confirm care assistant picked up"
-              >
-                {completeWpLoading
-                  ? <Loader2 size={16} className="animate-spin" />
-                  : <UserCheck size={16} />
-                }
-                {caDisplayName} Picked Up
-              </motion.button>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* ── PRIMARY SWIPE ACTION BUTTON ───────────────────────────────── */}
-        <AnimatePresence mode="wait">
-          {actionButton && !['completed', 'cancelled'].includes(rideStatus) && (
-            <motion.div
-              key={rideStatus}
-              initial={{ y: 100, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 100, opacity: 0 }}
-              transition={{ type: 'spring', damping: 26, stiffness: 320 }}
-              className="absolute z-30 flex justify-center w-full px-4"
-              style={{ bottom: `calc(88px + env(safe-area-inset-bottom, 0px))` }}
-            >
-              <SwipeActionButton buttonConfig={actionButton} />
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* ── BOTTOM SHEET ──────────────────────────────────────────────── */}
-        <BottomSheet
-          ride={tracking}
-          booking={bk}
-          open={sheetOpen}
-          onToggle={() => setSheetOpen(p => !p)}
-          rideStatus={rideStatus}
-        />
-
-        {/* ── OTP MODAL ─────────────────────────────────────────────────── */}
-        <AnimatePresence>
-          {showOtpModal && (
-            <OtpModal
-              onVerify={handleOtpVerify}
-              onClose={() => setShowOtpModal(false)}
-              loading={otpLoading}
-              error={otpError}
+          {isFullCareRide && (
+            <CaStatusBar
+              caStatus={localCaStatus}
+              caName={caDisplayName}
+              jpCompleted={jpCompleted}
             />
           )}
         </AnimatePresence>
 
+        {/* Rerouting banner */}
+        <AnimatePresence>
+          {isRerouting && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+              className="flex items-center gap-2 mx-2 mt-1 px-3 py-2 rounded-xl text-xs font-semibold"
+              style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.30)', color: '#f59e0b' }}
+              role="status">
+              <RotateCcw size={12} className="animate-spin" /> Recalculating route…
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
-    </>
+
+      {/* ── GPS ERROR ─────────────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {gpsError && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
+            className="absolute top-[130px] left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap"
+            style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444' }}
+            role="alert">
+            <MapPinOff size={12} /> {gpsError}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── LEFT FABs ─────────────────────────────────────────────────────── */}
+      <div className="absolute z-20 flex flex-col gap-2.5" style={{ top: 160, left: 12 }}>
+        {[
+          { icon: <Maximize2 size={16} />, action: handleRecenter, label: 'Re-center',
+            active: followMode, activeColor: 'var(--primary)' },
+          { icon: <Compass   size={16} />, action: () => { resetToNorth(); setFollowMode(false); }, label: 'North' },
+          { icon: <Plus      size={16} />, action: zoomIn,  label: 'Zoom in'  },
+          { icon: <Minus     size={16} />, action: zoomOut, label: 'Zoom out' },
+        ].map(({ icon, action, label, active, activeColor }) => (
+          <motion.button
+            key={label} whileTap={{ scale: 0.88 }} onClick={action} aria-label={label}
+            style={{
+              width: 44, height: 44, borderRadius: 13,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer',
+              background: active ? (activeColor || 'var(--primary)') : 'rgba(20,26,40,0.88)',
+              border:     `1.5px solid ${active ? (activeColor || 'var(--primary)') : 'rgba(255,255,255,0.12)'}`,
+              boxShadow:  '0 4px 16px rgba(0,0,0,0.45)',
+              color:      active ? '#fff' : 'rgba(255,255,255,0.6)',
+              backdropFilter: 'blur(10px)',
+            }}>
+            {icon}
+          </motion.button>
+        ))}
+      </div>
+
+      {/* ── RIGHT FABs ────────────────────────────────────────────────────── */}
+      <div className="absolute z-20 flex flex-col gap-2.5" style={{ top: 160, right: 12 }}>
+        <motion.button
+          whileTap={{ scale: 0.88 }} onClick={toggleVoice}
+          aria-label={voiceEnabled ? 'Mute voice' : 'Enable voice'}
+          style={{
+            width: 44, height: 44, borderRadius: 13,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer',
+            background: voiceEnabled ? 'rgba(16,185,129,0.15)' : 'rgba(20,26,40,0.88)',
+            border:     `1.5px solid ${voiceEnabled ? 'rgba(16,185,129,0.40)' : 'rgba(255,255,255,0.12)'}`,
+            boxShadow:  '0 4px 16px rgba(0,0,0,0.45)',
+            color:      voiceEnabled ? '#10b981' : 'rgba(255,255,255,0.35)',
+            backdropFilter: 'blur(10px)',
+          }}>
+          {voiceEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+        </motion.button>
+
+        <motion.button
+          whileTap={{ scale: 0.88 }}
+          onClick={() => {
+            setSosActive(true);
+            triggerSosAlert('safety');
+            setTimeout(() => setSosActive(false), 8000);
+          }}
+          aria-label="SOS"
+          style={{
+            width: 44, height: 44, borderRadius: 13,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer',
+            background: sosActive ? '#ef4444' : 'rgba(239,68,68,0.12)',
+            border:     `1.5px solid ${sosActive ? '#ef4444' : 'rgba(239,68,68,0.35)'}`,
+            boxShadow:  '0 4px 16px rgba(0,0,0,0.45)',
+            color:      sosActive ? '#fff' : '#ef4444',
+            backdropFilter: 'blur(10px)',
+            animation:  sosActive ? 'sosPulse 1s ease-in-out infinite' : 'none',
+          }}>
+          {sosActive ? <ShieldAlert size={16} /> : <Shield size={16} />}
+        </motion.button>
+      </div>
+
+      {/* ── MAP LEGEND (full_care_ride) ───────────────────────────────────── */}
+      <MapLegend bookingType={bookingType} caName={caDisplayName} jpCompleted={jpCompleted} />
+
+      {/* ── CA LIVE CHIP ──────────────────────────────────────────────────── */}
+      {isFullCareRide && caLiveCoords && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+          className="absolute z-20"
+          style={{ bottom: `calc(104px + env(safe-area-inset-bottom, 0px))`, right: 12 }}>
+          <div
+            className="flex items-center gap-2 px-3 py-1.5 rounded-2xl text-xs font-bold"
+            style={{
+              background:    'rgba(139,92,246,0.15)',
+              border:        '1px solid rgba(139,92,246,0.4)',
+              color:         '#8b5cf6',
+              backdropFilter:'blur(10px)',
+            }}>
+            <div className="w-2 h-2 rounded-full bg-[#8b5cf6] animate-pulse" />
+            {caDisplayName} live
+          </div>
+        </motion.div>
+      )}
+
+      {/* ── JP INFO CHIP — shown when CA not yet joined ───────────────────── */}
+      {isFullCareRide && caJoinCoords && !jpCompleted && localCaStatus !== 'in_ride' && (
+        <motion.div
+          initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
+          className="absolute z-20"
+          style={{
+            bottom: `calc(${caLiveCoords ? 142 : 104}px + env(safe-area-inset-bottom, 0px))`,
+            right: 12,
+          }}>
+          <div
+            className="flex items-center gap-2 px-3 py-1.5 rounded-2xl text-xs font-bold"
+            style={{
+              background:    'rgba(245,158,11,0.15)',
+              border:        '1px solid rgba(245,158,11,0.4)',
+              color:         '#f59e0b',
+              backdropFilter:'blur(10px)',
+            }}>
+            <MapPin size={11} />
+            Join Point
+          </div>
+        </motion.div>
+      )}
+
+      {/* ── CA PICKED UP BUTTON (full_care_ride) ──────────────────────────── */}
+      <AnimatePresence>
+        {showCaPickupButton && (
+          <motion.div
+            initial={{ y: 80, opacity: 0 }}
+            animate={{ y: 0,  opacity: 1 }}
+            exit={{   y: 80, opacity: 0  }}
+            transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+            className="absolute z-30 flex justify-center w-full px-4"
+            style={{ bottom: `calc(148px + env(safe-area-inset-bottom, 0px))` }}
+          >
+            <motion.button
+              whileTap={{ scale: 0.96 }}
+              onClick={handleCompleteWaypoint}
+              disabled={completeWpLoading}
+              className="flex items-center gap-2.5 px-6 py-3 rounded-2xl font-bold text-sm"
+              style={{
+                background:    'rgba(139,92,246,0.92)',
+                border:        '1.5px solid rgba(139,92,246,0.5)',
+                color:         '#fff',
+                boxShadow:     '0 6px 24px rgba(139,92,246,0.45)',
+                backdropFilter:'blur(10px)',
+                cursor:        completeWpLoading ? 'not-allowed' : 'pointer',
+                opacity:       completeWpLoading ? 0.7 : 1,
+              }}
+              aria-label="Confirm care assistant picked up"
+            >
+              {completeWpLoading
+                ? <Loader2 size={16} className="animate-spin" />
+                : <UserCheck size={16} />
+              }
+              {caDisplayName} Picked Up
+            </motion.button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── PRIMARY SWIPE ACTION BUTTON ───────────────────────────────────── */}
+      <AnimatePresence mode="wait">
+        {actionButton && !['completed', 'cancelled'].includes(rideStatus) && (
+          <motion.div
+            key={rideStatus}
+            initial={{ y: 100, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 100, opacity: 0 }}
+            transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+            className="absolute z-30 flex justify-center w-full px-4"
+            style={{ bottom: `calc(88px + env(safe-area-inset-bottom, 0px))` }}
+          >
+            <SwipeActionButton buttonConfig={actionButton} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── BOTTOM SHEET ──────────────────────────────────────────────────── */}
+      <BottomSheet
+        ride={tracking}
+        booking={bk}
+        open={sheetOpen}
+        onToggle={() => setSheetOpen(p => !p)}
+        rideStatus={rideStatus}
+      />
+
+      {/* ── OTP MODAL ─────────────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {showOtpModal && (
+          <OtpModal
+            onVerify={handleOtpVerify}
+            onClose={() => setShowOtpModal(false)}
+            loading={otpLoading}
+            error={otpError}
+          />
+        )}
+      </AnimatePresence>
+
+    </div>
   );
 }
