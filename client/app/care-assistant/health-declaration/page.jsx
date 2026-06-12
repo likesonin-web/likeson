@@ -11,6 +11,7 @@ import {
   updateHealthDeclaration,
   selectProfile, selectLoading, selectErrorKey,
 } from '@/store/slices/careAssistantSlice';
+import BackButton from '../../../components/BackButton';
 
 const DECLARATIONS = [
   { id: 'noInfectious',  label: 'I have no known infectious or communicable diseases.' },
@@ -60,7 +61,9 @@ export default function FitnessDeclarationPage() {
         animate={{ opacity: 1, y: 0 }}
         className="px-6 pt-8 pb-6"
       >
+
         <div className="flex items-center gap-3 mb-1">
+          <BackButton   />
           <div className="p-2 rounded-xl" style={{ background: 'color-mix(in srgb, var(--success), transparent 85%)' }}>
             <Heart size={22} style={{ color: 'var(--success)' }} />
           </div>

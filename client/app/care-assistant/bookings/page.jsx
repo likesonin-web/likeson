@@ -34,6 +34,7 @@ import {
   selectClinicalError,
   clearSelectedCABooking,
 } from '@/store/slices/clinicalSlice';
+import BackButton from '../../../components/BackButton';
 
 // ─── Animation Variants ───────────────────────────────────────────────────────
 
@@ -788,6 +789,8 @@ export default function BookingManagement() {
         <motion.div variants={fadeUp} initial="hidden" animate="visible"
           className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
           <div>
+                       <BackButton className='my-3' />
+            
             <div className="flex items-center gap-3 mb-1.5">
               <div className="w-10 h-10 rounded-xl flex items-center justify-center"
                 style={{ background: 'var(--bg-gradient-primary)' }}>

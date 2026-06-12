@@ -1,32 +1,5 @@
 'use client';
-
-/**
- * useRideTracking.js — Likeson.in
- *
- * FIXES vs previous version:
- *  - Added CARE_ASSISTANT_LOCATION_UPDATE socket listener → exposes caLiveLocation state
- *  - Added CARE_ASSISTANT_STATUS_CHANGE socket listener → exposes caStatus state
- *  - Added CARE_ASSISTANT_JOINED_RIDE + CARE_ASSISTANT_ATTACHED socket listeners
- *  - bookingType derived from tracking data + exposed from hook
- *  - caJoinPoint extracted from tracking snapshot / socket events + exposed
- *  - caName exposed from tracking snapshot
- *  - socketLive now merged with CA fields (careAssistantLiveLocation, careAssistantName)
- *  - GPS watchPosition inside hook (approach B) — not calling socketService.startGpsTracking
- *  - startGpsTracking dispatched ONCE on mount; stopGpsTracking ONCE on unmount
- *  - speed guard: null/negative check before * 3.6
- *  - verifyOtp: socket path uses socketService.verifyOtpAsync directly
- *  - sendStatusUpdate: OTP_VERIFIED omitted (use verifyOtp())
- *  - socket listeners registered ONCE (not per-connection)
- *  - mountedRef.current = false set FIRST in cleanup
- *  - bookingId guard on joinBookingRoom / leaveBookingRoom
- *  - requestBookingState dispatched once after join
- *
- * FIX (this version):
- *  - Removed gpsError from startTracking useCallback deps — caused new fn ref on every
- *    GPS error → stale closure in success handler couldn't clear error state.
- *    Now uses setGpsError(prev => prev ? null : prev) — no stale read needed.
- *  - GPS success handler: clear error without reading stale gpsError closure value.
- */
+ 
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useDispatch, useSelector }                 from 'react-redux';
@@ -74,6 +47,10 @@ import {
   setCareAssistantStatus,
   setCareAssistantJoined,
   setCareRideWorkflow,
+  setCaAtJoinPoint,
+setCaHasJoined,
+setJpWaypointCompleted,
+setCaViewMode,
 } from '@/store/slices/operationsSlice';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -185,6 +162,34 @@ export function useRideTracking({ rideId, bookingId }) {
         dispatch(socketLocationUpdate(data));
         dispatch(setLiveLocation(data));
       }),
+
+      // CA reached join point
+on('care_assistant_at_jp', (data) => {
+  if (!mountedRef.current) return;
+  if (data?.careAssistantStatus) {
+    setCaStatusLocal(data.careAssistantStatus);
+    dispatch(setCareAssistantStatus({ careAssistantStatus: data.careAssistantStatus }));
+  }
+  dispatch(setCaAtJoinPoint());
+}),
+
+// CA joined ride — update view mode
+on('care_assistant_joined_ride', (data) => {
+  // Merged with existing handler — add to the existing one:
+  // After the existing dispatch(setCareAssistantJoined(data)):
+  dispatch(setCaViewMode('driver_tracking_only'));
+  dispatch(setCaHasJoined(data));
+  if (!mountedRef.current) return;
+  setCaStatusLocal('in_ride');
+}),
+
+// Driver marked JP complete
+on('ca_join_waypoint_completed', (data) => {
+  if (!mountedRef.current) return;
+  dispatch(setJpWaypointCompleted(data));
+  // Update local caJoinPoint as completed
+  setCaJoinPoint(prev => prev ? { ...prev, isCompleted: true } : prev);
+}),
 
       on(EV.ETA_UPDATE, (data) => {
         dispatch(socketEtaUpdate(data));

@@ -17,6 +17,7 @@ import {
   getBankDetails, updateBankDetails,
   selectBankDetails, selectLoading, selectErrors, clearError,
 } from "@/store/slices/careAssistantSlice";
+import BackButton from "../../../components/BackButton";
 
 const POPULAR_BANKS = [
   "State Bank of India","HDFC Bank","ICICI Bank","Axis Bank",
@@ -144,6 +145,8 @@ export default function BankPage() {
         }}
       >
         <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
+                     <BackButton className='my-3' />
+          
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-[11px] font-bold uppercase tracking-widest mb-0.5"

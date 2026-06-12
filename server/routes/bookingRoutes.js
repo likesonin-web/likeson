@@ -43,6 +43,10 @@ import {
   CARE_RIDE_RADIUS_M,
   TRANSPORT_RADIUS_M,
 } from './bookingRouterShared.js';
+import {
+  resolveCaJoinPoint,
+  buildCaJoinWaypoint,
+} from '../utils/careJoinPointUtils.js';
 
 import cache       from '../middleware/cache.js';
 import redisClient from '../config/redis.js';

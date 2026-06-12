@@ -1,16 +1,9 @@
 'use client';
+
 /**
- * SocketProvider.jsx — Likeson.in
- *
- * FIXES:
- * 1. useBookingRoom: add listeners for all CA events:
- *    - care_assistant_location_update
- *    - care_assistant_status_change
- *    - care_assistant_joined_ride
- *    - care_assistant_attached_to_ride
- * 2. SocketProvider ctx: expose startCareGpsTracking, stopCareGpsTracking, emitCareLocation
- * 3. New hook: useCareTracking — full CA tracking hook for care_assistant + full_care_ride
- * 4. useBookingRoom: detect bookingType from snapshot and expose isCareAssistantOnly flag
+ * @file SocketProvider.jsx
+ * @description Manages WebSocket connections and exposes hooks for real-time tracking, 
+ * ride updates, and Care Assistant data flow.
  */
 
 import React, {
@@ -19,11 +12,19 @@ import React, {
   useContext,
   useEffect,
   useState,
+  useMemo,
 } from 'react';
 
 import {
-  Wifi, WifiOff, AlertTriangle, Loader2,
-  MapPin, Clock, Shield, ShieldAlert, Navigation,
+  Wifi,
+  WifiOff,
+  AlertTriangle,
+  Loader2,
+  MapPin,
+  Clock,
+  Shield,
+  ShieldAlert,
+  Navigation,
 } from 'lucide-react';
 
 import socketService, {
@@ -39,23 +40,32 @@ import socketService, {
 const SocketContext = createContext(null);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONNECTION STATUS BADGE
+// UI COMPONENTS (Note: In production, move these to a /components directory)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const STATUS_CONFIG = {
-  connected:    { label: 'Live',        icon: Wifi,          cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
-  connecting:   { label: 'Connecting…', icon: Loader2,       cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
-  disconnected: { label: 'Offline',     icon: WifiOff,       cls: 'bg-red-500/10 text-red-400 border-red-500/30' },
-  error:        { label: 'Error',       icon: AlertTriangle, cls: 'bg-red-500/10 text-red-500 border-red-500/30' },
-};
-
 function ConnectionBadge({ status }) {
-  const cfg  = STATUS_CONFIG[status] || STATUS_CONFIG.disconnected;
-  const Icon = cfg.icon;
+  // Encapsulated configuration logic - prevents global scope pollution
+  const getBadgeConfig = (currentStatus) => {
+    switch (currentStatus) {
+      case 'connected':
+        return { label: 'Live', Icon: Wifi, styles: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' };
+      case 'connecting':
+        return { label: 'Connecting…', Icon: Loader2, styles: 'bg-amber-500/10 text-amber-400 border-amber-500/30', isSpinning: true };
+      case 'error':
+        return { label: 'Error', Icon: AlertTriangle, styles: 'bg-red-500/10 text-red-500 border-red-500/30' };
+      case 'disconnected':
+      default:
+        return { label: 'Offline', Icon: WifiOff, styles: 'bg-red-500/10 text-red-400 border-red-500/30' };
+    }
+  };
+
+  const { label, Icon, styles, isSpinning } = getBadgeConfig(status);
+
   return (
-    <div className={`fixed bottom-3 right-3 z-50 font-inter flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium backdrop-blur-sm transition-all duration-300 ${cfg.cls}`}>
-      <Icon size={12} className={status === 'connecting' ? 'animate-spin' : ''} />
-      <span className="tracking-wide">{cfg.label}</span>
+// Replace this line inside your ConnectionBadge component:
+<div className={`fixed top-4 right-4 z-10 font-inter flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium backdrop-blur-sm transition-all duration-300 ${styles}`}>
+      <Icon size={12} className={isSpinning ? 'animate-spin' : ''} aria-hidden="true" />
+      <span className="tracking-wide">{label}</span>
     </div>
   );
 }
@@ -72,7 +82,7 @@ export function SocketProvider({
   onDisconnect,
 }) {
   const [connStatus, setConnStatus] = useState('disconnected');
-  const [lastError,  setLastError]  = useState(null);
+  const [lastError, setLastError] = useState(null);
 
   useEffect(() => {
     if (!token) {
@@ -84,81 +94,89 @@ export function SocketProvider({
     setConnStatus('connecting');
     const sock = socketService.init(token);
 
-    const onConn  = () => { setConnStatus('connected'); setLastError(null); onConnect?.(); };
-    const onDisc  = (reason) => { setConnStatus('disconnected'); onDisconnect?.(reason); };
-    const onErr   = () => setConnStatus('error');
-    const onCErr  = (err) => { setLastError(err.message); setConnStatus('error'); };
+    const handleConnect = () => {
+      setConnStatus('connected');
+      setLastError(null);
+      if (onConnect) onConnect();
+    };
 
-    sock.on('connect',       onConn);
-    sock.on('disconnect',    onDisc);
-    sock.on('error',         onErr);
-    sock.on('connect_error', onCErr);
+    const handleDisconnect = (reason) => {
+      setConnStatus('disconnected');
+      if (onDisconnect) onDisconnect(reason);
+    };
+
+    const handleError = () => setConnStatus('error');
+    const handleConnectError = (err) => {
+      setLastError(err.message);
+      setConnStatus('error');
+    };
+
+    sock.on('connect', handleConnect);
+    sock.on('disconnect', handleDisconnect);
+    sock.on('error', handleError);
+    sock.on('connect_error', handleConnectError);
 
     return () => {
-      sock.off('connect',       onConn);
-      sock.off('disconnect',    onDisc);
-      sock.off('error',         onErr);
-      sock.off('connect_error', onCErr);
+      sock.off('connect', handleConnect);
+      sock.off('disconnect', handleDisconnect);
+      sock.off('error', handleError);
+      sock.off('connect_error', handleConnectError);
       socketService.destroy();
       setConnStatus('disconnected');
     };
-  }, [token]); // eslint-disable-line
+  }, [token, onConnect, onDisconnect]);
 
-  const ctx = {
-    connected:  connStatus === 'connected',
+  // Memoize context to prevent unnecessary re-renders in consumer components
+  const contextValue = useMemo(() => ({
+    connected: connStatus === 'connected',
     connStatus,
     lastError,
 
-    on:   socketService.on.bind(socketService),
-    off:  socketService.off.bind(socketService),
+    // Base Socket Ops
+    on: socketService.on.bind(socketService),
+    off: socketService.off.bind(socketService),
     once: socketService.once.bind(socketService),
     emit: socketService.emit.bind(socketService),
 
-    joinBookingRoom:  socketService.joinBookingRoom.bind(socketService),
+    // Rooms
+    joinBookingRoom: socketService.joinBookingRoom.bind(socketService),
     leaveBookingRoom: socketService.leaveBookingRoom.bind(socketService),
-    joinTpRoom:       socketService.joinTpRoom.bind(socketService),
-    leaveTpRoom:      socketService.leaveTpRoom.bind(socketService),
+    joinTpRoom: socketService.joinTpRoom.bind(socketService),
+    leaveTpRoom: socketService.leaveTpRoom.bind(socketService),
 
-    // Driver GPS
+    // Driver Tracking
     startGpsTracking: socketService.startGpsTracking.bind(socketService),
-    stopGpsTracking:  socketService.stopGpsTracking.bind(socketService),
+    stopGpsTracking: socketService.stopGpsTracking.bind(socketService),
 
-    // FIX: expose CA GPS methods
+    // Care Assistant Tracking
     startCareGpsTracking: socketService.startCareGpsTracking.bind(socketService),
-    stopCareGpsTracking:  socketService.stopCareGpsTracking.bind(socketService),
-    emitCareLocation:     socketService.emitCareLocation.bind(socketService),
+    stopCareGpsTracking: socketService.stopCareGpsTracking.bind(socketService),
+    emitCareLocation: socketService.emitCareLocation.bind(socketService),
 
-    // Generic location emit (isCare flag)
+    // Generic
     emitLocation: socketService.emitLocation.bind(socketService),
-
-    // Driver
     updateDriverStatus: socketService.updateDriverStatus.bind(socketService),
 
-    // OTP
-    verifyOtp:          socketService.verifyOtp.bind(socketService),
-    verifyOtpAsync:     socketService.verifyOtpAsync.bind(socketService),
-    requestOtpResend:   socketService.requestOtpResend.bind(socketService),
-
-    // SOS
+    // OTP & Security
+    verifyOtp: socketService.verifyOtp.bind(socketService),
+    verifyOtpAsync: socketService.verifyOtpAsync.bind(socketService),
+    requestOtpResend: socketService.requestOtpResend.bind(socketService),
     triggerSos: socketService.triggerSos.bind(socketService),
 
-    // Route
+    // Routing & State
     reportRouteDeviation: socketService.reportRouteDeviation.bind(socketService),
-
-    // State snapshot
-    requestBookingState:      socketService.requestBookingState.bind(socketService),
+    requestBookingState: socketService.requestBookingState.bind(socketService),
     requestBookingStateAsync: socketService.requestBookingStateAsync.bind(socketService),
-
-    // Health
     pingHealth: socketService.pingHealth.bind(socketService),
 
+    // Constants exported to context
     SOCKET_EVENTS,
     CLIENT_EVENTS,
     DRIVER_STATUS,
-  };
+  }), [connStatus, lastError]);
 
   return (
-    <SocketContext.Provider value={ctx}>
+    <SocketContext.Provider value={contextValue}>
       {showStatusBadge && <ConnectionBadge status={connStatus} />}
       {children}
     </SocketContext.Provider>
@@ -170,226 +188,228 @@ export function SocketProvider({
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function useSocket() {
-  const ctx = useContext(SocketContext);
-  if (!ctx) throw new Error('useSocket must be inside <SocketProvider>');
-  return ctx;
+  const context = useContext(SocketContext);
+  if (!context) {
+    throw new Error('useSocket must be used within a <SocketProvider>');
+  }
+  return context;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BOOKING ROOM HOOK
-// FIX: added all CA event listeners
+// DOMAIN HOOKS
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function useBookingRoom(bookingId) {
-  const {
-    on, connected,
-    joinBookingRoom, leaveBookingRoom,
-    requestBookingState,
-    SOCKET_EVENTS: EV,
-  } = useSocket();
+  const socketCtx = useSocket();
+  const { on, connected, joinBookingRoom, leaveBookingRoom, requestBookingState, SOCKET_EVENTS: EV } = socketCtx;
 
-  const [joined,           setJoined]           = useState(false);
-  const [locationUpdate,   setLocationUpdate]   = useState(null);  // driver
-  const [etaUpdate,        setEtaUpdate]        = useState(null);
-  const [rideStatus,       setRideStatus]       = useState(null);
-  const [bookingStatus,    setBookingStatus]    = useState(null);
-  const [navigationTarget, setNavTarget]        = useState(null);
-  const [sosAlert,         setSosAlert]         = useState(null);
-  const [routeDeviation,   setRouteDeviation]   = useState(null);
-  const [snapshot,         setSnapshot]         = useState(null);
+  const [roomState, setRoomState] = useState({
+    joined: false,
+    locationUpdate: null,
+    etaUpdate: null,
+    rideStatus: null,
+    bookingStatus: null,
+    navigationTarget: null,
+    sosAlert: null,
+    routeDeviation: null,
+    snapshot: null,
+    hospitalEta: null,
+    caLocationUpdate: null,
+    caStatusChange: null,
+    caJoinedRide: null,
+    caAttached: null,
+  });
 
-  // FIX: CA-specific state in this hook
-  const [caLocationUpdate, setCaLocationUpdate] = useState(null);
-  const [caStatusChange,   setCaStatusChange]   = useState(null);
-  const [caJoinedRide,     setCaJoinedRide]     = useState(null);
-  const [caAttached,       setCaAttached]       = useState(null);
-  const [hospitalEta,      setHospitalEta]      = useState(null);
-
-  // Derived: is this a care_assistant-only booking (no driver)?
-  // Populated once snapshot arrives
   const [isCareAssistantOnly, setIsCareAssistantOnly] = useState(false);
 
   useEffect(() => {
     if (!bookingId || !connected) return;
 
     joinBookingRoom(bookingId);
+    
+    // Using a cleaner state update pattern for enterprise scale
+    const handleUpdate = (key) => (data) => setRoomState((prev) => ({ ...prev, [key]: data }));
 
     const unsubs = [
-      // Room join ack
-      on(EV.JOINED_ROOM, (d) => {
-        if (d.bookingId === bookingId) setJoined(true);
-      }),
+      on(EV.JOINED_ROOM, (d) => { if (d.bookingId === bookingId) handleUpdate('joined')(true); }),
+      on(EV.LOCATION_UPDATE, handleUpdate('locationUpdate')),
+      on(EV.ETA_UPDATE, handleUpdate('etaUpdate')),
+      on(EV.HOSPITAL_ETA_UPDATE, handleUpdate('hospitalEta')),
+      on('hospital:eta:update', handleUpdate('hospitalEta')),
+      on(EV.RIDE_STATUS_CHANGED, handleUpdate('rideStatus')),
+      on(EV.BOOKING_STATUS_CHANGE, handleUpdate('bookingStatus')),
+      on(EV.NAVIGATION_TARGET_CHANGED, handleUpdate('navigationTarget')),
+      on(EV.SOS_ALERT, handleUpdate('sosAlert')),
+      on(EV.ROUTE_DEVIATION_ALERT, handleUpdate('routeDeviation')),
 
-      // Driver location (full_care_ride, patient_transport)
-      on(EV.LOCATION_UPDATE, setLocationUpdate),
-
-      // ETA
-      on(EV.ETA_UPDATE, setEtaUpdate),
-
-      // Hospital ETA (both event name variants)
-      on(EV.HOSPITAL_ETA_UPDATE,   (d) => setHospitalEta(d)),
-      on('hospital:eta:update',    (d) => setHospitalEta(d)),
-
-      // Ride / booking status
-      on(EV.RIDE_STATUS_CHANGED,       setRideStatus),
-      on(EV.BOOKING_STATUS_CHANGE,     setBookingStatus),
-      on(EV.NAVIGATION_TARGET_CHANGED, setNavTarget),
-
-      // SOS / deviation
-      on(EV.SOS_ALERT,            setSosAlert),
-      on(EV.ROUTE_DEVIATION_ALERT,setRouteDeviation),
-
-      // State snapshot (reconnect)
       on(EV.BOOKING_STATE_SNAPSHOT, (d) => {
-        setSnapshot(d);
-        // Detect care_assistant booking type from snapshot
-        if (d?.bookingType === 'care_assistant') {
-          setIsCareAssistantOnly(true);
-        }
+        handleUpdate('snapshot')(d);
+        if (d?.bookingType === 'care_assistant') setIsCareAssistantOnly(true);
       }),
 
-      // ── FIX: CA events ────────────────────────────────────────────────────
-
-      // CA GPS ping → booking room (PRIMARY for care_assistant booking)
       on(EV.CARE_ASSISTANT_LOCATION_UPDATE, (d) => {
-        setCaLocationUpdate(d);
-        // For care_assistant booking, mirror to locationUpdate so existing
-        // map components using locationUpdate still render the moving pin
-        if (isCareAssistantOnly) {
-          setLocationUpdate(d);
-        }
+        handleUpdate('caLocationUpdate')(d);
+        if (isCareAssistantOnly) handleUpdate('locationUpdate')(d);
       }),
 
-      // CA status transition
-      on(EV.CARE_ASSISTANT_STATUS_CHANGE, (d) => {
-        setCaStatusChange(d);
-      }),
+      on(EV.CARE_ASSISTANT_STATUS_CHANGE, handleUpdate('caStatusChange')),
 
-      // CA joins ride (mid-route for full_care_ride, or at patient for care_assistant)
       on(EV.CARE_ASSISTANT_JOINED_RIDE, (d) => {
-        setCaJoinedRide(d);
-        // Once CA joins, update snapshot join point if present
+        handleUpdate('caJoinedRide')(d);
         if (d?.caJoinPoint) {
-          setSnapshot(prev => prev
-            ? { ...prev, route: { ...(prev.route ?? {}), caJoinWaypoint: d.caJoinPoint } }
-            : prev
-          );
+          setRoomState((prev) => ({
+            ...prev,
+            snapshot: prev.snapshot ? { ...prev.snapshot, route: { ...prev.snapshot.route, caJoinWaypoint: d.caJoinPoint } } : null
+          }));
         }
       }),
 
-      // Admin assigns CA to an already-active ride (full_care_ride)
+      
+
+on('care_assistant_at_jp', (d) => {
+  setRoomState((prev) => ({
+    ...prev,
+    caStatusChange: { ...d, careAssistantStatus: 'at_pickup' },
+  }));
+}),
+
+on('ca_join_waypoint_completed', (d) => {
+  setRoomState((prev) => {
+    // Mark JP as completed in snapshot
+    const updatedSnapshot = prev.snapshot
+      ? {
+          ...prev.snapshot,
+          fullCareRide: prev.snapshot.fullCareRide
+            ? {
+                ...prev.snapshot.fullCareRide,
+                caJoinPoint: prev.snapshot.fullCareRide.caJoinPoint
+                  ? { ...prev.snapshot.fullCareRide.caJoinPoint, isCompleted: true }
+                  : prev.snapshot.fullCareRide.caJoinPoint,
+              }
+            : prev.snapshot.fullCareRide,
+          route: prev.snapshot.route
+            ? {
+                ...prev.snapshot.route,
+                caJoinWaypoint: prev.snapshot.route.caJoinWaypoint
+                  ? { ...prev.snapshot.route.caJoinWaypoint, isCompleted: true }
+                  : prev.snapshot.route.caJoinWaypoint,
+              }
+            : prev.snapshot.route,
+        }
+      : prev.snapshot;
+    return { ...prev, snapshot: updatedSnapshot, jpWaypointCompleted: d };
+  });
+}),
+
       on(EV.CARE_ASSISTANT_ATTACHED, (d) => {
-        setCaAttached(d);
-        // Patch join point into snapshot immediately so map re-renders
+        handleUpdate('caAttached')(d);
         if (d?.caJoinPoint) {
-          setSnapshot(prev => prev
-            ? { ...prev, route: { ...(prev.route ?? {}), caJoinWaypoint: d.caJoinPoint } }
-            : prev
-          );
+          setRoomState((prev) => ({
+            ...prev,
+            snapshot: prev.snapshot ? { ...prev.snapshot, route: { ...prev.snapshot.route, caJoinWaypoint: d.caJoinPoint } } : null
+          }));
         }
       }),
     ];
 
-    // Request state snapshot on join (handles reconnects)
     requestBookingState(bookingId);
 
     return () => {
-      unsubs.forEach((fn) => fn?.());
+      unsubs.forEach((unsubscribe) => unsubscribe?.());
       leaveBookingRoom(bookingId);
-      setJoined(false);
+      setRoomState((prev) => ({ ...prev, joined: false }));
       setIsCareAssistantOnly(false);
     };
-  }, [bookingId, connected]); // eslint-disable-line
+  }, [bookingId, connected, joinBookingRoom, leaveBookingRoom, on, requestBookingState, EV, isCareAssistantOnly]);
 
   return {
-    // Standard
-    joined,
-    locationUpdate,    // driver GPS (or mirrored CA for care_assistant type)
-    etaUpdate,
-    rideStatus,
-    bookingStatus,
-    navigationTarget,
-    sosAlert,
-    routeDeviation,
-    snapshot,
-    hospitalEta,
-
-    // FIX: CA-specific
-    caLocationUpdate,  // raw CA GPS payload
-    caStatusChange,    // CA status transition payload
-    caJoinedRide,      // CA joined ride payload
-    caAttached,        // CA attached to ride (with caJoinPoint)
-
-    // Derived
-    isCareAssistantOnly, // true when bookingType === 'care_assistant'
+    ...roomState,
+    isCareAssistantOnly,
   };
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// FIX: useCareTracking — dedicated hook for CA tracking screens
-//
-// Handles both booking types:
-//   care_assistant  → CA is sole tracked entity (no driver)
-//   full_care_ride  → CA is secondary tracked entity (driver is primary)
-//
-// Usage:
-//   const { caLiveLocation, joinPoint, caStatus, startTracking, stopTracking }
-//     = useCareTracking({ bookingId, bookingType });
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function useCareTracking({ bookingId, bookingType, autoStart = false } = {}) {
   const {
     on, connected,
     startCareGpsTracking, stopCareGpsTracking,
-    emitCareLocation,
-    SOCKET_EVENTS: EV,
+    emitCareLocation, SOCKET_EVENTS: EV,
   } = useSocket();
 
   const isCareOnly     = bookingType === 'care_assistant';
   const isFullCareRide = bookingType === 'full_care_ride';
 
   const [caLiveLocation,  setCaLiveLocation]  = useState(null);
-  const [caStatus,        setCaStatus]        = useState(null);
+  const [caStatus,        setCaStatus]        = useState('not_joined');
   const [joinPoint,       setJoinPoint]       = useState(null);
   const [caJoinedAt,      setCaJoinedAt]      = useState(null);
   const [tracking,        setTracking]        = useState(false);
+
+  // NEW: view mode state
+  const [caViewMode,      setCaViewMode]      = useState(
+    isFullCareRide ? 'navigate_to_jp' : null
+  );
+  const [caAtJoinPoint,   setCaAtJoinPoint]   = useState(false);
+  const [caHasJoined,     setCaHasJoined]     = useState(false);
 
   useEffect(() => {
     if (!bookingId || !connected) return;
 
     const unsubs = [
-      // CA GPS → updates map pin
       on(EV.CARE_ASSISTANT_LOCATION_UPDATE, (d) => {
         if (d?.bookingId && d.bookingId !== bookingId) return;
-        setCaLiveLocation({ lat: d.lat, lng: d.lng, heading: d.heading, speed: d.speed, updatedAt: d.updatedAt });
+        setCaLiveLocation({
+          lat:       d.lat,
+          lng:       d.lng,
+          heading:   d.heading,
+          speed:     d.speed,
+          updatedAt: d.updatedAt,
+        });
       }),
 
-      // CA status change
       on(EV.CARE_ASSISTANT_STATUS_CHANGE, (d) => {
         if (d?.bookingId && d.bookingId !== bookingId) return;
-        setCaStatus(d?.careAssistantStatus ?? null);
+        const newStatus = d?.careAssistantStatus ?? null;
+        if (newStatus) setCaStatus(newStatus);
+        // If at_pickup → CA is waiting at JP
+        if (newStatus === 'at_pickup') setCaAtJoinPoint(true);
       }),
 
-      // CA joins ride (full_care_ride: CA boards at join point)
+      // CA reached JP
+      on('care_assistant_at_jp', (d) => {
+        if (d?.bookingId && d.bookingId !== bookingId) return;
+        setCaStatus('at_pickup');
+        setCaAtJoinPoint(true);
+      }),
+
+      // CA joined ride → switch view mode
       on(EV.CARE_ASSISTANT_JOINED_RIDE, (d) => {
         if (d?.bookingId && d.bookingId !== bookingId) return;
         setCaJoinedAt(d?.joinedAt ?? new Date().toISOString());
         setCaStatus('in_ride');
+        setCaHasJoined(true);
+        setCaAtJoinPoint(false);
+        // VIEW MODE SWITCH: CA now tracks driver only
+        setCaViewMode('driver_tracking_only');
         if (d?.caJoinPoint) setJoinPoint(d.caJoinPoint);
       }),
 
-      // Admin assigns CA — join point computed and sent
       on(EV.CARE_ASSISTANT_ATTACHED, (d) => {
         if (d?.bookingId && d.bookingId !== bookingId) return;
         if (d?.caJoinPoint) setJoinPoint(d.caJoinPoint);
         setCaStatus('en_route_to_pickup');
+        if (isFullCareRide) setCaViewMode('navigate_to_jp');
+      }),
+
+      // JP waypoint completed by driver
+      on('ca_join_waypoint_completed', (d) => {
+        if (d?.bookingId && d.bookingId !== bookingId) return;
+        setJoinPoint(prev => prev ? { ...prev, isCompleted: true } : prev);
       }),
     ];
 
     return () => unsubs.forEach((fn) => fn?.());
-  }, [bookingId, connected]); // eslint-disable-line
+  }, [bookingId, connected, on, EV, isFullCareRide]);
 
-  // Start / stop CA GPS broadcast
   const startTracking = useCallback((statusOverride) => {
     startCareGpsTracking({
       bookingId,
@@ -403,7 +423,6 @@ export function useCareTracking({ bookingId, bookingType, autoStart = false } = 
     setTracking(false);
   }, [stopCareGpsTracking]);
 
-  // Single manual ping (for when autoGPS is off)
   const pingLocation = useCallback(({ lat, lng, heading, speed, status } = {}) => {
     emitCareLocation({ bookingId, lat, lng, heading, speed, status });
   }, [bookingId, emitCareLocation]);
@@ -411,44 +430,39 @@ export function useCareTracking({ bookingId, bookingType, autoStart = false } = 
   useEffect(() => {
     if (autoStart && connected) startTracking();
     return () => { if (autoStart) stopTracking(); };
-  }, [autoStart, connected]); // eslint-disable-line
+  }, [autoStart, connected, startTracking, stopTracking]);
 
   return {
-    // Live state
-    caLiveLocation,   // { lat, lng, heading, speed, updatedAt }
-    caStatus,         // 'not_joined'|'en_route_to_pickup'|'at_pickup'|'in_ride'|'departed'
-    joinPoint,        // { coordinates, zone, distCaToJoinKm, caRoute } — full_care_ride only
+    caLiveLocation,
+    caStatus,
+    joinPoint,
     caJoinedAt,
-
-    // GPS control
     tracking,
     startTracking,
     stopTracking,
     pingLocation,
-
-    // Derived flags
     isCareOnly,
     isFullCareRide,
-    hasBoardedRide: caStatus === 'in_ride',
-    isAtJoinPoint:  caStatus === 'at_pickup',
+    // NEW view mode fields
+    caViewMode,
+    caAtJoinPoint,
+    caHasJoined,
+    hasBoardedRide:  caStatus === 'in_ride' || caHasJoined,
+    isAtJoinPoint:   caStatus === 'at_pickup' || caAtJoinPoint,
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DRIVER STATUS HOOK (unchanged)
-// ─────────────────────────────────────────────────────────────────────────────
-
 export function useDriverStatus({ bookingId, rideId } = {}) {
   const { updateDriverStatus, on, SOCKET_EVENTS: EV, DRIVER_STATUS: DS } = useSocket();
-  const [ack,     setAck]    = useState(null);
-  const [error,   setError]  = useState(null);
-  const [loading, setLoading]= useState(false);
+  const [ack, setAck] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const unsubAck = on(EV.STATUS_UPDATE_ACK, (d) => { setAck(d);           setLoading(false); });
-    const unsubErr = on(EV.ERROR,             (d) => { setError(d?.message); setLoading(false); });
+    const unsubAck = on(EV.STATUS_UPDATE_ACK, (d) => { setAck(d); setLoading(false); });
+    const unsubErr = on(EV.ERROR, (d) => { setError(d?.message); setLoading(false); });
     return () => { unsubAck?.(); unsubErr?.(); };
-  }, []); // eslint-disable-line
+  }, [on, EV]);
 
   const send = useCallback((status, extras = {}) => {
     setLoading(true);
@@ -459,21 +473,17 @@ export function useDriverStatus({ bookingId, rideId } = {}) {
   return { send, ack, error, loading, DRIVER_STATUS: DS };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// OTP HOOK (unchanged)
-// ─────────────────────────────────────────────────────────────────────────────
-
 export function useOtp({ bookingId, rideId } = {}) {
   const { verifyOtpAsync, requestOtpResend, on, SOCKET_EVENTS: EV } = useSocket();
-  const [result,        setResult]       = useState(null);
-  const [error,         setError]        = useState(null);
-  const [loading,       setLoading]      = useState(false);
-  const [wrongAttempts, setWrongAttempts]= useState(0);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [wrongAttempts, setWrongAttempts] = useState(0);
 
   useEffect(() => {
     const unsubWrong = on(EV.OTP_WRONG_ATTEMPT, () => setWrongAttempts((n) => n + 1));
     return () => unsubWrong?.();
-  }, []); // eslint-disable-line
+  }, [on, EV]);
 
   const verify = useCallback(async (otp) => {
     setLoading(true);
@@ -495,21 +505,17 @@ export function useOtp({ bookingId, rideId } = {}) {
   return { verify, resend, result, error, loading, wrongAttempts };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SOS HOOK (unchanged)
-// ─────────────────────────────────────────────────────────────────────────────
-
 export function useSos(bookingId, rideId) {
   const { triggerSos, on, SOCKET_EVENTS: EV } = useSocket();
   const [sosActive, setSosActive] = useState(false);
-  const [sosData,   setSosData]   = useState(null);
-  const [acked,     setAcked]     = useState(false);
+  const [sosData, setSosData] = useState(null);
+  const [acked, setAcked] = useState(false);
 
   useEffect(() => {
     const unsubAlert = on(EV.SOS_ALERT, (d) => { setSosActive(true); setSosData(d); });
-    const unsubAck   = on(EV.SOS_ACK,  () => setAcked(true));
+    const unsubAck = on(EV.SOS_ACK, () => setAcked(true));
     return () => { unsubAlert?.(); unsubAck?.(); };
-  }, []); // eslint-disable-line
+  }, [on, EV]);
 
   const trigger = useCallback(({ sosType = 'other', description, lat, lng } = {}) => {
     triggerSos({ bookingId, rideId, sosType, description, lat, lng });
@@ -519,10 +525,6 @@ export function useSos(bookingId, rideId) {
 
   return { trigger, dismiss, sosActive, sosData, acked };
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// GPS HOOK (driver) (unchanged)
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function useGpsTracking({ bookingId, autoStart = false } = {}) {
   const { startGpsTracking, stopGpsTracking } = useSocket();
@@ -540,15 +542,11 @@ export function useGpsTracking({ bookingId, autoStart = false } = {}) {
 
   useEffect(() => {
     if (autoStart) start();
-    return () => stop();
-  }, [autoStart]); // eslint-disable-line
+    return () => { if (autoStart) stop(); };
+  }, [autoStart, start, stop]);
 
   return { start, stop, tracking };
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CONNECTION STATUS HOOK (unchanged)
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function useConnectionStatus() {
   const { connected, connStatus, lastError, pingHealth, on, SOCKET_EVENTS: EV } = useSocket();
@@ -566,13 +564,9 @@ export function useConnectionStatus() {
   return { connected, connStatus, lastError, latencyMs, ping };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ADMIN OPS HOOK (unchanged)
-// ─────────────────────────────────────────────────────────────────────────────
-
 export function useAdminOps({ maxFeed = 50 } = {}) {
   const { on, SOCKET_EVENTS: EV } = useSocket();
-  const [feed,          setFeed]          = useState([]);
+  const [feed, setFeed] = useState([]);
   const [driversOnline, setDriversOnline] = useState({});
 
   const addFeed = useCallback((type, data) => {
@@ -581,41 +575,44 @@ export function useAdminOps({ maxFeed = 50 } = {}) {
 
   useEffect(() => {
     const unsubs = [
-      on(EV.DRIVER_LOCATION,      (d) => setDriversOnline((prev) => ({ ...prev, [d.driverObjectId]: d }))),
-      on(EV.DRIVER_ONLINE,        (d) => { addFeed('driver_online',  d); setDriversOnline((prev) => ({ ...prev, [d.driverObjectId]: d })); }),
-      on(EV.DRIVER_OFFLINE,       (d) => { addFeed('driver_offline', d); setDriversOnline((prev) => { const n = { ...prev }; delete n[d.driverObjectId]; return n; }); }),
-      on(EV.RIDE_STATUS_CHANGED,  (d) => addFeed('ride_status',    d)),
-      on(EV.BOOKING_STATUS_CHANGE,(d) => addFeed('booking_status', d)),
-      on(EV.SOS_ALERT,            (d) => addFeed('sos',            d)),
-      on(EV.OTP_FOR_ADMIN,        (d) => addFeed('otp',            d)),
-      on(EV.OTP_FAILED_ATTEMPT,   (d) => addFeed('otp_fail',       d)),
-      on(EV.ROUTE_DEVIATION_ALERT,(d) => addFeed('deviation',      d)),
-      // FIX: also track CA events in admin ops feed
-      on(EV.CARE_ASSISTANT_ATTACHED,      (d) => addFeed('ca_attached',      d)),
-      on(EV.CARE_ASSISTANT_JOINED_RIDE,   (d) => addFeed('ca_joined',        d)),
+      on(EV.DRIVER_LOCATION, (d) => setDriversOnline((prev) => ({ ...prev, [d.driverObjectId]: d }))),
+      on(EV.DRIVER_ONLINE, (d) => { addFeed('driver_online', d); setDriversOnline((prev) => ({ ...prev, [d.driverObjectId]: d })); }),
+      on(EV.DRIVER_OFFLINE, (d) => { 
+        addFeed('driver_offline', d); 
+        setDriversOnline((prev) => { const n = { ...prev }; delete n[d.driverObjectId]; return n; }); 
+      }),
+      on(EV.RIDE_STATUS_CHANGED, (d) => addFeed('ride_status', d)),
+      on(EV.BOOKING_STATUS_CHANGE, (d) => addFeed('booking_status', d)),
+      on(EV.SOS_ALERT, (d) => addFeed('sos', d)),
+      on(EV.OTP_FOR_ADMIN, (d) => addFeed('otp', d)),
+      on(EV.OTP_FAILED_ATTEMPT, (d) => addFeed('otp_fail', d)),
+      on(EV.ROUTE_DEVIATION_ALERT, (d) => addFeed('deviation', d)),
+      on(EV.CARE_ASSISTANT_ATTACHED, (d) => addFeed('ca_attached', d)),
+      on(EV.CARE_ASSISTANT_JOINED_RIDE, (d) => addFeed('ca_joined', d)),
       on(EV.CARE_ASSISTANT_STATUS_CHANGE, (d) => addFeed('ca_status_change', d)),
     ];
-    return () => unsubs.forEach((fn) => fn?.());
-  }, []); // eslint-disable-line
+    return () => unsubs.forEach((unsubscribe) => unsubscribe?.());
+  }, [on, EV, addFeed]);
 
   return { feed, driversOnline };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EXAMPLE COMPONENTS (unchanged)
+// EXPORTED UI BLOCKS
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function LiveEtaBadge({ bookingId }) {
   const { etaUpdate } = useBookingRoom(bookingId);
   if (!etaUpdate) return null;
+  
   return (
     <div className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-white font-inter">
-      <Clock size={14} className="text-amber-400" />
+      <Clock size={14} className="text-amber-400" aria-hidden="true" />
       <span className="font-medium">{etaUpdate.etaMinutes} min</span>
-      <span className="text-slate-400">·</span>
-      <MapPin size={12} className="text-slate-400" />
+      <span className="text-slate-400" aria-hidden="true">·</span>
+      <MapPin size={12} className="text-slate-400" aria-hidden="true" />
       <span className="text-slate-400">{etaUpdate.distanceRemainingKm} km</span>
-      <Navigation size={12} className="text-emerald-400" />
+      <Navigation size={12} className="text-emerald-400" aria-hidden="true" />
       <span className="text-emerald-400 capitalize">{etaUpdate.currentTarget}</span>
     </div>
   );
@@ -623,14 +620,27 @@ export function LiveEtaBadge({ bookingId }) {
 
 export function SosButton({ bookingId, rideId }) {
   const { trigger, sosActive, dismiss } = useSos(bookingId, rideId);
-  return sosActive ? (
-    <button onClick={dismiss} className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-white font-bold animate-pulse font-inter">
-      <ShieldAlert size={16} />
-      SOS Active — Tap to dismiss
-    </button>
-  ) : (
-    <button onClick={() => trigger({ sosType: 'safety' })} className="flex items-center gap-2 rounded-lg bg-red-500/10 border border-red-500/40 px-4 py-2 text-red-400 font-medium hover:bg-red-500/20 transition-colors font-inter">
-      <Shield size={16} />
+  
+  if (sosActive) {
+    return (
+      <button 
+        onClick={dismiss} 
+        className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-white font-bold animate-pulse font-inter focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+        aria-label="Dismiss SOS"
+      >
+        <ShieldAlert size={16} aria-hidden="true" />
+        SOS Active — Tap to dismiss
+      </button>
+    );
+  }
+
+  return (
+    <button 
+      onClick={() => trigger({ sosType: 'safety' })} 
+      className="flex items-center gap-2 rounded-lg bg-red-500/10 border border-red-500/40 px-4 py-2 text-red-400 font-medium hover:bg-red-500/20 transition-colors font-inter focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+      aria-label="Trigger SOS"
+    >
+      <Shield size={16} aria-hidden="true" />
       SOS
     </button>
   );

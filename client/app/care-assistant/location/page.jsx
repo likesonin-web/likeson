@@ -11,6 +11,7 @@ import {
   updateLocation, updateAvailability, updateServiceArea,
   selectProfile, selectLoading, selectErrorKey,
 } from '@/store/slices/careAssistantSlice';
+import BackButton from '../../../components/BackButton';
 
 const GOOGLE_MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
 
@@ -234,6 +235,8 @@ export default function LocationPage() {
         animate={{ opacity: 1, y: 0 }}
         className="px-6 pt-8 pb-4"
       >
+                   <BackButton className='my-3' />
+        
         <div className="flex items-center gap-3 mb-1">
           <div className="p-2 rounded-xl" style={{ background: 'color-mix(in srgb, var(--primary), transparent 85%)' }}>
             <Map size={22} style={{ color: 'var(--primary)' }} />

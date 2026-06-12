@@ -46,7 +46,7 @@ const Home: React.FC = () => {
           <section className="animate-fade-in">
             <Banner position="Home_Middle" />
           </section>
-       
+        <Ads page="Global" slot="Popup" />
           {/* 6. Retention */}
           <Subscription />
           <Faq />
@@ -57,7 +57,7 @@ const Home: React.FC = () => {
       {role === "care_assistant" && (
         <Container className="w-full flex flex-col gap-12 py-6">
           <CareAssistant />
-          <Ads page="Global" slot="Native_Feed" />
+           
         </Container>
       )}
 
@@ -99,7 +99,7 @@ const Home: React.FC = () => {
         Your backend/Redux state (via `targeting.userSegments`) will decide 
         if the current user actually gets an ad returned for these slots.
       */}
-      <Ads page="Global" slot="Popup" />
+     
 
       {/* Only show the Global Sticky Bottom if they aren't drivers (drivers get the Ride Tracking sticky) */}
       {(role !== "driver" && role !== "solodriverpartner") && (

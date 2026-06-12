@@ -1354,9 +1354,24 @@ export const resolveCareAssistantFee = async ({ userId, durationHours, config })
   const parsedDuration = parseInt(durationHours, 10) || 4;
   const subCheck       = await checkSubscriptionCareAssistant(userId);
 
-  // 1. FIXED plan → free, consume quota
-  if (subCheck.allowed && subCheck.isFree && subCheck.planType !== 'custom') {
-    const platformTier = PlatformPricingConfig.resolveCareAssistantTier?.(resolvedConfig, parsedDuration) ?? null;
+// 1. FIXED plan → first active tier is free, other tiers charge platform rate
+if (subCheck.allowed && subCheck.isFree && subCheck.planType !== 'custom') {
+  const platformTiers = resolvedConfig?.careAssistant?.pricingTiers ?? [];
+  const activeTiers   = platformTiers.filter(t => t.isActive !== false).sort((a, b) => (a.minHours ?? 0) - (b.minHours ?? 0));
+
+  // First tier = "Standard" (free for fixed plan subscribers)
+  const freeTier = activeTiers[0] ?? null;
+
+  // Find which tier covers requested duration
+  const requestedTier = activeTiers.find(t =>
+    parsedDuration >= (t.minHours ?? 0) &&
+    (t.maxHours == null || parsedDuration < t.maxHours)
+  ) ?? activeTiers[activeTiers.length - 1] ?? null;
+
+  const isFreeForThisDuration = requestedTier && freeTier &&
+    requestedTier.minHours === freeTier.minHours;
+
+  if (isFreeForThisDuration) {
     return {
       fee:                     0,
       source:                  'subscription',
@@ -1364,9 +1379,21 @@ export const resolveCareAssistantFee = async ({ userId, durationHours, config })
       quotaTracked:            true,
       sub:                     subCheck.sub,
       subQuotaInfo:            subCheck,
-      tier:                    platformTier,
+      tier:                    freeTier,
     };
   }
+
+  // Different (higher) tier selected — charge platform rate, no quota consumed
+  return {
+    fee:                     requestedTier?.chargeToUser ?? 0,
+    source:                  'platform',
+    isCoveredBySubscription: false,
+    quotaTracked:            false,
+    sub:                     subCheck.sub,
+    subQuotaInfo:            subCheck,
+    tier:                    requestedTier,
+  };
+}
 
   // 2. CUSTOM plan
   if (subCheck.planType === 'custom') {

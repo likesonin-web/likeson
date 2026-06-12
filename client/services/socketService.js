@@ -26,6 +26,9 @@ export const SOCKET_EVENTS = {
   PARTICIPANT_LEFT:       'participant_left',
   DRIVER_ONLINE:          'driver_online',
   DRIVER_OFFLINE:         'driver_offline',
+  // Full care ride JP events
+CARE_ASSISTANT_AT_JP:         'care_assistant_at_jp',
+CA_JOIN_WAYPOINT_COMPLETED:   'ca_join_waypoint_completed',
 
   // Driver location (admin:ops feed)
   DRIVER_LOCATION:        'driver_location',
@@ -35,6 +38,7 @@ export const SOCKET_EVENTS = {
 
   // FIX: CA location events — were missing from constant map
   CARE_ASSISTANT_LOCATION_UPDATE: 'care_assistant_location_update',  // CA GPS → booking room
+  CARE_REACHED_JP:  'care_reached_jp',   // CA tells server they're at JP (via HTTP not socket)
   CARE_ASSISTANT_STATUS_CHANGE:   'care_assistant_status_change',    // CA status → booking room
   CARE_ASSISTANT_JOINED_RIDE:     'care_assistant_joined_ride',      // CA joins ride
   CARE_ASSISTANT_ATTACHED:        'care_assistant_attached_to_ride', // admin assigns CA to active ride

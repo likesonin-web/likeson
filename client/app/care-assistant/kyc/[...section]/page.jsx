@@ -37,6 +37,7 @@ import {
   selectErrors,
   getProfile,
 } from "@/store/slices/careAssistantSlice";
+import BackButton from "../../../../components/BackButton";
 
 // ─── nav links ─────────────────────────────────────────────────────────────
 const links = [
@@ -737,7 +738,7 @@ export default function KycPage() {
   return (
     // ← Care-assistant theme applied at the root of this page
     <div data-theme="care-assistant" className="min-h-screen" style={{ background: "var(--base-100)" }}>
-
+ 
       {/* ── header ── */}
       <div
         className="sticky top-0 z-20 px-4 pt-5 pb-3"
@@ -747,6 +748,7 @@ export default function KycPage() {
           borderBottom:   "1px solid var(--base-300)",
         }}
       >
+        <BackButton className="my-3" />
         <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
           <p
             className="text-[11px] font-semibold uppercase tracking-widest mb-0.5"

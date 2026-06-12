@@ -1,28 +1,3 @@
-/**
- * operationsSlice.js — Likeson.in
- *
- * COMPLETE — covers ALL routes from both router files:
- *   bookingRouter (driver/care/admin/customer routes)
- *   bookingRouter2 (consultation + TP + hospital + doctor + OP + admin)
- *
- * ADDED vs original:
- *   fetchConsultation           GET  /consultations/:bookingId
- *   confirmConsultation         PATCH /consultations/:id/confirm
- *   acceptConsultation          PATCH /consultations/:id/accept
- *   startConsultation           PATCH /consultations/:id/start
- *   endConsultation             PATCH /consultations/:id/end
- *   submitConsultationConsent   PATCH /consultations/:id/consent
- *   sendConsultationChat        POST  /consultations/:id/chat
- *   fetchConsultationJoinToken  GET  /consultations/:id/join-token
- *
- * CA FIXES (preserved from prior revision):
- *   careRideStatus always OBJECT — never string/null
- *   setCareAssistantStatus patches status field only
- *   careJoinRide / careUpdateRideStatus / fetchCareTrackingSnapshot patch status only
- *   clearCareRideState restores to initial OBJECT shape
- *   adminAssignCareAssistant stores caJoinPoint
- */
-
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import toast from "react-hot-toast";
 
@@ -111,9 +86,9 @@ const initialState = {
   careRideNearby: null,
 
   // ── Consultation ───────────────────────────────────────────────────────────
-  consultation: null,          // active consultation document
+  consultation: null, // active consultation document
   consultationJoinToken: null, // Agora token + room info for join
-  consultationChat: [],        // chat messages array
+  consultationChat: [], // chat messages array
 
   // ── CA tracking state ──────────────────────────────────────────────────────
   careTrackingSnapshot: null,
@@ -130,6 +105,16 @@ const initialState = {
   selectedFollowUps: [],
   bookingSnapshot: null,
   activeRide: null,
+
+  // Full care ride view mode for CA
+  // 'navigate_to_jp' | 'driver_tracking_only'
+  caViewMode: null,
+
+  // Whether CA has joined the ride vehicle
+  caHasJoined: false,
+
+  // Whether CA is waiting at join point
+  caAtJoinPoint: false,
 
   // ── Admin operation results ────────────────────────────────────────────────
   adminStatusUpdate: null,
@@ -647,7 +632,17 @@ export const fetchAdminBookings = mkThunk(
     to,
   } = {}) => {
     const { data } = await API.get(`${BASE}/admin/bookings`, {
-      params: { status, bookingType, city, date, page, limit, search, from, to },
+      params: {
+        status,
+        bookingType,
+        city,
+        date,
+        page,
+        limit,
+        search,
+        from,
+        to,
+      },
     });
     return data.data;
   },
@@ -937,7 +932,11 @@ export const leaveTpRoom = createAsyncThunk(
 export const verifyOtpSocket = mkThunk(
   "operations/verifyOtpSocket",
   async ({ bookingId, rideId, otp }) => {
-    const result = await socketService.verifyOtpAsync({ bookingId, rideId, otp });
+    const result = await socketService.verifyOtpAsync({
+      bookingId,
+      rideId,
+      otp,
+    });
     toast.success("OTP verified — ride started");
     return result;
   },
@@ -946,7 +945,14 @@ export const verifyOtpSocket = mkThunk(
 export const updateDriverStatusSocket = createAsyncThunk(
   "operations/updateDriverStatusSocket",
   ({ bookingId, rideId, status, lat, lng, meta }) => {
-    socketService.updateDriverStatus({ bookingId, rideId, status, lat, lng, meta });
+    socketService.updateDriverStatus({
+      bookingId,
+      rideId,
+      status,
+      lat,
+      lng,
+      meta,
+    });
     return { bookingId, rideId, status };
   },
 );
@@ -970,7 +976,14 @@ export const stopGpsTracking = createAsyncThunk(
 export const triggerSos = createAsyncThunk(
   "operations/triggerSos",
   ({ bookingId, rideId, lat, lng, sosType = "other", description }) => {
-    socketService.triggerSos({ bookingId, rideId, lat, lng, sosType, description });
+    socketService.triggerSos({
+      bookingId,
+      rideId,
+      lat,
+      lng,
+      sosType,
+      description,
+    });
     toast.error("SOS triggered — help notified");
     return { bookingId, rideId, sosType };
   },
@@ -980,7 +993,12 @@ export const reportRouteDeviation = createAsyncThunk(
   "operations/reportRouteDeviation",
   ({ bookingId, rideId, lat, lng, deviationKm, driverReason }) => {
     socketService.reportRouteDeviation({
-      bookingId, rideId, lat, lng, deviationKm, driverReason,
+      bookingId,
+      rideId,
+      lat,
+      lng,
+      deviationKm,
+      driverReason,
     });
     return { bookingId, rideId, deviationKm };
   },
@@ -991,6 +1009,39 @@ export const requestBookingState = mkThunk(
   async ({ bookingId }) => {
     const snapshot = await socketService.requestBookingStateAsync(bookingId);
     return snapshot;
+  },
+);
+
+/**
+ * PATCH /:bookingId/care/reached-jp
+ * CA signals they have arrived at the join point.
+ * Body: { lat?, lng? }
+ */
+export const careReachedJoinPoint = mkThunk(
+  "operations/careReachedJoinPoint",
+  async ({ bookingId, lat, lng }) => {
+    const { data } = await API.patch(`${BASE}/${bookingId}/care/reached-jp`, {
+      lat,
+      lng,
+    });
+    toast.success("Marked as reached join point");
+    return data.data;
+  },
+);
+
+/**
+ * PATCH /ride-requests/:rideId/status  { action: 'complete_waypoint', waypointType }
+ * Driver marks CA join waypoint as completed (CA boarded vehicle).
+ */
+export const driverCompleteWaypoint = mkThunk(
+  "operations/driverCompleteWaypoint",
+  async ({ rideId, waypointType = "care_assistant_join" }) => {
+    const { data } = await API.patch(`/ride-requests/${rideId}/status`, {
+      action: "complete_waypoint",
+      waypointType,
+    });
+    toast.success("Waypoint completed");
+    return data.data;
   },
 );
 
@@ -1145,6 +1196,54 @@ const operationsSlice = createSlice({
       state.consultationChat = [...state.consultationChat, payload];
     },
 
+    // CA reached join point — update local status
+    setCaAtJoinPoint(state, { payload }) {
+      state.careRideStatus = {
+        ...state.careRideStatus,
+        status: "at_pickup",
+      };
+      state.caAtJoinPoint = true;
+    },
+
+    // CA joined ride — switch view mode
+    setCaHasJoined(state, { payload }) {
+      state.caHasJoined = true;
+      state.caViewMode = "driver_tracking_only";
+      state.caAtJoinPoint = false;
+      state.careRideStatus = {
+        ...state.careRideStatus,
+        status: "in_ride",
+        careAssistantJoined: true,
+      };
+      // Update waypoint as completed in snapshot
+      if (state.careTrackingSnapshot?.route?.caJoinWaypoint) {
+        state.careTrackingSnapshot.route.caJoinWaypoint.isCompleted = true;
+        state.careTrackingSnapshot.route.caJoinWaypoint.completedAt =
+          new Date().toISOString();
+      }
+    },
+
+    // JP waypoint completed by driver (CA boarded)
+    setJpWaypointCompleted(state, { payload }) {
+      if (state.caJoinPoint) {
+        state.caJoinPoint = {
+          ...state.caJoinPoint,
+          isCompleted: true,
+          completedAt: payload?.timestamp || new Date().toISOString(),
+        };
+      }
+      if (state.careTrackingSnapshot?.route?.caJoinWaypoint) {
+        state.careTrackingSnapshot.route.caJoinWaypoint.isCompleted = true;
+        state.careTrackingSnapshot.route.caJoinWaypoint.completedAt =
+          payload?.timestamp || new Date().toISOString();
+      }
+    },
+
+    // Set CA view mode explicitly
+    setCaViewMode(state, { payload }) {
+      state.caViewMode = payload;
+    },
+
     // ── CA socket reducers ──────────────────────────────────────────────────
 
     setCareAssistantLocation(state, { payload }) {
@@ -1270,10 +1369,27 @@ const operationsSlice = createSlice({
     });
     wire(sendConsultationChat, (state, { payload }) => {
       if (payload?.message) {
-        state.consultationChat = [
-          ...state.consultationChat,
-          payload.message,
-        ];
+        state.consultationChat = [...state.consultationChat, payload.message];
+      }
+    });
+
+    // Care reached join point
+    wire(careReachedJoinPoint, (state) => {
+      state.caAtJoinPoint = true;
+      state.careRideStatus = {
+        ...state.careRideStatus,
+        status: "at_pickup",
+      };
+    });
+
+    // Driver complete waypoint
+    wire(driverCompleteWaypoint, (state, { payload }) => {
+      if (payload?.jpCompleted && state.caJoinPoint) {
+        state.caJoinPoint = {
+          ...state.caJoinPoint,
+          isCompleted: true,
+          completedAt: new Date().toISOString(),
+        };
       }
     });
     wire(fetchConsultationJoinToken, (state, { payload }) => {
@@ -1297,15 +1413,22 @@ const operationsSlice = createSlice({
     });
 
     // Patch careRideStatus.status — never replace object
-    wire(careJoinRide, (state) => {
+    // REPLACE existing wire(careJoinRide, ...) with:
+    wire(careJoinRide, (state, { payload }) => {
+      state.caHasJoined = true;
+      state.caViewMode = "driver_tracking_only";
+      state.caAtJoinPoint = false;
       state.careRideStatus = {
         ...state.careRideStatus,
-        status: "en_route_to_pickup",
+        status: "in_ride",
         careAssistantJoined: true,
       };
+      if (payload?.jpCompleted && state.caJoinPoint) {
+        state.caJoinPoint = { ...state.caJoinPoint, isCompleted: true };
+      }
       if (state.careTrackingSnapshot?.careAssistant) {
         state.careTrackingSnapshot.careAssistant.isLinkedToRide = true;
-        state.careTrackingSnapshot.careAssistant.status = "en_route_to_pickup";
+        state.careTrackingSnapshot.careAssistant.status = "in_ride";
       }
     });
 
@@ -1469,18 +1592,27 @@ const operationsSlice = createSlice({
     wire(adminAssignSoloDriver, (state, { payload }) => {
       state.adminAssignment = payload ?? null;
       if (state.selectedBooking && payload?.booking)
-        state.selectedBooking = { ...state.selectedBooking, ...payload.booking };
+        state.selectedBooking = {
+          ...state.selectedBooking,
+          ...payload.booking,
+        };
     });
     wire(adminAssignTransportPartner, (state, { payload }) => {
       state.adminAssignment = payload ?? null;
       if (state.selectedBooking && payload?.booking)
-        state.selectedBooking = { ...state.selectedBooking, ...payload.booking };
+        state.selectedBooking = {
+          ...state.selectedBooking,
+          ...payload.booking,
+        };
     });
     // Handle new { booking, caJoinPoint } shape from backend
     wire(adminAssignCareAssistant, (state, { payload }) => {
       state.adminAssignment = payload ?? null;
       if (state.selectedBooking && payload?.booking)
-        state.selectedBooking = { ...state.selectedBooking, ...payload.booking };
+        state.selectedBooking = {
+          ...state.selectedBooking,
+          ...payload.booking,
+        };
       if (payload?.caJoinPoint) {
         state.caJoinPoint = payload.caJoinPoint;
         if (state.careTrackingSnapshot?.route) {
@@ -1491,7 +1623,10 @@ const operationsSlice = createSlice({
     wire(adminAssignHospital, (state, { payload }) => {
       state.adminAssignment = payload ?? null;
       if (state.selectedBooking && payload?.booking)
-        state.selectedBooking = { ...state.selectedBooking, ...payload.booking };
+        state.selectedBooking = {
+          ...state.selectedBooking,
+          ...payload.booking,
+        };
     });
     wire(adminReassignDriver, (state, { payload }) => {
       state.adminAssignment = payload ?? null;
@@ -1608,11 +1743,24 @@ export const {
   clearConsultation,
   setConsultationFromSocket,
   appendConsultationChatMessage,
+  // Add to the existing destructured export:
+  setCaAtJoinPoint,
+  setCaHasJoined,
+  setJpWaypointCompleted,
+  setCaViewMode,
 } = operationsSlice.actions;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SELECTORS
 // ─────────────────────────────────────────────────────────────────────────────
+
+export const selectCaViewMode = (s) => s.operations.caViewMode;
+export const selectCaHasJoined = (s) => s.operations.caHasJoined;
+export const selectCaAtJoinPoint = (s) => s.operations.caAtJoinPoint;
+export const selectCareReachedJpLoading = (s) =>
+  s.operations.loading["careReachedJoinPoint"] ?? false;
+export const selectCareJoinRideLoading = (s) =>
+  s.operations.loading["careJoinRide"] ?? false;
 
 export const selectAdminBookings = (s) => s.operations.adminBookings;
 export const selectAdminBookingsMeta = (s) => s.operations.adminBookingsMeta;
@@ -1621,25 +1769,31 @@ export const selectAdminOps = (s) => s.operations.adminOps;
 export const selectAdminOpsMeta = (s) => s.operations.adminOpsMeta;
 export const selectAdminBookingDetail = (s) => s.operations.selectedBooking;
 export const selectAdminOpRecord = (s) => s.operations.selectedOp;
-export const selectAdminBookingFollowUps = (s) => s.operations.selectedFollowUps;
+export const selectAdminBookingFollowUps = (s) =>
+  s.operations.selectedFollowUps;
 export const selectAdminStatusUpdate = (s) => s.operations.adminStatusUpdate;
 export const selectAdminAssignment = (s) => s.operations.adminAssignment;
 export const selectAdminRefund = (s) => s.operations.adminRefund;
-export const selectAdminOpStatusUpdate = (s) => s.operations.adminOpStatusUpdate;
+export const selectAdminOpStatusUpdate = (s) =>
+  s.operations.adminOpStatusUpdate;
 export const selectTpAssignedBookings = (s) => s.operations.tpAssignedBookings;
 export const selectTpAvailableDrivers = (s) => s.operations.tpAvailableDrivers;
-export const selectCareAssignedBookings = (s) => s.operations.careAssignedBookings;
+export const selectCareAssignedBookings = (s) =>
+  s.operations.careAssignedBookings;
 export const selectHospitalUpcoming = (s) => s.operations.hospitalUpcoming;
 export const selectHospitalOps = (s) => s.operations.hospitalOps;
 export const selectHospitalOpsMeta = (s) => s.operations.hospitalOpsMeta;
 export const selectHospitalValidOps = (s) => s.operations.hospitalValidOps;
-export const selectHospitalValidOpsMeta = (s) => s.operations.hospitalValidOpsMeta;
+export const selectHospitalValidOpsMeta = (s) =>
+  s.operations.hospitalValidOpsMeta;
 export const selectDoctorOps = (s) => s.operations.doctorOps;
 export const selectDoctorOpsMeta = (s) => s.operations.doctorOpsMeta;
-export const selectDriverAssignedRides = (s) => s.operations.driverAssignedRides;
+export const selectDriverAssignedRides = (s) =>
+  s.operations.driverAssignedRides;
 export const selectDriverInfo = (s) => s.operations.driverInfo;
 export const selectNearbyDrivers = (s) => s.operations.nearbyDrivers;
-export const selectNearbyCareAssistants = (s) => s.operations.nearbyCareAssistants;
+export const selectNearbyCareAssistants = (s) =>
+  s.operations.nearbyCareAssistants;
 export const selectNearbyTPs = (s) => s.operations.nearbyTPs;
 export const selectNearbyHospitals = (s) => s.operations.nearbyHospitals;
 export const selectCareRideNearby = (s) => s.operations.careRideNearby;
@@ -1691,7 +1845,8 @@ export const selectAdminAssignLoading = (s) =>
 
 // ── Consultation Selectors ───────────────────────────────────────────────────
 export const selectConsultation = (s) => s.operations.consultation;
-export const selectConsultationJoinToken = (s) => s.operations.consultationJoinToken;
+export const selectConsultationJoinToken = (s) =>
+  s.operations.consultationJoinToken;
 export const selectConsultationChat = (s) => s.operations.consultationChat;
 export const selectConsultationLoading = (s) =>
   s.operations.loading["fetchConsultation"] ?? false;
@@ -1709,10 +1864,14 @@ export const selectSendChatLoading = (s) =>
   s.operations.loading["sendConsultationChat"] ?? false;
 
 // ── CA Tracking Selectors ────────────────────────────────────────────────────
-export const selectCareTrackingSnapshot = (s) => s.operations.careTrackingSnapshot;
-export const selectCareAssistantLocation = (s) => s.operations.careAssistantLocation;
-export const selectCareAssistantStatus = (s) => s.operations.careAssistantStatus;
-export const selectCareAssistantJoined = (s) => s.operations.careAssistantJoined;
+export const selectCareTrackingSnapshot = (s) =>
+  s.operations.careTrackingSnapshot;
+export const selectCareAssistantLocation = (s) =>
+  s.operations.careAssistantLocation;
+export const selectCareAssistantStatus = (s) =>
+  s.operations.careAssistantStatus;
+export const selectCareAssistantJoined = (s) =>
+  s.operations.careAssistantJoined;
 // Always object — safe for .status, .rideStage etc
 export const selectCareRideStatus = (s) => s.operations.careRideStatus;
 export const selectRideStageOps = (s) =>

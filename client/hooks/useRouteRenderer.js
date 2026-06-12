@@ -1,28 +1,5 @@
 'use client';
-
-/**
- * useRouteRenderer.js — Likeson.in
- *
- * FIXES vs previous version:
- *  - full_care_ride needs TWO separate polyline sets:
- *      1. Driver route (existing: traversed + remaining + border)
- *      2. CA route to join point (new: caRoute line — dashed purple)
- *  - Added setCaRoute(directionsResult | latLngArray) — renders CA route
- *  - Added clearCaRoute() — removes CA route polyline
- *  - Added setCaRouteDirect(pointsArray) — for when we have [lng,lat] pairs
- *    directly (from caJoinPoint.caRoute) without a DirectionsResult
- *  - Colors object extended with CA route color
- *  - ensureLines() never recreates existing lines (guard added)
- *  - clearRoute() also calls clearCaRoute()
- *
- * FIX (this version):
- *  - ensureLines() now always calls applyColors() internally so routeType
- *    color changes apply to already-existing lines. Previously if lines existed
- *    from a prior routeType, colors were stale until applyColors() was called
- *    by the caller — but callers that skip applyColors() would see wrong colors.
- *    Now ensureLines(routeType) is the single call needed for both create + recolor.
- *  - setRoute() no longer calls applyColors() separately — ensureLines handles it.
- */
+ 
 
 import { useRef, useCallback, useEffect } from 'react';
 import { extractRoutePolyline, snapToPolyline } from '@/utils/navigationUtils';

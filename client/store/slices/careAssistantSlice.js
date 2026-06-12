@@ -1,31 +1,4 @@
-// ═══════════════════════════════════════════════════════════════════════════════
-// CARE ASSISTANT SLICE — LIKESON HEALTHCARE
-// File: store/slices/careAssistantSlice.js
-//
-// Every route in careAssistantRouter.js is mapped 1-to-1 to a createAsyncThunk.
-// Sections mirror the router exactly:
-//   A  Profile Setup         (getProfile, updateProfile)
-//   B  Upload                (getUploadAuth, uploadPhoto, uploadDocument)
-//   C  KYC                   (submitKyc, getKycStatus)
-//   D  Training              (updateTraining, addCertificate, deleteCertificate)
-//   E  Schedule              (getSchedule, updateSchedule)
-//   F  Availability/Location (updateAvailability, updateLocation, updateStatus)
-//   G  Bank Details          (getBankDetails, updateBankDetails)
-//   H  Health Declaration    (updateHealthDeclaration)
-//   I  Onboarding Wizard     (updateOnboardingStep, completeOnboarding)
-//   J  Settings              (getSettings, updateNotifPrefs, updateServiceArea,
-//                             registerDeviceToken, removeDeviceToken)
-//   K  Security              (changePassword, sendEmailOtp, verifyEmailOtp,
-//                             getSessions, revokeSession, revokeAllSessions,
-//                             requestAccountDeletion, confirmAccountDeletion)
-//   L  Performance           (getPerformance)
-//   M  Admin                 (adminCreateCareAssistant, adminGetAll,
-//                             adminGetOne, adminKycAction,
-//                             adminPoliceVerification, adminBlockCA,
-//                             adminUnblockCA, adminVerifyCertificate,
-//                             adminUpdatePerformance, adminUpdateNotes,
-//                             adminVerifyBank, adminGetStats, adminGetNearby)
-// ═══════════════════════════════════════════════════════════════════════════════
+ 
 
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import API   from '../api';

@@ -64,6 +64,7 @@ import {
   getProfile,
   resetCareAssistant,
 } from "@/store/slices/careAssistantSlice";
+import BackButton from "../../../../components/BackButton";
 
 // ─── nav links ────────────────────────────────────────────────────────────
 const links = [
@@ -871,6 +872,8 @@ export default function SecurityPage() {
         }}
       >
         <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
+                     <BackButton className='my-3' />
+          
           <p className="text-[11px] font-bold uppercase tracking-widest mb-0.5" style={{ color: sectionColor }}>
             Account Security
           </p>

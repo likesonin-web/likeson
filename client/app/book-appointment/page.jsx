@@ -914,26 +914,42 @@ const resolveConsultFee = (form, followUpCheck) => {
 const resolveCaFee = (form, caTiers) => {
   const sub = form.subCoverage;
 
-  // Fixed plan — CA free via subscription
+ // Fixed plan — only tier index 0 (Standard / Short Visit) free
   if (sub?.careAssistantFree && !sub?.isCustomPlan) {
+    const durHours    = form.durationHours ?? caTiers[0]?.hours ?? 1;
+    const isFirstTier = durHours === (caTiers[0]?.hours ?? durHours);
+
+    if (isFirstTier) {
+      return {
+        fee: 0,
+        isFree: true,
+        isCustomPlan: false,
+        reason: sub.careAssistantQuota || "Standard tier covered by subscription",
+      };
+    }
+
+    // Higher tier — charge that tier price + 18% GST
+    const selectedTier = caTiers.find((t) => t.hours === durHours) ?? caTiers[caTiers.length - 1];
     return {
-      fee: 0,
-      isFree: true,
+      fee: selectedTier?.price ?? 0,
+      isFree: false,
       isCustomPlan: false,
-      reason: sub.careAssistantQuota || "Covered by subscription",
+      reason: `Only Standard tier (${caTiers[0]?.hours ?? 1}h) free — upgrade tier charges platform rate + 18% GST`,
     };
   }
 
   // Custom plan with quota remaining
-  if (
-    sub?.isCustomPlan &&
-    sub?.careAssistantAllowed &&
-    (sub?.careAssistantRemaining ?? 0) > 0
-  ) {
-    const planTierIdx = sub?.careAssistantTierIndex ?? 0;
-    const durHours = form.durationHours ?? caTiers[0]?.hours ?? 1;
+// Custom plan with quota remaining
+  // careAssistantRemaining: null = unlimited, number = count, missing = 0
+  const caRemaining = sub?.careAssistantRemaining;
+  const hasQuota    = sub?.isCustomPlan && sub?.careAssistantAllowed &&
+                      (caRemaining === null || caRemaining === Infinity || (caRemaining ?? 0) > 0);
+
+  if (hasQuota) {
+    const planTierIdx     = sub?.careAssistantTierIndex ?? 0;
+    const durHours        = form.durationHours ?? caTiers[0]?.hours ?? 1;
     const selectedTierIdx = caTiers.findIndex((t) => t.hours === durHours);
-    const effectiveIdx = selectedTierIdx >= 0 ? selectedTierIdx : 0;
+    const effectiveIdx    = selectedTierIdx >= 0 ? selectedTierIdx : 0;
 
     if (effectiveIdx === planTierIdx) {
       return {
@@ -3470,10 +3486,14 @@ function StepSchedule({
             >
               {rangeLabel}
             </span>
-            {caFreeViaSub ? (
-              <span className="text-[9px] font-black text-success" style={PP}>
-                FREE
-              </span>
+         {caFreeViaSub && tierIdx === 0 ? (
+                          <span className="text-[9px] font-black text-success" style={PP}>
+                            FREE
+                          </span>
+                        ) : caFreeViaSub && tierIdx > 0 ? (
+                          <span className="text-[9px] font-black text-warning" style={PP}>
+                            {fmt(price)} · extra
+                          </span>
             ) : isQuotaTier ? (
               <span className="text-[9px] font-black text-success" style={PP}>
                 FREE · plan
@@ -4000,12 +4020,13 @@ function StepSchedule({
                         >
                           {rangeLabel}
                         </span>
-                        {caFreeViaSub ? (
-                          <span
-                            className="text-[9px] font-black text-success"
-                            style={PP}
-                          >
+{caFreeViaSub && tierIdx === 0 ? (
+                          <span className="text-[9px] font-black text-success" style={PP}>
                             FREE
+                          </span>
+                        ) : caFreeViaSub && tierIdx > 0 ? (
+                          <span className="text-[9px] font-black text-warning" style={PP}>
+                            {fmt(price)}
                           </span>
                         ) : isQuotaTier ? (
                           <span

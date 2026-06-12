@@ -20,6 +20,7 @@ import {
   getProfile, updateTraining, addCertificate, deleteCertificate,
   selectProfile, selectLoading, selectErrors,
 } from "@/store/slices/careAssistantSlice";
+import BackButton from "../../../../components/BackButton";
 
 const links = [
   { name:"Training Competencies", href:"/care-assistant/training",                    segments:[],                    icon:<BookOpen size={17}/>, note:"Toggle your core skill flags" },
@@ -388,6 +389,8 @@ export default function TrainingPage() {
         }}
       >
         <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
+                     <BackButton className='my-3' />
+          
           <p className="text-[11px] font-semibold uppercase tracking-widest mb-0.5" style={{ color: "var(--primary)" }}>
             Training & Certifications
           </p>

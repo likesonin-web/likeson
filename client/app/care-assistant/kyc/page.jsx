@@ -37,6 +37,7 @@ import {
   selectErrors,
   getProfile,
 } from "@/store/slices/careAssistantSlice";
+import BackButton from "../../../components/BackButton";
 
 // ─── nav links ─────────────────────────────────────────────────────────────
 const links = [
@@ -747,6 +748,7 @@ export default function KycPage() {
           borderBottom:   "1px solid var(--base-300)",
         }}
       >
+        <BackButton />
         <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
           <p
             className="text-[11px] font-semibold uppercase tracking-widest mb-0.5"

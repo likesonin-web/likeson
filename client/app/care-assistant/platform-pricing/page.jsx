@@ -10,6 +10,7 @@ import {
   ShieldCheck, AlertCircle, ChevronRight, Award
 } from 'lucide-react';
 import { selectProfile, selectPerformance, selectEarnings } from '@/store/slices/careAssistantSlice';
+import BackButton from '../../../components/BackButton';
 
 /* ─── Static platform pricing (owned by PlatformPricingConfig on backend) ─── */
 const BASE_RATES = [
@@ -69,6 +70,7 @@ export default function PayoutRatesPage() {
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}
         className="px-6 pt-8 pb-4">
+           <BackButton className='my-3' />
         <div className="flex items-center gap-3 mb-1">
           <div className="p-2 rounded-xl" style={{ background: 'color-mix(in srgb, var(--accent), transparent 85%)' }}>
             <IndianRupee size={22} style={{ color: 'var(--accent)' }} />

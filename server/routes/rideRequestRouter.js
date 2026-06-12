@@ -1060,6 +1060,9 @@ router.patch('/:rideId/status',
       const socketService = getBookingSocketService();
       const currentStatus = ride.status;
 
+
+      
+
       switch (action) {
 
         // ── ACCEPT ───────────────────────────────────────────────────────────
@@ -1438,6 +1441,55 @@ router.patch('/:rideId/status',
           return res.json({ success: true, message: 'Ride cancelled.', data: { status: 'cancelled' } });
         }
 
+        // ── COMPLETE_WAYPOINT (driver marks JP as physically picked up CA) ─────────
+case 'complete_waypoint': {
+  const { waypointType } = req.body;
+  if (!waypointType)
+    return res.status(400).json({ success: false, message: 'waypointType required' });
+
+  // Load ride with waypoints
+  const rideWithWps = await Ride.findById(rideId).select('waypoints booking').lean();
+  if (!rideWithWps)
+    return res.status(404).json({ success: false, message: 'Ride not found' });
+
+  const updatedWaypoints = (rideWithWps.waypoints || []).map(wp => {
+    if (wp.type === waypointType && !wp.isCompleted) {
+      return { ...wp, isCompleted: true, completedAt: new Date() };
+    }
+    return wp;
+  });
+
+  await Ride.findByIdAndUpdate(rideId, {
+    $set: { waypoints: updatedWaypoints },
+  });
+
+  // Update tracking milestone
+  await RideTracking.addMilestone(rideId, 'care_assistant_joined', {
+    meta:             { event: 'driver_picked_up_ca', waypointType },
+    recordedBy:       'driver',
+    recordedByUserId: req.user._id,
+  }).catch(() => {});
+
+  // Broadcast: JP marked completed on all maps, stays visible as completed marker
+  if (ride.booking) {
+    socketService?.emitToRoom(`booking:${ride.booking}`, 'ca_join_waypoint_completed', {
+      rideId:            String(rideId),
+      bookingId:         String(ride.booking),
+      waypointType,
+      updatedWaypoints,
+      timestamp:         new Date().toISOString(),
+      // JP stays on map (isCompleted=true), navigation continues to dropoff
+      jpCompleted:       true,
+    });
+  }
+
+  return res.json({
+    success: true,
+    message: `Waypoint '${waypointType}' marked completed.`,
+    data:    { waypointType, jpCompleted: true, updatedWaypoints },
+  });
+}
+
         default:
           return res.status(400).json({ success: false, message: `Unknown action: ${action}` });
       }
@@ -1762,55 +1814,197 @@ router.post('/:rideId/tracking/milestone',
   }
 );
 
+/**
+ * GET /api/ride-requests/:rideId/care-assistant-live
+ *
+ * Full_care_ride specific: returns role-aware tracking snapshot.
+ *   CA (before joining):  their own nav target (JP coords) + driver position
+ *   CA (after joining):   driver live tracking only (caViewMode = driver_tracking_only)
+ *   Driver:               CA live location + JP (completed or pending) + pickup/dropoff
+ *   Customer:             driver live + CA live + JP + pickup + dropoff
+ */
 router.get(
   '/:rideId/care-assistant-live',
-
   protect,
-
   async (req, res) => {
-
     try {
+      const ride = await Ride.findById(req.params.rideId)
+        .select('status liveLocation pickup dropoff waypoints booking driverSnapshot vehicleSnapshot trackingId')
+        .lean();
+      if (!ride)
+        return res.status(404).json({ success: false, message: 'Ride not found' });
 
-      const ride =
-        await Ride.findById(
-          req.params.rideId
-        ).lean();
+      const tracking = await RideTracking.findOne({ ride: ride._id })
+        .populate('hospital')
+        .lean();
 
-      if (!ride) {
+      // Pull CA join waypoint
+      const caJoinWaypoint = (ride.waypoints || []).find(w => w.type === 'care_assistant_join') ?? null;
 
-        return res.status(404).json({
-          success: false,
-          message: 'Ride not found',
+      const careAssistantStatus = tracking?.careAssistantStatus ?? 'not_joined';
+      const caHasJoined         = careAssistantStatus === 'in_ride';
+      const caLiveLocation      = tracking?.careAssistantLiveLocation ?? null;
+
+      const fmtLoc = (loc) => {
+        if (!loc?.coordinates || loc.coordinates.length !== 2) return null;
+        return {
+          lat:       loc.coordinates[1],
+          lng:       loc.coordinates[0],
+          heading:   loc.heading  ?? 0,
+          speedKmh:  loc.speedKmh ?? 0,
+          updatedAt: loc.updatedAt,
+        };
+      };
+
+      // Determine requester role
+      const role = req.user?.role ?? 'unknown';
+
+      // ── CA VIEW ───────────────────────────────────────────────────────────
+      if (role === 'care_assistant') {
+        if (caHasJoined) {
+          // CA joined → show driver tracking only
+          return res.json({
+            success: true,
+            data: {
+              caViewMode:       'driver_tracking_only',
+              careAssistantStatus,
+              driverLiveLocation: fmtLoc(ride.liveLocation),
+              driverSnapshot:     ride.driverSnapshot,
+              vehicleSnapshot:    ride.vehicleSnapshot,
+              dropoff:            ride.dropoff,
+              activeTarget:       tracking?.activeTarget ?? 'dropoff_destination',
+              socketHint: {
+                room:   ride.booking ? `booking:${ride.booking}` : null,
+                events: ['location_update'],  // only driver GPS needed
+              },
+              _serverTime: new Date().toISOString(),
+            },
+          });
+        }
+
+        // CA not yet joined → show navigation to JP + driver position
+        return res.json({
+          success: true,
+          data: {
+            caViewMode:          'navigate_to_jp',
+            careAssistantStatus,
+            // CA navigates to this point
+            navigateTo:          caJoinWaypoint
+              ? {
+                  coordinates: caJoinWaypoint.location?.coordinates,
+                  address:     caJoinWaypoint.location?.address,
+                  label:       caJoinWaypoint.location?.label,
+                  isCompleted: caJoinWaypoint.isCompleted,
+                }
+              : null,
+            // Also show driver position so CA knows how close driver is
+            driverLiveLocation:  fmtLoc(ride.liveLocation),
+            driverSnapshot:      ride.driverSnapshot,
+            pickup:              ride.pickup,
+            dropoff:             ride.dropoff,
+            activeTarget:        tracking?.activeTarget,
+            socketHint: {
+              room:   ride.booking ? `booking:${ride.booking}` : null,
+              events: [
+                'care_assistant_location_update',
+                'location_update',        // driver GPS (to show driver getting closer)
+                'care_assistant_at_jp',
+                'care_assistant_joined_ride',
+              ],
+            },
+            _serverTime: new Date().toISOString(),
+          },
         });
       }
 
-      const tracking =
-        await RideTracking
-          .findOne({
-            ride: ride._id,
-          })
-          .populate('hospital')
-          .lean();
+      // ── DRIVER VIEW ───────────────────────────────────────────────────────
+      if (role === 'driver' || role === 'solodriverpartner') {
+        return res.json({
+          success: true,
+          data: {
+            // Driver navigates pickup → dropoff normally
+            // JP is shown as a map marker (not a nav detour)
+            activeTarget:  tracking?.activeTarget ?? 'pickup_patient',
+            pickup:        ride.pickup,
+            dropoff:       ride.dropoff,
+            // CA join point — always show, marked completed when CA boards
+            caJoinPoint:   caJoinWaypoint
+              ? {
+                  coordinates: caJoinWaypoint.location?.coordinates,
+                  address:     caJoinWaypoint.location?.address,
+                  label:       caJoinWaypoint.location?.label,
+                  isCompleted: caJoinWaypoint.isCompleted,
+                  completedAt: caJoinWaypoint.completedAt,
+                  zone:        caJoinWaypoint.meta?.zone,
+                }
+              : null,
+            // CA live tracking (show on map until CA joins)
+            caLiveLocation:      !caHasJoined ? fmtLoc(caLiveLocation) : null,
+            careAssistantStatus,
+            caHasJoined,
+            hospital:            tracking?.hospital ?? null,
+            liveRouteContext:    tracking?.liveRouteContext ?? null,
+            socketHint: {
+              room:   ride.booking ? `booking:${ride.booking}` : null,
+              events: [
+                'location_update',                 // own GPS (ignored by driver)
+                'care_assistant_location_update',  // CA GPS marker
+                'care_assistant_at_jp',            // CA reached JP
+                'care_assistant_joined_ride',      // CA boarded
+                'ca_join_waypoint_completed',      // JP marked done
+                'eta_update',
+              ],
+            },
+            _serverTime: new Date().toISOString(),
+          },
+        });
+      }
 
+      // ── CUSTOMER VIEW (default) ───────────────────────────────────────────
       return res.json({
         success: true,
-
         data: {
-
-          activeTarget:
-            tracking?.activeTarget,
-
-          liveRouteContext:
-            tracking
-              ?.liveRouteContext || null,
-
-          hospital:
-            tracking?.hospital || null,
+          // Driver live tracking
+          driverLiveLocation:  fmtLoc(ride.liveLocation),
+          driverSnapshot:      ride.driverSnapshot,
+          vehicleSnapshot:     ride.vehicleSnapshot,
+          // CA live tracking
+          caLiveLocation:      fmtLoc(caLiveLocation),
+          careAssistantStatus,
+          caHasJoined,
+          // JP — always visible, completed or pending
+          caJoinPoint:         caJoinWaypoint
+            ? {
+                coordinates: caJoinWaypoint.location?.coordinates,
+                address:     caJoinWaypoint.location?.address,
+                label:       caJoinWaypoint.location?.label,
+                isCompleted: caJoinWaypoint.isCompleted,
+                completedAt: caJoinWaypoint.completedAt,
+              }
+            : null,
+          pickup:              ride.pickup,
+          dropoff:             ride.dropoff,
+          activeTarget:        tracking?.activeTarget,
+          currentEtaMinutes:   tracking?.currentEtaMinutes ?? null,
+          hasActiveSos:        tracking?.hasActiveSos ?? false,
+          hospital:            tracking?.hospital ?? null,
+          liveRouteContext:    tracking?.liveRouteContext ?? null,
+          socketHint: {
+            room:   ride.booking ? `booking:${ride.booking}` : null,
+            events: [
+              'location_update',                 // driver GPS
+              'care_assistant_location_update',  // CA GPS
+              'care_assistant_at_jp',
+              'care_assistant_joined_ride',
+              'ca_join_waypoint_completed',
+              'eta_update',
+              'ride_status_changed',
+            ],
+          },
+          _serverTime: new Date().toISOString(),
         },
       });
-
     } catch (err) {
-
       return res.status(500).json({
         success: false,
         message: err.message,

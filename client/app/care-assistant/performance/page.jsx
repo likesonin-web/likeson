@@ -15,6 +15,7 @@ import {
   getPerformance,
   selectPerformance, selectEarnings, selectLoading,
 } from '@/store/slices/careAssistantSlice';
+import BackButton from '../../../components/BackButton';
 
 const CARD_VARIANTS = {
   hidden:  { opacity: 0, y: 20 },
@@ -86,6 +87,8 @@ export default function PerformancePage() {
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}
         className="px-6 pt-8 pb-4">
+                     <BackButton className='my-3' />
+          
         <div className="flex items-center gap-3 mb-1">
           <div className="p-2 rounded-xl" style={{ background: 'color-mix(in srgb, var(--primary), transparent 85%)' }}>
             <Activity size={22} style={{ color: 'var(--primary)' }} />

@@ -1,29 +1,4 @@
-/**
- * rideRequestSlice.js — Likeson.in
- *
- * Covers all routes from rideRequestRouter.js
- *
- * Routes:
- *   POST   /ride-requests/customer                    → customerRequestRide
- *   POST   /ride-requests/care-assistant              → careAssistantRequestRide
- *   GET    /ride-requests/:rideId                     → fetchRide
- *   GET    /ride-requests/admin/all                   → fetchAdminAllRides
- *   GET    /ride-requests/admin/:rideId/nearby        → fetchNearbyDrivers
- *   POST   /ride-requests/admin/:rideId/assign        → adminAssignRide
- *   PATCH  /ride-requests/tp/:rideId/assign-driver    → tpAssignDriver
- *   PATCH  /ride-requests/:rideId/status              → updateRideStatus
- *   GET    /ride-requests/:rideId/live                → fetchRideLive
- *   GET    /ride-requests/:rideId/tracking            → fetchRideTracking
- *   POST   /ride-requests/:rideId/tracking/milestone  → postMilestone
- *
- * Socket events (from socketService.js SOCKET_EVENTS):
- *   ride_requested, ride_assigned, ride_status_changed,
- *   driver_accepted, driver_en_route, driver_arrived,
- *   otp_verified, ride_started, at_stop, ride_completed,
- *   ride_cancelled, navigation_target_changed, location_update,
- *   eta_update, otp_result, otp_wrong_attempt
- */
-
+ 
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import API from '../api';
 import toast from 'react-hot-toast';
@@ -273,6 +248,13 @@ socketLive: {
     milestone:          false,
   },
 
+  // Full care ride CA tracking
+caAtJoinPoint:     false,
+caHasJoined:       false,
+caViewMode:        null,   // 'navigate_to_jp' | 'driver_tracking_only'
+jpCompleted:       false,
+updatedWaypoints:  null,
+
   errors: {
     customerRequest:    null,
     careRequest:        null,
@@ -426,6 +408,36 @@ socketCareAssistantTracking(
 
   state.socketLive.activeTarget =
     action.payload.activeTarget;
+},
+
+// care_assistant_at_jp → CA reached join point
+socketCaAtJoinPoint(state, action) {
+  const p = action.payload;
+  state.socketLive.caAtJoinPoint   = true;
+  state.socketLive.caViewMode      = 'navigate_to_jp'; // still at JP, not yet in ride
+  if (p.careAssistantStatus) {
+    state.socketLive.careAssistantTracking = {
+      ...state.socketLive.careAssistantTracking,
+      caStatus: p.careAssistantStatus,
+    };
+  }
+},
+
+// care_assistant_joined_ride → CA boarded, switch CA to driver-only view
+socketCaJoinedRide(state, action) {
+  const p = action.payload;
+  state.socketLive.caHasJoined  = true;
+  state.socketLive.caViewMode   = 'driver_tracking_only';
+  state.socketLive.caAtJoinPoint = false;
+  if (p.jpCompleted) state.socketLive.jpCompleted = true;
+  if (p.updatedWaypoints) state.socketLive.updatedWaypoints = p.updatedWaypoints;
+},
+
+// ca_join_waypoint_completed → driver marked CA as picked up
+socketJpWaypointCompleted(state, action) {
+  const p = action.payload;
+  state.socketLive.jpCompleted = true;
+  if (p.updatedWaypoints) state.socketLive.updatedWaypoints = p.updatedWaypoints;
 },
     // navigation_target_changed → SOCKET_EVENTS.NAVIGATION_TARGET_CHANGED
     // payload: { currentTarget, coords, address, polyline, bookingId, rideId }
@@ -734,6 +746,9 @@ export const {
   socketRideAssigned,
   socketHospitalEtaUpdate,
 socketCareAssistantTracking,
+socketCaAtJoinPoint,
+socketCaJoinedRide,
+socketJpWaypointCompleted,
 
   // Manual resets
   clearCurrentRide,
@@ -795,6 +810,10 @@ export const selectNearbyLoading      = (s) => s.rideRequest.loading.nearby;
 export const selectAdminAssignLoading = (s) => s.rideRequest.loading.adminAssign;
 export const selectTpAssignLoading    = (s) => s.rideRequest.loading.tpAssign;
 
+export const selectCaViewMode    = (s) => s.rideRequest.socketLive.caViewMode;
+export const selectCaHasJoined   = (s) => s.rideRequest.socketLive.caHasJoined;
+export const selectCaAtJoinPoint = (s) => s.rideRequest.socketLive.caAtJoinPoint;
+export const selectJpCompleted   = (s) => s.rideRequest.socketLive.jpCompleted;
 // ─────────────────────────────────────────────────────────────────────────────
 // SOCKET WIRING HELPER
 // ─────────────────────────────────────────────────────────────────────────────
@@ -835,6 +854,11 @@ on(
       socketCareAssistantTracking(d)
     )
 ),
+
+// Add inside wireRideSocketEvents unsubs array:
+on('care_assistant_at_jp',         (d) => dispatch(socketCaAtJoinPoint(d))),
+on('care_assistant_joined_ride',   (d) => dispatch(socketCaJoinedRide(d))),
+on('ca_join_waypoint_completed',   (d) => dispatch(socketJpWaypointCompleted(d))),
 
     // Fine-grained ride status events
     on('driver_accepted',  (d) => dispatch(socketDriverAccepted(d))),

@@ -1169,7 +1169,7 @@ export default function MyProfile() {
         }}
         aria-label="Profile sections"
       >
-        <div className="flex items-center justify-center px-2 py-1 gap-0.5 w-max min-w-full">
+        <div className="flex px-2 py-1 itesm-center justify-center gap-0.5 w-max min-w-full">
           {NAV.map((item) => {
             const active = activeKey === item.key;
             const Icon   = item.icon;

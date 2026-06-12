@@ -1416,133 +1416,216 @@ router.get('/admin/care-ride/:bookingId/nearby',
   }
 );
 
-router.post(
-  '/:id/care/join-ride',
-
-  protect,
-  authorize(
-    'careassistant'
-  ),
-
-  async (
-    req,
-    res
-  ) => {
-
+router.patch('/:id/care/join-ride',
+  protect, authorize('care_assistant'),
+  async (req, res) => {
     try {
+      const { currentLat, currentLng } = req.body;
 
-      const booking =
-        await Booking
-          .findById(
-            req.params.id
-          );
+      const profile = await CareAssistantProfile.findOne({ user: req.user._id })
+        .select('_id fullName').lean();
+      if (!profile)
+        return res.status(404).json({ success: false, message: 'Care assistant profile not found' });
 
-      if (!booking) {
+      const booking = await Booking.findOne({ _id: req.params.id, careAssistant: profile._id })
+        .select('_id bookingCode customer primaryRide status bookingType').lean();
+      if (!booking)
+        return res.status(404).json({ success: false, message: 'Booking not found or not assigned to you' });
 
-        return res
-          .status(404)
-          .json({
+      if (!booking.primaryRide)
+        return res.status(400).json({ success: false, message: 'No active ride on this booking yet' });
 
-            success: false,
+      const ride = await Ride.findById(booking.primaryRide)
+        .select('_id status trackingId waypoints').lean();
+      if (!ride)
+        return res.status(404).json({ success: false, message: 'Ride not found' });
 
-            message:
-              'Booking not found',
-          });
-      }
+      const activeMidwayStatuses = [
+        'driver_assigned', 'driver_accepted', 'driver_en_route',
+        'driver_arrived', 'otp_verified', 'in_progress', 'at_stop',
+      ];
+      if (!activeMidwayStatuses.includes(ride.status))
+        return res.status(400).json({ success: false, message: `Cannot join ride in status: ${ride.status}` });
 
-      const ride =
-        await Ride.findOne({
-
-          booking:
-            booking._id,
-
-          status: {
-            $in:
-              RIDE_STATUSES_ACTIVE,
-          },
-        });
-
-      if (!ride) {
-
-        return res
-          .status(404)
-          .json({
-
-            success: false,
-
-            message:
-              'Ride not active',
-          });
-      }
-
-      ride.activeTarget =
-        'hospital_drop';
-
-      ride.currentLeg =
-        'to_hospital';
-
-      await ride.save();
-
-      await RideTracking
-        .findOneAndUpdate(
-
-          {
-            ride:
-              ride._id,
-          },
-
-          {
-            $set: {
-
-              'liveRouteContext.activeTarget':
-                'hospital_drop',
-
-              careAssistantJoinedAt:
-                new Date(),
-            },
-          }
-        );
-
-      getBookingSocketService()
-        ?.emitToRoom(
-
-          `care:${booking._id}`,
-
-          'care_assistant_joined',
-
-          {
-
-            bookingId:
-              booking._id,
-
-            rideId:
-              ride._id,
-
-            activeTarget:
-              'hospital_drop',
-          }
-        );
-
-      return res.json({
-
-        success: true,
-
-        data: {
-          ride,
-        },
+      // Mark CA join waypoint as completed
+      const updatedWaypoints = (ride.waypoints || []).map(wp => {
+        if (wp.type === 'care_assistant_join' && !wp.isCompleted) {
+          return { ...wp, isCompleted: true, completedAt: new Date() };
+        }
+        return wp;
       });
 
-    } catch (err) {
+      // Update ride waypoints
+      await Ride.findByIdAndUpdate(booking.primaryRide, {
+        $set: { waypoints: updatedWaypoints },
+      });
 
-      return res
-        .status(500)
-        .json({
+      // Update RideTracking: CA is now in_ride, mark join context
+      await RideTracking.findOneAndUpdate(
+        { ride: booking.primaryRide },
+        {
+          $set: {
+            careAssistantStatus:   'in_ride',
+            careAssistantJoinedAt: new Date(),
+            'liveRouteContext.careAssistantJoinedAt': new Date(),
+            // activeTarget stays at dropoff — driver continues to dropoff
+          },
+        }
+      );
 
-          success: false,
+      // Update CA live location if provided
+      if (currentLat && currentLng) {
+        await RideTracking.updateCareAssistantLocation(booking.primaryRide, {
+          coordinates: [currentLng, currentLat], source: 'gps',
+        }).catch(() => {});
 
-          message:
-            err.message,
+        await CareAssistantProfile.findByIdAndUpdate(profile._id, {
+          'location.coordinates': [currentLng, currentLat],
+          'location.updatedAt':   new Date(),
         });
+      }
+
+      // Milestone
+      RideTracking.addMilestone(booking.primaryRide, 'care_assistant_joined', {
+        coordinates:      currentLat && currentLng ? [currentLng, currentLat] : null,
+        meta:             { careAssistantId: profile._id },
+        recordedBy:       'driver',   // CA action
+        recordedByUserId: req.user._id,
+      }).catch(() => {});
+
+      // Join booking socket room
+      getBookingSocketService()?.emitJoinRoom(String(req.user._id), `booking:${booking._id}`);
+
+      // Broadcast to all: JP marked completed, CA now in ride
+      // CA view: switch to driver-only tracking
+      // Driver view: JP stays (completed marker), no more CA nav
+      // Customer view: JP stays (completed marker), CA live still shown
+      getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'care_assistant_joined_ride', {
+        bookingId:         booking._id,
+        rideId:            booking.primaryRide,
+        careAssistantId:   profile._id,
+        careAssistantName: profile.fullName,
+        joinedAt:          new Date(),
+        currentLocation:   (currentLat && currentLng) ? { lat: currentLat, lng: currentLng } : null,
+        rideStatus:        ride.status,
+        // Tells CA client to switch to driver-only tracking mode
+        caViewMode:        'driver_tracking_only',
+        // JP waypoint now completed — stays on map but marked
+        jpCompleted:       true,
+        updatedWaypoints,
+      });
+
+      await createNotification({
+        recipient: booking.customer,
+        title:     'Care Assistant Joined',
+        body:      `${profile.fullName} has joined your ride.`,
+        type:      'Care_Assistant_Assigned',
+        bookingId: booking._id,
+      });
+
+      return res.json({
+        success: true,
+        message: 'Joined ride. CA view switched to driver tracking only.',
+        data: {
+          rideId:            booking.primaryRide,
+          bookingId:         booking._id,
+          careAssistantStatus: 'in_ride',
+          caViewMode:        'driver_tracking_only',
+          jpCompleted:       true,
+          socketRoom:        `booking:${booking._id}`,
+          socketEvents:      ['location_update'],   // CA now listens to driver location only
+        },
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+
+/**
+ * PATCH /:id/care/reached-jp
+ * CA signals they have arrived at the join point.
+ * Updates status to 'at_pickup', notifies driver + customer.
+ * Body: { lat?, lng? }
+ */
+router.patch('/:id/care/reached-jp',
+  protect, authorize('care_assistant'),
+  async (req, res) => {
+    try {
+      const { lat, lng } = req.body;
+
+      const profile = await CareAssistantProfile.findOne({ user: req.user._id })
+        .select('_id fullName').lean();
+      if (!profile)
+        return res.status(404).json({ success: false, message: 'Care assistant profile not found' });
+
+      const booking = await Booking.findOne({ _id: req.params.id, careAssistant: profile._id })
+        .select('_id customer primaryRide bookingType bookingCode').lean();
+      if (!booking)
+        return res.status(404).json({ success: false, message: 'Booking not found or not assigned to you' });
+
+      if (booking.bookingType !== 'full_care_ride')
+        return res.status(400).json({ success: false, message: 'reached-jp only valid for full_care_ride' });
+
+      if (!booking.primaryRide)
+        return res.status(400).json({ success: false, message: 'No active ride on this booking' });
+
+      // Update CA status in RideTracking
+      await RideTracking.updateCareAssistantStatus(booking.primaryRide, 'at_pickup');
+
+      // Update CA location if provided
+      if (lat && lng) {
+        await RideTracking.updateCareAssistantLocation(booking.primaryRide, {
+          coordinates: [lng, lat], source: 'gps',
+        }).catch(() => {});
+
+        await CareAssistantProfile.findByIdAndUpdate(profile._id, {
+          'location.coordinates': [lng, lat],
+          'location.updatedAt':   new Date(),
+        });
+      }
+
+      // Milestone
+      RideTracking.addMilestone(booking.primaryRide, 'care_assistant_joined', {
+        coordinates:      lat && lng ? [lng, lat] : null,
+        meta:             { event: 'reached_jp', careAssistantId: profile._id },
+        recordedBy:       'driver',
+        recordedByUserId: req.user._id,
+      }).catch(() => {});
+
+      // Notify all parties: CA is at the join point waiting for driver
+      getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'care_assistant_at_jp', {
+        bookingId:           booking._id,
+        rideId:              booking.primaryRide,
+        careAssistantId:     profile._id,
+        careAssistantName:   profile.fullName,
+        careAssistantStatus: 'at_pickup',
+        location:            (lat && lng) ? { lat, lng } : null,
+        timestamp:           new Date(),
+        // Driver: you can pick up CA at this location
+        // CA: stay here, driver is coming
+        // Customer: CA has reached pickup point
+      });
+
+      await createNotification({
+        recipient: booking.customer,
+        title:     'Care Assistant at Join Point',
+        body:      `${profile.fullName} has reached the pickup point.`,
+        type:      'Care_Assistant_Arriving',
+        bookingId: booking._id,
+      });
+
+      return res.json({
+        success: true,
+        message: 'Marked as reached join point. Waiting for driver.',
+        data: {
+          careAssistantStatus: 'at_pickup',
+          rideId:              booking.primaryRide,
+        },
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
     }
   }
 );

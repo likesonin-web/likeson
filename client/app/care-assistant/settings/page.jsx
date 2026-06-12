@@ -20,6 +20,7 @@ import {
   registerDeviceToken, removeDeviceToken,
   selectSettings, selectProfile, selectLoading, selectErrors, clearError, getProfile,
 } from "@/store/slices/careAssistantSlice";
+import BackButton from "../../../components/BackButton";
 
 const links = [
   { name:"Notifications", href:"/care-assistant/settings/notifications", segments:["notifications"], icon:<Bell size={16}/>, note:"Control how and when Likeson contacts you" },
@@ -486,6 +487,8 @@ export default function SettingsPage() {
         }}
       >
         <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
+                     <BackButton className='my-3' />
+          
           <p className="text-[11px] font-bold uppercase tracking-widest mb-0.5" style={{ color: accentColor }}>
             Settings & Preferences
           </p>

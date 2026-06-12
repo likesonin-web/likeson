@@ -332,7 +332,7 @@ legalDocumentSchema.pre('save', async function () {
     this.sections.sort((a, b) => a.order - b.order);
   }
 
-  next();
+ 
 });
 
 // ── Model ─────────────────────────────────────────────────────────────────────

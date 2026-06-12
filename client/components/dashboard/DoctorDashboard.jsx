@@ -177,7 +177,8 @@ const SidebarSection = memo(function SidebarSection({
             {section.icons}
           </span>
           {isSidebarOpen && (
-            <span className="text-[10px] text-left font-bold uppercase tracking-widest whitespace-nowrap">
+            <span               className="text-xs font-semibold whitespace-nowrap overflow-hidden"
+>
               {section.title}
             </span>
           )}

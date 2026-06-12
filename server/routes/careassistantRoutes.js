@@ -270,7 +270,13 @@ router.post('/admin/create', isAdmin, async (req, res) => {
 router.get('/profile', isCareAssistant, async (req, res) => {
   try {
     const profile = await CareAssistantProfile.findOne({ user: req.user._id })
-      .select('-kyc.aadhaarNumber -kyc.panNumber -bankDetails.accountNumber -adminNotes');
+      // Explicitly remove sensitive IDs and internal notes
+      .select('-kyc.aadhaarNumber -kyc.panNumber -bankDetails.accountNumber -adminNotes')
+      // Populate the base User model with specific fields
+      .populate({
+        path: 'user',
+        select: 'name email phone avatar role isEmailVerified isPhoneVerified coins coinsEarned isOnline location'
+      });
 
     if (!profile) {
       return res.status(404).json({ success: false, message: 'Profile not found. Please complete onboarding.' });

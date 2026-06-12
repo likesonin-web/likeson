@@ -6,8 +6,9 @@
  *   B — OP Records
  *   C — Care Assistant: Bookings
  *   D — Care Assistant: Care Records
+ *   D2 — Care Record Uploads (file + standalone)
  *   E — Admin
- *   F — Doctor Dashboard (appointments, availability, earnings, transactions, invoices)
+ *   F — Doctor Dashboard
  */
 
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
@@ -16,10 +17,34 @@ import toast from 'react-hot-toast';
 
 const BASE = '/clinical';
 
-// ─── Loading / error helpers ──────────────────────────────────────────────────
-const pending  = (state, key)        => { state.loading[key] = true;  state.errors[key] = null; };
-const rejected = (state, action, key) => { state.loading[key] = false; state.errors[key] = action.payload; };
-const fulfilled = (state, key)        => { state.loading[key] = false; state.errors[key] = null; };
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const pending   = (state, key)         => { state.loading[key] = true;  state.errors[key] = null; };
+const rejected  = (state, action, key) => { state.loading[key] = false; state.errors[key] = action.payload; };
+const fulfilled = (state, key)         => { state.loading[key] = false; state.errors[key] = null; };
+
+/**
+ * Build FormData from a plain object.
+ * Handles: File[] under key "files", arrays serialised as JSON, primitives as strings.
+ * Usage: toFormData({ files: [File, File], mealType: 'lunch', images: [...urls] })
+ */
+const toFormData = (obj) => {
+  const fd = new FormData();
+  Object.entries(obj).forEach(([k, v]) => {
+    if (v === undefined || v === null) return;
+    if (k === 'files') {
+      // FileList or File[]
+      const list = Array.isArray(v) ? v : Array.from(v);
+      list.forEach((f) => fd.append('files', f));
+    } else if (Array.isArray(v) || (typeof v === 'object' && !(v instanceof File))) {
+      fd.append(k, JSON.stringify(v));
+    } else {
+      fd.append(k, v);
+    }
+  });
+  return fd;
+};
+
+const multipartCfg = { headers: { 'Content-Type': 'multipart/form-data' } };
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -46,13 +71,14 @@ export const fetchPrescriptions = createAsyncThunk(
   async (params = {}, { rejectWithValue }) => {
     try {
       const { data } = await API.get(`${BASE}/prescriptions`, { params });
-      return data;
+      return data; // { total, page, data[] }
     } catch (err) {
       return rejectWithValue(err.response?.data?.message || 'Failed to fetch prescriptions.');
     }
   }
 );
 
+// NOTE: must hit /verify/:rxNumber BEFORE /:id — router already ordered correctly
 export const verifyPrescription = createAsyncThunk(
   'clinical/verifyPrescription',
   async (rxNumber, { rejectWithValue }) => {
@@ -83,8 +109,8 @@ export const downloadPrescriptionPdf = createAsyncThunk(
   'clinical/downloadPrescriptionPdf',
   async (id, { rejectWithValue }) => {
     try {
-      const response = await API.get(`${BASE}/prescriptions/${id}/pdf`, { responseType: 'blob' });
-      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+      const res = await API.get(`${BASE}/prescriptions/${id}/pdf`, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
       window.open(url, '_blank');
       return id;
     } catch (err) {
@@ -247,6 +273,23 @@ export const rejectCABooking = createAsyncThunk(
 //  D — CARE ASSISTANT: CARE RECORDS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Resolve active care record by bookingId or patientId.
+ * CA app calls this on mount — sets activeCareRecord in state.
+ * Params: { bookingId } | { patientId }
+ */
+export const fetchActiveCareRecord = createAsyncThunk(
+  'clinical/fetchActiveCareRecord',
+  async (params, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`${BASE}/care/records/active`, { params });
+      return data.record;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || 'No active care record found.');
+    }
+  }
+);
+
 export const fetchCareRecords = createAsyncThunk(
   'clinical/fetchCareRecords',
   async (params = {}, { rejectWithValue }) => {
@@ -271,13 +314,41 @@ export const fetchCareRecordById = createAsyncThunk(
   }
 );
 
+/**
+ * Log vitals — supports file uploads (oximeter/monitor photos).
+ * Pass files: File[] for multipart upload, or omit for JSON-only.
+ *
+ * @param {object} payload
+ * @param {string} payload.id              — care record _id
+ * @param {File[]} [payload.files]         — optional evidence images
+ * @param {string} [payload.caption]       — image caption
+ * @param {string} [payload.bloodPressure]
+ * @param {number} [payload.pulseRate]
+ * @param {number} [payload.temperature]
+ * @param {number} [payload.spO2]
+ * @param {number} [payload.bloodSugar]
+ * @param {number} [payload.weightKg]
+ * @param {number} [payload.heightCm]
+ * @param {number} [payload.respiratoryRate]
+ * @param {string} [payload.notes]
+ * @param {object[]} [payload.evidenceImages] — pre-hosted URL objects (no files)
+ */
 export const logVitals = createAsyncThunk(
   'clinical/logVitals',
-  async ({ id, ...vitalsBody }, { rejectWithValue }) => {
+  async ({ id, files, ...rest }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post(`${BASE}/care/records/${id}/vitals`, vitalsBody);
+      let res;
+      if (files?.length) {
+        res = await API.post(
+          `${BASE}/care/records/${id}/vitals`,
+          toFormData({ files, ...rest }),
+          multipartCfg,
+        );
+      } else {
+        res = await API.post(`${BASE}/care/records/${id}/vitals`, rest);
+      }
       toast.success('Vitals recorded.');
-      return { id, entry: data.latest };
+      return { id, entry: res.data.latest };
     } catch (err) {
       const msg = err.response?.data?.message || 'Failed to log vitals.';
       toast.error(msg);
@@ -286,13 +357,37 @@ export const logVitals = createAsyncThunk(
   }
 );
 
+/**
+ * Log food entry — supports meal plate photo upload.
+ *
+ * @param {object} payload
+ * @param {string} payload.id
+ * @param {File[]} [payload.files]
+ * @param {string} payload.mealType
+ * @param {string} [payload.description]
+ * @param {number} [payload.quantityMl]
+ * @param {string} [payload.status]        — consumed|partial|refused|vomited
+ * @param {string} [payload.refusalReason]
+ * @param {string} [payload.notes]
+ * @param {string} [payload.caption]
+ * @param {object[]} [payload.images]      — pre-hosted URL objects
+ */
 export const logFood = createAsyncThunk(
   'clinical/logFood',
-  async ({ id, ...foodBody }, { rejectWithValue }) => {
+  async ({ id, files, ...rest }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post(`${BASE}/care/records/${id}/food`, foodBody);
+      let res;
+      if (files?.length) {
+        res = await API.post(
+          `${BASE}/care/records/${id}/food`,
+          toFormData({ files, ...rest }),
+          multipartCfg,
+        );
+      } else {
+        res = await API.post(`${BASE}/care/records/${id}/food`, rest);
+      }
       toast.success('Food entry logged.');
-      return { id, entry: data.entry };
+      return { id, entry: res.data.entry };
     } catch (err) {
       const msg = err.response?.data?.message || 'Failed to log food entry.';
       toast.error(msg);
@@ -301,13 +396,39 @@ export const logFood = createAsyncThunk(
   }
 );
 
+/**
+ * Log medicine administration — supports pill/strip photo upload.
+ *
+ * @param {object} payload
+ * @param {string} payload.id
+ * @param {File[]} [payload.files]
+ * @param {string} payload.medicineName
+ * @param {string} payload.scheduledAt    — ISO date string
+ * @param {string} [payload.dosage]
+ * @param {string} [payload.route]        — oral|iv|im|topical|...
+ * @param {string} [payload.status]       — given|missed|refused|held
+ * @param {string} [payload.administeredAt]
+ * @param {string} [payload.missedReason]
+ * @param {string} [payload.notes]
+ * @param {string} [payload.caption]
+ * @param {object[]} [payload.pillImages] — pre-hosted URL objects
+ */
 export const logMedicine = createAsyncThunk(
   'clinical/logMedicine',
-  async ({ id, ...medBody }, { rejectWithValue }) => {
+  async ({ id, files, ...rest }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post(`${BASE}/care/records/${id}/medicine-log`, medBody);
+      let res;
+      if (files?.length) {
+        res = await API.post(
+          `${BASE}/care/records/${id}/medicine-log`,
+          toFormData({ files, ...rest }),
+          multipartCfg,
+        );
+      } else {
+        res = await API.post(`${BASE}/care/records/${id}/medicine-log`, rest);
+      }
       toast.success('Medicine administration logged.');
-      return { id, entry: data.entry };
+      return { id, entry: res.data.entry };
     } catch (err) {
       const msg = err.response?.data?.message || 'Failed to log medicine.';
       toast.error(msg);
@@ -316,15 +437,34 @@ export const logMedicine = createAsyncThunk(
   }
 );
 
+/**
+ * Add care note — supports wound/observation photo upload.
+ *
+ * @param {object} payload
+ * @param {string} payload.id
+ * @param {string} payload.note
+ * @param {string} [payload.category]          — general|behavior|pain|mobility|hygiene|emotional|alert
+ * @param {string} [payload.severity]          — low|medium|high|critical
+ * @param {File[]} [payload.files]             — observation photos
+ * @param {string} [payload.caption]
+ * @param {object[]} [payload.observationImages] — pre-hosted URL objects
+ */
 export const addCareNote = createAsyncThunk(
   'clinical/addCareNote',
-  async ({ id, note, category, severity, observationImages }, { rejectWithValue }) => {
+  async ({ id, files, ...rest }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post(`${BASE}/care/records/${id}/notes`, {
-        note, category, severity, observationImages,
-      });
+      let res;
+      if (files?.length) {
+        res = await API.post(
+          `${BASE}/care/records/${id}/notes`,
+          toFormData({ files, ...rest }),
+          multipartCfg,
+        );
+      } else {
+        res = await API.post(`${BASE}/care/records/${id}/notes`, rest);
+      }
       toast.success('Care note added.');
-      return { id, note: data.note };
+      return { id, note: res.data.note };
     } catch (err) {
       const msg = err.response?.data?.message || 'Failed to add care note.';
       toast.error(msg);
@@ -348,15 +488,33 @@ export const resolveCareNote = createAsyncThunk(
   }
 );
 
+/**
+ * Add hospital instruction — supports prescription scan attachment upload.
+ *
+ * @param {object} payload
+ * @param {string} payload.id
+ * @param {string} payload.instruction
+ * @param {string} [payload.category]      — diet|mobility|medication|wound_care|general|emergency
+ * @param {File[]} [payload.files]
+ * @param {string} [payload.caption]
+ * @param {object[]} [payload.attachments] — pre-hosted URL objects
+ */
 export const addInstruction = createAsyncThunk(
   'clinical/addInstruction',
-  async ({ id, instruction, category, attachments }, { rejectWithValue }) => {
+  async ({ id, files, ...rest }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post(`${BASE}/care/records/${id}/instructions`, {
-        instruction, category, attachments,
-      });
+      let res;
+      if (files?.length) {
+        res = await API.post(
+          `${BASE}/care/records/${id}/instructions`,
+          toFormData({ files, ...rest }),
+          multipartCfg,
+        );
+      } else {
+        res = await API.post(`${BASE}/care/records/${id}/instructions`, rest);
+      }
       toast.success('Instruction added.');
-      return { id, instruction: data.instruction };
+      return { id, instruction: res.data.instruction };
     } catch (err) {
       const msg = err.response?.data?.message || 'Failed to add instruction.';
       toast.error(msg);
@@ -401,6 +559,74 @@ export const updateCareRecordStatus = createAsyncThunk(
       return data.data;
     } catch (err) {
       const msg = err.response?.data?.message || 'Failed to update care record status.';
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  }
+);
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  D2 — CARE RECORD UPLOADS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Push image(s) to an EXISTING log entry (positional S3 upload via backend).
+ * Use when CA wants to add more photos to an already-created vitals/food/etc entry.
+ *
+ * @param {object} payload
+ * @param {File[]} payload.files             — required
+ * @param {string} [payload.recordId]        — care record _id
+ * @param {string} [payload.bookingId]       — alt: resolves to active record
+ * @param {'vitals'|'food'|'medicine'|'care_note'|'instruction'} payload.logType
+ * @param {string} payload.entryId           — _id of subdoc entry to attach to
+ * @param {string} [payload.caption]
+ */
+export const uploadToLogEntry = createAsyncThunk(
+  'clinical/uploadToLogEntry',
+  async ({ files, ...rest }, { rejectWithValue }) => {
+    try {
+      if (!files?.length) throw new Error('No files provided.');
+      const { data } = await API.post(
+        `${BASE}/care/records/upload`,
+        toFormData({ files, standalone: 'false', ...rest }),
+        multipartCfg,
+      );
+      toast.success('Images attached to entry.');
+      return data; // { success, uploaded[], message }
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message || 'Upload failed.';
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  }
+);
+
+/**
+ * Upload standalone document (prescription scan, lab report, KYC doc, discharge summary).
+ * Syncs to Booking.documents + CustomerProfile.medicalTimeline (best-effort).
+ *
+ * @param {object} payload
+ * @param {File[]} payload.files
+ * @param {string} [payload.recordId]
+ * @param {string} [payload.bookingId]
+ * @param {'prescription'|'lab_report'|'discharge_summary'|'kyc'|'other'} [payload.docType]
+ * @param {string} [payload.caption]
+ */
+export const uploadStandaloneDoc = createAsyncThunk(
+  'clinical/uploadStandaloneDoc',
+  async ({ files, ...rest }, { rejectWithValue }) => {
+    try {
+      if (!files?.length) throw new Error('No files provided.');
+      const { data } = await API.post(
+        `${BASE}/care/records/upload`,
+        toFormData({ files, standalone: 'true', ...rest }),
+        multipartCfg,
+      );
+      toast.success('Document uploaded successfully.');
+      return data; // { success, uploaded[], message }
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message || 'Upload failed.';
       toast.error(msg);
       return rejectWithValue(msg);
     }
@@ -480,14 +706,8 @@ export const adminAssignCareAssistant = createAsyncThunk(
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  F — DOCTOR DASHBOARD
-//  Route: GET /clinical/doctor/appointments
-//  Supports: status, consultationType, search, from, to, page, limit
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Fetch doctor's appointments (bookings where doctor = logged-in doctor profile).
- * Params: status, consultationType, search, from, to, page, limit
- */
 export const fetchDoctorAppointments = createAsyncThunk(
   'clinical/fetchDoctorAppointments',
   async (params = {}, { rejectWithValue }) => {
@@ -500,17 +720,11 @@ export const fetchDoctorAppointments = createAsyncThunk(
   }
 );
 
-/**
- * Fetch single appointment detail by bookingId.
- * Uses GET /clinical/care/bookings/:bookingId (all-staff route — doctor has access).
- */
+// Reuses isAnyStaff route — doctor role check enforced server-side
 export const fetchDoctorAppointmentById = createAsyncThunk(
   'clinical/fetchDoctorAppointmentById',
   async (bookingId, { rejectWithValue }) => {
     try {
-      // Booking detail: reuse the booking router endpoint via operations pattern.
-      // Since prescriptionCareRouter doesn't have a single-booking endpoint for doctors,
-      // we call the care/bookings/:id route which is isAnyStaff (includes doctor).
       const { data } = await API.get(`${BASE}/care/bookings/${bookingId}`);
       return data.data;
     } catch (err) {
@@ -519,10 +733,6 @@ export const fetchDoctorAppointmentById = createAsyncThunk(
   }
 );
 
-/**
- * Fetch today's appointment count — derived from fetchDoctorAppointments.
- * Convenience thunk: filters to today's date server-side.
- */
 export const fetchDoctorTodayAppointments = createAsyncThunk(
   'clinical/fetchDoctorTodayAppointments',
   async (_, { rejectWithValue }) => {
@@ -533,7 +743,7 @@ export const fetchDoctorTodayAppointments = createAsyncThunk(
       });
       return data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.message || 'Failed to fetch today\'s appointments.');
+      return rejectWithValue(err.response?.data?.message || "Failed to fetch today's appointments.");
     }
   }
 );
@@ -635,8 +845,12 @@ const initialState = {
   careRecords:        [],
   careRecordsTotal:   0,
   careRecordsPage:    1,
-  selectedCareRecord: null,
-  instructions:       {}, // { [recordId]: [] }
+  activeCareRecord:   null,  // resolved by fetchActiveCareRecord (mount)
+  selectedCareRecord: null,  // resolved by fetchCareRecordById (detail view)
+  instructions:       {},    // { [recordId]: [] }
+
+  // D2 — Uploads
+  lastUploadedDocs: [], // most recent uploadStandaloneDoc result
 
   // E — Admin
   adminPrescriptions:      [],
@@ -653,7 +867,7 @@ const initialState = {
   doctorAppointmentsPage:    1,
   doctorTodayAppointments:   [],
   doctorTodayTotal:          0,
-  selectedDoctorAppointment: null, // from fetchDoctorAppointmentById
+  selectedDoctorAppointment: null,
   doctorAvailability:        null,
   doctorEarnings:            null,
   doctorTransactions:        [],
@@ -675,14 +889,37 @@ const clinicalSlice = createSlice({
   initialState,
 
   reducers: {
-    clearSelectedPrescription:      (state) => { state.selectedPrescription      = null; },
-    clearVerifiedRx:                (state) => { state.verifiedRx                = null; },
-    clearSelectedOP:                (state) => { state.selectedOP                = null; },
-    clearSelectedCABooking:         (state) => { state.selectedCABooking         = null; },
-    clearSelectedCareRecord:        (state) => { state.selectedCareRecord        = null; },
-    clearSelectedDoctorAppointment: (state) => { state.selectedDoctorAppointment = null; },
-    clearClinicalErrors:            (state) => { state.errors                    = {};   },
-    resetClinical:                  ()      => initialState,
+    clearSelectedPrescription:      (s) => { s.selectedPrescription      = null; },
+    clearVerifiedRx:                (s) => { s.verifiedRx                = null; },
+    clearSelectedOP:                (s) => { s.selectedOP                = null; },
+    clearSelectedCABooking:         (s) => { s.selectedCABooking         = null; },
+    clearActiveCareRecord:          (s) => { s.activeCareRecord          = null; },
+    clearSelectedCareRecord:        (s) => { s.selectedCareRecord        = null; },
+    clearSelectedDoctorAppointment: (s) => { s.selectedDoctorAppointment = null; },
+    clearClinicalErrors:            (s) => { s.errors                    = {};   },
+    resetClinical:                  ()  => initialState,
+
+    // Optimistic patch: update a single vitals entry's image list after uploadToLogEntry
+    appendImagesToVitalsEntry: (s, { payload: { entryId, images } }) => {
+      if (!s.selectedCareRecord?.vitalsLog) return;
+      const entry = s.selectedCareRecord.vitalsLog.find((e) => e._id === entryId);
+      if (entry) entry.evidenceImages = [...(entry.evidenceImages || []), ...images];
+    },
+    appendImagesToFoodEntry: (s, { payload: { entryId, images } }) => {
+      if (!s.selectedCareRecord?.foodLog) return;
+      const entry = s.selectedCareRecord.foodLog.find((e) => e._id === entryId);
+      if (entry) entry.images = [...(entry.images || []), ...images];
+    },
+    appendImagesToMedEntry: (s, { payload: { entryId, images } }) => {
+      if (!s.selectedCareRecord?.medicineLog) return;
+      const entry = s.selectedCareRecord.medicineLog.find((e) => e._id === entryId);
+      if (entry) entry.pillImages = [...(entry.pillImages || []), ...images];
+    },
+    appendImagesToNoteEntry: (s, { payload: { entryId, images } }) => {
+      if (!s.selectedCareRecord?.careNotes) return;
+      const entry = s.selectedCareRecord.careNotes.find((e) => e._id === entryId);
+      if (entry) entry.observationImages = [...(entry.observationImages || []), ...images];
+    },
   },
 
   extraReducers: (builder) => {
@@ -815,6 +1052,8 @@ const clinicalSlice = createSlice({
         const idx = s.caBookings.findIndex((b) => b._id === payload.bookingId);
         if (idx !== -1) s.caBookings[idx].status = 'in_progress';
         s.careRecords.unshift(payload.careRecord);
+        // Also populate activeCareRecord immediately so CA can start logging
+        s.activeCareRecord = payload.careRecord;
       });
 
     builder
@@ -828,6 +1067,14 @@ const clinicalSlice = createSlice({
 
 
     // ── D. CARE RECORDS ──────────────────────────────────────────────────────
+    builder
+      .addCase(fetchActiveCareRecord.pending,   (s)    => pending(s, 'fetchActiveCareRecord'))
+      .addCase(fetchActiveCareRecord.rejected,  (s, a) => rejected(s, a, 'fetchActiveCareRecord'))
+      .addCase(fetchActiveCareRecord.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'fetchActiveCareRecord');
+        s.activeCareRecord = payload;
+      });
+
     builder
       .addCase(fetchCareRecords.pending,   (s)    => pending(s, 'fetchCareRecords'))
       .addCase(fetchCareRecords.rejected,  (s, a) => rejected(s, a, 'fetchCareRecords'))
@@ -851,7 +1098,13 @@ const clinicalSlice = createSlice({
       .addCase(logVitals.rejected,  (s, a) => rejected(s, a, 'logVitals'))
       .addCase(logVitals.fulfilled, (s, { payload }) => {
         fulfilled(s, 'logVitals');
-        if (s.selectedCareRecord?._id === payload.id) s.selectedCareRecord.vitalsLog.push(payload.entry);
+        if (s.selectedCareRecord?._id === payload.id) {
+          s.selectedCareRecord.vitalsLog.push(payload.entry);
+        }
+        if (s.activeCareRecord?._id === payload.id) {
+          s.activeCareRecord.vitalsLog = s.activeCareRecord.vitalsLog ?? [];
+          s.activeCareRecord.vitalsLog.push(payload.entry);
+        }
       });
 
     builder
@@ -859,7 +1112,13 @@ const clinicalSlice = createSlice({
       .addCase(logFood.rejected,  (s, a) => rejected(s, a, 'logFood'))
       .addCase(logFood.fulfilled, (s, { payload }) => {
         fulfilled(s, 'logFood');
-        if (s.selectedCareRecord?._id === payload.id) s.selectedCareRecord.foodLog.push(payload.entry);
+        if (s.selectedCareRecord?._id === payload.id) {
+          s.selectedCareRecord.foodLog.push(payload.entry);
+        }
+        if (s.activeCareRecord?._id === payload.id) {
+          s.activeCareRecord.foodLog = s.activeCareRecord.foodLog ?? [];
+          s.activeCareRecord.foodLog.push(payload.entry);
+        }
       });
 
     builder
@@ -867,7 +1126,13 @@ const clinicalSlice = createSlice({
       .addCase(logMedicine.rejected,  (s, a) => rejected(s, a, 'logMedicine'))
       .addCase(logMedicine.fulfilled, (s, { payload }) => {
         fulfilled(s, 'logMedicine');
-        if (s.selectedCareRecord?._id === payload.id) s.selectedCareRecord.medicineLog.push(payload.entry);
+        if (s.selectedCareRecord?._id === payload.id) {
+          s.selectedCareRecord.medicineLog.push(payload.entry);
+        }
+        if (s.activeCareRecord?._id === payload.id) {
+          s.activeCareRecord.medicineLog = s.activeCareRecord.medicineLog ?? [];
+          s.activeCareRecord.medicineLog.push(payload.entry);
+        }
       });
 
     builder
@@ -875,7 +1140,13 @@ const clinicalSlice = createSlice({
       .addCase(addCareNote.rejected,  (s, a) => rejected(s, a, 'addCareNote'))
       .addCase(addCareNote.fulfilled, (s, { payload }) => {
         fulfilled(s, 'addCareNote');
-        if (s.selectedCareRecord?._id === payload.id) s.selectedCareRecord.careNotes.push(payload.note);
+        if (s.selectedCareRecord?._id === payload.id) {
+          s.selectedCareRecord.careNotes.push(payload.note);
+        }
+        if (s.activeCareRecord?._id === payload.id) {
+          s.activeCareRecord.careNotes = s.activeCareRecord.careNotes ?? [];
+          s.activeCareRecord.careNotes.push(payload.note);
+        }
       });
 
     builder
@@ -883,9 +1154,16 @@ const clinicalSlice = createSlice({
       .addCase(resolveCareNote.rejected,  (s, a) => rejected(s, a, 'resolveCareNote'))
       .addCase(resolveCareNote.fulfilled, (s, { payload }) => {
         fulfilled(s, 'resolveCareNote');
-        if (s.selectedCareRecord?._id === payload.id) {
-          const note = s.selectedCareRecord.careNotes.find((n) => n._id === payload.note._id);
-          if (note) { note.isResolved = true; note.resolvedAt = payload.note.resolvedAt; }
+        // Patch in both selected and active
+        for (const rec of [s.selectedCareRecord, s.activeCareRecord]) {
+          if (rec?._id === payload.id) {
+            const note = rec.careNotes?.find((n) => n._id === payload.note._id);
+            if (note) {
+              note.isResolved = true;
+              note.resolvedAt = payload.note.resolvedAt;
+              note.resolvedBy = payload.note.resolvedBy;
+            }
+          }
         }
       });
 
@@ -914,6 +1192,8 @@ const clinicalSlice = createSlice({
         const idx = s.careRecords.findIndex((r) => r._id === payload._id);
         if (idx !== -1) s.careRecords[idx] = payload;
         if (s.selectedCareRecord?._id === payload._id) s.selectedCareRecord = payload;
+        // Clear activeCareRecord — patient is gone
+        if (s.activeCareRecord?._id === payload._id) s.activeCareRecord = null;
       });
 
     builder
@@ -924,8 +1204,25 @@ const clinicalSlice = createSlice({
         const idx = s.careRecords.findIndex((r) => r._id === payload._id);
         if (idx !== -1) s.careRecords[idx] = payload;
         if (s.selectedCareRecord?._id === payload._id) s.selectedCareRecord = payload;
+        if (s.activeCareRecord?._id   === payload._id) s.activeCareRecord   = payload;
         const aidx = s.adminCareRecords.findIndex((r) => r._id === payload._id);
         if (aidx !== -1) s.adminCareRecords[aidx] = payload;
+      });
+
+
+    // ── D2. UPLOADS ──────────────────────────────────────────────────────────
+    builder
+      .addCase(uploadToLogEntry.pending,   (s)    => pending(s, 'uploadToLogEntry'))
+      .addCase(uploadToLogEntry.rejected,  (s, a) => rejected(s, a, 'uploadToLogEntry'))
+      .addCase(uploadToLogEntry.fulfilled, (s)    => fulfilled(s, 'uploadToLogEntry'));
+      // Optimistic image patching done via appendImages* sync actions above
+
+    builder
+      .addCase(uploadStandaloneDoc.pending,   (s)    => pending(s, 'uploadStandaloneDoc'))
+      .addCase(uploadStandaloneDoc.rejected,  (s, a) => rejected(s, a, 'uploadStandaloneDoc'))
+      .addCase(uploadStandaloneDoc.fulfilled, (s, { payload }) => {
+        fulfilled(s, 'uploadStandaloneDoc');
+        s.lastUploadedDocs = payload.uploaded || [];
       });
 
 
@@ -1053,10 +1350,15 @@ export const {
   clearVerifiedRx,
   clearSelectedOP,
   clearSelectedCABooking,
+  clearActiveCareRecord,
   clearSelectedCareRecord,
   clearSelectedDoctorAppointment,
   clearClinicalErrors,
   resetClinical,
+  appendImagesToVitalsEntry,
+  appendImagesToFoodEntry,
+  appendImagesToMedEntry,
+  appendImagesToNoteEntry,
 } = clinicalSlice.actions;
 
 
@@ -1083,8 +1385,10 @@ export const selectCAPendingCount    = (s) => s.clinical.caPendingBookings.lengt
 // D — Care Records
 export const selectCareRecords        = (s) => s.clinical.careRecords;
 export const selectCareRecordsTotal   = (s) => s.clinical.careRecordsTotal;
+export const selectActiveCareRecord   = (s) => s.clinical.activeCareRecord;
 export const selectSelectedCareRecord = (s) => s.clinical.selectedCareRecord;
 export const selectInstructionsFor    = (id) => (s) => s.clinical.instructions[id] || [];
+export const selectLastUploadedDocs   = (s) => s.clinical.lastUploadedDocs;
 
 // E — Admin
 export const selectAdminPrescriptions      = (s) => s.clinical.adminPrescriptions;
@@ -1108,19 +1412,20 @@ export const selectDoctorTransactions        = (s) => s.clinical.doctorTransacti
 export const selectDoctorTransactionsTotal   = (s) => s.clinical.doctorTransactionsTotal;
 export const selectDoctorInvoice             = (s) => s.clinical.doctorInvoice;
 
-// Derived care record helpers
+// Derived care record helpers — work on both active and selected
 export const selectLatestVitals = (s) => {
-  const rec = s.clinical.selectedCareRecord;
+  const rec = s.clinical.selectedCareRecord ?? s.clinical.activeCareRecord;
   if (!rec?.vitalsLog?.length) return null;
   return rec.vitalsLog[rec.vitalsLog.length - 1];
 };
-export const selectOpenAlerts = (s) =>
-  (s.clinical.selectedCareRecord?.careNotes || []).filter(
-    (n) => n.severity === 'critical' && !n.isResolved
-  );
+export const selectOpenAlerts = (s) => {
+  const rec = s.clinical.selectedCareRecord ?? s.clinical.activeCareRecord;
+  return (rec?.careNotes || []).filter((n) => n.severity === 'critical' && !n.isResolved);
+};
 export const selectTodaysMissedMeds = (s) => {
+  const rec = s.clinical.selectedCareRecord ?? s.clinical.activeCareRecord;
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  return (s.clinical.selectedCareRecord?.medicineLog || []).filter(
+  return (rec?.medicineLog || []).filter(
     (m) => m.status === 'missed' && new Date(m.scheduledAt) >= today
   );
 };

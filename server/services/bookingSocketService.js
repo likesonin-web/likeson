@@ -37,13 +37,13 @@ const LOCATION_THROTTLE_MS = 2_000;
 const ETA_RECALC_THROTTLE_MS = 30_000;
 
 const ACTIVE_RIDE_STATUSES = [
-  'driver_assigned',
-  'driver_accepted',
-  'driver_en_route',
-  'driver_arrived',
-  'otp_verified',
-  'in_progress',
-  'at_stop',
+  "driver_assigned",
+  "driver_accepted",
+  "driver_en_route",
+  "driver_arrived",
+  "otp_verified",
+  "in_progress",
+  "at_stop",
 ];
 
 const DROPOFF_TARGET_STATUSES = ["otp_verified", "in_progress", "at_stop"];
@@ -112,109 +112,115 @@ const resolveMapTarget = (rideStatus) =>
 
 const canJoinRoom = async (user, room) => {
   const { _id: userId, role, driverObjectId } = user;
- 
+
   // ── Admin rooms ─────────────────────────────────────────────────────────────
-  if (room === 'admin:ops' || room === 'admin:global') {
-    return ['admin', 'superadmin'].includes(role)
+  if (room === "admin:ops" || room === "admin:global") {
+    return ["admin", "superadmin"].includes(role)
       ? { allowed: true }
-      : { allowed: false, reason: 'Admin only' };
+      : { allowed: false, reason: "Admin only" };
   }
- 
+
   // ── Driver personal room ────────────────────────────────────────────────────
-  if (room.startsWith('driver:')) {
-    if (['admin', 'superadmin'].includes(role)) return { allowed: true };
-    const roomDriverId = room.replace('driver:', '');
+  if (room.startsWith("driver:")) {
+    if (["admin", "superadmin"].includes(role)) return { allowed: true };
+    const roomDriverId = room.replace("driver:", "");
     if (!isValidId(roomDriverId))
-      return { allowed: false, reason: 'Invalid driver ID' };
-    if (!['driver', 'solodriverpartner'].includes(role))
-      return { allowed: false, reason: 'Driver only' };
+      return { allowed: false, reason: "Invalid driver ID" };
+    if (!["driver", "solodriverpartner"].includes(role))
+      return { allowed: false, reason: "Driver only" };
     const myDriverId = driverObjectId || (await resolveDriverId(userId, role));
     if (!myDriverId || myDriverId !== roomDriverId)
-      return { allowed: false, reason: 'Not your driver room' };
+      return { allowed: false, reason: "Not your driver room" };
     return { allowed: true };
   }
- 
+
   // ── User personal room ──────────────────────────────────────────────────────
-  if (room.startsWith('user:')) {
-    if (['admin', 'superadmin'].includes(role)) return { allowed: true };
-    const roomUserId = room.replace('user:', '');
+  if (room.startsWith("user:")) {
+    if (["admin", "superadmin"].includes(role)) return { allowed: true };
+    const roomUserId = room.replace("user:", "");
     if (!isValidId(roomUserId))
-      return { allowed: false, reason: 'Invalid user ID' };
+      return { allowed: false, reason: "Invalid user ID" };
     if (userId !== roomUserId)
-      return { allowed: false, reason: 'Not your user room' };
+      return { allowed: false, reason: "Not your user room" };
     return { allowed: true };
   }
- 
+
   // ── Transport partner room ──────────────────────────────────────────────────
-  if (room.startsWith('tp:')) {
-    if (['admin', 'superadmin'].includes(role)) return { allowed: true };
-    if (role !== 'transportpartner')
-      return { allowed: false, reason: 'TP or admin only' };
-    const tpId = room.replace('tp:', '');
-    if (!isValidId(tpId)) return { allowed: false, reason: 'Invalid TP ID' };
+  if (room.startsWith("tp:")) {
+    if (["admin", "superadmin"].includes(role)) return { allowed: true };
+    if (role !== "transportpartner")
+      return { allowed: false, reason: "TP or admin only" };
+    const tpId = room.replace("tp:", "");
+    if (!isValidId(tpId)) return { allowed: false, reason: "Invalid TP ID" };
     const tp = await TransportPartner.findOne({ _id: tpId, user: userId })
-      .select('_id')
+      .select("_id")
       .lean();
-    if (!tp) return { allowed: false, reason: 'Not your TP' };
+    if (!tp) return { allowed: false, reason: "Not your TP" };
     return { allowed: true };
   }
- 
+
   // ── Booking room ────────────────────────────────────────────────────────────
-  if (room.startsWith('booking:')) {
-    const bookingId = room.replace('booking:', '');
+  if (room.startsWith("booking:")) {
+    const bookingId = room.replace("booking:", "");
     if (!isValidId(bookingId))
-      return { allowed: false, reason: 'Invalid booking ID' };
- 
+      return { allowed: false, reason: "Invalid booking ID" };
+
     // Admin always allowed
-    if (['admin', 'superadmin'].includes(role)) return { allowed: true };
- 
+    if (["admin", "superadmin"].includes(role)) return { allowed: true };
+
     const booking = await Booking.findById(bookingId)
-      .select('customer doctor transportPartner careAssistant bookingType')
+      .select("customer doctor transportPartner careAssistant bookingType")
       .lean();
-    if (!booking) return { allowed: false, reason: 'Booking not found' };
- 
+    if (!booking) return { allowed: false, reason: "Booking not found" };
+
     // ── Customer: owns this booking ───────────────────────────────────────────
     if (booking.customer?.toString() === userId) return { allowed: true };
- 
+
     // ── Driver: has an active ride on this booking ────────────────────────────
-    if (['driver', 'solodriverpartner'].includes(role)) {
+    if (["driver", "solodriverpartner"].includes(role)) {
       const dId = driverObjectId || (await resolveDriverId(userId, role));
       if (dId) {
         const ride = await Ride.findOne({
           booking: bookingId,
-          driver:  dId,
-        }).select('_id').lean();
+          driver: dId,
+        })
+          .select("_id")
+          .lean();
         if (ride) return { allowed: true };
       }
     }
- 
+
     // ── Care assistant ────────────────────────────────────────────────────────
     // FIX: CA can join booking room for BOTH care_assistant and full_care_ride
     // Previously: only checked if CA had a ride with driver field = CA
     // Now: check if booking.careAssistant === CA profile _id
-    if (role === 'care_assistant') {
+    if (role === "care_assistant") {
       const ca = await CareAssistantProfile.findOne({ user: userId })
-        .select('_id')
+        .select("_id")
         .lean();
       if (ca) {
         // Direct assignment check — works for ALL booking types including care_assistant
         if (booking.careAssistant?.toString() === ca._id.toString()) {
           return {
-            allowed:          true,
-            liveTracking:     true,
-            hospitalTracking: booking.bookingType === 'full_care_ride',
+            allowed: true,
+            liveTracking: true,
+            hospitalTracking: booking.bookingType === "full_care_ride",
           };
         }
- 
+
         // Fallback: check via RideTracking.careAssistant (in case booking.careAssistant not yet set)
         const activeRide = await Ride.findOne({
           booking: bookingId,
-          status:  { $in: ACTIVE_RIDE_STATUSES },
-        }).select('_id trackingId').lean();
- 
+          status: { $in: ACTIVE_RIDE_STATUSES },
+        })
+          .select(
+            "status rideStage activeNavigationTarget liveLocation driverSnapshot vehicleSnapshot trackingId pickup dropoff estimatedDistanceKm estimatedDurationMin waypoints",
+          )
+          .lean();
+
         if (activeRide?.trackingId) {
           const tracking = await RideTracking.findById(activeRide.trackingId)
-            .select('careAssistant')
+            .select("careAssistant")
             .lean();
           if (tracking?.careAssistant?.toString() === ca._id.toString()) {
             return { allowed: true, liveTracking: true };
@@ -222,20 +228,20 @@ const canJoinRoom = async (user, room) => {
         }
       }
     }
- 
+
     // ── Transport partner ─────────────────────────────────────────────────────
-    if (role === 'transportpartner') {
+    if (role === "transportpartner") {
       const tp = await TransportPartner.findOne({ user: userId })
-        .select('_id')
+        .select("_id")
         .lean();
       if (tp && booking.transportPartner?.toString() === tp._id.toString())
         return { allowed: true };
     }
- 
-    return { allowed: false, reason: 'Not linked to this booking' };
+
+    return { allowed: false, reason: "Not linked to this booking" };
   }
- 
-  return { allowed: false, reason: 'Unknown room format' };
+
+  return { allowed: false, reason: "Unknown room format" };
 };
 
 export { canJoinRoom };
@@ -380,14 +386,12 @@ class BookingSocketService {
           bookingId,
           _serverTime: new Date().toISOString(),
         });
-        socket
-          .to(room)
-          .emit("participant_joined", {
-            role,
-            name,
-            bookingId,
-            timestamp: new Date().toISOString(),
-          });
+        socket.to(room).emit("participant_joined", {
+          role,
+          name,
+          bookingId,
+          timestamp: new Date().toISOString(),
+        });
       } catch (err) {
         socket.emit("error", { message: "Failed to join room" });
       }
@@ -572,14 +576,30 @@ class BookingSocketService {
         if (activeRide?.trackingId) {
           tracking = await RideTracking.findById(activeRide.trackingId)
             .select(
-              "currentEtaMinutes totalDistanceKm hasActiveSos milestones expectedRoutePolyline activeTarget careAssistantStatus careAssistantLiveLocation",
+              "currentEtaMinutes totalDistanceKm hasActiveSos milestones expectedRoutePolyline " +
+                "activeTarget careAssistantStatus careAssistantLiveLocation careAssistantJoinedAt " +
+                "liveRouteContext",
             )
             .lean();
         }
 
+        // Pull CA join waypoint for full_care_ride
+        const caJoinWaypoint = activeRide
+          ? ((activeRide.waypoints || []).find(
+              (w) => w.type === "care_assistant_join",
+            ) ?? null)
+          : null;
+
+        const careAssistantStatus =
+          tracking?.careAssistantStatus ?? "not_joined";
+        const caHasJoined = careAssistantStatus === "in_ride";
+
         socket.emit("booking_state_snapshot", {
           bookingId,
           bookingStatus: booking.status,
+          bookingType: booking.bookingType,
+          isFullCareRide: booking.bookingType === "full_care_ride",
+
           ride: activeRide
             ? {
                 status: activeRide.status,
@@ -597,6 +617,7 @@ class BookingSocketService {
                 estimatedMinutes: activeRide.estimatedDurationMin,
               }
             : null,
+
           tracking: tracking
             ? {
                 currentEtaMinutes: tracking.currentEtaMinutes,
@@ -604,10 +625,37 @@ class BookingSocketService {
                 hasActiveSos: tracking.hasActiveSos,
                 lastMilestone: tracking.milestones?.slice(-1)[0] ?? null,
                 expectedRoutePolyline: tracking.expectedRoutePolyline,
-                careAssistantStatus: tracking.careAssistantStatus,
+                careAssistantStatus,
                 careAssistantLiveLocation: tracking.careAssistantLiveLocation,
               }
             : null,
+
+          // Full care ride specific — role-aware view hints
+          fullCareRide:
+            booking.bookingType === "full_care_ride"
+              ? {
+                  caJoinPoint: caJoinWaypoint
+                    ? {
+                        coordinates: caJoinWaypoint.location?.coordinates,
+                        address: caJoinWaypoint.location?.address,
+                        label: caJoinWaypoint.location?.label,
+                        zone: caJoinWaypoint.meta?.zone,
+                        isCompleted: caJoinWaypoint.isCompleted,
+                        completedAt: caJoinWaypoint.completedAt,
+                      }
+                    : null,
+                  careAssistantStatus,
+                  caHasJoined,
+                  // Role-based view mode for CA
+                  caViewMode:
+                    role === "care_assistant"
+                      ? caHasJoined
+                        ? "driver_tracking_only"
+                        : "navigate_to_jp"
+                      : null,
+                }
+              : null,
+
           _serverTime: new Date().toISOString(),
         });
       } catch (err) {

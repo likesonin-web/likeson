@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { Poppins, Montserrat } from 'next/font/google';
+import { Analytics } from '@vercel/analytics/next'; // <-- 1. Added Analytics import
 import './globals.css';
 import './consultation-admin.css';
 import ConnectivityWrapper from '@/components/ui/ConnectivityWrapper';
@@ -170,6 +171,9 @@ export default function RootLayout({
             />
           </ThemeProvider>
         </StoreProvider>
+        
+        {/* <-- 2. Added Analytics component here */}
+        <Analytics />
       </body>
     </html>
   );

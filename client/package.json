@@ -16,6 +16,7 @@
     "@lottiefiles/dotlottie-react": "^0.18.9",
     "@react-google-maps/api": "^2.20.8",
     "@reduxjs/toolkit": "^2.11.2",
+    "@vercel/analytics": "^2.0.1",
     "@videosdk.live/react-sdk": "^0.10.0",
     "agora-rtc-react": "^2.5.1",
     "agora-rtc-sdk-ng": "^4.24.3",
