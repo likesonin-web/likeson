@@ -1,15 +1,6 @@
 @import "tailwindcss";
 
-/* ============================================================
-   DESIGN PHILOSOPHY
-   - Pure white base, clean clinical feel
-   - All roles share same structural base; only primary/accent differ
-   - Each role has ONE signature hue — no hue conflicts
-   - Warm life added via accent warmth and friendly radius
-   - Dark mode = first-class, not an afterthought
-   - Cohesive family: roles feel related, not random
-   ============================================================ */
-
+ 
 @theme {
   --font-family-poppins:    var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
   --font-family-montserrat: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
@@ -1264,6 +1255,5 @@
   .glass-card { border: 1px solid #e5e7eb; background: white; }
   .no-print   { display: none !important; }
 }
-
 
  

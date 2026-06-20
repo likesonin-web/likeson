@@ -1,33 +1,5 @@
 'use client';
 
-/**
- * WalletPage — Likeson Healthcare
- *
- * Corrected to match:
- *   • walletRouter.js   — Razorpay-only, P2P removed
- *   • walletSlice.js    — all thunks, corrected selectors
- *
- * Bug fixes over previous version:
- *   1.  P2P Send / Receive removed — router has no /transfer, /lookup, /upi-id endpoints.
- *   2.  ReceiveModal removed — UPI ID no longer stored on wallet.
- *   3.  SendModal removed — P2P transfer removed from router.
- *   4.  P2PHistoryPanel removed — /transfers endpoint removed.
- *   5.  BalanceCard: Send + Receive buttons removed; replaced with Withdraw.
- *   6.  FILTER_OPTIONS: P2P_Send, P2P_Receive removed from filter list.
- *   7.  TABS: 'p2p' tab removed; 'admin' tab added for admin roles.
- *   8.  verifyWalletTopup payload: amount renamed to displayAmount — server
- *       fetches authoritative amount from Razorpay; client value is UI-only.
- *   9.  AddBankModal toast text corrected: "verified and added" not "pending".
- *   10. AdminWithdrawalsPanel: no razorpayPayoutId input — server handles payout.
- *   11. completeWithdrawal response: reads data.payoutId / data.status (not razorpayPayoutId).
- *   12. adminVerifyBankAccount: razorpayContactId field removed from payload.
- *   13. selectWithdrawalsPage / limit selectors now correctly sourced.
- *   14. StatsRow uses selectNonWithdrawable correctly.
- *   15. TransactionRow PURPOSE_META: P2P entries kept for historical display of
- *       old txns but not in filters/tabs.
- *   16. Admin panel (AdminWithdrawalsPanel, AdminVerifyBankModal) fully implemented.
- */
-
 import {
   useState, useCallback, useMemo, useRef, useEffect, memo,
 } from 'react';
@@ -39,10 +11,10 @@ import {
   Wallet, Plus, ArrowUpRight, ArrowDownLeft, RefreshCw,
   ShieldCheck, Filter, ChevronDown, X, CheckCircle2,
   AlertCircle, Loader2, CreditCard, Banknote, History,
-  Star, Clock, Zap, Eye, EyeOff, Copy, CheckCheck,
-  BarChart3, Activity, ArrowRight, Building2, Trash2,
+  Star, Clock, Zap, Eye, EyeOff, CheckCheck,
+  BarChart3, Activity, Building2, Trash2,
   Info, BanknoteIcon, LockKeyhole, RotateCcw, ListChecks,
-  TrendingUp, UserCog, ShieldAlert, ToggleLeft, ToggleRight,
+  TrendingUp,
 } from 'lucide-react';
 
 import {
@@ -61,19 +33,6 @@ import {
   fetchWithdrawals,
   requestWithdrawal,
   cancelWithdrawal,
-  // Admin withdrawals
-  fetchAdminWithdrawals,
-  approveWithdrawal,
-  completeWithdrawal,
-  rejectWithdrawal,
-  failWithdrawal,
-  // Admin bank verify
-  adminVerifyBankAccount,
-  // Admin wallet ops
-  adminCreditWallet,
-  adminDebitWallet,
-  fetchAdminWallets,
-  toggleWalletActive,
   // Actions
   clearWalletErrors,
   clearActiveWithdrawal,
@@ -82,7 +41,6 @@ import {
   selectWalletData,
   selectWalletBalance,
   selectWalletLoading,
-  selectWalletActionLoading,
   selectWalletError,
   selectWalletTransactions,
   // Selectors — withdrawable
@@ -95,7 +53,6 @@ import {
   selectWithdrawableLoading,
   // Selectors — bank accounts
   selectBankAccounts,
-  selectPrimaryBankAccount,
   selectVerifiedBankAccounts,
   selectBankAccountsLoading,
   selectBankAccountActing,
@@ -104,13 +61,6 @@ import {
   selectWithdrawalsTotal,
   selectWithdrawalsLoading,
   selectWithdrawalActing,
-  // Selectors — admin
-  selectAdminWithdrawals,
-  selectAdminWithdrawalsTotal,
-  selectAdminWithdrawalsLoading,
-  selectAdminWallets,
-  selectAdminWalletsTotal,
-  selectAdminWalletsLoading,
 } from '@/store/slices/walletSlice';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -127,21 +77,20 @@ const PER_PAGE           = 12;
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PURPOSE_META = {
-  Add_Money:           { label: 'Top Up',       color: 'text-emerald-500', bg: 'bg-emerald-500/10', Icon: Plus         },
+  Add_Money:           { label: 'Top Up',        color: 'text-emerald-500', bg: 'bg-emerald-500/10', Icon: Plus         },
   Booking_Payment:     { label: 'Booking',       color: 'text-sky-500',     bg: 'bg-sky-500/10',     Icon: CreditCard   },
   Medicine_Purchase:   { label: 'Pharmacy',      color: 'text-violet-500',  bg: 'bg-violet-500/10',  Icon: Banknote     },
-  Refund:              { label: 'Refund',         color: 'text-cyan-500',    bg: 'bg-cyan-500/10',    Icon: ArrowDownLeft},
-  Referral_Bonus:      { label: 'Referral',       color: 'text-amber-500',   bg: 'bg-amber-500/10',   Icon: Star         },
+  Refund:              { label: 'Refund',        color: 'text-cyan-500',    bg: 'bg-cyan-500/10',    Icon: ArrowDownLeft},
+  Referral_Bonus:      { label: 'Referral',      color: 'text-amber-500',   bg: 'bg-amber-500/10',   Icon: Star         },
   Subscription_Fee:    { label: 'Subscription',  color: 'text-rose-500',    bg: 'bg-rose-500/10',    Icon: RefreshCw    },
-  Coin_Conversion:     { label: 'Coins',          color: 'text-yellow-500',  bg: 'bg-yellow-500/10',  Icon: Star         },
+  Coin_Conversion:     { label: 'Coins',         color: 'text-yellow-500',  bg: 'bg-yellow-500/10',  Icon: Star         },
   Admin_Credit:        { label: 'Admin Credit',  color: 'text-emerald-500', bg: 'bg-emerald-500/10', Icon: CheckCircle2 },
   Admin_Debit:         { label: 'Admin Debit',   color: 'text-rose-500',    bg: 'bg-rose-500/10',    Icon: AlertCircle  },
-  Cashback:            { label: 'Cashback',       color: 'text-lime-500',    bg: 'bg-lime-500/10',    Icon: TrendingUp   },
-  // P2P kept in meta for historical transaction display — router no longer creates them
-  P2P_Send:            { label: 'Sent (P2P)',     color: 'text-rose-500',    bg: 'bg-rose-500/10',    Icon: ArrowUpRight },
+  Cashback:            { label: 'Cashback',      color: 'text-lime-500',    bg: 'bg-lime-500/10',    Icon: TrendingUp   },
+  P2P_Send:            { label: 'Sent (P2P)',    color: 'text-rose-500',    bg: 'bg-rose-500/10',    Icon: ArrowUpRight },
   P2P_Receive:         { label: 'Received (P2P)',color: 'text-emerald-500', bg: 'bg-emerald-500/10', Icon: ArrowDownLeft},
-  Withdrawal_Debit:    { label: 'Withdrawal',     color: 'text-orange-500',  bg: 'bg-orange-500/10',  Icon: BanknoteIcon },
-  Withdrawal_Reversal: { label: 'Reversal',       color: 'text-teal-500',    bg: 'bg-teal-500/10',    Icon: RotateCcw    },
+  Withdrawal_Debit:    { label: 'Withdrawal',    color: 'text-orange-500',  bg: 'bg-orange-500/10',  Icon: BanknoteIcon },
+  Withdrawal_Reversal: { label: 'Reversal',      color: 'text-teal-500',    bg: 'bg-teal-500/10',    Icon: RotateCcw    },
 };
 
 const WITHDRAWAL_STATUS_META = {
@@ -152,8 +101,6 @@ const WITHDRAWAL_STATUS_META = {
   Rejected:  { color: 'text-red-500',     bg: 'bg-red-500/10',     label: 'Rejected'  },
 };
 
-// BUG FIX: P2P_Send / P2P_Receive removed from active filter options
-// (they remain in PURPOSE_META for rendering historical transactions)
 const FILTER_OPTIONS = [
   { key: 'All',               label: 'All'        },
   { key: 'Credit',            label: 'Credits'    },
@@ -238,11 +185,6 @@ const slideLeft = {
 function useWalletOps() {
   const dispatch = useDispatch();
 
-  /**
-   * Full Razorpay top-up flow.
-   * displayAmount is used ONLY for the success toast — it is passed as
-   * `displayAmount` to verifyWalletTopup and never sent to the server.
-   */
   const handleAddMoney = useCallback(
     async (amount, { onProcessing, onSuccess, onError, onDismiss } = {}) => {
       try {
@@ -260,7 +202,6 @@ function useWalletOps() {
           order_id:    rzpOrder.id,
           handler: async (resp) => {
             try {
-              // BUG FIX #8: pass displayAmount, not amount — server ignores amount
               await dispatch(verifyWalletTopup({
                 razorpay_order_id:   resp.razorpay_order_id,
                 razorpay_payment_id: resp.razorpay_payment_id,
@@ -356,8 +297,6 @@ AnimatedBalance.displayName = 'AnimatedBalance';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Balance Card
-// BUG FIX #2 & #3: Send + Receive buttons removed — P2P removed from router.
-//                  Replaced with Withdraw button.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BalanceCard = memo(({ onAddMoney, onWithdraw }) => {
@@ -440,7 +379,7 @@ const BalanceCard = memo(({ onAddMoney, onWithdraw }) => {
           </div>
         </div>
 
-        {/* action buttons — BUG FIX: Send/Receive removed */}
+        {/* action buttons */}
         <div className="mt-5 flex flex-wrap gap-2.5">
           <motion.button
             onClick={onAddMoney}
@@ -530,8 +469,8 @@ const WithdrawablePanel = memo(({ onWithdraw }) => {
         <div className="grid grid-cols-2 gap-3">
           {[
             { label: 'Total Balance',    value: fmt(balance),   color: 'text-base-content'    },
-            { label: 'Withdrawable',     value: fmt(wdBalance), color: 'text-warning'          },
-            { label: 'Locked',           value: fmt(locked),    color: 'text-error'            },
+            { label: 'Withdrawable',     value: fmt(wdBalance), color: 'text-warning'         },
+            { label: 'Locked',           value: fmt(locked),    color: 'text-error'           },
             { label: 'Platform Only',    value: fmt(nonWd),     color: 'text-base-content/50' },
           ].map(({ label, value, color }) => (
             <div key={label} className="rounded-xl bg-base-200 px-3 py-3">
@@ -630,7 +569,7 @@ const BankAccountsPanel = memo(({ onAddNew }) => {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <p className="text-[13px] font-bold text-base-content truncate">{acc.accountHolderName}</p>
-                  {acc.isPrimary  && <Pill color="text-info"    bg="bg-info/10">Primary</Pill>}
+                  {acc.isPrimary  && <Pill color="text-info"   bg="bg-info/10">Primary</Pill>}
                   {acc.isVerified
                     ? <Pill color="text-success" bg="bg-success/10">Verified</Pill>
                     : <Pill color="text-warning" bg="bg-warning/10">Unverified</Pill>
@@ -784,236 +723,6 @@ const UserWithdrawalsPanel = memo(({ onNewWithdrawal }) => {
   );
 });
 UserWithdrawalsPanel.displayName = 'UserWithdrawalsPanel';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Admin: Withdrawals Panel
-// BUG FIX #10: No razorpayPayoutId input — server handles Razorpay X call.
-// ─────────────────────────────────────────────────────────────────────────────
-
-const AdminWithdrawalsPanel = memo(() => {
-  const dispatch  = useDispatch();
-  const requests  = useSelector(selectAdminWithdrawals);
-  const total     = useSelector(selectAdminWithdrawalsTotal);
-  const loading   = useSelector(selectAdminWithdrawalsLoading);
-  const acting    = useSelector(selectWithdrawalActing);
-
-  const [statusFilter, setStatusFilter] = useState('Pending');
-  const [adminNote, setAdminNote]       = useState('');
-  const [failReason, setFailReason]     = useState('');
-  const [activeId, setActiveId]         = useState(null);
-
-  useEffect(() => {
-    dispatch(fetchAdminWithdrawals({ status: statusFilter, page: 1, limit: 20 }));
-  }, [dispatch, statusFilter]);
-
-  const act = (fn) => async (item) => {
-    setActiveId(item.request.requestId);
-    try { await fn(item); }
-    finally { setActiveId(null); }
-  };
-
-  const handleApprove = act(({ request, walletId }) =>
-    dispatch(approveWithdrawal({ requestId: request.requestId, walletId }))
-  );
-
-  // BUG FIX: complete only sends { walletId } — NO razorpayPayoutId
-  const handleComplete = act(({ request, walletId }) =>
-    dispatch(completeWithdrawal({ requestId: request.requestId, walletId }))
-  );
-
-  const handleReject = act(({ request, walletId }) => {
-    const note = prompt('Rejection reason (optional):') ?? '';
-    return dispatch(rejectWithdrawal({ requestId: request.requestId, walletId, adminNote: note }));
-  });
-
-  const handleFail = act(({ request, walletId }) => {
-    const reason = prompt('Failure reason (optional):') ?? '';
-    return dispatch(failWithdrawal({ requestId: request.requestId, walletId, failureReason: reason }));
-  });
-
-  return (
-    <motion.div variants={fadeUp} className="card overflow-hidden">
-      <div className="flex items-center justify-between border-b border-base-300 bg-base-200/60 px-5 py-4">
-        <div className="flex items-center gap-2">
-          <ShieldAlert className="h-4 w-4 text-error" />
-          <h3 className="text-[11px] font-black uppercase tracking-[0.14em] text-base-content">Admin: Withdrawal Queue</h3>
-          {total > 0 && (
-            <span className="rounded-full bg-error/10 px-2 py-0.5 text-[10px] font-black text-error">{total}</span>
-          )}
-        </div>
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
-          className="rounded-lg border border-base-300 bg-base-200 px-2 py-1 text-[11px] font-bold text-base-content"
-        >
-          {['Pending', 'Approved', 'Completed', 'Failed', 'Rejected'].map((s) => (
-            <option key={s} value={s}>{s}</option>
-          ))}
-        </select>
-      </div>
-
-      <div className="p-4 space-y-3">
-        {loading && requests.length === 0 ? (
-          Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="h-20 w-full animate-pulse rounded-xl bg-base-200" />
-          ))
-        ) : requests.length === 0 ? (
-          <div className="flex flex-col items-center py-10 text-center gap-3">
-            <p className="text-sm font-bold text-base-content/40">No {statusFilter} requests</p>
-          </div>
-        ) : (
-          requests.map((item) => {
-            const { request, user, walletId } = item;
-            const meta = WITHDRAWAL_STATUS_META[request.status] ?? WITHDRAWAL_STATUS_META.Pending;
-            const isThis = activeId === request.requestId;
-
-            return (
-              <motion.div key={request.requestId} layout
-                className="rounded-xl border border-base-300 bg-base-200 p-4 space-y-3"
-              >
-                {/* user + amount */}
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-[13px] font-bold text-base-content">{user?.name || 'Unknown User'}</p>
-                    <p className="text-[11px] text-base-content/45 truncate">{user?.email} · {user?.phone}</p>
-                    <p className="text-[10px] text-base-content/30 mt-0.5">{request.requestId}</p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-[15px] font-black text-base-content">{fmt(request.amount)}</p>
-                    <Pill color={meta.color} bg={meta.bg}>{meta.label}</Pill>
-                  </div>
-                </div>
-
-                {/* bank info */}
-                <div className="flex items-center gap-2 rounded-lg bg-base-100 px-3 py-2">
-                  <Building2 className="h-3.5 w-3.5 text-base-content/30" />
-                  <p className="text-[11px] text-base-content/60 truncate">
-                    XXXX{request.accountNumber} · {request.ifscCode} · {request.bankName || '—'}
-                  </p>
-                </div>
-
-                <p className="text-[10px] text-base-content/35">{fmtDate(request.requestedAt)}</p>
-
-                {/* action buttons */}
-                {request.status === 'Pending' && (
-                  <div className="flex gap-2 flex-wrap">
-                    <button onClick={() => handleApprove(item)} disabled={acting}
-                      className="flex items-center gap-1.5 rounded-lg bg-sky-500/10 px-3 py-2 text-[11px] font-bold text-sky-500 hover:bg-sky-500/20 disabled:opacity-50 transition-colors"
-                    >
-                      {isThis ? <Spinner size={3} /> : <CheckCircle2 className="h-3.5 w-3.5" />} Approve
-                    </button>
-                    <button onClick={() => handleReject(item)} disabled={acting}
-                      className="flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-2 text-[11px] font-bold text-red-500 hover:bg-red-500/20 disabled:opacity-50 transition-colors"
-                    >
-                      {isThis ? <Spinner size={3} /> : <X className="h-3.5 w-3.5" />} Reject
-                    </button>
-                  </div>
-                )}
-
-                {request.status === 'Approved' && (
-                  <div className="flex gap-2 flex-wrap">
-                    {/* BUG FIX: "Initiate Payout" — no payout ID input field */}
-                    <button onClick={() => handleComplete(item)} disabled={acting}
-                      className="flex items-center gap-1.5 rounded-lg bg-emerald-500/10 px-3 py-2 text-[11px] font-bold text-emerald-500 hover:bg-emerald-500/20 disabled:opacity-50 transition-colors"
-                    >
-                      {isThis ? <Spinner size={3} /> : <Zap className="h-3.5 w-3.5" />}
-                      Initiate Payout via Razorpay
-                    </button>
-                    <button onClick={() => handleFail(item)} disabled={acting}
-                      className="flex items-center gap-1.5 rounded-lg bg-rose-500/10 px-3 py-2 text-[11px] font-bold text-rose-500 hover:bg-rose-500/20 disabled:opacity-50 transition-colors"
-                    >
-                      {isThis ? <Spinner size={3} /> : <AlertCircle className="h-3.5 w-3.5" />} Mark Failed
-                    </button>
-                  </div>
-                )}
-
-                {request.razorpayPayoutId && (
-                  <p className="text-[10px] text-base-content/30">
-                    Payout ID: {request.razorpayPayoutId} · {request.razorpayPayoutStatus}
-                  </p>
-                )}
-              </motion.div>
-            );
-          })
-        )}
-      </div>
-    </motion.div>
-  );
-});
-AdminWithdrawalsPanel.displayName = 'AdminWithdrawalsPanel';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Admin: Verify Bank Account Modal
-// BUG FIX #12: razorpayContactId removed from payload
-// ─────────────────────────────────────────────────────────────────────────────
-
-const AdminVerifyBankModal = memo(({ open, onClose, walletId, bankAccountId, maskedAccount }) => {
-  const dispatch = useDispatch();
-  const acting   = useSelector(selectBankAccountActing);
-  const [fundAccountId, setFundAccountId] = useState('');
-  const [err, setErr] = useState('');
-
-  const handleSubmit = async () => {
-    if (!fundAccountId.trim()) { setErr('Razorpay Fund Account ID is required'); return; }
-    setErr('');
-    try {
-      // BUG FIX: only razorpayFundAccountId sent — razorpayContactId removed from schema
-      await dispatch(adminVerifyBankAccount({
-        walletId,
-        bankAccountId,
-        razorpayFundAccountId: fundAccountId.trim(),
-      })).unwrap();
-      setFundAccountId('');
-      onClose();
-    } catch (e) { setErr(e?.message || 'Verification failed'); }
-  };
-
-  return (
-    <AnimatePresence>
-      {open && (
-        <ModalOverlay onClose={onClose}>
-          <motion.div variants={scaleIn} initial="hidden" animate="visible" exit="exit"
-            className="w-full max-w-sm overflow-hidden rounded-2xl border border-info/20 bg-base-100 shadow-2xl"
-          >
-            <div className="h-1 bg-gradient-to-r from-info to-primary" />
-            <div className="flex items-center justify-between px-6 py-5 pb-4">
-              <div>
-                <h2 className="font-black text-lg text-base-content">Verify Bank Account</h2>
-                <p className="mt-0.5 text-[11px] text-base-content/45">{maskedAccount}</p>
-              </div>
-              <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-xl bg-base-300">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="px-6 pb-7 space-y-4">
-              <div>
-                <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-base-content/45">
-                  Razorpay Fund Account ID
-                </label>
-                <input
-                  className="w-full rounded-xl border border-base-300 bg-base-200 px-4 py-3 text-sm font-medium text-base-content focus:border-info/50 focus:outline-none focus:ring-1 focus:ring-info/30"
-                  placeholder="fa_xxxxxxxxxxxxx"
-                  value={fundAccountId}
-                  onChange={(e) => setFundAccountId(e.target.value)}
-                />
-                <p className="mt-1.5 text-[11px] text-base-content/35">
-                  Get this from Razorpay X dashboard after creating the fund account.
-                </p>
-              </div>
-              <ErrorBox msg={err} />
-              <motion.button
-                onClick={handleSubmit} disabled={acting || !fundAccountId.trim()}
-                whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-                className="w-full flex items-center justify-center gap-2 rounded-xl bg-info py-3 text-[13px] font-black uppercase tracking-wider text-white disabled:opacity-50"
-              >
-                {acting ? <><Spinner /> Verifying…</> : <><CheckCircle2 className="h-4 w-4" /> Verify Account</>}
-              </motion.button>
-            </div>
-          </motion.div>
-        </ModalOverlay>
-      )}
-    </AnimatePresence>
-  );
-});
-AdminVerifyBankModal.displayName = 'AdminVerifyBankModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Transaction Row
@@ -1256,7 +965,6 @@ InsightsPanel.displayName = 'InsightsPanel';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stats Row
-// BUG FIX #4 (selectNonWithdrawable) and BUG FIX #11 (label)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const StatsRow = memo(() => {
@@ -1268,8 +976,8 @@ const StatsRow = memo(() => {
     const debits  = txns.filter((t) => t.type === 'Debit').reduce((s, t) => s + t.amount, 0);
     const success = txns.filter((t) => t.status === 'Success').length;
     return [
-      { label: 'Total Credited',    value: fmtCompact(credits), color: 'text-success', bg: 'bg-success/10', Icon: ArrowDownLeft, sub: 'All time'     },
-      { label: 'Total Debited',     value: fmtCompact(debits),  color: 'text-error',   bg: 'bg-error/10',   Icon: ArrowUpRight,  sub: 'All time'     },
+      { label: 'Total Credited',    value: fmtCompact(credits), color: 'text-success', bg: 'bg-success/10', Icon: ArrowDownLeft, sub: 'All time'      },
+      { label: 'Total Debited',     value: fmtCompact(debits),  color: 'text-error',   bg: 'bg-error/10',   Icon: ArrowUpRight,  sub: 'All time'      },
       { label: 'Transactions',      value: success,             color: 'text-primary', bg: 'bg-primary/10', Icon: Activity,      sub: 'Successful'   },
       { label: 'Platform Balance',  value: fmtCompact(nonWd),   color: 'text-warning', bg: 'bg-warning/10', Icon: BanknoteIcon,  sub: 'Non-withdrawable' },
     ];
@@ -1298,15 +1006,13 @@ StatsRow.displayName = 'StatsRow';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tab Bar
-// BUG FIX #6: 'p2p' tab removed. 'admin' tab added.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TABS = [
-  { key: 'all',      label: 'History',  Icon: History     },
-  { key: 'bank',     label: 'Bank',     Icon: Building2   },
+  { key: 'all',      label: 'History',  Icon: History    },
+  { key: 'bank',     label: 'Bank',     Icon: Building2  },
   { key: 'withdraw', label: 'Withdraw', Icon: BanknoteIcon },
-  { key: 'insights', label: 'Insights', Icon: BarChart3   },
-  { key: 'admin',    label: 'Admin',    Icon: UserCog     },
+  { key: 'insights', label: 'Insights', Icon: BarChart3  },
 ];
 
 const TabBar = memo(({ active, onChange }) => (
@@ -1508,7 +1214,6 @@ AddMoneyModal.displayName = 'AddMoneyModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Add Bank Account Modal
-// BUG FIX #9: toast text corrected — Razorpay auto-verifies during add
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AddBankModal = memo(({ open, onClose }) => {
@@ -1549,7 +1254,7 @@ const AddBankModal = memo(({ open, onClose }) => {
   const FIELDS = [
     { label: 'Account Holder Name *', key: 'accountHolderName', placeholder: 'As per bank records'        },
     { label: 'Account Number *',      key: 'accountNumber',     placeholder: '9–18 digit account number', inputMode: 'numeric' },
-    { label: 'IFSC Code *',           key: 'ifscCode',          placeholder: 'e.g. SBIN0001234',           upper: true },
+    { label: 'IFSC Code *',           key: 'ifscCode',          placeholder: 'e.g. SBIN0001234',          upper: true },
     { label: 'Bank Name',             key: 'bankName',          placeholder: 'e.g. State Bank of India'   },
     { label: 'Branch Name',           key: 'branchName',        placeholder: 'Optional'                   },
   ];
@@ -1628,7 +1333,6 @@ AddBankModal.displayName = 'AddBankModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Withdrawal Request Modal
-// Uses selectVerifiedBankAccounts — only verified accounts eligible
 // ─────────────────────────────────────────────────────────────────────────────
 
 const WithdrawModal = memo(({ open, onClose }) => {
@@ -1825,9 +1529,6 @@ export default function WalletPage() {
   const [showWithdraw, setShowWithdraw] = useState(false);
   const [activeTab,    setActiveTab]    = useState('all');
 
-  // Admin verify bank modal state
-  const [verifyModal, setVerifyModal] = useState({ open: false, walletId: null, bankAccountId: null, maskedAccount: '' });
-
   useEffect(() => {
     dispatch(fetchWalletDetails());
     dispatch(fetchWithdrawableBalance());
@@ -1919,13 +1620,6 @@ export default function WalletPage() {
                   </motion.div>
                 )}
 
-                {/* BUG FIX #7: Admin tab — was missing entirely */}
-                {activeTab === 'admin' && (
-                  <motion.div key="admin" variants={slideLeft} initial="hidden" animate="visible" exit="exit" className="space-y-4">
-                    <AdminWithdrawalsPanel />
-                  </motion.div>
-                )}
-
               </AnimatePresence>
             </div>
           </motion.div>
@@ -1948,13 +1642,6 @@ export default function WalletPage() {
       <AddMoneyModal   open={showAdd}      onClose={() => setShowAdd(false)}      />
       <AddBankModal    open={showAddBank}  onClose={() => setShowAddBank(false)}  />
       <WithdrawModal   open={showWithdraw} onClose={() => setShowWithdraw(false)} />
-      <AdminVerifyBankModal
-        open={verifyModal.open}
-        onClose={() => setVerifyModal({ open: false, walletId: null, bankAccountId: null, maskedAccount: '' })}
-        walletId={verifyModal.walletId}
-        bankAccountId={verifyModal.bankAccountId}
-        maskedAccount={verifyModal.maskedAccount}
-      />
     </div>
   );
 }

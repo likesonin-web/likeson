@@ -82,9 +82,7 @@ export const SUPER_ADMIN_DASHBOARD_LINKS = [
       { name: "Independent Drivers",  href: "/super-admin/partners/solor-driver",   icon: <Car size={15} />        },
       { name: "Gig Caregivers",       href: "/super-admin/partners/care-assistants",icon: <Users2 size={15} />     },
       { name: "Diagnostic Labs",      href: "/super-admin/partners/labs",           icon: <Microscope size={15} /> },
-      { name: "B2B Clients",          href: "/super-admin/partners/institutional",  icon: <Handshake size={15} />  },
-      { name: "VIP Directory",        href: "/super-admin/members/directory",       icon: <Users size={15} />      },
-      { name: "Loyalty Program",      href: "/super-admin/members/loyalty",         icon: <Star size={15} />       },
+      
     ],
   },
 
@@ -108,7 +106,7 @@ export const SUPER_ADMIN_DASHBOARD_LINKS = [
       { name: "Hospital Affiliates",    href: "/super-admin/hospitals",        icon: <Hospital size={15} />      },
       { name: "Physician Directory",    href: "/super-admin/doctors",          icon: <UserCog size={15} />       },
       { name: "Clinical Appointments",  href: "/super-admin/appointments",     icon: <CalendarClock size={15} /> },
-      { name: "Consultation Management",href: "/super-admin/consultations",    icon: <Activity size={15} />      }, // NEW LINK ADDED HERE
+      { name: "Consultation Management",href: "/super-admin/consultations",    icon: <Activity size={15} />      },
       { name: "Medical Specialties",    href: "/super-admin/specialties",      icon: <Stethoscope size={15} />   },
       { name: "Blood Bank",             href: "/super-admin/blood-bank",       icon: <Droplets size={15} />      },
     ],
@@ -134,6 +132,7 @@ export const SUPER_ADMIN_DASHBOARD_LINKS = [
       { name: "Transaction Ledger",href: "/super-admin/transactions",  icon: <ArrowLeftRight size={15} />     },
       { name: "Client Invoices",   href: "/super-admin/invoices",      icon: <ReceiptIndianRupee size={15} /> },
       { name: "Refund Processing", href: "/super-admin/refunds",       icon: <Undo2 size={15} />              },
+      { name: "Accounting Console",href: "/super-admin/accounting",    icon: <FileBarChart size={15} />       }, // <-- ADDED HERE
     ],
   },
 
@@ -165,11 +164,9 @@ export const SUPER_ADMIN_DASHBOARD_LINKS = [
     title: "Content & Communications",
     icons: <LifeBuoy size={18} />,
     links: [
-      { name: "Platform Announcements", href: "/super-admin/announcements",  icon: <Megaphone size={15} />            },
-      { name: "Helpdesk Tickets",       href: "/super-admin/support",        icon: <LifeBuoy size={15} />             },
+      { name: "Platform Announcements", href: "/super-admin/marquee",  icon: <Megaphone size={15} />            },
       { name: "Legal & Compliance",     href: "/super-admin/legal",          icon: <Scale size={15} />                },
       { name: "Knowledge Base",         href: "/super-admin/faq",            icon: <FileQuestion size={15} />         },
-      { name: "Marquee Alerts",         href: "/super-admin/marquee",        icon: <SquareDashedTopSolid size={15} /> },
       { name: "Push Notifications",     href: "/super-admin/notifications",  icon: <Bell size={15} />                 },
       { name: "Compliance Alerts",      href: "/super-admin/compliance/alerts", icon: <AlertTriangle size={15} />     },
       { name: "Audit Trails",           href: "/super-admin/logs",           icon: <ScrollText size={15} />           },
@@ -182,7 +179,7 @@ export const SUPER_ADMIN_DASHBOARD_LINKS = [
     icons: <Settings2 size={18}/>,
     links: [
       { name: "Global Preferences", href: "/super-admin/settings/general",       icon: <Globe2 size={15} />      },
-      { name: "Chat Config",        href: "/dashboard/chat/management",          icon: <MessageCircle size={15} />},
+      { name: "Chat Config",        href: "/chat",          icon: <MessageCircle size={15} />},
       { name: "Security Policies",  href: "/super-admin/settings/security",      icon: <ShieldCheck size={15} /> },
       { name: "Third-Party APIs",   href: "/super-admin/settings/integrations",  icon: <Terminal size={15} />    },
     ],
@@ -235,7 +232,6 @@ export const SUPER_ADMIN_DASHBOARD_SEARCH_LINKS = [
 
 export const PROFILE_LINKS = [
   { name: "My Profile",       href: "/super-admin/profile",           icon: <UserRound size={15} />  },
-  { name: "Account Settings", href: "/super-admin/account-settings",  icon: <Settings2 size={15} />  },
   { name: "Activity Log",     href: "/super-admin/activity-log",      icon: <HeartPulse size={15} /> },
 ];
 

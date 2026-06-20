@@ -48,6 +48,7 @@ import {
   SubscriptionPlan,
   sendBookingConfirmationEmail,
   parseFrontendDateTime,
+  markCaStandardTierUsed
 } from "./bookingRouterShared.js";
 
 import PlatformPricingConfig from "../models/PlatformPricingConfig.js";
@@ -67,14 +68,35 @@ import {
 import User from "../models/User.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HELPER: processHomeCollectionUsage (Centralized for all payment methods)
+// HELPER: processHomeCollectionUsage
 // ─────────────────────────────────────────────────────────────────────────────
 const processHomeCollectionUsage = async (booking) => {
   if (booking.bookingType === "diagnostic_home" && booking.internalNotes) {
-    const match = String(booking.internalNotes).match(/homeCollectionFreeSubId:([a-f0-9]{24})/i);
+    const match = String(booking.internalNotes).match(
+      /homeCollectionFreeSubId:([a-f0-9]{24})/i,
+    );
     if (match?.[1]) {
       await markHomeCollectionUsed(match[1]).catch((e) =>
-        console.error("[processHomeCollectionUsage] failed:", e.message)
+        console.error("[processHomeCollectionUsage] failed:", e.message),
+      );
+    }
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: processCaStandardTierUsage
+// ─────────────────────────────────────────────────────────────────────────────
+const processCaStandardTierUsage = async (booking) => {
+  if (
+    ["care_assistant", "full_care_ride"].includes(booking.bookingType) &&
+    booking.internalNotes
+  ) {
+    const match = String(booking.internalNotes).match(
+      /caStandardTierFreeSubId:([a-f0-9]{24})/i,
+    );
+    if (match?.[1]) {
+      await markCaStandardTierUsed(match[1]).catch((e) =>
+        console.error("[processCaStandardTierUsage] failed:", e.message),
       );
     }
   }
@@ -704,17 +726,20 @@ router.get("/doctors", protect, async (req, res) => {
       page = "1",
       limit = "20",
     } = req.query;
+    
     const filter = {
       partnershipStatus: "Active",
       isActive: true,
       isVerified: true,
     };
+    
     if (specialization) filter.specialization = specialization;
     if (isOnline === "true") filter.isOnline = true;
     if (consultationType === "video") filter["consultationTypes.video"] = true;
 
     const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const total = await DoctorProfile.countDocuments(filter);
+    
     const doctors = await DoctorProfile.find(filter)
       .populate("user", "name email phone")
       .populate(
@@ -729,24 +754,12 @@ router.get("/doctors", protect, async (req, res) => {
       .sort({ "rating.averageRating": -1, isOnline: -1 })
       .lean();
 
-    const doctorsWithPricing = doctors.map((d) => {
-      let effectiveFees = d.fees || {};
-      let pricingSource = "doctor";
-      if (
-        d.primaryHospital?.managementModel === "hospital-manager" &&
-        d.primaryHospital?.consultationPricing
-      ) {
-        const cp = d.primaryHospital.consultationPricing;
-        effectiveFees = {
-          inPersonFee: cp.inPersonFee,
-          videoFee: cp.videoFee,
-          homeVisitFee: cp.homeVisitFee,
-          followUpFee: cp.followUpFee,
-          followUpDiscountPercent: cp.followUpDiscountPercent,
-          followUpValidDays: cp.followUpValidDays,
-        };
-        pricingSource = "hospital";
-      }
+const doctorsWithPricing = doctors.map((d) => {
+      // Pricing always comes from the doctor's own `fees` — hospitals never
+      // set consultation pricing, even when managementModel is "hospital-manager".
+      const effectiveFees = d.fees || {};
+      const pricingSource = "doctor";
+
       return {
         ...d,
         effectiveFees,
@@ -763,6 +776,7 @@ router.get("/doctors", protect, async (req, res) => {
             .includes(city.toLowerCase()),
         )
       : doctorsWithPricing;
+      
     res.json({
       success: true,
       total,
@@ -807,14 +821,13 @@ router.get("/hospitals/:hospitalId/availability", protect, async (req, res) => {
 router.get("/doctors/:doctorId/availability", protect, async (req, res) => {
   try {
     const { scheduledAt, hospitalId } = req.query;
-    
+
     if (!scheduledAt) {
       return res
         .status(400)
         .json({ success: false, message: "scheduledAt required" });
     }
 
-    // FIX: Parse the incoming date string safely to prevent UTC timezone shifts
     const scheduledDate = parseFrontendDateTime(scheduledAt);
 
     const result = await checkHospitalOrDoctorAvailability({
@@ -822,7 +835,7 @@ router.get("/doctors/:doctorId/availability", protect, async (req, res) => {
       doctorId: req.params.doctorId,
       scheduledAt: scheduledDate,
     });
-    
+
     res.json({ success: true, data: result });
   } catch (err) {
     console.error("[GET /doctors/:doctorId/availability]", err);
@@ -857,12 +870,10 @@ router.get("/labs/:labId", protect, async (req, res) => {
 router.get("/booking-options/:type", protect, (req, res) => {
   const { type } = req.params;
   if (!CUSTOMER_BOOKING_TYPES.includes(type)) {
-    return res
-      .status(400)
-      .json({
-        success: false,
-        message: `Invalid booking type. Allowed: ${CUSTOMER_BOOKING_TYPES.join(", ")}`,
-      });
+    return res.status(400).json({
+      success: false,
+      message: `Invalid booking type. Allowed: ${CUSTOMER_BOOKING_TYPES.join(", ")}`,
+    });
   }
   const components = resolveServiceComponents(type);
   res.json({ success: true, data: { bookingType: type, components } });
@@ -880,12 +891,10 @@ router.get("/transport/estimate", protect, async (req, res) => {
       bookingType = "patient_transport",
     } = req.query;
     if (!pickupLng || !pickupLat || !dropoffLng || !dropoffLat) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "pickupLng, pickupLat, dropoffLng, dropoffLat required",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "pickupLng, pickupLat, dropoffLng, dropoffLat required",
+      });
     }
     const pickupCoords = [parseFloat(pickupLng), parseFloat(pickupLat)];
     const dropoffCoords = [parseFloat(dropoffLng), parseFloat(dropoffLat)];
@@ -1020,21 +1029,17 @@ router.post(
         !patientInfo ||
         !patientLocation
       ) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "hospitalId, doctorId, scheduledAt, patientInfo, patientLocation required",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "hospitalId, doctorId, scheduledAt, patientInfo, patientLocation required",
+        });
       }
       if (!patientLocation?.coordinates?.length) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "patientLocation.coordinates [lng, lat] required",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "patientLocation.coordinates [lng, lat] required",
+        });
       }
 
       const scheduledDate = new Date(scheduledAt);
@@ -1066,28 +1071,31 @@ router.post(
       const hospCoords =
         destinationLocation?.coordinates || hospital.location?.coordinates;
       if (!hospCoords?.length)
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "Hospital location unavailable. Provide destinationLocation.",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "Hospital location unavailable. Provide destinationLocation.",
+        });
 
       const subCheck = await checkSubscriptionConsultation(
         req.user._id,
         consultationType,
       );
       const isCoveredBySubscription = subCheck.allowed && subCheck.isFree;
-      const { fee: consultationFee, source: pricingSource } =
-        await resolveConsultationFee({
-          isFollowUp: false,
-          followUpFee: 0,
-          isCoveredBySubscription,
-          doctorId,
-          hospitalId,
-          consultationType,
-        });
+      
+      const {
+        fee: consultationFee,
+        doctorShare,
+        hospitalShare,
+        source: pricingSource,
+      } = await resolveConsultationFee({
+        isFollowUp: false,
+        followUpFee: 0,
+        isCoveredBySubscription,
+        doctorId,
+        hospitalId,
+        consultationType,
+      });
 
       const { ratePerKm, source: kmRateSource } = await resolveKmRate(
         req.user._id,
@@ -1114,8 +1122,11 @@ router.post(
         ? +(careResult.fee * 0.18).toFixed(2)
         : 0;
       const consultGst = 0;
+      
       const fareBreakdown = buildFareBreakdown({
         consultationFee,
+        doctorShare,
+        hospitalShare,
         careAssistantFee: careResult.fee,
         transportFee: transportCalc.totalTransportFee,
         taxPercent: 0,
@@ -1140,6 +1151,11 @@ router.post(
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
           : "pending";
+
+      const caStandardFreeNote =
+        careResult.caStandardTierFree && careResult.sub?._id
+          ? `caStandardTierFreeSubId:${careResult.sub._id.toString()}`
+          : undefined;
 
       const booking = await Booking.create({
         bookingType: "full_care_ride",
@@ -1177,6 +1193,7 @@ router.post(
         couponCode: couponCode || undefined,
         coinsRedeemed: coinsToRedeem,
         status: initialStatus,
+        internalNotes: caStandardFreeNote,
         createdBy: req.user._id,
         careAssistantSnapshot: null,
         subscriptionUsagePending: [],
@@ -1188,6 +1205,19 @@ router.post(
           booking._id,
           subCheck.sub._id,
           "consultationsUsed",
+        );
+      }
+
+      if (
+        careResult.isCoveredBySubscription &&
+        careResult.quotaTracked &&
+        careResult.source === "custom_plan_quota" &&
+        careResult.sub?._id
+      ) {
+        await queueSubscriptionUsage(
+          booking._id,
+          careResult.sub._id,
+          "careAssistantVisitsUsed",
         );
       }
 
@@ -1208,6 +1238,7 @@ router.post(
         await booking.save();
         if (!walletResult.needsRazorpay) {
           await flushAndRecord(booking);
+          await processCaStandardTierUsage(booking);
           sendPaymentConfirmedEmails({ booking, paymentMethod: "Wallet" });
         }
         razorpayOrder = walletResult.razorpayOrder;
@@ -1218,6 +1249,7 @@ router.post(
         booking.status = "pending";
         await booking.save();
         await flushAndRecord(booking);
+        await processCaStandardTierUsage(booking);
         sendPaymentConfirmedEmails({ booking, paymentMethod: "Free (₹0)" });
       }
 
@@ -1333,6 +1365,8 @@ router.post(
         scheduledAt: scheduledDate,
         status: "scheduled",
         consultationFee,
+        doctorShare,
+        hospitalShare,
         feeSource: pricingSource,
         isCoveredBySubscription,
         isFollowUp: false,
@@ -1475,12 +1509,10 @@ router.post(
       } = req.body;
 
       if (!doctorId || !scheduledAt || !patientInfo)
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "doctorId, scheduledAt, patientInfo required",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "doctorId, scheduledAt, patientInfo required",
+        });
       const scheduledDate = new Date(scheduledAt);
       const avail = await checkHospitalOrDoctorAvailability({
         hospitalId,
@@ -1504,8 +1536,11 @@ router.post(
         consultationType,
       );
       const isCoveredBySubscription = subCheck.allowed && subCheck.isFree;
+      
       const {
         fee: consultationFee,
+        doctorShare,
+        hospitalShare,
         source: pricingSource,
         gstRate,
       } = await resolveConsultationFee({
@@ -1516,11 +1551,15 @@ router.post(
         hospitalId,
         consultationType,
       });
+      
       const fareBreakdown = buildFareBreakdown({
         consultationFee,
+        doctorShare,
+        hospitalShare,
         taxPercent:
           pricingSource === "subscription" ? 0 : Math.round(gstRate * 100),
       });
+      
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -1613,6 +1652,8 @@ router.post(
         scheduledAt: scheduledDate,
         status: "scheduled",
         consultationFee,
+        doctorShare,
+        hospitalShare,
         feeSource: pricingSource,
         isCoveredBySubscription,
         isFollowUp: false,
@@ -1698,12 +1739,10 @@ router.post(
         slotId,
       } = req.body;
       if (!doctorId || !scheduledAt || !patientInfo) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "doctorId, scheduledAt, patientInfo required",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "doctorId, scheduledAt, patientInfo required",
+        });
       }
 
       let scheduledDate;
@@ -1714,22 +1753,18 @@ router.post(
         scheduledDate = new Date(rawStr);
       }
       if (isNaN(scheduledDate.getTime())) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              'Invalid scheduledAt — use ISO 8601 format e.g. "2026-06-15T10:30:00+05:30"',
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            'Invalid scheduledAt — use ISO 8601 format e.g. "2026-06-15T10:30:00+05:30"',
+        });
       }
       const GRACE_MS = 10 * 60 * 1000;
       if (scheduledDate < new Date(Date.now() - GRACE_MS)) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: `scheduledAt is in the past. Provided: ${scheduledDate.toISOString()}, Server time: ${new Date().toISOString()}`,
-          });
+        return res.status(400).json({
+          success: false,
+          message: `scheduledAt is in the past. Provided: ${scheduledDate.toISOString()}, Server time: ${new Date().toISOString()}`,
+        });
       }
 
       const avail = await checkHospitalOrDoctorAvailability({
@@ -1740,13 +1775,11 @@ router.post(
         return res.status(400).json({ success: false, message: avail.reason });
 
       if (paymentMethod === "Cash") {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "Cash payment not available for video consultations. Please use Wallet or online payment.",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "Cash payment not available for video consultations. Please use Wallet or online payment.",
+        });
       }
 
       const subCheck = await checkSubscriptionConsultation(
@@ -1754,8 +1787,11 @@ router.post(
         "video",
       );
       const isCoveredBySubscription = subCheck.allowed && subCheck.isFree;
+      
       const {
         fee: consultationFee,
+        doctorShare,
+        hospitalShare,
         source: pricingSource,
         gstRate,
       } = await resolveConsultationFee({
@@ -1766,10 +1802,14 @@ router.post(
         hospitalId: null,
         consultationType: "video",
       });
+      
       const fareBreakdown = buildFareBreakdown({
         consultationFee,
+        doctorShare,
+        hospitalShare,
         taxPercent: isCoveredBySubscription ? 0 : Math.round(gstRate * 100),
       });
+      
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -1982,13 +2022,11 @@ router.post(
         !destinationLocation?.coordinates ||
         !scheduledAt
       ) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "patientInfo, patientLocation.coordinates, destinationLocation.coordinates, scheduledAt required",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "patientInfo, patientLocation.coordinates, destinationLocation.coordinates, scheduledAt required",
+        });
       }
 
       const scheduledDate = new Date(scheduledAt);
@@ -2014,6 +2052,8 @@ router.post(
       });
 
       let consultationFee = 0,
+        doctorShare = 0,
+        hospitalShare = 0,
         consultationSource = null,
         opNumber = null;
       let isCoveredBySub = false,
@@ -2021,12 +2061,10 @@ router.post(
 
       if (addConsultation) {
         if (!doctorId)
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: "doctorId required when addConsultation=true",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "doctorId required when addConsultation=true",
+          });
         const consultationAvail = await checkHospitalOrDoctorAvailability({
           hospitalId,
           doctorId,
@@ -2050,6 +2088,7 @@ router.post(
         );
         isCoveredBySub = subCheck.allowed && subCheck.isFree;
         subRef = subCheck.sub;
+        
         const feeResult = await resolveConsultationFee({
           isFollowUp: false,
           followUpFee: 0,
@@ -2059,14 +2098,19 @@ router.post(
           consultationType,
         });
         consultationFee = feeResult.fee;
+        doctorShare = feeResult.doctorShare;
+        hospitalShare = feeResult.hospitalShare;
         consultationSource = feeResult.source;
       }
 
       const fareBreakdown = buildFareBreakdown({
         consultationFee,
+        doctorShare,
+        hospitalShare,
         transportFee: transportCalc.totalTransportFee,
         taxPercent: config?.tax?.transportGstPercent ?? 5,
       });
+      
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -2250,6 +2294,8 @@ router.post(
           scheduledAt: scheduledDate,
           status: "scheduled",
           consultationFee,
+          doctorShare,
+          hospitalShare,
           feeSource: consultationSource,
           isCoveredBySubscription: consultationFee === 0 && isCoveredBySub,
           isFollowUp: false,
@@ -2346,12 +2392,10 @@ router.post(
         paymentMethod = "Razorpay",
       } = req.body;
       if (!doctorId || !scheduledAt || !patientInfo)
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "doctorId, scheduledAt, patientInfo required",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "doctorId, scheduledAt, patientInfo required",
+        });
 
       const scheduledDate = new Date(scheduledAt);
       const avail = await checkHospitalOrDoctorAvailability({
@@ -2361,21 +2405,28 @@ router.post(
       if (!avail.available)
         return res.status(400).json({ success: false, message: avail.reason });
 
-      const { fee: consultationFee, source: pricingSource } =
-        await resolveConsultationFee({
-          isFollowUp: false,
-          followUpFee: 0,
-          isCoveredBySubscription: false,
-          doctorId,
-          hospitalId: null,
-          consultationType:
-            visitType === "homeVisit" ? "homeVisit" : "inPerson",
-        });
+      const {
+        fee: consultationFee,
+        doctorShare,
+        hospitalShare,
+        source: pricingSource,
+      } = await resolveConsultationFee({
+        isFollowUp: false,
+        followUpFee: 0,
+        isCoveredBySubscription: false,
+        doctorId,
+        hospitalId: null,
+        consultationType: visitType === "homeVisit" ? "homeVisit" : "inPerson",
+      });
+      
       const config = await PlatformPricingConfig.getGlobal();
       const fareBreakdown = buildFareBreakdown({
         consultationFee,
+        doctorShare,
+        hospitalShare,
         taxPercent: config?.tax?.consultationGstPercent ?? 0,
       });
+      
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -2487,12 +2538,10 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
       paymentMethod = "Razorpay",
     } = req.body;
     if (!doctorId || !scheduledAt || !patientInfo)
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "doctorId, scheduledAt, patientInfo required",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "doctorId, scheduledAt, patientInfo required",
+      });
 
     const followUpCheck = await checkFollowUpEligibility({
       customerId: req.user._id,
@@ -2513,7 +2562,11 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
     if (!avail.available)
       return res.status(400).json({ success: false, message: avail.reason });
 
-    const { fee: consultationFee } = await resolveConsultationFee({
+    const {
+      fee: consultationFee,
+      doctorShare,
+      hospitalShare,
+    } = await resolveConsultationFee({
       isFollowUp: true,
       followUpFee: followUpCheck.followUpFee,
       isCoveredBySubscription: false,
@@ -2521,11 +2574,15 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
       hospitalId,
       consultationType,
     });
+    
     const config = await PlatformPricingConfig.getGlobal();
     const fareBreakdown = buildFareBreakdown({
       consultationFee,
+      doctorShare,
+      hospitalShare,
       taxPercent: config?.tax?.consultationGstPercent ?? 0,
     });
+    
     const initialStatus =
       paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
         ? "payment_pending"
@@ -2598,6 +2655,8 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
       scheduledAt: scheduledDate,
       status: "scheduled",
       consultationFee,
+      doctorShare,
+      hospitalShare,
       feeSource: "follow_up",
       isCoveredBySubscription: false,
       isFollowUp: true,
@@ -2671,13 +2730,11 @@ router.post(
         !patientInfo ||
         (!tests.length && !packages.length)
       ) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "labId, scheduledAt, patientInfo, and tests or packages required",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "labId, scheduledAt, patientInfo, and tests or packages required",
+        });
       }
 
       const lab = await getLabWithTests(labId);
@@ -2721,13 +2778,11 @@ router.post(
       }
 
       if (resolvedTests.length === 0 && resolvedPackages.length === 0) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "No valid tests or packages found. Ensure slugs match the lab catalogue.",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "No valid tests or packages found. Ensure slugs match the lab catalogue.",
+        });
       }
 
       const diagSub = await checkSubscriptionDiagnostics(req.user._id);
@@ -2857,10 +2912,16 @@ router.post(
         paymentMethod = "Razorpay",
       } = req.body;
 
-      if (!labId || !scheduledAt || !patientInfo || !patientLocation?.coordinates) {
+      if (
+        !labId ||
+        !scheduledAt ||
+        !patientInfo ||
+        !patientLocation?.coordinates
+      ) {
         return res.status(400).json({
           success: false,
-          message: "labId, scheduledAt, patientInfo, patientLocation.coordinates required",
+          message:
+            "labId, scheduledAt, patientInfo, patientLocation.coordinates required",
         });
       }
 
@@ -2877,10 +2938,11 @@ router.post(
       const hasHomeSampleCollectionInPlan = diagSub.homeSampleCollection;
       const diagSubId = diagSub.sub?._id ?? null;
 
-      // ONE-TIME gate: free only if plan has it AND not yet used this cycle
-      const homeCollectionUsedOnce = diagSub.sub?.limits?.homeCollectionUsedOnce ?? false;
+      const homeCollectionUsedOnce =
+        diagSub.sub?.limits?.homeCollectionUsedOnce ?? false;
       const homeCollectionFreeNow =
-        hasHomeSampleCollectionInPlan === true && homeCollectionUsedOnce === false;
+        hasHomeSampleCollectionInPlan === true &&
+        homeCollectionUsedOnce === false;
 
       const resolvedTests = [];
       const resolvedPackages = [];
@@ -2893,10 +2955,15 @@ router.post(
         const slug = String(rawSlug ?? "").trim();
         if (!slug) continue;
         const t = lab.labTests?.find((lt) => lt.isActive && lt.slug === slug);
-        if (!t) { console.warn(`[diagnostic-home] no active test slug="${slug}"`); continue; }
+        if (!t) {
+          console.warn(`[diagnostic-home] no active test slug="${slug}"`);
+          continue;
+        }
         if (t.homeCollectionAvailable === false) {
           skippedTests.push(t.testName);
-          console.warn(`[diagnostic-home] test "${t.testName}" homeCollectionAvailable=false — skipping`);
+          console.warn(
+            `[diagnostic-home] test "${t.testName}" homeCollectionAvailable=false — skipping`,
+          );
           continue;
         }
         diagnosticFee += t.discountedPrice ?? t.mrpPrice;
@@ -2907,8 +2974,13 @@ router.post(
       for (const rawSlug of packages) {
         const slug = String(rawSlug ?? "").trim();
         if (!slug) continue;
-        const p = lab.labPackages?.find((lp) => lp.isActive && lp.slug === slug);
-        if (!p) { console.warn(`[diagnostic-home] no active package slug="${slug}"`); continue; }
+        const p = lab.labPackages?.find(
+          (lp) => lp.isActive && lp.slug === slug,
+        );
+        if (!p) {
+          console.warn(`[diagnostic-home] no active package slug="${slug}"`);
+          continue;
+        }
         diagnosticFee += p.mrpPrice;
         packageNames.push(p.packageName);
         resolvedPackages.push(p.slug);
@@ -2917,7 +2989,8 @@ router.post(
       if (resolvedTests.length === 0 && resolvedPackages.length === 0) {
         return res.status(400).json({
           success: false,
-          message: "No valid tests or packages found. Ensure slugs match the lab catalogue.",
+          message:
+            "No valid tests or packages found. Ensure slugs match the lab catalogue.",
         });
       }
 
@@ -2932,7 +3005,9 @@ router.post(
       const config = await PlatformPricingConfig.getGlobal();
       const diagGstBase = +Math.max(0, diagnosticFee - discount).toFixed(2);
       const diagGstAmt = +(diagGstBase * 0.05).toFixed(2);
-      const homeColGstAmt = +(effectiveHomeCollectionFee * homeCollectionGstRate).toFixed(2);
+      const homeColGstAmt = +(
+        effectiveHomeCollectionFee * homeCollectionGstRate
+      ).toFixed(2);
       const totalGstManual = +(diagGstAmt + homeColGstAmt).toFixed(2);
 
       const fareBreakdown = buildFareBreakdown({
@@ -2964,8 +3039,6 @@ router.post(
           ? "payment_pending"
           : "pending";
 
-      // Build internalNotes upfront if home visit is free — used by all payment paths
-      // to defer markHomeCollectionUsed until payment actually confirmed
       const homeCollectionNote =
         homeVisitFree && diagSubId
           ? `homeCollectionFreeSubId:${diagSubId.toString()}`
@@ -2996,7 +3069,6 @@ router.post(
         paymentStatus: "unpaid",
         payments: [],
         status: initialStatus,
-        // Store note on booking so all payment completion paths can mark used
         internalNotes: homeCollectionNote,
         createdBy: req.user._id,
         subscriptionUsagePending: [],
@@ -3006,7 +3078,6 @@ router.post(
       let razorpayOrder = null;
       let walletResult = null;
 
-      // ── WALLET ──────────────────────────────────────────────────────────────
       if (paymentMethod === "Wallet") {
         walletResult = await processWalletOrPartialPayment({
           userId: req.user._id,
@@ -3021,36 +3092,30 @@ router.post(
         await booking.save();
 
         if (!walletResult.needsRazorpay) {
-          // Fully paid by wallet — mark immediately
           await flushAndRecord(booking);
-          await processHomeCollectionUsage(booking); // Centralized Usage Marker
+          await processHomeCollectionUsage(booking);
           sendPaymentConfirmedEmails({ booking, paymentMethod: "Wallet" });
         }
-        // If needsRazorpay=true (partial wallet), verify-payment will handle
-        // markHomeCollectionUsed via internalNotes on booking
         razorpayOrder = walletResult.razorpayOrder;
       }
 
-      // ── FREE (₹0) via Razorpay path ─────────────────────────────────────────
       if (fareBreakdown.totalAmount === 0 && paymentMethod === "Razorpay") {
         booking.paymentStatus = "paid";
         booking.status = "pending";
         await booking.save();
         await flushAndRecord(booking);
-        await processHomeCollectionUsage(booking); // Centralized Usage Marker
+        await processHomeCollectionUsage(booking);
         sendPaymentConfirmedEmails({ booking, paymentMethod: "Free (₹0)" });
       }
 
-      // ── CASH ────────────────────────────────────────────────────────────────
-      // internalNotes already saved on booking above with diagSubId
-      // confirm-cash-payment route reads internalNotes and calls markHomeCollectionUsed
       if (paymentMethod === "Cash") {
         booking.paymentStatus = "pending_cash";
         await booking.save();
       }
 
-      // ── Build ride ────────────────────────────────────────────────────────────
-      const labCoords = lab.registeredAddress?.location?.coordinates || [80.648, 16.506];
+      const labCoords = lab.registeredAddress?.location?.coordinates || [
+        80.648, 16.506,
+      ];
       const {
         distanceKm: techDistKm,
         durationMin: techDurMin,
@@ -3079,13 +3144,13 @@ router.post(
         booking: booking._id,
         expectedRoutePolyline: techPolyline,
       });
-      await Ride.findByIdAndUpdate(techRide._id, { $set: { trackingId: techTracking._id } });
+      await Ride.findByIdAndUpdate(techRide._id, {
+        $set: { trackingId: techTracking._id },
+      });
       booking.primaryRide = techRide._id;
       booking.rides = [techRide._id];
       await booking.save();
 
-      // ── Razorpay order (paid flow) ───────────────────────────────────────────
-      // internalNotes already on booking — verify-payment will read it
       if (paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0) {
         razorpayOrder = await createRazorpayOrder(
           fareBreakdown.totalAmount,
@@ -3148,13 +3213,11 @@ router.post(
         paymentMethod = "Razorpay",
       } = req.body;
       if (!patientInfo || !patientLocation?.coordinates || !scheduledAt) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "patientInfo, patientLocation.coordinates, scheduledAt required",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "patientInfo, patientLocation.coordinates, scheduledAt required",
+        });
       }
 
       const config = await PlatformPricingConfig.getGlobal();
@@ -3185,6 +3248,11 @@ router.post(
           ? "payment_pending"
           : "pending";
 
+      const caStandardFreeNote =
+        careResult.caStandardTierFree && careResult.sub?._id
+          ? `caStandardTierFreeSubId:${careResult.sub._id.toString()}`
+          : undefined;
+
       const booking = await Booking.create({
         bookingType: "care_assistant",
         customer: req.user._id,
@@ -3198,16 +3266,31 @@ router.post(
           city: patientLocation.city,
         },
         fareBreakdown,
-        pricingSource:
-          careResult.source === "subscription" ? "subscription" : "platform",
+        pricingSource: careResult.isCoveredBySubscription
+          ? "subscription"
+          : "platform",
         paymentStatus: "unpaid",
         payments: [],
         status: initialStatus,
+        internalNotes: caStandardFreeNote,
         createdBy: req.user._id,
         careAssistantSnapshot: null,
         subscriptionUsagePending: [],
         confirmedSubscriptionUsage: [],
       });
+
+      if (
+        careResult.isCoveredBySubscription &&
+        careResult.quotaTracked &&
+        careResult.source === "custom_plan_quota" &&
+        careResult.sub?._id
+      ) {
+        await queueSubscriptionUsage(
+          booking._id,
+          careResult.sub._id,
+          "careAssistantVisitsUsed",
+        );
+      }
 
       let razorpayOrder = null;
       let walletResult = null;
@@ -3230,6 +3313,7 @@ router.post(
         await booking.save();
         if (!walletResult?.needsRazorpay) {
           await flushAndRecord(booking);
+          await processCaStandardTierUsage(booking);
           sendPaymentConfirmedEmails({ booking, paymentMethod: "Wallet" });
         }
         if (walletResult?.razorpayOrder)
@@ -3240,6 +3324,7 @@ router.post(
         booking.status = "pending";
         await booking.save();
         await flushAndRecord(booking);
+        await processCaStandardTierUsage(booking);
         sendPaymentConfirmedEmails({ booking, paymentMethod: "Free (₹0)" });
       }
       if (paymentMethod === "Cash") {
@@ -3327,10 +3412,16 @@ router.post("/verify-payment", protect, async (req, res) => {
       razorpay_signature,
     } = req.body;
 
-    if (!bookingId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    if (
+      !bookingId ||
+      !razorpay_order_id ||
+      !razorpay_payment_id ||
+      !razorpay_signature
+    ) {
       return res.status(400).json({
         success: false,
-        message: "bookingId, razorpay_order_id, razorpay_payment_id, razorpay_signature required",
+        message:
+          "bookingId, razorpay_order_id, razorpay_payment_id, razorpay_signature required",
       });
     }
 
@@ -3340,27 +3431,36 @@ router.post("/verify-payment", protect, async (req, res) => {
       razorpay_signature,
     );
     if (!isValid) {
-      return res.status(400).json({ success: false, message: "Invalid payment signature" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid payment signature" });
     }
 
-const booking = await Booking.findOneAndUpdate(
-  {
-    _id: bookingId,
-    customer: req.user._id,
-    paymentStatus: { $ne: "paid" },
-  },
-  { $set: { paymentStatus: "paid" } },
-  { new: true, select: "+internalNotes" },
-);
+    const booking = await Booking.findOneAndUpdate(
+      {
+        _id: bookingId,
+        customer: req.user._id,
+        paymentStatus: { $ne: "paid" },
+      },
+      { $set: { paymentStatus: "paid" } },
+      { new: true, select: "+internalNotes" },
+    );
 
     if (!booking) {
-      const existing = await Booking.findOne({ _id: bookingId, customer: req.user._id })
+      const existing = await Booking.findOne({
+        _id: bookingId,
+        customer: req.user._id,
+      })
         .select("paymentStatus")
         .lean();
       if (!existing) {
-        return res.status(404).json({ success: false, message: "Booking not found" });
+        return res
+          .status(404)
+          .json({ success: false, message: "Booking not found" });
       }
-      console.log(`[verify-payment] ⚠️ already paid — skip duplicate for booking:${bookingId}`);
+      console.log(
+        `[verify-payment] ⚠️ already paid — skip duplicate for booking:${bookingId}`,
+      );
       return res.json({
         success: true,
         message: "Already verified",
@@ -3371,7 +3471,8 @@ const booking = await Booking.findOneAndUpdate(
     if (booking.status === "payment_pending") booking.status = "pending";
 
     const razorpayPortion = +(
-      booking.fareBreakdown.totalAmount - (booking.fareBreakdown.walletApplied || 0)
+      booking.fareBreakdown.totalAmount -
+      (booking.fareBreakdown.walletApplied || 0)
     ).toFixed(2);
 
     booking.payments.push({
@@ -3388,11 +3489,13 @@ const booking = await Booking.findOneAndUpdate(
     await booking.save();
 
     await flushAndRecord(booking);
-    
-    // Centralized Usage Marker for home collection
-    await processHomeCollectionUsage(booking);
 
-    console.log(`[verify-payment] ✅ payment verified + usage flushed for booking:${bookingId}`);
+    await processHomeCollectionUsage(booking);
+    await processCaStandardTierUsage(booking);
+
+    console.log(
+      `[verify-payment] ✅ payment verified + usage flushed for booking:${bookingId}`,
+    );
     sendPaymentConfirmedEmails({ booking, paymentMethod: "Razorpay" });
     sendStatusUpdateEmails({ booking, newStatus: "Confirmed" });
 
@@ -3426,12 +3529,10 @@ router.post("/delete-failed-booking", protect, async (req, res) => {
         .status(404)
         .json({ success: false, message: "Booking not found" });
     if (booking.paymentStatus === "paid")
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Booking already paid — cannot delete",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Booking already paid — cannot delete",
+      });
     const walletToRefund =
       walletApplied > 0
         ? walletApplied
@@ -3462,17 +3563,15 @@ router.post(
         return res
           .status(400)
           .json({ success: false, message: "bookingId required" });
-   const booking = await Booking.findOne({
-  _id: bookingId,
-  paymentStatus: "pending_cash",
-}).select("+internalNotes");
+      const booking = await Booking.findOne({
+        _id: bookingId,
+        paymentStatus: "pending_cash",
+      }).select("+internalNotes");
       if (!booking)
-        return res
-          .status(404)
-          .json({
-            success: false,
-            message: "Booking not found or not in pending_cash status",
-          });
+        return res.status(404).json({
+          success: false,
+          message: "Booking not found or not in pending_cash status",
+        });
       if (booking.paymentStatus === "paid") {
         console.log(
           `[confirm-cash-payment] ⚠️ already confirmed for booking:${bookingId}`,
@@ -3496,11 +3595,11 @@ router.post(
         amountCollected ?? booking.fareBreakdown.totalAmount;
       booking.updatedBy = req.user._id;
       await booking.save();
-      
+
       await flushAndRecord(booking);
-      
-      // Centralized Usage Marker for home collection
+
       await processHomeCollectionUsage(booking);
+      await processCaStandardTierUsage(booking);
 
       console.log(
         `[confirm-cash-payment] ✅ cash confirmed + usage flushed for booking:${bookingId}`,
@@ -3519,9 +3618,9 @@ router.post(
   },
 );
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
 // BOOKING MANAGEMENT
-// ═════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
 router.get("/my-bookings", protect, authorize("customer"), async (req, res) => {
   try {
     const { status, bookingType, page = "1", limit = "10" } = req.query;
@@ -3638,12 +3737,10 @@ router.post(
           booking.status,
         )
       ) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: `Cannot cancel booking in status: ${booking.status}`,
-          });
+        return res.status(400).json({
+          success: false,
+          message: `Cannot cancel booking in status: ${booking.status}`,
+        });
       }
 
       let refundPercent = 0,
@@ -3653,6 +3750,25 @@ router.post(
       }
 
       const recoveryResult = await recoverSubscriptionUsageOnCancel(booking);
+
+      if (
+        ["care_assistant", "full_care_ride"].includes(booking.bookingType) &&
+        booking.internalNotes &&
+        booking.paymentStatus === "paid"
+      ) {
+        const m = String(booking.internalNotes).match(
+          /caStandardTierFreeSubId:([a-f0-9]{24})/i,
+        );
+        if (m?.[1]) {
+          await recoverCaStandardTierUsage(m[1]).catch((e) =>
+            console.error(
+              "[cancel] recoverCaStandardTierUsage failed:",
+              e.message,
+            ),
+          );
+        }
+      }
+
       booking.status = "cancelled";
       booking.cancellation = {
         cancelledBy: "customer",
@@ -3730,12 +3846,10 @@ router.post(
           .status(404)
           .json({ success: false, message: "Booking not found" });
       if (booking.status !== "completed")
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "Can only rate completed bookings",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "Can only rate completed bookings",
+        });
       if (booking.isRated)
         return res
           .status(400)
@@ -3848,12 +3962,10 @@ router.get("/platform-pricing", async (req, res) => {
       isActive: true,
     }).select("careAssistant.pricingTiers");
     if (!config)
-      return res
-        .status(404)
-        .json({
-          success: false,
-          message: "Platform pricing configuration not found.",
-        });
+      return res.status(404).json({
+        success: false,
+        message: "Platform pricing configuration not found.",
+      });
     res.json({ success: true, data: config.careAssistant.pricingTiers });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -4040,21 +4152,24 @@ router.get(
             isActive: true,
           }));
         const serviceType = sub.plan?.careAssistant?.serviceType ?? "Standard";
+        const isDedicated = sub.plan?.careAssistant?.isDedicated === true;
         activeTier = {
           label:
             serviceType === "Dedicated"
               ? "Dedicated Assistant"
               : "Standard (Platform Rates Apply)",
           serviceType,
+          isDedicated,
           chargeToUser:
             serviceType === "Dedicated"
               ? (config?.careAssistant?.dedicatedMonthlyCharge ?? null)
               : null,
           source: "fixed_plan",
-          note:
-            serviceType === "Dedicated"
-              ? "Dedicated assistant — flat monthly charge applies"
-              : "Per-visit charge from duration-based platform tiers above",
+          note: isDedicated
+            ? "Dedicated assistant — unlimited free use for entire subscription period"
+            : (sub.limits?.caStandardTierUsedOnce ?? false)
+              ? "Standard tier free-use already used this cycle — platform rate applies"
+              : "First/standard tier free once this cycle. Other tiers charge platform rate (18% GST).",
         };
       }
 
@@ -4081,6 +4196,7 @@ router.get(
             remaining,
             percentUsed,
             isDedicated: sub.plan?.careAssistant?.isDedicated ?? false,
+            caStandardTierUsedOnce: sub.limits?.caStandardTierUsedOnce ?? false,
             activeTier,
             allTiers,
             platformConfig,
@@ -4172,19 +4288,17 @@ router.get(
         (u) => u.month === now.getMonth() + 1 && u.year === now.getFullYear(),
       );
       const homeVisitsUsed = usage?.diagnosticBookingsMade ?? 0;
-      const homeCollectionUsedOnce = sub.limits?.homeCollectionUsedOnce ?? false;
+      const homeCollectionUsedOnce =
+        sub.limits?.homeCollectionUsedOnce ?? false;
 
-      // HOME COLLECTION FIX:
-      // All plans (fixed + custom) treat home sample as ONE-TIME per billing cycle.
-      // homeCollectionUsedOnce is the canonical flag — use it for all plan types.
-      // homeVisitLimit -1 = "included" for fixed plans (not truly unlimited — still one-time).
-      const homeVisitUnlimited = false; // never unlimited — always one-time per cycle
-      const homeCollectionAvailable = homeSampleCollection === true && homeCollectionUsedOnce === false;
+      const homeVisitUnlimited = false; 
+      const homeCollectionAvailable =
+        homeSampleCollection === true && homeCollectionUsedOnce === false;
       const homeVisitsRemaining = !homeSampleCollection
         ? 0
         : homeCollectionAvailable
-          ? 1   // one use remaining
-          : 0;  // already used or not included
+          ? 1 
+          : 0; 
       const homeVisitPercentUsed = !homeSampleCollection
         ? 100
         : homeCollectionUsedOnce

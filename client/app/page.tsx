@@ -65,8 +65,7 @@ const Home: React.FC = () => {
       {role === "lab_partner" && (
         <Container className="w-full flex flex-col gap-12 py-6">
           <LabHero />
-          <Ads page="Global" slot="Hero_Banner" />
-          <Ads page="Global" slot="Native_Feed" />
+          
         </Container>
       )}
 
@@ -75,10 +74,9 @@ const Home: React.FC = () => {
         <>
           <Container className="w-full flex flex-col gap-12 py-6">
             <HeroSoloDriver />
-            <Ads page="Global" slot="Native_Feed" />
+ 
           </Container>
-          {/* Context-specific sticky ad for drivers */}
-          <Ads page="Ride_Tracking_Screen" slot="Sticky_Bottom" />
+  
         </>
       )}
 
@@ -87,10 +85,9 @@ const Home: React.FC = () => {
         <>
           <Container className="w-full flex flex-col gap-12 py-6">
             <HeroDriver />
-            <Ads page="Global" slot="Native_Feed" />
+    
           </Container>
-          {/* Context-specific sticky ad for drivers */}
-          <Ads page="Ride_Tracking_Screen" slot="Sticky_Bottom" />
+     
         </>
       )}
 

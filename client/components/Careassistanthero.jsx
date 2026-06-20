@@ -1,4 +1,4 @@
-"use client";
+'use client';
 
 import React, { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
@@ -6,9 +6,9 @@ import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   User, MapPin, Clock, ShieldAlert, Star,
-  Wallet, CheckCircle, Power, ChevronRight,
+  Wallet, CheckCircle, ChevronRight,
   AlertTriangle, Calendar, Award, BookOpen, Navigation, Activity,
-  LayoutDashboard, UserCog, HelpCircle // Added new icons for quick links
+  LayoutDashboard, UserCog, HelpCircle, HeartPulse
 } from 'lucide-react';
 
 import {
@@ -32,8 +32,37 @@ const staggerContainer = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SKELETON LOADER (10/10 UI avoids spinners for main layouts)
+// REUSABLE UI COMPONENTS
 // ─────────────────────────────────────────────────────────────────────────────
+function OnlineToggle({ isOnline, onToggle, disabled }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className={`text-sm font-semibold transition-opacity ${isOnline ? 'text-base-content/40' : 'text-base-content'}`}>
+        Offline
+      </span>
+      <button
+        role="switch"
+        aria-checked={isOnline}
+        onClick={onToggle}
+        disabled={disabled}
+        className={`relative w-14 h-[28px] rounded-full p-[3px] transition-colors duration-300 ease-in-out focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed ${
+          isOnline ? 'bg-success' : 'bg-base-300'
+        }`}
+      >
+        <span
+          className={`block w-[22px] h-[22px] bg-white rounded-full shadow-md transition-transform duration-300 ease-in-out ${
+            isOnline ? 'translate-x-[26px]' : 'translate-x-0'
+          }`}
+        />
+      </button>
+      <span className={`text-sm font-semibold transition-opacity ${isOnline ? 'text-success' : 'text-base-content/40'}`}>
+        Online
+      </span>
+    </div>
+  );
+}
+
+// Skeleton Loader
 const DashboardSkeleton = () => (
   <div className="min-h-screen bg-base-100/50 p-4 space-y-8 animate-pulse">
     <div className="flex gap-6 items-center border-b border-base-300/50 pb-6">
@@ -48,9 +77,6 @@ const DashboardSkeleton = () => (
       <div className="col-span-2 h-64 bg-base-300 rounded-3xl"></div>
       <div className="col-span-1 h-64 bg-base-300 rounded-3xl"></div>
     </div>
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
-      {[1, 2, 3, 4].map(i => <div key={i} className="h-32 bg-base-300 rounded-2xl"></div>)}
-    </div>
   </div>
 );
 
@@ -59,8 +85,9 @@ const DashboardSkeleton = () => (
 // ─────────────────────────────────────────────────────────────────────────────
 export default function CareHome() {
   const dispatch = useDispatch();
-  const router = useRouter(); // Initialize router for button navigation
+  const router = useRouter();
 
+  // Care Assistant Redux State
   const profile = useSelector(selectProfile);
   const isOnline = useSelector(selectIsOnline);
   const currentStatus = useSelector(selectCurrentStatus);
@@ -77,6 +104,7 @@ export default function CareHome() {
     if (!profile) dispatch(getProfile());
   }, [dispatch, profile]);
 
+  // Care Assistant Action Handlers
   const handleToggleOnline = () => {
     dispatch(updateAvailability({ 
       isOnline: !isOnline,
@@ -89,37 +117,31 @@ export default function CareHome() {
     dispatch(updateStatus({ status: newStatus }));
   };
 
-  // ── ERROR / LOADING HANDLERS ────────────────────────────────────────────────
+  // Error / Loading States
   if (isProfileLoading || (!profile && !profileError)) return <DashboardSkeleton />;
   
   if (profileError && !profile) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-base-100 p-6" data-theme="care-assistant">
-        <div className="card max-w-md w-full p-8 text-center border-error/30 bg-error/5 backdrop-blur-strong shadow-lg">
+        <div className="card max-w-md w-full p-8 text-center border-error/30 bg-error/5 shadow-lg">
           <ShieldAlert size={48} className="text-error mx-auto mb-4" />
           <h3 className="font-montserrat text-xl font-bold text-base-content mb-2">Connection Failed</h3>
           <p className="text-base-content/60 text-sm mb-6">{profileError}</p>
-          <button onClick={() => dispatch(getProfile())} className="btn btn-primary-cta w-full">Retry Connection</button>
+          <button onClick={() => dispatch(getProfile())} className="btn btn-primary w-full">Retry Connection</button>
         </div>
       </div>
     );
   }
 
-  // ── DERIVED STATE FROM SCHEMAS ──────────────────────────────────────────────
+  // Derived Variables
+  const firstName = profile?.fullName?.split(' ')[0] || 'Caregiver';
   const kycStatus = profile?.kyc?.verificationStatus || 'Pending';
-  const isDispatchable = profile?.isDispatchable;
   const isMedicallyFit = profile?.healthDeclaration?.isMedicallyFit;
   
-  // Extract training credentials for badges
-  const credentials = [];
-  if (profile?.training?.isFirstAidCertified) credentials.push('First Aid Certified');
-  if (profile?.training?.woundCare) credentials.push('Wound Care');
-  if (profile?.training?.medicationManagement) credentials.push('Medication Mgmt');
-
   return (
     <div className="min-h-screen bg-base-100/40 pb-24 pt-6 md:pt-10 px-4 sm:px-6 lg:px-8 safe-bottom safe-top" data-theme="care-assistant">
       
-      {/* Ambient Glow matching role theme */}
+      {/* Ambient Glow */}
       <div className="fixed top-0 left-1/2 -translate-x-1/2 w-[60vw] h-[40vh] bg-primary/10 rounded-[100%] blur-[120px] pointer-events-none -z-10 mix-blend-multiply dark:mix-blend-screen"></div>
 
       <motion.div 
@@ -130,11 +152,13 @@ export default function CareHome() {
       >
         
         {/* ══════════════════════════════════════════════════════════════════════
-            1. PREMIUM HEADER (Identity & Trust Metrics)
+            1. PREMIUM HEADER (Welcome, Avatar & Completion)
             ══════════════════════════════════════════════════════════════════════ */}
         <motion.header variants={fadeUpVariants} className="flex flex-col xl:flex-row xl:items-end justify-between gap-6 pb-6 border-b border-base-300/60">
-          <div className="flex items-center gap-5 sm:gap-6">
-            <div className="relative group">
+          
+          <div className="flex flex-col md:flex-row md:items-center gap-6">
+            {/* Avatar Profile */}
+            <div className="relative group flex-shrink-0">
               <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-base-200 border-4 border-base-100 shadow-md overflow-hidden flex items-center justify-center relative z-10">
                 {profile.photoUrl || profile.user?.avatar ? (
                   <img src={profile.photoUrl || profile.user.avatar} alt={profile.fullName} className="w-full h-full object-cover" />
@@ -145,40 +169,32 @@ export default function CareHome() {
               <div className={`absolute bottom-1 right-1 w-5 h-5 sm:w-6 sm:h-6 rounded-full border-4 border-base-100 z-20 ${isOnline ? 'bg-success shadow-[0_0_12px_var(--success)]' : 'bg-base-300'}`}></div>
             </div>
             
-            <div className="pt-1">
-              <div className="flex items-center gap-3 mb-1.5">
-                <h1 className="text-2xl sm:text-4xl font-montserrat font-black text-base-content tracking-tight">
-                  {profile.fullName}
+            {/* Greeting & Location Details */}
+            <div className="flex flex-col gap-1.5 pt-1">
+              <p className="text-xs font-bold uppercase tracking-widest text-base-content/50">Welcome back</p>
+              
+              <div className="flex items-center gap-3">
+                <h1 className="text-3xl sm:text-4xl font-montserrat font-black text-base-content tracking-tight leading-none">
+                  {firstName}, <span className="bg-clip-text text-transparent bg-gradient-to-r from-primary to-secondary">Ready to Care.</span>
                 </h1>
                 {kycStatus === 'Verified' && (
                   <div className="bg-success/10 text-success p-1.5 rounded-full" title="Verified KYC">
                     <CheckCircle size={16} strokeWidth={3} />
                   </div>
                 )}
-                {isMedicallyFit && (
-                  <div className="bg-info/10 text-info p-1.5 rounded-full hidden sm:block" title="Medically Fit">
-                    <Activity size={16} strokeWidth={3} />
-                  </div>
-                )}
               </div>
               
-              <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-sm">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-sm mt-2">
                 <span className="badge badge-primary badge-sm sm:badge-md font-bold">{profile.workType || 'Part-Time'}</span>
                 <span className="flex items-center gap-1 text-base-content/60 font-medium">
                   <MapPin size={14} /> {profile?.availability?.currentCity || 'Location Pending'}
                 </span>
+                {isMedicallyFit && (
+                  <span className="flex items-center gap-1 text-info text-xs font-bold bg-info/10 px-2 py-0.5 rounded-md">
+                    <HeartPulse size={12} /> Fit for Duty
+                  </span>
+                )}
               </div>
-
-              {/* Surface Training Credentials */}
-              {credentials.length > 0 && (
-                <div className="flex flex-wrap gap-2 mt-3">
-                  {credentials.map(cert => (
-                    <span key={cert} className="text-[10px] sm:text-xs font-bold uppercase tracking-wider bg-base-200 text-base-content/60 px-2 py-1 rounded-md border border-base-300">
-                      {cert}
-                    </span>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
 
@@ -197,41 +213,30 @@ export default function CareHome() {
               />
             </div>
             {completion < 100 && (
-              <p className="text-xs text-base-content/50 mt-3 font-medium flex items-center justify-between">
-                Complete profile for dispatch <ChevronRight size={14}/>
+              <p className="text-xs text-base-content/50 mt-3 font-medium flex items-center justify-between cursor-pointer" onClick={() => router.push('/care-assistant/profile')}>
+                Complete profile to activate <ChevronRight size={14}/>
               </p>
             )}
           </div>
         </motion.header>
 
         {/* ══════════════════════════════════════════════════════════════════════
-            NEW: QUICK ACTIONS BAR (Dashboard, Account, Support)
+            2. QUICK ACTIONS BAR
             ══════════════════════════════════════════════════════════════════════ */}
         <motion.div variants={fadeUpVariants} className="flex flex-wrap items-center gap-3 py-1">
-          <button 
-            onClick={() => router.push('/care-assistant/dashboard')} 
-            className="btn btn-primary btn-sm md:btn-md rounded-xl shadow-sm"
-          >
+          <button onClick={() => router.push('/care-assistant/dashboard')} className="btn btn-primary btn-sm md:btn-md rounded-xl shadow-sm">
             <LayoutDashboard size={18} /> View Dashboard
           </button>
-          
-          <button 
-            onClick={() => router.push('/care-assistant/profile')} 
-            className="btn btn-outline btn-sm md:btn-md rounded-xl bg-base-100 shadow-sm"
-          >
+          <button onClick={() => router.push('/care-assistant/profile')} className="btn btn-outline btn-sm md:btn-md rounded-xl bg-base-100 shadow-sm">
             <UserCog size={18} /> Manage Account
           </button>
-          
-          <button 
-            onClick={() => router.push('/care-assistant/support')} 
-            className="btn btn-ghost btn-sm md:btn-md rounded-xl bg-base-200/60"
-          >
+          <button onClick={() => router.push('/care-assistant/support')} className="btn btn-ghost btn-sm md:btn-md rounded-xl bg-base-200/60">
             <HelpCircle size={18} /> Help & Support
           </button>
         </motion.div>
 
         {/* ══════════════════════════════════════════════════════════════════════
-            2. ALERTS (Strict Conditional Rendering)
+            3. ALERTS (Strict Conditional Rendering)
             ══════════════════════════════════════════════════════════════════════ */}
         <AnimatePresence>
           {!profile.isActive && kycStatus === 'Verified' ? (
@@ -257,50 +262,36 @@ export default function CareHome() {
         </AnimatePresence>
 
         {/* ══════════════════════════════════════════════════════════════════════
-            3. BENTO GRID: COMMAND CENTER & QUICK STATS
+            4. COMMAND CENTER: ONLINE TOGGLE & AVAILABILITY STATUS
             ══════════════════════════════════════════════════════════════════════ */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           
-          {/* Main Dispatch Controller (Takes up more space) */}
-          <motion.div variants={fadeUpVariants} className="lg:col-span-8 glass-card p-1 shadow-sm border border-base-200/50 rounded-3xl overflow-hidden relative">
+          {/* Main Dispatch Controller */}
+          <motion.div variants={fadeUpVariants} className="lg:col-span-8 p-1 shadow-sm border border-base-200/50 rounded-3xl overflow-hidden relative">
             <div className="absolute inset-0 bg-gradient-to-br from-base-100/80 to-base-200/80 -z-10"></div>
             
-            <div className="bg-base-100 rounded-[22px] p-4 h-full flex flex-col md:flex-row gap-4 border border-base-100/50 shadow-inner">
+            <div className="bg-base-100 rounded-[22px] p-5 h-full flex flex-col md:flex-row md:items-center justify-between gap-6 border border-base-100/50 shadow-inner">
               
-              <div className="flex items-center gap-3 w-full md:w-auto">
-                {/* Custom Tactile Toggle */}
-                <button
-                  onClick={handleToggleOnline}
-                  disabled={isAvailabilityLoading || !profile.isActive}
-                  className={`relative flex items-center justify-center w-17 h-17 rounded-full transition-all duration-300 shadow-xl flex-shrink-0 ${
-                    isOnline ? 'bg-success text-success-content border-b-4 border-success/50' : 'bg-base-200 text-base-content/40 border-b-4 border-base-300 hover:bg-base-300/50'
-                  } disabled:opacity-50 disabled:cursor-not-allowed`}
-                  style={{ width: '68px', height: '68px' }} // w-17 h-17 custom workaround
-                >
-                  {isAvailabilityLoading ? (
-                    <div className="loading loading-spinner loading-lg"></div>
-                  ) : (
-                    <Power size={30} strokeWidth={isOnline ? 3 : 2} className={isOnline ? 'drop-shadow-md' : ''} />
-                  )}
-                </button>
+              <div className="flex flex-col gap-4">
+                {/* The Integrated Online/Offline Switch */}
+                <OnlineToggle 
+                  isOnline={isOnline} 
+                  onToggle={handleToggleOnline} 
+                  disabled={isAvailabilityLoading || !profile.isActive} 
+                />
                 
                 <div>
-                  <h2 className={`text-2xl font-montserrat font-black tracking-tight ${isOnline ? 'text-success' : 'text-base-content/40'}`}>
-                    {isOnline ? 'Online' : 'Offline'}
+                  <h2 className={`text-xl font-montserrat font-black tracking-tight ${isOnline ? 'text-success' : 'text-base-content/40'}`}>
+                    {isOnline ? 'Dispatch Active' : 'System Paused'}
                   </h2>
                   <p className="text-xs font-medium text-base-content/60 mt-1">
-                    {isOnline ? 'Receiving dispatch requests' : 'System is currently paused'}
+                    {isOnline ? 'You are receiving nearby care requests' : 'Go online to accept new tasks'}
                   </p>
-                  {isOnline && isDispatchable && (
-                    <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-success/10 text-success text-xs font-bold uppercase tracking-wider">
-                      <Navigation size={12} className="animate-pulse" /> Dispatch Active
-                    </div>
-                  )}
                 </div>
               </div>
 
-              {/* Status Segmented Control */}
-              <div className="w-full md:w-auto flex-1 max-w-sm bg-base-200 p-1 rounded-2xl flex relative">
+              {/* Status Segmented Control (Availability Detailed Status) */}
+              <div className="w-full md:w-auto flex-1 max-w-sm bg-base-200 p-1 rounded-2xl flex relative h-12">
                 {[
                   { label: 'Available', value: 'Available', color: 'success' },
                   { label: 'On Task', value: 'On-Task', color: 'info' },
@@ -312,7 +303,7 @@ export default function CareHome() {
                       key={status.value}
                       onClick={() => handleStatusChange(status.value)}
                       disabled={isStatusLoading || !isOnline}
-                      className={`relative flex-1 py-2 text-sm font-bold font-poppins rounded-xl z-10 transition-colors ${
+                      className={`relative flex-1 text-sm font-bold font-poppins rounded-xl z-10 transition-colors ${
                         !isOnline ? 'text-base-content/30 cursor-not-allowed' : isActive ? `text-${status.color}-content` : 'text-base-content/60 hover:text-base-content'
                       }`}
                     >
@@ -329,7 +320,7 @@ export default function CareHome() {
           </motion.div>
 
           {/* Earnings Mini-Bento */}
-          <motion.div variants={fadeUpVariants} className="lg:col-span-4 stat-card bg-primary text-primary-content rounded-3xl p-6 flex flex-col justify-between relative overflow-hidden">
+          <motion.div variants={fadeUpVariants} className="lg:col-span-4 bg-primary text-primary-content rounded-3xl p-6 flex flex-col justify-between relative overflow-hidden shadow-sm">
             <div className="absolute -right-6 -top-6 text-primary-content/10 rotate-12">
               <Wallet size={160} strokeWidth={1} />
             </div>
@@ -348,47 +339,47 @@ export default function CareHome() {
         </div>
 
         {/* ══════════════════════════════════════════════════════════════════════
-            4. PERFORMANCE METRICS (Data from schema)
+            5. PERFORMANCE METRICS
             ══════════════════════════════════════════════════════════════════════ */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
-          <motion.div variants={fadeUpVariants} className="stat-card rounded-2xl">
-            <p className="stat-card-label">Client Rating</p>
+          <motion.div variants={fadeUpVariants} className="bg-base-100 p-5 rounded-2xl shadow-sm border border-base-200">
+            <p className="text-xs font-bold uppercase tracking-widest text-base-content/50">Client Rating</p>
             <div className="flex items-center gap-2 mt-2">
-              <h3 className="stat-card-value">{performance?.averageRating?.toFixed(1) || '0.0'}</h3>
+              <h3 className="text-3xl font-black font-montserrat text-base-content">{performance?.averageRating?.toFixed(1) || '0.0'}</h3>
               <Star size={24} className="text-warning fill-warning" />
             </div>
             <p className="text-xs text-base-content/50 mt-2 font-medium">{performance?.totalRatings || 0} lifetime reviews</p>
           </motion.div>
 
-          <motion.div variants={fadeUpVariants} className="stat-card rounded-2xl">
-            <p className="stat-card-label">Tasks Completed</p>
-            <h3 className="stat-card-value mt-2 text-success">{performance?.totalTasksCompleted || '0'}</h3>
+          <motion.div variants={fadeUpVariants} className="bg-base-100 p-5 rounded-2xl shadow-sm border border-base-200">
+            <p className="text-xs font-bold uppercase tracking-widest text-base-content/50">Tasks Completed</p>
+            <h3 className="text-3xl font-black font-montserrat mt-2 text-success">{performance?.totalTasksCompleted || '0'}</h3>
             <p className="text-xs text-base-content/50 mt-2 font-medium">Monthly: {performance?.monthlyTasks || 0}</p>
           </motion.div>
 
-          <motion.div variants={fadeUpVariants} className="stat-card rounded-2xl">
-            <p className="stat-card-label">Cancel Rate</p>
-            <h3 className={`stat-card-value mt-2 ${performance?.cancellationRate > 10 ? 'text-error' : 'text-base-content'}`}>
+          <motion.div variants={fadeUpVariants} className="bg-base-100 p-5 rounded-2xl shadow-sm border border-base-200">
+            <p className="text-xs font-bold uppercase tracking-widest text-base-content/50">Cancel Rate</p>
+            <h3 className={`text-3xl font-black font-montserrat mt-2 ${performance?.cancellationRate > 10 ? 'text-error' : 'text-base-content'}`}>
               {performance?.cancellationRate || 0}%
             </h3>
             <p className="text-xs text-base-content/50 mt-2 font-medium">Keep below 5% for bonuses</p>
           </motion.div>
 
-          <motion.div variants={fadeUpVariants} className="stat-card rounded-2xl">
-            <p className="stat-card-label">Service Radius</p>
-            <h3 className="stat-card-value mt-2 text-info">{profile?.maxServiceRadiusKm || 10}<span className="text-lg text-base-content/40 ml-1 font-bold">km</span></h3>
+          <motion.div variants={fadeUpVariants} className="bg-base-100 p-5 rounded-2xl shadow-sm border border-base-200">
+            <p className="text-xs font-bold uppercase tracking-widest text-base-content/50">Service Radius</p>
+            <h3 className="text-3xl font-black font-montserrat mt-2 text-info">{profile?.maxServiceRadiusKm || 10}<span className="text-lg text-base-content/40 ml-1 font-bold">km</span></h3>
             <p className="text-xs text-base-content/50 mt-2 font-medium">Notice SLA: {profile?.availability?.minNoticeMinutes || 60}m</p>
           </motion.div>
         </div>
 
         {/* ══════════════════════════════════════════════════════════════════════
-            5. BOTTOM SPLIT (Schedule & Ops)
+            6. BOTTOM SPLIT (Schedule & Ops)
             ══════════════════════════════════════════════════════════════════════ */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
           
           <motion.div variants={fadeUpVariants} className="lg:col-span-2 flex flex-col gap-5">
             <h3 className="font-montserrat text-lg font-bold text-base-content ml-1">Today's Itinerary</h3>
-            <div className="card bg-base-100 p-8 text-center border border-base-200 border-dashed shadow-sm flex flex-col items-center justify-center min-h-[280px] rounded-3xl">
+            <div className="bg-base-100 p-8 text-center border border-base-200 border-dashed shadow-sm flex flex-col items-center justify-center min-h-[280px] rounded-3xl">
               <div className="w-16 h-16 bg-base-200 rounded-full flex items-center justify-center mb-4">
                 <Calendar size={28} className="text-base-content/40" />
               </div>
@@ -401,7 +392,7 @@ export default function CareHome() {
 
           <motion.div variants={fadeUpVariants} className="lg:col-span-1 flex flex-col gap-5">
             <h3 className="font-montserrat text-lg font-bold text-base-content ml-1">Operations</h3>
-            <div className="card bg-base-100 p-2 shadow-sm border border-base-200 rounded-3xl">
+            <div className="bg-base-100 p-2 shadow-sm border border-base-200 rounded-3xl">
               <ul className="flex flex-col">
                 {[
                   { label: 'Weekly Schedule', icon: Clock, color: 'text-primary', bg: 'bg-primary/10', route: '/schedule' },

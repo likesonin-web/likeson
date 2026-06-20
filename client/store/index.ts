@@ -1,98 +1,110 @@
 import { configureStore } from "@reduxjs/toolkit";
-import userReducer from "./slices/userSlice";
-import hospitalReducer from "./slices/hospitalSlice";
-import uploadReducer from "./slices/uploadSlice";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SLICE IMPORTS (Alphabetical Order)
+// ─────────────────────────────────────────────────────────────────────────────
+import accountingReducer from "./slices/accountingSlice";
+import adminAnalysticsReducer from "./slices/adminAnalyticsSlice";
+import adminUserReducer from "./slices/adminUserSlice";
 import adsReducer from "./slices/adsSlice";
+import availabilityReducer from "./slices/availabilitySlice";
 import bannersReducer from "./slices/bannerSlice";
-import subscriptionPlansReducer from "./slices/subscriptionPlanSlice";
-import transportPartnerReducer from "./slices/transportPartnerSlice";
-import userManagementReducer from "./slices/userManagementSlice";
-import meetingsReducer from "./slices/meetingSlice";
-import medicineReducer from "./slices/medicineSlice";
-import notificationsReducer from "./slices/notificationSlice";
-import faqReducer from "./slices/faqSlice";
-import promotionReducer from "./slices/promotionSlice";
+import bloodbankReducer from "./slices/bloodbankSlice";
+import bookingReducer from "./slices/bookingSlice";
+import careAssistantReducer from "./slices/careAssistantSlice";
 import chatReducer from "./slices/chatSlice";
-import usersubscriptionPlansReducer from "./slices/subscriptionSlice";
-import pharmacyOrderReducer from "./slices/pharmacyOrderSlice";
-import pharmacyReducer from "./slices/pharmacySlice";
-import walletReducer from "./slices/walletSlice";
-import superadminReducer from "./slices/superadminSlice";
+import clinicalReducer from "./slices/clinicalSlice";
+import consulationReducer from "./slices/consultationSlice";
+import cookieConsentReducer from "./slices/cookieConsentSlice";
+import customerProfileReducer from "./slices/customerProfileSlice";
+import driverReducer from "./slices/driverSlice";
+import faqReducer from "./slices/faqSlice";
+import heroPageReducer from "./slices/heroPageSlice";
+import hospitalManagerReducer from "./slices/hospitalManagerSlice";
+import hospitalReducer from "./slices/hospitalSlice";
+import labPartnerBookingsReducer from "./slices/labPartnerBookingSlice";
+import labReducer from "./slices/labSlice";
 import legalReducer from "./slices/legalSlice";
 import marqueeReducer from "./slices/marqueeSlice";
-import adminUserReducer from "./slices/adminUserSlice";
-import customerProfileReducer from "./slices/customerProfileSlice";
-import heroPageReducer from "./slices/heroPageSlice";
-import referralReducer from "./slices/referralSlice";
+import medicineReducer from "./slices/medicineSlice";
+import meetingsReducer from "./slices/meetingSlice";
+import notificationsReducer from "./slices/notificationSlice";
+import operationsReducer from "./slices/operationsSlice";
+import payAtServiceReducer from './slices/payAtServiceSlice';
+import pharmacyOrderReducer from "./slices/pharmacyOrderSlice";
+import pharmacyReducer from "./slices/pharmacySlice";
 import pharmacyStoreReducer from "./slices/pharmacy/pharmacyStoreSlice";
 import platformPricingReducer from "./slices/platformPricingSlice";
-import soloDriverReducer from "./slices/soloDriverSlice";
-import careAssistantReducer from "./slices/careAssistantSlice";
-import labReducer from "./slices/labSlice";
-import hospitalManagerReducer from "./slices/hospitalManagerSlice";
-import driverReducer from "./slices/driverSlice";
-import searchReducer from "./slices/searchSlice";
-import bookingReducer from "./slices/bookingSlice";
-import operationsReducer from "./slices/operationsSlice";
-import availabilityReducer from "./slices/availabilitySlice";
+import promotionReducer from "./slices/promotionSlice";
+import referralReducer from "./slices/referralSlice";
 import rideRequestReducer from "./slices/rideRequestSlice";
-import clinicalReducer from "./slices/clinicalSlice";
-import bloodbankReducer from "./slices/bloodbankSlice";
-import adminAnalysticsReducer from "./slices/adminAnalyticsSlice";
-import consulationReducer from "./slices/consultationSlice";
-import labPartnerBookingsReducer from "./slices/labPartnerBookingSlice";
-import cookieConsentReducer from "./slices/cookieConsentSlice";
+import searchReducer from "./slices/searchSlice";
+import soloDriverReducer from "./slices/soloDriverSlice";
+import subscriptionPlansReducer from "./slices/subscriptionPlanSlice";
+import usersubscriptionPlansReducer from "./slices/subscriptionSlice";
+import superadminReducer from "./slices/superadminSlice";
+import transportPartnerReducer from "./slices/transportPartnerSlice";
+import uploadReducer from "./slices/uploadSlice";
+import userManagementReducer from "./slices/userManagementSlice";
+import userReducer from "./slices/userSlice";
+import walletReducer from "./slices/walletSlice";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STORE CONFIGURATION
+// ─────────────────────────────────────────────────────────────────────────────
 export const store = configureStore({
   reducer: {
-    user: userReducer,
-    hospital: hospitalReducer,
-    upload: uploadReducer,
+    accounting: accountingReducer,
+    adminAnalytics: adminAnalysticsReducer,
+    adminUsers: adminUserReducer,
     ads: adsReducer,
+    availability: availabilityReducer,
     banners: bannersReducer,
-    subscriptionPlan: subscriptionPlansReducer,
-    transportPartner: transportPartnerReducer,
-    userManagement: userManagementReducer,
-    meeting: meetingsReducer,
-    medicine: medicineReducer,
-    notifications: notificationsReducer,
-    faq: faqReducer,
-    promotion: promotionReducer,
+    bloodBank: bloodbankReducer,
+    booking: bookingReducer,
+    careAssistant: careAssistantReducer,
     chat: chatReducer,
-    subscriptions: usersubscriptionPlansReducer,
-    pharmacyOrder: pharmacyOrderReducer,
-    pharmacy: pharmacyReducer,
-    wallet: walletReducer,
-    superadmin: superadminReducer,
+    clinical: clinicalReducer,
+    consultation: consulationReducer,
+    cookieConsent: cookieConsentReducer,
+    customerProfile: customerProfileReducer,
+    driver: driverReducer,
+    faq: faqReducer,
+    heroPage: heroPageReducer,
+    hospital: hospitalReducer,
+    hospitalManager: hospitalManagerReducer,
+    labPartnerBookings: labPartnerBookingsReducer,
+    labs: labReducer,
     legal: legalReducer,
     marquee: marqueeReducer,
-    adminUsers: adminUserReducer,
-    heroPage: heroPageReducer,
-    referral: referralReducer,
-    platformPricing: platformPricingReducer,
-    customerProfile: customerProfileReducer,
-    soloDriver: soloDriverReducer,
-    driver: driverReducer,
-    //  pharmacy slices
-    pharmacyStore: pharmacyStoreReducer,
-    careAssistant: careAssistantReducer,
-    hospitalManager: hospitalManagerReducer,
-    labs: labReducer,
-    search: searchReducer,
-    booking: bookingReducer,
+    medicine: medicineReducer,
+    meeting: meetingsReducer,
+    notifications: notificationsReducer,
     operations: operationsReducer,
-    availability: availabilityReducer,
+    payAtService: payAtServiceReducer,
+    pharmacy: pharmacyReducer,
+    pharmacyOrder: pharmacyOrderReducer,
+    pharmacyStore: pharmacyStoreReducer,
+    platformPricing: platformPricingReducer,
+    promotion: promotionReducer,
+    referral: referralReducer,
     rideRequest: rideRequestReducer,
-    clinical: clinicalReducer,
-    bloodBank: bloodbankReducer,
-    adminAnalytics: adminAnalysticsReducer,
-    consultation: consulationReducer,
-    labPartnerBookings:labPartnerBookingsReducer,
-    cookieConsent: cookieConsentReducer,
+    search: searchReducer,
+    soloDriver: soloDriverReducer,
+    subscriptionPlan: subscriptionPlansReducer,
+    subscriptions: usersubscriptionPlansReducer,
+    superadmin: superadminReducer,
+    transportPartner: transportPartnerReducer,
+    upload: uploadReducer,
+    user: userReducer,
+    userManagement: userManagementReducer,
+    wallet: walletReducer,
   },
-  devTools: process.env.NODE_ENV !== "production",
 });
 
-// --- ADD THESE LINES ---
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPORTED TYPES
+// ─────────────────────────────────────────────────────────────────────────────
 // This exports the 'RootState' type that your page.tsx is looking for
 export type RootState = ReturnType<typeof store.getState>;
 // This exports the 'AppDispatch' type for use with useDispatch

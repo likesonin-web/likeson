@@ -1,23 +1,5 @@
 "use client";
 
-/**
- * AdsManagement.jsx
- * Admin / Superadmin — full advertisement control panel.
- *
- * Architecture notes:
- *   • All server state lives in adsSlice (Redux Toolkit).
- *   • Local UI state (search, filters, modal open/close) lives in useState.
- *   • Heavy chart panel is lazy-loaded via next/dynamic to keep initial bundle small.
- *   • Every sub-component is memoised with React.memo to prevent unnecessary re-renders
- *     when parent state (e.g. search input) changes.
- *
- * Data flow:
- *   mount → dispatch(fetchAllAds) + dispatch(getAdAnalytics)
- *   every 30 s → dispatch(getAdAnalytics)   [live stat cards]
- *   user creates/edits ad → dispatch(createAd|updateAd) → slice updates allAds in place
- *   user archives ad → dispatch(archiveAd) → slice removes from allAds + banners
- */
-
 import dynamic from "next/dynamic";
 import React, {
   useState,
@@ -60,32 +42,16 @@ const RechartsPanel = dynamic(() => import("./RechartsPanel"), {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
-// These must exactly match the enums in Advertisement.js schema.
-// If you add a new value to the schema, add it here too.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Pages where ads can appear. Must match placement.page enum in schema. */
 const PAGES = ["Global", "Search_Results", "Medicine_Store", "Ride_Tracking_Screen"];
-
-/** Ad slot positions within a page. Must match placement.slot enum in schema. */
 const SLOTS = ["Popup", "Native_Feed", "Sticky_Bottom", "Hero_Banner"];
-
-/** Creative asset formats. Must match adContent.mediaType enum in schema. */
 const MEDIA_TYPES = ["Image", "Video", "Gif"];
-
-/** Billing models. Must match pricingModel enum in schema. */
 const PRICING_MODELS = ["CPC", "CPM", "CPA", "Fixed_Weekly"];
-
-/** Device targets. Must match targeting.deviceType enum in schema. */
 const DEVICE_TYPES = ["iOS", "Android", "Web"];
-
-/** All possible ad lifecycle statuses. Must match status enum in schema. */
 const STATUSES = ["Active", "Paused", "Archived", "Depleted", "Draft"];
-
-/** Advertiser category — Internal = our own promos, External_Partner = paid clients. */
 const AD_TYPES = ["Internal", "External_Partner"];
 
-/** Visual config for each status — drives badge colors throughout the UI. */
 const STATUS_CONFIG = {
   Active:   { color: "text-success",         bg: "bg-success/10",    border: "border-success/40",  icon: CheckCircle },
   Paused:   { color: "text-warning",         bg: "bg-warning/10",    border: "border-warning/40",  icon: PauseCircle },
@@ -94,24 +60,6 @@ const STATUS_CONFIG = {
   Draft:    { color: "text-info",            bg: "bg-info/10",       border: "border-info/30",     icon: Info },
 };
 
-/**
- * EMPTY_FORM
- * Default values for a brand-new ad.
- * When editing, this is deep-merged with the existing ad so missing fields
- * get sensible defaults rather than undefined.
- *
- * Key fields:
- *   targeting.location.coordinates — [lng, lat] GeoJSON order.
- *     [0, 0] means "global" (no geo restriction). Backend skips radius
- *     check for ads at exactly [0, 0].
- *   targeting.radiusInKm — how far from the ad's location coordinates a
- *     customer must be to see the ad. Ignored when coordinates = [0, 0].
- *   schedule.displayHours — UTC hours (0–23) when the ad is eligible.
- *     Empty array = serve all day (no restriction).
- *   schedule.frequencyCap — max times same user sees this ad within windowHours.
- *   budget.totalMax — hard spend cap; ad auto-depletes when currentSpend hits this.
- *   budget.dailyMax — optional per-day cap (not yet enforced server-side by default).
- */
 const EMPTY_FORM = {
   advertiser: {
     name: "",
@@ -129,40 +77,39 @@ const EMPTY_FORM = {
   placement: {
     page: "Global",
     slot: "Native_Feed",
-    priority: 5,   // 1 (lowest) – 10 (highest)
+    priority: 5,
   },
   targeting: {
     deviceType: ["Web"],
-    userSegments: "",  // stored as CSV string in form; split to array on submit
+    userSegments: "",
     location: {
       type: "Point",
-      coordinates: [0, 0],  // [longitude, latitude] — 0,0 = global (no geo filter)
+      coordinates: [0, 0],
     },
-    radiusInKm: 5,  // km radius around coordinates; ignored when coordinates = [0,0]
+    radiusInKm: 5,
   },
   schedule: {
     startDate: new Date().toISOString().split("T")[0],
-    endDate: "",   // blank = open-ended; ad runs until archived or depleted
-    displayHours: [],   // [] = all hours; [9,10,11] = only those UTC hours
+    endDate: "",
+    displayHours: [],
     frequencyCap: {
-      limit: 3,         // max impressions per user in the window below
-      windowHours: 24,  // rolling window in hours
+      limit: 3,
+      windowHours: 24,
     },
   },
-  pricingModel: "CPC",  // default; backend also defaults to CPC if omitted
+  pricingModel: "CPC",
   budget: {
-    totalMax: 10000,     // ₹ hard cap — ad becomes Depleted at this amount
-    dailyMax: 500,       // ₹ daily soft cap (optional)
-    currentSpend: 0,     // always starts at 0 for new ads
+    totalMax: 10000,
+    dailyMax: 500,
+    currentSpend: 0,
   },
-  status: "Active",  // new ads go live immediately; change to "Draft" to save without serving
+  status: "Active",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SKELETON LOADERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Shown in stat card grid while first fetchAllAds is in flight. */
 const StatSkeleton = memo(() => (
   <div className="stat-card animate-pulse">
     <div className="skeleton h-3 w-24 mb-3 rounded" />
@@ -172,7 +119,6 @@ const StatSkeleton = memo(() => (
 ));
 StatSkeleton.displayName = "StatSkeleton";
 
-/** Shown in table body while first fetchAllAds is in flight. */
 const TableRowSkeleton = memo(() => (
   <tr>
     {Array.from({ length: 7 }).map((_, i) => (
@@ -184,7 +130,6 @@ const TableRowSkeleton = memo(() => (
 ));
 TableRowSkeleton.displayName = "TableRowSkeleton";
 
-/** Shown inside the lazy RechartsPanel while the bundle chunk is loading. */
 const ChartSkeleton = memo(() => (
   <div className="animate-pulse h-64 bg-base-200 rounded-box flex items-end gap-2 p-4">
     {Array.from({ length: 7 }).map((_, i) => (
@@ -198,15 +143,6 @@ ChartSkeleton.displayName = "ChartSkeleton";
 // STAT CARD
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * StatCard — animated KPI card in the top grid.
- * @param icon     — Lucide icon component
- * @param label    — metric name
- * @param value    — formatted value string / number
- * @param sub      — small secondary text below value
- * @param trend    — "up" | "down" | undefined — shows colored arrow
- * @param color    — Tailwind text class for the icon background tint
- */
 const StatCard = memo(({ icon: Icon, label, value, sub, trend, color = "text-primary" }) => (
   <motion.div
     initial={{ opacity: 0, y: 16 }}
@@ -235,7 +171,6 @@ StatCard.displayName = "StatCard";
 // STATUS BADGE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Coloured pill badge showing current ad status. */
 const StatusBadge = memo(({ status }) => {
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.Draft;
   const Icon = cfg.icon;
@@ -252,26 +187,12 @@ StatusBadge.displayName = "StatusBadge";
 // MEDIA UPLOAD FIELD
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * MediaUploadField
- * Dual-mode input: paste a direct URL OR upload a file to the CDN.
- * On upload success, the CDN URL is written back via onChange.
- *
- * Props:
- *   value     — current mediaUrl string (from form state)
- *   onChange  — (url: string) => void
- *   mediaType — "Image" | "Video" | "Gif" — controls accept filter + preview
- *
- * BUG FIX: useEffect dependency array previously omitted `dispatch`.
- *   ESLint exhaustive-deps would warn; added to deps array now.
- */
 const MediaUploadField = memo(({ value, onChange, mediaType }) => {
   const dispatch = useDispatch();
   const { isUploading, lastUploadedUrl } = useSelector((s) => s.upload);
-  const [mode, setMode] = useState("url"); // "url" | "upload"
+  const [mode, setMode] = useState("url"); 
   const fileRef = useRef(null);
 
-  // When upload slice reports success, push the CDN URL into the form field
   useEffect(() => {
     if (lastUploadedUrl) {
       onChange(lastUploadedUrl);
@@ -290,7 +211,6 @@ const MediaUploadField = memo(({ value, onChange, mediaType }) => {
 
   return (
     <div className="space-y-2">
-      {/* Toggle between URL paste and file upload */}
       <div className="flex gap-1 p-1 bg-base-200 rounded-field w-fit">
         {["url", "upload"].map((m) => (
           <button
@@ -354,7 +274,6 @@ const MediaUploadField = memo(({ value, onChange, mediaType }) => {
         </div>
       )}
 
-      {/* Live preview when a URL is pasted */}
       {value && mode === "url" && (
         <div className="relative w-full h-28 rounded-field overflow-hidden bg-base-200 border border-base-300">
           {mediaType === "Video" ? (
@@ -377,19 +296,6 @@ MediaUploadField.displayName = "MediaUploadField";
 // HOURS SELECTOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * HoursSelector
- * Grid of 24 toggle buttons (0–23) representing UTC hours.
- * Selected hours are the only hours the ad is eligible to serve.
- * Empty selection = no restriction = ad serves all day.
- *
- * Note: backend compares using getUTCHours() so times here are UTC.
- *   If your users are all in IST (+5:30) and you want 9am–6pm IST,
- *   select hours 3–12 UTC.
- *
- * BUG FIX (was): `toggleAll` created a new closure every render because it
- *   wasn't wrapped in useCallback. Now memoised.
- */
 const HoursSelector = memo(({ selected, onChange }) => {
   const toggle = useCallback(
     (h) => {
@@ -449,7 +355,6 @@ HoursSelector.displayName = "HoursSelector";
 // FIELD GROUP HELPER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Wrapper that shows a field label + helper note above the input. */
 const FieldGroup = memo(({ label, note, children }) => (
   <div className="space-y-1.5">
     <div className="flex items-baseline gap-2">
@@ -461,7 +366,6 @@ const FieldGroup = memo(({ label, note, children }) => (
 ));
 FieldGroup.displayName = "FieldGroup";
 
-/** Native select with a chevron overlay. */
 const SelectField = memo(({ value, onChange, options }) => (
   <div className="relative">
     <select
@@ -485,35 +389,12 @@ SelectField.displayName = "SelectField";
 // AD FORM MODAL
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * AdFormModal
- * Multi-tab form for creating or editing an advertisement.
- *
- * Tabs: Content → Placement → Targeting → Schedule → Budget
- *
- * Key behaviours:
- *   • setField(dotPath, value) — deep-sets any nested field by dot-path string
- *     without mutating the original state object. Works for any depth.
- *   • On submit, userSegments CSV is split to array before sending to API.
- *   • On submit, startDate / endDate ISO strings are reconstructed from the
- *     date-input values (which are plain YYYY-MM-DD strings).
- *
- * BUG FIX: form footer button had `form={undefined}` which disconnected it
- *   from the <form> element entirely. Click handler `handleSubmit` is now
- *   attached directly via onClick so it still works, but `type="button"` is
- *   explicit to prevent accidental native submit.
- *
- * BUG FIX: editAd initialisation only spread top-level keys — nested objects
- *   like targeting and schedule reverted to EMPTY_FORM defaults. Now deep-
- *   merged with explicit spread for each nested section.
- */
 const AdFormModal = memo(({ editAd, onClose }) => {
   const dispatch = useDispatch();
   const { loading } = useSelector((s) => s.ads);
 
   const [form, setForm] = useState(() => {
     if (!editAd) return EMPTY_FORM;
-    // Deep-merge so any field the edit ad doesn't have falls back to EMPTY_FORM default
     return {
       ...EMPTY_FORM,
       ...editAd,
@@ -523,14 +404,12 @@ const AdFormModal = memo(({ editAd, onClose }) => {
       targeting: {
         ...EMPTY_FORM.targeting,
         ...editAd.targeting,
-        // Convert array to CSV string for the textarea input
         userSegments: editAd.targeting?.userSegments?.join(", ") ?? "",
         location: { ...EMPTY_FORM.targeting.location, ...editAd.targeting?.location },
       },
       schedule: {
         ...EMPTY_FORM.schedule,
         ...editAd.schedule,
-        // date-input needs plain YYYY-MM-DD, not full ISO string
         startDate: editAd.schedule?.startDate?.split("T")[0] ?? EMPTY_FORM.schedule.startDate,
         endDate:   editAd.schedule?.endDate?.split("T")[0]   ?? "",
         frequencyCap: { ...EMPTY_FORM.schedule.frequencyCap, ...editAd.schedule?.frequencyCap },
@@ -541,13 +420,6 @@ const AdFormModal = memo(({ editAd, onClose }) => {
 
   const [section, setSection] = useState("content");
 
-  /**
-   * setField
-   * Deep-sets a field by dot-notation path e.g. "adContent.headline".
-   * Works for any nesting depth. Immer-style — returns new object at each level.
-   *
-   * BUG FIX (was): used a for-in loop which didn't correctly handle the final key.
-   */
   const setField = useCallback((path, val) => {
     setForm((prev) => {
       const keys = path.split(".");
@@ -562,13 +434,6 @@ const AdFormModal = memo(({ editAd, onClose }) => {
     });
   }, []);
 
-  /**
-   * handleSubmit
-   * Transforms form state into API payload:
-   *   • Splits userSegments CSV back to array
-   *   • Strips empty campaignId (would fail ObjectId validation)
-   *   • Removes currentSpend from create payload (backend always starts at 0)
-   */
   const handleSubmit = useCallback(
     async (e) => {
       e?.preventDefault();
@@ -582,7 +447,6 @@ const AdFormModal = memo(({ editAd, onClose }) => {
             .map((s) => s.trim())
             .filter(Boolean),
         },
-        // Don't send empty string as campaignId — Mongo ObjectId validation would reject it
         advertiser: {
           ...form.advertiser,
           ...(form.advertiser.campaignId ? {} : { campaignId: undefined }),
@@ -592,7 +456,6 @@ const AdFormModal = memo(({ editAd, onClose }) => {
       if (editAd) {
         await dispatch(updateAd({ id: editAd._id, adData: payload }));
       } else {
-        // Strip currentSpend from create — backend always initialises to 0
         const { budget: { currentSpend: _, ...budgetRest }, ...rest } = payload;
         await dispatch(createAd({ ...rest, budget: budgetRest }));
       }
@@ -624,7 +487,7 @@ const AdFormModal = memo(({ editAd, onClose }) => {
           exit={{ scale: 0.95, y: 20 }}
           className="w-full max-w-3xl max-h-[90vh] bg-base-100 rounded-box border border-base-300 shadow-2xl flex flex-col overflow-hidden"
         >
-          {/* ── Modal Header ── */}
+          {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-base-300 shrink-0">
             <div>
               <h2 className="text-xl font-poppins tracking-tight">
@@ -641,7 +504,7 @@ const AdFormModal = memo(({ editAd, onClose }) => {
             </button>
           </div>
 
-          {/* ── Tab Navigation ── */}
+          {/* Tabs */}
           <div className="flex gap-1 px-6 pt-3 pb-0 shrink-0 overflow-x-auto scrollbar-thin">
             {TABS.map(({ id, label, icon: Icon }) => (
               <button
@@ -660,17 +523,12 @@ const AdFormModal = memo(({ editAd, onClose }) => {
             ))}
           </div>
 
-          {/* ── Form Body (scrollable) ── */}
+          {/* Form Body */}
           <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
-
-            {/* ════════════ CONTENT TAB ════════════ */}
+            {/* CONTENT */}
             {section === "content" && (
               <div className="space-y-4">
-
-                <FieldGroup
-                  label="Advertiser Name"
-                  note="Brand or company running this ad — shown in admin table"
-                >
+                <FieldGroup label="Advertiser Name" note="Brand or company running this ad">
                   <input
                     className="input-field w-full"
                     value={form.advertiser.name}
@@ -679,22 +537,14 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                     required
                   />
                 </FieldGroup>
-
-                <FieldGroup
-                  label="Advertiser Type"
-                  note="Internal = our own campaigns. External_Partner = paying advertisers"
-                >
+                <FieldGroup label="Advertiser Type" note="Internal vs External Partner">
                   <SelectField
                     value={form.advertiser.type}
                     onChange={(v) => setField("advertiser.type", v)}
                     options={AD_TYPES}
                   />
                 </FieldGroup>
-
-                <FieldGroup
-                  label="Headline"
-                  note="Primary ad copy — keep under 60 characters for best display"
-                >
+                <FieldGroup label="Headline" note="Primary ad copy — max 80 chars">
                   <input
                     className="input-field w-full"
                     value={form.adContent.headline}
@@ -704,11 +554,7 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                     required
                   />
                 </FieldGroup>
-
-                <FieldGroup
-                  label="Sub Headline"
-                  note="Supporting copy shown below the headline — one sentence max"
-                >
+                <FieldGroup label="Sub Headline" note="Supporting copy shown below the headline">
                   <textarea
                     className="input-field w-full resize-none"
                     rows={2}
@@ -717,11 +563,7 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                     placeholder="Talk to verified specialist doctors online 24/7."
                   />
                 </FieldGroup>
-
-                <FieldGroup
-                  label="CTA Button Text"
-                  note="Label on the call-to-action button — default is 'Learn More'"
-                >
+                <FieldGroup label="CTA Button Text" note="Call-to-action label">
                   <input
                     className="input-field w-full"
                     value={form.adContent.ctaText}
@@ -729,11 +571,7 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                     placeholder="Learn More"
                   />
                 </FieldGroup>
-
-                <FieldGroup
-                  label="Landing Page URL"
-                  note="Full URL where users land after clicking the ad — must start with https://"
-                >
+                <FieldGroup label="Landing Page URL" note="Destination URL starting with https://">
                   <input
                     type="url"
                     className="input-field w-full"
@@ -743,11 +581,7 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                     required
                   />
                 </FieldGroup>
-
-                <FieldGroup
-                  label="Media Type"
-                  note="Format of the creative asset — determines file upload accept filter"
-                >
+                <FieldGroup label="Media Type" note="Format of the creative asset">
                   <div className="flex gap-2">
                     {MEDIA_TYPES.map((t) => {
                       const Icon = t === "Video" ? Video : ImageIcon;
@@ -768,11 +602,7 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                     })}
                   </div>
                 </FieldGroup>
-
-                <FieldGroup
-                  label="Creative Media"
-                  note="Upload a file to our CDN or paste a direct URL to an existing asset"
-                >
+                <FieldGroup label="Creative Media" note="Upload or paste URL">
                   <MediaUploadField
                     value={form.adContent.mediaUrl}
                     onChange={(v) => setField("adContent.mediaUrl", v)}
@@ -782,36 +612,24 @@ const AdFormModal = memo(({ editAd, onClose }) => {
               </div>
             )}
 
-            {/* ════════════ PLACEMENT TAB ════════════ */}
+            {/* PLACEMENT */}
             {section === "placement" && (
               <div className="space-y-4">
-
-                <FieldGroup
-                  label="App Page"
-                  note="Which screen in the app this ad appears on"
-                >
+                <FieldGroup label="App Page" note="Screen in the app to display ad">
                   <SelectField
                     value={form.placement.page}
                     onChange={(v) => setField("placement.page", v)}
                     options={PAGES}
                   />
                 </FieldGroup>
-
-                <FieldGroup
-                  label="Ad Slot"
-                  note="The specific position within the page — Popup overlays content, Native_Feed blends in, etc."
-                >
+                <FieldGroup label="Ad Slot" note="Specific UI position">
                   <SelectField
                     value={form.placement.slot}
                     onChange={(v) => setField("placement.slot", v)}
                     options={SLOTS}
                   />
                 </FieldGroup>
-
-                <FieldGroup
-                  label="Priority"
-                  note="When multiple ads compete for the same page+slot, higher priority wins. Range: 1 (lowest) – 10 (highest)"
-                >
+                <FieldGroup label="Priority" note="1 (lowest) – 10 (highest)">
                   <div className="flex items-center gap-4">
                     <input
                       type="range"
@@ -826,11 +644,7 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                     </span>
                   </div>
                 </FieldGroup>
-
-                <FieldGroup
-                  label="Initial Status"
-                  note="Active = live immediately. Draft = saved but not served. Paused = temporary hold."
-                >
+                <FieldGroup label="Initial Status" note="Active, Draft, Paused">
                   <div className="grid grid-cols-3 gap-2">
                     {STATUSES.map((s) => {
                       const cfg = STATUS_CONFIG[s];
@@ -854,14 +668,10 @@ const AdFormModal = memo(({ editAd, onClose }) => {
               </div>
             )}
 
-            {/* ════════════ TARGETING TAB ════════════ */}
+            {/* TARGETING */}
             {section === "targeting" && (
               <div className="space-y-4">
-
-                <FieldGroup
-                  label="Device Types"
-                  note="Which platforms see this ad. Select none to target all devices."
-                >
+                <FieldGroup label="Device Types" note="Platforms targeting. None = all devices.">
                   <div className="flex gap-2 flex-wrap">
                     {DEVICE_TYPES.map((d) => (
                       <button
@@ -885,11 +695,7 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                     ))}
                   </div>
                 </FieldGroup>
-
-                <FieldGroup
-                  label="User Segments"
-                  note="Comma-separated audience tags e.g. first_time_user, parent, working_professional. Leave blank for all users."
-                >
+                <FieldGroup label="User Segments" note="Comma-separated tags (e.g. first_time_user)">
                   <input
                     className="input-field w-full"
                     value={form.targeting.userSegments}
@@ -898,21 +704,15 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                   />
                 </FieldGroup>
 
-                {/* Geo-targeting section */}
                 <div className="bg-base-200/60 rounded-field p-4 space-y-3 border border-base-300">
                   <p className="text-xs font-bold text-base-content/60 uppercase tracking-wider">
                     Geo Targeting
                   </p>
                   <p className="text-xs text-base-content/40">
-                    Set coordinates + radius to show this ad only to customers within that area.
-                    Leave longitude and latitude at 0 to serve globally (no geo restriction).
+                    Set coordinates + radius to filter delivery. [0, 0] means global (no restriction).
                   </p>
-
                   <div className="grid grid-cols-2 gap-4">
-                    <FieldGroup
-                      label="Longitude"
-                      note="East/West — e.g. 80.6480 for Vijayawada"
-                    >
+                    <FieldGroup label="Longitude" note="East/West">
                       <input
                         type="number"
                         step="any"
@@ -923,17 +723,13 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                         onChange={(e) =>
                           setField("targeting.location.coordinates", [
                             Number(e.target.value),
-                            form.targeting.location.coordinates[1], // keep existing lat
+                            form.targeting.location.coordinates[1],
                           ])
                         }
                         placeholder="80.6480"
                       />
                     </FieldGroup>
-
-                    <FieldGroup
-                      label="Latitude"
-                      note="North/South — e.g. 16.5062 for Vijayawada"
-                    >
+                    <FieldGroup label="Latitude" note="North/South">
                       <input
                         type="number"
                         step="any"
@@ -943,7 +739,7 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                         value={form.targeting.location.coordinates[1]}
                         onChange={(e) =>
                           setField("targeting.location.coordinates", [
-                            form.targeting.location.coordinates[0], // keep existing lng
+                            form.targeting.location.coordinates[0],
                             Number(e.target.value),
                           ])
                         }
@@ -951,11 +747,7 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                       />
                     </FieldGroup>
                   </div>
-
-                  <FieldGroup
-                    label="Radius (km)"
-                    note="Customers within this many km of the coordinates above will see the ad. Min 1 km."
-                  >
+                  <FieldGroup label="Radius (km)" note="Distance around target coordinates">
                     <input
                       type="number"
                       min={1}
@@ -965,28 +757,22 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                       onChange={(e) => setField("targeting.radiusInKm", Number(e.target.value))}
                     />
                   </FieldGroup>
-
-                  {/* Visual hint: coordinates [0,0] means global */}
                   {form.targeting.location.coordinates[0] === 0 &&
                    form.targeting.location.coordinates[1] === 0 && (
                     <div className="flex items-center gap-2 text-xs text-info bg-info/10 rounded p-2">
                       <Info size={12} />
-                      Coordinates are [0, 0] — this ad will be served globally to all customers.
+                      Coordinates are [0, 0] — serving globally.
                     </div>
                   )}
                 </div>
               </div>
             )}
 
-            {/* ════════════ SCHEDULE TAB ════════════ */}
+            {/* SCHEDULE */}
             {section === "schedule" && (
               <div className="space-y-4">
-
                 <div className="grid grid-cols-2 gap-4">
-                  <FieldGroup
-                    label="Start Date"
-                    note="Ad goes live at 00:00 UTC on this date"
-                  >
+                  <FieldGroup label="Start Date" note="Ad live date">
                     <input
                       type="date"
                       className="input-field w-full"
@@ -994,36 +780,24 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                       onChange={(e) => setField("schedule.startDate", e.target.value)}
                     />
                   </FieldGroup>
-
-                  <FieldGroup
-                    label="End Date"
-                    note="Leave blank for open-ended. Ad auto-archives after this date via cron."
-                  >
+                  <FieldGroup label="End Date" note="Leave blank for open-ended">
                     <input
                       type="date"
                       className="input-field w-full"
                       value={form.schedule.endDate}
                       onChange={(e) => setField("schedule.endDate", e.target.value)}
-                      min={form.schedule.startDate} // BUG FIX: prevent end before start
+                      min={form.schedule.startDate}
                     />
                   </FieldGroup>
                 </div>
-
-                <FieldGroup
-                  label="Display Hours (UTC)"
-                  note="Restrict serving to specific hours of the day. Empty = serve 24/7."
-                >
+                <FieldGroup label="Display Hours (UTC)" note="Restrict serving hours">
                   <HoursSelector
                     selected={form.schedule.displayHours}
                     onChange={(v) => setField("schedule.displayHours", v)}
                   />
                 </FieldGroup>
-
                 <div className="grid grid-cols-2 gap-4">
-                  <FieldGroup
-                    label="Frequency Cap — Max Impressions"
-                    note="Max times one user sees this ad within the window period below"
-                  >
+                  <FieldGroup label="Frequency Cap" note="Max impressions per user">
                     <input
                       type="number"
                       min={1}
@@ -1037,11 +811,7 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                       }
                     />
                   </FieldGroup>
-
-                  <FieldGroup
-                    label="Frequency Window (hours)"
-                    note="Rolling time window for the impression cap above — default 24 h"
-                  >
+                  <FieldGroup label="Frequency Window" note="Rolling window in hours">
                     <input
                       type="number"
                       min={1}
@@ -1059,14 +829,10 @@ const AdFormModal = memo(({ editAd, onClose }) => {
               </div>
             )}
 
-            {/* ════════════ BUDGET TAB ════════════ */}
+            {/* BUDGET */}
             {section === "budget" && (
               <div className="space-y-4">
-
-                <FieldGroup
-                  label="Pricing Model"
-                  note="CPC = pay per click · CPM = pay per 1000 views · CPA = pay per conversion · Fixed_Weekly = flat weekly fee"
-                >
+                <FieldGroup label="Pricing Model" note="Cost structure">
                   <div className="grid grid-cols-2 gap-2">
                     {PRICING_MODELS.map((m) => (
                       <button
@@ -1084,11 +850,7 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                     ))}
                   </div>
                 </FieldGroup>
-
-                <FieldGroup
-                  label="Total Max Budget (₹)"
-                  note="Hard cap — campaign status becomes 'Depleted' and stops serving once spend reaches this"
-                >
+                <FieldGroup label="Total Max Budget (₹)" note="Campaign hard cap limit">
                   <input
                     type="number"
                     min={100}
@@ -1098,11 +860,7 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                     required
                   />
                 </FieldGroup>
-
-                <FieldGroup
-                  label="Daily Max Budget (₹)"
-                  note="Optional soft daily cap — leave 0 for no daily limit"
-                >
+                <FieldGroup label="Daily Max Budget (₹)" note="Leave 0 for no daily limit">
                   <input
                     type="number"
                     min={0}
@@ -1112,7 +870,6 @@ const AdFormModal = memo(({ editAd, onClose }) => {
                   />
                 </FieldGroup>
 
-                {/* Spend progress bar — only shown when editing an existing ad */}
                 {editAd && (
                   <div className="bg-base-200 rounded-field p-4 space-y-2">
                     <div className="flex justify-between text-xs font-bold">
@@ -1145,13 +902,11 @@ const AdFormModal = memo(({ editAd, onClose }) => {
             )}
           </div>
 
-          {/* ── Modal Footer ── */}
+          {/* Footer */}
           <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-base-300 shrink-0">
             <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
               Cancel
             </button>
-            {/* BUG FIX: was form={undefined} — button was disconnected from form submit.
-                Now explicit type="button" with onClick handler. */}
             <button
               type="button"
               onClick={handleSubmit}
@@ -1179,31 +934,21 @@ AdFormModal.displayName = "AdFormModal";
 // AD TABLE ROW
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * AdRow
- * Single row in the admin ads table.
- * Shows thumbnail, headline, placement, status badge, analytics, budget progress, pricing model.
- * Hover reveals Edit + kebab-menu actions (Pause / Activate / Archive).
- *
- * BUG FIX: quickStatus dispatched updateAd with the full ad object as adData.
- *   If the ad has nested virtuals (e.g. ctr) that the schema doesn't accept,
- *   this would cause a 400. Now only sends the status field.
- */
 const AdRow = memo(({ ad, onEdit, onArchive }) => {
   const dispatch = useDispatch();
   const [menuOpen, setMenuOpen] = useState(false);
 
+  // BUG FIX: Secure budget evaluation against missing objects
   const spendPct = Math.min(
     100,
-    ((ad.budget.currentSpend ?? 0) / (ad.budget.totalMax || 1)) * 100
+    ((ad.budget?.currentSpend ?? 0) / (ad.budget?.totalMax || 1)) * 100
   );
-  const ctr =
-    ad.analytics.views > 0
-      ? ((ad.analytics.clicks / ad.analytics.views) * 100).toFixed(2)
-      : "0.00";
+  
+  // BUG FIX: Ensure strict evaluation of analytics variables
+  const views = ad.analytics?.views ?? 0;
+  const clicks = ad.analytics?.clicks ?? 0;
+  const ctr = views > 0 ? ((clicks / views) * 100).toFixed(2) : "0.00";
 
-  // BUG FIX: was spreading entire `ad` object into adData — sends virtuals + read-only fields.
-  // Now only patches the status field.
   const quickStatus = useCallback(
     async (status) => {
       await dispatch(updateAd({ id: ad._id, adData: { status } }));
@@ -1218,15 +963,14 @@ const AdRow = memo(({ ad, onEdit, onArchive }) => {
       animate={{ opacity: 1 }}
       className="group hover:bg-base-200/40 transition-colors"
     >
-      {/* Creative thumbnail + headline */}
       <td className="px-4 py-3">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-field overflow-hidden bg-base-200 shrink-0 border border-base-300">
-            {ad.adContent.mediaUrl ? (
+            {ad.adContent?.mediaUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={ad.adContent.mediaUrl}
-                alt={ad.adContent.headline}
+                alt={ad.adContent?.headline}
                 className="w-full h-full object-cover"
                 loading="lazy"
               />
@@ -1238,51 +982,47 @@ const AdRow = memo(({ ad, onEdit, onArchive }) => {
           </div>
           <div className="min-w-0">
             <p className="font-bold text-sm text-base-content truncate max-w-[160px]">
-              {ad.adContent.headline}
+              {ad.adContent?.headline}
             </p>
-            <p className="text-xs text-base-content/40 truncate">{ad.advertiser.name}</p>
+            <p className="text-xs text-base-content/40 truncate">{ad.advertiser?.name}</p>
           </div>
         </div>
       </td>
 
-      {/* Page + slot badges */}
       <td className="px-4 py-3">
         <div className="space-y-1">
-          <span className="badge badge-info badge-xs">{ad.placement.page}</span>
+          <span className="badge badge-info badge-xs">{ad.placement?.page}</span>
           <br />
           <span className="badge badge-xs bg-base-300/60 text-base-content/60 border-base-300">
-            {ad.placement.slot}
+            {ad.placement?.slot}
           </span>
         </div>
       </td>
 
-      {/* Status badge */}
       <td className="px-4 py-3">
         <StatusBadge status={ad.status} />
       </td>
 
-      {/* Views / clicks / CTR */}
       <td className="px-4 py-3">
         <div className="space-y-0.5">
           <div className="flex items-center gap-1 text-xs">
             <Eye size={10} className="text-base-content/40" />
-            <span className="font-bold">{(ad.analytics.views ?? 0).toLocaleString()}</span>
+            <span className="font-bold">{views.toLocaleString()}</span>
           </div>
           <div className="flex items-center gap-1 text-xs">
             <MousePointerClick size={10} className="text-base-content/40" />
-            <span className="font-bold">{(ad.analytics.clicks ?? 0).toLocaleString()}</span>
+            <span className="font-bold">{clicks.toLocaleString()}</span>
           </div>
           <div className="text-[10px] text-primary font-bold">CTR {ctr}%</div>
         </div>
       </td>
 
-      {/* Budget spend progress */}
       <td className="px-4 py-3">
         <div className="space-y-1 min-w-[100px]">
           <div className="flex justify-between text-[10px] font-bold">
-            <span>₹{(ad.budget.currentSpend ?? 0).toLocaleString()}</span>
+            <span>₹{(ad.budget?.currentSpend ?? 0).toLocaleString()}</span>
             <span className="text-base-content/40">
-              / ₹{ad.budget.totalMax.toLocaleString()}
+              / ₹{(ad.budget?.totalMax ?? 0).toLocaleString()}
             </span>
           </div>
           <div className="progress-bar" style={{ height: "4px" }}>
@@ -1292,29 +1032,18 @@ const AdRow = memo(({ ad, onEdit, onArchive }) => {
         </div>
       </td>
 
-      {/* Pricing model */}
       <td className="px-4 py-3">
         <span className="badge badge-xs bg-accent/5 text-accent border-accent/30">
           {ad.pricingModel}
         </span>
       </td>
 
-      {/* Row actions — visible on hover */}
       <td className="px-4 py-3">
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity relative">
-          <button
-            onClick={() => onEdit(ad)}
-            className="btn btn-ghost btn-xs btn-circle"
-            aria-label="Edit ad"
-          >
+          <button onClick={() => onEdit(ad)} className="btn btn-ghost btn-xs btn-circle" aria-label="Edit ad">
             <Edit3 size={13} />
           </button>
-
-          <button
-            onClick={() => setMenuOpen((p) => !p)}
-            className="btn btn-ghost btn-xs btn-circle"
-            aria-label="More options"
-          >
+          <button onClick={() => setMenuOpen((p) => !p)} className="btn btn-ghost btn-xs btn-circle" aria-label="More options">
             <MoreVertical size={13} />
           </button>
 
@@ -1327,27 +1056,12 @@ const AdRow = memo(({ ad, onEdit, onArchive }) => {
                 className="absolute right-0 top-full mt-1 z-50 bg-base-100 border border-base-300 rounded-field shadow-xl py-1 min-w-[150px]"
               >
                 {ad.status !== "Active" && (
-                  <MenuBtn
-                    onClick={() => quickStatus("Active")}
-                    icon={CheckCircle}
-                    label="Set Active"
-                    color="text-success"
-                  />
+                  <MenuBtn onClick={() => quickStatus("Active")} icon={CheckCircle} label="Set Active" color="text-success" />
                 )}
                 {ad.status === "Active" && (
-                  <MenuBtn
-                    onClick={() => quickStatus("Paused")}
-                    icon={PauseCircle}
-                    label="Pause"
-                    color="text-warning"
-                  />
+                  <MenuBtn onClick={() => quickStatus("Paused")} icon={PauseCircle} label="Pause" color="text-warning" />
                 )}
-                <MenuBtn
-                  onClick={() => onArchive(ad._id)}
-                  icon={Archive}
-                  label="Archive"
-                  color="text-error"
-                />
+                <MenuBtn onClick={() => onArchive(ad._id)} icon={Archive} label="Archive" color="text-error" />
               </motion.div>
             )}
           </AnimatePresence>
@@ -1358,7 +1072,6 @@ const AdRow = memo(({ ad, onEdit, onArchive }) => {
 });
 AdRow.displayName = "AdRow";
 
-/** Small button row inside the kebab dropdown menu. */
 const MenuBtn = ({ onClick, icon: Icon, label, color }) => (
   <button
     onClick={onClick}
@@ -1406,18 +1119,6 @@ EmptyState.displayName = "EmptyState";
 // MAIN PAGE COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * AdsManagement (default export)
- * Admin control panel for the entire ad lifecycle:
- *   view all → filter/search → create / edit → archive
- *
- * BUG FIX: analytics refresh interval was never cleared in the old code if
- *   `dispatch` reference changed (it shouldn't, but the ESLint rule is correct).
- *   Now correctly returns the clearInterval cleanup from useEffect.
- *
- * BUG FIX: sortKey "ctr" calculation divided by zero when views = 0.
- *   Now guarded with || 0 in the sort comparator.
- */
 export default function AdsManagement() {
   const dispatch = useDispatch();
   const { allAds, analytics, loading, isRefreshing } = useSelector((s) => s.ads);
@@ -1428,19 +1129,17 @@ export default function AdsManagement() {
   const [showForm, setShowForm]       = useState(false);
   const [editAd, setEditAd]           = useState(null);
   const [showChart, setShowChart]     = useState(false);
-  const [sortKey, setSortKey]         = useState("priority"); // "priority" | "spend" | "ctr"
+  const [sortKey, setSortKey]         = useState("priority"); 
   const [sortDir, setSortDir]         = useState("desc");
 
-  // Fetch all ads + analytics on mount
   useEffect(() => {
     dispatch(fetchAllAds());
     dispatch(getAdAnalytics());
   }, [dispatch]);
 
-  // Refresh analytics stat cards every 30 seconds without full table reload
   useEffect(() => {
     const id = setInterval(() => dispatch(getAdAnalytics()), 30_000);
-    return () => clearInterval(id); // BUG FIX: cleanup was missing
+    return () => clearInterval(id);
   }, [dispatch]);
 
   const handleEdit = useCallback((ad) => {
@@ -1470,46 +1169,48 @@ export default function AdsManagement() {
     [sortKey]
   );
 
-  // Derived: filter + sort allAds for the table
   const filteredAds = useMemo(() => {
-    let res = allAds;
+    let res = allAds || []; // safeguard
 
     if (statusFilter !== "All") res = res.filter((a) => a.status === statusFilter);
-    if (pageFilter !== "All")   res = res.filter((a) => a.placement.page === pageFilter);
+    if (pageFilter !== "All")   res = res.filter((a) => a.placement?.page === pageFilter);
 
     if (search.trim()) {
       const q = search.toLowerCase();
       res = res.filter(
         (a) =>
-          a.adContent.headline.toLowerCase().includes(q) ||
-          a.advertiser.name.toLowerCase().includes(q)
+          a.adContent?.headline?.toLowerCase().includes(q) ||
+          a.advertiser?.name?.toLowerCase().includes(q)
       );
     }
 
     return [...res].sort((a, b) => {
       let va, vb;
       if (sortKey === "priority") {
-        va = a.placement.priority;
-        vb = b.placement.priority;
+        va = a.placement?.priority ?? 0;
+        vb = b.placement?.priority ?? 0;
       } else if (sortKey === "spend") {
-        va = a.budget.currentSpend ?? 0;
-        vb = b.budget.currentSpend ?? 0;
+        va = a.budget?.currentSpend ?? 0;
+        vb = b.budget?.currentSpend ?? 0;
       } else {
-        // ctr — BUG FIX: guard division by zero
-        va = a.analytics.views ? a.analytics.clicks / a.analytics.views : 0;
-        vb = b.analytics.views ? b.analytics.clicks / b.analytics.views : 0;
+        // BUG FIX: Secure calculation against missing analytics objects completely
+        const viewsA = a.analytics?.views ?? 0;
+        const clicksA = a.analytics?.clicks ?? 0;
+        va = viewsA > 0 ? clicksA / viewsA : 0;
+
+        const viewsB = b.analytics?.views ?? 0;
+        const clicksB = b.analytics?.clicks ?? 0;
+        vb = viewsB > 0 ? clicksB / viewsB : 0;
       }
       return sortDir === "desc" ? vb - va : va - vb;
     });
   }, [allAds, statusFilter, pageFilter, search, sortKey, sortDir]);
 
-  // Derived: summary numbers for stat cards (computed from local allAds, not re-fetched)
   const stats = useMemo(() => ({
-    activeCount: allAds.filter((a) => a.status === "Active").length,
-    totalSpend:  allAds.reduce((s, a) => s + (a.budget.currentSpend ?? 0), 0),
+    activeCount: (allAds || []).filter((a) => a.status === "Active").length,
+    totalSpend:  (allAds || []).reduce((s, a) => s + (a.budget?.currentSpend ?? 0), 0),
   }), [allAds]);
 
-  // Sort icon — shown in table header next to the sortable column
   const SortIcon = ({ k }) =>
     sortKey === k
       ? sortDir === "desc"
@@ -1519,8 +1220,6 @@ export default function AdsManagement() {
 
   return (
     <div className="min-h-screen bg-base-100">
-
-      {/* ── Sticky Header ── */}
       <header className="sticky top-0 z-40 bg-base-100/90 backdrop-blur-strong border-b border-base-300">
         <div className="container-custom py-4 flex items-center justify-between gap-4 flex-wrap">
           <div>
@@ -1529,12 +1228,11 @@ export default function AdsManagement() {
               Ads Management
             </h1>
             <p className="text-xs text-base-content/50">
-              {allAds.length} campaigns · {stats.activeCount} active
+              {(allAds || []).length} campaigns · {stats.activeCount} active
             </p>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Manual refresh button */}
             <button
               onClick={() => { dispatch(fetchAllAds()); dispatch(getAdAnalytics()); }}
               className="btn btn-ghost btn-sm gap-1"
@@ -1544,7 +1242,6 @@ export default function AdsManagement() {
               <RefreshCw size={14} className={isRefreshing ? "animate-spin" : ""} />
             </button>
 
-            {/* Toggle analytics chart panel */}
             <button
               onClick={() => setShowChart((p) => !p)}
               className={`btn btn-sm gap-1 ${showChart ? "btn-primary" : "btn-outline"}`}
@@ -1552,7 +1249,6 @@ export default function AdsManagement() {
               <BarChart2 size={14} /> Analytics
             </button>
 
-            {/* Create new ad */}
             <button
               onClick={() => { setEditAd(null); setShowForm(true); }}
               className="btn-primary-cta px-4 py-2 flex items-center gap-2 text-sm"
@@ -1564,10 +1260,8 @@ export default function AdsManagement() {
       </header>
 
       <main className="container-custom py-6 space-y-6">
-
-        {/* ── KPI Stat Cards ── */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {loading && allAds.length === 0 ? (
+          {loading && (allAds || []).length === 0 ? (
             Array.from({ length: 4 }).map((_, i) => <StatSkeleton key={i} />)
           ) : (
             <>
@@ -1575,21 +1269,21 @@ export default function AdsManagement() {
                 icon={Activity}
                 label="Active Campaigns"
                 value={stats.activeCount}
-                sub={`of ${allAds.length} total`}
+                sub={`of ${(allAds || []).length} total`}
                 trend="up"
               />
               <StatCard
                 icon={Eye}
                 label="Total Impressions"
-                value={(analytics.totalViews ?? 0).toLocaleString()}
+                value={(analytics?.totalViews ?? 0).toLocaleString()}
                 sub="all time"
                 color="text-info"
               />
               <StatCard
                 icon={MousePointerClick}
                 label="Total Clicks"
-                value={(analytics.totalClicks ?? 0).toLocaleString()}
-                sub={`CTR ${(analytics.avgCtr ?? 0).toFixed(2)}%`}
+                value={(analytics?.totalClicks ?? 0).toLocaleString()}
+                sub={`CTR ${(analytics?.avgCtr ?? 0).toFixed(2)}%`}
                 color="text-success"
                 trend="up"
               />
@@ -1604,7 +1298,6 @@ export default function AdsManagement() {
           )}
         </div>
 
-        {/* ── Analytics Chart (lazy) ── */}
         <AnimatePresence>
           {showChart && (
             <motion.div
@@ -1618,15 +1311,13 @@ export default function AdsManagement() {
                   <TrendingUp size={16} className="text-primary" />
                   Campaign Performance
                 </h3>
-                <RechartsPanel ads={allAds} />
+                <RechartsPanel ads={allAds || []} />
               </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* ── Filter Bar ── */}
         <div className="flex flex-wrap gap-3 items-center">
-          {/* Full-text search by headline or advertiser name */}
           <div className="relative flex-1 min-w-[200px] max-w-sm">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
             <input
@@ -1638,7 +1329,6 @@ export default function AdsManagement() {
             />
           </div>
 
-          {/* Filter by status */}
           <div className="relative">
             <select
               value={statusFilter}
@@ -1652,7 +1342,6 @@ export default function AdsManagement() {
             <ChevronDown size={12} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-base-content/40" />
           </div>
 
-          {/* Filter by page */}
           <div className="relative">
             <select
               value={pageFilter}
@@ -1666,13 +1355,11 @@ export default function AdsManagement() {
             <ChevronDown size={12} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-base-content/40" />
           </div>
 
-          {/* Result count */}
           <span className="text-xs text-base-content/40 ml-auto">
             {filteredAds.length} result{filteredAds.length !== 1 ? "s" : ""}
           </span>
         </div>
 
-        {/* ── Ads Table ── */}
         <div className="card overflow-hidden">
           <div className="overflow-x-auto">
             <table
@@ -1686,18 +1373,12 @@ export default function AdsManagement() {
                   <th>Placement</th>
                   <th>Status</th>
                   <th>
-                    <button
-                      onClick={() => toggleSort("ctr")}
-                      className="flex items-center gap-1 hover:text-primary transition-colors"
-                    >
+                    <button onClick={() => toggleSort("ctr")} className="flex items-center gap-1 hover:text-primary transition-colors">
                       Analytics <SortIcon k="ctr" />
                     </button>
                   </th>
                   <th>
-                    <button
-                      onClick={() => toggleSort("spend")}
-                      className="flex items-center gap-1 hover:text-primary transition-colors"
-                    >
+                    <button onClick={() => toggleSort("spend")} className="flex items-center gap-1 hover:text-primary transition-colors">
                       Budget <SortIcon k="spend" />
                     </button>
                   </th>
@@ -1706,7 +1387,7 @@ export default function AdsManagement() {
                 </tr>
               </thead>
               <tbody>
-                {loading && allAds.length === 0 ? (
+                {loading && (allAds || []).length === 0 ? (
                   Array.from({ length: 5 }).map((_, i) => <TableRowSkeleton key={i} />)
                 ) : filteredAds.length === 0 ? (
                   <tr>
@@ -1724,12 +1405,7 @@ export default function AdsManagement() {
                   </tr>
                 ) : (
                   filteredAds.map((ad) => (
-                    <AdRow
-                      key={ad._id}
-                      ad={ad}
-                      onEdit={handleEdit}
-                      onArchive={handleArchive}
-                    />
+                    <AdRow key={ad._id} ad={ad} onEdit={handleEdit} onArchive={handleArchive} />
                   ))
                 )}
               </tbody>
@@ -1738,7 +1414,6 @@ export default function AdsManagement() {
         </div>
       </main>
 
-      {/* ── Ad Form Modal ── */}
       <AnimatePresence>
         {showForm && <AdFormModal editAd={editAd} onClose={handleCloseForm} />}
       </AnimatePresence>

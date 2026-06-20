@@ -17,17 +17,24 @@ import {
   ADMIN_SEARCH_QUICK_AND_PAGE_LINKS,
   ADMIN_PROFILE_LINKS,
 } from "../../constants/admin";
- 
 
 import { useRouter, usePathname } from "next/navigation";
 import { logout } from "@/store/slices/userSlice";
 import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
+import AdminWelcomePage from "./AdminWelcomePage";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Flattened set of every registered sidebar href — built once at module load.
+const ADMIN_REGISTERED_PATHS = new Set(
+  ADMIN_DASHBOARD_LINKS.flatMap((section) =>
+    section.links.map((link) => link.href)
+  )
+);
 
 // FIX 3: Removed local PROFILE_LINKS constant entirely — data now comes from
 //         ADMIN_PROFILE_LINKS in the data file (unified prop shape: name/href/icon).
@@ -263,6 +270,16 @@ const AdminDashboard = ({ children }) => {
     return user?.avatar || avatars[user?.role] || avatars.customer;
   }, [user]);
 
+  // Is the current route part of the registered sidebar navigation?
+  const isRegisteredRoute = useMemo(
+    () => ADMIN_REGISTERED_PATHS.has(pathname),
+    [pathname]
+  );
+
+  const breadcrumbLabel = isRegisteredRoute
+    ? pathname.split("/").filter(Boolean).pop()?.replace(/-/g, " ")
+    : "Welcome";
+
   // FIX 11: Authorization guard — was missing entirely in original component.
   //          Admin shell should only render for role === "admin".
   if (mounted && user?.role !== "admin") {
@@ -471,7 +488,7 @@ const AdminDashboard = ({ children }) => {
               <Link
                 key={idx}
                 href={shortcut.href}
-                className="flex flex-col items-center justify-center p-2 bg-base-200 border border-base-300 rounded-md hover:border-warning/50 hover:bg-warning/5 transition-all group relative overflow-hidden"
+                className="flex flex-col items-center justify-center   bg-base-200 border border-base-300 rounded-md hover:border-warning/50 hover:bg-warning/5 transition-all group relative overflow-hidden"
               >
                 <div className="absolute top-2 right-3 text-[8px] font-bold text-warning/40 uppercase tracking-tighter">
                   {shortcut.shortcut}
@@ -492,7 +509,7 @@ const AdminDashboard = ({ children }) => {
               <Link href="/admin/dashboard" className="hover:text-warning transition-colors">HOME</Link>
               <ChevronRight size={12} />
               <span className="text-warning italic">
-                {pathname.split("/").filter(Boolean).pop()?.replace(/-/g, " ") || "DASHBOARD"}
+                {breadcrumbLabel || "DASHBOARD"}
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -505,10 +522,10 @@ const AdminDashboard = ({ children }) => {
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="rounded-[1.5rem] border border-base-300 bg-base-200/40 min-h-[65vh] p-2 shadow-inner relative overflow-hidden"
+            className="rounded-[1.5rem] border border-base-300 bg-base-200/40 min-h-[100vh] p-2 shadow-inner relative overflow-hidden"
           >
             <div className="absolute top-0 right-0 w-[600px] h-[1000px] bg-warning/5 blur-[150px] rounded-full -z-10 animate-pulse pointer-events-none" />
-            {children}
+            {isRegisteredRoute ? children : <AdminWelcomePage />}
           </motion.div>
         </section>
 

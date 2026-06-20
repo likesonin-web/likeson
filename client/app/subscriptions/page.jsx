@@ -193,21 +193,16 @@ function PlanPattern({ patternId, planName }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  POPULAR BADGE — static 3px top border + centered "Most Popular" pill
-//  (NO rotating animation)
+//  POPULAR BADGE
 // ─────────────────────────────────────────────────────────────────────────────
 function PopularTopBadge({ color, label = "Most Popular" }) {
   return (
     <>
-      {/* 3px solid top accent border */}
       <div
         className="absolute top-0 left-0 right-0 h-[3px] rounded-t-[calc(var(--r-box,12px)+1px)] z-10 pointer-events-none"
         style={{ background: `linear-gradient(90deg, ${color}aa, ${color}, ${color}aa)` }}
       />
-      {/* Centered "Most Popular" pill sitting on top of the card */}
-      <div
-        className="absolute -top-[14px] left-1/2 -translate-x-1/2 z-20 pointer-events-none"
-      >
+      <div className="absolute -top-[14px] left-1/2 -translate-x-1/2 z-20 pointer-events-none">
         <motion.span
           initial={{ opacity: 0, y: -6, scale: 0.9 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -223,7 +218,6 @@ function PopularTopBadge({ color, label = "Most Popular" }) {
           {label}
         </motion.span>
       </div>
-      {/* Subtle outer glow — static, no animation */}
       <div
         className="absolute -inset-[2px] rounded-[calc(var(--r-box,12px)+2px)] pointer-events-none"
         style={{
@@ -259,8 +253,6 @@ function BenefitRow({ icon: Icon, label, value, active, accent, delay = 0 }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  PLAN CARD
-//  – popular card gets PopularTopBadge (static 3px border + centered pill)
-//  – popular card lifted (mt-0 vs mt-6) so it visually "anchors" to center
 // ─────────────────────────────────────────────────────────────────────────────
 function PlanCard({ plan, isActive, isCurrent, onSubscribe, onTrial, onUpgrade, trialEligible, purchaseLoading, trialLoading, index }) {
   const name      = plan.fixedTier || plan.name;
@@ -303,16 +295,13 @@ function PlanCard({ plan, isActive, isCurrent, onSubscribe, onTrial, onUpgrade, 
       transition={{ delay: index * 0.08, duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
       whileHover={{ y: -6, scale: 1.012 }}
       className="relative flex flex-col"
-      // Popular card: add top padding so the pill badge has space above the card
       style={{
         zIndex: t.popular ? 2 : 1,
         paddingTop: t.popular ? "18px" : "0px",
       }}
     >
-      {/* Popular static top-border + centered pill */}
       {t.popular && <PopularTopBadge color={t.accent} label={t.tag} />}
 
-      {/* Card shell */}
       <div
         className="relative flex flex-col h-full overflow-hidden"
         style={{
@@ -329,11 +318,10 @@ function PlanCard({ plan, isActive, isCurrent, onSubscribe, onTrial, onUpgrade, 
           maskImage: "linear-gradient(#fff, #fff)",
         }}
       >
-        {/* ── Gradient header ── */}
+        {/* Gradient header */}
         <div className="relative overflow-hidden flex-shrink-0" style={{ background: t.gradient, minHeight: 148 }}>
           <PlanPattern patternId={t.patternId} planName={name} />
 
-          {/* Subtle rotating decoration — only the background circles, not the border */}
           <motion.div
             animate={{ rotate: 360 }}
             transition={{ duration: 45, repeat: Infinity, ease: "linear" }}
@@ -348,9 +336,7 @@ function PlanCard({ plan, isActive, isCurrent, onSubscribe, onTrial, onUpgrade, 
           />
 
           <div className="relative z-10 p-5">
-            {/* Tag row */}
             <div className="flex items-center justify-between mb-3">
-              {/* For popular plan, don't show the "Most Popular" tag inside the header (it's already the top pill) */}
               {!t.popular && (
                 <span
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider"
@@ -367,7 +353,6 @@ function PlanCard({ plan, isActive, isCurrent, onSubscribe, onTrial, onUpgrade, 
                   <Crown size={9} /> Premium
                 </span>
               )}
-
               {isCurrent && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black"
                   style={{ background: "rgba(255,255,255,0.22)", color: "white" }}>
@@ -376,7 +361,6 @@ function PlanCard({ plan, isActive, isCurrent, onSubscribe, onTrial, onUpgrade, 
               )}
             </div>
 
-            {/* Icon + name */}
             <div className="flex items-end justify-between">
               <div>
                 <div className="flex items-center gap-2 mb-1">
@@ -402,14 +386,14 @@ function PlanCard({ plan, isActive, isCurrent, onSubscribe, onTrial, onUpgrade, 
           </div>
         </div>
 
-        {/* ── Benefits ── */}
+        {/* Benefits */}
         <div className="px-5 pt-4 pb-1">
           {benefits.map((b, i) => (
             <BenefitRow key={i} {...b} accent={t.accent} delay={0.05 + i * 0.04} />
           ))}
         </div>
 
-        {/* ── Feature pills ── */}
+        {/* Feature pills */}
         {features.length > 0 && (
           <div className="px-5 pt-3 pb-1 flex flex-wrap gap-1.5">
             {features.slice(0, 4).map((f, i) => (
@@ -434,7 +418,6 @@ function PlanCard({ plan, isActive, isCurrent, onSubscribe, onTrial, onUpgrade, 
           </div>
         )}
 
-        {/* ── Ideal for ── */}
         {plan.idealFor && (
           <div className="px-5 pt-2">
             <p className="text-[10px] font-semibold" style={{ opacity: 0.45 }}>
@@ -444,7 +427,7 @@ function PlanCard({ plan, isActive, isCurrent, onSubscribe, onTrial, onUpgrade, 
           </div>
         )}
 
-        {/* ── CTA buttons ── */}
+        {/* CTA buttons */}
         <div className="p-5 mt-auto space-y-2">
           {isCurrent ? (
             <div className="flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-black"
@@ -492,16 +475,16 @@ function PlanCard({ plan, isActive, isCurrent, onSubscribe, onTrial, onUpgrade, 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  CUSTOM PLAN BUILDER  — max-w-xl, centred
+//  CUSTOM PLAN BUILDER  — transport uses dropdown only (no stepper)
 // ─────────────────────────────────────────────────────────────────────────────
 const OPTION_KEYS = [
-  { key: "consultations",        icon: Stethoscope,  label: "Doctor Consultations",  unit: "consults/mo",  isToggle: false },
-  { key: "transport",            icon: Truck,        label: "Transport Rides",        unit: "rides/mo",     isToggle: false },
-  { key: "diagnostics",          icon: Microscope,   label: "Diagnostic Discount",    unit: "% off",        isToggle: false },
-  { key: "pharmacy",             icon: Pill,         label: "Pharmacy Discount",      unit: "% off",        isToggle: false },
-  { key: "careAssistant",        icon: UserCheck,    label: "Care Assistant Visits",  unit: "visits/mo",    isToggle: false },
-  { key: "homeSampleCollection", icon: Home,         label: "Home Sample Collection", unit: "add-on",       isToggle: true  },
-  { key: "prioritySupport",      icon: Zap,          label: "Priority Support",       unit: "add-on",       isToggle: true  },
+  { key: "consultations",        icon: Stethoscope,  label: "Doctor Consultations",  unit: "consults/mo",  isToggle: false, isTransport: false },
+  { key: "transport",            icon: Truck,        label: "Medical Transport",      unit: "slab",         isToggle: false, isTransport: true  },
+  { key: "diagnostics",          icon: Microscope,   label: "Diagnostic Discount",    unit: "% off",        isToggle: false, isTransport: false },
+  { key: "pharmacy",             icon: Pill,         label: "Pharmacy Discount",      unit: "% off",        isToggle: false, isTransport: false },
+  { key: "careAssistant",        icon: UserCheck,    label: "Care Assistant Visits",  unit: "visits/mo",    isToggle: false, isTransport: false },
+  { key: "homeSampleCollection", icon: Home,         label: "Home Sample Collection", unit: "add-on",       isToggle: true,  isTransport: false },
+  { key: "prioritySupport",      icon: Zap,          label: "Priority Support",       unit: "add-on",       isToggle: true,  isTransport: false },
 ];
 
 function CustomPlanBuilder({ onClose, existingCustomPlan }) {
@@ -511,14 +494,21 @@ function CustomPlanBuilder({ onClose, existingCustomPlan }) {
   const saveLoading  = useSelector(selectCustomPlanLoading);
   const saveError    = useSelector(selectCustomPlanError);
 
-  const [planName, setPlanName]     = useState(existingCustomPlan?.name || "My Custom Plan");
+  const [planName, setPlanName] = useState(existingCustomPlan?.name || "My Custom Plan");
+
+  // ── quantities: for transport stores selected slab index (-1 = not selected)
   const [quantities, setQuantities] = useState(() => {
     if (existingCustomPlan?.customOptions) {
-      return Object.fromEntries(
+      const map = Object.fromEntries(
         existingCustomPlan.customOptions.map((o) => [o.optionKey, o.quantity])
       );
+      // transport quantity stored as slabIndex; -1 if absent
+      if (!("transport" in map)) map.transport = -1;
+      return map;
     }
-    return Object.fromEntries(OPTION_KEYS.map((o) => [o.key, 0]));
+    const defaults = Object.fromEntries(OPTION_KEYS.map((o) => [o.key, 0]));
+    defaults.transport = -1; // -1 = no slab selected
+    return defaults;
   });
 
   useEffect(() => { dispatch(fetchCustomPlanPricing()); }, [dispatch]);
@@ -526,9 +516,11 @@ function CustomPlanBuilder({ onClose, existingCustomPlan }) {
   const unitPrices = pricing?.unitPrices || {};
   const caps       = pricing?.caps || {};
 
+  // kmSlabs from pricing if available, otherwise empty
+  const kmSlabs = pricing?.transport?.kmSlabs ?? pricing?.kmSlabs ?? [];
+
   const PRICE_MAP = {
-    consultations:        unitPrices.consultationPricePerUnit          || 150,
-    transport:            unitPrices.transportRidePricePerUnit         || 100,
+    consultations:        unitPrices.consultationPricePerUnit           || 150,
     diagnostics:          unitPrices.diagnosticsDiscountPricePerPercent || 20,
     pharmacy:             unitPrices.pharmacyDiscountPricePerPercent    || 25,
     careAssistant:        unitPrices.careAssistantVisitPricePerUnit     || 120,
@@ -538,28 +530,79 @@ function CustomPlanBuilder({ onClose, existingCustomPlan }) {
 
   const CAP_MAP = {
     consultations: caps.consultationsMaxPerMonth       || 30,
-    transport:     caps.transportMaxRidesPerMonth      || 20,
     diagnostics:   caps.diagnosticsDiscountMax         || 25,
     pharmacy:      caps.pharmacyDiscountMax            || 25,
     careAssistant: caps.careAssistantMaxVisitsPerMonth || 30,
   };
 
-  const total = useMemo(
-    () => Object.entries(quantities).reduce((sum, [key, qty]) => sum + qty * (PRICE_MAP[key] || 0), 0),
-    [quantities, PRICE_MAP]
-  );
+  // ── Compute transport line total from selected slab
+  const transportLineTotal = useMemo(() => {
+    const slabIdx = quantities.transport;
+    if (slabIdx < 0 || !kmSlabs.length) return 0;
+    const slab = kmSlabs[slabIdx];
+    return slab ? slab.packagePrice ?? slab.price ?? 0 : 0;
+  }, [quantities.transport, kmSlabs]);
+
+  const transportSlabLabel = useMemo(() => {
+    const slabIdx = quantities.transport;
+    if (slabIdx < 0 || !kmSlabs.length) return "";
+    const slab = kmSlabs[slabIdx];
+    if (!slab) return "";
+    return `₹${slab.pricePerKm ?? slab.ratePerKm ?? 0}/km · Bundle ₹${slab.packagePrice ?? slab.price ?? 0}/mo`;
+  }, [quantities.transport, kmSlabs]);
+
+  const total = useMemo(() => {
+    let sum = 0;
+    for (const [key, qty] of Object.entries(quantities)) {
+      if (key === "transport") {
+        sum += transportLineTotal;
+      } else {
+        sum += Math.max(0, qty) * (PRICE_MAP[key] || 0);
+      }
+    }
+    return sum;
+  }, [quantities, PRICE_MAP, transportLineTotal]);
 
   const setQty = (key, val) => {
     const max = CAP_MAP[key] ?? 1;
     setQuantities((q) => ({ ...q, [key]: Math.max(0, Math.min(max, val)) }));
   };
 
+  // ── Transport slab select handler
+  const handleTransportChange = (e) => {
+    const val = e.target.value;
+    setQuantities((q) => ({ ...q, transport: val === "" ? -1 : Number(val) }));
+  };
+
   const handleSave = async () => {
-    const options = OPTION_KEYS.filter((o) => quantities[o.key] > 0).map((o) => ({
-      optionKey: o.key,
-      label:     o.label,
-      quantity:  quantities[o.key],
-    }));
+    const options = [];
+
+    for (const opt of OPTION_KEYS) {
+      if (opt.isTransport) {
+        const slabIdx = quantities.transport;
+        if (slabIdx >= 0 && kmSlabs[slabIdx]) {
+          const slab = kmSlabs[slabIdx];
+          options.push({
+            optionKey:  "transport",
+            label:      opt.label,
+            quantity:   slabIdx,           // store slab index as quantity
+            unitPrice:  slab.pricePerKm ?? slab.ratePerKm ?? 0,
+            lineTotal:  slab.packagePrice ?? slab.price ?? 0,
+            slabIndex:  slabIdx,
+          });
+        }
+      } else {
+        const qty = quantities[opt.key] ?? 0;
+        if (qty > 0) {
+          options.push({
+            optionKey: opt.key,
+            label:     opt.label,
+            quantity:  qty,
+          });
+        }
+      }
+    }
+
     if (options.length === 0) return;
     const payload = { name: planName, options };
     const action  = existingCustomPlan
@@ -570,7 +613,6 @@ function CustomPlanBuilder({ onClose, existingCustomPlan }) {
   };
 
   return (
-    /* ── Outer wrapper: full-width but content capped at max-w-xl, centred ── */
     <div className="w-full flex justify-center">
       <motion.div
         initial={{ opacity: 0, y: 20, scale: 0.97 }}
@@ -620,7 +662,76 @@ function CustomPlanBuilder({ onClose, existingCustomPlan }) {
             </div>
           ) : (
             OPTION_KEYS.map((opt) => {
-              const qty       = quantities[opt.key];
+              // ── Transport: dropdown-only logic ──
+              if (opt.isTransport) {
+                const slabIdx   = quantities.transport;
+                const active    = slabIdx >= 0;
+                const lineTotal = transportLineTotal;
+
+                return (
+                  <motion.div
+                    key={opt.key}
+                    animate={{ opacity: active ? 1 : 0.6 }}
+                    className="flex items-start gap-3 p-3.5 rounded-xl transition-all"
+                    style={{
+                      background: active ? `${CUSTOM_TIER.accent}0e` : "var(--base-200)",
+                      border: active ? `1.5px solid ${CUSTOM_TIER.accent}35` : "1.5px solid var(--base-300)",
+                    }}
+                  >
+                    <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
+                      style={{ background: active ? `${CUSTOM_TIER.accent}20` : "var(--base-300)" }}>
+                      <opt.icon size={14} style={{ color: active ? CUSTOM_TIER.accent : "inherit" }} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-black text-base-content mb-1">{opt.label}</p>
+                      {/* Slab dropdown — always visible */}
+                      <select
+                        value={slabIdx === -1 ? "" : slabIdx}
+                        onChange={handleTransportChange}
+                        className="input-field text-sm py-2 px-3 rounded-xl w-full"
+                        style={{ background: "var(--base-100)", border: "1.5px solid var(--base-300)" }}
+                      >
+                        <option value="">— Not included —</option>
+                        {kmSlabs.length > 0
+                          ? kmSlabs.map((slab, i) => (
+                              <option key={i} value={i}>
+                                ₹{slab.pricePerKm ?? slab.ratePerKm ?? 0}/km · Bundle ₹{slab.packagePrice ?? slab.price ?? 0}/mo
+                              </option>
+                            ))
+                          : (
+                              // Fallback options if kmSlabs not in pricing yet
+                              [
+                                { label: "₹8/km · Bundle ₹299/mo",  pricePerKm: 8,  packagePrice: 299  },
+                                { label: "₹12/km · Bundle ₹499/mo", pricePerKm: 12, packagePrice: 499  },
+                                { label: "₹15/km · Bundle ₹699/mo", pricePerKm: 15, packagePrice: 699  },
+                              ].map((s, i) => (
+                                <option key={i} value={i}>{s.label}</option>
+                              ))
+                            )
+                        }
+                      </select>
+                      {active && transportSlabLabel && (
+                        <p className="text-[10px] font-bold mt-1.5" style={{ color: CUSTOM_TIER.accent }}>
+                          ↳ {transportSlabLabel}
+                        </p>
+                      )}
+                    </div>
+                    {active && (
+                      <motion.span
+                        initial={{ opacity: 0, scale: 0.7 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="text-[10px] font-black flex-shrink-0 w-14 text-right mt-0.5"
+                        style={{ color: CUSTOM_TIER.accent }}
+                      >
+                        ₹{lineTotal}
+                      </motion.span>
+                    )}
+                  </motion.div>
+                );
+              }
+
+              // ── All other options: original stepper / toggle logic ──
+              const qty       = quantities[opt.key] ?? 0;
               const unitPrice = PRICE_MAP[opt.key] || 0;
               const lineTotal = qty * unitPrice;
               const max       = CAP_MAP[opt.key] ?? 1;
@@ -1174,7 +1285,7 @@ export default function SubscriptionPage() {
   return (
     <div className="min-h-screen" style={{ background: "var(--base-100)" }}>
       <div className="max-w-5xl mx-auto px-4 py-10 space-y-12">
-      <BackButton />
+        <BackButton />
 
         {/* ── HERO ─────────────────────────────────────────────────────────── */}
         <motion.div initial={{ opacity: 0, y: -24 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.55 }}>
@@ -1331,13 +1442,6 @@ export default function SubscriptionPage() {
             </motion.div>
           </div>
 
-          {/*
-            ── Grid: the popular (center) card needs top padding for its
-               floating pill. We use `items-start` so side cards don't
-               inherit that extra height, keeping a clean visual alignment.
-               The popular card's paddingTop is injected via inline style
-               inside PlanCard itself, so the grid stays 3-col as-is.
-          ──*/}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
             {primaryPlans.map((plan, i) => (
               <PlanCard
@@ -1441,7 +1545,7 @@ export default function SubscriptionPage() {
             )}
           </div>
 
-          {/* Custom plan builder — max-w-xl, centered */}
+          {/* Custom plan builder */}
           <AnimatePresence>
             {showCustomBuilder && (
               <CustomPlanBuilder
@@ -1494,7 +1598,9 @@ export default function SubscriptionPage() {
                             {(plan.customOptions || []).filter((o) => o.quantity > 0).map((o, oi) => (
                               <span key={oi} className="text-[10px] font-bold px-2 py-0.5 rounded-full"
                                 style={{ background: "var(--base-200)", color: "var(--base-content)" }}>
-                                {o.label}: {o.quantity}
+                                {o.optionKey === "transport"
+                                  ? `Transport: ₹${o.unitPrice ?? 0}/km bundle`
+                                  : `${o.label}: ${o.quantity}`}
                               </span>
                             ))}
                           </div>

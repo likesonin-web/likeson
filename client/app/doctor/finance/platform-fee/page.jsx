@@ -4,8 +4,19 @@ import { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
 import {
-  Percent, DollarSign, Layers, Info, CheckCircle,
-  ArrowRight, Sparkles, Shield, Clock, Building2,
+  Percent,
+  Wallet,
+  Building2,
+  Stethoscope,
+  Info,
+  CheckCircle2,
+  Sparkles,
+  ShieldCheck,
+  Clock,
+  ArrowRight,
+  Video,
+  Home,
+  UserRound,
 } from 'lucide-react';
 import {
   fetchMyDoctorProfile,
@@ -13,243 +24,249 @@ import {
   selectHospitalLoading,
 } from '@/store/slices/hospitalSlice';
 
-/* ─── animation ─── */
-const fadeUp = {
-  hidden: { opacity: 0, y: 16 },
-  show: (i = 0) => ({
-    opacity: 1, y: 0,
-    transition: { delay: i * 0.08, duration: 0.4, ease: 'easeOut' },
-  }),
+/* ─── ANIMATION VARIANTS ─── */
+const staggerContainer = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: { staggerChildren: 0.1 },
+  },
 };
 
-/* ─── fee card ─── */
-const FeeCard = ({ label, value, type, isCustom, delay }) => (
-  <motion.div
-    variants={fadeUp} custom={delay} initial="hidden" animate="show"
-    className="relative overflow-hidden p-5 rounded-2xl border border-base-300/60 bg-base-200 group"
-  >
-    {isCustom && (
-      <div className="absolute top-3 right-3">
-        <span className="badge badge-secondary text-[10px] gap-1">
-          <Sparkles className="w-2.5 h-2.5" /> Custom
-        </span>
-      </div>
-    )}
+const fadeUp = {
+  hidden: { opacity: 0, y: 20 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' } },
+};
+
+/* ─── REUSABLE COMPONENTS ─── */
+const StatCard = ({ icon: Icon, label, value, subtext, badgeText, isCustom }) => (
+  <motion.div variants={fadeUp} className="stat-card relative overflow-hidden group">
     <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-    <div className="relative z-10">
-      <p className="text-xs font-semibold text-base-content/50 uppercase tracking-wider mb-3">{label}</p>
-      {value !== null && value !== undefined ? (
-        <div className="flex items-end gap-2 flex-wrap">
-          <span className="text-3xl font-black text-base-content font-mono">
-            {type === 'percentage' ? `${value}%` : `₹${value}`}
-          </span>
-          <span className={`mb-1 badge ${type === 'percentage' ? 'badge-primary' : 'badge-success'}`}>
-            {type === 'percentage' ? 'of transaction' : 'flat fee'}
-          </span>
+    
+    <div className="relative z-10 flex justify-between items-start mb-4">
+      <div className="flex items-center gap-3">
+        <div className="p-2 rounded-lg bg-base-100 border border-base-300 shadow-sm">
+          <Icon className="w-5 h-5 text-primary" />
         </div>
-      ) : (
-        <span className="text-2xl font-black text-base-content/30">Global Default</span>
+        <span className="stat-card-label m-0">{label}</span>
+      </div>
+      {isCustom && (
+        <span className="badge badge-secondary badge-sm shadow-sm gap-1">
+          <Sparkles className="w-3 h-3" /> Custom
+        </span>
       )}
+      {badgeText && !isCustom && (
+        <span className="badge badge-primary badge-sm shadow-sm">
+          {badgeText}
+        </span>
+      )}
+    </div>
+
+    <div className="relative z-10">
+      <div className="stat-card-value">{value}</div>
+      {subtext && <div className="text-sm font-medium text-base-content/50 mt-1">{subtext}</div>}
     </div>
   </motion.div>
 );
 
-/* ─── info row ─── */
-const InfoRow = ({ icon: Icon, label, value }) => (
-  <div className="flex items-center gap-3 py-3 border-b border-base-300/60 last:border-0">
-    <Icon className="w-4 h-4 text-primary flex-shrink-0" />
-    <span className="text-sm text-base-content/50 flex-1">{label}</span>
-    <span className="text-sm font-semibold text-base-content text-right">{value}</span>
+const PricingRow = ({ icon: Icon, label, fee, isAvailable }) => {
+  if (!isAvailable) return null;
+  return (
+    <div className="flex items-center justify-between p-4 rounded-xl bg-base-100 border border-base-300 transition-colors hover:border-primary/30">
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+          <Icon className="w-4 h-4 text-primary" />
+        </div>
+        <span className="font-semibold text-sm md:text-base text-base-content">{label}</span>
+      </div>
+      <div className="text-right">
+        <span className="font-montserrat font-bold text-lg text-primary">
+          {fee != null ? `₹${fee}` : '—'}
+        </span>
+      </div>
+    </div>
+  );
+};
+
+const ExplainerStep = ({ step, title, desc }) => (
+  <div className="flex gap-4">
+    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center shadow-sm">
+      <span className="font-bold text-sm text-primary">{step}</span>
+    </div>
+    <div className="pt-1 pb-4 border-b border-base-300 last:border-0 last:pb-0 flex-1">
+      <p className="text-base font-bold text-base-content">{title}</p>
+      <p className="text-sm text-base-content/60 mt-1 leading-relaxed max-w-2xl">{desc}</p>
+    </div>
   </div>
 );
 
-/* ─── explainer step ─── */
-const ExplainerStep = ({ step, title, desc, delay }) => (
-  <motion.div variants={fadeUp} custom={delay} initial="hidden" animate="show" className="flex gap-4">
-    <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center">
-      <span className="text-xs font-bold text-primary">{step}</span>
-    </div>
-    <div className="pt-0.5">
-      <p className="text-sm font-semibold text-base-content">{title}</p>
-      <p className="text-xs text-base-content/40 mt-0.5 leading-relaxed">{desc}</p>
-    </div>
-  </motion.div>
-);
-
-/* ─── section card ─── */
-const SectionCard = ({ children, delay, className = '' }) => (
-  <motion.div
-    variants={fadeUp} custom={delay} initial="hidden" animate="show"
-    className={`p-6 rounded-2xl border border-base-300/60 bg-base-200 ${className}`}
-  >
-    {children}
-  </motion.div>
-);
-
-const SectionTitle = ({ children, icon: Icon }) => (
-  <h2 className="text-xs font-bold text-base-content/50 uppercase tracking-widest flex items-center gap-2 mb-4">
-    <Icon className="w-3.5 h-3.5 text-primary" />
-    {children}
-  </h2>
-);
-
-/* ─── main page ─── */
+/* ─── MAIN PAGE COMPONENT ─── */
 export default function PlatformFeeInfo() {
   const dispatch = useDispatch();
-  const profile  = useSelector(selectMyDoctorProfile);
-  const loading  = useSelector(selectHospitalLoading);
+  const profile = useSelector(selectMyDoctorProfile);
+  const loading = useSelector(selectHospitalLoading);
 
   useEffect(() => {
     if (!profile) dispatch(fetchMyDoctorProfile());
   }, [dispatch, profile]);
 
-  const isLoading        = loading.fetchMyDoctorProfile;
-  const pf               = profile?.platformFee;
-  const hasCustom        = profile?.hasCustomPlatformFee;
+  const isLoading = loading.fetchMyDoctorProfile;
+
+  // Data Extraction
+  const pf = profile?.platformFee;
+  const hasCustom = profile?.hasCustomPlatformFee;
   const consultationTypes = profile?.consultationTypes || {};
-  const fees             = profile?.fees || {};
+  const fees = profile?.fees || {};
+  const primaryHospital = profile?.primaryHospital;
+  const isManagedByHospital = primaryHospital?.managementModel === 'hospital-manager';
 
   return (
-    <div className="min-h-screen bg-base-100 text-base-content font-[family-name:var(--font-family-poppins)]">
-
-      <div className="relative z-10 max-w-3xl mx-auto px-4 sm:px-6 py-8">
-
-        {/* ── Header ── */}
-        <motion.div variants={fadeUp} custom={0} initial="hidden" animate="show" className="mb-8">
-          <div className="flex items-center gap-3 mb-1">
-            <div className="p-2.5 rounded-xl bg-primary">
-              <Percent className="w-5 h-5 text-primary-content" />
+    <div className="min-h-screen bg-base-100 pb-16">
+      <motion.div 
+        variants={staggerContainer} 
+        initial="hidden" 
+        animate="show" 
+        className="container-custom max-w-5xl py-8 md:py-12"
+      >
+        
+        {/* ── Page Header ── */}
+        <motion.div variants={fadeUp} className="mb-10">
+          <div className="flex items-center gap-4 mb-2">
+            <div className="p-3 rounded-2xl bg-primary text-primary-content shadow-primary">
+              <Wallet className="w-7 h-7" />
             </div>
-            <h1 className="text-2xl font-black tracking-tight text-base-content">Platform Fee</h1>
+            <h1 className="section-heading m-0">Earnings & Fees</h1>
           </div>
-          <p className="text-sm text-base-content/50 ml-[3.25rem]">
-            Your current platform fee structure and consultation pricing
+          <p className="section-subheading ml-[4.25rem] m-0">
+            Transparent breakdown of your platform fees, settlement cycles, and consultation pricing.
           </p>
         </motion.div>
 
-        {/* ── Status banner ── */}
-        <motion.div
-          variants={fadeUp} custom={1} initial="hidden" animate="show"
-          className={`mb-6 flex items-start gap-3 p-4 rounded-xl border ${
-            hasCustom
-              ? 'border-secondary/30 bg-secondary/5'
-              : 'border-primary/20 bg-primary/5'
-          }`}
-        >
-          {hasCustom
-            ? <Sparkles className="w-5 h-5 text-secondary flex-shrink-0 mt-0.5" />
-            : <Shield className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
-          }
-          <div>
-            <p className={`text-sm font-semibold ${hasCustom ? 'text-secondary' : 'text-primary'}`}>
-              {hasCustom ? 'Custom Platform Fee Applied' : 'Global Default Fee Active'}
-            </p>
-            <p className="text-xs text-base-content/50 mt-0.5">
-              {hasCustom
-                ? 'Your account has a custom platform fee set by the admin, overriding the global default.'
-                : 'You are on the standard platform fee. Contact admin for custom pricing arrangements.'
-              }
-            </p>
-          </div>
-        </motion.div>
-
-        {/* ── Fee cards ── */}
         {isLoading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-            {[0, 1].map((i) => <div key={i} className="h-28 rounded-2xl skeleton" />)}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <div className="h-36 skeleton rounded-box" />
+            <div className="h-36 skeleton rounded-box" />
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-            <FeeCard
-              label="Current Platform Fee"
-              value={pf?.value}
-              type={pf?.type}
-              isCustom={hasCustom}
-              delay={2}
-            />
-            <FeeCard
-              label="Settlement Cycle"
-              value={null}
-              type={null}
-              isCustom={false}
-              delay={3}
-            />
-          </div>
-        )}
-
-        {/* ── Settlement cycle ── */}
-        {!isLoading && (
-          <motion.div
-            variants={fadeUp} custom={3} initial="hidden" animate="show"
-            className="mb-6 p-5 rounded-2xl border border-base-300/60 bg-base-200"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Clock className="w-4 h-4 text-accent flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-semibold text-base-content capitalize">
-                    {profile?.settlementCycle || 'Monthly'} Settlement
-                  </p>
-                  <p className="text-xs text-base-content/40 mt-0.5">
-                    Earnings are transferred on a {profile?.settlementCycle || 'monthly'} basis
-                  </p>
-                </div>
+          <>
+            {/* ── Understanding Note (Pricing Control Logic) ── */}
+            <motion.div variants={fadeUp} className={`alert ${isManagedByHospital ? 'alert-info' : 'alert-success'} mb-8 shadow-sm`}>
+              {isManagedByHospital ? <Building2 className="w-6 h-6 flex-shrink-0" /> : <Stethoscope className="w-6 h-6 flex-shrink-0" />}
+              <div>
+                <h4 className="font-bold text-sm uppercase tracking-wider mb-1">
+                  Pricing Control & Management
+                </h4>
+                <p className="text-sm opacity-90 leading-relaxed">
+                  {isManagedByHospital 
+                    ? `You are registered under a Managed Hospital (${primaryHospital?.name || 'Admin'}). Your consultation fees are strictly determined and updated by the hospital administration.`
+                    : `You are registered as a Doctor-Owner. You have complete administrative control over your consultation pricing and structure.`}
+                </p>
               </div>
-              <ArrowRight className="w-4 h-4 text-base-content/20" />
+            </motion.div>
+
+            {/* ── Financial Stats Grid ── */}
+            <motion.div variants={fadeUp} className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 mb-10">
+              <StatCard
+                icon={Percent}
+                label="Platform Fee Deduction"
+                value={pf ? (pf.type === 'percentage' ? `${pf.value}%` : `₹${pf.value}`) : 'Default'}
+                subtext={pf ? (pf.type === 'percentage' ? 'Deducted from each transaction' : 'Flat rate per transaction') : 'Standard global rates apply'}
+                badgeText={!hasCustom ? "Global Default" : ""}
+                isCustom={hasCustom}
+              />
+              <StatCard
+                icon={Clock}
+                label="Payout Settlement"
+                value={profile?.settlementCycle ? profile.settlementCycle.charAt(0).toUpperCase() + profile.settlementCycle.slice(1) : 'Monthly'}
+                subtext="Cycle for transferring your earnings"
+                badgeText="Standard"
+                isCustom={false}
+              />
+            </motion.div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
+              
+              {/* ── Left Column: Pricing Details ── */}
+              <motion.div variants={fadeUp} className="lg:col-span-3 flex flex-col gap-6">
+                <div className="glass-card p-6 md:p-8 h-full">
+                  <h2 className="font-montserrat font-bold text-lg md:text-xl flex items-center gap-3 mb-6">
+                    <CheckCircle2 className="w-5 h-5 text-success" />
+                    Consultation Rate Card
+                  </h2>
+                  
+                  <div className="flex flex-col gap-3">
+                    <PricingRow 
+                      icon={UserRound} 
+                      label="In-Person Consultation" 
+                      fee={fees.inPersonFee ?? fees.consultationFee} 
+                      isAvailable={consultationTypes.inPerson} 
+                    />
+                    <PricingRow 
+                      icon={Video} 
+                      label="Video Consultation" 
+                      fee={fees.videoFee ?? fees.consultationFee} 
+                      isAvailable={consultationTypes.video} 
+                    />
+                    <PricingRow 
+                      icon={Home} 
+                      label="Home Visit" 
+                      fee={fees.homeVisitFee ?? fees.consultationFee} 
+                      isAvailable={consultationTypes.homeVisit} 
+                    />
+                    
+                    <div className="divider my-2" />
+                    
+                    <PricingRow 
+                      icon={CheckCircle2} 
+                      label={`Follow-Up (Valid ${fees.followUpValidDays || 7} Days)`} 
+                      fee={fees.followUpFee || 0} 
+                      isAvailable={true} 
+                    />
+                  </div>
+                </div>
+              </motion.div>
+
+              {/* ── Right Column: Explainer ── */}
+              <motion.div variants={fadeUp} className="lg:col-span-2 flex flex-col gap-6">
+                <div className="card p-6 md:p-8 bg-base-200/50 h-full">
+                  <h2 className="font-montserrat font-bold text-lg md:text-xl flex items-center gap-3 mb-6">
+                    <Info className="w-5 h-5 text-primary" />
+                    How Earnings Work
+                  </h2>
+                  
+                  <div className="flex flex-col gap-5">
+                    <ExplainerStep 
+                      step="1" 
+                      title="Patient Booking" 
+                      desc="Patient is charged your exact listed consultation fee at the time of booking confirmation." 
+                    />
+                    <ExplainerStep 
+                      step="2" 
+                      title="Fee Deduction" 
+                      desc={hasCustom && pf
+                        ? `Your negotiated ${pf.type === 'fixed' ? `₹${pf.value} flat` : `${pf.value}%`} platform fee is automatically deducted.`
+                        : 'The standard platform infrastructure fee is automatically calculated and deducted.'} 
+                    />
+                    <ExplainerStep 
+                      step="3" 
+                      title="Bank Settlement" 
+                      desc={`Net earnings are processed and transferred directly to your verified bank account on a ${profile?.settlementCycle || 'monthly'} schedule.`} 
+                    />
+                  </div>
+
+                  <div className="mt-8 p-4 rounded-xl bg-primary/10 border border-primary/20 flex items-center gap-3">
+                    <ShieldCheck className="w-8 h-8 text-primary" />
+                    <p className="text-xs text-base-content/70 font-medium">
+                      All financial transactions are securely processed and protected. Need to change fees? {isManagedByHospital ? 'Contact your hospital admin.' : 'Update via profile settings.'}
+                    </p>
+                  </div>
+                </div>
+              </motion.div>
+
             </div>
-          </motion.div>
+          </>
         )}
-
-        {/* ── Consultation fees ── */}
-        <SectionCard delay={4} className="mb-6">
-          <SectionTitle icon={DollarSign}>Your Consultation Fees</SectionTitle>
-          <div className="space-y-0">
-            {consultationTypes.inPerson && (
-              <InfoRow icon={Building2} label="In-Person Consultation" value={fees.inPersonFee ? `₹${fees.inPersonFee}` : '—'} />
-            )}
-            {consultationTypes.video && (
-              <InfoRow icon={Layers} label="Video Consultation" value={fees.videoFee ? `₹${fees.videoFee}` : '—'} />
-            )}
-            {consultationTypes.homeVisit && (
-              <InfoRow icon={Building2} label="Home Visit" value={fees.homeVisitFee ? `₹${fees.homeVisitFee}` : '—'} />
-            )}
-            <InfoRow icon={CheckCircle} label="Follow-Up Fee" value={fees.followUpFee ? `₹${fees.followUpFee}` : '—'} />
-          </div>
-        </SectionCard>
-
-        {/* ── How it works ── */}
-        <SectionCard delay={5}>
-          <SectionTitle icon={Info}>How Platform Fees Work</SectionTitle>
-          <div className="space-y-5">
-            <ExplainerStep
-              step="1" delay={6}
-              title="Patient pays consultation fee"
-              desc="Patient is charged your listed consultation fee when booking an appointment."
-            />
-            <ExplainerStep
-              step="2" delay={7}
-              title="Platform fee is deducted"
-              desc={`${hasCustom && pf
-                ? `Your custom ${pf.type === 'fixed' ? `₹${pf.value} flat` : `${pf.value}%`} fee`
-                : 'A platform fee based on the global pricing config'
-              } is deducted from the transaction.`}
-            />
-            <ExplainerStep
-              step="3" delay={8}
-              title="Net amount settled to you"
-              desc={`Remaining earnings are settled to your registered bank account on a ${profile?.settlementCycle || 'monthly'} basis.`}
-            />
-          </div>
-        </SectionCard>
-
-        {/* ── Contact note ── */}
-        <motion.div variants={fadeUp} custom={9} initial="hidden" animate="show" className="mt-6 text-center">
-          <p className="text-xs text-base-content/30">
-            To negotiate custom platform fee rates, contact your account manager or admin portal.
-          </p>
-        </motion.div>
-
-      </div>
+      </motion.div>
     </div>
   );
 }

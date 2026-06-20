@@ -40,6 +40,10 @@ import {
   selectWalletBalance,
   selectLoaders,
 } from '@/store/slices/userSlice';
+import {
+  fetchMyWallet as fetchPartnerWallet,
+  selectMyWallet as selectPartnerWalletObj,
+} from '@/store/slices/accountingSlice';
 import { useTheme } from 'next-themes';
 
 // ── Lazy-load framer-motion ──────────────────────────────────────────────────
@@ -415,15 +419,36 @@ function useHeaderData() {
   const token         = useSelector(selectToken);
   const unreadCount   = useSelector(selectUnreadCount) ?? 0;
   const cartItems     = useSelector(selectCartItems)   ?? [];
-  const walletBalance = useSelector(selectWalletBalance) ?? 0;
+  
+  const isCustomer = !user?.role || user.role === 'customer';
+  
+  // Customer Wallet State
+  const customerWalletBalance = useSelector(selectWalletBalance) ?? 0;
+  // Partner Wallet State (from accountingSlice)
+  const partnerWalletObj = useSelector(selectPartnerWalletObj);
+  const partnerWalletBalance = partnerWalletObj?.wallet?.availableBalance ?? 0;
+  
+  const walletBalance = isCustomer ? customerWalletBalance : partnerWalletBalance;
+
   const cartCount = useMemo(
     () => (Array.isArray(cartItems) ? cartItems.reduce((a, i) => a + (i.quantity ?? 0), 0) : 0),
     [cartItems]
   );
+  
   useEffect(() => {
     if (!token) return;
-    dispatch(getProfile()); dispatch(fetchNotifications()); dispatch(getWallet()); dispatch(fetchCart());
-  }, [token, dispatch]);
+    dispatch(getProfile()); 
+    dispatch(fetchNotifications()); 
+    dispatch(fetchCart());
+    
+    // Fetch appropriate wallet based on role
+    if (isCustomer) {
+      dispatch(getWallet());
+    } else {
+      dispatch(fetchPartnerWallet());
+    }
+  }, [token, dispatch, isCustomer]);
+  
   return { user, token, unreadCount, cartCount, walletBalance };
 }
 
@@ -452,17 +477,20 @@ const ThemeToggle = memo(function ThemeToggle({ compact = false }) {
 });
 
 // ── WalletWidget ──────────────────────────────────────────────────────────────
-const WalletWidget = memo(function WalletWidget({ walletBalance, isMobile = false, accent }) {
-  const accentColor = accent ?? 'var(--warning)';
+const WalletWidget = memo(function WalletWidget({ walletBalance, isMobile = false, accent, isCustomer = true }) {
+  const href = isCustomer ? '/wallet' : '/partner/wallet';
+  const accentColor = isCustomer ? (accent ?? 'var(--warning)') : '#10b981'; // Emerald Green for partners
+  const Icon = isCustomer ? WalletIcon : IndianRupee; // Different icon for partners
+
   return (
-    <Link href="/wallet" aria-label={`Wallet balance ₹${walletBalance}. Go to wallet.`}
+    <Link href={href} aria-label={`Wallet balance ₹${walletBalance}. Go to wallet.`}
       className={cn(
         'flex items-center gap-2 rounded-full border transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]',
         isMobile ? 'w-full px-4 py-3' : 'px-3 py-1.5'
       )}
       style={{ borderColor: `color-mix(in srgb, ${accentColor} 30%, transparent)`, background: `color-mix(in srgb, ${accentColor} 8%, transparent)` }}>
       <div className="p-1 rounded-full" style={{ background: `color-mix(in srgb, ${accentColor} 25%, transparent)`, color: accentColor }} aria-hidden="true">
-        <WalletIcon size={isMobile ? 16 : 13} strokeWidth={2.5} />
+        <Icon size={isMobile ? 16 : 13} strokeWidth={2.5} />
       </div>
       <div className="flex flex-col items-start leading-none">
         <span className="text-[8px] font-black uppercase tracking-tighter opacity-50">Balance</span>
@@ -989,84 +1017,15 @@ function MobileSubBarContent({ isCustomer, rolePalette, RoleIcon, user, accentCo
           {RoleIcon && <RoleIcon size={13} aria-hidden="true" />}
           <span>{rolePalette.label} Portal</span>
         </div>
-        <Link href="/wallet"
+        <Link href="/partner/wallet"
           className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-black"
-          style={{ borderColor: `color-mix(in srgb, var(--warning) 30%, transparent)`, background: 'color-mix(in srgb, var(--warning) 8%, transparent)', color: 'var(--warning)' }}>
-          <WalletIcon size={11} strokeWidth={2.5} aria-hidden="true" />
+          style={{ borderColor: `color-mix(in srgb, #10b981 30%, transparent)`, background: 'color-mix(in srgb, #10b981 8%, transparent)', color: '#10b981' }}>
+          <IndianRupee size={11} strokeWidth={2.5} aria-hidden="true" />
           ₹{(walletBalance ?? 0).toLocaleString('en-IN')}
         </Link>
       </div>
     );
   }
-
-  // Customer / guest sub-bar
-  return (
-    <>
-      <div className="flex md:hidden items-center gap-2 px-4 py-2 border-t border-base-300"
-        style={{ background: 'color-mix(in srgb, var(--base-100) 95%, transparent)' }}>
-
-        {/* Search bar */}
-        <Link href="/search" aria-label="Open search"
-          className="flex flex-1 relative items-center rounded-xl bg-base-200/70 border border-base-300 px-3 py-2 gap-2 active:scale-[0.99] transition-transform">
-          <Search size={14} style={{ color: accentColor, opacity: 0.5 }} aria-hidden="true" />
-          <span className="text-[12px] text-base-content/40 font-medium flex-1 truncate">
-            Search medicines, doctors…
-          </span>
-        </Link>
-
-        {/* Location icon button — toggles location panel */}
-        <button
-          type="button"
-          onClick={() => setMobileLocationOpen((p) => !p)}
-          aria-label="Set location"
-          aria-expanded={mobileLocationOpen}
-          className="flex items-center justify-center w-10 h-10 rounded-xl flex-shrink-0 border transition-all"
-          style={{
-            background: mobileLocationOpen
-              ? `color-mix(in srgb, ${accentColor} 15%, transparent)`
-              : 'var(--base-200)',
-            borderColor: mobileLocationOpen
-              ? `color-mix(in srgb, ${accentColor} 40%, transparent)`
-              : 'var(--base-300)',
-            color: accentColor,
-          }}>
-          <MapPin size={16} strokeWidth={2.5} />
-        </button>
-
-        {/* Guest: Login button */}
-        {!user && (
-          <Link href="/login" aria-label="Sign in">
-            <button
-              className="flex items-center gap-1.5 h-9 px-3.5 rounded-xl text-[11px] font-black uppercase tracking-wide text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2"
-              style={{ background: mood?.barGradient ?? 'var(--primary)' }}>
-              <User size={13} aria-hidden="true" />
-              Login
-            </button>
-          </Link>
-        )}
-
-        {/* Logged-in customer: wallet compact */}
-        {user && isCustomer && (
-          <Link href="/wallet"
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-[10px] font-black whitespace-nowrap"
-            style={{ borderColor: 'color-mix(in srgb, var(--warning) 30%, transparent)', background: 'color-mix(in srgb, var(--warning) 8%, transparent)', color: 'var(--warning)' }}>
-            <WalletIcon size={11} strokeWidth={2.5} aria-hidden="true" />
-            ₹{(walletBalance ?? 0).toLocaleString('en-IN')}
-          </Link>
-        )}
-      </div>
-
-      {/* Collapsible location panel — slides in below sub-bar */}
-      {mobileLocationOpen && (
-        <div className="flex md:hidden px-4 pb-3 pt-1 border-b border-base-300"
-          style={{ background: 'color-mix(in srgb, var(--base-100) 97%, transparent)' }}>
-          <div className="w-full">
-            <LocationWidget mood={mood} isMobile />
-          </div>
-        </div>
-      )}
-    </>
-  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1297,9 +1256,9 @@ const Header = () => {
                     </AnimatePresence>
                   )}
 
-                  {/* Desktop-only: Wallet */}
+                {/* Desktop-only: Wallet */}
                   <div className="hidden md:flex">
-                    <WalletWidget walletBalance={walletBalance} accent={mood?.accent} />
+                    <WalletWidget walletBalance={walletBalance} accent={mood?.accent} isCustomer={isCustomer} />
                   </div>
 
                   {/* Cart — customer/pharmacy — visible on MOBILE too */}
@@ -1569,9 +1528,9 @@ const Header = () => {
                 </MotionUl>
               </nav>
 
-              {/* Action buttons */}
+{/* Action buttons */}
               <div className="flex flex-col gap-3 mt-2">
-                {user && <WalletWidget walletBalance={walletBalance} isMobile accent={mood?.accent} />}
+                {user && <WalletWidget walletBalance={walletBalance} isMobile accent={mood?.accent} isCustomer={isCustomer} />}
 
                 {(isCustomer || userRole === 'pharmacy') && (
                   <Link href="/pharmacy/cart" onClick={() => setMobileOpen(false)}>

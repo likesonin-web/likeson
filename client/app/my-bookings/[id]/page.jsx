@@ -75,6 +75,21 @@ import {
   selectDownloadOpCardLoading,
 } from '@/store/slices/bookingSlice';
 
+
+import {
+  fetchPayAtServiceStatus,
+  linkGeneratedFromSocket,
+  paidFromSocket,
+  serviceCompletedFromSocket,
+  clearSession,
+  selectPayAtServiceSession,
+  selectIsPaid,
+  selectNeedsNewLink,
+  selectMinutesUntilExpiry,
+} from '@/store/slices/payAtServiceSlice';
+import QRCode from 'qrcode';
+import socketService, { SOCKET_EVENTS } from '@/services/socketService'; // adjust path
+
 // ─── Map Styles ───────────────────────────────────────────────────────────────
 
 const MAP_STYLES_CLEAN = [
@@ -127,7 +142,9 @@ const PAYMENT_STATUS_META = {
   failed:             { label: 'Payment Failed',       cls: 'text-error bg-error/10'      },
   refunded:           { label: 'Refunded',             cls: 'text-info bg-info/10'        },
   partially_refunded: { label: 'Partially Refunded',   cls: 'text-info bg-info/10'        },
-  waived:             { label: 'Waived',               cls: 'text-success bg-success/10' },
+waived:                  { label: 'Waived',                    cls: 'text-success bg-success/10'  },
+  pay_at_service_pending:  { label: 'Awaiting QR Payment',       cls: 'text-warning bg-warning/10'  },
+  pay_at_service_paid:     { label: 'Paid via QR',               cls: 'text-success bg-success/10'  },
 };
 
 // ─── ID Helpers ───────────────────────────────────────────────────────────────
@@ -952,6 +969,208 @@ const ConsultationSessionCard = memo(function ConsultationSessionCard({ booking 
   );
 });
 
+
+// ─── Pay-at-Service Card (Customer View) ─────────────────────────────────────
+// Shows when booking has payAtService.enabled OR paymentStatus = pay_at_service_pending/paid
+// Customer sees: QR code, amount, expiry timer, paid confirmation
+
+const PayAtServiceCard = memo(function PayAtServiceCard({ booking }) {
+  const dispatch = useDispatch();
+  const session = useSelector(selectPayAtServiceSession(booking._id));
+  const isPaid = useSelector(selectIsPaid(booking._id));
+  const needsNew = useSelector(selectNeedsNewLink(booking._id));
+  const minsLeft = useSelector(selectMinutesUntilExpiry(booking._id));
+
+  const [qrDataUrl, setQrDataUrl] = useState(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const pollRef = useRef(null);
+
+  const payAtService = booking.payAtService;
+  const isPasEnabled = payAtService?.enabled || ['pay_at_service_pending', 'pay_at_service_paid'].includes(booking.paymentStatus);
+
+  // Seed session from booking data on mount (no extra API call needed if data fresh)
+  useEffect(() => {
+    if (!isPasEnabled) return;
+    // If booking already has shortUrl, seed into redux so QR renders immediately
+    if (payAtService?.shortUrl && !session?.shortUrl) {
+      dispatch(fetchPayAtServiceStatus({ bookingId: booking._id }));
+    }
+  }, [isPasEnabled]); // eslint-disable-line
+
+  // Generate QR from shortUrl
+  useEffect(() => {
+    const url = session?.shortUrl ?? payAtService?.shortUrl;
+    if (!url || isPaid) return;
+    
+    setQrLoading(true);
+    QRCode.toDataURL(url, {
+      width: 260,
+      margin: 2,
+      color: { dark: '#1e293b', light: '#ffffff' },
+    })
+      .then(setQrDataUrl)
+      .catch(() => setQrDataUrl(null))
+      .finally(() => setQrLoading(false));
+  }, [session?.shortUrl, payAtService?.shortUrl, isPaid]);
+
+  // Poll every 5s while pending + not paid + not expired
+  useEffect(() => {
+    if (!isPasEnabled || isPaid || needsNew) {
+      clearInterval(pollRef.current);
+      return;
+    }
+    pollRef.current = setInterval(() => {
+      dispatch(fetchPayAtServiceStatus({ bookingId: booking._id }));
+    }, 5000);
+    
+    return () => clearInterval(pollRef.current);
+  }, [isPasEnabled, isPaid, needsNew, booking._id, dispatch]);
+
+  if (!isPasEnabled) return null;
+
+  const amount = session?.amount ?? payAtService?.amount ?? booking.fareBreakdown?.totalAmount ?? 0;
+  const shortUrl = session?.shortUrl ?? payAtService?.shortUrl ?? null;
+  const expiresAt = session?.expiresAt ?? payAtService?.expiresAt ?? null;
+  const paidAt = session?.paidAt ?? payAtService?.paidAt ?? null;
+  const expired = session?.expired ?? (expiresAt ? new Date(expiresAt) < new Date() : false);
+  const alreadyPaid = isPaid || ['pay_at_service_paid', 'paid'].includes(booking.paymentStatus);
+
+  return (
+    <SectionCard
+      title="Pay for Your Service"
+      subtitle="Scan QR or use the link to complete payment"
+      icon={Banknote}
+      iconColor="text-warning"
+      iconBg="bg-warning/10"
+      accent="bg-gradient-to-r from-warning/60 via-warning/20 to-transparent"
+      delay={0.09}
+    >
+      <div className="py-2 space-y-4">
+        {/* ── PAID state ── */}
+        {alreadyPaid ? (
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="flex flex-col items-center gap-3 py-6"
+          >
+            <div className="w-16 h-16 rounded-full bg-success/10 border-2 border-success/30 flex items-center justify-center">
+              <CheckCircle2 size={32} className="text-success" />
+            </div>
+            <div className="text-center">
+              <p className="font-black text-success text-lg">Payment Received!</p>
+              <p className="text-xs text-base-content/50 mt-1">
+                {fmtINR(amount)} paid{paidAt ? ` on ${fmtDate(paidAt)} at ${fmtTime(paidAt)}` : ''}
+              </p>
+              <p className="text-[10px] text-base-content/30 mt-1">
+                Your service provider will now complete your service.
+              </p>
+            </div>
+          </motion.div>
+        ) : expired ? (
+          /* ── EXPIRED state ── */
+          <div className="flex flex-col items-center gap-3 py-4">
+            <div className="w-12 h-12 rounded-full bg-error/10 flex items-center justify-center">
+              <Timer size={22} className="text-error" />
+            </div>
+            <div className="text-center">
+              <p className="font-bold text-error text-sm">QR Code Expired</p>
+              <p className="text-xs text-base-content/40 mt-1">
+                This payment link has expired. Ask your service provider to generate a new QR.
+              </p>
+            </div>
+          </div>
+        ) : (
+          /* ── PENDING / QR state ── */
+          <>
+            {/* Amount + timer */}
+            <div className="flex items-center justify-between p-3 rounded-xl bg-warning/5 border border-warning/20">
+              <div>
+                <p className="text-[11px] font-bold text-base-content/40 uppercase tracking-wide">Amount Due</p>
+                <p className="font-black text-2xl text-warning">{fmtINR(amount)}</p>
+              </div>
+              {minsLeft != null && minsLeft > 0 && (
+                <div className="text-right">
+                  <p className="text-[10px] text-base-content/30 uppercase tracking-wide">Expires in</p>
+                  <p className={`font-black text-lg ${minsLeft <= 10 ? 'text-error' : 'text-base-content/70'}`}>
+                    {minsLeft}m
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* QR Code */}
+            <div className="flex flex-col items-center gap-3">
+              {qrLoading && (
+                <div className="w-[200px] h-[200px] flex items-center justify-center bg-base-200 rounded-2xl border border-base-300">
+                  <Loader2 size={28} className="animate-spin text-warning" />
+                </div>
+              )}
+              {!qrLoading && qrDataUrl && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="relative p-3 bg-white rounded-2xl shadow-lg border-2 border-warning/30"
+                >
+                  <img
+                    src={qrDataUrl}
+                    alt="Payment QR Code"
+                    className="w-[200px] h-[200px] block"
+                  />
+                  {/* Likeson watermark center */}
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="w-8 h-8 bg-white rounded-full flex items-center justify-center">
+                      <IndianRupee size={14} className="text-warning" />
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+              {!qrLoading && !qrDataUrl && shortUrl && (
+                <div className="w-[200px] h-[200px] flex flex-col items-center justify-center bg-base-200 rounded-2xl border border-base-300 gap-2">
+                  <AlertCircle size={24} className="text-warning" />
+                  <p className="text-[10px] text-base-content/40 text-center px-3">QR could not load. Use button below.</p>
+                </div>
+              )}
+              {!shortUrl && (
+                <div className="w-[200px] h-[200px] flex flex-col items-center justify-center bg-base-200 rounded-2xl border border-dashed border-base-300 gap-2">
+                  <Banknote size={24} className="text-base-content/20" />
+                  <p className="text-[10px] text-base-content/30 text-center px-3">
+                    Ask your service provider to show the QR code on their device.
+                  </p>
+                </div>
+              )}
+
+              <p className="text-[11px] text-base-content/40 text-center">
+                Scan with any UPI app · Google Pay · PhonePe · Paytm
+              </p>
+            </div>
+
+            {/* Pay via link button */}
+            {shortUrl && (
+              <a
+                href={shortUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-warning w-full gap-2"
+              >
+                <ExternalLink size={14} />
+                Pay {fmtINR(amount)} Online
+              </a>
+            )}
+
+            {/* Polling indicator */}
+            <div className="flex items-center gap-2 justify-center">
+              <span className="w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />
+              <p className="text-[10px] text-base-content/30">
+                Checking payment status automatically…
+              </p>
+            </div>
+          </>
+        )}
+      </div>
+    </SectionCard>
+  );
+});
+
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function BookingDetailsPage() {
@@ -971,6 +1190,55 @@ export default function BookingDetailsPage() {
   const [copied,     setCopied]     = useState(false);
 
   const { isLoaded: mapsLoaded } = useGoogleMaps();
+
+  // ── Pay-at-Service + booking socket events via socketService singleton ──
+  useEffect(() => {
+    if (!id) return;
+
+    // Join booking room so server pushes events to this customer
+    socketService.joinBookingRoom(id);
+
+    // Handler: partner generated QR → customer sees QR card appear
+    const onLinkGenerated = (data) => {
+      if (String(data.bookingId) !== String(id)) return;
+      dispatch(linkGeneratedFromSocket(data));
+      // Fetch full status so session is seeded with shortUrl + expiry
+      dispatch(fetchPayAtServiceStatus({ bookingId: id }));
+    };
+
+    // Handler: payment confirmed (webhook fired → server broadcasts)
+    const onPaid = (data) => {
+      if (String(data.bookingId) !== String(id)) return;
+      dispatch(paidFromSocket(data));
+    };
+
+    // Handler: booking status changed (service completed, confirmed, etc.)
+    const onBookingStatusChange = (data) => {
+      if (String(data.bookingId) !== String(id)) return;
+      if (data.status === 'completed') {
+        dispatch(serviceCompletedFromSocket(data));
+        // Refresh full booking so UI reflects completed state
+        dispatch(fetchMyBookingById({ bookingId: id }));
+      }
+    };
+
+    // Register all listeners via socketService
+    const offLinkGenerated      = socketService.on('pay_at_service_link_generated', onLinkGenerated);
+    const offPaid               = socketService.on('pay_at_service_paid',            onPaid);
+    const offBookingStatusChange = socketService.on(
+      SOCKET_EVENTS.BOOKING_STATUS_CHANGE,   // 'booking_status_change'
+      onBookingStatusChange
+    );
+
+    return () => {
+      // socketService.on() returns cleanup fn — call them all
+      offLinkGenerated?.();
+      offPaid?.();
+      offBookingStatusChange?.();
+      socketService.leaveBookingRoom(id);
+      dispatch(clearSession({ bookingId: id }));
+    };
+  }, [id, dispatch]);
 
   useEffect(() => {
     if (!id) return;
@@ -1400,6 +1668,13 @@ export default function BookingDetailsPage() {
                     </div>
                   )}
                 </SectionCard>
+              )}
+
+              {/* ── Pay-at-Service QR Card ── */}
+              {(booking.payAtService?.enabled ||
+                ['pay_at_service_pending', 'pay_at_service_paid'].includes(booking.paymentStatus)
+              ) && (
+                <PayAtServiceCard booking={booking} />
               )}
 
               {/* ── Consultation Session Card (online bookings) ── */}

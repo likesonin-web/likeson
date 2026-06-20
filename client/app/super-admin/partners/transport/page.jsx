@@ -1,19 +1,5 @@
 'use client';
 
-/**
- * TransportPartnersManagement.jsx
- * Superadmin — Transport Partners Management Page
- * FIXED:
- *  - KYC docs (aadhaar front/back, DL, PAN) shown as clickable image/pdf previews
- *  - Status section now shows current partnershipStatus before the update form
- *  - KYC section shows current kycStatus badge before the update form
- *  - Driver KYC section shows current verificationStatus badge
- *  - Driver block section shows current block reason clearly
- *  - DocViewer modal for image / pdf preview
- *  - Vehicle detail modal shows all vehicle doc fields
- *  - fleetInfo uses virtual totalVehicles / activeVehicles from API response
- */
-
 import {
   useState, useCallback, useMemo, useEffect, useRef, memo,
 } from 'react';
@@ -98,7 +84,7 @@ const DRIVER_KYC_CSS = {
   Rejected:        'badge-error',
 };
 
-const DRIVER_KYC_STATUSES     = ['Pending', 'Under-Review', 'Verified', 'Rejected'];
+const DRIVER_KYC_STATUSES      = ['Pending', 'Under-Review', 'Verified', 'Rejected'];
 const VEHICLE_VERIFY_STATUSES  = ['under-review', 'verified', 'rejected'];
 const PARTNERSHIP_STATUSES     = ['pending', 'under-review', 'active', 'suspended', 'rejected'];
 
@@ -130,14 +116,13 @@ const isImage = (url) => url && /\.(jpg|jpeg|png|webp|gif|svg|avif)(\?|$)/i.test
 const inr = (n) => Number(n ?? 0).toLocaleString('en-IN');
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DOC VIEWER MODAL  ← NEW
-// Opens image or PDF inline; falls back to external link
+// DOC VIEWER MODAL
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DocViewerModal = memo(({ open, onClose, url, title }) => {
   if (!open || !url) return null;
-  const pdf  = isPdf(url);
-  const img  = isImage(url);
+  const pdf = isPdf(url);
+  const img = isImage(url);
 
   return (
     <AnimatePresence>
@@ -200,8 +185,7 @@ const DocViewerModal = memo(({ open, onClose, url, title }) => {
 DocViewerModal.displayName = 'DocViewerModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DOC THUMB  ← NEW
-// Small thumbnail card that opens DocViewerModal on click
+// DOC THUMB
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DocThumb = memo(({ url, label }) => {
@@ -307,7 +291,6 @@ const DriverKycBadge = memo(({ status, className = '' }) => (
 ));
 DriverKycBadge.displayName = 'DriverKycBadge';
 
-/** Current value display row — used before update forms */
 const CurrentValueRow = memo(({ label, children }) => (
   <div className="flex items-center gap-3 bg-base-200 rounded-lg px-4 py-2.5 text-sm">
     <span className="text-base-content/50 font-medium shrink-0">{label}:</span>
@@ -646,7 +629,7 @@ const PartnerFormModal = memo(({ open, onClose, editData }) => {
 PartnerFormModal.displayName = 'PartnerFormModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PARTNER DETAIL MODAL  — FIXED
+// PARTNER DETAIL MODAL
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PARTNER_SECTIONS = [
@@ -769,17 +752,15 @@ const PartnerDetailModal = memo(({ open, onClose, partnerId }) => {
                 </div>
               )}
 
-              {/* ── KYC & DOCS  ← FIXED — shows all doc images ── */}
+              {/* ── KYC & DOCS ── */}
               {sec === 'kyc' && (
                 <div className="space-y-5">
-                  {/* Current KYC status */}
                   <CurrentValueRow label="Current KYC Status">
                     <KycBadge status={kyc.kycStatus} />
                     {kyc.aadhaarVerified && <span className="badge badge-success badge-xs ml-2">Aadhaar ✓</span>}
                     {kyc.panVerified     && <span className="badge badge-success badge-xs ml-1">PAN ✓</span>}
                   </CurrentValueRow>
 
-                  {/* Owner info */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                     {[
                       ['Full Name',    kyc.fullName ?? '—'],
@@ -796,7 +777,6 @@ const PartnerDetailModal = memo(({ open, onClose, partnerId }) => {
                     ))}
                   </div>
 
-                  {/* Document thumbnails */}
                   <div>
                     <p className="text-xs font-bold uppercase tracking-widest text-base-content/40 mb-3">Uploaded Documents</p>
                     <div className="flex flex-wrap gap-3">
@@ -808,7 +788,6 @@ const PartnerDetailModal = memo(({ open, onClose, partnerId }) => {
                     </div>
                   </div>
 
-                  {/* Update form */}
                   <div className="border-t border-base-300 pt-4 space-y-4">
                     <p className="text-xs font-bold uppercase tracking-widest text-base-content/40">Update KYC Decision</p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -844,10 +823,9 @@ const PartnerDetailModal = memo(({ open, onClose, partnerId }) => {
                 </div>
               )}
 
-              {/* ── STATUS  ← FIXED — shows current status first ── */}
+              {/* ── STATUS ── */}
               {sec === 'status' && (
                 <div className="space-y-4">
-                  {/* Current status */}
                   <CurrentValueRow label="Current Status">
                     <StatusBadge status={p.partnershipStatus} />
                     {p.verifiedAt && (
@@ -1027,17 +1005,17 @@ const PartnersTab = memo(() => {
   return (
     <motion.div variants={stagger} initial="hidden" animate="visible" className="space-y-4">
       <motion.div variants={fadeUp} className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
-        <div className="flex flex-wrap gap-2 flex-1">
-          <div className="relative">
+        <div className="flex   gap-2 flex-1">
+          <div className=" flex-1 relative w-full   ">
             <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40 pointer-events-none" />
-            <input className="input-field pl-8 pr-3 py-2 text-sm w-52" placeholder="Search by name, email..." value={search}
+            <input className="input-field w-full  pl-8 pr-3 py-2 text-sm  " placeholder="Search by name, email..." value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1); }} aria-label="Search partners" />
           </div>
-          <select className="input-field py-2 text-sm" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
+          <select className="input-field w-fit py-2 text-sm" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
             <option value="">All Status</option>
             {PARTNERSHIP_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
-          <select className="input-field py-2 text-sm" value={kycStatus} onChange={(e) => { setKycStatus(e.target.value); setPage(1); }}>
+          <select className="input-field w-fit py-2 text-sm" value={kycStatus} onChange={(e) => { setKycStatus(e.target.value); setPage(1); }}>
             <option value="">All KYC</option>
             {['not-submitted', 'pending', 'under-review', 'verified', 'rejected'].map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
@@ -1117,13 +1095,12 @@ const PartnersTab = memo(() => {
 PartnersTab.displayName = 'PartnersTab';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VEHICLES TAB  — FIXED: vehicle detail shows all doc fields
+// VEHICLES TAB
 // ─────────────────────────────────────────────────────────────────────────────
 
-const VehicleDetailModal = memo(({ open, onClose, item, onVerify }) => {
+const VehicleDetailModal = memo(({ open, onClose, v, onVerify }) => {
   const { loading } = useSelector((s) => s.transportPartner);
   const [vForm, setVForm] = useState({ verificationStatus: 'verified', rejectionReason: '' });
-  const v = item?.vehicle;
 
   useEffect(() => {
     if (v) setVForm({ verificationStatus: v.verificationStatus === 'pending' ? 'under-review' : 'verified', rejectionReason: '' });
@@ -1134,14 +1111,12 @@ const VehicleDetailModal = memo(({ open, onClose, item, onVerify }) => {
   return (
     <Modal open={open} onClose={onClose} title={`Vehicle Review — ${v.registrationNumber}`} width="max-w-2xl">
       <div className="space-y-5">
-        {/* Current status */}
         <CurrentValueRow label="Current Status">
           <span className={`badge badge-xs ${v.verificationStatus === 'verified' ? 'badge-success' : v.verificationStatus === 'rejected' ? 'badge-error' : 'badge-warning'}`}>
             {v.verificationStatus}
           </span>
         </CurrentValueRow>
 
-        {/* Vehicle info */}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
           {[
             ['Make', v.make],
@@ -1164,7 +1139,6 @@ const VehicleDetailModal = memo(({ open, onClose, item, onVerify }) => {
           ))}
         </div>
 
-        {/* Feature flags */}
         <div className="flex flex-wrap gap-2">
           {[
             ['AC', v.hasAC],
@@ -1179,7 +1153,6 @@ const VehicleDetailModal = memo(({ open, onClose, item, onVerify }) => {
           ))}
         </div>
 
-        {/* Document thumbnails */}
         <div>
           <p className="text-xs font-bold uppercase tracking-widest text-base-content/40 mb-3">Documents</p>
           <div className="flex flex-wrap gap-3">
@@ -1190,7 +1163,6 @@ const VehicleDetailModal = memo(({ open, onClose, item, onVerify }) => {
           </div>
         </div>
 
-        {/* Photos */}
         {v.photos?.length > 0 && (
           <div>
             <p className="text-xs font-bold uppercase tracking-widest text-base-content/40 mb-3">Vehicle Photos</p>
@@ -1200,13 +1172,13 @@ const VehicleDetailModal = memo(({ open, onClose, item, onVerify }) => {
           </div>
         )}
 
-        {/* Agency info */}
         <div className="bg-base-200 rounded-lg p-3 text-xs">
-          <p className="text-base-content/50 font-semibold uppercase tracking-wide">Agency</p>
-          <p className="font-semibold text-base-content mt-0.5">{item?.businessName} — {item?.ownerPhone}</p>
+          <p className="text-base-content/50 font-semibold uppercase tracking-wide">Owner / Agency</p>
+          <p className="font-semibold text-base-content mt-0.5">
+            {v.ownerId?.businessName || v.ownerId?.name || 'Unknown'} — {v.ownerId?.ownerPhone || v.ownerId?.phone || '—'}
+          </p>
         </div>
 
-        {/* Verification decision */}
         <div className="border-t border-base-300 pt-4 space-y-3">
           <p className="text-xs font-bold uppercase tracking-widest text-base-content/40">Verification Decision</p>
           <FieldNote label="New Status" note="'verified' makes vehicle available for assignments">
@@ -1221,7 +1193,7 @@ const VehicleDetailModal = memo(({ open, onClose, item, onVerify }) => {
           )}
           <div className="flex gap-3 justify-end">
             <button className="btn btn-ghost btn-sm" onClick={onClose}>Cancel</button>
-            <button className="btn btn-primary btn-sm" onClick={() => onVerify(item, vForm)} disabled={loading}>
+            <button className="btn btn-primary btn-sm" onClick={() => onVerify(v, vForm)} disabled={loading}>
               {loading ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
               Submit Decision
             </button>
@@ -1242,10 +1214,9 @@ const VehiclesTab = memo(() => {
 
   useEffect(() => { dispatch(adminFetchPendingVehicles({ page, limit: LIMIT })); }, [dispatch, page]);
 
-  const handleVerify = useCallback(async (item, vForm) => {
+  const handleVerify = useCallback(async (v, vForm) => {
     await dispatch(adminVerifyVehicle({
-      partnerId:          item._id,
-      vehicleId:          item.vehicle._id,
+      vehicleId:          v._id,
       verificationStatus: vForm.verificationStatus,
       rejectionReason:    vForm.rejectionReason,
     }));
@@ -1269,7 +1240,7 @@ const VehiclesTab = memo(() => {
           <table className="table" aria-label="Pending vehicles">
             <thead>
               <tr>
-                <th>Agency</th>
+                <th>Agency / Owner</th>
                 <th>Registration No.</th>
                 <th>Type</th>
                 <th>Make / Model</th>
@@ -1290,25 +1261,25 @@ const VehiclesTab = memo(() => {
                       </td>
                     </tr>
                   )
-                  : pendingVehicles.map((item) => (
-                    <tr key={item.vehicle?._id}>
+                  : pendingVehicles.map((v) => (
+                    <tr key={v._id}>
                       <td>
-                        <p className="font-semibold text-sm">{item.businessName}</p>
-                        <p className="text-xs text-base-content/50">{item.ownerPhone}</p>
+                        <p className="font-semibold text-sm">{v.ownerId?.businessName || v.ownerId?.name || 'Unknown'}</p>
+                        <p className="text-xs text-base-content/50">{v.ownerId?.ownerPhone || v.ownerId?.phone || '—'}</p>
                       </td>
-                      <td className="font-mono text-sm font-bold tracking-wider">{item.vehicle?.registrationNumber}</td>
-                      <td className="text-sm">{item.vehicle?.vehicleType}</td>
-                      <td className="text-sm">{[item.vehicle?.make, item.vehicle?.model].filter(Boolean).join(' ') || '—'}</td>
+                      <td className="font-mono text-sm font-bold tracking-wider">{v.registrationNumber}</td>
+                      <td className="text-sm">{v.vehicleType}</td>
+                      <td className="text-sm">{[v.make, v.model].filter(Boolean).join(' ') || '—'}</td>
                       <td>
-                        <span className={`badge badge-xs ${item.vehicle?.verificationStatus === 'verified' ? 'badge-success' : item.vehicle?.verificationStatus === 'rejected' ? 'badge-error' : 'badge-warning'}`}>
-                          {item.vehicle?.verificationStatus}
+                        <span className={`badge badge-xs ${v.verificationStatus === 'verified' ? 'badge-success' : v.verificationStatus === 'rejected' ? 'badge-error' : 'badge-warning'}`}>
+                          {v.verificationStatus}
                         </span>
                       </td>
                       <td className="text-xs text-base-content/50">
-                        {item.vehicle?.createdAt ? new Date(item.vehicle.createdAt).toLocaleDateString('en-IN') : '—'}
+                        {v.createdAt ? new Date(v.createdAt).toLocaleDateString('en-IN') : '—'}
                       </td>
                       <td className="text-right">
-                        <button className="btn btn-primary btn-xs gap-1" onClick={() => setReviewItem(item)}>
+                        <button className="btn btn-primary btn-xs gap-1" onClick={() => setReviewItem(v)}>
                           <Eye size={11} /> Review
                         </button>
                       </td>
@@ -1321,14 +1292,14 @@ const VehiclesTab = memo(() => {
         <Pagination page={page} total={pendingVehiclesTotal} limit={LIMIT} onPageChange={setPage} />
       </motion.div>
 
-      <VehicleDetailModal open={!!reviewItem} onClose={() => setReviewItem(null)} item={reviewItem} onVerify={handleVerify} />
+      <VehicleDetailModal open={!!reviewItem} onClose={() => setReviewItem(null)} v={reviewItem} onVerify={handleVerify} />
     </motion.div>
   );
 });
 VehiclesTab.displayName = 'VehiclesTab';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DRIVER DETAIL MODAL  — FIXED: KYC docs, current status shown
+// DRIVER DETAIL MODAL
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DRIVER_SECTIONS = [
@@ -1410,16 +1381,14 @@ const DriverDetailModal = memo(({ open, onClose, driverId }) => {
                 </div>
               )}
 
-              {/* KYC & DOCS  ← FIXED */}
+              {/* KYC & DOCS */}
               {sec === 'kyc' && (
                 <div className="space-y-5">
-                  {/* Current KYC status */}
                   <CurrentValueRow label="Current KYC Status">
                     <DriverKycBadge status={kyc.verificationStatus} />
                     {kyc.isVerified && <span className="badge badge-success badge-xs ml-2">Verified ✓</span>}
                   </CurrentValueRow>
 
-                  {/* KYC details */}
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
                     {[
                       ['DL Number',      kyc.drivingLicenceNumber ?? '—'],
@@ -1439,7 +1408,6 @@ const DriverDetailModal = memo(({ open, onClose, driverId }) => {
                     ))}
                   </div>
 
-                  {/* Document thumbnails */}
                   <div>
                     <p className="text-xs font-bold uppercase tracking-widest text-base-content/40 mb-3">Uploaded Documents</p>
                     <div className="flex flex-wrap gap-3">
@@ -1451,7 +1419,6 @@ const DriverDetailModal = memo(({ open, onClose, driverId }) => {
                     </div>
                   </div>
 
-                  {/* Medical fitness docs */}
                   {d.medicalFitness?.documentUrl && (
                     <div>
                       <p className="text-xs font-bold uppercase tracking-widest text-base-content/40 mb-3">Medical Fitness</p>
@@ -1473,7 +1440,6 @@ const DriverDetailModal = memo(({ open, onClose, driverId }) => {
                     </div>
                   )}
 
-                  {/* Update form */}
                   <div className="border-t border-base-300 pt-4 space-y-4">
                     <p className="text-xs font-bold uppercase tracking-widest text-base-content/40">Update KYC Decision</p>
                     {kyc.rejectionReason && (
@@ -1503,7 +1469,7 @@ const DriverDetailModal = memo(({ open, onClose, driverId }) => {
                 </div>
               )}
 
-              {/* BLOCK  ← FIXED: shows current block state + reason clearly */}
+              {/* BLOCK */}
               {sec === 'block' && (
                 <div className="space-y-4">
                   <CurrentValueRow label="Block Status">

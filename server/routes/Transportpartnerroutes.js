@@ -1,11 +1,10 @@
- 
-
 import express             from 'express';
 import mongoose            from 'mongoose';
 
 // ── Models ────────────────────────────────────────────────────────────────────
 import TransportPartner    from '../models/TransportPartner.js';
 import Driver              from '../models/Driver.js';
+import Vehicle             from '../models/Vehicle.js'; // NEW: Imported Vehicle
 import User                from '../models/User.js';
 import SystemLog           from '../models/SystemLog.js';
 import PlatformPricingConfig from '../models/PlatformPricingConfig.js';
@@ -31,6 +30,7 @@ import {
 import sendEmail           from '../utils/sendEmail.js';
 import bcrypt from 'bcryptjs';
 import { transactionalTemplate } from '../utils/emailTemplates.js';
+
 const router = express.Router();
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -365,12 +365,12 @@ router.delete(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §B  TRANSPORT PARTNER — VEHICLE MANAGEMENT
+// §B  TRANSPORT PARTNER — VEHICLE MANAGEMENT (FULLY REFACTORED)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * GET /api/transport/vehicles
- * List own vehicles with optional filters
+ * List own vehicles with optional filters from the STANDALONE collection
  */
 router.get(
   '/vehicles',
@@ -379,13 +379,17 @@ router.get(
   async (req, res) => {
     try {
       const { status, type, active } = req.query;
-      const agency = await TransportPartner.findById(req.transportPartner.agency._id)
-        .select('vehicles fleetInfo');
+      const agencyId = req.transportPartner.agency._id;
 
-      let vehicles = agency.vehicles;
-      if (status) vehicles = vehicles.filter((v) => v.verificationStatus === status);
-      if (type)   vehicles = vehicles.filter((v) => v.vehicleType === type);
-      if (active !== undefined) vehicles = vehicles.filter((v) => v.isActive === (active === 'true'));
+      // Query standalone collection via polymorphic ref
+      const filter = { ownerType: 'TransportPartner', ownerId: agencyId };
+      if (status) filter.verificationStatus = status;
+      if (type)   filter.vehicleType = type;
+      if (active !== undefined) filter.status = active === 'true' ? 'active' : 'inactive';
+
+      const vehicles = await Vehicle.find(filter)
+        .populate('assignedDriver', 'legalName driverCode')
+        .sort({ createdAt: -1 });
 
       return res.json({ success: true, count: vehicles.length, data: vehicles });
     } catch (err) {
@@ -396,20 +400,21 @@ router.get(
 
 /**
  * GET /api/transport/vehicles/:vehicleId
- * Get single vehicle detail
+ * Get single vehicle detail from the STANDALONE collection
  */
 router.get(
   '/vehicles/:vehicleId',
   transportPartnerRoutes,
   async (req, res) => {
     try {
-      const agency = await TransportPartner.findOne(
-        { _id: req.transportPartner.agency._id, 'vehicles._id': req.params.vehicleId },
-        { 'vehicles.$': 1 }
-      );
+      const vehicle = await Vehicle.findOne({
+        _id: req.params.vehicleId,
+        ownerType: 'TransportPartner',
+        ownerId: req.transportPartner.agency._id
+      }).populate('assignedDriver', 'legalName driverCode phone');
 
-      if (!agency) return res.status(404).json({ success: false, message: 'Vehicle not found' });
-      return res.json({ success: true, data: agency.vehicles[0] });
+      if (!vehicle) return res.status(404).json({ success: false, message: 'Vehicle not found' });
+      return res.json({ success: true, data: vehicle });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -425,21 +430,24 @@ router.post(
   transportPartnerRoutes,
   async (req, res) => {
     try {
-      const agency = await TransportPartner.findByIdAndUpdate(
-        req.transportPartner.agency._id,
-        { $push: { vehicles: req.body }, updatedBy: req.user._id },
-        { new: true, runValidators: true }
-      ).select('vehicles fleetInfo');
+      const agencyId = req.transportPartner.agency._id;
 
-      await invalidateTPCache(agency._id);
+      const vehiclePayload = {
+        ...req.body,
+        ownerType: 'TransportPartner',
+        ownerId: agencyId,
+      };
 
-      const newVehicle = agency.vehicles[agency.vehicles.length - 1];
+      // Triggers Vehicle.post('save') hook to sync fleetInfo on TransportPartner
+      const newVehicle = await Vehicle.create(vehiclePayload);
+
+      await invalidateTPCache(agencyId);
 
       syslog({
         level: 'info', category: 'user',
-        message: `Vehicle added: ${newVehicle.registrationNumber} by ${agency.businessName}`,
+        message: `Vehicle added: ${newVehicle.registrationNumber} by TransportPartner`,
         actor: { userId: req.user._id, name: req.user.name, role: req.user.role, ip: req.deviceInfo?.ipAddress },
-        relatedEntity: { model: 'TransportPartner', entityId: agency._id, label: agency.businessName },
+        relatedEntity: { model: 'TransportPartner', entityId: agencyId },
         request: { method: 'POST', path: req.originalUrl, statusCode: 201 },
         metadata: { vehicleId: newVehicle._id, regNo: newVehicle.registrationNumber, type: newVehicle.vehicleType },
       });
@@ -460,7 +468,13 @@ router.patch(
   transportPartnerRoutes,
   async (req, res) => {
     try {
-      const forbidden = ['verificationStatus', 'verifiedAt', 'verifiedBy', 'vehicleCode'];
+      const agencyId = req.transportPartner.agency._id;
+
+      // Prevent mutating ownership or verification audit trails
+      const forbidden = [
+        'verificationStatus', 'verifiedAt', 'verifiedBy', 'vehicleCode',
+        'ownerType', 'ownerId', 'assignedDriver', 'assignedAt'
+      ];
       const body = { ...req.body };
       forbidden.forEach((f) => delete body[f]);
 
@@ -468,63 +482,76 @@ router.patch(
         return res.status(400).json({ success: false, message: 'No valid fields to update' });
       }
 
-      const setPayload = {};
-      Object.keys(body).forEach((key) => {
-        setPayload[`vehicles.$.${key}`] = body[key];
+      // Fetch, Mutate, and Save to ensure Mongoose post-save hooks (like fleet sync) trigger
+      const vehicle = await Vehicle.findOne({
+        _id: req.params.vehicleId,
+        ownerType: 'TransportPartner',
+        ownerId: agencyId
       });
-      setPayload.updatedBy = req.user._id;
 
-      // BROKEN
-const agency = await TransportPartner.findOneAndUpdate(
-  { _id: req.transportPartner.agency._id, 'vehicles._id': req.params.vehicleId },
-  { $set: setPayload },
-  { returnDocument: 'after', runValidators: true }
-).select('vehicles');  // <-- full array, then .id() below
+      if (!vehicle) return res.status(404).json({ success: false, message: 'Vehicle not found' });
 
-const updated = agency.vehicles.id(req.params.vehicleId); // correct workaround already written                       // ← full array, no $
+      Object.assign(vehicle, body);
+      await vehicle.save(); // Triggers the fleet cache sync in Vehicle post-save
 
-      if (!agency) return res.status(404).json({ success: false, message: 'Vehicle not found' });
+      await invalidateTPCache(agencyId);
 
-       // ← find subdoc by id
-
-      await invalidateTPCache(req.transportPartner.agency._id);
-
-      return res.json({ success: true, message: 'Vehicle updated', data: updated });
+      return res.json({ success: true, message: 'Vehicle updated', data: vehicle });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
   }
 );
+
 /**
  * DELETE /api/transport/vehicles/:vehicleId
- * Soft-delete vehicle (set isActive: false)
- * Hard-delete only allowed if vehicle is unassigned and unverified
+ * Soft-delete vehicle (set status: inactive).
+ * Hard-delete only allowed if vehicle is unassigned and unverified.
  */
 router.delete(
   '/vehicles/:vehicleId',
   transportPartnerRoutes,
   async (req, res) => {
     try {
-      const agency = await TransportPartner.findById(req.transportPartner.agency._id).select('vehicles');
-      const vehicle = agency.vehicles.id(req.params.vehicleId);
+      const agencyId = req.transportPartner.agency._id;
+      const vehicle = await Vehicle.findOne({
+        _id: req.params.vehicleId,
+        ownerType: 'TransportPartner',
+        ownerId: agencyId
+      });
+
       if (!vehicle) return res.status(404).json({ success: false, message: 'Vehicle not found' });
 
       const { hard } = req.query;
       if (hard === 'true' && vehicle.verificationStatus === 'pending' && !vehicle.assignedDriver) {
-        await TransportPartner.findByIdAndUpdate(
-          agency._id,
-          { $pull: { vehicles: { _id: req.params.vehicleId } }, updatedBy: req.user._id }
-        );
-        await invalidateTPCache(agency._id);
+        await Vehicle.findByIdAndDelete(vehicle._id);
+        
+        // Manual cache sync since findByIdAndDelete doesn't trigger post('save') hooks natively 
+        // unless handled specifically in the schema. (Fallback sync mechanism here)
+        const counts = await Vehicle.aggregate([
+          { $match: { ownerType: 'TransportPartner', ownerId: agencyId } },
+          { $group: {
+              _id: null,
+              total: { $sum: 1 },
+              active: { $sum: { $cond: [{ $and: [{ $eq: ['$status', 'active'] }, { $eq: ['$verificationStatus', 'verified'] }] }, 1, 0] } }
+            }
+          }
+        ]);
+        
+        await TransportPartner.findByIdAndUpdate(agencyId, {
+          'fleetInfo.totalVehicles': counts[0]?.total ?? 0,
+          'fleetInfo.activeVehicles': counts[0]?.active ?? 0
+        });
+
+        await invalidateTPCache(agencyId);
         return res.json({ success: true, message: 'Vehicle permanently removed' });
       }
 
       // Soft delete
-      await TransportPartner.findOneAndUpdate(
-        { _id: agency._id, 'vehicles._id': req.params.vehicleId },
-        { $set: { 'vehicles.$.isActive': false, updatedBy: req.user._id } }
-      );
-      await invalidateTPCache(agency._id);
+      vehicle.status = 'inactive';
+      await vehicle.save(); // Triggers the fleet cache sync in post-save
+
+      await invalidateTPCache(agencyId);
       return res.json({ success: true, message: 'Vehicle deactivated' });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
@@ -534,7 +561,7 @@ router.delete(
 
 /**
  * PATCH /api/transport/vehicles/:vehicleId/assign-driver
- * Assign a driver to a vehicle
+ * Assign a driver to a vehicle using Driver instance method to sync both sides
  */
 router.patch(
   '/vehicles/:vehicleId/assign-driver',
@@ -545,13 +572,15 @@ router.patch(
       const agencyId = req.transportPartner.agency._id;
 
       // Validate driver belongs to this agency
-      const driver = await Driver.findOne({ _id: driverId, ownerAgency: agencyId }).select('_id legalName');
+      const driver = await Driver.findOne({ _id: driverId, ownerAgency: agencyId });
       if (!driver) return res.status(404).json({ success: false, message: 'Driver not found in your agency' });
 
-      await TransportPartner.findOneAndUpdate(
-        { _id: agencyId, 'vehicles._id': req.params.vehicleId },
-        { $set: { 'vehicles.$.assignedDriver': driverId, updatedBy: req.user._id } }
-      );
+      // Ensure vehicle belongs to agency
+      const vehicleExists = await Vehicle.exists({ _id: req.params.vehicleId, ownerType: 'TransportPartner', ownerId: agencyId });
+      if (!vehicleExists) return res.status(404).json({ success: false, message: 'Vehicle not found' });
+
+      // Use the instance method defined in Driver Schema to keep caches in sync
+      await driver.assignVehicle(req.params.vehicleId);
 
       await invalidateTPCache(agencyId);
       return res.json({ success: true, message: `Driver ${driver.legalName} assigned to vehicle` });
@@ -570,12 +599,21 @@ router.patch(
   transportPartnerRoutes,
   async (req, res) => {
     try {
-      await TransportPartner.findOneAndUpdate(
-        { _id: req.transportPartner.agency._id, 'vehicles._id': req.params.vehicleId },
-        { $set: { 'vehicles.$.assignedDriver': null, updatedBy: req.user._id } }
-      );
+      const agencyId = req.transportPartner.agency._id;
+      const vehicle = await Vehicle.findOne({ _id: req.params.vehicleId, ownerType: 'TransportPartner', ownerId: agencyId });
+      
+      if (!vehicle) return res.status(404).json({ success: false, message: 'Vehicle not found' });
+      if (!vehicle.assignedDriver) return res.status(400).json({ success: false, message: 'Vehicle has no assigned driver' });
 
-      await invalidateTPCache(req.transportPartner.agency._id);
+      // Clear Driver's cache
+      await Driver.findByIdAndUpdate(vehicle.assignedDriver, { assignedVehicleId: null, assignedVehicleSnapshot: null });
+
+      // Clear Vehicle source of truth
+      vehicle.assignedDriver = null;
+      vehicle.assignedAt = null;
+      await vehicle.save();
+
+      await invalidateTPCache(agencyId);
       return res.json({ success: true, message: 'Driver unassigned from vehicle' });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
@@ -585,7 +623,7 @@ router.patch(
 
 /**
  * POST /api/transport/vehicles/:vehicleId/photos
- * Add photo URLs to a vehicle
+ * Add photo URLs to a standalone vehicle
  */
 router.post(
   '/vehicles/:vehicleId/photos',
@@ -597,10 +635,13 @@ router.post(
         return res.status(400).json({ success: false, message: 'photoUrls array is required' });
       }
 
-      await TransportPartner.findOneAndUpdate(
-        { _id: req.transportPartner.agency._id, 'vehicles._id': req.params.vehicleId },
-        { $push: { 'vehicles.$.photos': { $each: photoUrls } }, updatedBy: req.user._id }
+      const vehicle = await Vehicle.findOneAndUpdate(
+        { _id: req.params.vehicleId, ownerType: 'TransportPartner', ownerId: req.transportPartner.agency._id },
+        { $push: { photos: { $each: photoUrls } } },
+        { new: true }
       );
+
+      if (!vehicle) return res.status(404).json({ success: false, message: 'Vehicle not found' });
 
       await invalidateTPCache(req.transportPartner.agency._id);
       return res.json({ success: true, message: `${photoUrls.length} photo(s) added` });
@@ -661,6 +702,7 @@ router.get(
         ownerAgency: req.transportPartner.agency._id,
       })
         .populate('user', 'name email phone avatar isOnline lastseen')
+        .populate('assignedVehicleId', 'registrationNumber vehicleType make model') // Populate standalone vehicle
         .select('-kyc.aadhaarNumber -bankDetails.accountNumber -adminNotes');
 
       if (!driver) return res.status(404).json({ success: false, message: 'Driver not found in your agency' });
@@ -674,44 +716,33 @@ router.get(
 /**
  * POST /api/transport/drivers
  * Register a new driver under this agency.
- * Also creates the linked User account (role: 'driver').
  */
 router.post(
   '/drivers',
-  transportPartnerRoutes, // Assuming this middleware attaches req.transportPartner and req.user
+  transportPartnerRoutes,
   async (req, res) => {
     try {
       const { 
         name, email, phone, password, 
-        kyc, vehicleDetails, currentCity,
+        kyc, currentCity,
         ...driverData 
       } = req.body;
 
-      // Extract agency details from middleware
       const agencyId = req.transportPartner.agency._id;
       const agencyName = req.transportPartner.agency.businessName;
 
       // ── Guards ──────────────────────────────────────────────────────────────
-
       if (!email || !password || !name) {
-        return res.status(400).json({
-          success: false,
-          message: 'Name, email, and password are required to register a driver',
-        });
+        return res.status(400).json({ success: false, message: 'Name, email, and password are required to register a driver' });
       }
 
       const userExists = await User.findOne({ email });
       if (userExists) {
-        return res.status(409).json({
-          success: false,
-          message: 'A user with this email already exists',
-        });
+        return res.status(409).json({ success: false, message: 'A user with this email already exists' });
       }
 
       // ── 1. Create linked User (role: driver) ───────────────────────────────
-
       const hashedPassword = await bcrypt.hash(password, 12);
-
       const newUser = await User.create({
         name,
         email,
@@ -722,7 +753,6 @@ router.post(
       });
 
       // ── 2. Create Driver document ──────────────────────────────────────────
-
       const driver = await Driver.create({
         user: newUser._id,
         ownerAgency: agencyId,
@@ -733,16 +763,14 @@ router.post(
         kyc: kyc || {
           aadhaarNumber: '000000000000',
           drivingLicenceNumber: 'PENDING',
-          drivingLicenceExpiry: new Date(Date.now() + 365 * 86400000), // Default 1 year expiry
+          drivingLicenceExpiry: new Date(Date.now() + 365 * 86400000), 
         },
-        vehicleDetails: vehicleDetails || {},
-        status: 'onboarding',
+        status: 'Offline',
         ...driverData,
         createdBy: req.user._id,
       });
 
       // ── 3. Update Agency Reference & Cache ─────────────────────────────────
-
       await TransportPartner.findByIdAndUpdate(agencyId, {
         $addToSet: { drivers: driver._id },
         updatedBy: req.user._id,
@@ -751,30 +779,17 @@ router.post(
       await invalidateTPCache(agencyId);
 
       // ── 4. System log ──────────────────────────────────────────────────────
-
       syslog({
-        level: 'success',
-        category: 'user',
+        level: 'success', category: 'user',
         message: `Driver registered: ${name} under ${agencyName}`,
-        actor: {
-          userId: req.user._id,
-          name: req.user.name,
-          role: req.user.role,
-          ip: req.deviceInfo?.ipAddress,
-        },
-        relatedEntity: {
-          model: 'Driver',
-          entityId: driver._id,
-          label: name,
-        },
+        actor: { userId: req.user._id, name: req.user.name, role: req.user.role, ip: req.deviceInfo?.ipAddress },
+        relatedEntity: { model: 'Driver', entityId: driver._id, label: name },
         request: { method: 'POST', path: req.originalUrl, statusCode: 201 },
         metadata: { driverId: driver._id, userId: newUser._id, agencyId },
       });
 
       // ── 5. Welcome email using transactionalTemplate ───────────────────────
-
       const loginUrl = `${process.env.FRONTEND_URL}/login`;
-
       const welcomeHtml = transactionalTemplate({
         header: 'Driver Account — Likeson.in',
         title: `Welcome to the Fleet, ${name}! 🚛`,
@@ -783,45 +798,27 @@ router.post(
             Your driver account has been created by <strong style="color:#1e293b;">${agencyName}</strong>. 
             You can now log in to the Likeson Driver App using the credentials below.
           </p>
-
-          <table width="100%" cellpadding="0" cellspacing="0"
-                 style="background:#f8fafc;border-radius:8px;padding:16px 20px;
-                        margin-bottom:16px;border:1px solid #e2e8f0;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border-radius:8px;padding:16px 20px;margin-bottom:16px;border:1px solid #e2e8f0;">
             <tr>
-              <td style="font-size:12px;color:#64748b;padding:5px 0;width:44%;font-weight:600;text-transform:uppercase;">
-                Login Email
-              </td>
-              <td style="font-size:13px;font-weight:700;color:#1e293b;padding:5px 0;">
-                ${email}
-              </td>
+              <td style="font-size:12px;color:#64748b;padding:5px 0;width:44%;font-weight:600;text-transform:uppercase;">Login Email</td>
+              <td style="font-size:13px;font-weight:700;color:#1e293b;padding:5px 0;">${email}</td>
             </tr>
             <tr>
-              <td style="font-size:12px;color:#64748b;padding:5px 0;font-weight:600;text-transform:uppercase;">
-                Temporary Password
-              </td>
+              <td style="font-size:12px;color:#64748b;padding:5px 0;font-weight:600;text-transform:uppercase;">Temporary Password</td>
               <td style="padding:5px 0;">
-                <span style="font-size:15px;font-weight:800;color:#0369a1;
-                             font-family:'Courier New',monospace;background:#e0f2fe;
-                             padding:3px 10px;border-radius:6px;border:1px solid #bae6fd;">
+                <span style="font-size:15px;font-weight:800;color:#0369a1;font-family:'Courier New',monospace;background:#e0f2fe;padding:3px 10px;border-radius:6px;border:1px solid #bae6fd;">
                   ${password}
                 </span>
               </td>
             </tr>
             <tr>
-              <td style="font-size:12px;color:#64748b;padding:5px 0;font-weight:600;text-transform:uppercase;">
-                Assigned Agency
-              </td>
-              <td style="font-size:13px;font-weight:700;color:#1e293b;padding:5px 0;">
-                ${agencyName}
-              </td>
+              <td style="font-size:12px;color:#64748b;padding:5px 0;font-weight:600;text-transform:uppercase;">Assigned Agency</td>
+              <td style="font-size:13px;font-weight:700;color:#1e293b;padding:5px 0;">${agencyName}</td>
             </tr>
           </table>
-
-          <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #22c55e;
-                      border-radius:8px;padding:12px 16px;margin-bottom:16px;">
+          <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #22c55e;border-radius:8px;padding:12px 16px;margin-bottom:16px;">
             <p style="margin:0;font-size:12px;color:#166534;line-height:1.6;">
-              ✅ <strong>Ready to drive?</strong> Please log in and verify your Aadhaar and Driving Licence 
-              details to start receiving trip assignments.
+              ✅ <strong>Ready to drive?</strong> Please log in and verify your Aadhaar and Driving Licence details to start receiving trips.
             </p>
           </div>
         `,
@@ -829,26 +826,14 @@ router.post(
         buttonLink: loginUrl,
       });
 
-      sendEmail({
-        email,
-        subject: `🚛 Welcome to Likeson — Your Driver Account is Ready`,
-        html: welcomeHtml,
-      }).catch((e) => console.error('Driver Welcome Email Failed:', e.message));
+      sendEmail({ email, subject: `🚛 Welcome to Likeson — Your Driver Account is Ready`, html: welcomeHtml }).catch((e) => console.error('Driver Welcome Email Failed:', e.message));
 
       // ── 6. Response ────────────────────────────────────────────────────────
-
-      return res.status(201).json({
-        success: true,
-        message: 'Driver registered successfully',
-        data: { driver, userId: newUser._id },
-      });
+      return res.status(201).json({ success: true, message: 'Driver registered successfully', data: { driver, userId: newUser._id } });
 
     } catch (err) {
       console.error('Driver Registration Error:', err);
-      return res.status(500).json({ 
-        success: false, 
-        message: err.message || 'Internal Server Error' 
-      });
+      return res.status(500).json({ success: false, message: err.message || 'Internal Server Error' });
     }
   }
 );
@@ -862,7 +847,7 @@ router.patch(
   transportPartnerRoutes,
   async (req, res) => {
     try {
-      const forbidden = ['ownerAgency', 'soloPartner', 'user', 'isVerified', 'isBlocked', 'kyc'];
+      const forbidden = ['ownerAgency', 'soloPartner', 'user', 'isVerified', 'isBlocked', 'kyc', 'assignedVehicleId', 'assignedVehicleSnapshot'];
       forbidden.forEach((f) => delete req.body[f]);
 
       const driver = await Driver.findOneAndUpdate(
@@ -896,7 +881,7 @@ router.patch(
       driver.isActive   = !driver.isActive;
       driver.updatedBy  = req.user._id;
       if (!driver.isActive) driver.status = 'Offline';
-      await driver.save();
+      await driver.save(); // Triggers driver fleetInfo sync hook
 
       await invalidateTPCache(req.transportPartner.agency._id);
       return res.json({ success: true, message: `Driver ${driver.isActive ? 'activated' : 'deactivated'}`, isActive: driver.isActive });
@@ -916,13 +901,16 @@ router.patch(
   async (req, res) => {
     try {
       const { pauseReason, pausedUntil } = req.body;
-      const driver = await Driver.findOneAndUpdate(
-        { _id: req.params.driverId, ownerAgency: req.transportPartner.agency._id },
-        { $set: { isPaused: true, pauseReason, pausedUntil: pausedUntil ? new Date(pausedUntil) : null, status: 'Offline', updatedBy: req.user._id } },
-        { new: true }
-      );
-
+      
+      const driver = await Driver.findOne({ _id: req.params.driverId, ownerAgency: req.transportPartner.agency._id });
       if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      driver.isPaused = true;
+      driver.pauseReason = pauseReason;
+      driver.pausedUntil = pausedUntil ? new Date(pausedUntil) : null;
+      driver.status = 'Offline';
+      driver.updatedBy = req.user._id;
+      await driver.save();
 
       await invalidateTPCache(req.transportPartner.agency._id);
       return res.json({ success: true, message: 'Driver paused', data: { isPaused: driver.isPaused, pausedUntil: driver.pausedUntil } });
@@ -941,13 +929,14 @@ router.patch(
   transportPartnerRoutes,
   async (req, res) => {
     try {
-      const driver = await Driver.findOneAndUpdate(
-        { _id: req.params.driverId, ownerAgency: req.transportPartner.agency._id },
-        { $set: { isPaused: false, pauseReason: null, pausedUntil: null, updatedBy: req.user._id } },
-        { new: true }
-      );
-
+      const driver = await Driver.findOne({ _id: req.params.driverId, ownerAgency: req.transportPartner.agency._id });
       if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      driver.isPaused = false;
+      driver.pauseReason = null;
+      driver.pausedUntil = null;
+      driver.updatedBy = req.user._id;
+      await driver.save();
 
       await invalidateTPCache(req.transportPartner.agency._id);
       return res.json({ success: true, message: 'Driver unpaused' });
@@ -978,7 +967,7 @@ router.delete(
       driver.ownerAgency = null;
       driver.status      = 'Offline';
       driver.isActive    = false;
-      await driver.save();
+      await driver.save(); // Sync hooks execute
 
       // Remove from agency drivers array
       await TransportPartner.findByIdAndUpdate(agencyId, {
@@ -1393,7 +1382,7 @@ router.get(
       const agencyId = req.transportPartner.agency._id;
 
       const agency = await TransportPartner.findById(agencyId)
-        .select('stats fleetInfo rating isAvailable partnershipStatus isOnboardingComplete vehicles drivers bankDetails.pendingSettlementAmount bankDetails.totalSettledAmount');
+        .select('stats fleetInfo rating isAvailable partnershipStatus isOnboardingComplete bankDetails.pendingSettlementAmount bankDetails.totalSettledAmount');
 
       const [availableDrivers, onTripDrivers] = await Promise.all([
         Driver.countDocuments({ ownerAgency: agencyId, status: 'Available', isActive: true }),
@@ -1403,17 +1392,17 @@ router.get(
       return res.json({
         success: true,
         data: {
-          stats:               agency.stats,
-          fleetInfo:           agency.fleetInfo,
-          rating:              agency.rating,
-          isAvailable:         agency.isAvailable,
-          partnershipStatus:   agency.partnershipStatus,
-          isOnboardingComplete:agency.isOnboardingComplete,
-          totalVehicles:       agency.vehicles.length,
-          verifiedVehicles:    agency.vehicles.filter((v) => v.verificationStatus === 'verified').length,
-          pendingSettlement:   agency.bankDetails?.pendingSettlementAmount,
-          totalSettled:        agency.bankDetails?.totalSettledAmount,
-          liveDriverStats:     { availableDrivers, onTripDrivers },
+          stats:                agency.stats,
+          fleetInfo:            agency.fleetInfo,
+          rating:               agency.rating,
+          isAvailable:          agency.isAvailable,
+          partnershipStatus:    agency.partnershipStatus,
+          isOnboardingComplete: agency.isOnboardingComplete,
+          totalVehicles:        agency.fleetInfo?.totalVehicles || 0,
+          activeVehicles:       agency.fleetInfo?.activeVehicles || 0,
+          pendingSettlement:    agency.bankDetails?.pendingSettlementAmount,
+          totalSettled:         agency.bankDetails?.totalSettledAmount,
+          liveDriverStats:      { availableDrivers, onTripDrivers },
         },
       });
     } catch (err) {
@@ -1522,7 +1511,7 @@ router.patch(
   authorize('driver'),
   async (req, res) => {
     try {
-      const forbidden = ['ownerAgency', 'soloPartner', 'user', 'isVerified', 'isBlocked', 'kyc', 'rewards', 'performance'];
+      const forbidden = ['ownerAgency', 'soloPartner', 'user', 'isVerified', 'isBlocked', 'kyc', 'rewards', 'performance', 'assignedVehicleId', 'assignedVehicleSnapshot'];
       forbidden.forEach((f) => delete req.body[f]);
 
       const driver = await Driver.findOneAndUpdate(
@@ -2036,11 +2025,7 @@ router.delete(
 
 /**
  * PATCH /api/transport/driver/kyc/document
- * Driver re-uploads a single KYC document URL (without changing the
- * whole KYC object). Resets verificationStatus → 'Under-Review'.
- *
- * Accepted fields:
- *   aadhaarDocUrl | drivingLicenceDocUrl | psvBadgeDocUrl | panDocUrl
+ * Driver re-uploads a single KYC document URL
  */
 router.patch(
   '/driver/kyc/document',
@@ -2063,7 +2048,6 @@ router.patch(
         });
       }
 
-      // Re-submit triggers review
       updates['kyc.verificationStatus'] = 'Under-Review';
       updates['kyc.submittedAt']        = new Date();
       updates['kyc.rejectionReason']    = null;
@@ -2100,12 +2084,6 @@ router.patch(
 /**
  * PATCH /api/transport/driver/kyc/licence-numbers
  * Driver updates licence/badge numbers (non-document fields).
- * Also resets to Under-Review so admin re-validates the new numbers.
- *
- * Accepted fields:
- *   drivingLicenceNumber | drivingLicenceExpiry | licenceClass[]
- *   psvBadgeNumber | psvBadgeExpiry
- *   panNumber
  */
 router.patch(
   '/driver/kyc/licence-numbers',
@@ -2172,7 +2150,6 @@ router.put(
       if (documentUrl)       update['medicalFitness.documentUrl']       = documentUrl;
       if (bloodGroup)        update['medicalFitness.bloodGroup']        = bloodGroup;
 
-      // Mark valid only when both cert number + expiry are present
       if (certificateNumber || expiryDate) {
         const driver = await Driver.findOne({ user: req.user._id }).select('medicalFitness');
         const merged = { ...driver?.medicalFitness?.toObject?.() ?? {}, ...update };
@@ -2209,9 +2186,7 @@ router.put(
 
 /**
  * GET /api/transport/driver/me/compliance
- * Driver checks their own compliance summary:
- * DL expiry, PSV badge expiry, medical fitness, KYC status.
- * Flags items expiring within 30 days.
+ * Driver checks their own compliance summary
  */
 router.get(
   '/driver/me/compliance',
@@ -2433,27 +2408,16 @@ router.post(
         notifications, partnershipStatus,
       } = req.body;
 
-      // ── Guards ──────────────────────────────────────────────────────────────
-
       if (!email || !password) {
-        return res.status(400).json({
-          success: false,
-          message: 'email and password are required to create a partner account',
-        });
+        return res.status(400).json({ success: false, message: 'email and password are required' });
       }
 
       const userExists = await User.findOne({ email });
       if (userExists) {
-        return res.status(409).json({
-          success: false,
-          message: 'A user with this email already exists',
-        });
+        return res.status(409).json({ success: false, message: 'A user with this email already exists' });
       }
 
-      // ── 1. Create linked User (role: transportpartner) ─────────────────────
-
       const hashedPassword = await bcrypt.hash(password, 12);
-
       const newUser = await User.create({
         name:      name      || ownerName,
         email,
@@ -2462,8 +2426,6 @@ router.post(
         role:      'transportpartner',
         createdBy: req.user._id,
       });
-
-      // ── 2. Create TransportPartner document ────────────────────────────────
 
       const partner = await TransportPartner.create({
         user:              newUser._id,
@@ -2486,28 +2448,13 @@ router.post(
 
       await invalidatePattern('admin:tp:list*');
 
-      // ── 3. System log ──────────────────────────────────────────────────────
-
       syslog({
-        level:    'success',
-        category: 'user',
+        level:    'success', category: 'user',
         message:  `TransportPartner created by admin: ${partner.businessName}`,
-        actor: {
-          userId: req.user._id,
-          name:   req.user.name,
-          role:   req.user.role,
-          ip:     req.deviceInfo?.ipAddress,
-        },
-        relatedEntity: {
-          model:    'TransportPartner',
-          entityId: partner._id,
-          label:    partner.businessName,
-        },
+        actor: { userId: req.user._id, name:   req.user.name, role:   req.user.role, ip:     req.deviceInfo?.ipAddress },
+        relatedEntity: { model: 'TransportPartner', entityId: partner._id, label: partner.businessName },
         request: { method: 'POST', path: req.originalUrl, statusCode: 201 },
-        metadata: { partnerId: partner._id, userId: newUser._id },
       });
-
-      // ── 4. Welcome email using transactionalTemplate ───────────────────────
 
       const loginUrl     = `${process.env.FRONTEND_URL}/login`;
       const ownerDisplay = partner.ownerName || name || 'Partner';
@@ -2521,84 +2468,23 @@ router.post(
             Your Transport Partner account for <strong style="color:#1e293b;">${bizDisplay}</strong>
             has been created by the Likeson admin team. Use the credentials below to sign in.
           </p>
-
-          <table width="100%" cellpadding="0" cellspacing="0"
-                 style="background:#f1f5f9;border-radius:8px;padding:16px 20px;
-                        margin-bottom:16px;border:1px solid #e2e8f0;">
-            <tr>
-              <td style="font-size:12px;color:#64748b;padding:5px 0;
-                         width:44%;font-weight:600;text-transform:uppercase;
-                         letter-spacing:.5px;">
-                Login Email
-              </td>
-              <td style="font-size:13px;font-weight:700;color:#1e293b;padding:5px 0;">
-                ${email}
-              </td>
-            </tr>
-            <tr>
-              <td style="font-size:12px;color:#64748b;padding:5px 0;
-                         font-weight:600;text-transform:uppercase;letter-spacing:.5px;">
-                Password
-              </td>
-              <td style="padding:5px 0;">
-                <span style="font-size:15px;font-weight:800;color:#92400e;
-                             font-family:'Courier New',monospace;letter-spacing:2px;
-                             background:#fef3c7;padding:3px 10px;border-radius:6px;
-                             border:1px solid #fde68a;">
-                  ${password}
-                </span>
-              </td>
-            </tr>
-            <tr>
-              <td style="font-size:12px;color:#64748b;padding:5px 0;
-                         font-weight:600;text-transform:uppercase;letter-spacing:.5px;">
-                Role
-              </td>
-              <td style="font-size:13px;font-weight:700;color:#1e293b;padding:5px 0;">
-                Transport Partner
-              </td>
-            </tr>
-            <tr>
-              <td style="font-size:12px;color:#64748b;padding:5px 0;
-                         font-weight:600;text-transform:uppercase;letter-spacing:.5px;">
-                Business
-              </td>
-              <td style="font-size:13px;font-weight:700;color:#1e293b;padding:5px 0;">
-                ${bizDisplay}
-              </td>
-            </tr>
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;border-radius:8px;padding:16px 20px;margin-bottom:16px;border:1px solid #e2e8f0;">
+            <tr><td style="font-size:12px;color:#64748b;padding:5px 0;width:44%;font-weight:600;text-transform:uppercase;">Login Email</td>
+                <td style="font-size:13px;font-weight:700;color:#1e293b;padding:5px 0;">${email}</td></tr>
+            <tr><td style="font-size:12px;color:#64748b;padding:5px 0;font-weight:600;text-transform:uppercase;">Password</td>
+                <td style="padding:5px 0;"><span style="font-size:15px;font-weight:800;color:#92400e;font-family:'Courier New',monospace;letter-spacing:2px;background:#fef3c7;padding:3px 10px;border-radius:6px;border:1px solid #fde68a;">${password}</span></td></tr>
           </table>
-
-          <div style="background:#fff7ed;border:1px solid #fed7aa;border-left:4px solid #f59e0b;
-                      border-radius:8px;padding:12px 16px;margin-bottom:16px;">
-            <p style="margin:0;font-size:12px;color:#92400e;line-height:1.6;">
-              ⚠️ <strong>Change your password after first login.</strong>
-              This password was set by an admin. Please update it immediately after signing in.
-            </p>
+          <div style="background:#fff7ed;border:1px solid #fed7aa;border-left:4px solid #f59e0b;border-radius:8px;padding:12px 16px;margin-bottom:16px;">
+            <p style="margin:0;font-size:12px;color:#92400e;line-height:1.6;">⚠️ <strong>Change your password after first login.</strong></p>
           </div>
-
-          <p style="margin:0;font-size:12px;color:#94a3b8;line-height:1.6;">
-            Next steps: Sign in → Change password → Complete KYC → Add your fleet and drivers.
-          </p>
         `,
         buttonText: 'Sign In to Your Account →',
         buttonLink: loginUrl,
       });
 
-      sendEmail({
-        email,
-        subject: `🎉 Welcome to Likeson — Your Transport Partner Account is Ready`,
-        html:    welcomeHtml,
-      }).catch(() => {});
+      sendEmail({ email, subject: `🎉 Welcome to Likeson — Your Transport Partner Account is Ready`, html: welcomeHtml }).catch(() => {});
 
-      // ── 5. Response ────────────────────────────────────────────────────────
-
-      return res.status(201).json({
-        success: true,
-        message: 'Transport partner created successfully',
-        data:    { partner, userId: newUser._id },
-      });
-
+      return res.status(201).json({ success: true, message: 'Transport partner created successfully', data: { partner, userId: newUser._id } });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -2608,36 +2494,23 @@ router.post(
 /**
  * PATCH /api/transport/admin/partners/:partnerId
  * Admin / Superadmin — Update any field on a TransportPartner
- * (broader than the partner's own PATCH /profile which restricts fields)
  */
 router.patch(
   '/admin/partners/:partnerId',
   adminOnly,
   async (req, res) => {
     try {
-      // Fields that must never be patched through this route
       const forbidden = [
         '_id', 'user', 'vehicles', 'drivers',
         'stats', 'fleetInfo', 'createdAt',
-        // These have dedicated endpoints:
-        'partnershipStatus',   // → PATCH /admin/partners/:id/status
-        'ownerKyc',            // → PATCH /admin/partners/:id/kyc
-        'platformFeeOverride', // → PATCH /admin/partners/:id/platform-fee
-        'internalNotes',       // → PATCH /admin/partners/:id/internal-notes
+        'partnershipStatus', 'ownerKyc', 'platformFeeOverride', 'internalNotes',
       ];
       forbidden.forEach((f) => delete req.body[f]);
 
-      // Flatten nested objects into dot-notation so Mongoose
-      // does a targeted $set instead of replacing the whole sub-doc.
       const flattenObject = (obj, prefix = '') =>
         Object.keys(obj).reduce((acc, key) => {
           const fullKey = prefix ? `${prefix}.${key}` : key;
-          if (
-            obj[key] !== null &&
-            typeof obj[key] === 'object' &&
-            !Array.isArray(obj[key]) &&
-            !(obj[key] instanceof Date)
-          ) {
+          if (obj[key] !== null && typeof obj[key] === 'object' && !Array.isArray(obj[key]) && !(obj[key] instanceof Date)) {
             Object.assign(acc, flattenObject(obj[key], fullKey));
           } else {
             acc[fullKey] = obj[key];
@@ -2649,7 +2522,6 @@ router.patch(
       updatePayload.updatedBy = req.user._id;
 
       if (Object.keys(updatePayload).length === 1) {
-        // Only updatedBy — nothing useful was sent
         return res.status(400).json({ success: false, message: 'No valid fields provided for update' });
       }
 
@@ -2657,46 +2529,29 @@ router.patch(
         req.params.partnerId,
         { $set: updatePayload },
         { new: true, runValidators: true }
-      )
-        .populate('user', 'name email phone avatar isOnline')
-        .select('-internalNotes -panNumber -bankDetails.bankAccounts.accountNumber -ownerKyc.aadhaarNumber -ownerKyc.panNumber');
+      ).populate('user', 'name email phone avatar isOnline')
+       .select('-internalNotes -panNumber -bankDetails.bankAccounts.accountNumber -ownerKyc.aadhaarNumber -ownerKyc.panNumber');
 
-      if (!partner) {
-        return res.status(404).json({ success: false, message: 'Partner not found' });
-      }
+      if (!partner) return res.status(404).json({ success: false, message: 'Partner not found' });
 
       await invalidateTPCache(partner._id);
       await invalidatePattern('admin:tp:list*');
 
       syslog({
-        level:    'info',
-        category: 'user',
-        message:  `TransportPartner updated by admin: ${partner.businessName}`,
-        actor: {
-          userId: req.user._id,
-          name:   req.user.name,
-          role:   req.user.role,
-          ip:     req.deviceInfo?.ipAddress,
-        },
-        relatedEntity: {
-          model:    'TransportPartner',
-          entityId: partner._id,
-          label:    partner.businessName,
-        },
+        level: 'info', category: 'user',
+        message: `TransportPartner updated by admin: ${partner.businessName}`,
+        actor: { userId: req.user._id, name: req.user.name, role: req.user.role, ip: req.deviceInfo?.ipAddress },
+        relatedEntity: { model: 'TransportPartner', entityId: partner._id, label: partner.businessName },
         request: { method: 'PATCH', path: req.originalUrl, statusCode: 200 },
-        metadata: { updatedFields: Object.keys(req.body) },
       });
 
-      return res.json({
-        success: true,
-        message: 'Partner updated successfully',
-        data:    partner,
-      });
+      return res.json({ success: true, message: 'Partner updated successfully', data: partner });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
   }
 ); 
+
 /**
  * PATCH /api/transport/admin/partners/:partnerId/status
  * Change partnershipStatus (approve / suspend / reject)
@@ -2734,7 +2589,6 @@ router.patch(
       await invalidateTPCache(partner._id);
       await invalidatePattern('admin:tp:list*');
 
-      // Email notification
       if (partner.ownerEmail) {
         const subjectMap = { active: '✅ Partnership Approved', suspended: '⚠️ Account Suspended', rejected: '❌ Application Rejected' };
         if (subjectMap[status]) {
@@ -2748,7 +2602,6 @@ router.patch(
         actor: { userId: req.user._id, name: req.user.name, role: req.user.role, ip: req.deviceInfo?.ipAddress },
         relatedEntity: { model: 'TransportPartner', entityId: partner._id, label: partner.businessName },
         request: { method: 'PATCH', path: req.originalUrl, statusCode: 200 },
-        metadata: { previousStatus: partner.partnershipStatus, newStatus: status, reason },
       });
 
       return res.json({ success: true, message: `Partner status updated to ${status}`, data: partner });
@@ -2790,14 +2643,6 @@ router.patch(
       if (!partner) return res.status(404).json({ success: false, message: 'Partner not found' });
 
       await invalidateTPCache(partner._id);
-
-      syslog({
-        level: kycStatus === 'verified' ? 'success' : 'warning', category: 'kyc',
-        message: `KYC ${kycStatus} for TransportPartner: ${partner.businessName}`,
-        actor: { userId: req.user._id, name: req.user.name, role: req.user.role, ip: req.deviceInfo?.ipAddress },
-        relatedEntity: { model: 'TransportPartner', entityId: partner._id, label: partner.businessName },
-        request: { method: 'PATCH', path: req.originalUrl, statusCode: 200 },
-      });
 
       return res.json({ success: true, message: `KYC status set to ${kycStatus}`, data: partner.ownerKyc });
     } catch (err) {
@@ -2847,6 +2692,9 @@ router.delete(
         { $set: { ownerAgency: null, isActive: false, status: 'Offline' } }
       );
 
+      // Unlink or delete vehicles from standalone collection
+      await Vehicle.deleteMany({ ownerType: 'TransportPartner', ownerId: partner._id });
+
       await TransportPartner.findByIdAndDelete(partner._id);
       await invalidateTPCache(partner._id);
       await invalidatePattern('admin:tp:list*');
@@ -2867,12 +2715,12 @@ router.delete(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §J  ADMIN — VEHICLE VERIFICATION
+// §J  ADMIN — VEHICLE VERIFICATION (REFACTORED FOR STANDALONE COLLECTION)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * GET /api/transport/admin/vehicles/pending
- * List all vehicles pending verification across all partners
+ * List all vehicles pending verification across all partners from standalone collection
  */
 router.get(
   '/admin/vehicles/pending',
@@ -2880,25 +2728,25 @@ router.get(
   cache(60, () => 'admin:vehicles:pending'),
   async (req, res) => {
     try {
-      const { page = 1, limit = 20, type } = req.query;
-      const matchVehicle = { 'vehicles.verificationStatus': 'pending' };
-      if (type) matchVehicle['vehicles.vehicleType'] = type;
+      const { page = 1, limit = 20, type, ownerType } = req.query;
+      
+      const filter = { verificationStatus: { $in: ['pending', 'under-review'] } };
+      if (type) filter.vehicleType = type;
+      if (ownerType) filter.ownerType = ownerType;
 
-      const partners = await TransportPartner.aggregate([
-        { $match: { 'vehicles.verificationStatus': { $in: ['pending', 'under-review'] } } },
-        { $unwind: '$vehicles' },
-        { $match: { 'vehicles.verificationStatus': { $in: ['pending', 'under-review'] } } },
-        { $project: {
-            businessName: 1, ownerName: 1, ownerPhone: 1,
-            vehicle: '$vehicles',
-          }
-        },
-        { $sort: { 'vehicle.createdAt': -1 } },
-        { $skip:  (+page - 1) * +limit },
-        { $limit: +limit },
+      const [vehicles, total] = await Promise.all([
+        Vehicle.find(filter)
+          .populate({
+            path: 'ownerId',
+            select: 'businessName ownerName ownerPhone name phone partnerCode', // Supports both TransportPartner & SoloDriverPartner dynamically
+          })
+          .sort({ createdAt: -1 })
+          .skip((+page - 1) * +limit)
+          .limit(+limit),
+        Vehicle.countDocuments(filter)
       ]);
 
-      return res.json({ success: true, count: partners.length, page: +page, data: partners });
+      return res.json({ success: true, count: vehicles.length, total, page: +page, data: vehicles });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -2906,11 +2754,12 @@ router.get(
 );
 
 /**
- * PATCH /api/transport/admin/vehicles/:partnerId/:vehicleId/verify
+ * PATCH /api/transport/admin/vehicles/:vehicleId/verify
  * Verify or reject a specific vehicle
+ * Note: Since Vehicle is standalone, we no longer strictly need partnerId in the URL param
  */
 router.patch(
-  '/admin/vehicles/:partnerId/:vehicleId/verify',
+  '/admin/vehicles/:vehicleId/verify',
   adminOnly,
   async (req, res) => {
     try {
@@ -2920,35 +2769,34 @@ router.patch(
         return res.status(400).json({ success: false, message: `verificationStatus must be one of: ${allowed.join(', ')}` });
       }
 
-      const update = {
-        'vehicles.$.verificationStatus': verificationStatus,
-        'vehicles.$.verifiedBy':         req.user._id,
-        updatedBy:                       req.user._id,
-      };
-      if (verificationStatus === 'verified')  update['vehicles.$.verifiedAt']      = new Date();
-      if (verificationStatus === 'rejected')  update['vehicles.$.rejectionReason']  = rejectionReason;
+      const vehicle = await Vehicle.findById(req.params.vehicleId);
+      if (!vehicle) return res.status(404).json({ success: false, message: 'Vehicle not found' });
 
-      const partner = await TransportPartner.findOneAndUpdate(
-        { _id: req.params.partnerId, 'vehicles._id': req.params.vehicleId },
-        { $set: update },
-        { new: true }
-      );
+      vehicle.verificationStatus = verificationStatus;
+      vehicle.verifiedBy = req.user._id;
+      
+      if (verificationStatus === 'verified') vehicle.verifiedAt = new Date();
+      if (verificationStatus === 'rejected') vehicle.rejectionReason = rejectionReason;
 
-      if (!partner) return res.status(404).json({ success: false, message: 'Vehicle not found' });
+      // Executing save() triggers the post-save hooks to sync fleetInfo on the owner document!
+      await vehicle.save(); 
 
-      await invalidateTPCache(partner._id);
+      // Invalidate relevant partner cache dynamically
+      if (vehicle.ownerType === 'TransportPartner') {
+        await invalidateTPCache(vehicle.ownerId);
+      }
       await invalidateKey('admin:vehicles:pending');
 
       syslog({
         level: verificationStatus === 'verified' ? 'success' : 'warning', category: 'kyc',
-        message: `Vehicle ${verificationStatus}: ${req.params.vehicleId} under ${partner.businessName}`,
+        message: `Vehicle ${verificationStatus}: ${vehicle.registrationNumber}`,
         actor: { userId: req.user._id, name: req.user.name, role: req.user.role, ip: req.deviceInfo?.ipAddress },
-        relatedEntity: { model: 'TransportPartner', entityId: partner._id, label: partner.businessName },
+        relatedEntity: { model: 'Vehicle', entityId: vehicle._id, label: vehicle.registrationNumber },
         request: { method: 'PATCH', path: req.originalUrl, statusCode: 200 },
-        metadata: { vehicleId: req.params.vehicleId, verificationStatus },
+        metadata: { vehicleId: vehicle._id, verificationStatus },
       });
 
-      return res.json({ success: true, message: `Vehicle ${verificationStatus}` });
+      return res.json({ success: true, message: `Vehicle ${verificationStatus}`, data: vehicle });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -3014,7 +2862,8 @@ router.get(
     try {
       const driver = await Driver.findById(req.params.driverId)
         .populate('user', 'name email phone avatar isOnline lastseen loginCount lastLoginAt')
-        .populate('ownerAgency', 'businessName ownerPhone');
+        .populate('ownerAgency', 'businessName ownerPhone')
+        .populate('assignedVehicleId', 'registrationNumber vehicleType');
 
       if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
       return res.json({ success: true, data: driver });
@@ -3039,25 +2888,24 @@ router.patch(
         return res.status(400).json({ success: false, message: `verificationStatus must be one of: ${allowed.join(', ')}` });
       }
 
-      const update = {
-        'kyc.verificationStatus': verificationStatus,
-        'kyc.verifiedBy':         req.user._id,
-        updatedBy:                req.user._id,
-      };
+      const driver = await Driver.findById(req.params.driverId);
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+      driver.kyc.verificationStatus = verificationStatus;
+      driver.kyc.verifiedBy = req.user._id;
+      driver.updatedBy = req.user._id;
+
       if (verificationStatus === 'Verified') {
-        update['kyc.isVerified'] = true;
-        update['kyc.verifiedAt'] = new Date();
-        update.isVerified        = true;
-        update.isActive          = true;
+        driver.kyc.isVerified = true;
+        driver.kyc.verifiedAt = new Date();
+        driver.isVerified = true;
+        driver.isActive = true;
       }
       if (verificationStatus === 'Rejected') {
-        update['kyc.rejectionReason'] = rejectionReason;
+        driver.kyc.rejectionReason = rejectionReason;
       }
 
-      const driver = await Driver.findByIdAndUpdate(req.params.driverId, { $set: update }, { new: true })
-        .select('legalName kyc.verificationStatus kyc.isVerified isVerified isActive');
-
-      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+      await driver.save(); // Triggers driver hooks
 
       await invalidatePattern(`admin:driver:${req.params.driverId}`);
       await invalidatePattern('admin:drivers:list*');
@@ -3484,7 +3332,7 @@ router.get(
           { $group: {
               _id: '$partnershipStatus',
               count: { $sum: 1 },
-              totalVehicles: { $sum: { $size: '$vehicles' } },
+              totalVehicles: { $sum: '$fleetInfo.totalVehicles' }, // Fixed to use cache
               totalRides:    { $sum: '$stats.totalRidesCompleted' },
               totalEarnings: { $sum: '$stats.totalEarnings' },
             }
@@ -3497,12 +3345,11 @@ router.get(
             }
           },
         ]),
-        TransportPartner.aggregate([
-          { $unwind: '$vehicles' },
+        Vehicle.aggregate([
           { $group: {
-              _id: '$vehicles.verificationStatus',
+              _id: '$verificationStatus',
               count: { $sum: 1 },
-              byType: { $push: '$vehicles.vehicleType' },
+              byType: { $push: '$vehicleType' },
             }
           },
         ]),

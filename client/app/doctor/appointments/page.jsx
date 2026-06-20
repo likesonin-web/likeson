@@ -16,9 +16,10 @@ import {
   Plus, Eye, Activity, CalendarDays, MoreVertical, Layers,
   ClipboardList, PenLine, BadgeCheck, Radio, UserCheck, XOctagon,
   TrendingUp, LayoutDashboard, History, Star, Users,
+  Phone, QrCode, CreditCard, DollarSign, Wallet,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-
+import QRCode from 'qrcode';
 import {
   fetchDoctorAppointments,
   fetchOPRecords,
@@ -29,6 +30,19 @@ import {
   selectClinicalLoading,
   selectClinicalError,
 } from '@/store/slices/clinicalSlice';
+
+import {
+  generatePayAtServiceLink,
+  fetchPayAtServiceStatus,
+  markCollectedByPartner,
+  markServiceComplete,
+  paidFromSocket,
+  clearSession,
+  selectPayAtServiceSession,
+  selectPayAtServiceLoading,
+  selectCanMarkComplete,
+  selectNeedsNewLink,
+} from '@/store/slices/payAtServiceSlice';
 
 import {
   fetchDoctorSchedule,
@@ -146,8 +160,17 @@ const buildChartData = (appointments) => {
   return days;
 };
 
-const isOnlineBooking = (b) =>
-  b?.bookingType === 'doctor_online' || b?.consultationType === 'video';
+// State Helpers
+const isOnlineBooking = (b) => b?.bookingType === 'doctor_online' || b?.consultationType === 'video';
+
+const isBookingPaid = (b) => ['paid', 'pay_at_service_paid', 'waived'].includes(b?.paymentStatus);
+
+const canShowQrPay = (b) => {
+  if (isBookingPaid(b)) return false;
+  if (['completed', 'cancelled', 'no_show', 'failed'].includes(b?.status)) return false;
+  if (b?.bookingType === 'doctor_online') return false;
+  return true;
+};
 
 const canJoinConsult = (b) =>
   isOnlineBooking(b) &&
@@ -572,7 +595,7 @@ const LoadingRows = () => (
 // APPOINTMENT TABLE ROW
 // ─────────────────────────────────────────────────────────────────────────────
 
-const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, onCancel, router }) => {
+const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, onCancel, onPayAtService, router }) => {
   const op       = opByBooking[booking._id?.toString()];
   const joinable = canJoinConsult(booking);
   const consultId = getConsultationId(booking);
@@ -604,10 +627,10 @@ const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, onCancel
       <td><StatusBadge status={booking.status} /></td>
       <td>
         <span className={`text-xs font-semibold ${
-          booking.paymentStatus === 'paid'   ? 'text-success' :
-          booking.paymentStatus === 'unpaid' ? 'text-error'   : 'text-warning'
+          isBookingPaid(booking) ? 'text-success' :
+          ['unpaid', 'failed'].includes(booking.paymentStatus) ? 'text-error' : 'text-warning'
         }`}>
-          {booking.paymentStatus ?? '—'}
+          {booking.paymentStatus?.replace(/_/g, ' ').toUpperCase() ?? '—'}
         </span>
       </td>
       <td>
@@ -623,6 +646,31 @@ const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, onCancel
       </td>
       <td className="text-right">
         <div className="flex items-center justify-end gap-1">
+          {/* Call patient */}
+          {booking?.patientInfo?.phone && (
+             <a href={`tel:${booking.patientInfo.phone}`}
+              className="btn btn-ghost btn-xs btn-circle text-success"
+              title={`Call ${getPatientName(booking)}: ${booking.patientInfo.phone}`}
+            >
+              <Phone size={13} aria-hidden="true" />
+            </a>
+          )}
+          
+          {/* Pay-at-service */}
+          {canShowQrPay(booking) && (
+            <button
+              className="btn btn-ghost btn-xs btn-circle text-primary"
+              title="Pay at service / QR"
+              onClick={() => onPayAtService({
+                bookingId:   String(booking._id),
+                bookingCode: booking.bookingCode,
+                amount:      booking.fareBreakdown?.totalAmount ?? 0,
+              })}
+            >
+              <QrCode size={13} aria-hidden="true" />
+            </button>
+          )}
+
           {joinable && consultId && (
             <button
               className="btn btn-info btn-xs gap-1"
@@ -632,6 +680,7 @@ const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, onCancel
               <span className="hidden lg:inline">Join</span>
             </button>
           )}
+          
           <button
             className="btn btn-ghost btn-xs gap-1 text-accent hover:bg-accent/10"
             onClick={() => router.push(`/doctor/prescriptions/new?bookingId=${booking._id}`)}
@@ -639,6 +688,7 @@ const AppointmentRow = memo(({ booking, index, opByBooking, onComplete, onCancel
             <PenLine size={13} aria-hidden="true" />
             <span className="hidden lg:inline text-xs">Prescribe</span>
           </button>
+
           <ActionMenu
             booking={booking}
             opRecord={op}
@@ -657,7 +707,7 @@ AppointmentRow.displayName = 'AppointmentRow';
 // MOBILE CARD
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MobileCard = memo(({ booking, index, opByBooking, onComplete, onCancel, router }) => {
+const MobileCard = memo(({ booking, index, opByBooking, onComplete, onCancel, onPayAtService, router }) => {
   const op = opByBooking[booking._id?.toString()];
   const joinable = canJoinConsult(booking);
   const consultId = getConsultationId(booking);
@@ -705,6 +755,28 @@ const MobileCard = memo(({ booking, index, opByBooking, onComplete, onCancel, ro
         >
           <PenLine size={12} aria-hidden="true" /> Prescribe
         </button>
+
+        {booking?.patientInfo?.phone && (
+          <a href={`tel:${booking.patientInfo.phone}`}
+            className="btn btn-success btn-sm gap-1 text-xs"
+          >
+            <Phone size={12} /> Call
+          </a>
+        )}
+
+        {canShowQrPay(booking) && (
+          <button
+            className="btn btn-outline btn-sm gap-1 text-xs"
+            onClick={() => onPayAtService({
+              bookingId:   String(booking._id),
+              bookingCode: booking.bookingCode,
+              amount:      booking.fareBreakdown?.totalAmount ?? 0,
+            })}
+          >
+            <QrCode size={12} /> QR Pay
+          </button>
+        )}
+
         {op && (
           <button
             className="btn btn-outline btn-sm gap-1 text-xs"
@@ -1021,6 +1093,213 @@ const FilterBar = memo(({
 ));
 FilterBar.displayName = 'FilterBar';
 
+const QRCodeImage = memo(({ value, size = 200 }) => {
+  const [dataUrl, setDataUrl] = useState(null);
+
+  useEffect(() => {
+    if (!value) return;
+    QRCode.toDataURL(value, { width: size, margin: 1 })
+      .then(setDataUrl)
+      .catch((e) => console.error('[QRCodeImage]', e.message));
+  }, [value, size]);
+
+  if (!dataUrl) {
+    return (
+      <div style={{ width: size, height: size }} className="flex items-center justify-center bg-base-200 rounded-lg">
+        <span className="loading loading-sm loading-spinner" />
+      </div>
+    );
+  }
+
+  return <img src={dataUrl} alt="Scan to pay" width={size} height={size} className="rounded-lg border border-base-300" />;
+});
+QRCodeImage.displayName = 'QRCodeImage';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAY-AT-SERVICE PANEL (modal/drawer content)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PayAtServicePanel = memo(({ bookingId, bookingCode, amount, onClose }) => {
+  const dispatch  = useDispatch();
+  const session   = useSelector(selectPayAtServiceSession(bookingId));
+  const loadFlags = useSelector(selectPayAtServiceLoading);
+  const canComplete = useSelector(selectCanMarkComplete(bookingId));
+  const needsNew    = useSelector(selectNeedsNewLink(bookingId));
+
+  const [cashAmt,   setCashAmt]   = useState(amount ?? '');
+  const [cashNote,  setCashNote]  = useState('');
+  const [pollTimer, setPollTimer] = useState(null);
+
+  // Poll every 5s when link active and not yet paid
+  useEffect(() => {
+    if (!session?.shortUrl || session?.paid || session?.expired) return;
+    const id = setInterval(() => {
+      dispatch(fetchPayAtServiceStatus({ bookingId }));
+    }, 5000);
+    setPollTimer(id);
+    return () => clearInterval(id);
+  }, [session?.shortUrl, session?.paid, session?.expired, bookingId, dispatch]);
+
+  // Cleanup on unmount
+  useEffect(() => () => {
+    if (pollTimer) clearInterval(pollTimer);
+    dispatch(clearSession({ bookingId }));
+  }, [bookingId, dispatch, pollTimer]);
+
+  const handleGenerate = () => dispatch(generatePayAtServiceLink({ bookingId }));
+
+  const handleCashCollect = () => {
+    const n = parseFloat(cashAmt);
+    if (!n || n <= 0) return toast.error('Enter valid amount');
+    dispatch(markCollectedByPartner({ bookingId, amount: n, method: 'cash', note: cashNote }));
+  };
+
+  const handleComplete = () => dispatch(markServiceComplete({ bookingId }));
+
+  const fmt = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+        onClick={onClose}
+      >
+        <motion.div
+          initial={{ y: 60, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: 60, opacity: 0 }}
+          transition={{ type: 'spring', damping: 26, stiffness: 280 }}
+          className="w-full max-w-md bg-base-100 rounded-2xl border border-base-300 shadow-2xl overflow-hidden"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="px-5 py-4 border-b border-base-200 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-xl bg-primary/10">
+                <QrCode size={18} className="text-primary" />
+              </div>
+              <div>
+                <p className="font-bold text-sm">Pay at Service</p>
+                <p className="text-xs text-base-content/50">#{bookingCode} · {fmt(amount)}</p>
+              </div>
+            </div>
+            <button onClick={onClose} className="btn btn-ghost btn-xs btn-circle">✕</button>
+          </div>
+
+          <div className="p-5 space-y-4">
+
+            {/* Status badge */}
+            {session?.paid && (
+              <div className="flex items-center gap-2 p-3 bg-success/10 rounded-xl border border-success/20">
+                <CheckCircle2 size={16} className="text-success" />
+                <div>
+                  <p className="text-sm font-bold text-success">Payment Confirmed</p>
+                  <p className="text-xs text-base-content/60">{fmt(session.amount)} received</p>
+                </div>
+              </div>
+            )}
+
+            {session?.shortUrl   && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 p-3 bg-warning/10 rounded-xl border border-warning/20">
+                  <Clock3 size={16} className="text-warning" />
+                  <div>
+                    <p className="text-sm font-semibold text-warning">Awaiting Payment</p>
+                    <p className="text-xs text-base-content/60">Sent via SMS + Email to customer</p>
+                  </div>
+                </div>
+
+                {session.qrCodeDataUrl && (
+                  <div className="flex flex-col items-center gap-2 p-4 bg-base-100 rounded-xl border border-base-300">
+                    <img src={session.qrCodeDataUrl} alt="Scan to pay" width={200} height={200} className="rounded-lg" />
+                    <p className="text-xs text-base-content/50 text-center break-all">{session.shortUrl}</p>
+                    <p className="text-xs font-semibold text-primary">Ask customer to scan with phone camera</p>
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {(needsNew || !session?.shortUrl) && !session?.paid && (
+              <div className="space-y-2">
+                <p className="text-xs text-base-content/60">Generate Razorpay QR link — show to customer</p>
+                <button
+                  className="btn btn-primary w-full gap-2"
+                  disabled={loadFlags.generateLink}
+                  onClick={handleGenerate}
+                >
+                  {loadFlags.generateLink
+                    ? <span className="loading loading-xs loading-spinner" />
+                    : <QrCode size={15} />}
+                  {needsNew ? 'Regenerate QR Link' : 'Generate QR Link'}
+                </button>
+              </div>
+            )}
+
+            {/* Cash fallback */}
+            {!session?.paid && (
+              <div className="border border-base-300 rounded-xl p-4 space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-base-content/50 flex items-center gap-1.5">
+                  <DollarSign size={12} /> Cash / Manual Fallback
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    className="input input-bordered input-sm flex-1"
+                    placeholder={`Amount (₹)`}
+                    value={cashAmt}
+                    onChange={(e) => setCashAmt(e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    className="input input-bordered input-sm flex-1"
+                    placeholder="Note (optional)"
+                    value={cashNote}
+                    onChange={(e) => setCashNote(e.target.value)}
+                  />
+                </div>
+                <button
+                  className="btn btn-outline btn-sm w-full gap-2"
+                  disabled={loadFlags.markCollected}
+                  onClick={handleCashCollect}
+                >
+                  {loadFlags.markCollected
+                    ? <span className="loading loading-xs loading-spinner" />
+                    : <Wallet size={13} />}
+                  Mark Cash Collected
+                </button>
+              </div>
+            )}
+
+            {/* Complete service */}
+            {canComplete && (
+              <button
+                className="btn btn-success w-full gap-2"
+                disabled={loadFlags.markComplete}
+                onClick={handleComplete}
+              >
+                {loadFlags.markComplete
+                  ? <span className="loading loading-xs loading-spinner" />
+                  : <CheckCircle2 size={15} />}
+                Mark Service Complete
+              </button>
+            )}
+
+            {session?.serviceCompleted && (
+              <div className="text-center text-xs text-success font-semibold py-1">
+                ✅ Service marked complete
+              </div>
+            )}
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+});
+PayAtServicePanel.displayName = 'PayAtServicePanel';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1054,6 +1333,9 @@ export default function AppointmentsManagement() {
   // ── Complete modal ─────────────────────────────────────────────────────────
   const [completeTarget, setCompleteTarget] = useState(null);
   const [showComplete,   setShowComplete]   = useState(false);
+
+  // Pay-at-service panel state
+  const [payTarget, setPayTarget] = useState(null); // { bookingId, bookingCode, amount }
 
   // ── Fetch data ─────────────────────────────────────────────────────────────
   const fetchData = useCallback(() => {
@@ -1287,6 +1569,7 @@ export default function AppointmentsManagement() {
                             opByBooking={opByBooking}
                             onComplete={handleCompleteClick}
                             onCancel={handleCancelConsultation}
+                            onPayAtService={setPayTarget}
                             router={router}
                           />
                         ))}
@@ -1310,6 +1593,7 @@ export default function AppointmentsManagement() {
                         opByBooking={opByBooking}
                         onComplete={handleCompleteClick}
                         onCancel={handleCancelConsultation}
+                        onPayAtService={setPayTarget}
                         router={router}
                       />
                     ))}
@@ -1363,6 +1647,15 @@ export default function AppointmentsManagement() {
         onSubmit={handleCompleteSubmit}
         loading={loadingOP}
       />
+
+      {payTarget && (
+        <PayAtServicePanel
+          bookingId={payTarget.bookingId}
+          bookingCode={payTarget.bookingCode}
+          amount={payTarget.amount}
+          onClose={() => setPayTarget(null)}
+        />
+      )}
     </div>
   );
 }

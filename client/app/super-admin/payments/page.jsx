@@ -1,1290 +1,1381 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, memo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend,
-  ComposedChart, Line
+    AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
+    XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
+import toast from 'react-hot-toast';
 import {
-  CreditCard, IndianRupee, TrendingUp, TrendingDown,
-  ArrowDownCircle, RefreshCw, Download, Search, Filter,
-  CheckCircle2, XCircle, Clock, AlertTriangle, ChevronLeft,
-  ChevronRight, Eye, RotateCcw, Wallet, ReceiptText,
-  Zap, Banknote, X, Loader2, Activity, BarChart2,
-  User, Calendar, ArrowUpRight, ShieldAlert, PieChart as PieIcon,
-  Layers, Star
+    IndianRupee, TrendingUp, TrendingDown, Wallet as WalletIcon,
+    Package, Stethoscope, CreditCard, RefreshCw, Search, Filter,
+    ChevronLeft, ChevronRight, X, Calendar, ArrowUpRight, ArrowDownRight,
+    CheckCircle2, XCircle, Clock, AlertTriangle, ChevronDown,
+    Banknote, Receipt, ShieldCheck, Users, ExternalLink, Download,
 } from 'lucide-react';
+
 import {
-  fetchPharmacyOrders,
-  fetchFinancialLedger,
-  fetchBillingSummary,
-  fetchAuditLogs,
-  fetchUserWallet,
-  adjustUserWallet,
-  processOrderRefund,
-  selectPharmacyOrders,
-  selectFinancialLedger,
-  selectBillingAnalytics,
-  selectAuditLogs,
-  selectRefundState,
-  selectWalletDetail,
-  selectWalletAdjust,
-  clearWalletDetail,
-} from '@/store/slices/superadminSlice';
+    fetchPharmacyOrders,
+    fetchFinancialLedger,
+    fetchBillingSummary,
+    processPharmacyRefund,
+    processBookingRefund,
+    selectPharmacyOrders,
+    selectFinancialLedger,
+    selectBillingAnalytics,
+    selectRefundState,
+    resetRefundStatus,
+} from '@/store/slices/superadminSlice'; // adjust path to actual slice location
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+import API from '@/store/api'; // adjust path
 
-const PAYMENT_STATUSES = ['Pending', 'Paid', 'Failed', 'Refunded'];
+// ════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ════════════════════════════════════════════════════════════════════════════
+
+const CHART_COLORS = ['var(--color-chart-1)', 'var(--color-chart-2)', 'var(--color-chart-3)', 'var(--color-chart-4)', 'var(--color-chart-5)', 'var(--color-chart-6)'];
+
+const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 const TABS = [
-  { key: 'orders',   label: 'Orders',   icon: CreditCard },
-  { key: 'ledger',   label: 'Ledger',   icon: Layers },
-  { key: 'billing',  label: 'Billing',  icon: PieIcon },
-  { key: 'audit',    label: 'Audit',    icon: ShieldAlert },
-  { key: 'wallet',   label: 'Wallet',   icon: Wallet },
-  { key: 'analytics',label: 'Analytics',icon: BarChart2 },
+    { key: 'pharmacy', label: 'Pharmacy Orders', icon: Package },
+    { key: 'bookings', label: 'Healthcare Bookings', icon: Stethoscope },
+    { key: 'ledger', label: 'Wallet Ledger', icon: WalletIcon },
 ];
 
-const STATUS_META = {
-  Pending:  { cls: 'badge-warning', icon: Clock },
-  Paid:     { cls: 'badge-success', icon: CheckCircle2 },
-  Failed:   { cls: 'badge-error',   icon: XCircle },
-  Refunded: { cls: 'badge-info',    icon: RotateCcw },
-  Active:   { cls: 'badge-success', icon: CheckCircle2 },
-  Expired:  { cls: 'badge-error',   icon: XCircle },
-  Cancelled:{ cls: 'badge-error',   icon: XCircle },
-  Paused:   { cls: 'badge-warning', icon: Clock },
-};
+const PHARMACY_PAYMENT_STATUSES = ['Pending', 'Paid', 'Failed', 'Refunded', 'Partially_Refunded'];
+const PHARMACY_DELIVERY_STATUSES = [
+    'Placed', 'Confirmed', 'Processing', 'Out-for-Delivery', 'Delivered',
+    'Cancelled', 'Return_Requested', 'Return_Accepted', 'Return_Rejected',
+    'Pickup_Assigned', 'Pickup_Done', 'Returned',
+];
+const PAYMENT_METHODS_PHARMACY = ['Razorpay', 'Wallet', 'COD'];
 
-const METHOD_META = {
-  Razorpay: { icon: CreditCard, cls: 'text-primary' },
-  Wallet:   { icon: Wallet,     cls: 'text-secondary' },
-  COD:      { icon: Banknote,   cls: 'text-accent' },
-};
-
-const CHART_COLORS = [
-  'var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)',
-  'var(--chart-4)', 'var(--chart-5)', 'var(--chart-6)',
+const BOOKING_STATUSES = [
+    'draft', 'payment_pending', 'pending', 'confirmed', 'in_progress',
+    'completed', 'cancelled', 'no_show', 'refund_pending', 'refunded',
+];
+const BOOKING_PAYMENT_STATUSES = [
+    'unpaid', 'pending', 'payment_pending', 'paid', 'partially_paid',
+    'failed', 'refunded', 'pending_cash', 'partially_refunded', 'waived',
+    'pay_at_service_pending', 'pay_at_service_paid',
+];
+const BOOKING_TYPES = [
+    'full_care_ride', 'doctor_consultation', 'doctor_online', 'physiotherapist',
+    'care_assistant', 'diagnostic_center', 'diagnostic_home', 'patient_transport', 'follow_up',
 ];
 
-const fadeUp  = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } };
-const stagger = { show: { transition: { staggerChildren: 0.07 } } };
+const LEDGER_TYPES = ['Credit', 'Debit'];
+const LEDGER_PURPOSES = [
+    'Add_Money', 'Booking_Payment', 'Medicine_Purchase', 'Refund', 'Referral_Bonus',
+    'Subscription_Fee', 'Coin_Conversion', 'Admin_Credit', 'Admin_Debit',
+    'Cashback', 'Withdrawal_Debit', 'Withdrawal_Reversal',
+];
+const LEDGER_STATUSES = ['Success', 'Pending', 'Failed', 'Reversed'];
 
-// ─── Receipt Printer ──────────────────────────────────────────────────────────
+const REFUND_METHODS = ['Wallet', 'Original_Source', 'Bank_Transfer'];
 
-const printPaymentReceipt = (order) => {
-  const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>
-  <title>Receipt – ${order.orderId}</title>
-  <style>
-    *{margin:0;padding:0;box-sizing:border-box;}
-    body{font-family:'Segoe UI',sans-serif;color:#0f172a;padding:48px;background:#fff;max-width:480px;margin:0 auto;}
-    .top{text-align:center;margin-bottom:32px;}
-    .logo{font-size:22px;font-weight:900;color:#2563eb;letter-spacing:-0.5px;}
-    .logo span{color:#0ea5e9;}
-    .seal{width:72px;height:72px;background:linear-gradient(135deg,#16a34a,#22c55e);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:20px auto 16px;}
-    .seal svg{width:36px;height:36px;fill:none;stroke:#fff;stroke-width:3;}
-    .amt{font-size:38px;font-weight:900;color:#0f172a;margin-bottom:4px;}
-    .sublabel{font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;font-weight:700;}
-    .divider{border:none;border-top:1px dashed #e2e8f0;margin:24px 0;}
-    .row{display:flex;justify-content:space-between;padding:8px 0;font-size:13px;}
-    .row span{color:#64748b;}.row strong{color:#0f172a;font-weight:700;}
-    .badge{display:inline-block;padding:3px 12px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:0.5px;}
-    .paid{background:#dcfce7;color:#166534;}.pending{background:#fef9c3;color:#854d0e;}.failed{background:#fee2e2;color:#991b1b;}.refunded{background:#dbeafe;color:#1e40af;}
-    .footer{text-align:center;margin-top:32px;font-size:11px;color:#94a3b8;padding-top:20px;border-top:1px solid #f1f5f9;}
-  </style></head><body>
-  <div class="top">
-    <div class="logo">Likeson<span>Health</span></div>
-    <div class="seal"><svg viewBox="0 0 24 24"><path d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-    <p class="sublabel">Payment Receipt</p>
-    <p class="amt">₹${order.billing?.totalPayable?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
-    <span class="badge ${(order.payment?.status ?? '').toLowerCase()}">${order.payment?.status ?? 'N/A'}</span>
-  </div>
-  <hr class="divider"/>
-  <div class="row"><span>Order ID</span><strong style="font-family:monospace;font-size:12px">${order.orderId}</strong></div>
-  <div class="row"><span>Customer</span><strong>${order.customer?.name ?? '—'}</strong></div>
-  <div class="row"><span>Method</span><strong>${order.payment?.method ?? '—'}</strong></div>
-  ${order.payment?.razorpayPaymentId ? `<div class="row"><span>Razorpay ID</span><strong style="font-family:monospace;font-size:11px">${order.payment.razorpayPaymentId}</strong></div>` : ''}
-  <div class="row"><span>Date</span><strong>${order.payment?.paidAt ? new Date(order.payment.paidAt).toLocaleString('en-IN', { dateStyle: 'long', timeStyle: 'short' }) : '—'}</strong></div>
-  <hr class="divider"/>
-  <div class="row"><span>Subtotal</span><strong>₹${(order.billing?.subTotal ?? 0).toFixed(2)}</strong></div>
-  <div class="row"><span>GST</span><strong>₹${(order.billing?.gstAmount ?? 0).toFixed(2)}</strong></div>
-  <div class="row"><span>Delivery</span><strong>₹${(order.billing?.deliveryCharges ?? 0).toFixed(2)}</strong></div>
-  <div class="row"><span>Platform Fee</span><strong>₹${(order.billing?.platformFee ?? 0).toFixed(2)}</strong></div>
-  ${order.billing?.discountAmount ? `<div class="row"><span>Discount</span><strong style="color:#16a34a">-₹${order.billing.discountAmount.toFixed(2)}</strong></div>` : ''}
-  <div class="row" style="font-size:15px;font-weight:900;border-top:2px solid #e2e8f0;padding-top:12px;margin-top:4px;"><span>Total Paid</span><strong style="color:#2563eb">₹${(order.billing?.totalPayable ?? 0).toFixed(2)}</strong></div>
-  <div class="footer"><p>Thank you for choosing LikesonHealth</p><p style="margin-top:4px">support@likesonhealth.com · System-generated receipt</p></div>
-  </body></html>`;
-  const win = window.open('', '_blank');
-  win.document.write(html);
-  win.document.close();
-  setTimeout(() => { win.focus(); win.print(); }, 500);
+const INR = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+const INR2 = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 });
+const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+const fmtDateTime = (d) => d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+
+const STATUS_TONE = {
+    // success / paid / delivered states
+    Paid: 'success', Delivered: 'success', completed: 'success', paid: 'success',
+    Completed: 'success', Success: 'success', Active: 'success', pay_at_service_paid: 'success',
+    Approved: 'success', confirmed: 'success', Confirmed: 'success',
+    // warning / pending states
+    Pending: 'warning', pending: 'warning', payment_pending: 'warning', Placed: 'warning',
+    Processing: 'warning', 'Out-for-Delivery': 'warning', partially_paid: 'warning',
+    Partially_Refunded: 'warning', partially_refunded: 'warning', Return_Requested: 'warning',
+    pay_at_service_pending: 'warning', pending_cash: 'warning', draft: 'warning', Trial: 'warning',
+    in_progress: 'info', Pickup_Assigned: 'warning', Pickup_Done: 'warning',
+    // error / failed / cancelled states
+    Failed: 'error', failed: 'error', Cancelled: 'error', cancelled: 'error',
+    no_show: 'error', Rejected: 'error', Return_Rejected: 'error', Reversed: 'error',
+    unpaid: 'error',
+    // neutral / refunded
+    Refunded: 'info', refunded: 'info', refund_pending: 'info', Returned: 'info',
+    waived: 'info', Return_Accepted: 'info',
 };
 
-// ─── Shared UI Atoms ──────────────────────────────────────────────────────────
-
-const ChartTooltip = memo(({ active, payload, label }) => {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="glass-card px-4 py-3 shadow-depth border-base-300">
-      <p className="font-black text-base-content text-xs mb-2">{label}</p>
-      {payload.map((p, i) => (
-        <p key={i} className="text-xs mb-0.5" style={{ color: p.color }}>
-          {p.name}: <strong>{typeof p.value === 'number' && p.name.includes('₹')
-            ? `₹${p.value.toLocaleString('en-IN')}`
-            : p.value}</strong>
-        </p>
-      ))}
-    </div>
-  );
-});
-ChartTooltip.displayName = 'ChartTooltip';
-
-const StatCard = memo(({ title, value, sub, icon: Icon, colorVar, trendVal }) => (
-  <motion.div variants={fadeUp} whileHover={{ y: -3, transition: { duration: 0.2 } }}
-    className="glass-card p-5 flex flex-col gap-3 cursor-default">
-    <div className="flex items-start justify-between">
-      <p className="text-xs font-bold text-base-content/50 uppercase tracking-widest">{title}</p>
-      <div className="p-2.5 rounded-xl bg-primary/10">
-        <Icon size={17} className={colorVar} />
-      </div>
-    </div>
-    <motion.p className="text-2xl font-black text-base-content"
-      initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.4, ease: 'backOut' }}>
-      {value}
-    </motion.p>
-    {sub && <p className="text-xs text-base-content/40">{sub}</p>}
-    {trendVal != null && (
-      <div className={`flex items-center gap-1 text-xs font-bold ${trendVal >= 0 ? 'text-success' : 'text-error'}`}>
-        {trendVal >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-        {Math.abs(trendVal)}% vs last period
-      </div>
-    )}
-  </motion.div>
-));
-StatCard.displayName = 'StatCard';
-
-const PaymentBadge = memo(({ status }) => {
-  const { cls, icon: Icon } = STATUS_META[status] ?? { cls: 'badge-info', icon: Clock };
-  return <span className={`badge ${cls} gap-1`}><Icon size={10} />{status}</span>;
-});
-PaymentBadge.displayName = 'PaymentBadge';
-
-const MethodBadge = memo(({ method }) => {
-  const { icon: Icon, cls } = METHOD_META[method] ?? { icon: CreditCard, cls: 'text-primary' };
-  return (
-    <div className={`flex items-center gap-1.5 text-xs font-semibold ${cls}`}>
-      <Icon size={12} /> {method}
-    </div>
-  );
-});
-MethodBadge.displayName = 'MethodBadge';
-
-const SectionHeading = ({ icon: Icon, title, badge }) => (
-  <div className="flex items-center gap-2 mb-5">
-    <Icon size={16} className="text-primary" />
-    <h3 className="font-bold text-sm text-base-content">{title}</h3>
-    {badge && <span className="badge badge-info ml-auto text-xs">{badge}</span>}
-  </div>
-);
-
-const SkeletonRow = ({ cols = 8 }) => (
-  <tr className="border-b border-base-300">
-    {Array(cols).fill(0).map((_, i) => (
-      <td key={i} className="py-4 px-4"><div className="skeleton h-4 rounded w-full" /></td>
-    ))}
-  </tr>
-);
-
-const EmptyState = ({ icon: Icon, message, sub }) => (
-  <div className="flex flex-col items-center justify-center py-20 gap-4 text-base-content/25">
-    <Icon size={60} strokeWidth={0.7} />
-    <p className="text-lg font-bold">{message}</p>
-    {sub && <p className="text-sm">{sub}</p>}
-  </div>
-);
-
-const Pagination = ({ pagination, page, onPage }) => {
-  if (pagination.pages <= 1) return null;
-  return (
-    <div className="flex items-center justify-between px-5 py-3 border-t border-base-300 bg-base-200/30">
-      <p className="text-xs text-base-content/40">
-        Page {pagination.page} of {pagination.pages} · {pagination.total?.toLocaleString()} total
-      </p>
-      <div className="flex gap-2">
-        <button disabled={page <= 1} onClick={() => onPage(page - 1)}
-          className="btn-secondary btn-sm disabled:opacity-30"><ChevronLeft size={14} /></button>
-        <button disabled={page >= pagination.pages} onClick={() => onPage(page + 1)}
-          className="btn-secondary btn-sm disabled:opacity-30"><ChevronRight size={14} /></button>
-      </div>
-    </div>
-  );
+const toneClass = {
+    success: 'badge-success',
+    warning: 'badge-warning',
+    error: 'badge-error',
+    info: 'badge-info',
+    default: 'badge-secondary',
 };
 
-// ─── Refund Modal ─────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// SMALL UI HELPERS
+// ════════════════════════════════════════════════════════════════════════════
 
-const RefundModal = memo(({ order, onClose }) => {
-  const dispatch = useDispatch();
-  const { processing } = useSelector(selectRefundState);
-  const [form, setForm] = useState({
-    amount: order?.billing?.totalPayable ?? '',
-    reason: '',
-    method: 'Wallet',
-  });
+function StatusBadge({ value }) {
+    if (!value) return <span className="badge badge-secondary badge-sm">—</span>;
+    const tone = STATUS_TONE[value] || 'default';
+    return (
+        <span className={`badge badge-sm ${toneClass[tone]}`}>
+            {String(value).replace(/_/g, ' ')}
+        </span>
+    );
+}
 
-  const handleSubmit = useCallback(async () => {
-    if (!form.amount || !form.reason) return;
-    await dispatch(processOrderRefund({ orderId: order.orderId, refundData: form }));
-    onClose();
-  }, [dispatch, form, order, onClose]);
+function formatLabel(str) {
+    return String(str || '').replace(/_/g, ' ').replace(/-/g, ' ');
+}
 
-  return (
-    <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <motion.div className="absolute inset-0 bg-black/60 backdrop-blur-md" onClick={onClose} />
-      <motion.div className="glass-card relative w-full max-w-md p-7 z-10"
-        initial={{ scale: 0.9, y: 24 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 24 }}
-        transition={{ type: 'spring', damping: 26 }}>
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h3 className="text-lg font-black text-base-content flex items-center gap-2">
-              <RotateCcw size={20} className="text-info" /> Initiate Refund
-            </h3>
-            <p className="text-xs text-base-content/40 mt-1 font-mono">{order.orderId}</p>
-          </div>
-          <button onClick={onClose} className="btn-ghost btn-sm btn-circle"><X size={16} /></button>
-        </div>
-        <div className="space-y-4">
-          <div>
-            <label className="label-text mb-1.5 block">Refund Amount (₹)</label>
-            <input className="input-field" type="number" value={form.amount}
-              onChange={e => setForm(p => ({ ...p, amount: e.target.value }))}
-              placeholder={`Max: ₹${order.billing?.totalPayable}`} />
-          </div>
-          <div>
-            <label className="label-text mb-1.5 block">Refund Method</label>
-            <select className="input-field" value={form.method}
-              onChange={e => setForm(p => ({ ...p, method: e.target.value }))}>
-              <option value="Wallet">Wallet (Instant)</option>
-              <option value="Original_Source">Original Source</option>
-              <option value="Bank_Transfer">Bank Transfer</option>
-            </select>
-          </div>
-          <div>
-            <label className="label-text mb-1.5 block">Reason</label>
-            <textarea className="input-field resize-none" rows={3} value={form.reason}
-              onChange={e => setForm(p => ({ ...p, reason: e.target.value }))}
-              placeholder="Reason for this refund…" />
-          </div>
-          <div className="alert alert-warning text-xs">
-            <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
-            <span>This action is <strong>irreversible</strong>. Confirm before proceeding.</span>
-          </div>
-        </div>
-        <div className="flex gap-3 mt-6">
-          <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-          <button className="btn-success flex-1 flex items-center justify-center gap-2"
-            onClick={handleSubmit}
-            disabled={processing || !form.amount || !form.reason}>
-            {processing ? <Loader2 size={15} className="animate-spin" /> : <RotateCcw size={15} />}
-            {processing ? 'Processing…' : 'Process Refund'}
-          </button>
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-});
-RefundModal.displayName = 'RefundModal';
+// ════════════════════════════════════════════════════════════════════════════
+// KPI CARD
+// ════════════════════════════════════════════════════════════════════════════
 
-// ─── Payment Drawer ───────────────────────────────────────────────────────────
+function KpiCard({ icon: Icon, label, value, sub, accent = 'primary', delay = 0 }) {
+    return (
+        <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, delay }}
+            className="glass-card p-5 flex flex-col gap-3"
+        >
+            <div className="flex items-center justify-between">
+                <div className={`flex items-center justify-center w-11 h-11 rounded-xl bg-${accent}/10`}>
+                    <Icon className={`w-5 h-5 text-${accent}`} />
+                </div>
+            </div>
+            <div>
+                <p className="stat-card-label">{label}</p>
+                <p className="stat-card-value !text-2xl md:!text-3xl mt-1">{value}</p>
+                {sub && <p className="text-xs text-base-content/60 mt-1">{sub}</p>}
+            </div>
+        </motion.div>
+    );
+}
 
-const PaymentDrawer = memo(({ order, onClose }) => {
-  if (!order) return null;
-  const logs = order.payment?.transactionLog ?? [];
-  return (
-    <motion.div className="fixed inset-0 z-50 flex"
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <motion.div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
-      <motion.div className="absolute right-0 top-0 h-full w-full max-w-lg overflow-y-auto shadow-depth-lg bg-base-100"
-        initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
-        transition={{ type: 'spring', damping: 28, stiffness: 280 }}>
-        <div className="sticky top-0 z-10 px-6 py-4 border-b border-base-300 flex items-center justify-between bg-base-200/80 backdrop-blur-strong">
-          <div>
-            <p className="font-black text-base-content">{order.orderId}</p>
-            <p className="text-xs text-base-content/40">{new Date(order.createdAt).toLocaleString('en-IN')}</p>
-          </div>
-          <div className="flex gap-2">
-            <button onClick={() => printPaymentReceipt(order)} className="btn-primary-cta btn-sm flex items-center gap-1.5">
-              <ReceiptText size={13} /> Receipt
-            </button>
-            <button onClick={onClose} className="btn-ghost btn-sm btn-circle"><X size={18} /></button>
-          </div>
-        </div>
-        <div className="p-6 space-y-5">
-          <div className="glass-card p-5 text-center">
-            <p className="text-xs font-bold uppercase tracking-widest text-base-content/40 mb-2">Total Amount</p>
-            <p className="text-4xl font-black text-base-content">
-              ₹{order.billing?.totalPayable?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+// ════════════════════════════════════════════════════════════════════════════
+// PAGINATION BAR
+// ════════════════════════════════════════════════════════════════════════════
+
+function PaginationBar({ pagination, onPageChange, loading }) {
+    const { page = 1, pages = 0, total = 0, limit = 20 } = pagination || {};
+    if (!total) return null;
+
+    const from = (page - 1) * limit + 1;
+    const to = Math.min(page * limit, total);
+
+    return (
+        <div className="flex items-center justify-between flex-wrap gap-3 px-4 py-3 border-t border-base-300">
+            <p className="text-xs text-base-content/60">
+                Showing <span className="font-semibold text-base-content">{from}–{to}</span> of{' '}
+                <span className="font-semibold text-base-content">{total}</span>
             </p>
-            <div className="flex items-center justify-center gap-2 mt-3">
-              <PaymentBadge status={order.payment?.status} />
-              <MethodBadge method={order.payment?.method} />
-            </div>
-          </div>
-          <div className="glass-card p-4 space-y-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-base-content/40">Payment Details</p>
-            {[
-              ['Order ID', order.orderId, 'font-mono text-xs'],
-              ['Customer', order.customer?.name, ''],
-              ['Method', order.payment?.method, ''],
-              ...(order.payment?.razorpayOrderId ? [['Razorpay Order', order.payment.razorpayOrderId, 'font-mono text-xs']] : []),
-              ...(order.payment?.razorpayPaymentId ? [['Razorpay Payment', order.payment.razorpayPaymentId, 'font-mono text-xs']] : []),
-              ['Paid At', order.payment?.paidAt ? new Date(order.payment.paidAt).toLocaleString('en-IN') : '—', ''],
-              ['Store', order.store?.name, ''],
-            ].map(([label, val, extraCls]) => (
-              <div key={label} className="flex justify-between items-center">
-                <span className="text-base-content/50 text-xs">{label}</span>
-                <span className={`font-semibold text-base-content text-xs ${extraCls}`}>{val ?? '—'}</span>
-              </div>
-            ))}
-          </div>
-          <div className="glass-card p-4 space-y-2">
-            <p className="text-xs font-bold uppercase tracking-widest text-base-content/40 mb-2">Billing Breakdown</p>
-            {[
-              ['Subtotal', order.billing?.subTotal ?? 0, false],
-              ['GST', order.billing?.gstAmount ?? 0, false],
-              ['Delivery', order.billing?.deliveryCharges ?? 0, false],
-              ['Platform Fee', order.billing?.platformFee ?? 0, false],
-              ['Discount', -(order.billing?.discountAmount ?? 0), true],
-            ].map(([label, val, isDiscount]) => (
-              <div key={label} className="flex justify-between text-xs text-base-content/60">
-                <span>{label}</span>
-                <span className={isDiscount && val < 0 ? 'text-success font-semibold' : ''}>
-                  {val < 0 ? '-' : ''}₹{Math.abs(val).toLocaleString('en-IN')}
-                </span>
-              </div>
-            ))}
-            <div className="flex justify-between font-black text-base-content border-t border-base-300 pt-2 mt-2">
-              <span>Total Payable</span>
-              <span>₹{order.billing?.totalPayable?.toLocaleString('en-IN')}</span>
-            </div>
-          </div>
-          {logs.length > 0 && (
-            <div className="glass-card p-4">
-              <p className="text-xs font-bold uppercase tracking-widest text-base-content/40 mb-3">Transaction Log</p>
-              <div className="space-y-2 relative">
-                <div className="absolute left-2.5 top-2 bottom-2 w-px bg-base-300" />
-                {logs.map((log, i) => (
-                  <div key={i} className="flex items-start gap-3 relative">
-                    <div className="w-5 h-5 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0 z-10">
-                      <div className="w-2 h-2 rounded-full bg-primary" />
-                    </div>
-                    <div>
-                      <p className="text-xs font-semibold text-base-content">{log.action ?? '—'}</p>
-                      <p className="text-xs text-base-content/40">{log.status} · {new Date(log.timestamp).toLocaleTimeString('en-IN')}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {order.cancellation?.isCancelled && (
-            <div className="glass-card p-4 border border-error/30">
-              <p className="text-xs font-bold uppercase tracking-widest text-error mb-2">Cancellation Info</p>
-              <p className="text-xs text-base-content/60">Reason: <strong>{order.cancellation.reason ?? '—'}</strong></p>
-              <div className="mt-1">Refund Status: <PaymentBadge status={order.cancellation.refundStatus} /></div>
-            </div>
-          )}
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-});
-PaymentDrawer.displayName = 'PaymentDrawer';
-
-// ─── Wallet Adjust Modal ──────────────────────────────────────────────────────
-
-const WalletAdjustModal = memo(({ userId, onClose }) => {
-  const dispatch = useDispatch();
-  const { processing } = useSelector(selectWalletAdjust);
-  const [form, setForm] = useState({ type: 'Credit', amount: '', description: '' });
-
-  const handleSubmit = useCallback(async () => {
-    if (!form.amount || !form.description) return;
-    await dispatch(adjustUserWallet({ userId, adjustData: form }));
-    // Refresh wallet after adjust
-    dispatch(fetchUserWallet({ userId }));
-    onClose();
-  }, [dispatch, userId, form, onClose]);
-
-  return (
-    <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <motion.div className="absolute inset-0 bg-black/60 backdrop-blur-md" onClick={onClose} />
-      <motion.div className="glass-card relative w-full max-w-sm p-7 z-10"
-        initial={{ scale: 0.9, y: 24 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 24 }}
-        transition={{ type: 'spring', damping: 26 }}>
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="text-lg font-black text-base-content flex items-center gap-2">
-            <Wallet size={20} className="text-primary" /> Wallet Adjustment
-          </h3>
-          <button onClick={onClose} className="btn-ghost btn-sm btn-circle"><X size={16} /></button>
-        </div>
-        <div className="space-y-4">
-          <div>
-            <label className="label-text mb-1.5 block">Type</label>
-            <select className="input-field" value={form.type}
-              onChange={e => setForm(p => ({ ...p, type: e.target.value }))}>
-              <option value="Credit">Credit</option>
-              <option value="Debit">Debit</option>
-            </select>
-          </div>
-          <div>
-            <label className="label-text mb-1.5 block">Amount (₹)</label>
-            <input className="input-field" type="number" min="1" value={form.amount}
-              onChange={e => setForm(p => ({ ...p, amount: e.target.value }))} placeholder="Enter amount" />
-          </div>
-          <div>
-            <label className="label-text mb-1.5 block">Description</label>
-            <textarea className="input-field resize-none" rows={3} value={form.description}
-              onChange={e => setForm(p => ({ ...p, description: e.target.value }))}
-              placeholder="Reason for adjustment…" />
-          </div>
-        </div>
-        <div className="flex gap-3 mt-6">
-          <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-          <button
-            className={`flex-1 flex items-center justify-center gap-2 ${form.type === 'Credit' ? 'btn-success' : 'btn-error'}`}
-            onClick={handleSubmit}
-            disabled={processing || !form.amount || !form.description}>
-            {processing ? <Loader2 size={15} className="animate-spin" /> : <Wallet size={15} />}
-            {processing ? 'Applying…' : `Apply ${form.type}`}
-          </button>
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-});
-WalletAdjustModal.displayName = 'WalletAdjustModal';
-
-// ─── Tab: Orders ──────────────────────────────────────────────────────────────
-
-const OrdersTab = () => {
-  const dispatch = useDispatch();
-  const { data: orders, pagination, loading } = useSelector(selectPharmacyOrders);
-  const [filters, setFilters] = useState({
-    page: 1, limit: 15,
-    paymentStatus: '', search: '',
-    startDate: '', endDate: '', minAmount: '', maxAmount: '',
-  });
-  const [showFilters, setShowFilters] = useState(false);
-  const [activeOrder, setActiveOrder] = useState(null);
-  const [refundOrder, setRefundOrder] = useState(null);
-
-  const setFilter = useCallback((key, val) =>
-    setFilters(p => ({ ...p, [key]: val, ...(key !== 'page' ? { page: 1 } : {}) })), []);
-
-  const fetchOrders = useCallback(() => {
-    const clean = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== ''));
-    dispatch(fetchPharmacyOrders(clean));
-  }, [dispatch, filters]);
-
-  useEffect(() => { fetchOrders(); }, [fetchOrders]);
-
-  const exportCSV = useCallback(() => {
-    const rows = [
-      'Order ID,Customer,Amount,Method,Status,Razorpay ID,Date',
-      ...orders.map(o => `"${o.orderId}","${o.customer?.name ?? ''}",${o.billing?.totalPayable ?? 0},"${o.payment?.method ?? ''}","${o.payment?.status ?? ''}","${o.payment?.razorpayPaymentId ?? ''}","${o.payment?.paidAt ? new Date(o.payment.paidAt).toLocaleDateString('en-IN') : ''}"`)
-    ].join('\n');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([rows], { type: 'text/csv' }));
-    a.download = `payments-${Date.now()}.csv`;
-    a.click();
-  }, [orders]);
-
-  return (
-    <>
-      <div className="flex justify-end gap-2 mb-4">
-        <button onClick={fetchOrders} className="btn-secondary btn-sm flex items-center gap-2">
-          <RefreshCw size={13} /> Refresh
-        </button>
-        <button onClick={exportCSV} className="btn-primary-cta btn-sm flex items-center gap-2">
-          <Download size={13} /> Export CSV
-        </button>
-      </div>
-
-      {/* Filters */}
-      <div className="glass-card p-4 space-y-3 mb-4">
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
-            <input className="input-field pl-9" placeholder="Search order ID…"
-              value={filters.search} onChange={e => setFilter('search', e.target.value)} />
-          </div>
-          <select className="input-field sm:w-44" value={filters.paymentStatus}
-            onChange={e => setFilter('paymentStatus', e.target.value)}>
-            <option value="">All Statuses</option>
-            {PAYMENT_STATUSES.map(s => <option key={s}>{s}</option>)}
-          </select>
-          <button onClick={() => setShowFilters(p => !p)}
-            className="btn-secondary btn-sm flex items-center gap-2 whitespace-nowrap">
-            <Filter size={13} /> {showFilters ? 'Hide' : 'More Filters'}
-          </button>
-        </div>
-        <AnimatePresence>
-          {showFilters && (
-            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-3 border-t border-base-300">
-                {[['Start Date', 'date', 'startDate'], ['End Date', 'date', 'endDate'],
-                  ['Min ₹', 'number', 'minAmount'], ['Max ₹', 'number', 'maxAmount']].map(([l, t, k]) => (
-                    <div key={k}>
-                      <label className="label-text block mb-1">{l}</label>
-                      <input className="input-field" type={t} value={filters[k]}
-                        onChange={e => setFilter(k, e.target.value)} />
-                    </div>
-                  ))}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-
-      {/* Table */}
-      <div className="glass-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="table">
-            <thead>
-              <tr>
-                {['Order ID', 'Customer', 'Amount', 'Method', 'Razorpay ID', 'Status', 'Paid At', 'Actions'].map(h => (
-                  <th key={h}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {loading
-                ? Array(10).fill(0).map((_, i) => <SkeletonRow key={i} />)
-                : orders.length === 0
-                  ? <tr><td colSpan={8}><EmptyState icon={CreditCard} message="No payment records" sub="Adjust filters to view payments" /></td></tr>
-                  : orders.map((order, idx) => (
-                    <motion.tr key={order._id}
-                      initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: idx * 0.025 }} className="group">
-                      <td className="font-mono font-black text-primary text-xs tracking-wide">{order.orderId}</td>
-                      <td>
-                        <div className="flex items-center gap-2">
-                          <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                            <User size={12} className="text-primary" />
-                          </div>
-                          <div>
-                            <p className="text-xs font-semibold text-base-content">{order.customer?.name ?? '—'}</p>
-                            <p className="text-xs text-base-content/40">{order.customer?.phone ?? ''}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="font-black text-base-content text-sm">
-                        ₹{order.billing?.totalPayable?.toLocaleString('en-IN') ?? '—'}
-                      </td>
-                      <td><MethodBadge method={order.payment?.method} /></td>
-                      <td className="font-mono text-xs text-base-content/50 truncate max-w-28">
-                        {order.payment?.razorpayPaymentId ?? '—'}
-                      </td>
-                      <td><PaymentBadge status={order.payment?.status} /></td>
-                      <td className="text-xs text-base-content/50">
-                        {order.payment?.paidAt
-                          ? new Date(order.payment.paidAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
-                          : '—'}
-                      </td>
-                      <td>
-                        <div className="flex items-center gap-1">
-                          <button onClick={() => setActiveOrder(order)}
-                            className="btn-ghost btn-xs btn-circle opacity-60 group-hover:opacity-100"
-                            title="View Details"><Eye size={14} /></button>
-                          <button onClick={() => printPaymentReceipt(order)}
-                            className="btn-ghost btn-xs btn-circle opacity-60 group-hover:opacity-100 text-secondary"
-                            title="Print Receipt"><ReceiptText size={14} /></button>
-                          {order.cancellation?.isCancelled && order.cancellation?.refundStatus !== 'Processed' && (
-                            <button onClick={() => setRefundOrder(order)}
-                              className="btn-ghost btn-xs btn-circle opacity-60 group-hover:opacity-100 text-error"
-                              title="Process Refund"><RotateCcw size={14} /></button>
-                          )}
-                        </div>
-                      </td>
-                    </motion.tr>
-                  ))}
-            </tbody>
-          </table>
-        </div>
-        <Pagination pagination={pagination} page={filters.page} onPage={p => setFilter('page', p)} />
-      </div>
-
-      <AnimatePresence>
-        {activeOrder && <PaymentDrawer order={activeOrder} onClose={() => setActiveOrder(null)} />}
-        {refundOrder && <RefundModal order={refundOrder} onClose={() => setRefundOrder(null)} />}
-      </AnimatePresence>
-    </>
-  );
-};
-
-// ─── Tab: Ledger ──────────────────────────────────────────────────────────────
-
-const LedgerTab = () => {
-  const dispatch = useDispatch();
-  const { data: ledger, pagination, loading } = useSelector(selectFinancialLedger);
-  const [filters, setFilters] = useState({ page: 1, limit: 20, type: '', purpose: '', status: '' });
-
-  const setFilter = useCallback((key, val) =>
-    setFilters(p => ({ ...p, [key]: val, ...(key !== 'page' ? { page: 1 } : {}) })), []);
-
-  useEffect(() => {
-    const clean = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== ''));
-    dispatch(fetchFinancialLedger(clean));
-  }, [dispatch, filters]);
-
-  return (
-    <>
-      <div className="glass-card p-4 mb-4">
-        <div className="flex flex-wrap gap-3">
-          {[['Type', ['', 'Credit', 'Debit'], 'type'],
-            ['Purpose', ['', 'Refund', 'Purchase', 'Admin_Credit', 'Admin_Debit', 'Withdrawal'], 'purpose'],
-            ['Status', ['', 'Success', 'Pending', 'Failed'], 'status']
-          ].map(([label, options, key]) => (
-            <div key={key} className="flex flex-col gap-1 min-w-36">
-              <label className="label-text">{label}</label>
-              <select className="input-field" value={filters[key]}
-                onChange={e => setFilter(key, e.target.value)}>
-                {options.map(o => <option key={o} value={o}>{o || `All ${label}s`}</option>)}
-              </select>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="glass-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="table">
-            <thead>
-              <tr>
-                {['User', 'Role', 'Type', 'Purpose', 'Amount', 'Status', 'Currency', 'Timestamp'].map(h => (
-                  <th key={h}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {loading
-                ? Array(8).fill(0).map((_, i) => <SkeletonRow key={i} />)
-                : ledger.length === 0
-                  ? <tr><td colSpan={8}><EmptyState icon={Layers} message="No transactions" /></td></tr>
-                  : ledger.map((item, idx) => {
-                    const tx = item.transaction ?? {};
-                    return (
-                      <motion.tr key={idx}
-                        initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                        transition={{ delay: idx * 0.02 }}>
-                        <td>
-                          <div>
-                            <p className="text-xs font-semibold text-base-content">{item.user?.name ?? '—'}</p>
-                            <p className="text-xs text-base-content/40">{item.user?.email ?? ''}</p>
-                          </div>
-                        </td>
-                        <td><span className="badge badge-secondary badge-xs">{item.user?.role ?? '—'}</span></td>
-                        <td>
-                          <span className={`badge badge-xs ${tx.type === 'Credit' ? 'badge-success' : 'badge-error'}`}>
-                            {tx.type === 'Credit' ? <ArrowUpRight size={9} /> : <ArrowDownCircle size={9} />}
-                            {tx.type ?? '—'}
-                          </span>
-                        </td>
-                        <td className="text-xs text-base-content/60">{tx.purpose ?? '—'}</td>
-                        <td className="font-black text-base-content">
-                          <span className={tx.type === 'Credit' ? 'text-success' : 'text-error'}>
-                            {tx.type === 'Credit' ? '+' : '-'}₹{(tx.amount ?? 0).toLocaleString('en-IN')}
-                          </span>
-                        </td>
-                        <td><PaymentBadge status={tx.status} /></td>
-                        <td className="text-xs text-base-content/50">{item.currency ?? 'INR'}</td>
-                        <td className="text-xs text-base-content/50">
-                          {tx.timestamp ? new Date(tx.timestamp).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
-                        </td>
-                      </motion.tr>
-                    );
-                  })}
-            </tbody>
-          </table>
-        </div>
-        <Pagination pagination={pagination} page={filters.page} onPage={p => setFilter('page', p)} />
-      </div>
-    </>
-  );
-};
-
-// ─── Tab: Billing Summary ─────────────────────────────────────────────────────
-
-const BillingTab = () => {
-  const dispatch = useDispatch();
-  const { summary, planBreakdown, upcomingRenewals, loading } = useSelector(selectBillingAnalytics);
-
-  useEffect(() => { dispatch(fetchBillingSummary()); }, [dispatch]);
-
-  const totalRevenue = useMemo(() =>
-    summary.reduce((acc, s) => acc + (s.totalRevenue ?? 0), 0), [summary]);
-
-  const totalSubs = useMemo(() =>
-    summary.reduce((acc, s) => acc + (s.count ?? 0), 0), [summary]);
-
-  return (
-    <div className="space-y-5">
-      {/* Summary cards */}
-      <motion.div initial="hidden" animate="show" variants={stagger}
-        className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard title="Total Revenue" value={`₹${totalRevenue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
-          icon={IndianRupee} colorVar="text-success" />
-        <StatCard title="Total Subscriptions" value={totalSubs.toLocaleString()}
-          icon={Star} colorVar="text-primary" />
-        {summary.map(s => (
-          <StatCard key={s._id}
-            title={`${s._id ?? 'Unknown'} Subs`}
-            value={s.count?.toLocaleString() ?? '0'}
-            sub={`₹${(s.totalRevenue ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })} revenue`}
-            icon={CheckCircle2}
-            colorVar={s._id === 'Active' ? 'text-success' : 'text-warning'} />
-        ))}
-      </motion.div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* Plan Breakdown */}
-        <div className="glass-card p-5">
-          <SectionHeading icon={PieIcon} title="Active Subscriptions by Plan" />
-          {loading
-            ? <div className="flex justify-center py-10"><div className="loading loading-md loading-spinner" /></div>
-            : planBreakdown.length === 0
-              ? <EmptyState icon={PieIcon} message="No plan data" />
-              : (
-                <ResponsiveContainer width="100%" height={220}>
-                  <PieChart>
-                    <Pie data={planBreakdown} dataKey="count" nameKey="planName"
-                      cx="50%" cy="50%" outerRadius={85} innerRadius={48} paddingAngle={4}>
-                      {planBreakdown.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
-                    </Pie>
-                    <Tooltip content={<ChartTooltip />} />
-                    <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" />
-                  </PieChart>
-                </ResponsiveContainer>
-              )
-          }
-        </div>
-
-        {/* Revenue by Status Bar */}
-        <div className="glass-card p-5">
-          <SectionHeading icon={BarChart2} title="Revenue by Subscription Status" />
-          {loading
-            ? <div className="flex justify-center py-10"><div className="loading loading-md loading-spinner" /></div>
-            : summary.length === 0
-              ? <EmptyState icon={BarChart2} message="No summary data" />
-              : (
-                <ResponsiveContainer width="100%" height={220}>
-                  <BarChart data={summary} margin={{ top: 4, right: 4, bottom: 0, left: 4 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" />
-                    <XAxis dataKey="_id" tick={{ fontSize: 11, fill: 'var(--base-content)', opacity: 0.5 }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.4 }}
-                      tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Bar dataKey="totalRevenue" name="Revenue ₹" radius={[6, 6, 0, 0]}>
-                      {summary.map((s, i) => (
-                        <Cell key={i} fill={s._id === 'Active' ? 'var(--success)' : s._id === 'Expired' ? 'var(--error)' : 'var(--warning)'} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              )
-          }
-        </div>
-      </div>
-
-      {/* Upcoming Renewals */}
-      <div className="glass-card overflow-hidden">
-        <div className="px-5 pt-5 pb-3">
-          <SectionHeading icon={Calendar} title="Upcoming Renewals (next 7 days)" badge={`${upcomingRenewals.length} renewals`} />
-        </div>
-        <div className="overflow-x-auto">
-          <table className="table">
-            <thead>
-              <tr>
-                {['User', 'Email', 'Plan', 'Expiry', 'Status'].map(h => <th key={h}>{h}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {loading
-                ? Array(5).fill(0).map((_, i) => <SkeletonRow key={i} cols={5} />)
-                : upcomingRenewals.length === 0
-                  ? <tr><td colSpan={5}><EmptyState icon={Calendar} message="No upcoming renewals" /></td></tr>
-                  : upcomingRenewals.map((sub, i) => (
-                    <tr key={i}>
-                      <td className="font-semibold text-base-content text-sm">{sub.user?.name ?? '—'}</td>
-                      <td className="text-xs text-base-content/50">{sub.user?.email ?? '—'}</td>
-                      <td><span className="badge badge-primary badge-xs">{sub.plan?.name ?? '—'}</span></td>
-                      <td className="text-xs text-base-content/60">
-                        {sub.expiryDate ? new Date(sub.expiryDate).toLocaleDateString('en-IN', { dateStyle: 'medium' }) : '—'}
-                      </td>
-                      <td><PaymentBadge status={sub.status} /></td>
-                    </tr>
-                  ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// ─── Tab: Audit Logs ──────────────────────────────────────────────────────────
-
-const AuditTab = () => {
-  const dispatch = useDispatch();
-  const { data: logs, pagination, loading } = useSelector(selectAuditLogs);
-  const [page, setPage] = useState(1);
-
-  useEffect(() => {
-    dispatch(fetchAuditLogs({ page, limit: 20 }));
-  }, [dispatch, page]);
-
-  return (
-    <div className="glass-card overflow-hidden">
-      <div className="px-5 pt-5 pb-2">
-        <div className="flex items-center gap-2 mb-1">
-          <ShieldAlert size={16} className="text-error" />
-          <h3 className="font-bold text-sm text-base-content">Suspicious Activity & High-Risk Users</h3>
-          <span className="badge badge-error badge-xs ml-auto">{pagination.total ?? 0} flagged</span>
-        </div>
-        <p className="text-xs text-base-content/40 mb-4">Users with &gt;100 logins, blocked accounts, or &gt;3 device tokens</p>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="table">
-          <thead>
-            <tr>
-              {['User', 'Role', 'Login Count', 'Last IP', 'Last Login', 'Devices', 'Status'].map(h => <th key={h}>{h}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {loading
-              ? Array(8).fill(0).map((_, i) => <SkeletonRow key={i} cols={7} />)
-              : logs.length === 0
-                ? <tr><td colSpan={7}><EmptyState icon={ShieldAlert} message="No suspicious activity" sub="All users within normal parameters" /></td></tr>
-                : logs.map((user, i) => (
-                  <motion.tr key={user._id ?? i}
-                    initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                    transition={{ delay: i * 0.02 }}>
-                    <td>
-                      <div>
-                        <p className="text-xs font-semibold text-base-content">{user.name ?? '—'}</p>
-                        <p className="text-xs text-base-content/40">{user.email ?? ''}</p>
-                      </div>
-                    </td>
-                    <td><span className="badge badge-secondary badge-xs">{user.role ?? '—'}</span></td>
-                    <td>
-                      <span className={`font-bold text-sm ${(user.loginCount ?? 0) > 100 ? 'text-error' : 'text-base-content'}`}>
-                        {user.loginCount ?? 0}
-                      </span>
-                    </td>
-                    <td className="font-mono text-xs text-base-content/50">{user.lastLoginIp ?? '—'}</td>
-                    <td className="text-xs text-base-content/50">
-                      {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
-                    </td>
-                    <td>
-                      <span className={`font-bold text-sm ${(user.deviceTokens?.length ?? 0) > 3 ? 'text-warning' : 'text-base-content'}`}>
-                        {user.deviceTokens?.length ?? 0}
-                      </span>
-                    </td>
-                    <td>
-                      {user.isBlocked
-                        ? <span className="badge badge-error badge-xs">Blocked</span>
-                        : <span className="badge badge-success badge-xs">Active</span>}
-                    </td>
-                  </motion.tr>
-                ))}
-          </tbody>
-        </table>
-      </div>
-      <Pagination pagination={pagination} page={page} onPage={setPage} />
-    </div>
-  );
-};
-
-// ─── Tab: Wallet Viewer ───────────────────────────────────────────────────────
-
-const WalletTab = () => {
-  const dispatch = useDispatch();
-  const { data: wallet, transactions, pagination, loading } = useSelector(selectWalletDetail);
-  const [userId, setUserId] = useState('');
-  const [searchInput, setSearchInput] = useState('');
-  const [page, setPage] = useState(1);
-  const [adjustOpen, setAdjustOpen] = useState(false);
-
-  const handleSearch = useCallback(() => {
-    if (!searchInput.trim()) return;
-    setUserId(searchInput.trim());
-    setPage(1);
-  }, [searchInput]);
-
-  useEffect(() => {
-    if (!userId) return;
-    dispatch(fetchUserWallet({ userId, params: { page, limit: 15 } }));
-  }, [dispatch, userId, page]);
-
-  useEffect(() => () => { dispatch(clearWalletDetail()); }, [dispatch]);
-
-  return (
-    <div className="space-y-5">
-      {/* Search */}
-      <div className="glass-card p-4">
-        <label className="label-text block mb-2">Look Up User Wallet by User ID</label>
-        <div className="flex gap-3">
-          <input className="input-field flex-1" placeholder="Paste MongoDB ObjectId…"
-            value={searchInput} onChange={e => setSearchInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSearch()} />
-          <button onClick={handleSearch} className="btn-primary-cta btn-sm flex items-center gap-2">
-            <Search size={14} /> Lookup
-          </button>
-        </div>
-      </div>
-
-      {loading && (
-        <div className="flex justify-center py-10">
-          <div className="loading loading-lg loading-spinner" />
-        </div>
-      )}
-
-      {wallet && !loading && (
-        <>
-          {/* Wallet Summary */}
-          <div className="glass-card p-6">
-            <div className="flex items-start justify-between mb-5">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center">
-                  <User size={22} className="text-primary" />
-                </div>
-                <div>
-                  <p className="font-black text-base-content text-lg">{wallet.user?.name ?? '—'}</p>
-                  <p className="text-xs text-base-content/40">{wallet.user?.email ?? ''}</p>
-                  <span className="badge badge-secondary badge-xs mt-1">{wallet.user?.role ?? '—'}</span>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <span className={`badge ${wallet.isActive ? 'badge-success' : 'badge-error'}`}>
-                  {wallet.isActive ? 'Active' : 'Inactive'}
-                </span>
-                <button onClick={() => setAdjustOpen(true)} className="btn-primary btn-sm flex items-center gap-2">
-                  <Wallet size={13} /> Adjust
+            <div className="flex items-center gap-2">
+                <button
+                    className="btn btn-ghost btn-sm btn-circle"
+                    disabled={page <= 1 || loading}
+                    onClick={() => onPageChange(page - 1)}
+                    aria-label="Previous page"
+                >
+                    <ChevronLeft className="w-4 h-4" />
                 </button>
-              </div>
+                <span className="text-xs font-semibold px-2">
+                    Page {page} of {pages || 1}
+                </span>
+                <button
+                    className="btn btn-ghost btn-sm btn-circle"
+                    disabled={page >= pages || loading}
+                    onClick={() => onPageChange(page + 1)}
+                    aria-label="Next page"
+                >
+                    <ChevronRight className="w-4 h-4" />
+                </button>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {[
-                ['Balance', wallet.balance, 'text-primary'],
-                ['Available', wallet.availableBalance, 'text-success'],
-                ['Withdrawable', wallet.withdrawableBalance, 'text-info'],
-                ['Locked', wallet.lockedBalance, 'text-warning'],
-                ['Total Credited', wallet.totalCredited, 'text-success'],
-                ['Total Debited', wallet.totalDebited, 'text-error'],
-                ['Total Withdrawn', wallet.totalWithdrawn, 'text-base-content'],
-                ['Pending Withdrawals', wallet.pendingWithdrawals?.length ?? 0, 'text-warning'],
-              ].map(([label, val, cls]) => (
-                <div key={label} className="stat-card">
-                  <p className="stat-card-label">{label}</p>
-                  <p className={`stat-card-value text-xl ${cls}`}>
-                    {typeof val === 'number' && label !== 'Pending Withdrawals'
-                      ? `₹${val.toLocaleString('en-IN')}`
-                      : val}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Transactions */}
-          <div className="glass-card overflow-hidden">
-            <div className="px-5 pt-5 pb-2">
-              <SectionHeading icon={Layers} title="Transaction History" badge={`${pagination.total} transactions`} />
-            </div>
-            <div className="overflow-x-auto">
-              <table className="table">
-                <thead>
-                  <tr>
-                    {['Type', 'Purpose', 'Amount', 'Balance After', 'Status', 'Reference', 'Date'].map(h => <th key={h}>{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {transactions.length === 0
-                    ? <tr><td colSpan={7}><EmptyState icon={Layers} message="No transactions" /></td></tr>
-                    : transactions.map((tx, i) => (
-                      <tr key={i}>
-                        <td>
-                          <span className={`badge badge-xs ${tx.type === 'Credit' ? 'badge-success' : 'badge-error'}`}>
-                            {tx.type === 'Credit' ? <ArrowUpRight size={9} /> : <ArrowDownCircle size={9} />}
-                            {tx.type}
-                          </span>
-                        </td>
-                        <td className="text-xs text-base-content/60">{tx.purpose ?? '—'}</td>
-                        <td className={`font-black text-sm ${tx.type === 'Credit' ? 'text-success' : 'text-error'}`}>
-                          {tx.type === 'Credit' ? '+' : '-'}₹{(tx.amount ?? 0).toLocaleString('en-IN')}
-                        </td>
-                        <td className="text-xs font-semibold text-base-content">
-                          ₹{(tx.balanceAfter ?? 0).toLocaleString('en-IN')}
-                        </td>
-                        <td><PaymentBadge status={tx.status} /></td>
-                        <td className="font-mono text-xs text-base-content/40 truncate max-w-24">
-                          {tx.referenceId?.toString() ?? '—'}
-                        </td>
-                        <td className="text-xs text-base-content/50">
-                          {tx.timestamp ? new Date(tx.timestamp).toLocaleDateString('en-IN', { dateStyle: 'short' }) : '—'}
-                        </td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
-            <Pagination pagination={pagination} page={page} onPage={setPage} />
-          </div>
-        </>
-      )}
-
-      {!wallet && !loading && userId && (
-        <div className="glass-card p-10 text-center text-base-content/40">
-          <Wallet size={40} strokeWidth={0.8} className="mx-auto mb-3" />
-          <p className="font-bold">Wallet not found for this user</p>
         </div>
-      )}
+    );
+}
 
-      <AnimatePresence>
-        {adjustOpen && wallet && (
-          <WalletAdjustModal userId={userId} onClose={() => setAdjustOpen(false)} />
-        )}
-      </AnimatePresence>
-    </div>
-  );
-};
+// ════════════════════════════════════════════════════════════════════════════
+// FILTER BAR (generic)
+// ════════════════════════════════════════════════════════════════════════════
 
-// ─── Tab: Analytics ───────────────────────────────────────────────────────────
+function FilterBar({ children, searchValue, onSearchChange, searchPlaceholder, onReset, activeCount }) {
+    const [open, setOpen] = useState(false);
 
-const AnalyticsTab = () => {
-  const dispatch = useDispatch();
-  const { data: orders } = useSelector(selectPharmacyOrders);
-  const { data: ledger, loading: ledgerLoading } = useSelector(selectFinancialLedger);
+    return (
+        <div className="border-b border-base-300">
+            <div className="flex items-center gap-3 p-4 flex-wrap">
+                <div className="relative flex-1 min-w-[220px]">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
+                    <input
+                        type="text"
+                        value={searchValue}
+                        onChange={(e) => onSearchChange(e.target.value)}
+                        placeholder={searchPlaceholder}
+                        className="input-field pl-9"
+                    />
+                </div>
+                <button
+                    onClick={() => setOpen((v) => !v)}
+                    className={`btn btn-sm ${open ? 'btn-primary' : 'btn-outline'} gap-2`}
+                >
+                    <Filter className="w-3.5 h-3.5" />
+                    Filters
+                    {activeCount > 0 && (
+                        <span className="badge badge-xs bg-primary-content/20 text-primary-content border-0">{activeCount}</span>
+                    )}
+                    <ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+                </button>
+                {activeCount > 0 && (
+                    <button onClick={onReset} className="btn btn-ghost btn-sm gap-1.5 text-error">
+                        <X className="w-3.5 h-3.5" /> Clear
+                    </button>
+                )}
+            </div>
+            <AnimatePresence>
+                {open && (
+                    <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className="overflow-hidden"
+                    >
+                        <div className="px-4 pb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                            {children}
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
+    );
+}
 
-  useEffect(() => {
-    dispatch(fetchFinancialLedger({ limit: 200 }));
-  }, [dispatch]);
+function FilterField({ label, children }) {
+    return (
+        <div className="flex flex-col gap-1">
+            <label className="label-text-alt font-semibold uppercase tracking-wide">{label}</label>
+            {children}
+        </div>
+    );
+}
 
-  const methodBreakdown = useMemo(() => {
-    const m = { Razorpay: 0, Wallet: 0, COD: 0 };
-    orders.forEach(o => {
-      if (o.payment?.status === 'Paid' && o.payment?.method) {
-        m[o.payment.method] = (m[o.payment.method] ?? 0) + (o.billing?.totalPayable ?? 0);
-      }
+function SelectInput({ value, onChange, options, placeholder = 'All' }) {
+    return (
+        <select value={value} onChange={(e) => onChange(e.target.value)} className="input-field">
+            <option value="">{placeholder}</option>
+            {options.map((opt) => (
+                <option key={opt} value={opt}>{formatLabel(opt)}</option>
+            ))}
+        </select>
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// REVENUE ANALYTICS HOOK (custom — hits /superadmin/analytics/revenue)
+// ════════════════════════════════════════════════════════════════════════════
+
+function useRevenueAnalytics(range) {
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+
+    const fetchData = useCallback(async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const params = {};
+            if (range?.startDate) params.startDate = range.startDate;
+            if (range?.endDate) params.endDate = range.endDate;
+            const res = await API.get('/superadmin/analytics/revenue', { params });
+            setData(res.data);
+        } catch (err) {
+            setError(err.response?.data?.message || 'Failed to load revenue analytics');
+        } finally {
+            setLoading(false);
+        }
+    }, [range?.startDate, range?.endDate]);
+
+    useEffect(() => { fetchData(); }, [fetchData]);
+
+    return { data, loading, error, refetch: fetchData };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SECTION: OVERVIEW (KPIs + Charts)
+// ════════════════════════════════════════════════════════════════════════════
+
+function OverviewSection() {
+    const { data: revenue, loading: revLoading, refetch: refetchRevenue } = useRevenueAnalytics();
+    const billing = useSelector(selectBillingAnalytics);
+    const dispatch = useDispatch();
+
+    useEffect(() => {
+        dispatch(fetchBillingSummary());
+    }, [dispatch]);
+
+    const grandTotal = revenue?.revenue?.grandTotal ?? 0;
+    const pharmacy = revenue?.revenue?.pharmacy ?? { total: 0, count: 0, avgOrder: 0 };
+    const bookings = revenue?.revenue?.bookings ?? { total: 0, count: 0, avgOrder: 0 };
+    const subscription = revenue?.revenue?.subscription ?? { total: 0, count: 0 };
+
+    const revenueShareData = useMemo(() => ([
+        { name: 'Pharmacy', value: pharmacy.total },
+        { name: 'Bookings', value: bookings.total },
+        { name: 'Subscriptions', value: subscription.total },
+    ].filter((d) => d.value > 0)), [pharmacy.total, bookings.total, subscription.total]);
+
+    const timelineData = useMemo(() => {
+        const arr = billing?.revenueTimeline || [];
+        return arr.map((item) => ({
+            label: `${MONTH_LABELS[(item.month - 1 + 12) % 12]} ${String(item.year).slice(-2)}`,
+            revenue: item.revenue,
+            count: item.count,
+        }));
+    }, [billing?.revenueTimeline]);
+
+    const planBreakdown = billing?.planBreakdown || [];
+    const upcomingRenewals = billing?.upcomingRenewals || [];
+
+    return (
+        <div className="flex flex-col gap-6">
+            {/* ── KPI ROW ── */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <KpiCard
+                    icon={IndianRupee}
+                    label="Total Revenue (30d)"
+                    value={revLoading ? '…' : INR.format(grandTotal)}
+                    sub="Pharmacy + bookings + subscriptions"
+                    accent="primary"
+                    delay={0}
+                />
+                <KpiCard
+                    icon={Package}
+                    label="Pharmacy Revenue"
+                    value={revLoading ? '…' : INR.format(pharmacy.total)}
+                    sub={`${pharmacy.count} paid order${pharmacy.count === 1 ? '' : 's'} · avg ${INR.format(pharmacy.avgOrder || 0)}`}
+                    accent="success"
+                    delay={0.05}
+                />
+                <KpiCard
+                    icon={Stethoscope}
+                    label="Booking Revenue"
+                    value={revLoading ? '…' : INR.format(bookings.total)}
+                    sub={`${bookings.count} paid booking${bookings.count === 1 ? '' : 's'} · avg ${INR.format(bookings.avgOrder || 0)}`}
+                    accent="info"
+                    delay={0.1}
+                />
+                <KpiCard
+                    icon={CreditCard}
+                    label="Subscription Revenue"
+                    value={revLoading ? '…' : INR.format(subscription.total)}
+                    sub={`${subscription.count} payment${subscription.count === 1 ? '' : 's'} recorded`}
+                    accent="accent"
+                    delay={0.15}
+                />
+            </div>
+
+            {/* ── CHARTS ROW ── */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                {/* Revenue timeline */}
+                <motion.div
+                    initial={{ opacity: 0, y: 16 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.35, delay: 0.1 }}
+                    className="card p-5 lg:col-span-2"
+                >
+                    <div className="flex items-center justify-between mb-4">
+                        <div>
+                            <h3 className="text-base font-bold text-base-content">Subscription Revenue Trend</h3>
+                            <p className="text-xs text-base-content/50">Last 12 months</p>
+                        </div>
+                        <TrendingUp className="w-5 h-5 text-success" />
+                    </div>
+                    {timelineData.length === 0 ? (
+                        <EmptyState compact icon={TrendingUp} title="No revenue data yet" />
+                    ) : (
+                        <ResponsiveContainer width="100%" height={260}>
+                            <AreaChart data={timelineData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+                                <defs>
+                                    <linearGradient id="revFill" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.35} />
+                                        <stop offset="100%" stopColor="var(--color-primary)" stopOpacity={0} />
+                                    </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" vertical={false} />
+                                <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--base-content)' }} axisLine={false} tickLine={false} />
+                                <YAxis tick={{ fontSize: 11, fill: 'var(--base-content)' }} axisLine={false} tickLine={false}
+                                    tickFormatter={(v) => `₹${v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}`} />
+                                <Tooltip
+                                    contentStyle={{ background: 'var(--base-100)', border: '1px solid var(--base-300)', borderRadius: 'var(--r-field)', fontSize: 12 }}
+                                    formatter={(value, name) => name === 'revenue' ? [INR.format(value), 'Revenue'] : [value, 'Payments']}
+                                />
+                                <Area type="monotone" dataKey="revenue" stroke="var(--color-primary)" strokeWidth={2.5} fill="url(#revFill)" />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                    )}
+                </motion.div>
+
+                {/* Revenue share pie */}
+                <motion.div
+                    initial={{ opacity: 0, y: 16 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.35, delay: 0.15 }}
+                    className="card p-5"
+                >
+                    <h3 className="text-base font-bold text-base-content mb-1">Revenue Mix</h3>
+                    <p className="text-xs text-base-content/50 mb-4">By source (30d window)</p>
+                    {revenueShareData.length === 0 ? (
+                        <EmptyState compact icon={IndianRupee} title="No revenue recorded" />
+                    ) : (
+                        <ResponsiveContainer width="100%" height={220}>
+                            <PieChart>
+                                <Pie
+                                    data={revenueShareData}
+                                    dataKey="value"
+                                    nameKey="name"
+                                    innerRadius={55}
+                                    outerRadius={85}
+                                    paddingAngle={3}
+                                >
+                                    {revenueShareData.map((_, i) => (
+                                        <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} stroke="none" />
+                                    ))}
+                                </Pie>
+                                <Tooltip
+                                    contentStyle={{ background: 'var(--base-100)', border: '1px solid var(--base-300)', borderRadius: 'var(--r-field)', fontSize: 12 }}
+                                    formatter={(value) => INR.format(value)}
+                                />
+                                <Legend wrapperStyle={{ fontSize: 11 }} />
+                            </PieChart>
+                        </ResponsiveContainer>
+                    )}
+                </motion.div>
+            </div>
+
+            {/* ── SUBSCRIPTIONS ROW ── */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                {/* Status summary */}
+                <motion.div
+                    initial={{ opacity: 0, y: 16 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.35, delay: 0.2 }}
+                    className="card p-5"
+                >
+                    <h3 className="text-base font-bold text-base-content mb-4">Subscriptions by Status</h3>
+                    {(!billing?.summary || billing.summary.length === 0) ? (
+                        <EmptyState compact icon={CreditCard} title="No subscriptions" />
+                    ) : (
+                        <div className="flex flex-col gap-3">
+                            {billing.summary.map((s) => (
+                                <div key={s._id} className="flex items-center justify-between">
+                                    <StatusBadge value={s._id} />
+                                    <div className="text-right">
+                                        <p className="text-sm font-bold text-base-content">{s.count}</p>
+                                        <p className="text-xs text-base-content/50">{INR.format(s.totalRevenue)}</p>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </motion.div>
+
+                {/* Plan breakdown */}
+                <motion.div
+                    initial={{ opacity: 0, y: 16 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.35, delay: 0.25 }}
+                    className="card p-5"
+                >
+                    <h3 className="text-base font-bold text-base-content mb-4">Active Plans</h3>
+                    {planBreakdown.length === 0 ? (
+                        <EmptyState compact icon={Users} title="No active plans" />
+                    ) : (
+                        <ResponsiveContainer width="100%" height={180}>
+                            <BarChart data={planBreakdown} layout="vertical" margin={{ left: 0, right: 16 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" horizontal={false} />
+                                <XAxis type="number" tick={{ fontSize: 11, fill: 'var(--base-content)' }} axisLine={false} tickLine={false} allowDecimals={false} />
+                                <YAxis type="category" dataKey="planName" width={90} tick={{ fontSize: 11, fill: 'var(--base-content)' }} axisLine={false} tickLine={false} />
+                                <Tooltip contentStyle={{ background: 'var(--base-100)', border: '1px solid var(--base-300)', borderRadius: 'var(--r-field)', fontSize: 12 }} />
+                                <Bar dataKey="count" radius={[0, 6, 6, 0]} fill="var(--color-primary)" />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    )}
+                </motion.div>
+
+                {/* Upcoming renewals */}
+                <motion.div
+                    initial={{ opacity: 0, y: 16 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.35, delay: 0.3 }}
+                    className="card p-5"
+                >
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-base font-bold text-base-content">Renewals — Next 7 Days</h3>
+                        <Clock className="w-4 h-4 text-warning" />
+                    </div>
+                    {upcomingRenewals.length === 0 ? (
+                        <EmptyState compact icon={Clock} title="No upcoming renewals" />
+                    ) : (
+                        <div className="flex flex-col gap-2.5 max-h-[200px] overflow-y-auto scrollbar-thin pr-1">
+                            {upcomingRenewals.map((sub) => (
+                                <div key={sub._id} className="flex items-center justify-between text-sm">
+                                    <div className="min-w-0">
+                                        <p className="font-semibold text-base-content truncate">{sub.user?.name || 'Unknown'}</p>
+                                        <p className="text-xs text-base-content/50">{sub.plan?.name || sub.planName}</p>
+                                    </div>
+                                    <span className="text-xs font-semibold text-warning whitespace-nowrap ml-2">{fmtDate(sub.expiryDate)}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </motion.div>
+            </div>
+        </div>
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// EMPTY / LOADING STATES
+// ════════════════════════════════════════════════════════════════════════════
+
+function EmptyState({ icon: Icon = Receipt, title = 'Nothing here yet', sub, compact = false }) {
+    return (
+        <div className={`flex flex-col items-center justify-center text-center ${compact ? 'py-8' : 'py-16'}`}>
+            <div className="w-12 h-12 rounded-2xl bg-base-300/60 flex items-center justify-center mb-3">
+                <Icon className="w-5 h-5 text-base-content/40" />
+            </div>
+            <p className="text-sm font-semibold text-base-content/70">{title}</p>
+            {sub && <p className="text-xs text-base-content/45 mt-1 max-w-xs">{sub}</p>}
+        </div>
+    );
+}
+
+function TableSkeleton({ rows = 6, cols = 6 }) {
+    return (
+        <div className="p-4 flex flex-col gap-3">
+            {Array.from({ length: rows }).map((_, r) => (
+                <div key={r} className="flex gap-4">
+                    {Array.from({ length: cols }).map((_, c) => (
+                        <div key={c} className="skeleton h-4 flex-1 rounded" />
+                    ))}
+                </div>
+            ))}
+        </div>
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// REFUND MODAL
+// ════════════════════════════════════════════════════════════════════════════
+
+function RefundModal({ open, onClose, target, kind }) {
+    const dispatch = useDispatch();
+    const { processing, error } = useSelector(selectRefundState);
+    const [amount, setAmount] = useState('');
+    const [reason, setReason] = useState('');
+    const [method, setMethod] = useState('Wallet');
+
+    const maxRefundable = useMemo(() => {
+        if (!target) return 0;
+        if (kind === 'pharmacy') return target.billing?.totalPayable ?? 0;
+        return target.fareBreakdown?.amountPaid ?? 0;
+    }, [target, kind]);
+
+    useEffect(() => {
+        if (open) {
+            setAmount(maxRefundable ? String(maxRefundable) : '');
+            setReason('');
+            setMethod('Wallet');
+            dispatch(resetRefundStatus());
+        }
+    }, [open, maxRefundable, dispatch]);
+
+    if (!target) return null;
+
+    const handleSubmit = async () => {
+        const amt = Number(amount);
+        if (!amt || amt <= 0) return toast.error('Enter a valid refund amount');
+        if (amt > maxRefundable) return toast.error(`Amount exceeds refundable total of ${INR.format(maxRefundable)}`);
+        if (!reason.trim()) return toast.error('Reason is required');
+
+        const refundData = { amount: amt, reason: reason.trim(), method };
+
+        let result;
+        if (kind === 'pharmacy') {
+            result = await dispatch(processPharmacyRefund({ orderId: target.orderId, refundData }));
+        } else {
+            result = await dispatch(processBookingRefund({ bookingId: target.bookingCode, refundData }));
+        }
+
+        if (!result.error) {
+            onClose();
+        }
+    };
+
+    const identifier = kind === 'pharmacy' ? target.orderId : target.bookingCode;
+    const alreadyRefunded = kind === 'pharmacy'
+        ? target.cancellation?.refundStatus === 'Processed'
+        : target.paymentStatus === 'refunded';
+
+    return (
+        <AnimatePresence>
+            {open && (
+                <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+                    onClick={onClose}
+                >
+                    <motion.div
+                        initial={{ opacity: 0, scale: 0.95, y: 12 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95, y: 12 }}
+                        transition={{ duration: 0.2 }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="card bg-base-100 w-full max-w-md p-6 shadow-depth-lg"
+                    >
+                        <div className="flex items-start justify-between mb-1">
+                            <div>
+                                <h3 className="text-lg font-bold text-base-content">Process Refund</h3>
+                                <p className="text-xs text-base-content/50 mt-0.5">
+                                    {kind === 'pharmacy' ? 'Pharmacy order' : 'Booking'} <span className="font-mono font-semibold">{identifier}</span>
+                                </p>
+                            </div>
+                            <button onClick={onClose} className="btn btn-ghost btn-circle btn-sm">
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+
+                        {alreadyRefunded ? (
+                            <div className="alert alert-warning mt-4">
+                                <AlertTriangle className="w-4 h-4 shrink-0" />
+                                <p className="text-sm">This {kind === 'pharmacy' ? 'order' : 'booking'} has already been refunded.</p>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col gap-4 mt-4">
+                                <div>
+                                    <label className="label-text mb-1.5 block">Refund Amount</label>
+                                    <div className="relative">
+                                        <IndianRupee className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max={maxRefundable}
+                                            value={amount}
+                                            onChange={(e) => setAmount(e.target.value)}
+                                            className="input-field pl-9"
+                                        />
+                                    </div>
+                                    <p className="label-text-alt mt-1">Max refundable: {INR2.format(maxRefundable)}</p>
+                                </div>
+
+                                <div>
+                                    <label className="label-text mb-1.5 block">Refund Method</label>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {REFUND_METHODS.map((m) => (
+                                            <button
+                                                key={m}
+                                                onClick={() => setMethod(m)}
+                                                className={`btn btn-sm ${method === m ? 'btn-primary' : 'btn-outline'}`}
+                                            >
+                                                {formatLabel(m)}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="label-text mb-1.5 block">Reason (required)</label>
+                                    <textarea
+                                        value={reason}
+                                        onChange={(e) => setReason(e.target.value)}
+                                        rows={3}
+                                        placeholder="Explain why this refund is being issued…"
+                                        className="input-field resize-none"
+                                    />
+                                </div>
+
+                                {error && (
+                                    <div className="alert alert-error">
+                                        <XCircle className="w-4 h-4 shrink-0" />
+                                        <p className="text-sm">{error}</p>
+                                    </div>
+                                )}
+
+                                <div className="flex gap-2 justify-end pt-2">
+                                    <button onClick={onClose} className="btn btn-ghost" disabled={processing}>Cancel</button>
+                                    <button onClick={handleSubmit} className="btn btn-error gap-2" disabled={processing}>
+                                        {processing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Banknote className="w-4 h-4" />}
+                                        Confirm Refund
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </motion.div>
+                </motion.div>
+            )}
+        </AnimatePresence>
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SECTION: PHARMACY ORDERS
+// ════════════════════════════════════════════════════════════════════════════
+
+function PharmacyOrdersSection() {
+    const dispatch = useDispatch();
+    const { data, pagination, loading } = useSelector(selectPharmacyOrders);
+
+    const [filters, setFilters] = useState({
+        search: '', deliveryStatus: '', paymentStatus: '', paymentMethod: '',
+        startDate: '', endDate: '', minAmount: '', maxAmount: '',
     });
-    return Object.entries(m).filter(([, v]) => v > 0).map(([name, value]) => ({ name, value }));
-  }, [orders]);
+    const [page, setPage] = useState(1);
+    const [refundTarget, setRefundTarget] = useState(null);
+    const [expandedId, setExpandedId] = useState(null);
 
-  const revenueTimeline = useMemo(() => {
-    const m = {};
-    ledger.forEach(item => {
-      const tx = item.transaction ?? {};
-      const d = new Date(tx.timestamp).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
-      if (!m[d]) m[d] = { date: d, credit: 0, debit: 0 };
-      if (tx.type === 'Credit') m[d].credit += tx.amount ?? 0;
-      if (tx.type === 'Debit')  m[d].debit  += tx.amount ?? 0;
-    });
-    return Object.values(m).slice(-14);
-  }, [ledger]);
+    const activeCount = useMemo(
+        () => Object.values(filters).filter((v) => v && v !== filters.search).length
+            + (filters.search ? 1 : 0) - (filters.search ? 1 : 0) // search counted separately below
+            + Object.entries(filters).filter(([k, v]) => k !== 'search' && v).length - Object.entries(filters).filter(([k, v]) => k !== 'search' && v).length,
+        [filters]
+    );
+    const activeFilterCount = Object.entries(filters).filter(([k, v]) => k !== 'search' && v).length;
 
-  const statusPieData = useMemo(() => {
-    const m = {};
-    orders.forEach(o => {
-      const s = o.payment?.status ?? 'Unknown';
-      m[s] = (m[s] ?? 0) + 1;
-    });
-    return Object.entries(m).map(([name, value]) => ({ name, value }));
-  }, [orders]);
+    useEffect(() => {
+        const params = { page, limit: 20 };
+        Object.entries(filters).forEach(([k, v]) => { if (v) params[k] = v; });
+        const timer = setTimeout(() => dispatch(fetchPharmacyOrders(params)), filters.search ? 350 : 0);
+        return () => clearTimeout(timer);
+    }, [dispatch, page, filters]);
 
-  return (
-    <div className="space-y-5">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Timeline */}
-        <div className="lg:col-span-2 glass-card p-5">
-          <SectionHeading icon={Activity} title="Wallet Flow Timeline (Last 14 Days)" badge="Live Ledger" />
-          {ledgerLoading
-            ? <div className="flex justify-center py-10"><div className="loading loading-md loading-spinner" /></div>
-            : (
-              <ResponsiveContainer width="100%" height={220}>
-                <ComposedChart data={revenueTimeline} margin={{ top: 4, right: 4, bottom: 0, left: 4 }}>
-                  <defs>
-                    <linearGradient id="cGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--success)" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="var(--success)" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="dGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--error)" stopOpacity={0.2} />
-                      <stop offset="95%" stopColor="var(--error)" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.4 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.4 }}
-                    tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Area type="monotone" dataKey="credit" fill="url(#cGrad)" stroke="var(--success)" strokeWidth={2.5} name="Credits ₹" />
-                  <Area type="monotone" dataKey="debit"  fill="url(#dGrad)" stroke="var(--error)"   strokeWidth={2}   name="Debits ₹" />
-                </ComposedChart>
-              </ResponsiveContainer>
+    const updateFilter = (key, value) => { setFilters((f) => ({ ...f, [key]: value })); setPage(1); };
+    const resetFilters = () => { setFilters({ search: '', deliveryStatus: '', paymentStatus: '', paymentMethod: '', startDate: '', endDate: '', minAmount: '', maxAmount: '' }); setPage(1); };
+
+    return (
+        <>
+            <div className="card overflow-hidden">
+                <FilterBar
+                    searchValue={filters.search}
+                    onSearchChange={(v) => updateFilter('search', v)}
+                    searchPlaceholder="Search by order ID (ORD-XXXX-…)"
+                    onReset={resetFilters}
+                    activeCount={activeFilterCount}
+                >
+                    <FilterField label="Delivery Status">
+                        <SelectInput value={filters.deliveryStatus} onChange={(v) => updateFilter('deliveryStatus', v)} options={PHARMACY_DELIVERY_STATUSES} />
+                    </FilterField>
+                    <FilterField label="Payment Status">
+                        <SelectInput value={filters.paymentStatus} onChange={(v) => updateFilter('paymentStatus', v)} options={PHARMACY_PAYMENT_STATUSES} />
+                    </FilterField>
+                    <FilterField label="Payment Method">
+                        <SelectInput value={filters.paymentMethod} onChange={(v) => updateFilter('paymentMethod', v)} options={PAYMENT_METHODS_PHARMACY} />
+                    </FilterField>
+                    <FilterField label="From Date">
+                        <input type="date" value={filters.startDate} onChange={(e) => updateFilter('startDate', e.target.value)} className="input-field" />
+                    </FilterField>
+                    <FilterField label="To Date">
+                        <input type="date" value={filters.endDate} onChange={(e) => updateFilter('endDate', e.target.value)} className="input-field" />
+                    </FilterField>
+                    <FilterField label="Min Amount (₹)">
+                        <input type="number" value={filters.minAmount} onChange={(e) => updateFilter('minAmount', e.target.value)} className="input-field" placeholder="0" />
+                    </FilterField>
+                    <FilterField label="Max Amount (₹)">
+                        <input type="number" value={filters.maxAmount} onChange={(e) => updateFilter('maxAmount', e.target.value)} className="input-field" placeholder="No limit" />
+                    </FilterField>
+                </FilterBar>
+
+                {loading ? (
+                    <TableSkeleton />
+                ) : data.length === 0 ? (
+                    <EmptyState icon={Package} title="No pharmacy orders found" sub="Try adjusting filters or search terms." />
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="table">
+                            <thead>
+                                <tr>
+                                    <th>Order</th>
+                                    <th>Customer</th>
+                                    <th>Store</th>
+                                    <th>Items</th>
+                                    <th>Total</th>
+                                    <th>Payment</th>
+                                    <th>Delivery</th>
+                                    <th>Placed</th>
+                                    <th className="text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {data.map((order) => (
+                                    <PharmacyRow
+                                        key={order._id}
+                                        order={order}
+                                        expanded={expandedId === order._id}
+                                        onToggle={() => setExpandedId(expandedId === order._id ? null : order._id)}
+                                        onRefund={() => setRefundTarget(order)}
+                                    />
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                <PaginationBar pagination={pagination} onPageChange={setPage} loading={loading} />
+            </div>
+
+            <RefundModal open={!!refundTarget} onClose={() => setRefundTarget(null)} target={refundTarget} kind="pharmacy" />
+        </>
+    );
+}
+
+function PharmacyRow({ order, expanded, onToggle, onRefund }) {
+    const canRefund = order.payment?.status === 'Paid' && order.cancellation?.refundStatus !== 'Processed';
+
+    return (
+        <>
+            <tr className="cursor-pointer" onClick={onToggle}>
+                <td>
+                    <div className="flex items-center gap-2">
+                        <ChevronDown className={`w-3.5 h-3.5 text-base-content/40 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                        <span className="font-mono text-xs font-semibold">{order.orderId}</span>
+                    </div>
+                </td>
+                <td>
+                    <p className="font-semibold text-sm">{order.customer?.name || '—'}</p>
+                    <p className="text-xs text-base-content/50">{order.customer?.phone || order.customer?.email || ''}</p>
+                </td>
+                <td className="text-sm">{order.store?.storeName || '—'}</td>
+                <td className="text-sm">{order.items?.length ?? 0} item{(order.items?.length ?? 0) === 1 ? '' : 's'}</td>
+                <td className="font-semibold text-sm">{INR2.format(order.billing?.totalPayable ?? 0)}</td>
+                <td>
+                    <div className="flex flex-col gap-1 items-start">
+                        <StatusBadge value={order.payment?.status} />
+                        <span className="text-xs text-base-content/50">{formatLabel(order.payment?.method)}</span>
+                    </div>
+                </td>
+                <td><StatusBadge value={order.delivery?.status} /></td>
+                <td className="text-xs text-base-content/60 whitespace-nowrap">{fmtDate(order.createdAt)}</td>
+                <td className="text-right">
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onRefund(); }}
+                        disabled={!canRefund}
+                        className="btn btn-xs btn-outline gap-1.5"
+                        title={canRefund ? 'Process refund' : 'Refund unavailable'}
+                    >
+                        <RefreshCw className="w-3 h-3" /> Refund
+                    </button>
+                </td>
+            </tr>
+            <AnimatePresence>
+                {expanded && (
+                    <tr>
+                        <td colSpan={9} className="p-0 border-b border-base-300">
+                            <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.2 }}
+                                className="overflow-hidden"
+                            >
+                                <div className="bg-base-200 p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                                    {/* Items */}
+                                    <div>
+                                        <h4 className="text-xs font-bold uppercase tracking-wide text-base-content/50 mb-2">Items</h4>
+                                        <div className="flex flex-col gap-2">
+                                            {(order.items || []).map((item, i) => (
+                                                <div key={i} className="flex justify-between text-sm bg-base-100 rounded-lg px-3 py-2">
+                                                    <div className="min-w-0">
+                                                        <p className="font-semibold truncate">{item.name}</p>
+                                                        <p className="text-xs text-base-content/50">{item.brandName} · Qty {item.quantity} · GST {item.gstPercentage}%</p>
+                                                    </div>
+                                                    <p className="font-semibold whitespace-nowrap ml-2">{INR2.format(item.totalPrice)}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Billing breakdown */}
+                                    <div>
+                                        <h4 className="text-xs font-bold uppercase tracking-wide text-base-content/50 mb-2">Billing</h4>
+                                        <div className="flex flex-col gap-1.5 text-sm bg-base-100 rounded-lg p-3">
+                                            <BillRow label="Subtotal" value={order.billing?.subTotal} />
+                                            <BillRow label="GST" value={order.billing?.gstAmount} />
+                                            <BillRow label="Delivery Charges" value={order.billing?.deliveryCharges} />
+                                            <BillRow label="Platform Fee" value={order.billing?.platformFee} />
+                                            <BillRow label="Discount" value={order.billing?.discountAmount} negative />
+                                            <BillRow label="Wallet Used" value={order.billing?.walletAmountUsed} negative />
+                                            <div className="divider my-1" />
+                                            <BillRow label="Total Payable" value={order.billing?.totalPayable} bold />
+                                            {order.billing?.promoCode && (
+                                                <p className="text-xs text-base-content/50 mt-1">Promo: <span className="font-mono">{order.billing.promoCode}</span></p>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Delivery / refund info */}
+                                    <div>
+                                        <h4 className="text-xs font-bold uppercase tracking-wide text-base-content/50 mb-2">Delivery &amp; Refund</h4>
+                                        <div className="flex flex-col gap-1.5 text-sm bg-base-100 rounded-lg p-3">
+                                            <BillRow label="Address" value={[order.delivery?.address?.line1, order.delivery?.address?.city, order.delivery?.address?.pincode].filter(Boolean).join(', ') || '—'} text />
+                                            <BillRow label="Delivery Type" value={formatLabel(order.delivery?.deliveryType)} text />
+                                            {order.delivery?.deliveredAt && <BillRow label="Delivered At" value={fmtDateTime(order.delivery.deliveredAt)} text />}
+                                            {order.cancellation?.refundStatus && order.cancellation.refundStatus !== 'None' && (
+                                                <>
+                                                    <div className="divider my-1" />
+                                                    <BillRow label="Refund Status" value={<StatusBadge value={order.cancellation.refundStatus} />} text />
+                                                    {order.cancellation?.refundAmount > 0 && <BillRow label="Refund Amount" value={INR2.format(order.cancellation.refundAmount)} text />}
+                                                    {order.cancellation?.refundMethod && <BillRow label="Refund Method" value={formatLabel(order.cancellation.refundMethod)} text />}
+                                                    {order.cancellation?.refundedAt && <BillRow label="Refunded At" value={fmtDateTime(order.cancellation.refundedAt)} text />}
+                                                </>
+                                            )}
+                                            {order.prescription?.verificationStatus && order.prescription.verificationStatus !== 'Not_Uploaded' && (
+                                                <>
+                                                    <div className="divider my-1" />
+                                                    <BillRow label="Prescription" value={<StatusBadge value={order.prescription.verificationStatus} />} text />
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </motion.div>
+                        </td>
+                    </tr>
+                )}
+            </AnimatePresence>
+        </>
+    );
+}
+
+function BillRow({ label, value, bold, negative, text }) {
+    return (
+        <div className="flex justify-between items-center gap-2">
+            <span className={`text-base-content/60 ${bold ? 'font-bold text-base-content' : ''}`}>{label}</span>
+            {text ? (
+                <span className={`text-right ${bold ? 'font-bold text-base-content' : 'text-base-content/80'}`}>{value}</span>
+            ) : (
+                <span className={`${bold ? 'font-bold text-base-content' : ''} ${negative && value > 0 ? 'text-error' : ''}`}>
+                    {negative && value > 0 ? '−' : ''}{INR2.format(value ?? 0)}
+                </span>
             )}
         </div>
-        {/* Method split */}
-        <div className="glass-card p-5">
-          <SectionHeading icon={PieIcon} title="Payment Method Split" />
-          <ResponsiveContainer width="100%" height={220}>
-            <PieChart>
-              <Pie data={methodBreakdown} dataKey="value" nameKey="name"
-                cx="50%" cy="50%" outerRadius={80} innerRadius={45} paddingAngle={5}>
-                {methodBreakdown.map((_, i) => <Cell key={i} fill={CHART_COLORS[i]} />)}
-              </Pie>
-              <Tooltip content={<ChartTooltip />} />
-              <Legend wrapperStyle={{ fontSize: 10 }} iconType="circle" />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
+    );
+}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="glass-card p-5">
-          <SectionHeading icon={Zap} title="Payment Status Distribution" />
-          <ResponsiveContainer width="100%" height={190}>
-            <BarChart data={statusPieData} margin={{ top: 4, right: 4, bottom: 0, left: 4 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" />
-              <XAxis dataKey="name" tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.5 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.4 }} axisLine={false} tickLine={false} />
-              <Tooltip content={<ChartTooltip />} />
-              <Bar dataKey="value" name="Orders" radius={[6, 6, 0, 0]}>
-                {statusPieData.map((d, i) => {
-                  const fill = d.name === 'Paid' ? 'var(--success)' : d.name === 'Failed' ? 'var(--error)' : d.name === 'Refunded' ? 'var(--info)' : 'var(--warning)';
-                  return <Cell key={i} fill={fill} />;
-                })}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="glass-card p-5">
-          <SectionHeading icon={IndianRupee} title="Revenue by Payment Method" />
-          <ResponsiveContainer width="100%" height={190}>
-            <BarChart data={methodBreakdown} layout="vertical" margin={{ top: 4, right: 24, bottom: 0, left: 16 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" />
-              <XAxis type="number" tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.4 }}
-                tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
-              <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: 'var(--base-content)', opacity: 0.6 }} axisLine={false} tickLine={false} />
-              <Tooltip content={<ChartTooltip />} />
-              <Bar dataKey="value" name="Revenue ₹" radius={[0, 6, 6, 0]}>
-                {methodBreakdown.map((_, i) => <Cell key={i} fill={CHART_COLORS[i]} />)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-    </div>
-  );
-};
+// ════════════════════════════════════════════════════════════════════════════
+// SECTION: HEALTHCARE BOOKINGS
+// ════════════════════════════════════════════════════════════════════════════
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
-
-export default function PaymentPage() {
-  const dispatch = useDispatch();
-  const { data: orders } = useSelector(selectPharmacyOrders);
-  const { data: ledger } = useSelector(selectFinancialLedger);
-  const [activeTab, setActiveTab] = useState('orders');
-
-  // Bootstrap: orders + ledger for summary stats
-  useEffect(() => {
-    dispatch(fetchPharmacyOrders({ page: 1, limit: 15 }));
-    dispatch(fetchFinancialLedger({ limit: 200 }));
-  }, [dispatch]);
-
-  const orderStats = useMemo(() => {
-    let totalPaid = 0, totalPending = 0, totalFailed = 0, totalRefunded = 0;
-    orders.forEach(o => {
-      const amt = o.billing?.totalPayable ?? 0;
-      if (o.payment?.status === 'Paid')     totalPaid     += amt;
-      if (o.payment?.status === 'Pending')  totalPending  += amt;
-      if (o.payment?.status === 'Failed')   totalFailed   += amt;
-      if (o.payment?.status === 'Refunded') totalRefunded += amt;
+function BookingsSection() {
+    const [data, setData] = useState([]);
+    const [pagination, setPagination] = useState({});
+    const [loading, setLoading] = useState(true);
+    const [filters, setFilters] = useState({
+        search: '', status: '', paymentStatus: '', bookingType: '', startDate: '', endDate: '',
     });
-    return { totalPaid, totalPending, totalFailed, totalRefunded };
-  }, [orders]);
+    const [page, setPage] = useState(1);
+    const [refundTarget, setRefundTarget] = useState(null);
+    const [expandedId, setExpandedId] = useState(null);
 
-  const TAB_PANELS = {
-    orders:    <OrdersTab />,
-    ledger:    <LedgerTab />,
-    billing:   <BillingTab />,
-    audit:     <AuditTab />,
-    wallet:    <WalletTab />,
-    analytics: <AnalyticsTab />,
-  };
+    const activeFilterCount = Object.entries(filters).filter(([k, v]) => k !== 'search' && v).length;
 
-  return (
-    <div className="min-h-screen p-4 md:p-6 space-y-6">
-      {/* Header */}
-      <motion.div initial="hidden" animate="show" variants={stagger}
-        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <motion.div variants={fadeUp}>
-          <h1 className="text-responsive-xl font-black text-base-content flex items-center gap-3">
-            <div className="p-2.5 rounded-2xl bg-primary/10">
-              <CreditCard size={26} className="text-primary" />
+    const fetchBookings = useCallback(async () => {
+        setLoading(true);
+        try {
+            const params = { page, limit: 20 };
+            Object.entries(filters).forEach(([k, v]) => { if (v) params[k] = v; });
+            const res = await API.get('/superadmin/bookings', { params });
+            setData(res.data.data || []);
+            setPagination(res.data.pagination || {});
+        } catch (err) {
+            toast.error(err.response?.data?.message || 'Failed to fetch bookings');
+        } finally {
+            setLoading(false);
+        }
+    }, [page, filters]);
+
+    useEffect(() => {
+        const timer = setTimeout(fetchBookings, filters.search ? 350 : 0);
+        return () => clearTimeout(timer);
+    }, [fetchBookings, filters.search]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    useEffect(() => { fetchBookings(); }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const updateFilter = (key, value) => { setFilters((f) => ({ ...f, [key]: value })); setPage(1); };
+    const resetFilters = () => { setFilters({ search: '', status: '', paymentStatus: '', bookingType: '', startDate: '', endDate: '' }); setPage(1); };
+
+    const handleRefundClose = () => { setRefundTarget(null); fetchBookings(); };
+
+    return (
+        <>
+            <div className="card overflow-hidden">
+                <FilterBar
+                    searchValue={filters.search}
+                    onSearchChange={(v) => updateFilter('search', v)}
+                    searchPlaceholder="Search by booking code (BK-XXXXXXXX)"
+                    onReset={resetFilters}
+                    activeCount={activeFilterCount}
+                >
+                    <FilterField label="Booking Status">
+                        <SelectInput value={filters.status} onChange={(v) => updateFilter('status', v)} options={BOOKING_STATUSES} />
+                    </FilterField>
+                    <FilterField label="Payment Status">
+                        <SelectInput value={filters.paymentStatus} onChange={(v) => updateFilter('paymentStatus', v)} options={BOOKING_PAYMENT_STATUSES} />
+                    </FilterField>
+                    <FilterField label="Booking Type">
+                        <SelectInput value={filters.bookingType} onChange={(v) => updateFilter('bookingType', v)} options={BOOKING_TYPES} />
+                    </FilterField>
+                    <FilterField label="From Date">
+                        <input type="date" value={filters.startDate} onChange={(e) => updateFilter('startDate', e.target.value)} className="input-field" />
+                    </FilterField>
+                    <FilterField label="To Date">
+                        <input type="date" value={filters.endDate} onChange={(e) => updateFilter('endDate', e.target.value)} className="input-field" />
+                    </FilterField>
+                </FilterBar>
+
+                {loading ? (
+                    <TableSkeleton />
+                ) : data.length === 0 ? (
+                    <EmptyState icon={Stethoscope} title="No bookings found" sub="Try adjusting filters or search terms." />
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="table">
+                            <thead>
+                                <tr>
+                                    <th>Booking</th>
+                                    <th>Customer</th>
+                                    <th>Type</th>
+                                    <th>Provider</th>
+                                    <th>Scheduled</th>
+                                    <th>Amount Paid</th>
+                                    <th>Payment</th>
+                                    <th>Status</th>
+                                    <th className="text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {data.map((booking) => (
+                                    <BookingRow
+                                        key={booking._id}
+                                        booking={booking}
+                                        expanded={expandedId === booking._id}
+                                        onToggle={() => setExpandedId(expandedId === booking._id ? null : booking._id)}
+                                        onRefund={() => setRefundTarget(booking)}
+                                    />
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                <PaginationBar pagination={pagination} onPageChange={setPage} loading={loading} />
             </div>
-            Payment Management
-          </h1>
-          <p className="text-base-content/40 text-sm mt-1 ml-1">
-            Monitor, reconcile &amp; manage all financial transactions
-          </p>
-        </motion.div>
-      </motion.div>
 
-      {/* Global Stats */}
-      <motion.div initial="hidden" animate="show" variants={stagger}
-        className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-        <StatCard title="Total Collected"
-          value={`₹${orderStats.totalPaid.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
-          icon={CheckCircle2} colorVar="text-success" trendVal={9.4} />
-        <StatCard title="Pending"
-          value={`₹${orderStats.totalPending.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
-          icon={Clock} colorVar="text-warning" trendVal={-3.1} />
-        <StatCard title="Failed Payments"
-          value={`₹${orderStats.totalFailed.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
-          icon={XCircle} colorVar="text-error" trendVal={-1.8} />
-        <StatCard title="Refunded"
-          value={`₹${orderStats.totalRefunded.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
-          icon={RotateCcw} colorVar="text-info" sub="Current page" />
-      </motion.div>
+            <RefundModal open={!!refundTarget} onClose={handleRefundClose} target={refundTarget} kind="booking" />
+        </>
+    );
+}
 
-      {/* Tab Bar */}
-      <div className="flex items-center gap-1 glass-card p-1.5 rounded-xl overflow-x-auto scrollbar-thin">
-        {TABS.map(({ key, label, icon: Icon }) => (
-          <button key={key} onClick={() => setActiveTab(key)}
-            className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${
-              activeTab === key
-                ? 'bg-primary text-primary-content shadow-md'
-                : 'text-base-content/60 hover:text-base-content hover:bg-base-200'
-            }`}>
-            <Icon size={13} />
-            {label}
-          </button>
-        ))}
-      </div>
+function BookingRow({ booking, expanded, onToggle, onRefund }) {
+    const canRefund = ['paid', 'partially_paid', 'pay_at_service_paid'].includes(booking.paymentStatus)
+        && booking.paymentStatus !== 'refunded';
 
-      {/* Tab Content */}
-      <AnimatePresence mode="wait">
-        <motion.div key={activeTab}
-          initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
-          {TAB_PANELS[activeTab]}
-        </motion.div>
-      </AnimatePresence>
-    </div>
-  );
+    const provider = booking.doctor?.specialization
+        ? `Dr. · ${booking.doctor.specialization}`
+        : booking.careAssistant?.fullName
+            ? booking.careAssistant.fullName
+            : booking.hospital?.name
+                ? booking.hospital.name
+                : booking.labPartner?.name || '—';
+
+    return (
+        <>
+            <tr className="cursor-pointer" onClick={onToggle}>
+                <td>
+                    <div className="flex items-center gap-2">
+                        <ChevronDown className={`w-3.5 h-3.5 text-base-content/40 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                        <span className="font-mono text-xs font-semibold">{booking.bookingCode}</span>
+                    </div>
+                </td>
+                <td>
+                    <p className="font-semibold text-sm">{booking.customer?.name || '—'}</p>
+                    <p className="text-xs text-base-content/50">{booking.customer?.phone || ''}</p>
+                </td>
+                <td><span className="badge badge-sm badge-secondary">{formatLabel(booking.bookingType)}</span></td>
+                <td className="text-sm">{provider}</td>
+                <td className="text-xs text-base-content/60 whitespace-nowrap">{fmtDateTime(booking.scheduledAt)}</td>
+                <td className="font-semibold text-sm">{INR2.format(booking.fareBreakdown?.amountPaid ?? 0)}</td>
+                <td><StatusBadge value={booking.paymentStatus} /></td>
+                <td><StatusBadge value={booking.status} /></td>
+                <td className="text-right">
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onRefund(); }}
+                        disabled={!canRefund}
+                        className="btn btn-xs btn-outline gap-1.5"
+                        title={canRefund ? 'Process refund' : 'Refund unavailable'}
+                    >
+                        <RefreshCw className="w-3 h-3" /> Refund
+                    </button>
+                </td>
+            </tr>
+            <AnimatePresence>
+                {expanded && (
+                    <tr>
+                        <td colSpan={9} className="p-0 border-b border-base-300">
+                            <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.2 }}
+                                className="overflow-hidden"
+                            >
+                                <div className="bg-base-200 p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                                    <div>
+                                        <h4 className="text-xs font-bold uppercase tracking-wide text-base-content/50 mb-2">Fare Breakdown</h4>
+                                        <div className="flex flex-col gap-1.5 text-sm bg-base-100 rounded-lg p-3">
+                                            <BillRow label="Consultation Fee" value={booking.fareBreakdown?.consultationFee} />
+                                            <BillRow label="Care Assistant Fee" value={booking.fareBreakdown?.careAssistantFee} />
+                                            <BillRow label="Transport Fee" value={booking.fareBreakdown?.transportFee} />
+                                            <BillRow label="Diagnostic Fee" value={booking.fareBreakdown?.diagnosticFee} />
+                                            <BillRow label="Home Collection Fee" value={booking.fareBreakdown?.homeCollectionFee} />
+                                            <BillRow label="Platform Fee" value={booking.fareBreakdown?.platformFee} />
+                                            <BillRow label="Taxes" value={booking.fareBreakdown?.taxes} />
+                                            <BillRow label="Discount" value={booking.fareBreakdown?.discount} negative />
+                                            <BillRow label="Coupon Discount" value={booking.fareBreakdown?.couponDiscount} negative />
+                                            <BillRow label="Wallet Applied" value={booking.fareBreakdown?.walletApplied} negative />
+                                            <div className="divider my-1" />
+                                            <BillRow label="Total Amount" value={booking.fareBreakdown?.totalAmount} bold />
+                                            <BillRow label="Amount Paid" value={booking.fareBreakdown?.amountPaid} bold />
+                                            {booking.fareBreakdown?.refundAmount > 0 && (
+                                                <BillRow label="Refund Amount" value={booking.fareBreakdown.refundAmount} />
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <h4 className="text-xs font-bold uppercase tracking-wide text-base-content/50 mb-2">Patient &amp; Schedule</h4>
+                                        <div className="flex flex-col gap-1.5 text-sm bg-base-100 rounded-lg p-3">
+                                            <BillRow label="Patient" value={booking.patientInfo?.name || '—'} text />
+                                            <BillRow label="Age / Gender" value={`${booking.patientInfo?.age ?? '—'} / ${booking.patientInfo?.gender || '—'}`} text />
+                                            <BillRow label="Consultation Type" value={formatLabel(booking.consultationType) || '—'} text />
+                                            <BillRow label="Scheduled At" value={fmtDateTime(booking.scheduledAt)} text />
+                                            {booking.completedAt && <BillRow label="Completed At" value={fmtDateTime(booking.completedAt)} text />}
+                                            {booking.diagnosticDetails?.testNames?.length > 0 && (
+                                                <BillRow label="Tests" value={booking.diagnosticDetails.testNames.join(', ')} text />
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <h4 className="text-xs font-bold uppercase tracking-wide text-base-content/50 mb-2">Payments &amp; Cancellation</h4>
+                                        <div className="flex flex-col gap-1.5 text-sm bg-base-100 rounded-lg p-3">
+                                            {(booking.payments || []).length === 0 ? (
+                                                <p className="text-base-content/50 text-xs">No payment records</p>
+                                            ) : (
+                                                booking.payments.map((p, i) => (
+                                                    <div key={i} className="flex justify-between items-center">
+                                                        <div className="min-w-0">
+                                                            <p className="font-semibold text-xs">{formatLabel(p.gateway)} · {formatLabel(p.paymentMode)}</p>
+                                                            <p className="text-xs text-base-content/50">{fmtDateTime(p.paidAt)}</p>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <p className="font-semibold text-xs">{INR2.format(p.amount)}</p>
+                                                            <StatusBadge value={p.status} />
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            )}
+                                            {booking.cancellation && (
+                                                <>
+                                                    <div className="divider my-1" />
+                                                    <BillRow label="Cancelled By" value={formatLabel(booking.cancellation.cancelledBy)} text />
+                                                    <BillRow label="Reason" value={booking.cancellation.reason || '—'} text />
+                                                    {booking.cancellation.cancelledAt && <BillRow label="Cancelled At" value={fmtDateTime(booking.cancellation.cancelledAt)} text />}
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </motion.div>
+                        </td>
+                    </tr>
+                )}
+            </AnimatePresence>
+        </>
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SECTION: WALLET LEDGER
+// ════════════════════════════════════════════════════════════════════════════
+
+function LedgerSection() {
+    const dispatch = useDispatch();
+    const { data, pagination, loading } = useSelector(selectFinancialLedger);
+
+    const [filters, setFilters] = useState({ type: '', purpose: '', status: '', startDate: '', endDate: '' });
+    const [page, setPage] = useState(1);
+
+    const activeFilterCount = Object.values(filters).filter(Boolean).length;
+
+    useEffect(() => {
+        const params = { page, limit: 25 };
+        Object.entries(filters).forEach(([k, v]) => { if (v) params[k] = v; });
+        dispatch(fetchFinancialLedger(params));
+    }, [dispatch, page, filters]);
+
+    const updateFilter = (key, value) => { setFilters((f) => ({ ...f, [key]: value })); setPage(1); };
+    const resetFilters = () => { setFilters({ type: '', purpose: '', status: '', startDate: '', endDate: '' }); setPage(1); };
+
+    const summary = useSelector((state) => state.superadmin?.financialLedger); // not used directly — kept for future
+
+    return (
+        <div className="card overflow-hidden">
+            <FilterBar
+                searchValue=""
+                onSearchChange={() => {}}
+                searchPlaceholder=""
+                onReset={resetFilters}
+                activeCount={activeFilterCount}
+            >
+                <FilterField label="Transaction Type">
+                    <SelectInput value={filters.type} onChange={(v) => updateFilter('type', v)} options={LEDGER_TYPES} />
+                </FilterField>
+                <FilterField label="Purpose">
+                    <SelectInput value={filters.purpose} onChange={(v) => updateFilter('purpose', v)} options={LEDGER_PURPOSES} />
+                </FilterField>
+                <FilterField label="Status">
+                    <SelectInput value={filters.status} onChange={(v) => updateFilter('status', v)} options={LEDGER_STATUSES} />
+                </FilterField>
+                <FilterField label="From Date">
+                    <input type="date" value={filters.startDate} onChange={(e) => updateFilter('startDate', e.target.value)} className="input-field" />
+                </FilterField>
+                <FilterField label="To Date">
+                    <input type="date" value={filters.endDate} onChange={(e) => updateFilter('endDate', e.target.value)} className="input-field" />
+                </FilterField>
+            </FilterBar>
+
+            {loading ? (
+                <TableSkeleton />
+            ) : data.length === 0 ? (
+                <EmptyState icon={WalletIcon} title="No transactions found" sub="Try adjusting filters." />
+            ) : (
+                <div className="overflow-x-auto">
+                    <table className="table">
+                        <thead>
+                            <tr>
+                                <th>Transaction</th>
+                                <th>User</th>
+                                <th>Type</th>
+                                <th>Purpose</th>
+                                <th>Amount</th>
+                                <th>Balance After</th>
+                                <th>Status</th>
+                                <th>Timestamp</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {data.map((row, idx) => {
+                                const txn = row.transaction;
+                                const isCredit = txn.type === 'Credit';
+                                return (
+                                    <tr key={txn._id || idx}>
+                                        <td>
+                                            <p className="font-mono text-xs font-semibold">{txn.transactionId}</p>
+                                            {txn.description && <p className="text-xs text-base-content/50 max-w-[220px] truncate">{txn.description}</p>}
+                                        </td>
+                                        <td>
+                                            <p className="font-semibold text-sm">{row.userId?.name || '—'}</p>
+                                            <p className="text-xs text-base-content/50">{row.userId?.email || ''}</p>
+                                        </td>
+                                        <td>
+                                            <span className={`badge badge-sm gap-1 ${isCredit ? 'badge-success' : 'badge-error'}`}>
+                                                {isCredit ? <ArrowDownRight className="w-3 h-3" /> : <ArrowUpRight className="w-3 h-3" />}
+                                                {txn.type}
+                                            </span>
+                                        </td>
+                                        <td><span className="badge badge-sm badge-secondary">{formatLabel(txn.purpose)}</span></td>
+                                        <td className={`font-semibold text-sm ${isCredit ? 'text-success' : 'text-error'}`}>
+                                            {isCredit ? '+' : '−'}{INR2.format(txn.amount)}
+                                        </td>
+                                        <td className="text-sm">{INR2.format(txn.balanceAfter ?? 0)}</td>
+                                        <td><StatusBadge value={txn.status} /></td>
+                                        <td className="text-xs text-base-content/60 whitespace-nowrap">{fmtDateTime(txn.timestamp)}</td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+
+            <PaginationBar pagination={pagination} onPageChange={setPage} loading={loading} />
+        </div>
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MAIN PAGE
+// ════════════════════════════════════════════════════════════════════════════
+
+export default function PaymentOverviewPage() {
+    const [activeTab, setActiveTab] = useState('pharmacy');
+
+    return (
+        <div className="container-custom py-6 md:py-8 flex flex-col gap-6" data-theme="superadmin">
+            {/* ── Page Header ── */}
+            <div className="flex items-start justify-between flex-wrap gap-4">
+                <div>
+                    <div className="flex items-center gap-2 mb-1">
+                        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                            <ShieldCheck className="w-5 h-5 text-primary" />
+                        </div>
+                        <h1 className="text-2xl md:text-3xl font-extrabold text-base-content tracking-tight">Payment Overview</h1>
+                    </div>
+                    <p className="text-sm text-base-content/55 ml-12">
+                        Revenue analytics, order payments, booking refunds, and wallet ledger — platform-wide.
+                    </p>
+                </div>
+            </div>
+
+            {/* ── Overview KPIs + Charts ── */}
+            <OverviewSection />
+
+            {/* ── Tabs ── */}
+            <div className="card p-1.5 flex flex-row gap-1 w-full sm:w-fit overflow-x-auto scrollbar-thin">
+                {TABS.map((tab) => {
+                    const Icon = tab.icon;
+                    const active = activeTab === tab.key;
+                    return (
+                        <button
+                            key={tab.key}
+                            onClick={() => setActiveTab(tab.key)}
+                            className={`flex items-center gap-2 px-4 py-2.5 rounded-[var(--r-field)] text-sm font-semibold whitespace-nowrap transition-colors
+                                ${active ? 'bg-primary text-primary-content shadow-primary' : 'text-base-content/60 hover:bg-base-200'}`}
+                        >
+                            <Icon className="w-4 h-4" />
+                            {tab.label}
+                        </button>
+                    );
+                })}
+            </div>
+
+            {/* ── Tab Content ── */}
+            <AnimatePresence mode="wait">
+                <motion.div
+                    key={activeTab}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    transition={{ duration: 0.2 }}
+                >
+                    {activeTab === 'pharmacy' && <PharmacyOrdersSection />}
+                    {activeTab === 'bookings' && <BookingsSection />}
+                    {activeTab === 'ledger' && <LedgerSection />}
+                </motion.div>
+            </AnimatePresence>
+        </div>
+    );
 }

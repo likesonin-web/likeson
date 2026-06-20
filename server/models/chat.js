@@ -1,318 +1,381 @@
 import mongoose from 'mongoose';
+
 const { Schema } = mongoose;
 
-// ─────────────────────────────────────────────
-// CONSTANTS
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. CONVERSATION
+// ─────────────────────────────────────────────────────────────────────────────
 
-const CHAT_ROLES = [
-  'superadmin', 'admin', 'doctor', 'transportpartner',
-  'driver', 'lab partner', 'finance', 'pharmacy', 'care assistant'
-];
+const participantSchema = new Schema(
+  {
+    user:       { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    role:       { type: String },
+    joinedAt:   { type: Date, default: Date.now },
+    lastReadAt: { type: Date, default: null },
+    isAdmin:    { type: Boolean, default: false },
+    isMuted:    { type: Boolean, default: false },
+    mutedUntil: { type: Date, default: null },
+    isArchived: { type: Boolean, default: false },
+    isDeleted:  { type: Boolean, default: false },
+    notifyOn:   { type: String, enum: ['all', 'mentions', 'none'], default: 'all' },
+  },
+  { _id: false }
+);
 
-const PARTICIPANT_PERMISSIONS = ['member', 'mentor', 'host'];
+const conversationSchema = new Schema(
+  {
+    type: {
+      type:     String,
+      enum:     ['direct', 'group', 'support', 'order', 'service'],
+      required: true,
+      index:    true,
+    },
+    participants: { type: [participantSchema], default: [] },
 
-// ─────────────────────────────────────────────
-// 1. ATTACHMENT SCHEMA (Reusable Sub-document)
-// ─────────────────────────────────────────────
+    name:        { type: String, trim: true },
+    description: { type: String },
+    avatar:      { type: String },
+    createdBy:   { type: Schema.Types.ObjectId, ref: 'User' },
 
-const attachmentSchema = new Schema({
-  url:        { type: String, required: true },
-  publicId:   { type: String }, // e.g. ImageKit  
-  fileName:   { type: String },
-  fileSize:   { type: Number }, // bytes
-  mimeType:   { type: String }, // e.g. 'image/png', 'application/pdf'
-  type: {
-    type: String,
-    enum: ['image', 'video', 'audio', 'document', 'other'],
-    default: 'other'
+    refModel: {
+      type: String,
+      enum: ['Order', 'Booking', 'LabTest', 'BloodRequest', 'PharmacyOrder', null],
+    },
+    refId: { type: Schema.Types.ObjectId, refPath: 'refModel', default: null },
+
+    lastMessage: {
+      _id:    { type: Schema.Types.ObjectId },
+      sender: { type: Schema.Types.ObjectId, ref: 'User' },
+      text:   { type: String },
+      type:   { type: String },
+      sentAt: { type: Date },
+    },
+
+    activeCall: {
+      callId:    { type: Schema.Types.ObjectId, ref: 'Call' },
+      startedAt: { type: Date },
+      type:      { type: String, enum: ['audio', 'video'] },
+    },
+
+    isBlocked:  { type: Boolean, default: false },
+    blockedBy:  { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    isPinned:   { type: Boolean, default: false },
+    isArchived: { type: Boolean, default: false },
+  },
+  {
+    timestamps: true,
+    toJSON:   { virtuals: true },
+    toObject: { virtuals: true },
   }
-}, { _id: true, timestamps: false });
+);
 
-// ─────────────────────────────────────────────
-// 2. REACTION SCHEMA (Reusable Sub-document)
-// ─────────────────────────────────────────────
+conversationSchema.index({ 'participants.user': 1, updatedAt: -1 });
+conversationSchema.index({ refModel: 1, refId: 1 });
+conversationSchema.index(
+  { type: 1, 'participants.user': 1 },
+  { partialFilterExpression: { type: 'direct' } }
+);
 
-const reactionSchema = new Schema({
-  emoji:  { type: String, required: true },  // e.g. '👍', '❤️'
-  user:   { type: Schema.Types.ObjectId, ref: 'User', required: true },
-  reactedAt: { type: Date, default: Date.now }
-}, { _id: false });
+export const Conversation = mongoose.model('Conversation', conversationSchema);
 
-// ─────────────────────────────────────────────
-// 3. MESSAGE MODEL
-// ─────────────────────────────────────────────
 
-const messageSchema = new Schema({
-  conversation: {
-    type: Schema.Types.ObjectId,
-    ref: 'Conversation',
-    required: true,
-    index: true
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. MESSAGE
+// ─────────────────────────────────────────────────────────────────────────────
+
+const reactionSchema = new Schema(
+  {
+    user:  { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    emoji: { type: String, required: true },
+    at:    { type: Date, default: Date.now },
   },
-  sender: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
-    required: true,
-    index: true
+  { _id: false }
+);
+
+const deliveryReceiptSchema = new Schema(
+  {
+    user:        { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    deliveredAt: { type: Date, default: null },
+    readAt:      { type: Date, default: null },
   },
-  senderRole: {
-    type: String,
-    enum: CHAT_ROLES,
-    required: true
+  { _id: false }
+);
+
+const messageSchema = new Schema(
+  {
+    conversation: {
+      type:     Schema.Types.ObjectId,
+      ref:      'Conversation',
+      required: true,
+      index:    true,
+    },
+    sender: {
+      type:     Schema.Types.ObjectId,
+      ref:      'User',
+      required: true,
+    },
+
+    type: {
+      type:    String,
+      enum:    [
+        'text', 'image', 'video', 'audio', 'file',
+        'location', 'contact', 'sticker', 'call_log', 'system', 'order_card',
+      ],
+      default: 'text',
+    },
+
+    text: { type: String, trim: true },
+
+    media: {
+      url:       { type: String },
+      thumbnail: { type: String },
+      mimeType:  { type: String },
+      size:      { type: Number },
+      duration:  { type: Number },
+      width:     { type: Number },
+      height:    { type: Number },
+      fileName:  { type: String },
+    },
+
+    location: {
+      type:        { type: String, enum: ['Point'], default: 'Point' },
+      coordinates: { type: [Number] },
+      address:     { type: String },
+    },
+
+    cardPayload: { type: Schema.Types.Mixed },
+
+    replyTo:      { type: Schema.Types.ObjectId, ref: 'Message', default: null },
+    forwardedFrom: {
+      message:      { type: Schema.Types.ObjectId, ref: 'Message' },
+      conversation: { type: Schema.Types.ObjectId, ref: 'Conversation' },
+    },
+
+    receipts:  { type: [deliveryReceiptSchema], default: [] },
+    reactions: { type: [reactionSchema], default: [] },
+
+    isEdited:    { type: Boolean, default: false },
+    editedAt:    { type: Date },
+    editHistory: [{ text: String, editedAt: Date }],
+
+    isDeleted:     { type: Boolean, default: false },
+    deletedAt:     { type: Date },
+    deletedFor:    [{ type: Schema.Types.ObjectId, ref: 'User' }],
+    deletedForAll: { type: Boolean, default: false },
+
+    isSilent: { type: Boolean, default: false },
+    isPinned: { type: Boolean, default: false },
+
+    callLog: {
+      callId:    { type: Schema.Types.ObjectId, ref: 'Call' },
+      callType:  { type: String, enum: ['audio', 'video'] },
+      status:    { type: String, enum: ['answered', 'missed', 'declined', 'cancelled'] },
+      duration:  { type: Number },
+      initiator: { type: Schema.Types.ObjectId, ref: 'User' },
+    },
   },
-
-  // ── Content ──
-  body:        { type: String, default: '' },         // plain text / markdown
-  attachments: { type: [attachmentSchema], default: [] },
-  
-  // ── Reply / Thread ──
-  replyTo: {
-    type: Schema.Types.ObjectId,
-    ref: 'Message',
-    default: null
-  },
-  // Inline quoted snapshot so the UI doesn't need an extra fetch
-  replySnapshot: {
-    senderName: String,
-    body:       String,
-    attachmentType: String  // e.g. 'image'
-  },
-
-  // ── Forwarding ──
-  isForwarded:        { type: Boolean, default: false },
-  originalMessage:    { type: Schema.Types.ObjectId, ref: 'Message', default: null },
-
-  // ── Type Flags ──
-  messageType: {
-    type: String,
-    enum: ['text', 'attachment', 'system', 'poll', 'call_log'],
-    default: 'text'
-  },
-  // System message e.g. "Alice added Bob to the group"
-  systemEvent: {
-    type: String,
-    enum: [
-      'member_added', 'member_removed', 'group_created',
-      'group_renamed', 'group_avatar_changed', 'call_started',
-      'call_ended', null
-    ],
-    default: null
-  },
-
-  // ── Read Receipts ──
-  readBy: [{
-    user:   { type: Schema.Types.ObjectId, ref: 'User' },
-    readAt: { type: Date, default: Date.now }
-  }],
-
-  // ── Reactions ──
-  reactions: { type: [reactionSchema], default: [] },
-
-  // ── Moderation ──
-  isDeleted:      { type: Boolean, default: false },
-  deletedAt:      { type: Date },
-  deletedBy:      { type: Schema.Types.ObjectId, ref: 'User' },
-  deleteType: {
-    type: String,
-    enum: ['for_me', 'for_everyone', null],
-    default: null
-  },
-
-  isEdited:       { type: Boolean, default: false },
-  editHistory: [{
-    body:     String,
-    editedAt: { type: Date, default: Date.now }
-  }],
-
-  isPinned:       { type: Boolean, default: false },
-  pinnedAt:       { type: Date },
-  pinnedBy:       { type: Schema.Types.ObjectId, ref: 'User' }
-
-}, {
-  timestamps: true,
-  toJSON:   { virtuals: true },
-  toObject: { virtuals: true }
-});
+  {
+    timestamps: true,
+    toJSON:   { virtuals: true },
+    toObject: { virtuals: true },
+  }
+);
 
 messageSchema.index({ conversation: 1, createdAt: -1 });
-messageSchema.index({ sender: 1, conversation: 1 });
+messageSchema.index({ sender: 1, createdAt: -1 });
+// Full-text search on message text
+messageSchema.index({ text: 'text' });
 
-// ─────────────────────────────────────────────
-// 4. CONVERSATION MODEL
-// ─────────────────────────────────────────────
-
-const participantSchema = new Schema({
-  user: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  role: {                            // user's app role
-    type: String,
-    enum: CHAT_ROLES
-  },
-  permission: {                      // chat permission level
-    type: String,
-    enum: PARTICIPANT_PERMISSIONS,
-    default: 'member'
-  },
-
-  // ── Per-participant state ──
-  joinedAt:         { type: Date, default: Date.now },
-  leftAt:           { type: Date, default: null },
-  isActive:         { type: Boolean, default: true },
-
-  // Mute
-  isMuted:          { type: Boolean, default: false },
-  mutedUntil:       { type: Date, default: null },
-
-  // Notification preference
-  notificationMode: {
-    type: String,
-    enum: ['all', 'mentions', 'none'],
-    default: 'all'
-  },
-
-  // Last message the participant has seen
-  lastSeenMessage: {
-    type: Schema.Types.ObjectId,
-    ref: 'Message',
-    default: null
-  },
-
-  // Nickname inside this group
-  nickname: { type: String, default: null }
-
-}, { _id: false });
-
-// ─────────────────────────────────────────────
-
-const conversationSchema = new Schema({
-
-  // ── Type ──
-  type: {
-    type: String,
-    enum: ['direct', 'group', 'department_channel'],
-    default: 'direct'
-  },
-
-  // ── Direct Chat ──
-  // For type='direct', store the two users for fast lookup
-  directParticipants: [{
-    type: Schema.Types.ObjectId,
-    ref: 'User'
-  }],
-
-  // ── Group / Channel Details ──
-  name:         { type: String, trim: true },      // group name
-  description:  { type: String, default: '' },
-  avatar:       { type: String, default: '' },     // group avatar URL
-  avatarPublicId: { type: String },
-
-  // Department channel (optional: restrict by role)
-  department: {
-    type: String,
-    enum: [...CHAT_ROLES, null],
-    default: null
-  },
-
-  // ── Participants ──
-  participants: { type: [participantSchema], default: [] },
-
-  // ── Roles allowed to join (for department_channel) ──
-  allowedRoles: [{
-    type: String,
-    enum: CHAT_ROLES
-  }],
-
-  // ── Last Message Snapshot (for conversation list UI) ──
-  lastMessage: {
-    type: Schema.Types.ObjectId,
-    ref: 'Message',
-    default: null
-  },
-  lastMessageAt: { type: Date, default: null },
-  lastMessagePreview: { type: String, default: '' }, // truncated body or 'Attachment'
-
-  // ── Pinned Messages ──
-  pinnedMessages: [{
-    type: Schema.Types.ObjectId,
-    ref: 'Message'
-  }],
-
-  // ── Settings ──
-  isArchived:        { type: Boolean, default: false },
-  archivedAt:        { type: Date },
-  isReadOnly:        { type: Boolean, default: false },  // only hosts can send
-  allowMemberInvite: { type: Boolean, default: false },  // members can invite others
-  allowReactions:    { type: Boolean, default: true },
-  allowReplies:      { type: Boolean, default: true },
-  
-  maxParticipants:   { type: Number, default: 500 },
-
-  // ── Admins / Ownership ──
-  createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-  updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-
-  // ── Encryption (future-proof) ──
-  isEncrypted: { type: Boolean, default: false }
-
-}, {
-  timestamps: true,
-  toJSON:   { virtuals: true },
-  toObject: { virtuals: true }
+// ── FIX 1: post('save') — use new Date() not this.createdAt for updatedAt
+//    this.createdAt is wrong on edit — edited messages should bump updatedAt to NOW
+messageSchema.post('save', async function () {
+  if (this.isDeleted || this.deletedForAll || this.type === 'system') return;
+  const now = new Date();
+  await Conversation.findByIdAndUpdate(this.conversation, {
+    lastMessage: {
+      _id:    this._id,
+      sender: this.sender,
+      text:   this.type === 'text' ? this.text : `[${this.type}]`,
+      type:   this.type,
+      sentAt: this.createdAt, // sentAt stays original creation time
+    },
+    updatedAt: now, // ← FIX: use now, not this.createdAt
+  });
 });
 
-// Fast lookup for direct chats between two users
-conversationSchema.index({ directParticipants: 1, type: 1 });
-// Sort conversations by last activity
-conversationSchema.index({ lastMessageAt: -1 });
-// Find all conversations a user is in
-conversationSchema.index({ 'participants.user': 1, lastMessageAt: -1 });
-// Department channels
-conversationSchema.index({ department: 1, type: 1 });
+export const Message = mongoose.model('Message', messageSchema);
 
-// ── Virtual: unread count helper (computed at query time via aggregation) ──
-// This is a placeholder — real unread counts should use aggregation pipelines
-conversationSchema.virtual('participantCount').get(function () {
-  return this.participants.filter(p => p.isActive).length;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. CALL
+// ─────────────────────────────────────────────────────────────────────────────
+
+const callParticipantSchema = new Schema(
+  {
+    user:            { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    uid:             { type: Number, required: true },
+    token:           { type: String, select: false },
+    joinedAt:        { type: Date },
+    leftAt:          { type: Date },
+    duration:        { type: Number, default: 0 },
+    isMuted:         { type: Boolean, default: false },
+    isCamOff:        { type: Boolean, default: false },
+    isScreenSharing: { type: Boolean, default: false },
+  },
+  { _id: false }
+);
+
+const callSchema = new Schema(
+  {
+    conversation: {
+      type:     Schema.Types.ObjectId,
+      ref:      'Conversation',
+      required: true,
+      index:    true,
+    },
+    initiator: {
+      type:     Schema.Types.ObjectId,
+      ref:      'User',
+      required: true,
+    },
+
+    type: {
+      type:     String,
+      enum:     ['audio', 'video'],
+      required: true,
+    },
+
+    channelName: {
+      type:     String,
+      required: true,
+      unique:   true,
+      index:    true,
+    },
+
+    agoraRecordingResourceId: { type: String },
+    agoraRecordingSid:        { type: String },
+    recordingUrls:            [{ type: String }],
+
+    status: {
+      type:    String,
+      enum:    ['ringing', 'ongoing', 'ended', 'missed', 'declined', 'cancelled', 'failed'],
+      default: 'ringing',
+      index:   true,
+    },
+
+    participants:    { type: [callParticipantSchema], default: [] },
+    startedAt:       { type: Date },
+    endedAt:         { type: Date },
+    duration:        { type: Number, default: 0 },
+    endedBy:         { type: Schema.Types.ObjectId, ref: 'User' },
+    endReason:       { type: String, enum: ['normal', 'timeout', 'error', 'network'] },
+    isGroupCall:     { type: Boolean, default: false },
+    maxParticipants: { type: Number, default: 2 },
+    isRecorded:      { type: Boolean, default: false },
+  },
+  {
+    timestamps: true,
+    toJSON:   { virtuals: true },
+    toObject: { virtuals: true },
+  }
+);
+
+callSchema.index({ initiator: 1, createdAt: -1 });
+callSchema.index({ status: 1, createdAt: -1 });
+
+// ── FIX 2: pre('save') duration calc — correct, no change needed
+callSchema.pre('save', function () {
+  if (this.isModified('status') && this.status === 'ended' && this.startedAt && this.endedAt) {
+    this.duration = Math.floor((this.endedAt - this.startedAt) / 1000);
+  }
 });
 
-// ─────────────────────────────────────────────
-// 5. CALL LOG MODEL (Optional but referenced)
-// ─────────────────────────────────────────────
+// ── FIX 3: post('save') — Mongoose post hooks DO NOT have isModified()
+//    Must track status change differently — use _statusChanged flag set in pre hook
+callSchema.pre('save', function () {
+  // Track whether status changed to a terminal state for post hook
+  if (this.isModified('status')) {
+    this._statusChangedTo = this.status;
+  }
+});
 
-const callLogSchema = new Schema({
-  conversation: { type: Schema.Types.ObjectId, ref: 'Conversation', required: true },
-  initiatedBy:  { type: Schema.Types.ObjectId, ref: 'User', required: true },
-  participants: [{
-    user:        { type: Schema.Types.ObjectId, ref: 'User' },
-    joinedAt:    Date,
-    leftAt:      Date,
-    durationSec: Number
-  }],
-  callType: {
-    type: String,
-    enum: ['audio', 'video'],
-    required: true
+callSchema.post('save', async function () {
+  const terminalStates = ['ended', 'missed', 'declined', 'cancelled'];
+  // Use _statusChangedTo flag set in pre hook — isModified() not available in post
+  if (!this._statusChangedTo || !terminalStates.includes(this._statusChangedTo)) return;
+
+  const statusMap = {
+    ended:     'answered',
+    missed:    'missed',
+    declined:  'declined',
+    cancelled: 'cancelled',
+  };
+
+  try {
+    await Message.create({
+      conversation: this.conversation,
+      sender:       this.initiator,
+      type:         'call_log',
+      isSilent:     true,
+      callLog: {
+        callId:    this._id,
+        callType:  this.type,
+        status:    statusMap[this._statusChangedTo] || 'missed',
+        duration:  this.duration,
+        initiator: this.initiator,
+      },
+    });
+  } catch (err) {
+    // Don't throw — call log failure shouldn't break the call end flow
+    console.error('[Call.post] call_log message creation failed:', err.message);
+  }
+
+  // Clear activeCall from conversation
+  await Conversation.findByIdAndUpdate(this.conversation, {
+    $unset: { activeCall: 1 },
+  });
+
+  // Reset flag
+  this._statusChangedTo = null;
+});
+
+export const Call = mongoose.model('Call', callSchema);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. MESSAGE STATUS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const messageStatusSchema = new Schema(
+  {
+    message:      { type: Schema.Types.ObjectId, ref: 'Message', required: true },
+    conversation: { type: Schema.Types.ObjectId, ref: 'Conversation', required: true },
+    user:         { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    deliveredAt:  { type: Date, default: null },
+    readAt:       { type: Date, default: null },
   },
-  status: {
-    type: String,
-    enum: ['initiated', 'ongoing', 'ended', 'missed', 'declined'],
-    default: 'initiated'
+  { timestamps: false }
+);
+
+messageStatusSchema.index({ message: 1, user: 1 }, { unique: true });
+messageStatusSchema.index({ conversation: 1, user: 1, readAt: 1 });
+
+export const MessageStatus = mongoose.model('MessageStatus', messageStatusSchema);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. BLOCKED USERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const userBlockSchema = new Schema(
+  {
+    blocker: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    blocked: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   },
-  startedAt: { type: Date, default: Date.now },
-  endedAt:   { type: Date },
-  totalDurationSec: { type: Number, default: 0 }
-}, { timestamps: true });
+  { timestamps: true }
+);
 
-callLogSchema.index({ conversation: 1, startedAt: -1 });
+userBlockSchema.index({ blocker: 1, blocked: 1 }, { unique: true });
+userBlockSchema.index({ blocked: 1 });
 
-// ─────────────────────────────────────────────
-// EXPORTS
-// ─────────────────────────────────────────────
-
-export const Message      = mongoose.model('Message',      messageSchema);
-export const Conversation = mongoose.model('Conversation', conversationSchema);
-export const CallLog      = mongoose.model('CallLog',      callLogSchema);
+export const UserBlock = mongoose.model('UserBlock', userBlockSchema);

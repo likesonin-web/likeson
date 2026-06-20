@@ -57,6 +57,7 @@ import {
   HOSPITAL_MANAGER_TOP_RIGHT_LINKS,
   HOSPITAL_MANAGER_PROFILE_LINKS,
 } from "../../constants/hospitalmangerlinks";
+import WelcomeHospitalPage from "@/app/hospital-manager/WelcomeHospitalPage"; // Added Welcome Page Import
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COMMAND SEARCH INDEX
@@ -261,6 +262,12 @@ const HospitalManagerDashboard = ({ children }) => {
   const [searchQuery,   setSearchQuery]   = useState("");
   const [isSearchOpen,  setIsSearchOpen]  = useState(false);
 
+  // ── FIX: Explicit check for the root/welcome paths ───────────────────────
+  const isWelcomeRoute = useMemo(
+    () => ["/", "/hospital-manager", "/hospital-manager/"].includes(pathname),
+    [pathname]
+  );
+
   // Collapse sidebar on mobile; fetch notifications on mount
   useEffect(() => {
     if (typeof window !== "undefined" && window.innerWidth < 1024) {
@@ -294,14 +301,16 @@ const HospitalManagerDashboard = ({ children }) => {
   // Derive page label from pathname
   const pageLabel = useMemo(
     () =>
-      pathname
-        .split("/")
-        .filter(Boolean)
-        .pop()
-        ?.replace(/-/g, " ") || "Dashboard",
-    [pathname]
+      isWelcomeRoute
+        ? "Welcome"
+        : pathname
+            .split("/")
+            .filter(Boolean)
+            .pop()
+            ?.replace(/-/g, " ") || "Dashboard",
+    [pathname, isWelcomeRoute]
   );
-   console.log('user', user.profile);
+
   // Auth guard
   if (user?.role !== "hospital") {
     return (
@@ -430,7 +439,7 @@ const HospitalManagerDashboard = ({ children }) => {
         </nav>
 
         {/* Sidebar footer */}
-        <div className="border-t border-base-300   shrink-0">
+        <div className="border-t border-base-300 shrink-0">
           <button
             onClick={handleLogout}
             className={cn(
@@ -452,7 +461,7 @@ const HospitalManagerDashboard = ({ children }) => {
         )}
       >
         {/* ── Global header ────────────────────────────────────────────── */}
-        <header className="sticky top-0 z-40 flex h-[68px] w-full items-center justify-between border-b border-base-300 bg-base-100/80 backdrop-blur-xl   shrink-0">
+        <header className="sticky top-0 z-40 flex h-[68px] w-full items-center justify-between border-b border-base-300 bg-base-100/80 backdrop-blur-xl shrink-0">
 
           {/* Left */}
           <div className="flex items-center gap-4">
@@ -629,7 +638,11 @@ const HospitalManagerDashboard = ({ children }) => {
           >
             {/* Decorative tint */}
             <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-primary/4 blur-[130px] rounded-full pointer-events-none" />
-            <div className="relative z-10">{children}</div>
+            
+            <div className="relative z-10">
+              {/* Render Welcome Page for root paths, otherwise render children */}
+              {isWelcomeRoute ? <WelcomeHospitalPage /> : children}
+            </div>
           </motion.div>
         </section>
 

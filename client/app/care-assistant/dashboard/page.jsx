@@ -110,12 +110,12 @@ function Sidebar({ activePath, collapsed, onClose }) {
             <div key={group.title}>
               <button
                 onClick={() => setOpenGroup(isOpen ? null : group.title)}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-[var(--r-field)] hover:bg-[var(--base-300)] transition-colors cursor-pointer group"
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md hover:bg-[var(--base-300)] transition-colors cursor-pointer group"
               >
-                <span className="text-[var(--primary)] opacity-70 group-hover:opacity-100 transition-opacity">
+                <span className="text-[var(--primary)] mr-1 opacity-70 group-hover:opacity-100 transition-opacity">
                   {group.icons}
                 </span>
-                <span className="flex-1 text-left text-[0.65rem] font-bold text-[var(--base-content)] uppercase tracking-wider">
+                <span className="flex-1 text-left text-[13px] font-bold text-[var(--base-content)] uppercase tracking-wider">
                   {group.title}
                 </span>
                 <motion.span animate={{ rotate: isOpen ? 90 : 0 }} transition={{ duration: 0.2 }}>
@@ -132,7 +132,7 @@ function Sidebar({ activePath, collapsed, onClose }) {
                     transition={{ duration: 0.2 }}
                     className="overflow-hidden"
                   >
-                    <div className="ml-4 pl-3 border-l border-[var(--base-300)] mt-0.5 mb-1 space-y-0.5">
+                    <div className="ml-4 pl-3  mt-0.5 mb-1 space-y-0.5">
                       {group.links.map((link) => {
                         const active = activePath === link.href;
                         return (
@@ -140,7 +140,7 @@ function Sidebar({ activePath, collapsed, onClose }) {
                             <motion.div
                               whileHover={{ x: 3 }}
                               className={[
-                                'flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--r-field)] text-[0.65rem] font-semibold cursor-pointer transition-colors',
+                                'flex items-center gap-2 px-2.5 py-2 rounded-md text-xs font-semibold cursor-pointer transition-colors',
                                 active
                                   ? 'bg-[color-mix(in_srgb,var(--primary)_14%,transparent)] text-[var(--primary)]'
                                   : 'text-[var(--base-content)] opacity-55 hover:opacity-100 hover:bg-[var(--base-300)]',
@@ -163,7 +163,7 @@ function Sidebar({ activePath, collapsed, onClose }) {
       {/* Bottom quick link */}
       <div className="p-3 border-t border-[var(--base-300)]">
         <Link href="/care-assistant/support">
-          <div className="flex items-center gap-2 px-2 py-1.5 rounded-[var(--r-field)] text-[0.65rem] font-semibold text-[var(--base-content)] opacity-45 hover:opacity-100 hover:bg-[var(--base-300)] transition-all cursor-pointer">
+          <div className="flex items-center gap-2 px-2 py-2 rounded-md text-[0.65rem] font-semibold text-[var(--base-content)] opacity-45 hover:opacity-100 hover:bg-[var(--base-300)] transition-all cursor-pointer">
             <LifeBuoy size={12} /> Help &amp; Support
           </div>
         </Link>
@@ -183,7 +183,7 @@ function OnlinePill({ isOnline, loading, onToggle }) {
       onClick={onToggle}
       disabled={loading}
       className={[
-        'relative flex items-center gap-2 px-4 py-1.5 rounded-full',
+        'relative flex items-center gap-2 px-4 py-2 rounded-full',
         'font-bold text-xs transition-all duration-300 cursor-pointer select-none disabled:opacity-50',
         isOnline
           ? 'bg-[var(--success)] text-[var(--success-content)] shadow-[0_0_18px_color-mix(in_srgb,var(--success),transparent_45%)]'
@@ -437,7 +437,7 @@ function KycCard({ kycStatus }) {
       </div>
 
       {/* Big status pill */}
-      <div className="flex items-center gap-3 p-3 rounded-[var(--r-field)] mb-4"
+      <div className="flex items-center gap-3 p-3 rounded-md mb-4"
         style={{ background: `color-mix(in srgb, ${status === 'Verified' ? 'var(--success)' : status === 'Rejected' ? 'var(--error)' : 'var(--warning)'}, transparent 90%)` }}
       >
         <Icon size={18} style={{ color: status === 'Verified' ? 'var(--success)' : status === 'Rejected' ? 'var(--error)' : 'var(--warning)' }} />
@@ -472,7 +472,7 @@ function KycCard({ kycStatus }) {
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.97 }}
-            className="mt-4 w-full py-2 rounded-[var(--r-field)] text-xs font-bold flex items-center justify-center gap-2 cursor-pointer"
+            className="mt-4 w-full py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 cursor-pointer"
             style={{ background: 'var(--primary)', color: 'var(--primary-content)' }}
           >
             <ScanLine size={13} /> Submit KYC
@@ -688,7 +688,7 @@ function EarningsCard({ earnings, performance }) {
 
       <div className="grid grid-cols-2 gap-2">
         {items.map((item) => (
-          <div key={item.label} className="p-2.5 rounded-[var(--r-field)] bg-[var(--base-200)]">
+          <div key={item.label} className="p-2.5 rounded-md bg-[var(--base-200)]">
             <p className="text-[0.58rem] opacity-45 font-semibold text-[var(--base-content)] uppercase tracking-wide">{item.label}</p>
             <p className="text-sm font-black mt-0.5" style={{ color: item.color }}>{item.value}</p>
           </div>
@@ -723,7 +723,7 @@ function QuickActions() {
               <motion.div
                 whileHover={{ scale: 1.06, y: -2 }}
                 whileTap={{ scale: 0.93 }}
-                className="flex flex-col items-center gap-1.5 p-3 rounded-[var(--r-field)] cursor-pointer transition-all"
+                className="flex flex-col items-center gap-1.5 p-3 rounded-md cursor-pointer transition-all"
                 style={{ background: `color-mix(in srgb, ${a.color}, transparent 88%)` }}
               >
                 <Icon size={16} style={{ color: a.color }} />
@@ -825,7 +825,7 @@ function BankCard({ bankDetails }) {
 
       {bankDetails?.bankName ? (
         <>
-          <div className="p-3 rounded-[var(--r-field)] mb-3"
+          <div className="p-3 rounded-md mb-3"
             style={{ background: 'linear-gradient(135deg, color-mix(in srgb, var(--primary) 18%, var(--base-200)), var(--base-200))' }}
           >
             <div className="flex items-center justify-between mb-2">
@@ -853,7 +853,7 @@ function BankCard({ bankDetails }) {
           <CreditCard size={28} style={{ color: 'color-mix(in srgb, var(--base-content) 20%, transparent)' }} />
           <p className="text-xs text-[var(--base-content)] opacity-35 text-center">No bank account added</p>
           <Link href="/care-assistant/bank">
-            <button className="btn-secondary px-4 py-1.5 text-xs">Add Bank</button>
+            <button className="btn-secondary px-4 py-2 text-xs">Add Bank</button>
           </Link>
         </div>
       )}
@@ -886,7 +886,7 @@ function NotifCard({ settings }) {
         {items.map((item) => {
           const on = prefs?.[item.key] ?? true;
           return (
-            <div key={item.key} className="flex items-center justify-between p-2.5 rounded-[var(--r-field)] bg-[var(--base-200)]">
+            <div key={item.key} className="flex items-center justify-between p-2.5 rounded-md bg-[var(--base-200)]">
               <div className="flex items-center gap-1.5">
                 <span className="text-sm">{item.icon}</span>
                 <span className="text-[0.62rem] font-semibold text-[var(--base-content)] opacity-65">{item.label}</span>
@@ -924,7 +924,7 @@ function HealthBanner({ profile }) {
         </div>
         <Link href="/care-assistant/health-declaration">
           <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
-            className="px-3 py-1.5 rounded-[var(--r-field)] text-xs font-bold cursor-pointer flex-shrink-0"
+            className="px-3 py-2 rounded-md text-xs font-bold cursor-pointer flex-shrink-0"
             style={{ background: 'var(--warning)', color: 'var(--warning-content)' }}
           >
             Declare
@@ -1025,7 +1025,7 @@ export default function CareAssistantDashboard() {
         <header className="sticky top-0 z-[90] bg-[color-mix(in_srgb,var(--base-100)_82%,transparent)] backdrop-blur-strong border-b border-[var(--base-300)] px-4 lg:px-6 py-3 flex items-center justify-between gap-3">
           <motion.button
             whileTap={{ scale: 0.9 }}
-            className="lg:hidden w-8 h-8 rounded-[var(--r-field)] bg-[var(--base-300)] flex items-center justify-center cursor-pointer"
+            className="lg:hidden w-8 h-8 rounded-md bg-[var(--base-300)] flex items-center justify-center cursor-pointer"
             onClick={() => setMobileOpen(true)}
           >
             <Menu size={15} className="text-[var(--base-content)]" />
@@ -1043,7 +1043,7 @@ export default function CareAssistantDashboard() {
             <Link href="/care-assistant/settings/notifications">
               <motion.button
                 whileTap={{ scale: 0.9 }}
-                className="relative w-8 h-8 rounded-[var(--r-field)] bg-[var(--base-200)] flex items-center justify-center cursor-pointer hover:bg-[var(--base-300)] transition-colors"
+                className="relative w-8 h-8 rounded-md bg-[var(--base-200)] flex items-center justify-center cursor-pointer hover:bg-[var(--base-300)] transition-colors"
               >
                 <Bell size={15} className="text-[var(--base-content)]" />
                 <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-[var(--error)] rounded-full" />
@@ -1055,7 +1055,7 @@ export default function CareAssistantDashboard() {
                 whileTap={{ scale: 0.9 }}
                 src={user?.avatar || 'https://api.dicebear.com/7.x/adventurer/svg?seed=ca'}
                 alt="avatar"
-                className="w-8 h-8 lg:w-9 lg:h-9 rounded-[var(--r-field)] object-cover ring-2 ring-[var(--primary)] cursor-pointer"
+                className="w-8 h-8 lg:w-9 lg:h-9 rounded-md object-cover ring-2 ring-[var(--primary)] cursor-pointer"
               />
             </Link>
           </div>

@@ -183,7 +183,7 @@ export const tpReassignDriver = mkThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — CONSULTATION  (NEW — routes from bookingRouter2)
+// THUNKS — CONSULTATION  (routes from bookingRouter2)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -376,6 +376,12 @@ export const careRequestRide = mkThunk(
   },
 );
 
+/**
+ * POST /:id/care/join-ride  (bookingRouter2 — care assistant routes)
+ * CA attaches to an in-progress RideTracking doc at any stage. Does NOT
+ * switch CA view mode — CA keeps navigating to the join point themselves.
+ * Body: { currentLat, currentLng }
+ */
 export const careJoinRide = mkThunk(
   "operations/careJoinRide",
   async ({ bookingId, currentLat, currentLng }) => {
@@ -385,6 +391,26 @@ export const careJoinRide = mkThunk(
     });
     toast.success("Joined ride session");
     return data.data;
+  },
+);
+
+/**
+ * PATCH /:id/care/join-ride  (driver-side router — DISTINCT route, same
+ * path as above but different HTTP verb + different handler).
+ * CA boards the vehicle mid-ride: marks the care_assistant_join waypoint
+ * completed, flips CA status straight to 'in_ride', and switches CA view
+ * to driver-tracking-only mode immediately.
+ * Body: { currentLat, currentLng }
+ */
+export const caJoinRideAndTrackDriver = mkThunk(
+  "operations/caJoinRideAndTrackDriver",
+  async ({ bookingId, currentLat, currentLng }) => {
+    const { data } = await API.patch(`${BASE}/${bookingId}/care/join-ride`, {
+      currentLat,
+      currentLng,
+    });
+    toast.success(data.message || "Joined ride — tracking driver");
+    return data.data; // { rideId, bookingId, careAssistantStatus, caViewMode, jpCompleted, socketRoom, socketEvents }
   },
 );
 
@@ -786,6 +812,15 @@ export const adminAssignHospital = mkThunk(
   },
 );
 
+/**
+ * NOTE — NO BACKEND ROUTE EXISTS FOR THIS.
+ * Both router files explicitly state: "There is intentionally no admin
+ * 'reassign driver' route" — admin can only reassign via TransportPartner
+ * (tpReassignDriver, PATCH /:id/tp/reassign-driver) or by re-running
+ * adminAssignSoloDriver for a solo driver. Calling this thunk will 404.
+ * Kept here only so existing imports don't break; do not wire to new UI.
+ * Use tpReassignDriver or adminAssignSoloDriver instead.
+ */
 export const adminReassignDriver = mkThunk(
   "operations/adminReassignDriver",
   async ({ bookingId, newDriverId, reason }) => {
@@ -1032,6 +1067,8 @@ export const careReachedJoinPoint = mkThunk(
 /**
  * PATCH /ride-requests/:rideId/status  { action: 'complete_waypoint', waypointType }
  * Driver marks CA join waypoint as completed (CA boarded vehicle).
+ * NOTE: lives on a separate ride-requests router, not bookingRouter — kept
+ * as-is, not part of the two booking router files being reconciled here.
  */
 export const driverCompleteWaypoint = mkThunk(
   "operations/driverCompleteWaypoint",
@@ -1412,8 +1449,7 @@ const operationsSlice = createSlice({
       if (payload?.rideId) state.activeRide = payload;
     });
 
-    // Patch careRideStatus.status — never replace object
-    // REPLACE existing wire(careJoinRide, ...) with:
+    // POST /:id/care/join-ride — CA attaches to tracking, keeps own nav view
     wire(careJoinRide, (state, { payload }) => {
       state.caHasJoined = true;
       state.caViewMode = "driver_tracking_only";
@@ -1429,6 +1465,34 @@ const operationsSlice = createSlice({
       if (state.careTrackingSnapshot?.careAssistant) {
         state.careTrackingSnapshot.careAssistant.isLinkedToRide = true;
         state.careTrackingSnapshot.careAssistant.status = "in_ride";
+      }
+    });
+
+    // PATCH /:id/care/join-ride — distinct route, CA boards mid-ride and
+    // is switched straight to driver-tracking-only mode by the backend.
+    wire(caJoinRideAndTrackDriver, (state, { payload }) => {
+      state.caHasJoined = true;
+      state.caViewMode = payload?.caViewMode || "driver_tracking_only";
+      state.caAtJoinPoint = false;
+      state.careRideStatus = {
+        ...state.careRideStatus,
+        status: payload?.careAssistantStatus || "in_ride",
+        careAssistantJoined: true,
+      };
+      if (payload?.jpCompleted) {
+        state.caJoinPoint = state.caJoinPoint
+          ? { ...state.caJoinPoint, isCompleted: true, completedAt: new Date().toISOString() }
+          : state.caJoinPoint;
+        if (state.careTrackingSnapshot?.route?.caJoinWaypoint) {
+          state.careTrackingSnapshot.route.caJoinWaypoint.isCompleted = true;
+          state.careTrackingSnapshot.route.caJoinWaypoint.completedAt =
+            new Date().toISOString();
+        }
+      }
+      if (state.careTrackingSnapshot?.careAssistant) {
+        state.careTrackingSnapshot.careAssistant.isLinkedToRide = true;
+        state.careTrackingSnapshot.careAssistant.status =
+          payload?.careAssistantStatus || "in_ride";
       }
     });
 
@@ -1628,6 +1692,8 @@ const operationsSlice = createSlice({
           ...payload.booking,
         };
     });
+    // NOTE: adminReassignDriver has no backing route (see thunk comment above).
+    // Wired only to avoid dead-case errors if something still dispatches it.
     wire(adminReassignDriver, (state, { payload }) => {
       state.adminAssignment = payload ?? null;
       state.activeRide = payload?.ride ?? null;
@@ -1743,7 +1809,7 @@ export const {
   clearConsultation,
   setConsultationFromSocket,
   appendConsultationChatMessage,
-  // Add to the existing destructured export:
+  // CA join / waypoint local reducers
   setCaAtJoinPoint,
   setCaHasJoined,
   setJpWaypointCompleted,
@@ -1761,6 +1827,8 @@ export const selectCareReachedJpLoading = (s) =>
   s.operations.loading["careReachedJoinPoint"] ?? false;
 export const selectCareJoinRideLoading = (s) =>
   s.operations.loading["careJoinRide"] ?? false;
+export const selectCaJoinRideAndTrackLoading = (s) =>
+  s.operations.loading["caJoinRideAndTrackDriver"] ?? false;
 
 export const selectAdminBookings = (s) => s.operations.adminBookings;
 export const selectAdminBookingsMeta = (s) => s.operations.adminBookingsMeta;

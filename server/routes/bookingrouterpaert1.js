@@ -52,7 +52,7 @@ const CACHE_TTL = { nearby: 30, ops: 45 };
 
 const invalidateBookingCache = async () => {
   try {
-    const patterns = ['GET:/admin/bookings*', 'GET:/op/*'];
+    const patterns = ['GET:/admin/bookings*', 'GET:/op/*', 'GET:/tp/*', 'GET:/driver/*'];
     for (const pattern of patterns) {
       let cursor = 0;
       do {
@@ -205,7 +205,8 @@ const emailNoDriverNearby = (booking, data) => {
         <strong>Pickup:</strong> ${data.pickup?.address || JSON.stringify(data.pickup?.coordinates)}<br/>
         <strong>Drop:</strong> ${data.destination?.address || JSON.stringify(data.destination?.coordinates)}<br/>
         <strong>Distance:</strong> ${data.distKm} km &nbsp;|&nbsp; ₹${data.transportFee}<br/>
-        <strong>Search Radius:</strong> ${data.searchRadiusKm} km
+        <strong>Search Radius:</strong> ${data.searchRadiusKm} km<br/>
+        <strong>Action:</strong> Assign a SoloDriverPartner or TransportPartner from the admin dashboard.
       `,
       buttonLink: `${process.env.FRONTEND_URL}/admin/bookings/${booking._id}`,
       buttonText: 'Assign Driver Now',
@@ -300,6 +301,14 @@ const emailHospitalRideCompleted = async (booking) => {
 // ═════════════════════════════════════════════════════════════════════════════
 // DRIVER ROUTES
 // CRITICAL: Ride.driver = Driver._id (NOT User._id)
+//
+// BUSINESS RULE: A normal/agency Driver only ever gets linked to a Ride
+// through its own TransportPartner (see /:id/tp/assign-driver and
+// /:id/tp/reassign-driver in the consultations/admin router file).
+// Admin/superadmin never assigns an agency Driver directly — admin's only
+// direct-driver path is a SoloDriverPartner (POST /admin/bookings/:id/assign/solo-driver,
+// in the same file). There is intentionally no admin "reassign driver" route
+// here — that capability belongs to the TP for its own fleet.
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
@@ -311,7 +320,9 @@ router.get('/driver/assigned',
   async (req, res) => {
     try {
       const driverDoc = await Driver.findOne({ user: req.user._id })
-        .select('_id legalName driverCode status assignedVehicleSnapshot ownerAgency soloPartner')
+        .select('_id legalName driverCode status assignedVehicleSnapshot ownerAgency soloPartner phone')
+        .populate('ownerAgency', 'businessName ownerPhone')
+        .populate('soloPartner', 'legalName phone partnershipStatus')
         .lean();
 
       if (!driverDoc) {
@@ -324,8 +335,12 @@ router.get('/driver/assigned',
       })
         .populate({
           path:   'booking',
-          select: 'bookingCode bookingType scheduledAt patientInfo fareBreakdown status patientLocation destinationLocation consultationType notificationsSent',
-          populate: { path: 'customer', select: 'name phone avatar' },
+          select: 'bookingCode bookingType scheduledAt patientInfo fareBreakdown status patientLocation destinationLocation consultationType notificationsSent doctor hospital',
+          populate: [
+            { path: 'customer', select: 'name phone avatar' },
+            { path: 'doctor', select: 'specialization registrationNumber', populate: { path: 'user', select: 'name phone' } },
+            { path: 'hospital', select: 'name address contact' },
+          ],
         })
         .populate('trackingId', 'expectedRoutePolyline currentEtaMinutes hasActiveSos')
         .select('rideCode rideType vehicleClass status pickup dropoff stops liveLocation scheduledPickupAt estimatedDistanceKm estimatedDurationMin driverAssignedAt driverAcceptedAt driverArrivedAt rideStartedAt fare trackingId booking transportPartner soloPartner vehicleSnapshot driverSnapshot isReturnRide')
@@ -338,9 +353,12 @@ router.get('/driver/assigned',
           driver: {
             driverCode:              driverDoc.driverCode,
             legalName:               driverDoc.legalName,
+            phone:                   driverDoc.phone,
             status:                  driverDoc.status,
             assignedVehicleSnapshot: driverDoc.assignedVehicleSnapshot,
             type: driverDoc.ownerAgency ? 'agency' : 'solo',
+            ownerAgency: driverDoc.ownerAgency || null,
+            soloPartner: driverDoc.soloPartner || null,
           },
           rides,
           total: rides.length,
@@ -370,16 +388,10 @@ router.patch('/:id/ride/accept',
       if (ride.status !== 'driver_assigned')
         return res.status(400).json({ success: false, message: `Ride status is ${ride.status}, expected driver_assigned` });
 
-      ride.status = 'driver_accepted';
-
-ride.driverAcceptedAt =
-  new Date();
-
-ride.activeTarget =
-  'patient_pickup';
-
-ride.currentLeg =
-  'driver_to_patient';
+      ride.status            = 'driver_accepted';
+      ride.driverAcceptedAt  = new Date();
+      ride.activeTarget      = 'patient_pickup';
+      ride.currentLeg        = 'driver_to_patient';
       await ride.save();
 
       const booking = await Booking.findById(req.params.id);
@@ -533,7 +545,7 @@ router.patch('/:id/ride/arrived',
 
       const otp      = genOtp();
       ride.status    = 'driver_arrived';
-      ride.pickupOtp = hashOtp(otp);;  
+      ride.pickupOtp = hashOtp(otp);
       await ride.save();
 
       if (ride.trackingId) {
@@ -979,7 +991,7 @@ router.post('/:id/request-ride',
       return res.json({
         success: true,
         message: nearbyCount === 0
-          ? 'Ride requested. No driver nearby — admin will assign.'
+          ? 'Ride requested. No driver nearby — admin will assign a solo driver or transport partner.'
           : 'Ride requested. Admin assigning driver.',
         data: {
           rideId:         ride._id,
@@ -1137,7 +1149,7 @@ router.post('/:id/care/request-ride',
       return res.json({
         success: true,
         message: nearbyCount === 0
-          ? 'Ride requested. No driver nearby — admin will assign.'
+          ? 'Ride requested. No driver nearby — admin will assign a solo driver or transport partner.'
           : 'Ride requested. Admin assigning driver.',
         data: {
           rideId:         ride._id,
@@ -1156,6 +1168,10 @@ router.post('/:id/care/request-ride',
 // ═════════════════════════════════════════════════════════════════════════════
 // ADMIN: care-ride request (on behalf of customer or care assistant)
 // EMAIL: customer + care assistant notified; ops alert if no driver
+// NOTE: This route only SEARCHES and SURFACES nearby drivers/TPs for admin's
+// visibility. It does NOT let admin link an agency Driver directly to the
+// ride — admin must use /assign/solo-driver or /assign/transport-partner
+// (which then requires the TP to pick its own driver).
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.post('/admin/care-ride/request',
@@ -1204,7 +1220,11 @@ router.post('/admin/care-ride/request',
         Driver.find({
           isActive: true, isVerified: true, isBlocked: false, status: 'Available',
           location: { $geoWithin: { $centerSphere: [[pLng, pLat], careRadiusRad] } },
-        }).select('driverCode legalName phone location performance assignedVehicleSnapshot ownerAgency soloPartner').limit(10).lean(),
+        })
+          .select('driverCode legalName phone location performance assignedVehicleSnapshot ownerAgency soloPartner')
+          .populate('ownerAgency', 'businessName ownerPhone')
+          .populate('soloPartner', 'legalName phone partnershipStatus')
+          .limit(10).lean(),
         TransportPartner.find({
           partnershipStatus: 'active', isAvailable: true,
           'serviceZones.city': { $regex: pickupLocation.city || '', $options: 'i' },
@@ -1318,8 +1338,8 @@ router.post('/admin/care-ride/request',
       return res.json({
         success: true,
         message: noDriverNearby
-          ? 'Care-ride created. No driver within 30km — assign manually.'
-          : `Care-ride created. ${nearbyDrivers.length} driver(s) and ${nearbyTPs.length} TP(s) found nearby.`,
+          ? 'Care-ride created. No driver within 30km — assign a solo driver or transport partner manually.'
+          : `Care-ride created. ${nearbyDrivers.length} driver(s) and ${nearbyTPs.length} TP(s) found nearby. Use /admin/bookings/:id/assign/solo-driver or /assign/transport-partner to finalize.`,
         data: {
           rideId: ride._id, requesterType, pickup: pickupGeo, destination: dropoffGeo,
           distKm: +canonicalKm.toFixed(2), durationMin, ratePerKm, rateSource, transportFee,
@@ -1332,6 +1352,8 @@ router.post('/admin/care-ride/request',
             rating:     d.performance?.rating,
             distanceKm: +haversineKm(pickupLocation.coordinates, d.location?.coordinates || [0, 0]).toFixed(1),
             type:       d.soloPartner ? 'solo' : 'agency',
+            soloPartner: d.soloPartner || null,
+            ownerAgency: d.ownerAgency || null,
           })),
           nearbyTPs: nearbyTPs.map(tp => ({
             tpId: tp._id, businessName: tp.businessName, ownerPhone: tp.ownerPhone,
@@ -1370,6 +1392,7 @@ router.get('/admin/care-ride/:bookingId/nearby',
           ownerAgency: { $ne: null }, isActive: true, isVerified: true, isBlocked: false, status: 'Available',
           location: { $geoWithin: { $centerSphere: [[lng, lat], careRadiusRad] } },
         })
+          .populate('ownerAgency', 'businessName ownerPhone')
           .select('driverCode legalName phone location performance assignedVehicleSnapshot ownerAgency').limit(15).lean(),
 
         TransportPartner.find({
@@ -1385,10 +1408,12 @@ router.get('/admin/care-ride/:bookingId/nearby',
         success: true,
         data: {
           searchRadiusKm: 30, ratePerKm, rateSource,
+          note: 'soloDrivers are assignable directly by admin via /assign/solo-driver. agencyDrivers belong to a TransportPartner fleet — admin assigns the TP via /assign/transport-partner, and the TP picks the driver.',
           soloDrivers: soloDrivers
             .filter(d => d.soloPartner?.partnershipStatus === 'active')
             .map(d => ({
               driverId:   d._id,
+              soloPartnerId: d.soloPartner?._id,
               name:       d.soloPartner?.legalName,
               phone:      d.soloPartner?.phone,
               vehicle:    d.assignedVehicleSnapshot,
@@ -1397,7 +1422,8 @@ router.get('/admin/care-ride/:bookingId/nearby',
             })),
           agencyDrivers: agencyDrivers.map(d => ({
             driverId:   d._id,
-            agencyId:   d.ownerAgency,
+            agencyId:   d.ownerAgency?._id || d.ownerAgency,
+            agencyName: d.ownerAgency?.businessName,
             name:       d.legalName,
             phone:      d.phone,
             vehicle:    d.assignedVehicleSnapshot,
@@ -1496,10 +1522,6 @@ router.patch('/:id/care/join-ride',
       // Join booking socket room
       getBookingSocketService()?.emitJoinRoom(String(req.user._id), `booking:${booking._id}`);
 
-      // Broadcast to all: JP marked completed, CA now in ride
-      // CA view: switch to driver-only tracking
-      // Driver view: JP stays (completed marker), no more CA nav
-      // Customer view: JP stays (completed marker), CA live still shown
       getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'care_assistant_joined_ride', {
         bookingId:         booking._id,
         rideId:            booking.primaryRide,
@@ -1603,9 +1625,6 @@ router.patch('/:id/care/reached-jp',
         careAssistantStatus: 'at_pickup',
         location:            (lat && lng) ? { lat, lng } : null,
         timestamp:           new Date(),
-        // Driver: you can pick up CA at this location
-        // CA: stay here, driver is coming
-        // Customer: CA has reached pickup point
       });
 
       await createNotification({

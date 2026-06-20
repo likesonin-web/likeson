@@ -1,29 +1,4 @@
-/**
- * ═══════════════════════════════════════════════════════════════════════════════
- * ADMIN ANALYTICS ROUTER — Likeson Healthcare
- * Access: admin | superadmin only
- *
- * Sections
- *  §1   Overview / Dashboard
- *  §2   Booking Analysis
- *  §3   Appointment Management
- *  §4   Specialties & Doctor Analytics
- *  §5   Booking Schedules
- *  §6   Doctor–Hospital Availability
- *  §7   Reports (downloadable JSON / CSV-ready payloads)
- *  §8   Referral Overview
- *  §9   Regional Scope
- *  §10  Finance & Revenue
- *  §11  User & Role Management Overview
- *  §12  Subscription Analytics
- *  §13  Driver & Transport Analytics
- *  §14  Pharmacy & Inventory Analytics
- *  §15  Lab Partner Analytics
- *  §16  Advertisement Analytics
- *  §17  Blood Bank Analytics
- *  §18  Wallet & Transaction Analytics
- * ═══════════════════════════════════════════════════════════════════════════════
- */
+ 
 
 import express        from 'express';
 import mongoose       from 'mongoose';
@@ -1305,19 +1280,36 @@ router.get('/finance', wrap(async (req, res) => {
     ]),
   ]);
 
-  const bookingTotal  = bookingRev.reduce((s, r) => s + r.gross, 0);
+const bookingTotal  = bookingRev.reduce((s, r) => s + r.gross, 0);
   const pharmacyTotal = pharmacyRev.reduce((s, r) => s + r.revenue, 0);
+  const pharmacyPlatformFee = pharmacyRev.reduce((s, r) => s + (r.platform ?? 0), 0);
+
+  // ── NET PLATFORM EARNING ─────────────────────────────────────────────────
+  // What Likeson actually KEEPS = booking platform fees + pharmacy platform
+  // fees + tax collected (pass-through, optional) − refunds issued.
+  // This is the number admins actually care about, separate from gross
+  // booking value (which mostly goes to doctors/drivers/stores).
+  const grossRevenue   = +(bookingTotal + pharmacyTotal).toFixed(2);
+  const platformEarned = +((platformFeeEarned[0]?.total ?? 0) + pharmacyPlatformFee).toFixed(2);
+  const netPlatformRevenue = +(platformEarned - (refunds[0]?.totalRefunded ?? 0)).toFixed(2);
 
   res.json({
     success: true,
     period:  { from, to },
     summary: {
-      totalRevenue:       +(bookingTotal + pharmacyTotal).toFixed(2),
+      // gross = total money that flowed through bookings + pharmacy orders
+      grossRevenue,
       bookingRevenue:     +bookingTotal.toFixed(2),
       pharmacyRevenue:    +pharmacyTotal.toFixed(2),
-      platformFeeEarned:  +(platformFeeEarned[0]?.total ?? 0).toFixed(2),
-      taxCollected:       +(taxCollected[0]?.totalGst ?? 0).toFixed(2),
-      totalRefunded:      +(refunds[0]?.totalRefunded ?? 0).toFixed(2),
+
+      // NEW — clear platform-only numbers
+      platformFeeEarned:        +(platformFeeEarned[0]?.total ?? 0).toFixed(2), // from bookings
+      pharmacyPlatformFeeEarned: +pharmacyPlatformFee.toFixed(2),               // from pharmacy
+      totalPlatformEarned:      platformEarned,        // sum of both fees (before refunds)
+      totalRefunded:            +(refunds[0]?.totalRefunded ?? 0).toFixed(2),
+      netPlatformRevenue,       // ⭐ THE NUMBER YOU WANT — platform's actual take-home
+
+      taxCollected: +(taxCollected[0]?.totalGst ?? 0).toFixed(2),
       pendingPayments: {
         amount: +(pendingPayments[0]?.total ?? 0).toFixed(2),
         count:   pendingPayments[0]?.count  ?? 0,
@@ -2095,5 +2087,281 @@ router.use((err, req, res, _next) => {
     ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
   });
 });
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §19  TOP EARNERS (THIS WEEK) — cross-platform leaderboard
+// GET /admin/analytics/top-earners
+//
+// Returns the highest-earning entities THIS WEEK across every revenue-bearing
+// role on the platform: doctors, drivers (agency + solo), transport agencies,
+// lab partners, and pharmacy stores — all in one unified, ranked list.
+//
+// "This week" = Monday 00:00 → now, in server local time (configurable via
+// ?from / ?to like other routes, defaults to current ISO week).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.get('/top-earners', wrap(async (req, res) => {
+  // Default range = current ISO week (Monday → now)
+  const now = new Date();
+  let from = req.query.from ? new Date(req.query.from) : null;
+  let to   = req.query.to   ? new Date(req.query.to)   : now;
+
+  if (!from) {
+    const day = now.getDay();                 // 0 = Sun … 6 = Sat
+    const diffToMonday = (day === 0 ? 6 : day - 1);
+    from = new Date(now);
+    from.setDate(now.getDate() - diffToMonday);
+    from.setHours(0, 0, 0, 0);
+  }
+
+  const limit = Math.min(50, parseInt(req.query.limit) || 10);
+
+  const [
+    topDoctorsWeek, topDriversWeek, topAgenciesWeek,
+    topSoloDriversWeek, topLabsWeek, topPharmacyStoresWeek,
+    lifetimeDoctors, lifetimeDrivers, lifetimeAgencies,
+    lifetimeSolo, lifetimeLabs,
+  ] = await Promise.all([
+
+    // ── Doctors — revenue from completed+paid bookings this week ────────────
+    Booking.aggregate([
+      { $match: {
+          ...dateMatch(from, to),
+          doctor: { $ne: null },
+          paymentStatus: 'paid',
+        },
+      },
+      { $group: {
+          _id:     '$doctor',
+          revenue: { $sum: '$fareBreakdown.totalAmount' },
+          bookings: { $sum: 1 },
+        },
+      },
+      { $sort: { revenue: -1 } },
+      { $limit: limit },
+      { $lookup: { from: 'doctorprofiles', localField: '_id', foreignField: '_id', as: 'doc' } },
+      { $unwind: '$doc' },
+      { $lookup: { from: 'users', localField: 'doc.user', foreignField: '_id', as: 'user' } },
+      { $project: {
+          revenue: 1, bookings: 1,
+          name:           { $arrayElemAt: ['$user.name', 0] },
+          specialization: '$doc.specialization',
+          lifetimePending: '$doc.earnings.pendingPayoutPaise',
+          lifetimeEarned:  '$doc.earnings.lifetimeEarningsPaise',
+        },
+      },
+    ]),
+
+    // ── Agency Drivers — via Ride model if present, else Booking.driver ─────
+    Booking.aggregate([
+      { $match: {
+          ...dateMatch(from, to),
+          driver: { $ne: null },
+          paymentStatus: 'paid',
+        },
+      },
+      { $group: {
+          _id:     '$driver',
+          revenue: { $sum: '$fareBreakdown.transportFee' },
+          rides:   { $sum: 1 },
+        },
+      },
+      { $sort: { revenue: -1 } },
+      { $limit: limit },
+      { $lookup: { from: 'drivers', localField: '_id', foreignField: '_id', as: 'drv' } },
+      { $unwind: '$drv' },
+      { $match: { 'drv.ownerAgency': { $ne: null } } }, // agency drivers only
+      { $project: {
+          revenue: 1, rides: 1,
+          name:            '$drv.legalName',
+          driverCode:      '$drv.driverCode',
+          ownerAgency:     '$drv.ownerAgency',
+          lifetimePending: '$drv.earnings.pendingPayoutPaise',
+          lifetimeEarned:  '$drv.earnings.lifetimeEarningsPaise',
+        },
+      },
+    ]),
+
+    // ── Transport Agencies — sum of their drivers' ride revenue this week ───
+    Booking.aggregate([
+      { $match: {
+          ...dateMatch(from, to),
+          driver: { $ne: null },
+          paymentStatus: 'paid',
+        },
+      },
+      { $group: {
+          _id:     '$driver',
+          revenue: { $sum: '$fareBreakdown.transportFee' },
+        },
+      },
+      { $lookup: { from: 'drivers', localField: '_id', foreignField: '_id', as: 'drv' } },
+      { $unwind: '$drv' },
+      { $match: { 'drv.ownerAgency': { $ne: null } } },
+      { $group: {
+          _id:     '$drv.ownerAgency',
+          revenue: { $sum: '$revenue' },
+          driverCount: { $sum: 1 },
+        },
+      },
+      { $sort: { revenue: -1 } },
+      { $limit: limit },
+      { $lookup: { from: 'transportpartners', localField: '_id', foreignField: '_id', as: 'tp' } },
+      { $unwind: '$tp' },
+      { $project: {
+          revenue: 1, driverCount: 1,
+          name:            '$tp.businessName',
+          partnershipStatus: '$tp.partnershipStatus',
+          lifetimePending: '$tp.earnings.pendingPayoutPaise',
+          lifetimeEarned:  '$tp.earnings.lifetimeEarningsPaise',
+        },
+      },
+    ]),
+
+    // ── Solo Driver-Partners — same booking pool, ownerAgency null ──────────
+    Booking.aggregate([
+      { $match: {
+          ...dateMatch(from, to),
+          driver: { $ne: null },
+          paymentStatus: 'paid',
+        },
+      },
+      { $group: {
+          _id:     '$driver',
+          revenue: { $sum: '$fareBreakdown.transportFee' },
+          rides:   { $sum: 1 },
+        },
+      },
+      { $sort: { revenue: -1 } },
+      { $limit: limit },
+      { $lookup: { from: 'drivers', localField: '_id', foreignField: '_id', as: 'drv' } },
+      { $unwind: '$drv' },
+      { $match: { 'drv.soloPartner': { $ne: null } } },
+      { $lookup: { from: 'solodriverpartners', localField: 'drv.soloPartner', foreignField: '_id', as: 'sdp' } },
+      { $unwind: '$sdp' },
+      { $project: {
+          revenue: 1, rides: 1,
+          name:            '$sdp.legalName',
+          partnerCode:     '$sdp.partnerCode',
+          lifetimePending: '$sdp.earnings.pendingPayoutPaise',
+          lifetimeEarned:  '$sdp.earnings.lifetimeEarningsPaise',
+        },
+      },
+    ]),
+
+    // ── Lab Partners — diagnostic booking revenue this week ──────────────────
+    Booking.aggregate([
+      { $match: {
+          ...dateMatch(from, to),
+          bookingType: { $in: ['diagnostic_center', 'diagnostic_home'] },
+          paymentStatus: 'paid',
+          'diagnosticDetails.labPartner': { $ne: null },
+        },
+      },
+      { $group: {
+          _id:     '$diagnosticDetails.labPartner',
+          revenue: { $sum: '$fareBreakdown.diagnosticFee' },
+          bookings: { $sum: 1 },
+        },
+      },
+      { $sort: { revenue: -1 } },
+      { $limit: limit },
+      { $lookup: { from: 'labpartnerprofiles', localField: '_id', foreignField: '_id', as: 'lab' } },
+      { $unwind: '$lab' },
+      { $project: {
+          revenue: 1, bookings: 1,
+          name:            '$lab.labName',
+          labType:         '$lab.labType',
+          lifetimePending: '$lab.earnings.pendingPayoutPaise',
+          lifetimeEarned:  '$lab.earnings.lifetimeEarningsPaise',
+        },
+      },
+    ]),
+
+    // ── Pharmacy Stores — order revenue this week ─────────────────────────────
+    PharmacyOrder.aggregate([
+      { $match: { ...dateMatch(from, to), 'payment.status': 'Paid' } },
+      { $group: {
+          _id:     '$store',
+          revenue: { $sum: '$billing.totalPayable' },
+          orders:  { $sum: 1 },
+        },
+      },
+      { $sort: { revenue: -1 } },
+      { $limit: limit },
+      { $lookup: { from: 'pharmacystores', localField: '_id', foreignField: '_id', as: 'store' } },
+      { $unwind: '$store' },
+      { $project: {
+          revenue: 1, orders: 1,
+          name:       '$store.storeName',
+          storeType:  '$store.storeType',
+          pendingSettlement: '$store.bankDetails.pendingSettlementAmount',
+        },
+      },
+    ]),
+
+    // ── Lifetime leaderboards (independent of week) — straight from `earnings` ──
+    DoctorProfile.find({ 'earnings.lifetimeEarningsPaise': { $gt: 0 } })
+      .sort({ 'earnings.lifetimeEarningsPaise': -1 })
+      .limit(limit)
+      .populate('user', 'name')
+      .select('specialization earnings user'),
+
+    Driver.find({ 'earnings.lifetimeEarningsPaise': { $gt: 0 }, ownerAgency: { $ne: null } })
+      .sort({ 'earnings.lifetimeEarningsPaise': -1 })
+      .limit(limit)
+      .select('legalName driverCode earnings ownerAgency'),
+
+    TransportPartner.find({ 'earnings.lifetimeEarningsPaise': { $gt: 0 } })
+      .sort({ 'earnings.lifetimeEarningsPaise': -1 })
+      .limit(limit)
+      .select('businessName earnings partnershipStatus'),
+
+    SoloDriverPartner.find({ 'earnings.lifetimeEarningsPaise': { $gt: 0 } })
+      .sort({ 'earnings.lifetimeEarningsPaise': -1 })
+      .limit(limit)
+      .select('legalName partnerCode earnings'),
+
+    LabPartnerProfile.find({ 'earnings.lifetimeEarningsPaise': { $gt: 0 } })
+      .sort({ 'earnings.lifetimeEarningsPaise': -1 })
+      .limit(limit)
+      .select('labName labType earnings'),
+  ]);
+
+  // ── Build unified "Top Earners This Week" leaderboard ───────────────────────
+  // Combine every category into one array, tag with `category`, sort by revenue.
+  const unified = [
+    ...topDoctorsWeek.map(d         => ({ category: 'doctor',          ...d })),
+    ...topDriversWeek.map(d         => ({ category: 'agency_driver',   ...d })),
+    ...topAgenciesWeek.map(d        => ({ category: 'transport_agency',...d })),
+    ...topSoloDriversWeek.map(d     => ({ category: 'solo_driver',     ...d })),
+    ...topLabsWeek.map(d            => ({ category: 'lab_partner',     ...d })),
+    ...topPharmacyStoresWeek.map(d  => ({ category: 'pharmacy_store',  ...d })),
+  ].sort((a, b) => (b.revenue ?? 0) - (a.revenue ?? 0))
+   .slice(0, limit)
+   .map((row, idx) => ({ rank: idx + 1, ...row }));
+
+  res.json({
+    success: true,
+    period:  { from, to },
+    topEarnersThisWeek: unified,         // ⭐ single ranked list across ALL types
+    byCategory: {
+      doctors:          topDoctorsWeek,
+      agencyDrivers:    topDriversWeek,
+      transportAgencies: topAgenciesWeek,
+      soloDrivers:      topSoloDriversWeek,
+      labPartners:      topLabsWeek,
+      pharmacyStores:   topPharmacyStoresWeek,
+    },
+    lifetimeLeaderboards: {
+      doctors:           lifetimeDoctors,
+      agencyDrivers:     lifetimeDrivers,
+      transportAgencies: lifetimeAgencies,
+      soloDrivers:       lifetimeSolo,
+      labPartners:       lifetimeLabs,
+    },
+  });
+}));
 
 export default router;

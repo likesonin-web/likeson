@@ -17,7 +17,7 @@ import "./config/passport.js";
 import redisClient from "./config/redis.js";
 
 // Socket Imports
-import { initSocket } from "./services/socketService.js";
+ import { attachChatSocket } from "./services/chatSocketService.js";
 import { initBookingSocket } from './services/bookingSocketService.js';
 import { 
   registerConsultationSocket, 
@@ -70,7 +70,9 @@ import consultationRouter       from './routes/consultationrouter.js';
 import { protect , authorize }  from "./middleware/authMiddleware.js";
 import labPartnerRoutes         from './routes/labpartnerbookingRoutes.js';
 import cookieConsentRoutes      from './routes/cookieConsentRoutes.js';
-
+import payoutRouter from './routes/payoutRouter.js';
+import bookingPayAtServiceRouter from './routes/bookingPayAtServiceRouter.js'
+import accountingRouter from './routes/accountingRouter.js'
 dotenv.config();
 
 // ─────────────────────────────────────────────
@@ -207,6 +209,12 @@ app.use('/api/cookie-consent', cookieConsentRoutes);
 app.use("/api/bookings", bookingRoutes);
 app.use("/api/bookings", customerBookingRouter);
 app.use("/api/bookings", booking1Routes);
+app.use('/api/bookings', bookingPayAtServiceRouter)
+app.use('/api/accounting', accountingRouter)
+
+ 
+ 
+app.use('/api/payouts', payoutRouter);
 
 // ─────────────────────────────────────────────
 // 6. HEALTH CHECK & ERROR HANDLING
@@ -236,8 +244,15 @@ async function startServer() {
   try {
     await connectDB();
 
-    // Socket.io initialization
-    const io = initSocket(server);
+   
+    const io = new Server(server, {
+      cors: {
+        origin: allowedOrigins,
+        methods: ["GET", "POST"],
+        credentials: true,
+      },
+    });
+    attachChatSocket(io)
     initBookingSocket(io);           
     
     // Register the Consultation Socket Namespace

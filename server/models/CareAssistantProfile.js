@@ -233,6 +233,9 @@ const careAssistantProfileSchema = new Schema(
       isBankVerified: { type: Boolean, default: false },
     },
 
+    razorpayContactId:     { type: String, select: false },
+razorpayFundAccountId: { type: String, select: false },
+
     // ── Performance ──────────────────────────────────────────────────────────
     performance: { type: performanceSchema, default: () => ({}) },
 

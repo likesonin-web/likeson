@@ -1,10 +1,9 @@
 'use client';
- 
 
-import { useState, useEffect, useCallback, useRef }        from 'react';
-import { useDispatch, useSelector }                         from 'react-redux';
-import { useRouter }                                        from 'next/navigation';
-import { motion, AnimatePresence }                          from 'framer-motion';
+import { useState, useEffect, useCallback } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { useRouter } from 'next/navigation';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -12,16 +11,15 @@ import {
 } from 'recharts';
 import {
   Search, Filter, Download, RefreshCw, ChevronLeft, ChevronRight,
-  MapPin, User, Car, Building2, Stethoscope, Heart, Phone, Mail,
-  Clock, AlertTriangle, CheckCircle, XCircle, RotateCcw,
-  TrendingUp, TrendingDown, DollarSign, Activity, BarChart2,
-  Calendar, Layers, Shield, Zap, Eye, MoreVertical, ArrowRight,
-  Truck, UserCheck, Hospital, Navigation, Radio, FileText,
-  ChevronDown, ChevronUp, Star, Package, Info, Send,
-  Wallet, CreditCard, Ban, Edit2, Plus, Minus, X, Video,
+  MapPin, Phone, Mail, Calendar, Layers, Shield, Zap, Eye,
+  CheckCircle, XCircle, RotateCcw, TrendingUp, TrendingDown,
+  DollarSign, Activity, BarChart2, ChevronDown, ChevronUp,
+  Car, Truck, Heart, Stethoscope, Radio, UserCheck, Building2,
+  Package, FileText, ArrowRight, Edit2, Plus, X, Video, Wallet,Clock,
+  QrCode, Banknote, AlertTriangle, Navigation // <-- ADD THIS HERE
 } from 'lucide-react';
 
-// ── operationsSlice — all booking/assignment/refund/tracking actions ─────────
+// ── operationsSlice ──────────────────────────────────────────────────────────
 import {
   fetchAdminBookings,
   fetchAdminBookingStats,
@@ -80,10 +78,9 @@ import {
   selectLiveLocation,
   selectSocketConnected,
   selectLoading,
-  selectError,
 } from '@/store/slices/operationsSlice';
 
-// ── consultationSlice — createConsultation + Agora token fetch ───────────────
+// ── consultationSlice ───────────────────────────────────────────────────────
 import {
   createConsultation,
   fetchAgoraTokens,
@@ -92,8 +89,18 @@ import {
   selectLoading as selectConsultLoading,
 } from '@/store/slices/consultationSlice';
 
-// ── userSlice ─────────────────────────────────────────────────────────────────
+// ── userSlice ────────────────────────────────────────────────────────────────
 import { selectCurrentUser } from '@/store/slices/userSlice';
+
+// ── payAtServiceSlice ───────────────────────────────────────────────────────
+import {
+  generatePayAtServiceLink,
+  fetchPayAtServiceStatus,
+  markCollectedByPartner,
+  markServiceComplete,
+  selectPayAtServiceSession,
+  selectPayAtServiceLoading,
+} from '@/store/slices/payAtServiceSlice';
 
 import LiveTrackingPanel from './LiveTrackingPanel';
 
@@ -163,6 +170,15 @@ const CA_STATUS_COLORS = {
   departed:           'text-base-content/50',
 };
 
+// Ride statuses that represent a driver actively assigned & engaged
+const ACTIVE_RIDE_STATUSES = [
+  'driver_assigned', 'driver_accepted', 'driver_en_route',
+  'driver_arrived', 'otp_verified', 'in_progress', 'at_stop', 'completed',
+];
+
+// Ride statuses representing a rejection / cancellation by partner
+const REJECTED_RIDE_STATUSES = ['cancelled'];
+
 /* ─────────────────────────────────────────────────────────────────────────── */
 /* HELPERS                                                                     */
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -180,6 +196,13 @@ const resolveConsultId = (raw) => {
   return String(raw);
 };
 
+/** Build a tel: link, stripping anything that isn't a digit or leading + */
+const telLink = (phone) => {
+  if (!phone) return null;
+  const cleaned = String(phone).trim().replace(/[^\d+]/g, '');
+  return cleaned ? `tel:${cleaned}` : null;
+};
+
 function statusBadge(status) {
   const color = STATUS_COLORS[status] ?? '#94a3b8';
   return (
@@ -189,6 +212,21 @@ function statusBadge(status) {
     >
       {status?.replace(/_/g, ' ')}
     </span>
+  );
+}
+
+/** Small reusable call button — renders nothing if no phone */
+function CallButton({ phone, label = 'Call', size = 'xs', className = '' }) {
+  const href = telLink(phone);
+  if (!href) return null;
+  return (
+    <a
+      href={href}
+      onClick={(e) => e.stopPropagation()}
+      className={`btn btn-${size} gap-1 bg-success/15 text-success border-success/30 hover:bg-success/25 ${className}`}
+    >
+      <Phone size={size === 'xs' ? 9 : 11} /> {label}
+    </a>
   );
 }
 
@@ -259,14 +297,17 @@ function StatCard({ label, value, sub, icon: Icon, trend, color = 'var(--primary
 /* INFO ROW                                                                    */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
-function InfoRow({ label, value, sub, mono = false }) {
+function InfoRow({ label, value, sub, mono = false, callPhone = null }) {
   if (!value) return null;
   return (
     <div className="flex items-center justify-between gap-2 py-1.5 border-b border-base-300/60 last:border-0">
       <span className="text-[10px] text-base-content/45 shrink-0 w-28">{label}</span>
-      <div className="text-right min-w-0">
-        <p className={`text-xs font-semibold text-base-content truncate m-0 ${mono ? 'font-mono' : ''}`}>{value}</p>
-        {sub && <p className="text-[10px] text-base-content/40 m-0">{sub}</p>}
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="text-right min-w-0">
+          <p className={`text-xs font-semibold text-base-content truncate m-0 ${mono ? 'font-mono' : ''}`}>{value}</p>
+          {sub && <p className="text-[10px] text-base-content/40 m-0">{sub}</p>}
+        </div>
+        {callPhone && <CallButton phone={callPhone} label="" size="xs" />}
       </div>
     </div>
   );
@@ -289,10 +330,109 @@ function SectionHeader({ title, sub, action }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────── */
+/* PARTNER STATUS BANNER — shows assigned / rejected partner state             */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Inspect booking.primaryRide / booking.rides to determine whether a driver
+ * is currently assigned & active, or was rejected and needs reassignment.
+ *
+ * Returns: { state: 'assigned'|'rejected'|'none', ride }
+ */
+function getDriverAssignmentState(booking) {
+  const primary = booking?.primaryRide;
+  if (primary?.status) {
+    if (REJECTED_RIDE_STATUSES.includes(primary.status)) {
+      return { state: 'rejected', ride: primary };
+    }
+    if (ACTIVE_RIDE_STATUSES.includes(primary.status)) {
+      return { state: 'assigned', ride: primary };
+    }
+  }
+  // Fallback: scan rides array for most recent rejection if primary missing
+  const rides = booking?.rides ?? [];
+  const lastCancelled = [...rides].reverse().find(r => r.status === 'cancelled');
+  if (lastCancelled) return { state: 'rejected', ride: lastCancelled };
+  return { state: 'none', ride: null };
+}
+
+function PartnerStatusBanner({ booking }) {
+  const driverState = getDriverAssignmentState(booking);
+  const caAssigned  = !!booking?.careAssistantSnapshot?.name || !!booking?.careAssistant;
+  const tpAssigned  = !!booking?.transportPartner;
+  const hospitalAssigned = !!booking?.hospital;
+
+  const items = [];
+
+  if (driverState.state === 'assigned') {
+    items.push(
+      <div key="driver-assigned" className="flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-[11px] text-success">
+        <CheckCircle size={12} />
+        <span className="font-bold">Driver Assigned</span>
+        {driverState.ride?.driverSnapshot?.legalName && (
+          <span className="text-base-content/60">— {driverState.ride.driverSnapshot.legalName}</span>
+        )}
+        {driverState.ride?.driverSnapshot?.phone && (
+          <CallButton phone={driverState.ride.driverSnapshot.phone} label="Call Driver" size="xs" className="ml-auto" />
+        )}
+      </div>
+    );
+  } else if (driverState.state === 'rejected') {
+    items.push(
+      <div key="driver-rejected" className="flex items-center gap-2 rounded-lg border border-error/30 bg-error/10 px-3 py-2 text-[11px] text-error">
+        <XCircle size={12} />
+        <span className="font-bold">Driver Rejected</span>
+        {driverState.ride?.cancellation?.reason && (
+          <span className="text-base-content/60 truncate">— {driverState.ride.cancellation.reason}</span>
+        )}
+        <span className="ml-auto text-base-content/40 normal-case font-medium">Reassign below</span>
+      </div>
+    );
+  }
+
+  if (caAssigned) {
+    items.push(
+      <div key="ca-assigned" className="flex items-center gap-2 rounded-lg border border-rose-300/30 bg-rose-50/10 px-3 py-2 text-[11px] text-rose-400">
+        <CheckCircle size={12} />
+        <span className="font-bold">Care Assistant Assigned</span>
+        <span className="text-base-content/60">— {booking.careAssistantSnapshot?.name ?? 'Linked'}</span>
+        {booking.careAssistantSnapshot?.phone && (
+          <CallButton phone={booking.careAssistantSnapshot.phone} label="Call CA" size="xs" className="ml-auto" />
+        )}
+      </div>
+    );
+  }
+
+  if (tpAssigned) {
+    items.push(
+      <div key="tp-assigned" className="flex items-center gap-2 rounded-lg border border-indigo-300/30 bg-indigo-50/10 px-3 py-2 text-[11px] text-indigo-400">
+        <CheckCircle size={12} />
+        <span className="font-bold">Transport Partner Assigned</span>
+      </div>
+    );
+  }
+
+  if (hospitalAssigned) {
+    items.push(
+      <div key="hospital-assigned" className="flex items-center gap-2 rounded-lg border border-cyan-300/30 bg-cyan-50/10 px-3 py-2 text-[11px] text-cyan-400">
+        <CheckCircle size={12} />
+        <span className="font-bold">Hospital Linked</span>
+        <span className="text-base-content/60">— {booking.hospital?.name ?? 'Linked'}</span>
+      </div>
+    );
+  }
+
+  if (!items.length) return null;
+
+  return <div className="flex flex-col gap-2 mb-3">{items}</div>;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
 /* NEARBY ASSIGN PANEL                                                         */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
-function NearbyAssignPanel({ bookingId, dispatch }) {
+function NearbyAssignPanel({ booking, dispatch }) {
+  const bookingId = booking._id;
   const [tab, setTab]       = useState('driver');
   const nearbyDrivers       = useSelector(selectNearbyDrivers);
   const nearbyCAs           = useSelector(selectNearbyCareAssistants);
@@ -302,6 +442,9 @@ function NearbyAssignPanel({ bookingId, dispatch }) {
   const assignLoading       = useSelector(selectAdminAssignLoading);
   const [reason, setReason] = useState('');
 
+  const driverState = getDriverAssignmentState(booking);
+  const caAssigned  = !!booking?.careAssistant;
+
   const load = useCallback((t) => {
     setTab(t);
     if (t === 'driver')   dispatch(fetchNearbySoloDrivers({ bookingId }));
@@ -310,7 +453,7 @@ function NearbyAssignPanel({ bookingId, dispatch }) {
     if (t === 'hospital') dispatch(fetchNearbyHospitals({ bookingId }));
   }, [bookingId, dispatch]);
 
-  useEffect(() => { load('driver'); }, [load]);
+  useEffect(() => { load('driver'); return () => dispatch(clearNearbyResults()); }, [load, dispatch]);
 
   const TABS = [
     { id: 'driver',   label: 'Solo Drivers', icon: Car       },
@@ -331,19 +474,42 @@ function NearbyAssignPanel({ bookingId, dispatch }) {
     if (type === 'care')   dispatch(adminReassignCareAssistant({ bookingId, newCareAssistantId: id }));
   };
 
-  const NearbyCard = ({ children, primary, secondary, onAssign, onReassign, assignLabel = 'Assign', showReassign = false }) => (
+  // Determine assign vs reassign vs rejected-reassign label for a given type
+  const actionLabelFor = (type) => {
+    if (type === 'driver') {
+      if (driverState.state === 'rejected') return { label: 'Reassign (was rejected)', mode: 'reassign', danger: true };
+      if (driverState.state === 'assigned') return { label: 'Reassign', mode: 'reassign', danger: false };
+      return { label: 'Assign', mode: 'assign', danger: false };
+    }
+    if (type === 'care') {
+      return caAssigned
+        ? { label: 'Reassign', mode: 'reassign', danger: false }
+        : { label: 'Assign', mode: 'assign', danger: false };
+    }
+    if (type === 'hospital') return { label: 'Link', mode: 'assign', danger: false };
+    return { label: 'Assign', mode: 'assign', danger: false };
+  };
+
+  const NearbyCard = ({ children, primary, secondary, phone, onAssign, onReassign, actionInfo, showAlternateReassign = false }) => (
     <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-base-300 bg-base-200/40 hover:border-primary/30 transition-colors">
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-bold text-base-content truncate m-0">{primary}</p>
+        <div className="flex items-center gap-2">
+          <p className="text-xs font-bold text-base-content truncate m-0">{primary}</p>
+          {phone && <CallButton phone={phone} label="" size="xs" />}
+        </div>
         <p className="text-[10px] text-base-content/50 mt-0.5 m-0">{secondary}</p>
         {children}
       </div>
       <div className="flex flex-col gap-1.5 shrink-0">
-        <button disabled={assignLoading} onClick={onAssign} className="btn btn-primary btn-xs gap-1">
-          {assignLoading ? <Spinner size={9} /> : <Plus size={9} />}
-          {assignLabel}
+        <button
+          disabled={assignLoading}
+          onClick={actionInfo.mode === 'reassign' ? onReassign : onAssign}
+          className={`btn btn-xs gap-1 ${actionInfo.danger ? 'btn-error' : 'btn-primary'}`}
+        >
+          {assignLoading ? <Spinner size={9} /> : (actionInfo.mode === 'reassign' ? <RotateCcw size={9} /> : <Plus size={9} />)}
+          {actionInfo.label}
         </button>
-        {showReassign && (
+        {showAlternateReassign && actionInfo.mode !== 'reassign' && (
           <button disabled={assignLoading} onClick={onReassign} className="btn btn-xs gap-1 bg-base-300 text-base-content hover:bg-base-300/70">
             <RotateCcw size={9} /> Reassign
           </button>
@@ -353,60 +519,75 @@ function NearbyAssignPanel({ bookingId, dispatch }) {
   );
 
   const lists = {
-    driver: (nearbyDrivers ?? []).map((d, i) => (
-      <NearbyCard
-        key={d.driverId ?? i}
-        primary={d.name ?? '—'}
-        secondary={`${d.phone ?? '—'} · ${d.distanceKm ?? '?'} km away${d.rating > 0 ? ` · ★ ${d.rating}` : ''}`}
-        onAssign={() => assign('driver', d.soloPartnerId)}
-        onReassign={() => reassign('driver', d.driverId)}
-        showReassign
-      >
-        {d.vehicle && (
-          <p className="text-[10px] text-base-content/35 mt-0.5 m-0">
-            {d.vehicle?.make} {d.vehicle?.model} · {d.vehicle?.registrationNumber}
-          </p>
-        )}
-      </NearbyCard>
-    )),
+    driver: (nearbyDrivers ?? []).map((d, i) => {
+      const actionInfo = actionLabelFor('driver');
+      return (
+        <NearbyCard
+          key={d.driverId ?? i}
+          primary={d.name ?? '—'}
+          phone={d.phone}
+          secondary={`${d.phone ?? '—'} · ${d.distanceKm ?? '?'} km away${d.rating > 0 ? ` · ★ ${d.rating}` : ''}`}
+          onAssign={() => assign('driver', d.soloPartnerId)}
+          onReassign={() => reassign('driver', d.driverId)}
+          actionInfo={actionInfo}
+        >
+          {d.vehicle && (
+            <p className="text-[10px] text-base-content/35 mt-0.5 m-0">
+              {d.vehicle?.make} {d.vehicle?.model} · {d.vehicle?.registrationNumber}
+            </p>
+          )}
+        </NearbyCard>
+      );
+    }),
 
     tp: (nearbyTPs ?? []).map((tp, i) => (
       <NearbyCard
         key={tp.tpId ?? i}
         primary={tp.businessName ?? '—'}
+        phone={tp.ownerPhone}
         secondary={`${tp.ownerPhone ?? '—'} · ${tp.availableDriversNearby ?? tp.activeDrivers ?? 0} drivers avail.`}
         onAssign={() => assign('tp', tp.tpId)}
+        onReassign={() => {}}
+        actionInfo={actionLabelFor('tp')}
       />
     )),
 
-    care: (nearbyCAs ?? []).map((ca, i) => (
-      <NearbyCard
-        key={ca.careAssistantId ?? i}
-        primary={ca.name ?? '—'}
-        secondary={`${ca.phone ?? '—'} · ${ca.distanceKm ?? '?'} km away${ca.rating > 0 ? ` · ★ ${ca.rating}` : ''}`}
-        onAssign={() => assign('care', ca.careAssistantId)}
-        onReassign={() => reassign('care', ca.careAssistantId)}
-        showReassign
-      >
-        {ca.specializations?.length > 0 && (
-          <p className="text-[10px] text-base-content/35 mt-0.5 m-0">{ca.specializations.slice(0, 2).join(', ')}</p>
-        )}
-      </NearbyCard>
-    )),
+    care: (nearbyCAs ?? []).map((ca, i) => {
+      const actionInfo = actionLabelFor('care');
+      return (
+        <NearbyCard
+          key={ca.careAssistantId ?? i}
+          primary={ca.name ?? '—'}
+          phone={ca.phone}
+          secondary={`${ca.phone ?? '—'} · ${ca.distanceKm ?? '?'} km away${ca.rating > 0 ? ` · ★ ${ca.rating}` : ''}`}
+          onAssign={() => assign('care', ca.careAssistantId)}
+          onReassign={() => reassign('care', ca.careAssistantId)}
+          actionInfo={actionInfo}
+        >
+          {ca.specializations?.length > 0 && (
+            <p className="text-[10px] text-base-content/35 mt-0.5 m-0">{ca.specializations.slice(0, 2).join(', ')}</p>
+          )}
+        </NearbyCard>
+      );
+    }),
 
     hospital: (nearbyHospitals ?? []).map((h, i) => (
       <NearbyCard
         key={h.hospitalId ?? i}
         primary={h.name ?? '—'}
+        phone={h.phone}
         secondary={`${h.distanceKm ?? '?'} km away${h.is24x7 ? ' · 24×7' : ''}${h.isEmergencyReady ? ' · Emergency' : ''}`}
         onAssign={() => assign('hospital', h.hospitalId)}
-        assignLabel="Link"
+        onReassign={() => {}}
+        actionInfo={actionLabelFor('hospital')}
       />
     )),
   };
 
   return (
     <div className="flex flex-col gap-3">
+      <PartnerStatusBanner booking={booking} />
+
       <input
         value={reason}
         onChange={(e) => setReason(e.target.value)}
@@ -461,6 +642,8 @@ function RefundPanel({ booking, dispatch }) {
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
 
+  const alreadyRefunded = ['refunded', 'refund_pending'].includes(booking?.status) || booking?.paymentStatus === 'refunded';
+
   const submit = () => {
     if (!reason) return;
     dispatch(adminProcessRefund({
@@ -476,6 +659,13 @@ function RefundPanel({ booking, dispatch }) {
         <p className="font-bold m-0 mb-1">Amount paid: {currency(booking?.fareBreakdown?.amountPaid)}</p>
         <p className="m-0 opacity-75">Leave amount blank to refund full paid amount. Razorpay refund initiated automatically.</p>
       </div>
+
+      {alreadyRefunded && (
+        <div className="rounded-xl border border-info/30 bg-info/10 p-3 text-xs text-info">
+          <p className="font-bold m-0">Already refunded: {currency(booking?.fareBreakdown?.refundAmount)}</p>
+          <p className="m-0 opacity-75 mt-0.5">You can still process an additional refund if required.</p>
+        </div>
+      )}
 
       <div>
         <label className="label text-[10px] uppercase tracking-widest mb-1 block">Refund Amount (₹)</label>
@@ -596,17 +786,157 @@ function CareRidePanel({ booking, dispatch }) {
           >
             <p className="font-bold m-0 mb-1">Nearby Results</p>
             <p className="m-0 text-base-content/60">
-              {careRideNearby.nearbyDrivers?.length ?? 0} drivers · {careRideNearby.nearbyTPs?.length ?? 0} TPs nearby
+              {careRideNearby.nearbyDrivers?.length ?? careRideNearby.soloDrivers?.length ?? 0} drivers · {careRideNearby.nearbyTPs?.length ?? careRideNearby.transportPartners?.length ?? 0} TPs nearby
             </p>
-            {(careRideNearby.nearbyDrivers ?? []).slice(0, 3).map((d, i) => (
-              <div key={d._id ?? i} className="flex items-center justify-between mt-2 py-1.5 border-t border-base-300/60">
-                <span className="font-medium">{d.name}</span>
-                <span className="text-[10px] text-primary">{d.distanceKm} km</span>
+            {(careRideNearby.nearbyDrivers ?? careRideNearby.soloDrivers ?? careRideNearby.agencyDrivers ?? []).slice(0, 5).map((d, i) => (
+              <div key={d._id ?? d.driverId ?? i} className="flex items-center justify-between mt-2 py-1.5 border-t border-base-300/60">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-medium truncate">{d.name}</span>
+                  {d.phone && <CallButton phone={d.phone} label="" size="xs" />}
+                </div>
+                <span className="text-[10px] text-primary shrink-0">{d.distanceKm} km</span>
               </div>
             ))}
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* PAY-AT-SERVICE PANEL — uses payAtServiceSlice                               */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+function PayAtServicePanel({ booking, dispatch }) {
+  const bookingId = booking._id;
+  const session   = useSelector(selectPayAtServiceSession(bookingId));
+  const loading   = useSelector(selectPayAtServiceLoading);
+
+  const [cashAmount, setCashAmount] = useState(booking?.fareBreakdown?.totalAmount ?? '');
+  const [cashMethod, setCashMethod] = useState('cash');
+  const [cashNote, setCashNote]     = useState('');
+
+  const paymentDone = ['paid', 'pay_at_service_paid', 'refunded'].includes(booking?.paymentStatus)
+    || session?.paid;
+
+  // Poll status while link is pending and not yet paid
+  useEffect(() => {
+    if (!bookingId) return;
+    let interval;
+    const shouldPoll = session?.shortUrl && !session?.paid && !paymentDone;
+    if (shouldPoll) {
+      dispatch(fetchPayAtServiceStatus({ bookingId }));
+      interval = setInterval(() => {
+        dispatch(fetchPayAtServiceStatus({ bookingId }));
+      }, 8000);
+    }
+    return () => interval && clearInterval(interval);
+  }, [bookingId, session?.shortUrl, session?.paid, paymentDone, dispatch]);
+
+  // Fetch initial status on mount
+  useEffect(() => {
+    if (bookingId) dispatch(fetchPayAtServiceStatus({ bookingId }));
+  }, [bookingId, dispatch]);
+
+  const generateLink = () => dispatch(generatePayAtServiceLink({ bookingId }));
+  const refreshStatus = () => dispatch(fetchPayAtServiceStatus({ bookingId }));
+  const markCash = () => {
+    if (!cashAmount || Number(cashAmount) <= 0) return;
+    dispatch(markCollectedByPartner({ bookingId, amount: Number(cashAmount), method: cashMethod, note: cashNote || undefined }));
+  };
+  const complete = () => dispatch(markServiceComplete({ bookingId }));
+
+  const amount    = session?.amount ?? booking?.fareBreakdown?.totalAmount ?? 0;
+  const shortUrl  = session?.shortUrl ?? booking?.payAtService?.shortUrl ?? null;
+  const expiresAt = session?.expiresAt ?? booking?.payAtService?.expiresAt ?? null;
+  const isPaid    = session?.paid ?? paymentDone;
+  const canComplete = (session?.canMarkComplete ?? isPaid) && booking?.status !== 'completed';
+  const isExpired = expiresAt ? new Date(expiresAt) < new Date() : false;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="rounded-xl border border-base-300 bg-base-200 p-3 grid grid-cols-2 gap-3">
+        <div>
+          <p className="text-[9px] uppercase tracking-widest text-base-content/40 m-0">Amount Due</p>
+          <p className="text-sm font-bold text-success m-0 mt-0.5">{currency(amount)}</p>
+        </div>
+        <div>
+          <p className="text-[9px] uppercase tracking-widest text-base-content/40 m-0">Payment Status</p>
+          <div className="mt-1">{statusBadge(booking?.paymentStatus ?? 'unpaid')}</div>
+        </div>
+      </div>
+
+      {isPaid ? (
+        <div className="rounded-xl border border-success/30 bg-success/10 p-3 text-xs text-success flex items-center gap-2">
+          <CheckCircle size={14} />
+          <div>
+            <p className="font-bold m-0">Payment Received</p>
+            {session?.paidAt && <p className="m-0 opacity-70 mt-0.5">Paid at {fmt(session.paidAt)}</p>}
+          </div>
+        </div>
+      ) : (
+        <>
+          {shortUrl && !isExpired && (
+            <div className="rounded-xl border border-primary/30 bg-primary/5 p-3 text-xs flex flex-col gap-2">
+              <p className="font-bold m-0 flex items-center gap-1.5"><QrCode size={12} /> Payment Link Active</p>
+              <p className="m-0 text-base-content/60 break-all font-mono text-[10px]">{shortUrl}</p>
+              {expiresAt && <p className="m-0 text-base-content/40">Expires: {fmt(expiresAt)}</p>}
+              <div className="flex gap-2 mt-1">
+                <a href={shortUrl} target="_blank" rel="noreferrer" className="btn btn-xs btn-primary flex-1 gap-1">
+                  <ArrowRight size={9} /> Open Link
+                </a>
+                <button onClick={refreshStatus} disabled={loading?.fetchStatus} className="btn btn-xs flex-1 gap-1 bg-base-300 text-base-content">
+                  {loading?.fetchStatus ? <Spinner size={9} /> : <RefreshCw size={9} />} Check Status
+                </button>
+              </div>
+            </div>
+          )}
+
+          {(!shortUrl || isExpired) && (
+            <button disabled={loading?.generateLink} onClick={generateLink} className="btn btn-primary w-full gap-2">
+              {loading?.generateLink ? <Spinner size={12} /> : <QrCode size={12} />}
+              {isExpired ? 'Regenerate QR / Link' : 'Generate QR / Payment Link'}
+            </button>
+          )}
+
+          <div className="divider text-[10px] text-base-content/35 m-0">OR record cash / manual payment</div>
+
+          <div className="rounded-xl border border-base-300 bg-base-200 p-3 flex flex-col gap-2">
+            <div className="flex gap-2">
+              <input
+                type="number"
+                value={cashAmount}
+                onChange={(e) => setCashAmount(e.target.value)}
+                placeholder="Amount collected"
+                className="input-field text-xs flex-1"
+              />
+              <select value={cashMethod} onChange={(e) => setCashMethod(e.target.value)} className="input-field text-xs w-28">
+                <option value="cash">Cash</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <input
+              value={cashNote}
+              onChange={(e) => setCashNote(e.target.value)}
+              placeholder="Note (optional)"
+              className="input-field text-xs"
+            />
+            <button disabled={loading?.markCollected || !cashAmount} onClick={markCash} className="btn btn-sm gap-1.5 bg-base-300 text-base-content">
+              {loading?.markCollected ? <Spinner size={10} /> : <Banknote size={10} />} Mark Collected
+            </button>
+          </div>
+        </>
+      )}
+
+      <button
+        disabled={!canComplete || loading?.markComplete || booking?.status === 'completed'}
+        onClick={complete}
+        className="btn btn-success w-full gap-2"
+      >
+        {loading?.markComplete ? <Spinner size={12} /> : <CheckCircle size={12} />}
+        {booking?.status === 'completed' ? 'Service Already Completed' : 'Mark Service Complete'}
+      </button>
     </div>
   );
 }
@@ -640,6 +970,12 @@ function OpPanel({ booking, dispatch }) {
         <p className="text-[11px] text-base-content/50 m-0">
           {opRecord.consultationType ?? '—'} · {fmtDate(opRecord.scheduledAt)}
         </p>
+        {opRecord.doctor?.user?.name && (
+          <p className="text-[11px] text-base-content/40 mt-1 m-0 flex items-center gap-1.5">
+            <Stethoscope size={10} /> Dr. {opRecord.doctor.user.name}
+            <CallButton phone={opRecord.doctor.user.phone} label="" size="xs" />
+          </p>
+        )}
         {opRecord.doctorNotes && (
           <p className="text-[11px] text-base-content/40 italic mt-1 m-0">"{opRecord.doctorNotes}"</p>
         )}
@@ -724,7 +1060,10 @@ function CareTrackingPanel({ booking, dispatch }) {
           </div>
           {snapshot?.driver?.snapshot ? (
             <>
-              <p className="text-xs font-bold text-base-content m-0">{snapshot.driver.snapshot.legalName ?? 'Assigned'}</p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-xs font-bold text-base-content m-0">{snapshot.driver.snapshot.legalName ?? 'Assigned'}</p>
+                <CallButton phone={snapshot.driver.snapshot.phone} label="" size="xs" />
+              </div>
               <p className="text-[10px] text-base-content/50 m-0">{snapshot.driver.snapshot.phone ?? '—'}</p>
             </>
           ) : (
@@ -749,7 +1088,10 @@ function CareTrackingPanel({ booking, dispatch }) {
           </div>
           {ca ? (
             <>
-              <p className="text-xs font-bold text-base-content m-0">{ca.name ?? 'Assigned'}</p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-xs font-bold text-base-content m-0">{ca.name ?? 'Assigned'}</p>
+                <CallButton phone={ca.phone} label="" size="xs" />
+              </div>
               <p className="text-[10px] text-base-content/50 m-0">{ca.phone ?? '—'}</p>
               <div className="flex items-center gap-1.5 mt-1.5">
                 {ca.isLinkedToRide ? (
@@ -802,6 +1144,12 @@ function CareTrackingPanel({ booking, dispatch }) {
         </div>
       )}
 
+      {snapshot?.hasActiveSos && (
+        <div className="rounded-xl border border-error/40 bg-error/10 p-3 flex items-center gap-2 text-error text-xs font-bold">
+          <AlertTriangle size={14} /> Active SOS on this booking — escalate immediately
+        </div>
+      )}
+
       {loading && (
         <div className="flex items-center justify-center gap-2 py-4 text-xs text-base-content/40">
           <Spinner size={12} /> Loading tracking data…
@@ -839,6 +1187,11 @@ function StatusPanel({ booking, dispatch }) {
 
   return (
     <div className="flex flex-col gap-3">
+      <div className="rounded-xl border border-base-300 bg-base-200 p-3 flex items-center justify-between">
+        <span className="text-[10px] uppercase tracking-widest text-base-content/45">Current Status</span>
+        {statusBadge(booking.status)}
+      </div>
+
       <select
         value={newStatus}
         onChange={(e) => { setNewStatus(e.target.value); setStatusNote(''); setCustomNote(''); }}
@@ -880,8 +1233,6 @@ function StatusPanel({ booking, dispatch }) {
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /* CONSULTATION PANEL                                                          */
-/* FIXED: fetchJoinToken → fetchAgoraTokens; createConsultation args aligned  */
-/* Added: router navigation to /doctor/consultation/[id]                      */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 function ConsultationPanel({ booking, dispatch }) {
@@ -894,19 +1245,16 @@ function ConsultationPanel({ booking, dispatch }) {
     urgency:                  'routine',
   });
 
-  // Agora state from consultationSlice
   const agoraState   = useSelector(selectAgora);
   const tokenLoading = useSelector(selectConsultLoading('agora'));
   const createLoading= useSelector(selectConsultLoading('create'));
 
   const [localErr, setLocalErr] = useState(null);
 
-  // Raw consultationSessionId from booking (Booking model field)
   const consultationId = resolveConsultId(booking?.consultationSessionId);
 
   const upd = (k, v) => setForm((p) => ({ ...p, [k]: v }));
 
-  // ── Create consultation session ──────────────────────────────────────────
   const handleCreate = async () => {
     if (!form.scheduledAt) { setLocalErr('Scheduled date/time is required'); return; }
     setLocalErr(null);
@@ -917,25 +1265,21 @@ function ConsultationPanel({ booking, dispatch }) {
         scheduledAt:      new Date(form.scheduledAt).toISOString(),
         slotDurationMin:  Number(form.slotDurationMin),
         urgency:          form.urgency,
-        // doctor + patient resolved server-side from booking
       })).unwrap();
     } catch (e) {
       setLocalErr(String(e?.message ?? e));
     }
   };
 
-  // ── Fetch Agora tokens for this consultation ─────────────────────────────
   const handleFetchToken = async () => {
     if (!consultationId) return;
     setLocalErr(null);
     try {
-      // Try get tokens; provision if 404
       const res = await dispatch(fetchAgoraTokens(consultationId)).unwrap();
       if (!res?.tokens) {
         await dispatch(provisionAgoraTokens(consultationId)).unwrap();
       }
     } catch (e) {
-      // Provision if tokens don't exist yet
       try {
         await dispatch(provisionAgoraTokens(consultationId)).unwrap();
       } catch (e2) {
@@ -944,22 +1288,17 @@ function ConsultationPanel({ booking, dispatch }) {
     }
   };
 
-  // ── Navigate to consultation room ────────────────────────────────────────
   const handleJoinRoom = () => {
     if (!consultationId) return;
-    // Admin joins as doctor view
     router.push(`/doctor/consultation/${consultationId}`);
   };
 
-  // Tokens come from Redux agoraState after fetch
   const tokens = agoraState?.myTokens ?? agoraState?.doctorTokens;
   const hasTokens = !!tokens?.rtcToken;
 
-  // Already linked consultation
   if (consultationId) {
     return (
       <div className="flex flex-col gap-3">
-        {/* Session card */}
         <div className="rounded-xl border border-violet-300/30 bg-violet-50/10 p-3">
           <div className="flex items-center gap-2 mb-2">
             <div className="w-5 h-5 rounded-full bg-violet-400/15 flex items-center justify-center">
@@ -973,7 +1312,6 @@ function ConsultationPanel({ booking, dispatch }) {
           </p>
         </div>
 
-        {/* Token display after fetch */}
         {hasTokens && (
           <div className="rounded-xl border border-base-300 bg-base-200 p-3 flex flex-col gap-1.5">
             <p className="text-[10px] font-bold uppercase tracking-widest text-base-content/40 m-0">Agora Session</p>
@@ -991,7 +1329,6 @@ function ConsultationPanel({ booking, dispatch }) {
 
         {localErr && <p className="text-[10px] text-error m-0">{localErr}</p>}
 
-        {/* Actions */}
         <div className="flex gap-2">
           <button
             disabled={tokenLoading}
@@ -1012,7 +1349,6 @@ function ConsultationPanel({ booking, dispatch }) {
     );
   }
 
-  // No session — create form
   return (
     <div className="flex flex-col gap-3">
       <div className="rounded-xl border border-warning/20 bg-warning/5 p-3 text-[10px] text-warning-content/70">
@@ -1099,6 +1435,7 @@ function BookingDetailPanel({ bookingId, dispatch }) {
     { id: 'care_ride',    label: 'Care Ride', icon: Heart       },
     { id: 'tracking',     label: 'Tracking',  icon: Navigation  },
     { id: 'consultation', label: 'Consult',   icon: Radio       },
+    { id: 'payment',      label: 'Payment',   icon: QrCode      },
   ];
 
   if (loading) {
@@ -1120,11 +1457,12 @@ function BookingDetailPanel({ bookingId, dispatch }) {
     );
   }
 
-  // Resolved consultation ID for join button in header
   const consultId = resolveConsultId(booking.consultationSessionId);
   const canJoinVideo = !!consultId &&
     ['doctor_online', 'full_care_ride'].includes(booking.bookingType) &&
     ['confirmed', 'in_progress', 'waiting'].includes(booking.status);
+
+  const driverState = getDriverAssignmentState(booking);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -1137,7 +1475,11 @@ function BookingDetailPanel({ bookingId, dispatch }) {
               {typeIcon(booking.bookingType)}
               <span className="text-[10px] font-bold text-primary uppercase tracking-widest">{booking.bookingCode}</span>
               {statusBadge(booking.status)}
-              {/* Quick join button in header */}
+              {driverState.state === 'rejected' && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold tracking-widest uppercase border border-error/40 bg-error/10 text-error">
+                  <XCircle size={9} /> Partner Rejected
+                </span>
+              )}
               {canJoinVideo && (
                 <button
                   onClick={() => router.push(`/doctor/consultation/${consultId}`)}
@@ -1147,7 +1489,10 @@ function BookingDetailPanel({ bookingId, dispatch }) {
                 </button>
               )}
             </div>
-            <p className="text-base font-bold text-base-content m-0 truncate">{booking.patientInfo?.name ?? '—'}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-base font-bold text-base-content m-0 truncate">{booking.patientInfo?.name ?? '—'}</p>
+              <CallButton phone={booking.customer?.phone} label="Call Patient" size="xs" />
+            </div>
             <p className="text-[11px] text-base-content/45 m-0 mt-0.5">
               {booking.bookingType?.replace(/_/g, ' ')} · {fmt(booking.scheduledAt)}
             </p>
@@ -1184,12 +1529,13 @@ function BookingDetailPanel({ bookingId, dispatch }) {
             transition={{ duration: 0.15 }}
           >
             {actionTab === 'status'       && <StatusPanel booking={booking} dispatch={dispatch} />}
-            {actionTab === 'assign'       && <NearbyAssignPanel bookingId={booking._id} dispatch={dispatch} />}
+            {actionTab === 'assign'       && <NearbyAssignPanel booking={booking} dispatch={dispatch} />}
             {actionTab === 'refund'       && <RefundPanel booking={booking} dispatch={dispatch} />}
             {actionTab === 'op'           && <OpPanel booking={booking} dispatch={dispatch} />}
             {actionTab === 'care_ride'    && <CareRidePanel booking={booking} dispatch={dispatch} />}
             {actionTab === 'tracking'     && <CareTrackingPanel booking={booking} dispatch={dispatch} />}
             {actionTab === 'consultation' && <ConsultationPanel booking={booking} dispatch={dispatch} />}
+            {actionTab === 'payment'      && <PayAtServicePanel booking={booking} dispatch={dispatch} />}
           </motion.div>
         </AnimatePresence>
       </div>
@@ -1197,6 +1543,9 @@ function BookingDetailPanel({ bookingId, dispatch }) {
       {/* Scrollable detail body */}
       <div className="flex-1 overflow-y-auto p-5 scrollbar-thin">
         <div className="flex flex-col gap-5">
+
+          {/* Partner status banner — global overview */}
+          <PartnerStatusBanner booking={booking} />
 
           {/* Patient + Customer */}
           <div className="grid grid-cols-2 gap-3">
@@ -1213,9 +1562,12 @@ function BookingDetailPanel({ bookingId, dispatch }) {
             <div className="rounded-xl border border-base-300 bg-base-200 p-3">
               <SectionHeader title="Customer" />
               <p className="text-xs font-bold text-base-content m-0">{booking.customer?.name ?? '—'}</p>
-              <p className="text-[11px] text-base-content/50 m-0 mt-0.5 flex items-center gap-1">
-                <Phone size={9} /> {booking.customer?.phone ?? '—'}
-              </p>
+              <div className="flex items-center justify-between mt-0.5">
+                <p className="text-[11px] text-base-content/50 m-0 flex items-center gap-1">
+                  <Phone size={9} /> {booking.customer?.phone ?? '—'}
+                </p>
+                <CallButton phone={booking.customer?.phone} label="Call" size="xs" />
+              </div>
               <p className="text-[11px] text-base-content/50 m-0 mt-0.5 flex items-center gap-1 truncate">
                 <Mail size={9} /> {booking.customer?.email ?? '—'}
               </p>
@@ -1278,11 +1630,31 @@ function BookingDetailPanel({ bookingId, dispatch }) {
           {/* Assignments */}
           <div className="rounded-xl border border-base-300 bg-base-200 p-3">
             <SectionHeader title="Assignments" />
-            <InfoRow label="Doctor"         value={booking.doctorSnapshot?.name}         sub={booking.doctorSnapshot?.specialization} />
-            <InfoRow label="Care Assistant" value={booking.careAssistantSnapshot?.name}  sub={booking.careAssistantSnapshot?.phone} />
+            <InfoRow
+              label="Doctor"
+              value={booking.doctorSnapshot?.name}
+              sub={booking.doctorSnapshot?.specialization}
+              callPhone={booking.doctorSnapshot?.phone}
+            />
+            <InfoRow
+              label="Care Assistant"
+              value={booking.careAssistantSnapshot?.name}
+              sub={booking.careAssistantSnapshot?.phone}
+              callPhone={booking.careAssistantSnapshot?.phone}
+            />
+            <InfoRow
+              label="Driver"
+              value={booking.primaryRide?.driverSnapshot?.legalName}
+              sub={
+                driverState.state === 'rejected'
+                  ? `Rejected${driverState.ride?.cancellation?.reason ? ` — ${driverState.ride.cancellation.reason}` : ''}`
+                  : booking.primaryRide?.driverSnapshot?.phone
+              }
+              callPhone={booking.primaryRide?.driverSnapshot?.phone}
+            />
             <InfoRow label="Hospital"       value={booking.hospital?.name ?? (booking.hospital ? 'Linked' : null)} />
             <InfoRow label="Transport"      value={booking.transportPartner ? 'TP assigned' : null} />
-            <InfoRow label="Primary Ride"   value={booking.primaryRide?.status}          sub={booking.primaryRide?.rideCode} mono />
+            <InfoRow label="Primary Ride"   value={booking.primaryRide?.status?.replace(/_/g, ' ')} sub={booking.primaryRide?.rideCode} mono />
             <InfoRow label="Consultation"   value={consultId ? 'Linked' : null}          sub="Telemedicine session" />
           </div>
 
@@ -1322,6 +1694,31 @@ function BookingDetailPanel({ bookingId, dispatch }) {
                     <span className="text-base-content/35 shrink-0 ml-2">{fmtDate(log.changedAt)}</span>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Ride history — shows assigned/rejected drivers across attempts */}
+          {(booking.rides?.length ?? 0) > 0 && (
+            <div className="rounded-xl border border-base-300 bg-base-200 p-3">
+              <SectionHeader title={`Ride Attempts (${booking.rides.length})`} />
+              <div className="flex flex-col gap-1.5 max-h-44 overflow-y-auto scrollbar-thin">
+                {[...booking.rides].reverse().map((r, i) => {
+                  const isRejected = r.status === 'cancelled';
+                  const isAssigned = ACTIVE_RIDE_STATUSES.includes(r.status) && !isRejected;
+                  return (
+                    <div key={r._id ?? i} className="flex items-center justify-between text-[11px] py-1.5 border-b border-base-300/60 last:border-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {isRejected ? <XCircle size={10} className="text-error shrink-0" /> : isAssigned ? <CheckCircle size={10} className="text-success shrink-0" /> : <Clock size={10} className="text-base-content/30 shrink-0" />}
+                        <span className="text-base-content/70 truncate">{r.driverSnapshot?.legalName ?? r.rideType ?? 'Ride'}</span>
+                        {r.driverSnapshot?.phone && <CallButton phone={r.driverSnapshot.phone} label="" size="xs" />}
+                      </div>
+                      <span className={`shrink-0 ml-2 ${isRejected ? 'text-error' : isAssigned ? 'text-success' : 'text-base-content/35'}`}>
+                        {r.status?.replace(/_/g, ' ')}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1367,6 +1764,8 @@ function BookingDetailPanel({ bookingId, dispatch }) {
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 function BookingCard({ booking, selected, onClick }) {
+  const driverState = getDriverAssignmentState(booking);
+
   return (
     <motion.div
       layout
@@ -1388,9 +1787,12 @@ function BookingCard({ booking, selected, onClick }) {
         {statusBadge(booking.status)}
       </div>
 
-      <p className="text-xs font-bold text-base-content m-0 mb-1 truncate">
-        {booking.patientInfo?.name ?? booking.customer?.name ?? '—'}
-      </p>
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <p className="text-xs font-bold text-base-content m-0 truncate">
+          {booking.patientInfo?.name ?? booking.customer?.name ?? '—'}
+        </p>
+        <CallButton phone={booking.customer?.phone} label="" size="xs" />
+      </div>
 
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-[10px] text-base-content/50">{booking.bookingType?.replace(/_/g, ' ')}</span>
@@ -1407,20 +1809,35 @@ function BookingCard({ booking, selected, onClick }) {
         </div>
       )}
 
-      {booking.careAssistant && (
-        <div className="flex items-center gap-1 mt-1.5">
-          <Heart size={8} className="text-rose-400" />
-          <span className="text-[10px] text-rose-400/80 font-medium">Care ride</span>
-        </div>
-      )}
+      <div className="flex items-center gap-2 flex-wrap mt-1.5">
+        {booking.careAssistant && (
+          <div className="flex items-center gap-1">
+            <Heart size={8} className="text-rose-400" />
+            <span className="text-[10px] text-rose-400/80 font-medium">Care ride</span>
+          </div>
+        )}
 
-      {/* Show video badge if has consultation */}
-      {booking.consultationSessionId && (
-        <div className="flex items-center gap-1 mt-1">
-          <Radio size={8} className="text-violet-400" />
-          <span className="text-[10px] text-violet-400/80 font-medium">Telemedicine</span>
-        </div>
-      )}
+        {booking.consultationSessionId && (
+          <div className="flex items-center gap-1">
+            <Radio size={8} className="text-violet-400" />
+            <span className="text-[10px] text-violet-400/80 font-medium">Telemedicine</span>
+          </div>
+        )}
+
+        {driverState.state === 'assigned' && (
+          <div className="flex items-center gap-1">
+            <CheckCircle size={8} className="text-success" />
+            <span className="text-[10px] text-success font-medium">Driver assigned</span>
+          </div>
+        )}
+
+        {driverState.state === 'rejected' && (
+          <div className="flex items-center gap-1">
+            <XCircle size={8} className="text-error" />
+            <span className="text-[10px] text-error font-medium">Partner rejected</span>
+          </div>
+        )}
+      </div>
     </motion.div>
   );
 }
@@ -1714,7 +2131,7 @@ function AnalysisSection({ dispatch }) {
 
 export default function BookingsManagement() {
   const dispatch = useDispatch();
-  const user     = useSelector(selectCurrentUser); // FIXED: was selectUser
+  const user     = useSelector(selectCurrentUser);
 
   const bookings      = useSelector(selectAdminBookings);
   const meta          = useSelector(selectAdminBookingsMeta);

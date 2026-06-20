@@ -699,7 +699,7 @@ export const checkHospitalOrDoctorAvailability = async ({ hospitalId, doctorId, 
 
 export const getDoctorsByHospital = async (hospitalId) => {
   const hospital = await Hospital.findById(hospitalId)
-    .select('managementModel consultationPricing linkedDoctors isActive isVerified')
+    .select('managementModel linkedDoctors isActive isVerified')
     .lean();
   if (!hospital)                                  throw new Error('Hospital not found');
   if (!hospital.isActive || !hospital.isVerified) throw new Error('Hospital not operational');
@@ -717,28 +717,19 @@ export const getDoctorsByHospital = async (hospitalId) => {
     .lean();
 
   const isHospitalManaged = hospital.managementModel === 'hospital-manager';
-  const cp                = hospital.consultationPricing || {};
 
+  // Pricing always comes from the doctor's own fees — hospitals (managed or
+  // owner-operated) do not set consultation pricing.
   return doctors.map((doc) => {
-    const effectiveFees = isHospitalManaged
-      ? {
-          inPersonFee:             cp.inPersonFee  ?? 0,
-          videoFee:                cp.videoFee     ?? 0,
-          homeVisitFee:            cp.homeVisitFee ?? 0,
-          followUpFee:             cp.followUpFee  ?? 0,
-          followUpDiscountPercent: cp.followUpDiscountPercent ?? 0,
-          followUpValidDays:       cp.followUpValidDays       ?? 7,
-          source: 'hospital',
-        }
-      : {
-          inPersonFee:             doc.fees?.inPersonFee             ?? 0,
-          videoFee:                doc.fees?.videoFee                ?? 0,
-          homeVisitFee:            doc.fees?.homeVisitFee            ?? 0,
-          followUpFee:             doc.fees?.followUpFee             ?? 0,
-          followUpDiscountPercent: doc.fees?.followUpDiscountPercent ?? 0,
-          followUpValidDays:       doc.fees?.followUpValidDays       ?? 7,
-          source: 'doctor',
-        };
+    const effectiveFees = {
+      inPersonFee:             doc.fees?.inPersonFee             ?? doc.fees?.consultationFee ?? 0,
+      videoFee:                doc.fees?.videoFee                ?? doc.fees?.consultationFee ?? 0,
+      homeVisitFee:            doc.fees?.homeVisitFee            ?? doc.fees?.consultationFee ?? 0,
+      followUpFee:             doc.fees?.followUpFee             ?? 0,
+      followUpDiscountPercent: doc.fees?.followUpDiscountPercent ?? 0,
+      followUpValidDays:       doc.fees?.followUpValidDays       ?? 7,
+      source: 'doctor',
+    };
     return { ...doc, effectiveFees, hospitalManaged: isHospitalManaged };
   });
 };
@@ -958,13 +949,16 @@ export const checkSubscriptionCareAssistant = async (userId) => {
   let limit    = sub.limits?.careAssistantVisitsPerMonth ?? null;
   let planType = sub.planType ?? 'fixed';
 
-  if ((limit == null || limit === 0) && sub.plan) {
+if ((limit == null || limit === 0) && sub.plan) {
     const plan = await SubscriptionPlan.findById(sub.plan)
       .select('planType customOptions careAssistant').lean();
     planType = plan?.planType ?? 'fixed';
     if (plan?.planType === 'custom' && Array.isArray(plan.customOptions)) {
       const caOpt = plan.customOptions.find(o => o.optionKey === 'careAssistant');
       if (caOpt?.quantity > 0) limit = caOpt.quantity;
+    } else if (plan?.careAssistant?.isDedicated === true) {
+      // Dedicated plans: unlimited CA for the whole subscription period
+      limit = -1;
     } else if (plan?.careAssistant?.visitsPerMonth != null) {
       limit = plan.careAssistant.visitsPerMonth;
     } else if (plan?.careAssistant?.included === true) {
@@ -1120,6 +1114,36 @@ export const markHomeCollectionUsed = async (subscriptionId) => {
     console.log(`[markHomeCollectionUsed] ✅ marked for sub:${subscriptionId}`);
   } catch (e) {
     console.error('[markHomeCollectionUsed] ❌ failed:', e.message);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// markCaStandardTierUsed — one-time-free standard CA tier (fixed plans only)
+// ─────────────────────────────────────────────────────────────────────────────
+export const markCaStandardTierUsed = async (subscriptionId) => {
+  if (!subscriptionId) return;
+  try {
+    await UserSubscription.findByIdAndUpdate(subscriptionId, {
+      $set: { 'limits.caStandardTierUsedOnce': true },
+    });
+    console.log(`[markCaStandardTierUsed] ✅ marked for sub:${subscriptionId}`);
+  } catch (e) {
+    console.error('[markCaStandardTierUsed] ❌ failed:', e.message);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// recoverCaStandardTierUsage — undo on cancellation if it was the free use
+// ─────────────────────────────────────────────────────────────────────────────
+export const recoverCaStandardTierUsage = async (subscriptionId) => {
+  if (!subscriptionId) return;
+  try {
+    await UserSubscription.findByIdAndUpdate(subscriptionId, {
+      $set: { 'limits.caStandardTierUsedOnce': false },
+    });
+    console.log(`[recoverCaStandardTierUsage] ✅ recovered for sub:${subscriptionId}`);
+  } catch (e) {
+    console.error('[recoverCaStandardTierUsage] ❌ failed:', e.message);
   }
 };
 
@@ -1307,43 +1331,65 @@ export const resolveConsultationFee = async ({
     video:     0.05,
     homeVisit: 0.05,
   };
-  const gstRate = gstRateMap[consultationType] ?? 0.00;
+  let gstRate = gstRateMap[consultationType] ?? 0.00;
 
-  if (isFollowUp)
-    return { fee: followUpFee || 0, source: 'follow_up', gstRate };
+  let baseFee = 600;
+  let doctorShare = 600;
+  let hospitalShare = 0;
+  let source = 'default';
 
-  if (isCoveredBySubscription)
-    return { fee: 0, source: 'subscription', gstRate: 0 };
-
-  if (hospitalId) {
-    const hosp = await Hospital.findById(hospitalId)
-      .select('managementModel consultationPricing').lean();
-    if (hosp?.managementModel === 'hospital-manager' && hosp.consultationPricing) {
-      const cp     = hosp.consultationPricing;
-      const feeMap = {
-        inPerson:  cp.inPersonFee,
-        video:     cp.videoFee,
-        homeVisit: cp.homeVisitFee,
-      };
-      return { fee: feeMap[consultationType] ?? cp.inPersonFee ?? 0, source: 'hospital', gstRate };
-    }
-  }
-
+  // PRICING ALWAYS COMES FROM THE DOCTOR PROFILE.
+  // Hospitals (managed or owner-operated) never set their own consultation
+  // pricing — there is no `consultationPricing` field on the Hospital model,
+  // and there should not be one. The doctor's `fees` sub-document is the
+  // single source of truth for what the patient pays and what the doctor
+  // keeps, regardless of which hospital they're linked to.
   if (doctorId) {
     const doc = await DoctorProfile.findById(doctorId).select('fees').lean();
     if (doc?.fees) {
-      const feeMap = {
-        inPerson:  doc.fees.inPersonFee,
-        video:     doc.fees.videoFee,
-        homeVisit: doc.fees.homeVisitFee,
-      };
-      if (feeMap[consultationType] != null)
-        return { fee: feeMap[consultationType], source: 'doctor', gstRate };
+      source = 'doctor';
+
+      if (isFollowUp) {
+        baseFee = followUpFee || 0;
+        // Pro-rata the follow-up fee based on the doctor's standard inPerson split
+        const stdFee = doc.fees.inPersonFee ?? doc.fees.consultationFee ?? 1;
+        const stdHon = doc.fees.inPersonHonorarium ?? doc.fees.consultationHonorarium ?? 0;
+        doctorShare = Math.round(baseFee * (stdHon / stdFee));
+      } else {
+        const feeMap = { inPerson: doc.fees.inPersonFee, video: doc.fees.videoFee, homeVisit: doc.fees.homeVisitFee };
+        const honMap = { inPerson: doc.fees.inPersonHonorarium, video: doc.fees.videoHonorarium, homeVisit: doc.fees.homeVisitHonorarium };
+
+        baseFee = feeMap[consultationType] ?? doc.fees.consultationFee ?? 0;
+        doctorShare = honMap[consultationType] ?? doc.fees.consultationHonorarium ?? baseFee;
+      }
+
+      // Whatever the doctor doesn't take as honorarium is the hospital's
+      // facility/platform cut. Works for both hospital-manager doctors
+      // (hospital provides space/staff) and doctor-owners (hospitalShare
+      // naturally becomes 0 since honorarium == fee in that case).
+      hospitalShare = Math.max(0, baseFee - doctorShare);
     }
   }
 
-  return { fee: 600, source: 'default', gstRate };
+  // SUBSCRIPTION LOGIC
+  const feeChargedToCustomer = isCoveredBySubscription ? 0 : baseFee;
+  if (isCoveredBySubscription) {
+    source = 'subscription';
+    gstRate = 0; // No GST on a free charge
+  }
+
+  return {
+    fee: feeChargedToCustomer,
+    doctorShare,
+    hospitalShare,
+    source,
+    gstRate,
+  };
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CARE ASSISTANT FEE RESOLVER
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CARE ASSISTANT FEE RESOLVER
@@ -1354,44 +1400,79 @@ export const resolveCareAssistantFee = async ({ userId, durationHours, config })
   const parsedDuration = parseInt(durationHours, 10) || 4;
   const subCheck       = await checkSubscriptionCareAssistant(userId);
 
-// 1. FIXED plan → first active tier is free, other tiers charge platform rate
-if (subCheck.allowed && subCheck.isFree && subCheck.planType !== 'custom') {
+  // Tier-matching helper: inclusive on both bounds so a duration exactly
+  // equal to a tier's upper bound still matches THAT tier (not the next
+  // one or a fallback-to-index-0).
+  const matchTier = (tiers, duration) => {
+    let idx = tiers.findIndex(
+      (t) =>
+        duration >= (t.minHours ?? 0) &&
+        (t.maxHours == null || duration <= t.maxHours)
+    );
+    if (idx < 0) {
+      // exact minHours match fallback
+      idx = tiers.findIndex((t) => t.minHours === duration);
+    }
+    if (idx < 0 && tiers.length > 0) {
+      // duration exceeds all tiers — use the last (highest) tier
+      idx = tiers.length - 1;
+    }
+    return idx < 0 ? 0 : idx;
+  };
+
+// 1. FIXED plan
+if (subCheck.allowed && subCheck.planType !== 'custom') {
+  const sub           = subCheck.sub;
   const platformTiers = resolvedConfig?.careAssistant?.pricingTiers ?? [];
   const activeTiers   = platformTiers.filter(t => t.isActive !== false).sort((a, b) => (a.minHours ?? 0) - (b.minHours ?? 0));
 
-  // First tier = "Standard" (free for fixed plan subscribers)
+  const requestedTier = activeTiers[matchTier(activeTiers, parsedDuration)] ?? null;
+
+  // 1a. DEDICATED plan (e.g. Pregnant Women Care) — ANY tier, unlimited, free
+  //     for the whole subscription period. No quota tracking at all.
+  if (sub?.limits?.careAssistantTierLabel === 'Dedicated' || subCheck.tierSnapshot?.tierLabel === 'Dedicated') {
+    return {
+      fee:                     0,
+      source:                  'subscription_dedicated',
+      isCoveredBySubscription: true,
+      quotaTracked:            false,
+      sub,
+      subQuotaInfo:            subCheck,
+      tier:                    { ...requestedTier, label: 'Dedicated' },
+    };
+  }
+
+  // 1b. STANDARD fixed plan — first/lowest tier free ONE TIME per billing cycle
   const freeTier = activeTiers[0] ?? null;
+  const isFirstTierRequested = requestedTier && freeTier && requestedTier.minHours === freeTier.minHours;
+  const standardUsedOnce = sub?.limits?.caStandardTierUsedOnce ?? false;
 
-  // Find which tier covers requested duration
-  const requestedTier = activeTiers.find(t =>
-    parsedDuration >= (t.minHours ?? 0) &&
-    (t.maxHours == null || parsedDuration < t.maxHours)
-  ) ?? activeTiers[activeTiers.length - 1] ?? null;
-
-  const isFreeForThisDuration = requestedTier && freeTier &&
-    requestedTier.minHours === freeTier.minHours;
-
-  if (isFreeForThisDuration) {
+  if (isFirstTierRequested && !standardUsedOnce) {
     return {
       fee:                     0,
       source:                  'subscription',
       isCoveredBySubscription: true,
-      quotaTracked:            true,
-      sub:                     subCheck.sub,
+      quotaTracked:            true,      // signals: mark caStandardTierUsedOnce on payment confirm
+      caStandardTierFree:      true,
+      sub,
       subQuotaInfo:            subCheck,
       tier:                    freeTier,
     };
   }
 
-  // Different (higher) tier selected — charge platform rate, no quota consumed
+  // 1c. First tier already used once this cycle, OR a higher tier selected
+  //     → charge platform rate for the requested tier, no quota consumed
   return {
     fee:                     requestedTier?.chargeToUser ?? 0,
     source:                  'platform',
     isCoveredBySubscription: false,
     quotaTracked:            false,
-    sub:                     subCheck.sub,
+    sub,
     subQuotaInfo:            subCheck,
     tier:                    requestedTier,
+    reason: isFirstTierRequested
+      ? 'Standard tier free-use already used this billing cycle — platform rate applies'
+      : undefined,
   };
 }
 
@@ -1404,28 +1485,45 @@ if (subCheck.allowed && subCheck.isFree && subCheck.planType !== 'custom') {
       const planTierIdx   = sub.limits?.careAssistantTierIndex ?? 0;
       const customTiers   = resolvedConfig?.customPlanOptions?.careAssistant?.pricingTiers ?? [];
 
-      let selectedTierIdx = customTiers.findIndex(
-        (t) =>
-          parsedDuration >= (t.minHours ?? 0) &&
-          (t.maxHours == null || parsedDuration < t.maxHours)
-      );
-      if (selectedTierIdx < 0) {
-        selectedTierIdx = customTiers.findIndex((t) => t.minHours === parsedDuration);
-      }
-      if (selectedTierIdx < 0) selectedTierIdx = 0;
+      let selectedTierIdx = matchTier(customTiers, parsedDuration);
+
+      // ── MATCH BY SNAPSHOTTED CHARGE, NOT STALE INDEX ─────────────────────
+      // sub.limits.careAssistantTierIndex/chargePerVisit/Label were snapshotted
+      // at subscribe time. If PlatformPricingConfig tiers were reordered/edited
+      // since, planTierIdx no longer maps to the same tier in current customTiers.
+      // Primary check: does the SELECTED tier's chargeToUser match the
+      // snapshotted free charge?
+      const snapshotCharge = sub.limits?.careAssistantChargePerVisit;
+      const snapshotLabel  = sub.limits?.careAssistantTierLabel;
+      const selectedTierForMatch = customTiers[selectedTierIdx];
+
+      const isPlanTierBySnapshot =
+        snapshotCharge != null &&
+        selectedTierForMatch &&
+        Number(selectedTierForMatch.chargeToUser) === Number(snapshotCharge);
+
+      const isPlanTierByLabel =
+        !snapshotCharge != null && // only if charge match unavailable
+        snapshotLabel &&
+        selectedTierForMatch?.label === snapshotLabel;
+
+      const isPlanTier =
+        isPlanTierBySnapshot ||
+        isPlanTierByLabel ||
+        selectedTierIdx === planTierIdx; // fallback: original index match
 
       // 2a. PLAN TIER selected → FREE
-      if (selectedTierIdx === planTierIdx) {
+      if (isPlanTier) {
         const snapshotTierIndex = sub.limits?.careAssistantTierIndex;
-        const snapshotCharge    = sub.limits?.careAssistantChargePerVisit;
-        const snapshotLabel     = sub.limits?.careAssistantTierLabel;
+        const snapshotCharge2   = sub.limits?.careAssistantChargePerVisit;
+        const snapshotLabel2    = sub.limits?.careAssistantTierLabel;
 
         let tier = null;
 
-        if (snapshotCharge != null) {
+        if (snapshotCharge2 != null) {
           tier = {
-            label:        snapshotLabel ?? `Tier ${snapshotTierIndex}`,
-            chargeToUser: snapshotCharge,
+            label:        snapshotLabel2 ?? `Tier ${snapshotTierIndex}`,
+            chargeToUser: snapshotCharge2,
             tierIndex:    snapshotTierIndex,
           };
         } else if (customTiers[selectedTierIdx]) {
@@ -1485,7 +1583,9 @@ if (subCheck.allowed && subCheck.isFree && subCheck.planType !== 'custom') {
       // 2b. DIFFERENT tier → charge platform rate, no quota
       const chargeTier = customTiers[selectedTierIdx] ?? null;
       console.log(
-        `[resolveCareAssistantFee] custom plan: selected tier ${selectedTierIdx} ≠ plan tier ${planTierIdx}` +
+        `[resolveCareAssistantFee] custom plan: selected tier ${selectedTierIdx} ` +
+        `(charge ${chargeTier?.chargeToUser}) does not match plan's free tier ` +
+        `(snapshot charge ${snapshotCharge}, label "${snapshotLabel}", index ${planTierIdx})` +
         ` — charging platform rate ${chargeTier?.chargeToUser ?? 0}`
       );
 
@@ -1535,15 +1635,16 @@ export const isPointNearRoute = ({ point, polyline, thresholdKm = 3 }) => {
   return false;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────a───────────────────────────────────────
 // FARE BREAKDOWN BUILDER
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const buildFareBreakdown = ({
-  consultationFee   = 0, careAssistantFee  = 0, transportFee    = 0,
-  diagnosticFee     = 0, pharmacyFee       = 0, bloodBankFee    = 0,
-  homeCollectionFee = 0, platformFee       = 0, taxPercent      = 0,
-  discount          = 0, couponDiscount    = 0, walletApplied   = 0,
+  consultationFee   = 0, doctorShare       = 0, hospitalShare     = 0,
+  careAssistantFee  = 0, transportFee      = 0, diagnosticFee     = 0, 
+  pharmacyFee       = 0, bloodBankFee      = 0, homeCollectionFee = 0, 
+  platformFee       = 0, taxPercent        = 0, discount          = 0, 
+  couponDiscount    = 0, walletApplied     = 0,
 } = {}) => {
   const subtotal      = +(
     consultationFee + careAssistantFee + transportFee + diagnosticFee +
@@ -1554,9 +1655,10 @@ export const buildFareBreakdown = ({
   const taxes         = taxPercent ? +(taxableBase * (taxPercent / 100)).toFixed(2) : 0;
   const totalAmount   = +(taxableBase + taxes).toFixed(2);
   const amountPaid    = totalAmount;
+  
   return {
-    consultationFee, careAssistantFee, transportFee, diagnosticFee,
-    pharmacyFee, bloodBankFee, homeCollectionFee, platformFee,
+    consultationFee, doctorShare, hospitalShare, careAssistantFee, transportFee, 
+    diagnosticFee, pharmacyFee, bloodBankFee, homeCollectionFee, platformFee,
     taxes, discount, couponDiscount, walletApplied,
     totalAmount, amountPaid, refundAmount: 0, currency: 'INR',
   };
@@ -1694,6 +1796,59 @@ export const resolveServiceComponents = (bookingType) => ({
   needsWaitingOption: bookingType === 'patient_transport',
   canAddDoctor:       bookingType === 'patient_transport',
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAY-AT-SERVICE: Generate Razorpay Payment Link (QR-safe, production)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const generatePayAtServiceLink = async ({ booking, customer, generatedByUserId }) => {
+  const TWO_HOURS_MS  = 2 * 60 * 60 * 1000;
+  const expiresAt     = new Date(Date.now() + TWO_HOURS_MS);
+  const expireUnix    = Math.floor(expiresAt.getTime() / 1000);
+
+  const amount = booking.fareBreakdown?.totalAmount ?? 0;
+  if (amount <= 0) throw new Error('Amount must be > 0 for pay-at-service link');
+
+  // Razorpay Payment Links API — works on all accounts, QR-renderable
+  const linkPayload = {
+    amount:       Math.round(amount * 100), // paise
+    currency:     'INR',
+    accept_partial: false,
+    description:  `Payment for Booking #${booking.bookingCode}`,
+    customer: {
+      name:    customer.name  || booking.patientInfo?.name || 'Customer',
+      email:   customer.email || '',
+      contact: customer.phone || '',
+    },
+    notify: {
+      sms:   !!customer.phone,
+      email: !!customer.email,
+    },
+    reminder_enable: false,
+    notes: {
+      bookingCode:    booking.bookingCode,
+      bookingId:      booking._id.toString(),
+      generatedBy:    generatedByUserId?.toString() ?? 'system',
+      source:         'pay_at_service',
+    },
+    callback_url:    `${process.env.FRONTEND_URL}/bookings/${booking._id}/payment-complete`,
+    callback_method: 'get',
+    expire_by:       expireUnix,
+  };
+
+  const link = await razorpay.paymentLink.create(linkPayload);
+
+  return {
+    paymentLinkId:  link.id,
+    paymentLinkUrl: link.short_url,   // this IS the short URL — also renders as QR
+    shortUrl:       link.short_url,
+    qrCodeUrl:      null,             // frontend renders QR from shortUrl using qrcode lib
+    amount,
+    expiresAt,
+    generatedAt:    new Date(),
+  };
+};
 
 export { resolvePlanModes };
  

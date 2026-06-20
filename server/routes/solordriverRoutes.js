@@ -1,12 +1,11 @@
- 
-
-import express              from 'express';
-import mongoose             from 'mongoose';
-import bcrypt               from 'bcryptjs';
+import express            from 'express';
+import mongoose           from 'mongoose';
+import bcrypt             from 'bcryptjs';
 
 import { protect, authorize }           from '../middleware/authMiddleware.js';
 import SoloDriverPartner                from '../models/SoloDriverPartner.js';
 import Driver                           from '../models/Driver.js';
+import Vehicle                          from '../models/Vehicle.js'; // NEW: Imported Vehicle Model
 import User                             from '../models/User.js';
 import Notification                     from '../models/Notification.js';
 import SystemLog                        from '../models/SystemLog.js';
@@ -15,7 +14,8 @@ import cache                            from '../middleware/cache.js';
 import { invalidateKey, invalidatePattern } from '../utils/cacheInvalidation.js';
 import sendEmail                        from '../utils/sendEmail.js';
 import { transactionalTemplate }        from '../utils/emailTemplates.js';
-import PlatformPricingConfig from '../models/PlatformPricingConfig.js'
+import PlatformPricingConfig            from '../models/PlatformPricingConfig.js';
+
 const router = express.Router();
 
 // ── §1  Internal Logger ───────────────────────────────────────────────────────
@@ -91,8 +91,7 @@ const asyncHandler = (fn) => (req, res, next) => {
  *
  * Loads the SoloDriverPartner document for the authenticated user and attaches
  * it to req.soloPartner. Suspended partners are blocked from mutating their data.
- * 
- * Callers: all solodriverpartner-scoped routes.
+ * * Callers: all solodriverpartner-scoped routes.
  */
 const attachSoloPartner = asyncHandler(async (req, res, next) => {
   if (!req.user) {
@@ -200,15 +199,6 @@ const buildActor = (req) => ({
 });
 
 // ── §7  Profile Routes ────────────────────────────────────────────────────────
-// GET    /api/solo-driver/me              → own profile
-// PATCH  /api/solo-driver/me              → update basic details
-// PATCH  /api/solo-driver/me/contact      → update contact info
-// PATCH  /api/solo-driver/me/address      → update address
-// PATCH  /api/solo-driver/me/professional → update professional info
-// PATCH  /api/solo-driver/me/emergency    → update emergency contact
-// GET    /api/solo-driver/me/settings     → notification prefs
-// PATCH  /api/solo-driver/me/settings     → update notification prefs
-// DELETE /api/solo-driver/me              → request account deletion
 
 /** GET /me — own full profile */
 router.get(
@@ -517,10 +507,6 @@ router.delete(
 );
 
 // ── §8  KYC Routes ────────────────────────────────────────────────────────────
-// GET   /api/solo-driver/kyc         → own KYC status
-// POST  /api/solo-driver/kyc         → submit / update KYC
-// POST  /api/solo-driver/kyc/medical → submit medical fitness
-// POST  /api/solo-driver/kyc/psv     → submit PSV badge details
 
 /** GET /kyc — KYC status and field completeness */
 router.get(
@@ -688,11 +674,6 @@ router.post(
 );
 
 // ── §9  Vehicle Routes ────────────────────────────────────────────────────────
-// GET   /api/solo-driver/vehicle                  → own vehicle info
-// PUT   /api/solo-driver/vehicle                  → update vehicle details
-// PATCH /api/solo-driver/vehicle/documents        → update vehicle documents
-// PATCH /api/solo-driver/vehicle/features         → update accessibility features
-// PATCH /api/solo-driver/vehicle/location         → update GPS location
 
 /** GET /vehicle — own vehicle info */
 router.get(
@@ -700,12 +681,9 @@ router.get(
   ...partnerGuard,
   cache(60, (req) => CK.vehicle(req.soloPartner._id)),
   asyncHandler(async (req, res) => {
-    const partner = await SoloDriverPartner
-      .findById(req.soloPartner._id)
-      .select('vehicle partnerCode')
-      .lean();
-
-    res.json({ success: true, data: partner?.vehicle || null });
+    // Queries standalone Vehicle collection using polymorphic reference
+    const vehicle = await Vehicle.findOne({ ownerType: 'SoloDriverPartner', ownerId: req.soloPartner._id }).lean();
+    res.json({ success: true, data: vehicle || null });
   })
 );
 
@@ -735,25 +713,32 @@ router.put(
     }
 
     const vehicleUpdate = {
-      'vehicle.registrationNumber': registrationNumber.toUpperCase().replace(/\s/g, ''),
-      'vehicle.make':               make,
-      'vehicle.model':              model,
-      'vehicle.year':               year ? Number(year) : undefined,
-      'vehicle.color':              color,
-      'vehicle.vehicleType':        vehicleType,
-      'vehicle.seatingCapacity':    seatingCapacity ? Number(seatingCapacity) : 4,
-      'vehicle.verificationStatus': 'pending',
-      updatedBy:                    req.user._id,
+      registrationNumber: registrationNumber.toUpperCase().replace(/\s/g, ''),
+      make,
+      model,
+      year:               year ? Number(year) : undefined,
+      color,
+      vehicleType,
+      seatingCapacity:    seatingCapacity ? Number(seatingCapacity) : 4,
+      verificationStatus: 'pending',
+      updatedBy:          req.user._id,
     };
 
     // Clean undefined values
     Object.keys(vehicleUpdate).forEach((k) => vehicleUpdate[k] === undefined && delete vehicleUpdate[k]);
 
-    const partner = await SoloDriverPartner.findByIdAndUpdate(
-      req.soloPartner._id,
-      { $set: vehicleUpdate },
-      { new: true, runValidators: true }
+    // Upsert into Vehicle collection
+    const vehicle = await Vehicle.findOneAndUpdate(
+      { ownerType: 'SoloDriverPartner', ownerId: req.soloPartner._id },
+      { 
+        $set: vehicleUpdate,
+        $setOnInsert: { ownerType: 'SoloDriverPartner', ownerId: req.soloPartner._id }
+      },
+      { new: true, upsert: true, runValidators: true }
     );
+
+    // This save trigger updates the read cache on SoloDriverPartner automatically
+    await vehicle.save(); 
 
     await invalidateSdpCache(req.soloPartner._id);
 
@@ -767,7 +752,7 @@ router.put(
     res.json({
       success: true,
       message: 'Vehicle details submitted for verification',
-      data: partner.vehicle,
+      data: vehicle,
     });
   })
 );
@@ -789,16 +774,16 @@ router.patch(
       return res.status(422).json({ success: false, message: 'No document fields provided' });
     }
 
-    const update = {};
-    for (const [k, v] of Object.entries(docs)) {
-      update[`vehicle.${k}`] = v;
-    }
-    update.updatedBy = req.user._id;
+    const update = { ...docs, updatedBy: req.user._id };
 
-    await SoloDriverPartner.findByIdAndUpdate(
-      req.soloPartner._id,
-      { $set: update }
+    const vehicle = await Vehicle.findOneAndUpdate(
+      { ownerType: 'SoloDriverPartner', ownerId: req.soloPartner._id },
+      { $set: update },
+      { new: true }
     );
+
+    if (!vehicle) return res.status(404).json({ success: false, message: 'Vehicle not found' });
+    await vehicle.save(); // triggers cache update hooks
 
     await invalidateSdpCache(req.soloPartner._id);
 
@@ -820,13 +805,17 @@ router.patch(
 
     const update = { updatedBy: req.user._id };
     for (const [k, v] of Object.entries(features)) {
-      update[`vehicle.${k}`] = Boolean(v);
+      update[k] = Boolean(v);
     }
 
-    await SoloDriverPartner.findByIdAndUpdate(
-      req.soloPartner._id,
-      { $set: update }
+    const vehicle = await Vehicle.findOneAndUpdate(
+      { ownerType: 'SoloDriverPartner', ownerId: req.soloPartner._id },
+      { $set: update },
+      { new: true }
     );
+
+    if (!vehicle) return res.status(404).json({ success: false, message: 'Vehicle not found' });
+    await vehicle.save();
 
     await invalidateSdpCache(req.soloPartner._id);
 
@@ -853,13 +842,16 @@ router.patch(
 
     const now = new Date();
     const update = {
-      'vehicle.lastKnownLocation': { type: 'Point', coordinates: [longitude, latitude] },
-      'vehicle.lastLocationUpdatedAt': now,
+      location: { type: 'Point', coordinates: [longitude, latitude] },
+      locationUpdatedAt: now,
       updatedBy: req.user._id,
     };
-    if (gpsDeviceId) update['vehicle.gpsDeviceId'] = gpsDeviceId;
+    if (gpsDeviceId) update.gpsDeviceId = gpsDeviceId;
 
-    await SoloDriverPartner.findByIdAndUpdate(req.soloPartner._id, { $set: update });
+    await Vehicle.findOneAndUpdate(
+      { ownerType: 'SoloDriverPartner', ownerId: req.soloPartner._id }, 
+      { $set: update }
+    );
 
     // Also sync location on companion Driver document if exists
     if (req.soloPartner.driverProfile) {
@@ -876,9 +868,6 @@ router.patch(
 );
 
 // ── §10  Bank & Settlement Routes ─────────────────────────────────────────────
-// GET   /api/solo-driver/bank          → get bank details (masked)
-// POST  /api/solo-driver/bank          → submit / update bank details
-// GET   /api/solo-driver/settlement    → settlement history
 
 /** GET /bank — bank details (masked) */
 router.get(
@@ -892,10 +881,10 @@ router.get(
       .lean();
 
     // Mask account number
-   if (partner.bankDetails?.accountNumber) {
-  partner.bankDetails.maskedAccount = `XXXX XXXX XXXX ${partner.bankDetails.accountNumber.slice(-4)}`;
-  delete partner.bankDetails.accountNumber;
-}
+    if (partner.bankDetails?.accountNumber) {
+      partner.bankDetails.maskedAccount = `XXXX XXXX XXXX ${partner.bankDetails.accountNumber.slice(-4)}`;
+      delete partner.bankDetails.accountNumber;
+    }
 
     res.json({ success: true, data: partner });
   })
@@ -927,7 +916,7 @@ router.post(
       {
         $set: {
           'bankDetails.accountHolderName': accountHolderName.trim(),
-        'bankDetails.accountNumber':     accountNumber.trim(),
+          'bankDetails.accountNumber':     accountNumber.trim(),
           'bankDetails.ifscCode':          ifscCode.toUpperCase().trim(),
           'bankDetails.bankName':          bankName.trim(),
           'bankDetails.upiId':             upiId?.trim() || undefined,
@@ -982,8 +971,6 @@ router.get(
 );
 
 // ── §11  Availability & Location Routes ───────────────────────────────────────
-// PATCH /api/solo-driver/availability   → toggle online / offline
-// GET   /api/solo-driver/availability   → current availability status
 
 /** GET /availability — current availability state */
 router.get(
@@ -1064,11 +1051,6 @@ router.patch(
 );
 
 // ── §12  Service Zones & Pricing Routes ───────────────────────────────────────
-// GET    /api/solo-driver/service-zones        → list own zones
-// POST   /api/solo-driver/service-zones        → add zone
-// DELETE /api/solo-driver/service-zones/:id    → remove zone
-// GET    /api/solo-driver/pricing              → own pricing config
-// PUT    /api/solo-driver/pricing              → update pricing
 
 /** GET /service-zones */
 router.get(
@@ -1181,7 +1163,6 @@ router.get(
     });
   })
 );
- 
 
 /** PUT /pricing — update own pricing */
 router.put(
@@ -1221,8 +1202,6 @@ router.put(
 );
 
 // ── §13  Stats & Rating Routes ────────────────────────────────────────────────
-// GET /api/solo-driver/stats    → ride and earnings stats
-// GET /api/solo-driver/rating   → rating summary
 
 /** GET /stats */
 router.get(
@@ -1255,7 +1234,6 @@ router.get(
 );
 
 // ── §14  Documents & Compliance Routes ───────────────────────────────────────
-// GET /api/solo-driver/compliance   → all document expiry statuses
 
 /** GET /compliance — summary of all expiring documents */
 router.get(
@@ -1264,8 +1242,10 @@ router.get(
   asyncHandler(async (req, res) => {
     const partner = await SoloDriverPartner
       .findById(req.soloPartner._id)
-      .select('kyc medicalFitness vehicle.insuranceExpiry vehicle.pollutionCertExpiry vehicle.fitnessCertExpiry vehicle.permitExpiry')
+      .select('kyc medicalFitness')
       .lean();
+
+    const vehicle = await Vehicle.findOne({ ownerType: 'SoloDriverPartner', ownerId: req.soloPartner._id }).lean();
 
     const now  = new Date();
     const soon = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
@@ -1282,10 +1262,10 @@ router.get(
       flagDoc('Driving Licence',         partner.kyc?.drivingLicenceExpiry),
       flagDoc('PSV Badge',               partner.kyc?.psvBadgeExpiry),
       flagDoc('Medical Fitness',         partner.medicalFitness?.expiryDate),
-      flagDoc('Vehicle Insurance',       partner.vehicle?.insuranceExpiry),
-      flagDoc('Pollution Certificate',   partner.vehicle?.pollutionCertExpiry),
-      flagDoc('Fitness Certificate',     partner.vehicle?.fitnessCertExpiry),
-      flagDoc('Vehicle Permit',          partner.vehicle?.permitExpiry),
+      flagDoc('Vehicle Insurance',       vehicle?.insuranceExpiry),
+      flagDoc('Pollution Certificate',   vehicle?.pollutionCertExpiry),
+      flagDoc('Fitness Certificate',     vehicle?.fitnessCertExpiry),
+      flagDoc('Vehicle Permit',          vehicle?.permitExpiry),
     ];
 
     const hasExpired  = docs.some((d) => d.status === 'expired');
@@ -1304,14 +1284,6 @@ router.get(
 );
 
 // ── §15  Security Routes ──────────────────────────────────────────────────────
-// GET    /api/solo-driver/security/sessions      → list active sessions
-// DELETE /api/solo-driver/security/sessions/:id  → revoke a session
-// GET    /api/solo-driver/security/devices       → registered device tokens
-// DELETE /api/solo-driver/security/devices/:id   → remove device token
-// POST   /api/solo-driver/security/change-password → change password
-// GET    /api/solo-driver/notifications           → own notifications
-// PATCH  /api/solo-driver/notifications/:id/read  → mark notification read
-// PATCH  /api/solo-driver/notifications/read-all  → mark all read
 
 /** GET /security/sessions */
 router.get(
@@ -1673,18 +1645,6 @@ router.get(
 );
 
 // ── §16  Admin Routes ─────────────────────────────────────────────────────────
-// GET    /api/solo-driver/admin/list                → list all partners (paginated, filtered)
-// POST   /api/solo-driver/admin/create
-// GET    /api/solo-driver/admin/:id                 → single partner detail
-// PATCH  /api/solo-driver/admin/:id/verify-kyc      → approve/reject KYC
-// PATCH  /api/solo-driver/admin/:id/verify-vehicle  → approve/reject vehicle
-// PATCH  /api/solo-driver/admin/:id/verify-bank     → mark bank verified
-// PATCH  /api/solo-driver/admin/:id/status          → change partnership status
-// PATCH  /api/solo-driver/admin/:id/block           → block/unblock the user account
-// POST   /api/solo-driver/admin/:id/create-driver   → create companion Driver doc
-// PATCH  /api/solo-driver/admin/:id/commission      → override commission
-// GET    /api/solo-driver/admin/compliance-alerts   → partners with expiring docs
-// POST   /api/solo-driver/admin/:id/notes           → update admin notes
 
 /** GET /admin/list — paginated list with powerful filtering */
 router.get(
@@ -1700,7 +1660,7 @@ router.get(
     const filter = {};
     if (status)        filter.partnershipStatus            = status;
     if (kycStatus)     filter['kyc.verificationStatus']    = kycStatus;
-    if (vehicleStatus) filter['vehicle.verificationStatus'] = vehicleStatus;
+    if (vehicleStatus) filter['vehicleStatus.verificationStatus'] = vehicleStatus; // FIXED
     if (city)          filter['serviceZones.city']         = new RegExp(city, 'i');
     if (state)         filter['serviceZones.state']        = new RegExp(state, 'i');
     if (hasDriverProfile === 'true')  filter.driverProfile = { $ne: null };
@@ -1738,7 +1698,7 @@ router.get(
  
 /**
  * @route   POST /api/v1/admin/create-solo-partner
- * @desc    Admin creates a Solo Driver Partner (User + Partner + Driver Doc)
+ * @desc    Admin creates a Solo Driver Partner (User + Partner + Driver Doc + Vehicle Doc)
  * @access  Private (Admin/Superadmin)
  */
 router.post(
@@ -1746,36 +1706,14 @@ router.post(
   ...adminGuard,
   asyncHandler(async (req, res) => {
     const {
-      // ── User / Personal ──────────────────────────────────────────────────
-      name,
-      email,
-      phone,
-      // ── SoloDriverPartner core ───────────────────────────────────────────
-      legalName,
-      displayName,
-      dateOfBirth,
-      gender,
-      address, // { street, city, state, pinCode, country }
-      // ── KYC ──────────────────────────────────────────────────────────────
-      drivingLicenceNumber,
-      drivingLicenceExpiry,
-      aadhaarNumber,
-      // ── Vehicle ──────────────────────────────────────────────────────────
-      registrationNumber,
-      vehicleType,
-      make,
-      vehicleModel,
-      // ── Business / Operational ───────────────────────────────────────────
-      businessType,
-      tradeName,
-      settlementCycle,
-      platformFeeOverride, // { type: 'fixed'|'percentage', value: Number }
-      // ── Internal ─────────────────────────────────────────────────────────
-      internalNotes,
-      adminNotes: adminNotesInput,
+      name, email, phone,
+      legalName, displayName, dateOfBirth, gender, address,
+      drivingLicenceNumber, drivingLicenceExpiry, aadhaarNumber,
+      registrationNumber, vehicleType, make, vehicleModel,
+      businessType, tradeName, settlementCycle, platformFeeOverride,
+      internalNotes, adminNotes: adminNotesInput,
     } = req.body;
 
-    // ── 1. Validation ────────────────────────────────────────────────────────
     const errors = [];
     if (!name?.trim()) errors.push("Full name is required");
     if (!email?.trim()) errors.push("Email is required");
@@ -1783,10 +1721,8 @@ router.post(
     if (!legalName?.trim()) errors.push("Legal name is required");
     if (!address?.city) errors.push("City is required");
     if (!address?.state) errors.push("State is required");
-    if (!drivingLicenceNumber)
-      errors.push("Driving Licence Number is required");
+    if (!drivingLicenceNumber) errors.push("Driving Licence Number is required");
 
-    // Validate Platform Fee Override if provided
     if (platformFeeOverride) {
       const { type, value } = platformFeeOverride;
       if (!["fixed", "percentage"].includes(type)) {
@@ -1798,12 +1734,9 @@ router.post(
     }
 
     if (errors.length) {
-      return res
-        .status(422)
-        .json({ success: false, message: "Validation failed", errors });
+      return res.status(422).json({ success: false, message: "Validation failed", errors });
     }
 
-    // ── 2. Duplicate Check ───────────────────────────────────────────────────
     const normalizedEmail = email.trim().toLowerCase();
     const normalizedPhone = phone.replace(/\D/g, "").slice(-10);
 
@@ -1812,21 +1745,12 @@ router.post(
       User.exists({ phone: { $regex: normalizedPhone + "$" } }),
     ]);
 
-    if (emailExists)
-      return res
-        .status(409)
-        .json({ success: false, message: "Email already registered" });
-    if (phoneExists)
-      return res
-        .status(409)
-        .json({ success: false, message: "Phone number already registered" });
+    if (emailExists) return res.status(409).json({ success: false, message: "Email already registered" });
+    if (phoneExists) return res.status(409).json({ success: false, message: "Phone number already registered" });
 
-    // ── 3. Fetch Global Pricing Defaults ─────────────────────────────────────
     const globalConfig = await PlatformPricingConfig.getGlobal();
-    const effectiveFee =
-      platformFeeOverride || globalConfig.transport.platformFee;
+    const effectiveFee = platformFeeOverride || globalConfig.transport.platformFee;
 
-    // ── 4. Create User ───────────────────────────────────────────────────────
     const rawPassword = `Lks@${Math.random().toString(36).slice(-4).toUpperCase()}${Math.floor(1000 + Math.random() * 9000)}`;
     const hashedPassword = await bcrypt.hash(rawPassword, 12);
 
@@ -1841,7 +1765,6 @@ router.post(
       createdBy: req.user._id,
     });
 
-    // ── 5. Create SoloDriverPartner Document ─────────────────────────────────
     const partnerPayload = {
       user: newUser._id,
       legalName: legalName.trim(),
@@ -1858,16 +1781,14 @@ router.post(
       businessType: businessType || "individual",
       tradeName: tradeName?.trim(),
       settlementCycle: settlementCycle || "Weekly",
-      platformFeeOverride: platformFeeOverride || null, // null = use global
+      platformFeeOverride: platformFeeOverride || null,
       partnershipStatus: "pending",
       createdBy: req.user._id,
       internalNotes,
       adminNotes: adminNotesInput,
       kyc: {
         drivingLicenceNumber: drivingLicenceNumber.toUpperCase().trim(),
-        drivingLicenceExpiry: drivingLicenceExpiry
-          ? new Date(drivingLicenceExpiry)
-          : undefined,
+        drivingLicenceExpiry: drivingLicenceExpiry ? new Date(drivingLicenceExpiry) : undefined,
         aadhaarNumber: aadhaarNumber || undefined,
         verificationStatus: "not-submitted",
       },
@@ -1876,21 +1797,23 @@ router.post(
     if (dateOfBirth) partnerPayload.dateOfBirth = new Date(dateOfBirth);
     if (gender) partnerPayload.gender = gender;
 
-    // Build Vehicle sub-doc if registration is provided
+    const newPartner = await SoloDriverPartner.create(partnerPayload);
+
+    // FIXED: Create standalone vehicle document
+    let newVehicle = null;
     if (registrationNumber) {
-      partnerPayload.vehicle = {
+      newVehicle = await Vehicle.create({
+        ownerType: 'SoloDriverPartner',
+        ownerId: newPartner._id,
         registrationNumber: registrationNumber.toUpperCase().replace(/\s/g, ""),
         make: make || "Unknown",
         model: vehicleModel || "Unknown",
         vehicleType: vehicleType || "Sedan",
         verificationStatus: "pending",
-      };
+        createdBy: req.user._id,
+      });
     }
 
-    const newPartner = await SoloDriverPartner.create(partnerPayload);
-
-    // ── 6. Create Companion Driver Document (The "Dispatch Profile") ──────────
-    // Every SoloDriverPartner needs a companion Driver record for the dispatch engine
     const driverDoc = await Driver.create({
       user: newUser._id,
       soloPartner: newPartner._id,
@@ -1900,157 +1823,97 @@ router.post(
       kyc: {
         drivingLicenceNumber: partnerPayload.kyc.drivingLicenceNumber,
         drivingLicenceExpiry: partnerPayload.kyc.drivingLicenceExpiry,
-        aadhaarNumber: aadhaarNumber || "000000000000", // Default placeholder if missing
+        aadhaarNumber: aadhaarNumber || "000000000000",
         verificationStatus: "Pending",
       },
-      assignedVehicleSnapshot: partnerPayload.vehicle
-        ? {
-            registrationNumber: partnerPayload.vehicle.registrationNumber,
-            make: partnerPayload.vehicle.make,
-            model: partnerPayload.vehicle.model,
-            vehicleType: partnerPayload.vehicle.vehicleType,
-          }
-        : undefined,
       status: "Offline",
       createdBy: req.user._id,
     });
 
-    // Link the Driver profile back to the Partner doc
+    // Link vehicle to driver using the service layer approach
+    if (newVehicle) {
+      await driverDoc.assignVehicle(newVehicle._id);
+    }
+
     newPartner.driverProfile = driverDoc._id;
     await newPartner.save();
 
-    // ── 7. Infrastructure (Wallet & Notifications) ───────────────────────────
     await Wallet.create({
       user: newUser._id,
       balance: 0,
       createdBy: req.user._id,
     });
-  const loginUrl = `${process.env.FRONTEND_URL}/login`
+
+    const loginUrl = `${process.env.FRONTEND_URL}/login`
     sendEmail({
       email: normalizedEmail,
-
       subject: "🏥 Welcome to Likeson Healthcare — Your Driver Partner Account",
-
       html: transactionalTemplate({
         header: "WELCOME TO LIKESON",
-
         title: `Hi ${name.trim()}, your partner account is ready!`,
-
         body: `
-
           <p style="margin:0 0 16px;">You have been registered as a <strong>Solo Driver Partner</strong> on the Likeson Healthcare platform by our operations team.</p>
-
-
-
           <table width="100%" cellpadding="0" cellspacing="0"
-
                  style="background:#f1f5f9;border-radius:8px;padding:16px 20px;margin-bottom:16px;">
-
             <tr>
-
               <td style="font-size:13px;color:#475569;padding:4px 0;width:40%;">Login Email</td>
-
               <td style="font-size:13px;font-weight:700;color:#1e293b;padding:4px 0;">${normalizedEmail}</td>
-
             </tr>
-
             <tr>
-
               <td style="font-size:13px;color:#475569;padding:4px 0;">Temporary Password</td>
-
               <td style="font-size:15px;font-weight:800;color:#0f3460;
-
                          font-family:'Courier New',monospace;padding:4px 0;letter-spacing:2px;">
-
                 ${rawPassword}
-
               </td>
-
             </tr>
             <tr>
               <td style="font-size:13px;color:#475569;padding:4px 0;">Partner Code</td>
-
               <td style="font-size:13px;font-weight:700;color:#1e293b;padding:4px 0;">${newPartner.partnerCode}</td>
-
             </tr>
-
           </table>
-
-
-
           <p style="margin:0 0 8px;font-size:12px;color:#64748b;">
-
             ⚠️ <strong>Please change your password immediately</strong> after your first login for security.
-
           </p>
-
           <p style="margin:0;font-size:12px;color:#64748b;">
-
             Complete your profile, submit KYC documents, and add your vehicle details to activate your account.
-
           </p>
-
         `,
-
         buttonLink: loginUrl,
-
         buttonText: "Login to Your Account →",
       }),
-    }).catch((e) =>
-      log.error("[AdminCreate] Welcome email failed:", e.message),
-    );
-
-    // ── 8. In-app notification ───────────────────────────────────────────────
+    }).catch((e) => log.error("[AdminCreate] Welcome email failed:", e.message));
 
     Notification.create({
       recipient: newUser._id,
-
       title: "Welcome to Likeson! 🎉",
-
       body: "Your solo driver partner account has been created. Please complete your KYC and vehicle details to get started.",
-
       type: "Account_Status",
-
       priority: "High",
-
       triggeredBy: "admin",
     }).catch((e) => log.error("[AdminCreate] Notification failed:", e.message));
 
-    // ── 9. Audit log ─────────────────────────────────────────────────────────
-
     createAuditLog({
       level: "success",
-
       category: "user",
-
       message: `Admin created new solo driver partner: ${normalizedEmail}`,
-
       actor: buildActor(req),
-
       relatedEntity: {
         model: "User",
         entityId: newUser._id,
         label: normalizedEmail,
       },
-
       request: { method: "POST", path: req.path, statusCode: 201 },
-
       metadata: {
         partnerCode: newPartner.partnerCode,
-
         partnerId: newPartner._id,
-
-        hasVehicle: !!partnerPayload.vehicle,
-
+        hasVehicle: !!newVehicle,
         hasKyc: !!partnerPayload.kyc,
-
         createdByRole: req.user.role,
       },
     });
 
     await invalidatePattern("sdp:list:*");
 
-    // ── 10. Final Response ───────────────────────────────────────────────────
     res.status(201).json({
       success: true,
       message: "Solo Driver Partner created successfully",
@@ -2062,7 +1925,7 @@ router.post(
         effectivePlatformFee: effectiveFee,
       },
     });
-  }),
+  })
 );
 
  
@@ -2181,44 +2044,45 @@ router.patch(
       return res.status(400).json({ success: false, message: 'Invalid partner ID' });
     }
 
+    const vehicle = await Vehicle.findOne({ ownerType: 'SoloDriverPartner', ownerId: id });
+    if (!vehicle) return res.status(404).json({ success: false, message: 'Vehicle not found' });
+
     const approved = action === 'approve';
-    const update   = {
-      'vehicle.verificationStatus': approved ? 'verified' : 'rejected',
-      'vehicle.isActive':           approved,
-      'vehicle.verifiedAt':         approved ? new Date() : undefined,
-      'vehicle.verifiedBy':         req.user._id,
-      'vehicle.rejectionReason':    !approved ? rejectionReason : undefined,
-      updatedBy:                    req.user._id,
-    };
-    Object.keys(update).forEach((k) => update[k] === undefined && delete update[k]);
+    vehicle.verificationStatus = approved ? 'verified' : 'rejected';
+    vehicle.status = approved ? 'active' : 'inactive';
+    if (approved) vehicle.verifiedAt = new Date();
+    vehicle.verifiedBy = req.user._id;
+    if (!approved) vehicle.rejectionReason = rejectionReason;
+    
+    // Save vehicle to trigger post-save sync on partner
+    await vehicle.save();
 
-    const partner = await SoloDriverPartner.findByIdAndUpdate(id, { $set: update }, { new: true })
-      .populate('user', 'name email');
+    const partner = await SoloDriverPartner.findById(id).populate('user', 'name email');
 
-    if (!partner) return res.status(404).json({ success: false, message: 'Partner not found' });
+    if (partner) {
+      await Notification.create({
+        recipient:   partner.user._id,
+        title:       approved ? 'Vehicle Verified ✅' : 'Vehicle Rejected ❌',
+        body:        approved
+          ? 'Your vehicle has been verified and activated on the platform.'
+          : `Vehicle verification rejected: ${rejectionReason}`,
+        type:        'Account_Status',
+        priority:    'High',
+        triggeredBy: 'admin',
+      });
 
-    await Notification.create({
-      recipient:   partner.user._id,
-      title:       approved ? 'Vehicle Verified ✅' : 'Vehicle Rejected ❌',
-      body:        approved
-        ? 'Your vehicle has been verified and activated on the platform.'
-        : `Vehicle verification rejected: ${rejectionReason}`,
-      type:        'Account_Status',
-      priority:    'High',
-      triggeredBy: 'admin',
-    });
-
-    createAuditLog({
-      level:    approved ? 'success' : 'warning',
-      category: 'kyc',
-      message:  `Admin ${approved ? 'approved' : 'rejected'} solo partner vehicle: ${partner.user.email}`,
-      actor:    buildActor(req),
-      relatedEntity: { model: 'User', entityId: partner.user._id },
-    });
+      createAuditLog({
+        level:    approved ? 'success' : 'warning',
+        category: 'kyc',
+        message:  `Admin ${approved ? 'approved' : 'rejected'} solo partner vehicle: ${partner.user.email}`,
+        actor:    buildActor(req),
+        relatedEntity: { model: 'User', entityId: partner.user._id },
+      });
+    }
 
     await invalidateSdpCache(id);
 
-    res.json({ success: true, message: `Vehicle ${action}d`, data: { vehicleStatus: partner.vehicle.verificationStatus } });
+    res.json({ success: true, message: `Vehicle ${action}d`, data: { vehicleStatus: vehicle.verificationStatus } });
   })
 );
 
@@ -2418,6 +2282,9 @@ router.post(
       return res.status(422).json({ success: false, message: 'KYC (driving licence) must be submitted before creating a driver profile' });
     }
 
+    // Attempt to locate vehicle snapshot data for initialization
+    const vehicle = await Vehicle.findOne({ ownerType: 'SoloDriverPartner', ownerId: id }).lean();
+
     // Create companion Driver document
     const driverDoc = await Driver.create({
       user:         partner.user._id,
@@ -2433,7 +2300,7 @@ router.post(
       hasAmbulanceExp:        partner.hasAmbulanceExp,
       yearsOfExperience:      partner.yearsOfExperience,
       kyc: {
-        aadhaarNumber:        'XXXX', // placeholder — solo partner KYC is on SoloDriverPartner.kyc
+        aadhaarNumber:        '000000000000', // placeholder — solo partner KYC is on SoloDriverPartner.kyc
         drivingLicenceNumber: partner.kyc.drivingLicenceNumber,
         drivingLicenceExpiry: partner.kyc.drivingLicenceExpiry,
         drivingLicenceDocUrl: partner.kyc.drivingLicenceDocUrl,
@@ -2442,19 +2309,16 @@ router.post(
         isVerified:           partner.kyc.isVerified,
       },
       medicalFitness:    partner.medicalFitness,
-      assignedVehicleSnapshot: partner.vehicle?.registrationNumber ? {
-        vehicleCode:        partner.vehicle.vehicleCode,
-        registrationNumber: partner.vehicle.registrationNumber,
-        make:               partner.vehicle.make,
-        model:              partner.vehicle.model,
-        vehicleType:        partner.vehicle.vehicleType,
-        color:              partner.vehicle.color,
-      } : undefined,
       status:    'Offline',
       isActive:  partner.partnershipStatus === 'active',
       isVerified: partner.kyc.isVerified,
       createdBy: req.user._id,
     });
+
+    if (vehicle) {
+      // Sync vehicle properly to driver
+      await driverDoc.assignVehicle(vehicle._id);
+    }
 
     // Link back
     partner.driverProfile = driverDoc._id;
@@ -2593,35 +2457,66 @@ router.get(
         { 'kyc.drivingLicenceExpiry':     { $lte: cutoff } },
         { 'kyc.psvBadgeExpiry':           { $lte: cutoff } },
         { 'medicalFitness.expiryDate':    { $lte: cutoff } },
-        { 'vehicle.insuranceExpiry':      { $lte: cutoff } },
-        { 'vehicle.pollutionCertExpiry':  { $lte: cutoff } },
-        { 'vehicle.fitnessCertExpiry':    { $lte: cutoff } },
-        { 'vehicle.permitExpiry':         { $lte: cutoff } },
       ],
     })
-      .select('legalName partnerCode phone email kyc.drivingLicenceExpiry kyc.psvBadgeExpiry medicalFitness.expiryDate vehicle.insuranceExpiry vehicle.pollutionCertExpiry vehicle.fitnessCertExpiry vehicle.permitExpiry')
+      .select('legalName partnerCode phone email kyc.drivingLicenceExpiry kyc.psvBadgeExpiry medicalFitness.expiryDate')
       .populate('user', 'name email phone')
       .lean();
 
-    // Annotate with severity
-    const annotated = partners.map((p) => {
-      const checks = [
-        { label: 'DL Expiry',         date: p.kyc?.drivingLicenceExpiry },
-        { label: 'PSV Badge',         date: p.kyc?.psvBadgeExpiry },
-        { label: 'Medical Fitness',   date: p.medicalFitness?.expiryDate },
-        { label: 'Insurance',         date: p.vehicle?.insuranceExpiry },
-        { label: 'Pollution Cert',    date: p.vehicle?.pollutionCertExpiry },
-        { label: 'Fitness Cert',      date: p.vehicle?.fitnessCertExpiry },
-        { label: 'Permit',            date: p.vehicle?.permitExpiry },
-      ].filter((c) => c.date && new Date(c.date) <= cutoff)
-       .map((c) => ({
+    const vehicles = await Vehicle.find({
+      ownerType: 'SoloDriverPartner',
+      status: 'active',
+      $or: [
+        { insuranceExpiry:     { $lte: cutoff } },
+        { pollutionCertExpiry: { $lte: cutoff } },
+        { fitnessCertExpiry:   { $lte: cutoff } },
+        { permitExpiry:        { $lte: cutoff } },
+      ]
+    })
+      .populate({ path: 'ownerId', select: 'legalName partnerCode phone email', populate: { path: 'user', select: 'name email phone' } })
+      .lean();
+
+    const alertMap = new Map();
+
+    partners.forEach(p => {
+      alertMap.set(p._id.toString(), {
+        ...p,
+        expiringDocs: []
+      });
+    });
+
+    vehicles.forEach(v => {
+      const pId = v.ownerId?._id?.toString();
+      if (!pId) return;
+      if (!alertMap.has(pId)) {
+        alertMap.set(pId, {
+          ...v.ownerId,
+          vehicle: v,
+          expiringDocs: []
+        });
+      } else {
+         alertMap.get(pId).vehicle = v;
+      }
+    });
+
+    const annotated = Array.from(alertMap.values()).map(p => {
+       const checks = [
+         { label: 'DL Expiry',         date: p.kyc?.drivingLicenceExpiry },
+         { label: 'PSV Badge',         date: p.kyc?.psvBadgeExpiry },
+         { label: 'Medical Fitness',   date: p.medicalFitness?.expiryDate },
+         { label: 'Insurance',         date: p.vehicle?.insuranceExpiry },
+         { label: 'Pollution Cert',    date: p.vehicle?.pollutionCertExpiry },
+         { label: 'Fitness Cert',      date: p.vehicle?.fitnessCertExpiry },
+         { label: 'Permit',            date: p.vehicle?.permitExpiry },
+       ].filter((c) => c.date && new Date(c.date) <= cutoff)
+        .map((c) => ({
           ...c,
           daysLeft: Math.max(0, Math.ceil((new Date(c.date) - now) / 86_400_000)),
           isExpired: new Date(c.date) < now,
         }));
 
-      return { ...p, expiringDocs: checks };
-    });
+       return { ...p, expiringDocs: checks };
+    }).filter(p => p.expiringDocs.length > 0);
 
     res.json({ success: true, total: annotated.length, data: annotated });
   })
@@ -2783,78 +2678,4 @@ router.use((err, req, res, next) => {
 // ── §18  Export ───────────────────────────────────────────────────────────────
 
 export default router;
-
-/**
- * ═══════════════════════════════════════════════════════════════════════════════
- * MOUNT IN app.js / server.js:
- *
- *   import soloDriverRouter from './routes/soloDriverRouter.js';
- *   app.use('/api/solo-driver', soloDriverRouter);
- *
- * ROUTE SUMMARY
- * ───────────────────────────────────────────────────────────────────────────────
- * PARTNER (role: solodriverpartner)
- *   GET    /api/solo-driver/me
- *   PATCH  /api/solo-driver/me
- *   PATCH  /api/solo-driver/me/contact
- *   PATCH  /api/solo-driver/me/address
- *   PATCH  /api/solo-driver/me/professional
- *   POST   /api/solo-driver/me/training-certificates
- *   DELETE /api/solo-driver/me/training-certificates/:certId
- *   PATCH  /api/solo-driver/me/emergency
- *   GET    /api/solo-driver/me/settings
- *   PATCH  /api/solo-driver/me/settings
- *   DELETE /api/solo-driver/me
- *
- *   GET    /api/solo-driver/kyc
- *   POST   /api/solo-driver/kyc
- *   POST   /api/solo-driver/kyc/medical
- *   POST   /api/solo-driver/kyc/psv
- *
- *   GET    /api/solo-driver/vehicle
- *   PUT    /api/solo-driver/vehicle
- *   PATCH  /api/solo-driver/vehicle/documents
- *   PATCH  /api/solo-driver/vehicle/features
- *   PATCH  /api/solo-driver/vehicle/location
- *
- *   GET    /api/solo-driver/bank
- *   POST   /api/solo-driver/bank
- *   GET    /api/solo-driver/settlement
- *
- *   GET    /api/solo-driver/availability
- *   PATCH  /api/solo-driver/availability
- *
- *   GET    /api/solo-driver/service-zones
- *   POST   /api/solo-driver/service-zones
- *   DELETE /api/solo-driver/service-zones/:zoneId
- *   GET    /api/solo-driver/pricing
- *   PUT    /api/solo-driver/pricing
- *
- *   GET    /api/solo-driver/stats
- *   GET    /api/solo-driver/rating
- *   GET    /api/solo-driver/compliance
- *
- *   GET    /api/solo-driver/security/sessions
- *   DELETE /api/solo-driver/security/sessions/:sessionId
- *   GET    /api/solo-driver/security/devices
- *   DELETE /api/solo-driver/security/devices/:deviceId
- *   POST   /api/solo-driver/security/change-password
- *
- *   GET    /api/solo-driver/notifications
- *   PATCH  /api/solo-driver/notifications/read-all
- *   PATCH  /api/solo-driver/notifications/:id/read
- *
- * ADMIN (role: admin | superadmin)
- *   GET    /api/solo-driver/admin/list
- *   GET    /api/solo-driver/admin/compliance-alerts
- *   GET    /api/solo-driver/admin/:id
- *   PATCH  /api/solo-driver/admin/:id/verify-kyc
- *   PATCH  /api/solo-driver/admin/:id/verify-vehicle
- *   PATCH  /api/solo-driver/admin/:id/verify-bank
- *   PATCH  /api/solo-driver/admin/:id/status
- *   PATCH  /api/solo-driver/admin/:id/block
- *   POST   /api/solo-driver/admin/:id/create-driver
- *   PATCH  /api/solo-driver/admin/:id/commission
- *   POST   /api/solo-driver/admin/:id/notes
- * ═══════════════════════════════════════════════════════════════════════════════
- */
+ 

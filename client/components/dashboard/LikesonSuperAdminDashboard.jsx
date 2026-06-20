@@ -32,13 +32,12 @@ import {
   SUPER_ADMIN_DASHBOARD_TOP_RIGHT_LINKS,
   SUPER_ADMIN_DASHBOARD_SEARCH_LINKS,
 } from "../../constants/data";
+import WelcomePage from "./WelcomePage";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const PROFILE_LINKS = [
   { name: "My Profile",       href: "/super-admin/profile",          icon: <UserRound size={14} /> },
-  { name: "Account Settings", href: "/super-admin/account-settings", icon: <Settings2 size={14} /> },
-  { name: "Subscription",     href: "/super-admin/subscription",     icon: <Gem size={14} /> },
   { name: "Terms & Privacy",  href: "/super-admin/terms-privacy",    icon: <ShieldCheck size={14} /> },
   { name: "Activity Log",     href: "/super-admin/activity-log",     icon: <HeartPulse size={14} /> },
 ];
@@ -237,6 +236,16 @@ const SuperAdminDashboard = ({ children }) => {
     return user?.avatar || avatars[user?.role] || avatars.customer;
   }, [user]);
 
+  // ── FIX: Explicit check for the root/welcome paths ───────────────────────
+  const isWelcomeRoute = useMemo(
+    () => ["/", "/super-admin", "/super-admin/"].includes(pathname),
+    [pathname]
+  );
+
+  const breadcrumbLabel = isWelcomeRoute
+    ? "Welcome"
+    : pathname.split("/").filter(Boolean).pop()?.replace(/-/g, " ");
+
   // Auth guard
   if (user?.role !== "superadmin") {
     return (
@@ -296,7 +305,7 @@ const SuperAdminDashboard = ({ children }) => {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                 >
-                  <Link href="/super-admin/dashboard" className="flex flex-col group">
+                  <Link href="/super-admin" className="flex flex-col group">
                     <span className="font-black text-xl tracking-tighter hover:text-primary transition-colors">
                       LIKESON<span className="text-secondary">.in</span>
                     </span>
@@ -490,7 +499,7 @@ const SuperAdminDashboard = ({ children }) => {
             </Link>
             <ChevronRight size={12} />
             <span className="text-primary">
-              {pathname.split("/").filter(Boolean).pop()?.replace(/-/g, " ") || "SYSTEM CORE"}
+              {breadcrumbLabel || "SYSTEM CORE"}
             </span>
           </div>
 
@@ -500,7 +509,10 @@ const SuperAdminDashboard = ({ children }) => {
             className="rounded-[0.5rem] pt-3 border border-base-300 bg-base-200/40 min-h-[75vh] shadow-inner relative overflow-hidden backdrop-blur-sm"
           >
             <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-primary/5 blur-[150px] rounded-full pointer-events-none" />
-            {children}
+            
+            {/* ── FIX: Apply Render Check ── */}
+            {isWelcomeRoute ? <WelcomePage /> : children}
+            
           </motion.div>
         </section>
 

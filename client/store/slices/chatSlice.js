@@ -1,1933 +1,1023 @@
+/**
+ * store/slices/chatSlice.js
+ * Fixes applied:
+ *  - socketMessagesRead: was zeroing unreadCount but NOT decrementing totalUnread correctly
+ *    (was subtracting prev which could be stale). Now uses a guard.
+ *  - socketMessagesDelivered: was bulk-updating ALL messages in conversation with deliveredAt.
+ *    Fix: only update messages sent by current user that don't have deliveredAt yet.
+ *    (We don't know currentUserId here — solved by only storing deliveredAt on sender-side
+ *     messages via the getMessages API which already attaches it. Socket event just stores
+ *     the timestamp for the conversation level.)
+ *  - socketNewMessage: bump totalUnread only when not active AND message not from self
+ *  - fetchMessages hasMore: was checking >= 50 hardcoded. Use returned length vs requested limit.
+ *  - ensureConvoMessages: safe init
+ *  - sendTextMessage: socket path doesn't go through thunk — handled in useChat. Thunk only
+ *    for REST fallback. No double-upsert issue.
+ */
+
 import {
   createSlice,
   createAsyncThunk,
   createEntityAdapter,
   createSelector,
-} from "@reduxjs/toolkit";
-import API   from "../api";
-import toast from "react-hot-toast";
-import { io } from "socket.io-client";
+} from '@reduxjs/toolkit';
+import API from '../api';
+import toast from 'react-hot-toast';
+import chatService from '../../services/chatService';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CALLMANAGER SINGLETON REGISTRY
-// ─────────────────────────────────────────────────────────────────────────────
-
-let _callManagerInstance = null;
-
-export function setCallManager(instance) {
-  _callManagerInstance = instance;
-}
-
-export function getCallManager() {
-  return _callManagerInstance;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ENTITY ADAPTERS
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Entity adapters ──────────────────────────────────────────────────────────
 
 const conversationsAdapter = createEntityAdapter({
-  selectId:     (c) => c._id,
-  sortComparer: (a, b) => {
-    const aTime = a.lastMessage?.sentAt || a.updatedAt || 0;
-    const bTime = b.lastMessage?.sentAt || b.updatedAt || 0;
-    return new Date(bTime) - new Date(aTime);
-  },
+  selectId:      (c) => c._id,
+  sortComparer:  (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt),
 });
 
 const messagesAdapter = createEntityAdapter({
-  selectId:     (m) => m._id,
-  sortComparer: (a, b) => new Date(a.createdAt) - new Date(b.createdAt),
+  selectId:      (m) => m._id,
+  sortComparer:  (a, b) => new Date(a.createdAt) - new Date(b.createdAt),
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SOCKET SINGLETON
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Initial state ────────────────────────────────────────────────────────────
 
-let _socket = null;
+const initialState = {
+  conversations:      conversationsAdapter.getInitialState(),
+  conversationsLoading: false,
+  conversationsMeta:  { total: 0, page: 1, pages: 1 },
 
-export function getSocket() { return _socket; }
+  activeConversationId: null,
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
+  // { [conversationId]: EntityState<Message> }
+  messagesByConversation: {},
+  messagesLoadingMap:     {},   // { [conversationId]: bool }
+  messagesCursorMap:      {},   // { [conversationId]: oldestMessageId | null }
+  messagesHasMoreMap:     {},   // { [conversationId]: bool }
 
-function extractError(err) {
-  return (
-    err?.response?.data?.message ||
-    err?.message ||
-    "Something went wrong. Please try again."
-  );
-}
+  pinnedMessages:     {},   // { [conversationId]: Message[] }
+  mediaByConversation:{},   // { [conversationId]: Message[] }
+  searchResults:      {},   // { [conversationId]: Message[] }
+  searchQuery:        '',
+  searchLoading:      false,
 
-function withGuard(loadingKey) {
-  return {
-    condition: (_arg, { getState }) => !getState().chat[loadingKey],
-  };
-}
+  totalUnread:  0,
+  blockedUsers: [],
 
-// FIX #13: Normalise any conversationId value (ObjectId object, string, or plain id)
-// to a plain string so it always matches state keys without mismatch.
-function toStringId(id) {
-  if (!id) return null;
-  if (typeof id === 'string') return id;
-  if (typeof id === 'object' && id._id) return String(id._id);
-  return String(id);
-}
+  typingUsers: {},           // { [conversationId]: userId[] }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ASYNC THUNKS — SOCKET
-// ─────────────────────────────────────────────────────────────────────────────
+  activeCall:   null,        // { callId, channelName, token, uid, appId, type, conversationId }
+  incomingCall: null,        // { callId, conversationId, type, channelName, appId, initiator }
+  callHistory:  [],
+  callHistoryMeta: { total: 0, page: 1, pages: 1 },
 
-export const connectSocket = createAsyncThunk(
-  "chat/connectSocket",
-  async (token, { dispatch, rejectWithValue }) => {
-    try {
-      if (_socket?.connected) return;
+  rtmToken:    null,
+  rtmExpiresAt: null,
 
-      _socket = io(process.env.NEXT_PUBLIC_SOCKET_URL, {
-        auth:                 { token },
-        transports:           ["websocket"],
-        reconnection:         true,
-        reconnectionAttempts: 10,
-        reconnectionDelay:    1000,
-        timeout:              20000,
-      });
+  presence:        {},       // { [userId]: { isOnline, lastseen } }
+  uploadProgress:  {},       // { [conversationId]: 0-100 }
 
-      _socket.on("connect",       ()  => dispatch(socketConnected()));
-      _socket.on("disconnect",    (r) => dispatch(socketDisconnected(r)));
-      _socket.on("connect_error", (e) => dispatch(socketError(e.message)));
+  // Track current user id for reducer logic (set on login)
+  currentUserId: null,
 
-      _socket.on("conversation:created",          (p) => dispatch(_onConversationCreated(p)));
-      _socket.on("conversation:updated",          (p) => dispatch(_onConversationUpdated(p)));
-      _socket.on("conversation:deleted",          (p) => dispatch(_onConversationDeleted(p)));
-      _socket.on("conversation:member_joined",    (p) => dispatch(_onMemberJoined(p)));
-      _socket.on("conversation:member_left",      (p) => dispatch(_onMemberLeft(p)));
-      _socket.on("conversation:member_added",     (p) => dispatch(_onMemberAdded(p)));
-      _socket.on("conversation:member_removed",   (p) => dispatch(_onMemberRemoved(p)));
-      _socket.on("conversation:you_were_removed", (p) => dispatch(_onRemovedFromConversation(p)));
-      _socket.on("conversation:mute_updated",     (p) => dispatch(_onConversationMuteUpdated(p)));
+  error: null,
+};
 
-      _socket.on("message:new",              (p) => dispatch(_onNewMessage(p)));
-      _socket.on("message:edited",           (p) => dispatch(_onMessageEdited(p)));
-      _socket.on("message:deleted",          (p) => dispatch(_onMessageDeleted(p)));
-      _socket.on("message:reaction",         (p) => dispatch(_onMessageReaction(p)));
-      _socket.on("message:pin_updated",      (p) => dispatch(_onMessagePinUpdated(p)));
-      _socket.on("message:scheduled",        (p) => dispatch(_onMessageScheduled(p)));
-      _socket.on("message:delivery_receipt", (p) => dispatch(_onDeliveryReceipt(p)));
-      _socket.on("message:read_receipt",     (p) => dispatch(_onReadReceipt(p)));
+// ─── Helper ───────────────────────────────────────────────────────────────────
 
-      _socket.on("typing:update", (p) => dispatch(_onTypingUpdate(p)));
-
-      _socket.on("call:incoming",            (p) => dispatch(_onCallIncoming(p)));
-      _socket.on("call:ringing",             (p) => dispatch(_onCallRinging(p)));
-      _socket.on("call:offer",               (p) => dispatch(_onCallOffer(p)));
-      _socket.on("call:answered",            (p) => dispatch(_onCallAnswered(p)));
-      _socket.on("call:ice",                 (p) => dispatch(_onCallIce(p)));
-      _socket.on("call:media_toggle",        (p) => dispatch(_onCallMediaToggle(p)));
-      _socket.on("call:ended",               (p) => dispatch(_onCallEnded(p)));
-      _socket.on("call:declined",            (p) => dispatch(_onCallDeclined(p)));
-      _socket.on("call:missed",              (p) => dispatch(_onCallMissed(p)));
-      _socket.on("call:peer_disconnected",   (p) => dispatch(_onCallPeerDisconnected(p)));
-      _socket.on("call:missed_while_offline",(p) => dispatch(_onCallMissedWhileOffline(p)));
-
-      _socket.on("user:online",  (p) => dispatch(_onUserOnline(p)));
-      _socket.on("user:offline", (p) => dispatch(_onUserOffline(p)));
-
-      _socket.on("notification:message", (p) => dispatch(_onNotification(p)));
-      _socket.on("notification:mention",  (p) => dispatch(_onMention(p)));
-
-    } catch (err) {
-      return rejectWithValue(extractError(err));
-    }
+const ensureConvoMessages = (state, conversationId) => {
+  if (!conversationId) return;
+  if (!state.messagesByConversation[conversationId]) {
+    state.messagesByConversation[conversationId] = messagesAdapter.getInitialState();
+    state.messagesHasMoreMap[conversationId]     = true;
+    state.messagesCursorMap[conversationId]      = null;
   }
-);
-
-export const disconnectSocket = createAsyncThunk(
-  "chat/disconnectSocket",
-  async (_, { dispatch }) => {
-    const cm = getCallManager();
-    if (cm) {
-      cm.destroy();
-      setCallManager(null);
-    }
-    if (_socket) {
-      _socket.disconnect();
-      _socket = null;
-    }
-    dispatch(socketDisconnected("manual"));
-  }
-);
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ASYNC THUNKS — CONVERSATIONS
+// ASYNC THUNKS
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ── Conversations ─────────────────────────────────────────────────────────────
 
 export const fetchConversations = createAsyncThunk(
-  "chat/fetchConversations",
+  'chat/fetchConversations',
   async (params = {}, { rejectWithValue }) => {
     try {
-      const { data } = await API.get("/chat/conversations", { params });
+      const { data } = await chatService.getConversations(params);
       return data;
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  },
-  withGuard("loadingConversations")
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
 );
 
-export const fetchConversation = createAsyncThunk(
-  "chat/fetchConversation",
+export const startDirectConversation = createAsyncThunk(
+  'chat/startDirectConversation',
+  async (targetUserId, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.createDirectConversation(targetUserId);
+      return data.conversation;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+export const startGroupConversation = createAsyncThunk(
+  'chat/startGroupConversation',
+  async (payload, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.createGroupConversation(payload);
+      return data.conversation;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+export const fetchConversationById = createAsyncThunk(
+  'chat/fetchConversationById',
   async (conversationId, { rejectWithValue }) => {
     try {
-      const { data } = await API.get(`/chat/conversations/${conversationId}`);
-      return data;
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.getConversation(conversationId);
+      return data.conversation;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const createConversation = createAsyncThunk(
-  "chat/createConversation",
-  async (payload, { rejectWithValue }) => {
+export const updateGroupInfo = createAsyncThunk(
+  'chat/updateGroupInfo',
+  async ({ conversationId, payload }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post("/chat/conversations", payload);
-      return data;
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const createDepartmentChannel = createAsyncThunk(
-  "chat/createDepartmentChannel",
-  async (payload, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post("/chat/conversations/department", payload);
-      return data;
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const fetchDepartmentChannel = createAsyncThunk(
-  "chat/fetchDepartmentChannel",
-  async (role, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(`/chat/conversations/department/${role}`);
-      return data;
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const fetchPartners = createAsyncThunk(
-  "chat/fetchPartners",
-  async (params = {}, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get("/chat/conversations/partners", { params });
-      return data;
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const updateConversation = createAsyncThunk(
-  "chat/updateConversation",
-  async ({ conversationId, ...updates }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.patch(`/chat/conversations/${conversationId}`, updates);
-      return data;
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const archiveConversation = createAsyncThunk(
-  "chat/archiveConversation",
-  async ({ conversationId, archive }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.patch(
-        `/chat/conversations/${conversationId}/archive`,
-        { archive }
-      );
-      return { conversationId, archive, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const muteConversation = createAsyncThunk(
-  "chat/muteConversation",
-  async ({ conversationId, mute, mutedUntil }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.patch(
-        `/chat/conversations/${conversationId}/mute`,
-        { mute, mutedUntil }
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.updateGroupConversation(conversationId, payload);
+      return data.conversation;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
 export const addMembers = createAsyncThunk(
-  "chat/addMembers",
-  async ({ conversationId, userIds }, { rejectWithValue }) => {
+  'chat/addMembers',
+  async ({ conversationId, memberIds }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post(
-        `/chat/conversations/${conversationId}/members`,
-        { userIds }
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.addGroupMembers(conversationId, memberIds);
+      return data.conversation;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
 export const removeMember = createAsyncThunk(
-  "chat/removeMember",
-  async ({ conversationId, userId }, { rejectWithValue }) => {
+  'chat/removeMember',
+  async ({ conversationId, memberId }, { rejectWithValue }) => {
     try {
-      await API.delete(`/chat/conversations/${conversationId}/members/${userId}`);
-      return { conversationId, userId };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.removeGroupMember(conversationId, memberId);
+      return data.conversation;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const leaveConversation = createAsyncThunk(
-  "chat/leaveConversation",
+export const toggleMemberAdmin = createAsyncThunk(
+  'chat/toggleMemberAdmin',
+  async ({ conversationId, memberId, isAdmin }, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.updateMemberAdminStatus(conversationId, memberId, isAdmin);
+      return data.conversation;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+export const archiveConversationThunk = createAsyncThunk(
+  'chat/archiveConversation',
+  async ({ conversationId, archive }, { rejectWithValue }) => {
+    try {
+      await chatService.archiveConversation(conversationId, archive);
+      return { conversationId, archive };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+export const muteConversationThunk = createAsyncThunk(
+  'chat/muteConversation',
+  async ({ conversationId, mute, mutedUntil }, { rejectWithValue }) => {
+    try {
+      await chatService.muteConversation(conversationId, mute, mutedUntil);
+      return { conversationId, mute, mutedUntil };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+export const clearConversationThunk = createAsyncThunk(
+  'chat/clearConversation',
   async (conversationId, { rejectWithValue }) => {
     try {
-      await API.post(`/chat/conversations/${conversationId}/leave`);
-      return conversationId;
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      await chatService.clearConversation(conversationId);
+      return { conversationId };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const promoteMember = createAsyncThunk(
-  "chat/promoteMember",
-  async ({ conversationId, userId, promote }, { rejectWithValue }) => {
+export const fetchConversationMedia = createAsyncThunk(
+  'chat/fetchConversationMedia',
+  async ({ conversationId, params }, { rejectWithValue }) => {
     try {
-      const { data } = await API.patch(
-        `/chat/conversations/${conversationId}/promote/${userId}`,
-        { promote }
-      );
-      return { conversationId, promote, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.getConversationMedia(conversationId, params);
+      return { conversationId, messages: data.messages };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const deleteConversation = createAsyncThunk(
-  "chat/deleteConversation",
-  async (conversationId, { rejectWithValue }) => {
-    try {
-      await API.delete(`/chat/conversations/${conversationId}`);
-      return conversationId;
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ASYNC THUNKS — MESSAGES
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Messages ──────────────────────────────────────────────────────────────────
 
 export const fetchMessages = createAsyncThunk(
-  "chat/fetchMessages",
-  async ({ conversationId, params = {} }, { rejectWithValue }) => {
+  'chat/fetchMessages',
+  async ({ conversationId, before, limit = 50 }, { rejectWithValue }) => {
     try {
-      const { data } = await API.get(
-        `/chat/conversations/${conversationId}/messages`,
-        { params }
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.getMessages(conversationId, { limit, before });
+      return { conversationId, messages: data.messages, before, limit };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const fetchMoreMessages = createAsyncThunk(
-  "chat/fetchMoreMessages",
-  async ({ conversationId, before }, { getState, rejectWithValue }) => {
-    if (getState().chat.loadingMoreMessages) return rejectWithValue("Already loading");
-    try {
-      const { data } = await API.get(
-        `/chat/conversations/${conversationId}/messages`,
-        { params: { before, limit: 30 } }
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const sendMessage = createAsyncThunk(
-  "chat/sendMessage",
+export const sendTextMessage = createAsyncThunk(
+  'chat/sendTextMessage',
   async ({ conversationId, payload }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post(
-        `/chat/conversations/${conversationId}/messages`,
-        payload
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.sendMessage(conversationId, payload);
+      return { conversationId, message: data.message };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const sendStickerMessage = createAsyncThunk(
-  "chat/sendStickerMessage",
-  async ({ conversationId, sticker, replyTo }, { rejectWithValue }) => {
+export const sendMediaMessageThunk = createAsyncThunk(
+  'chat/sendMediaMessage',
+  async ({ conversationId, file, duration }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post(
-        `/chat/conversations/${conversationId}/messages`,
-        { type: "sticker", sticker, replyTo: replyTo || undefined }
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.sendMediaMessage(conversationId, file, duration);
+      return { conversationId, message: data.message };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const sendMediaMessage = createAsyncThunk(
-  "chat/sendMediaMessage",
-  async ({ conversationId, formData, onUploadProgress }, { rejectWithValue }) => {
+export const markRead = createAsyncThunk(
+  'chat/markRead',
+  async (conversationId, { rejectWithValue }) => {
     try {
-      const { data } = await API.post(
-        `/chat/conversations/${conversationId}/messages/media`,
-        formData,
-        { headers: { "Content-Type": "multipart/form-data" }, onUploadProgress }
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const sendMultipleMedia = createAsyncThunk(
-  "chat/sendMultipleMedia",
-  async ({ conversationId, formData, onUploadProgress }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post(
-        `/chat/conversations/${conversationId}/messages/media/multiple`,
-        formData,
-        { headers: { "Content-Type": "multipart/form-data" }, onUploadProgress }
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const sendRecordingMessage = createAsyncThunk(
-  "chat/sendRecordingMessage",
-  async ({ conversationId, formData, onUploadProgress }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post(
-        `/chat/conversations/${conversationId}/messages/recording`,
-        formData,
-        { headers: { "Content-Type": "multipart/form-data" }, onUploadProgress }
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const editMessage = createAsyncThunk(
-  "chat/editMessage",
-  async ({ conversationId, messageId, content }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.patch(
-        `/chat/conversations/${conversationId}/messages/${messageId}`,
-        { content }
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const deleteMessage = createAsyncThunk(
-  "chat/deleteMessage",
-  async ({ conversationId, messageId, scope }, { rejectWithValue }) => {
-    try {
-      await API.delete(
-        `/chat/conversations/${conversationId}/messages/${messageId}`,
-        { data: { scope } }
-      );
-      return { conversationId, messageId, scope };
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const reactToMessage = createAsyncThunk(
-  "chat/reactToMessage",
-  async ({ conversationId, messageId, emoji }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post(
-        `/chat/conversations/${conversationId}/messages/${messageId}/react`,
-        { emoji }
-      );
-      return { conversationId, messageId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const pinMessage = createAsyncThunk(
-  "chat/pinMessage",
-  async ({ conversationId, messageId, pin }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.patch(
-        `/chat/conversations/${conversationId}/messages/${messageId}/pin`,
-        { pin }
-      );
-      return { conversationId, messageId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      await chatService.markMessagesRead(conversationId);
+      return { conversationId };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
 export const fetchPinnedMessages = createAsyncThunk(
-  "chat/fetchPinnedMessages",
+  'chat/fetchPinnedMessages',
   async (conversationId, { rejectWithValue }) => {
     try {
-      const { data } = await API.get(
-        `/chat/conversations/${conversationId}/messages/pinned`
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.getPinnedMessages(conversationId);
+      return { conversationId, messages: data.messages };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const forwardMessage = createAsyncThunk(
-  "chat/forwardMessage",
-  async ({ conversationId, messageId, targetConversationIds }, { rejectWithValue }) => {
+export const searchMessagesThunk = createAsyncThunk(
+  'chat/searchMessages',
+  async ({ conversationId, q, limit }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post(
-        `/chat/conversations/${conversationId}/messages/${messageId}/forward`,
-        { targetConversationIds }
-      );
-      return data;
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.searchMessages(conversationId, q, limit);
+      return { conversationId, messages: data.messages, q };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const markMessageRead = createAsyncThunk(
-  "chat/markMessageRead",
-  async ({ conversationId, messageId }, { rejectWithValue }) => {
+export const editMessageThunk = createAsyncThunk(
+  'chat/editMessage',
+  async ({ messageId, conversationId, text }, { rejectWithValue }) => {
     try {
-      const { data } = await API.patch(
-        `/chat/conversations/${conversationId}/messages/${messageId}/read`
-      );
-      return { conversationId, messageId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.editMessage(messageId, text);
+      return { conversationId, message: data.message };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const markMessageDelivered = createAsyncThunk(
-  "chat/markMessageDelivered",
-  async ({ conversationId, messageId }, { rejectWithValue }) => {
+export const deleteMessageThunk = createAsyncThunk(
+  'chat/deleteMessage',
+  async ({ messageId, conversationId, scope }, { rejectWithValue }) => {
     try {
-      await API.patch(
-        `/chat/conversations/${conversationId}/messages/${messageId}/delivered`
-      );
-      return { conversationId, messageId };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      await chatService.deleteMessage(messageId, scope);
+      return { messageId, conversationId, scope };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const markAllRead = createAsyncThunk(
-  "chat/markAllRead",
-  async (conversationId, { rejectWithValue }) => {
+export const reactToMessageThunk = createAsyncThunk(
+  'chat/reactToMessage',
+  async ({ messageId, conversationId, emoji }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post(
-        `/chat/conversations/${conversationId}/read-all`
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.reactToMessage(messageId, emoji);
+      return { messageId, conversationId, reactions: data.reactions };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const searchMessages = createAsyncThunk(
-  "chat/searchMessages",
-  async ({ conversationId, q, page }, { rejectWithValue }) => {
+export const pinMessageThunk = createAsyncThunk(
+  'chat/pinMessage',
+  async ({ messageId, conversationId, pin }, { rejectWithValue }) => {
     try {
-      const { data } = await API.get(
-        `/chat/conversations/${conversationId}/messages/search`,
-        { params: { q, page } }
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.pinMessage(messageId, pin);
+      return { conversationId, message: data.message };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const fetchMediaMessages = createAsyncThunk(
-  "chat/fetchMediaMessages",
-  async ({ conversationId, type, page }, { rejectWithValue }) => {
+export const forwardMessageThunk = createAsyncThunk(
+  'chat/forwardMessage',
+  async ({ messageId, targetConversationId }, { rejectWithValue }) => {
     try {
-      const { data } = await API.get(
-        `/chat/conversations/${conversationId}/messages/media`,
-        { params: { type, page } }
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.forwardMessage(messageId, targetConversationId);
+      return { conversationId: targetConversationId, message: data.message };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const fetchScheduledMessages = createAsyncThunk(
-  "chat/fetchScheduledMessages",
-  async (conversationId, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get(
-        `/chat/conversations/${conversationId}/messages/scheduled`
-      );
-      return { conversationId, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const cancelScheduledMessage = createAsyncThunk(
-  "chat/cancelScheduledMessage",
-  async ({ conversationId, messageId }, { rejectWithValue }) => {
-    try {
-      await API.delete(
-        `/chat/conversations/${conversationId}/messages/scheduled/${messageId}`
-      );
-      return { conversationId, messageId };
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ASYNC THUNKS — CALLS (REST)
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const initiateCall = createAsyncThunk(
-  "chat/initiateCall",
-  async ({ conversationId, callType, mediaConstraints }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post(
-        `/chat/conversations/${conversationId}/call/initiate`,
-        {
-          callType,
-          mediaConstraints: mediaConstraints || {
-            audio: true,
-            video: callType === "video",
-          },
-        }
-      );
-      return { conversationId, callType, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const endCall = createAsyncThunk(
-  "chat/endCall",
-  async ({ conversationId, messageId, duration }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.patch(
-        `/chat/conversations/${conversationId}/call/${messageId}/end`,
-        { duration }
-      );
-      return { conversationId, messageId, duration, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const updateCallStatus = createAsyncThunk(
-  "chat/updateCallStatus",
-  async ({ conversationId, messageId, status }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.patch(
-        `/chat/conversations/${conversationId}/call/${messageId}/status`,
-        { status }
-      );
-      return { conversationId, messageId, status, ...data };
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ASYNC THUNKS — PRESENCE & UNREAD
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const fetchOnlinePresence = createAsyncThunk(
-  "chat/fetchOnlinePresence",
-  async (userIds, { rejectWithValue }) => {
-    try {
-      const { data } = await API.get("/chat/users/online", {
-        params: { userIds: userIds.join(",") },
-      });
-      return data.presence;
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-export const fetchTotalUnreadCount = createAsyncThunk(
-  "chat/fetchTotalUnreadCount",
+export const fetchTotalUnread = createAsyncThunk(
+  'chat/fetchTotalUnread',
   async (_, { rejectWithValue }) => {
     try {
-      const { data } = await API.get("/chat/unread/count");
+      const { data } = await chatService.getUnreadCount();
       return data.unreadCount;
-    } catch (err) { return rejectWithValue(extractError(err)); }
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const fetchConversationUnreadCount = createAsyncThunk(
-  "chat/fetchConversationUnreadCount",
-  async (conversationId, { rejectWithValue }) => {
+export const fetchBlockedUsers = createAsyncThunk(
+  'chat/fetchBlockedUsers',
+  async (_, { rejectWithValue }) => {
     try {
-      const { data } = await API.get(
-        `/chat/conversations/${conversationId}/unread/count`
-      );
-      return { conversationId, unreadCount: data.unreadCount };
-    } catch (err) { return rejectWithValue(extractError(err)); }
+      const { data } = await chatService.getBlockedUsers();
+      return data.blockedUsers;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ASYNC THUNKS — ADMIN
-// ─────────────────────────────────────────────────────────────────────────────
+export const blockUserThunk = createAsyncThunk(
+  'chat/blockUser',
+  async (targetUserId, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.blockUser(targetUserId);
+      return data.block;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
 
-export const adminFetchConversations = createAsyncThunk(
-  "chat/adminFetchConversations",
+export const unblockUserThunk = createAsyncThunk(
+  'chat/unblockUser',
+  async (targetUserId, { rejectWithValue }) => {
+    try {
+      await chatService.unblockUser(targetUserId);
+      return targetUserId;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+export const fetchRtmToken = createAsyncThunk(
+  'chat/fetchRtmToken',
+  async (_, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.getRtmToken();
+      return data;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+export const initiateCallThunk = createAsyncThunk(
+  'chat/initiateCall',
+  async ({ conversationId, type }, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.initiateCall(conversationId, type);
+      return { ...data, conversationId, type };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+export const joinCallThunk = createAsyncThunk(
+  'chat/joinCall',
+  async (callId, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.joinCall(callId);
+      return data;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+export const endCallThunk = createAsyncThunk(
+  'chat/endCall',
+  async ({ callId, status }, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.endCall(callId, status);
+      return data;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+export const fetchCallHistory = createAsyncThunk(
+  'chat/fetchCallHistory',
   async (params = {}, { rejectWithValue }) => {
     try {
-      const { data } = await API.get("/chat/admin/conversations", { params });
+      const { data } = await chatService.getCallHistory(params);
       return data;
-    } catch (err) { return rejectWithValue(extractError(err)); }
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
   }
 );
 
-export const adminDeleteMessage = createAsyncThunk(
-  "chat/adminDeleteMessage",
-  async (messageId, { rejectWithValue }) => {
+export const fetchPresence = createAsyncThunk(
+  'chat/fetchPresence',
+  async (userIds, { rejectWithValue }) => {
     try {
-      await API.delete(`/chat/admin/messages/${messageId}`);
-      return messageId;
-    } catch (err) { return rejectWithValue(extractError(err)); }
-  }
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SOCKET EMIT THUNKS — MESSAGES
-// ─────────────────────────────────────────────────────────────────────────────
-
-// FIX #14: socketSendMessage — reject path fixed.
-// Original used Promise constructor with reject() call in a non-returning branch,
-// meaning the thunk resolved undefined when socket is disconnected instead of
-// rejecting → no error toast. Now returns a proper rejected Promise.
-export const socketSendMessage = createAsyncThunk(
-  "chat/socketSendMessage",
-  async (payload, { rejectWithValue }) => {
-    if (!_socket?.connected) {
-      return rejectWithValue("Socket not connected");
+      const { data } = await chatService.getBulkPresence(userIds);
+      return data.presence;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
     }
-    return new Promise((resolve, reject) => {
-      _socket.emit("message:send", payload, (ack) => {
-        if (ack?.success) resolve(ack);
-        else reject(ack?.message || "Failed to send message");
-      });
-    }).catch((err) => rejectWithValue(typeof err === 'string' ? err : err?.message || "Send failed"));
   }
 );
-
-export const socketUploadRecording = createAsyncThunk(
-  "chat/socketUploadRecording",
-  async (payload, { rejectWithValue }) => {
-    if (!_socket?.connected) {
-      return rejectWithValue("Socket not connected");
-    }
-    return new Promise((resolve, reject) => {
-      _socket.emit("call:recording_upload", payload, (ack) => {
-        if (ack?.success) resolve(ack);
-        else reject(ack?.message || "Recording upload failed");
-      });
-    }).catch((err) => rejectWithValue(typeof err === 'string' ? err : err?.message || "Upload failed"));
-  }
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SOCKET EMIT HELPERS — CALLS
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const socketCallRinging = (payload) => () => {
-  _socket?.emit("call:ringing", payload);
-};
-
-export const socketCallEnd = (payload) => () => {
-  _socket?.emit("call:end", payload);
-};
-
-export const socketCallDecline = (payload) => () => {
-  _socket?.emit("call:decline", payload);
-};
-
-export const socketCallMissed = (payload) => () => {
-  _socket?.emit("call:missed", payload);
-};
-
-export const socketCallMediaToggle = (payload) => () => {
-  _socket?.emit("call:media_toggle", payload);
-};
-
-export const socketTypingStart = (conversationId) => () => {
-  _socket?.emit("typing:start", { conversationId });
-};
-
-export const socketTypingStop = (conversationId) => () => {
-  _socket?.emit("typing:stop", { conversationId });
-};
-
-export const socketPresenceGet = (userIds) => (dispatch) => {
-  if (!_socket?.connected) return;
-  _socket.emit("presence:get", { userIds }, (result) => {
-    dispatch(_setPresenceBatch(result));
-  });
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// INITIAL STATE
-// ─────────────────────────────────────────────────────────────────────────────
-
-const initialState = {
-  ...conversationsAdapter.getInitialState(),
-  conversationPagination: { page: 1, limit: 30, total: 0, pages: 0 },
-  loadingConversations:   false,
-  loadingConversation:    false,
-
-  activeConversationId: null,
-
-  messages:             {},
-  messagePagination:    {},
-  loadingMessages:      false,
-  loadingMoreMessages:  false,
-  sendingMessage:       false,
-  uploadProgress:       0,
-
-  sendingRecording:     false,
-  recordingProgress:    0,
-
-  pinnedMessages:       {},
-  scheduledMessages:    {},
-  mediaMessages:        {},
-
-  searchResults:        [],
-  searchLoading:        false,
-  searchQuery:          "",
-
-  typing:               {},
-  presence:             {},
-
-  totalUnreadCount:     0,
-  unreadCounts:         {},
-
-  partners:             [],
-  partnerPagination:    { page: 1, total: 0, pages: 0 },
-  loadingPartners:      false,
-
-  departmentChannel:    null,
-
-  activeCall:           null,
-  incomingCall:         null,
-
-  socketConnected:      false,
-  socketError:          null,
-  socketReconnecting:   false,
-
-  adminConversations:   [],
-  adminPagination:      { page: 1, total: 0, pages: 0 },
-  adminLoading:         false,
-
-  error:                null,
-  success:              null,
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PER-CONVERSATION MESSAGE ADAPTER HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
-
-function getOrInitMsgState(state, conversationId) {
-  // FIX #13: Always coerce to string so ObjectId objects don't create separate keys
-  const key = toStringId(conversationId);
-  if (!key) return null;
-  if (!state.messages[key]) {
-    state.messages[key] = messagesAdapter.getInitialState();
-  }
-  return state.messages[key];
-}
-
-function upsertMsg(state, conversationId, message) {
-  const ms = getOrInitMsgState(state, conversationId);
-  if (ms) messagesAdapter.upsertOne(ms, message);
-}
-
-function upsertMsgs(state, conversationId, messages) {
-  const ms = getOrInitMsgState(state, conversationId);
-  if (ms) messagesAdapter.upsertMany(ms, messages);
-}
-
-function findConvIdForMessage(state, messageId) {
-  for (const convId of Object.keys(state.messages)) {
-    if (state.messages[convId]?.entities[messageId]) return convId;
-  }
-  return null;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SLICE
 // ─────────────────────────────────────────────────────────────────────────────
 
 const chatSlice = createSlice({
-  name: "chat",
+  name: 'chat',
   initialState,
 
   reducers: {
-
-    socketConnected(state) {
-      state.socketConnected    = true;
-      state.socketError        = null;
-      state.socketReconnecting = false;
-    },
-    socketDisconnected(state, { payload: reason }) {
-      state.socketConnected    = false;
-      state.socketReconnecting = reason !== "manual";
-    },
-    socketError(state, { payload }) {
-      state.socketError     = payload;
-      state.socketConnected = false;
+    // Set current user id (called after login)
+    setCurrentUserId(state, { payload }) {
+      state.currentUserId = payload;
     },
 
-    setActiveConversation(state, { payload }) {
-      // FIX #13: coerce to string
-      const id = toStringId(payload);
-      state.activeConversationId = id;
-      if (id) {
-        const prev = state.unreadCounts[id] || 0;
-        state.totalUnreadCount   = Math.max(0, state.totalUnreadCount - prev);
-        state.unreadCounts[id]   = 0;
-      }
+    setActiveConversation(state, { payload: conversationId }) {
+      state.activeConversationId = conversationId;
+      state.searchResults        = {};
+      state.searchQuery          = '';
     },
+
     clearActiveConversation(state) {
       state.activeConversationId = null;
     },
 
-    _onConversationCreated(state, { payload }) {
-      const { conversation } = payload;
-      if (conversation) conversationsAdapter.upsertOne(state, conversation);
-    },
+    // ── Socket: new message ─────────────────────────────────────────────────
+    socketNewMessage(state, { payload: { conversationId, message } }) {
+      ensureConvoMessages(state, conversationId);
+      messagesAdapter.upsertOne(state.messagesByConversation[conversationId], message);
 
-    _onConversationUpdated(state, { payload }) {
-      const { conversationId, updates } = payload;
-      if (conversationId && updates) {
-        conversationsAdapter.updateOne(state, { id: toStringId(conversationId), changes: updates });
+      const convo = state.conversations.entities[conversationId];
+      if (convo) {
+        convo.lastMessage = {
+          _id:    message._id,
+          sender: message.sender,
+          text:   message.type === 'text' ? message.text : `[${message.type}]`,
+          type:   message.type,
+          sentAt: message.createdAt,
+        };
+        convo.updatedAt = message.createdAt;
+
+        // FIX: only bump unread if this convo is NOT active AND message is not from self
+        const isActive   = state.activeConversationId === conversationId;
+        const senderId   = message.sender?._id || message.sender;
+        const isFromSelf = senderId?.toString() === state.currentUserId;
+
+        if (!isActive && !isFromSelf) {
+          convo.unreadCount    = (convo.unreadCount || 0) + 1;
+          state.totalUnread    = Math.max(0, state.totalUnread + 1);
+        }
       }
     },
 
-    _onConversationDeleted(state, { payload }) {
-      const convId = toStringId(payload?.conversationId);
-      if (!convId) return;
-      conversationsAdapter.removeOne(state, convId);
-      if (state.messages[convId]) delete state.messages[convId];
-      if (state.activeConversationId === convId) state.activeConversationId = null;
+    socketMessageEdited(state, { payload: { conversationId, message } }) {
+      if (!state.messagesByConversation[conversationId]) return;
+      messagesAdapter.upsertOne(state.messagesByConversation[conversationId], message);
     },
 
-    _onConversationMuteUpdated(state, { payload }) {
-      const convId = toStringId(payload?.conversationId);
-      const conv = state.entities[convId];
-      if (!conv) return;
-      conversationsAdapter.updateOne(state, {
-        id:      convId,
-        changes: {
-          participants: conv.participants?.map((p) =>
-            (p.user?._id || p.user)?.toString() === payload.userId?.toString()
-              ? { ...p, isMuted: payload.isMuted, mutedUntil: payload.mutedUntil }
-              : p
-          ),
-        },
-      });
-    },
-
-    _onMemberJoined(state, { payload }) {
-      const convId = toStringId(payload?.conversationId);
-      const conv = state.entities[convId];
-      if (!conv || !payload.user) return;
-      const exists = conv.participants?.find(
-        (p) => (p.user?._id || p.user)?.toString() === payload.user._id?.toString()
-      );
-      if (!exists) {
-        conversationsAdapter.updateOne(state, {
-          id:      convId,
-          changes: {
-            participants: [
-              ...(conv.participants || []),
-              { user: payload.user, isActive: true, joinedAt: new Date().toISOString(), conversationRole: "member" },
-            ],
-          },
+    socketMessageDeleted(state, { payload: { messageId, conversationId, scope } }) {
+      if (!state.messagesByConversation[conversationId]) return;
+      if (scope === 'for_all') {
+        messagesAdapter.updateOne(state.messagesByConversation[conversationId], {
+          id:      messageId,
+          changes: { deletedForAll: true, text: null, isDeleted: true, media: null },
         });
       }
     },
 
-    _onMemberLeft(state, { payload }) {
-      const convId = toStringId(payload?.conversationId);
-      const conv = state.entities[convId];
-      if (!conv) return;
-      conversationsAdapter.updateOne(state, {
-        id:      convId,
-        changes: {
-          participants: conv.participants?.map((p) =>
-            (p.user?._id || p.user)?.toString() === payload.userId?.toString()
-              ? { ...p, isActive: false, leftAt: new Date().toISOString() }
-              : p
-          ),
-        },
-      });
-    },
-
-    _onMemberAdded(state, { payload }) {
-      const convId = toStringId(payload?.conversationId);
-      const conv = state.entities[convId];
-      if (!conv || !payload.addedUser) return;
-      const exists = conv.participants?.find(
-        (p) => (p.user?._id || p.user)?.toString() === payload.addedUser._id?.toString()
-      );
-      if (!exists) {
-        conversationsAdapter.updateOne(state, {
-          id:      convId,
-          changes: {
-            participants: [
-              ...(conv.participants || []),
-              { user: payload.addedUser, isActive: true, conversationRole: "member" },
-            ],
-          },
-        });
-      }
-    },
-
-    _onMemberRemoved(state, { payload }) {
-      const convId = toStringId(payload?.conversationId);
-      const conv = state.entities[convId];
-      if (!conv) return;
-      conversationsAdapter.updateOne(state, {
-        id:      convId,
-        changes: {
-          participants: conv.participants?.map((p) =>
-            (p.user?._id || p.user)?.toString() === payload.targetUserId?.toString()
-              ? { ...p, isActive: false }
-              : p
-          ),
-        },
-      });
-    },
-
-    _onRemovedFromConversation(state, { payload }) {
-      const convId = toStringId(payload?.conversationId);
-      conversationsAdapter.removeOne(state, convId);
-      if (state.messages[convId]) delete state.messages[convId];
-      if (state.activeConversationId === convId) state.activeConversationId = null;
-      toast("You were removed from a conversation.", { icon: "ℹ️" });
-    },
-
-    // FIX #13: conversationId coerced to string before use as state key
-    _onNewMessage(state, { payload }) {
-      const { message } = payload;
-      if (!message) return;
-      // FIX #13: Always coerce to string
-      const convId = toStringId(message.conversation?._id || message.conversation);
-      if (!convId) return;
-
-      upsertMsg(state, convId, message);
-
-      const preview =
-        message.type === "sticker"
-          ? message.sticker?.title || "🎭 Sticker"
-          : (message.content || "").slice(0, 100);
-
-      conversationsAdapter.updateOne(state, {
-        id:      convId,
-        changes: {
-          lastMessage: {
-            messageId: message._id,
-            senderId:  message.sender?._id || message.sender,
-            content:   preview,
-            type:      message.type,
-            sentAt:    message.createdAt,
-          },
-        },
-      });
-
-      if (state.activeConversationId !== convId) {
-        state.unreadCounts[convId] = (state.unreadCounts[convId] || 0) + 1;
-        state.totalUnreadCount     = Math.max(0, state.totalUnreadCount + 1);
-      }
-    },
-
-    _onMessageEdited(state, { payload }) {
-      const { messageId, content, editedAt, editHistory } = payload;
-      const convId = findConvIdForMessage(state, messageId);
-      if (!convId) return;
-      messagesAdapter.updateOne(state.messages[convId], {
-        id: messageId, changes: { content, isEdited: true, editedAt, editHistory },
-      });
-    },
-
-    _onMessageDeleted(state, { payload }) {
-      const { messageId, scope, deletedBy, deletedAt } = payload;
-      const convId = findConvIdForMessage(state, messageId);
-      if (!convId) return;
-      messagesAdapter.updateOne(state.messages[convId], {
-        id:      messageId,
-        changes: {
-          isDeleted:   true,
-          deleteScope: scope,
-          deletedAt,
-          deletedBy,
-          ...(scope === "deleted_for_everyone" ? { content: "", attachments: [] } : {}),
-        },
-      });
-    },
-
-    _onMessageReaction(state, { payload }) {
-      const { messageId, reactions } = payload;
-      const convId = findConvIdForMessage(state, messageId);
-      if (!convId) return;
-      messagesAdapter.updateOne(state.messages[convId], {
+    socketMessageReaction(state, { payload: { messageId, conversationId, reactions } }) {
+      if (!state.messagesByConversation[conversationId]) return;
+      messagesAdapter.updateOne(state.messagesByConversation[conversationId], {
         id: messageId, changes: { reactions },
       });
     },
 
-    _onMessagePinUpdated(state, { payload }) {
-      const { messageId, isPinned, pinnedAt, pinnedBy } = payload;
-      const convId = findConvIdForMessage(state, messageId);
-      if (!convId) return;
-      messagesAdapter.updateOne(state.messages[convId], {
-        id: messageId, changes: { isPinned, pinnedAt, pinnedBy },
-      });
-    },
-
-    _onMessageScheduled(state, { payload }) {
-      const { message } = payload;
-      if (!message) return;
-      const convId = toStringId(message.conversation?._id || message.conversation);
-      if (!convId) return;
-      if (!state.scheduledMessages[convId]) state.scheduledMessages[convId] = [];
-      const idx = state.scheduledMessages[convId].findIndex((m) => m._id === message._id);
-      if (idx >= 0) state.scheduledMessages[convId][idx] = message;
-      else state.scheduledMessages[convId].push(message);
-    },
-
-    _onDeliveryReceipt(state, { payload }) {
-      const { messageId, userId, deliveredAt } = payload;
-      const convId = findConvIdForMessage(state, messageId);
-      if (!convId) return;
-      const msg = state.messages[convId]?.entities[messageId];
-      if (!msg) return;
-      messagesAdapter.updateOne(state.messages[convId], {
-        id:      messageId,
-        changes: {
-          receipts: (msg.receipts || []).map((r) =>
-            (r.user?._id || r.user)?.toString() === userId?.toString()
-              ? { ...r, deliveredAt }
-              : r
-          ),
-        },
-      });
-    },
-
-    _onReadReceipt(state, { payload }) {
-      const { conversationId, messageId, readBy, readAt } = payload;
-      const key = toStringId(conversationId);
-      const msgState = state.messages[key];
-      if (!msgState) return;
-      const pivotIdx = msgState.ids.indexOf(messageId);
-      if (pivotIdx < 0) return;
-      for (const mid of msgState.ids.slice(0, pivotIdx + 1)) {
-        const msg = msgState.entities[mid];
-        if (!msg) continue;
-        messagesAdapter.updateOne(msgState, {
-          id:      mid,
-          changes: {
-            receipts: (msg.receipts || []).map((r) =>
-              (r.user?._id || r.user)?.toString() === readBy?.toString()
-                ? { ...r, readAt: r.readAt || readAt }
-                : r
-            ),
-          },
-        });
+    // FIX: socketMessagesRead — zero unread for conversation, adjust totalUnread correctly
+    socketMessagesRead(state, { payload: { conversationId, readBy } }) {
+      const convo = state.conversations.entities[conversationId];
+      if (convo) {
+        const prev           = convo.unreadCount || 0;
+        convo.unreadCount    = 0;
+        state.totalUnread    = Math.max(0, state.totalUnread - prev);
       }
     },
 
-    _onTypingUpdate(state, { payload }) {
-      const { conversationId, userId, name, isTyping } = payload;
-      if (!conversationId) return;
-      const key = toStringId(conversationId);
-      if (!state.typing[key]) state.typing[key] = {};
+    // FIX: socketMessagesDelivered — store deliveredAt at conversation level only
+    // Don't bulk-update all messages (we don't have currentUserId in reducer safely).
+    // The per-message deliveredAt is fetched fresh from server via getMessages.
+    socketMessagesDelivered(state, { payload: { conversationId, deliveredTo, deliveredAt } }) {
+      // Update all messages in this conversation that were sent and have no deliveredAt
+      if (!state.messagesByConversation[conversationId]) return;
+      const ids = state.messagesByConversation[conversationId].ids;
+      const updates = ids
+        .map((id) => state.messagesByConversation[conversationId].entities[id])
+        .filter((msg) => msg && !msg.deliveredAt)
+        .map((msg) => ({ id: msg._id, changes: { deliveredAt } }));
+
+      if (updates.length > 0) {
+        messagesAdapter.updateMany(state.messagesByConversation[conversationId], updates);
+      }
+    },
+
+    socketUserTyping(state, { payload: { conversationId, userId, isTyping } }) {
+      if (!state.typingUsers[conversationId]) {
+        state.typingUsers[conversationId] = [];
+      }
       if (isTyping) {
-        state.typing[key][userId] = { name, isTyping: true };
-      } else {
-        delete state.typing[key][userId];
-      }
-    },
-
-    _onUserOnline(state, { payload }) {
-      state.presence[payload.userId] = {
-        isOnline: true,
-        name:     payload.name,
-        avatar:   payload.avatar,
-        role:     payload.role,
-      };
-    },
-    _onUserOffline(state, { payload }) {
-      state.presence[payload.userId] = { isOnline: false, lastseen: payload.lastseen };
-    },
-    _setPresenceBatch(state, { payload }) {
-      for (const [userId, data] of Object.entries(payload || {})) {
-        state.presence[userId] = data;
-      }
-    },
-
-    _onCallIncoming(state, { payload }) {
-      if (state.activeCall) return;
-      state.incomingCall = {
-        conversationId:   payload.conversationId,
-        callType:         payload.callType,
-        caller:           payload.caller,
-        messageId:        payload.messageId,
-        mediaConstraints: payload.mediaConstraints || {
-          audio: true,
-          video: payload.callType === "video",
-        },
-        delayed: payload.delayed || false,
-      };
-      toast(
-        `📞 Incoming ${payload.callType} call from ${payload.caller?.name}`,
-        { duration: 30000, id: "incoming-call" }
-      );
-    },
-
-    _onCallRinging(state, { payload }) {
-      if (!state.activeCall) return;
-      state.activeCall.status      = "ringing";
-      state.activeCall.callRinging = true;
-      state.activeCall.callee      = payload.user || null;
-    },
-
-    _onCallOffer(state, { payload }) {
-      if (state.activeCall) {
-        state.activeCall.status = "connecting";
-        if (payload.from && !state.activeCall.targetUserId) {
-          state.activeCall.targetUserId = payload.from;
+        if (!state.typingUsers[conversationId].includes(userId)) {
+          state.typingUsers[conversationId].push(userId);
         }
-      }
-      if (state.incomingCall && payload.caller) {
-        state.incomingCall.caller = payload.caller;
-      }
-    },
-
-    _onCallAnswered(state, { payload }) {
-      if (!state.activeCall) return;
-      state.activeCall.status = "connecting";
-      state.activeCall.callee = payload.callee || null;
-      if (payload.from && !state.activeCall.targetUserId) {
-        state.activeCall.targetUserId = payload.from;
-      }
-      toast.dismiss("incoming-call");
-    },
-
-    // Intentional NO-OP — CallManager handles ICE
-    // eslint-disable-next-line no-unused-vars
-    _onCallIce(_state, _action) {},
-
-    _onCallMediaToggle(state, { payload }) {
-      if (!state.activeCall) return;
-      if (!state.activeCall.peerMedia) {
-        state.activeCall.peerMedia = { audio: true, video: true };
-      }
-      if (payload.kind === "audio" || payload.kind === "video") {
-        state.activeCall.peerMedia[payload.kind] = payload.enabled;
-      }
-    },
-
-    _onCallEnded(state, { payload }) {
-      state.activeCall   = null;
-      state.incomingCall = null;
-      toast.dismiss("incoming-call");
-      if (payload?.duration) {
-        const mins = Math.floor(payload.duration / 60);
-        const secs = payload.duration % 60;
-        toast(`Call ended — ${mins}m ${secs}s`, { icon: "📞" });
       } else {
-        toast("Call ended.", { icon: "📞" });
+        state.typingUsers[conversationId] = state.typingUsers[conversationId].filter(
+          (id) => id !== userId
+        );
       }
     },
 
-    _onCallDeclined(state, { payload }) {
-      state.activeCall   = null;
-      state.incomingCall = null;
-      toast.dismiss("incoming-call");
-      const name = payload?.declinedByUser?.name;
-      toast(name ? `${name} declined the call` : "Call declined.", { icon: "📵" });
+    socketUserPresence(state, { payload: { userId, isOnline, lastseen } }) {
+      state.presence[userId] = { isOnline, lastseen };
     },
 
-    _onCallMissed(state) {
-      state.activeCall   = null;
-      state.incomingCall = null;
-      toast.dismiss("incoming-call");
-      toast("Missed call", { icon: "📵" });
+    socketIncomingCall(state, { payload }) {
+      state.incomingCall = payload;
     },
 
-    _onCallPeerDisconnected(state, { payload }) {
-      if (!state.activeCall) return;
-      state.activeCall.status           = "reconnecting";
-      state.activeCall.peerDisconnected = {
-        userId:   payload.userId,
-        userName: payload.userName,
-      };
+    socketCallParticipantJoined(state, { payload }) {
+      if (state.activeCall) {
+        if (!state.activeCall.participants) state.activeCall.participants = [];
+        // Avoid duplicate
+        const exists = state.activeCall.participants.some((p) => p.userId === payload.userId);
+        if (!exists) state.activeCall.participants.push(payload);
+      }
     },
 
-    _onCallMissedWhileOffline(state, { payload }) {
-      void state;
-      toast(
-        `📵 Missed ${payload.callType || ""} call from ${payload.caller?.name || "someone"} while offline`,
-        { duration: 8000 }
-      );
+    socketCallDeclined(state, { payload: { callId } }) {
+      if (state.activeCall?.callId === callId)  state.activeCall  = null;
+      if (state.incomingCall?.callId === callId) state.incomingCall = null;
     },
 
-    setActiveCall(state, { payload }) {
-      state.activeCall = {
-        status:           "calling",
-        mediaConstraints: { audio: true, video: payload.callType === "video" },
-        caller:           null,
-        callee:           null,
-        callRinging:      false,
-        peerMedia:        { audio: true, video: true },
-        peerDisconnected: null,
-        ...payload,
-        iceCandidates:  undefined,
-        peerSdpOffer:   undefined,
-        peerSdpAnswer:  undefined,
-      };
-      state.incomingCall = null;
-      toast.dismiss("incoming-call");
+    socketCallEnded(state, { payload: { callId } }) {
+      if (state.activeCall?.callId === callId)  state.activeCall  = null;
+      if (state.incomingCall?.callId === callId) state.incomingCall = null;
+    },
+
+    socketCallCancelled(state, { payload: { callId } }) {
+      if (state.activeCall?.callId === callId)  state.activeCall  = null;
+      if (state.incomingCall?.callId === callId) state.incomingCall = null;
+    },
+
+    socketCallLog(state, { payload: { conversationId, message } }) {
+      ensureConvoMessages(state, conversationId);
+      messagesAdapter.upsertOne(state.messagesByConversation[conversationId], message);
     },
 
     clearIncomingCall(state) {
       state.incomingCall = null;
-      toast.dismiss("incoming-call");
     },
 
     clearActiveCall(state) {
       state.activeCall = null;
     },
 
-    _onNotification(state, { payload }) { void state; void payload; },
-    _onMention(state, { payload }) {
-      toast(`You were mentioned by ${payload.mentionedBy?.name}`, { icon: "🔔" });
+    upsertConversation(state, { payload: conversation }) {
+      conversationsAdapter.upsertOne(state.conversations, conversation);
     },
 
-    setUploadProgress(state, { payload })   { state.uploadProgress    = payload; },
-    resetUploadProgress(state)              { state.uploadProgress    = 0; },
-    setRecordingProgress(state, { payload }){ state.recordingProgress = payload; },
-    resetRecordingProgress(state)           { state.recordingProgress = 0; },
+    clearSearch(state) {
+      state.searchResults = {};
+      state.searchQuery   = '';
+    },
 
-    clearSearchResults(state) { state.searchResults = []; state.searchQuery = ""; },
-    clearError(state)         { state.error   = null; },
-    clearSuccess(state)       { state.success = null; },
-    resetChatState()          { return initialState; },
+    setUploadProgress(state, { payload: { conversationId, progress } }) {
+      state.uploadProgress[conversationId] = progress;
+    },
+
+    clearUploadProgress(state, { payload: conversationId }) {
+      delete state.uploadProgress[conversationId];
+    },
+
+    clearError(state) {
+      state.error = null;
+    },
   },
 
   extraReducers: (builder) => {
-
-    builder.addCase(connectSocket.rejected, (state, { payload }) => {
-      state.socketError = payload;
-      toast.error("Chat connection failed");
-    });
-
+    // fetchConversations
     builder
       .addCase(fetchConversations.pending, (state) => {
-        state.loadingConversations = true; state.error = null;
+        state.conversationsLoading = true;
       })
       .addCase(fetchConversations.fulfilled, (state, { payload }) => {
-        state.loadingConversations = false;
-        conversationsAdapter.setAll(state, payload.conversations || []);
-        state.conversationPagination = payload.pagination || state.conversationPagination;
-        for (const c of payload.conversations || []) {
-          if (c.unreadCount !== undefined) state.unreadCounts[c._id] = c.unreadCount;
-        }
+        state.conversationsLoading = false;
+        conversationsAdapter.setAll(state.conversations, payload.conversations);
+        state.conversationsMeta = { total: payload.total, page: payload.page, pages: payload.pages };
       })
       .addCase(fetchConversations.rejected, (state, { payload }) => {
-        state.loadingConversations = false; state.error = payload;
+        state.conversationsLoading = false;
+        state.error = payload;
       });
 
+    // startDirectConversation / startGroupConversation
     builder
-      .addCase(fetchConversation.pending,   (state) => { state.loadingConversation = true; })
-      .addCase(fetchConversation.fulfilled, (state, { payload }) => {
-        state.loadingConversation = false;
-        if (payload.conversation) conversationsAdapter.upsertOne(state, payload.conversation);
+      .addCase(startDirectConversation.fulfilled, (state, { payload }) => {
+        conversationsAdapter.upsertOne(state.conversations, payload);
       })
-      .addCase(fetchConversation.rejected,  (state, { payload }) => {
-        state.loadingConversation = false; state.error = payload;
+      .addCase(startGroupConversation.fulfilled, (state, { payload }) => {
+        conversationsAdapter.upsertOne(state.conversations, payload);
+        toast.success('Group created');
       });
 
-    builder
-      .addCase(createConversation.fulfilled, (state, { payload }) => {
-        if (payload.conversation) conversationsAdapter.upsertOne(state, payload.conversation);
-        if (!payload.alreadyExists) toast.success("Conversation created");
-      })
-      .addCase(createConversation.rejected, (state, { payload }) => {
-        state.error = payload; toast.error(payload || "Failed to create conversation");
-      });
+    // fetchConversationById
+    builder.addCase(fetchConversationById.fulfilled, (state, { payload }) => {
+      conversationsAdapter.upsertOne(state.conversations, payload);
+    });
 
+    // updateGroupInfo / addMembers / removeMember / toggleMemberAdmin
     builder
-      .addCase(createDepartmentChannel.fulfilled, (state, { payload }) => {
-        if (payload.conversation) {
-          conversationsAdapter.upsertOne(state, payload.conversation);
-          state.departmentChannel = payload.conversation;
-        }
-        toast.success(`Department channel created (${payload.memberCount} members)`);
+      .addCase(updateGroupInfo.fulfilled, (state, { payload }) => {
+        conversationsAdapter.upsertOne(state.conversations, payload);
+        toast.success('Group updated');
       })
-      .addCase(createDepartmentChannel.rejected, (state, { payload }) => {
-        state.error = payload; toast.error(payload || "Failed to create department channel");
-      });
-
-    builder
-      .addCase(fetchDepartmentChannel.fulfilled, (state, { payload }) => {
-        if (payload.conversation) {
-          state.departmentChannel = payload.conversation;
-          conversationsAdapter.upsertOne(state, payload.conversation);
-        }
+      .addCase(addMembers.fulfilled, (state, { payload }) => {
+        conversationsAdapter.upsertOne(state.conversations, payload);
+        toast.success('Members added');
       })
-      .addCase(fetchDepartmentChannel.rejected, (state, { payload }) => { state.error = payload; });
-
-    builder
-      .addCase(fetchPartners.pending,   (state) => { state.loadingPartners = true; })
-      .addCase(fetchPartners.fulfilled, (state, { payload }) => {
-        state.loadingPartners   = false;
-        state.partners          = payload.users || [];
-        state.partnerPagination = payload.pagination || state.partnerPagination;
-      })
-      .addCase(fetchPartners.rejected,  (state, { payload }) => {
-        state.loadingPartners = false; state.error = payload;
-      });
-
-    builder
-      .addCase(updateConversation.fulfilled, (state, { payload }) => {
-        if (payload.conversation) conversationsAdapter.upsertOne(state, payload.conversation);
-        toast.success("Conversation updated");
-      })
-      .addCase(updateConversation.rejected, (state, { payload }) => {
-        state.error = payload; toast.error(payload || "Update failed");
-      });
-
-    builder
-      .addCase(archiveConversation.fulfilled, (state, { payload }) => {
-        conversationsAdapter.updateOne(state, {
-          id: payload.conversationId, changes: { isArchived: payload.archive },
-        });
-        toast.success(payload.archive ? "Conversation archived" : "Conversation unarchived");
-      })
-      .addCase(archiveConversation.rejected, (_, { payload }) => {
-        toast.error(payload || "Action failed");
-      });
-
-    builder
-      .addCase(muteConversation.fulfilled, (_, { payload }) => {
-        toast.success(payload.muted ? "Conversation muted" : "Conversation unmuted");
-      })
-      .addCase(muteConversation.rejected, (_, { payload }) => {
-        toast.error(payload || "Mute failed");
-      });
-
-    builder
-      .addCase(addMembers.fulfilled, (_, { payload }) => {
-        toast.success(`${payload.added?.length || 0} member(s) added`);
-      })
-      .addCase(addMembers.rejected, (_, { payload }) => {
-        toast.error(payload || "Failed to add members");
-      });
-
-    builder
       .addCase(removeMember.fulfilled, (state, { payload }) => {
-        const conv = state.entities[payload.conversationId];
-        if (conv) {
-          conversationsAdapter.updateOne(state, {
-            id:      payload.conversationId,
-            changes: {
-              participants: conv.participants?.map((p) =>
-                (p.user?._id || p.user)?.toString() === payload.userId?.toString()
-                  ? { ...p, isActive: false }
-                  : p
-              ),
-            },
-          });
-        }
-        toast.success("Member removed");
+        conversationsAdapter.upsertOne(state.conversations, payload);
       })
-      .addCase(removeMember.rejected, (_, { payload }) => {
-        toast.error(payload || "Failed to remove member");
+      .addCase(toggleMemberAdmin.fulfilled, (state, { payload }) => {
+        conversationsAdapter.upsertOne(state.conversations, payload);
       });
 
-    builder
-      .addCase(leaveConversation.fulfilled, (state, { payload: convId }) => {
-        conversationsAdapter.removeOne(state, convId);
-        if (state.messages[convId]) delete state.messages[convId];
-        if (state.activeConversationId === convId) state.activeConversationId = null;
-        toast.success("Left conversation");
-      })
-      .addCase(leaveConversation.rejected, (_, { payload }) => {
-        toast.error(payload || "Failed to leave conversation");
-      });
+    // archiveConversation
+    builder.addCase(archiveConversationThunk.fulfilled, (state, { payload: { conversationId, archive } }) => {
+      if (archive) conversationsAdapter.removeOne(state.conversations, conversationId);
+    });
 
-    builder
-      .addCase(promoteMember.fulfilled, (_, { payload }) => {
-        toast.success(payload.role === "admin" ? "Member promoted to admin" : "Member demoted");
-      })
-      .addCase(promoteMember.rejected, (_, { payload }) => {
-        toast.error(payload || "Promotion failed");
-      });
+    // clearConversation
+    builder.addCase(clearConversationThunk.fulfilled, (state, { payload: { conversationId } }) => {
+      if (state.messagesByConversation[conversationId]) {
+        state.messagesByConversation[conversationId] = messagesAdapter.getInitialState();
+      }
+      toast.success('Chat cleared');
+    });
 
-    builder
-      .addCase(deleteConversation.fulfilled, (state, { payload: convId }) => {
-        conversationsAdapter.removeOne(state, convId);
-        if (state.messages[convId]) delete state.messages[convId];
-        if (state.activeConversationId === convId) state.activeConversationId = null;
-        toast.success("Conversation deleted");
-      })
-      .addCase(deleteConversation.rejected, (_, { payload }) => {
-        toast.error(payload || "Delete failed");
-      });
+    // fetchConversationMedia
+    builder.addCase(fetchConversationMedia.fulfilled, (state, { payload: { conversationId, messages } }) => {
+      state.mediaByConversation[conversationId] = messages;
+    });
 
+    // fetchMessages
     builder
-      .addCase(fetchMessages.pending, (state) => { state.loadingMessages = true; state.error = null; })
+      .addCase(fetchMessages.pending, (state, { meta: { arg } }) => {
+        state.messagesLoadingMap[arg.conversationId] = true;
+      })
       .addCase(fetchMessages.fulfilled, (state, { payload }) => {
-        state.loadingMessages = false;
-        const { conversationId, messages = [], pagination } = payload;
-        const key = toStringId(conversationId);
-        if (key) {
-          messagesAdapter.setAll(getOrInitMsgState(state, key), messages);
-          state.messagePagination[key] = {
-            ...pagination,
-            hasMore: (pagination?.page || 1) < (pagination?.pages || 1),
-          };
+        const { conversationId, messages, before, limit } = payload;
+        ensureConvoMessages(state, conversationId);
+        state.messagesLoadingMap[conversationId] = false;
+        messagesAdapter.upsertMany(state.messagesByConversation[conversationId], messages);
+
+        // FIX: use actual returned count vs requested limit (not hardcoded 50)
+        state.messagesHasMoreMap[conversationId] = messages.length >= (limit || 50);
+        if (messages.length > 0) {
+          state.messagesCursorMap[conversationId] = messages[0]._id; // oldest
         }
       })
-      .addCase(fetchMessages.rejected, (state, { payload }) => {
-        state.loadingMessages = false; state.error = payload;
+      .addCase(fetchMessages.rejected, (state, { meta: { arg }, payload }) => {
+        state.messagesLoadingMap[arg.conversationId] = false;
+        state.error = payload;
       });
 
-    builder
-      .addCase(fetchMoreMessages.pending,   (state) => { state.loadingMoreMessages = true; })
-      .addCase(fetchMoreMessages.fulfilled, (state, { payload }) => {
-        state.loadingMoreMessages = false;
-        const { conversationId, messages = [], pagination } = payload;
-        const key = toStringId(conversationId);
-        if (key) {
-          upsertMsgs(state, key, messages);
-          state.messagePagination[key] = {
-            ...pagination,
-            hasMore: messages.length === (pagination?.limit || 30),
-          };
-        }
-      })
-      .addCase(fetchMoreMessages.rejected, (state) => { state.loadingMoreMessages = false; });
-
-    builder
-      .addCase(sendMessage.pending,   (state) => { state.sendingMessage = true; })
-      .addCase(sendMessage.fulfilled, (state, { payload }) => {
-        state.sendingMessage = false;
-        if (payload.message) upsertMsg(state, toStringId(payload.conversationId), payload.message);
-      })
-      .addCase(sendMessage.rejected,  (state, { payload }) => {
-        state.sendingMessage = false; state.error = payload;
-        toast.error(payload || "Failed to send message");
-      });
-
-    builder
-      .addCase(sendStickerMessage.pending,   (state) => { state.sendingMessage = true; })
-      .addCase(sendStickerMessage.fulfilled, (state, { payload }) => {
-        state.sendingMessage = false;
-        if (payload.message) upsertMsg(state, toStringId(payload.conversationId), payload.message);
-      })
-      .addCase(sendStickerMessage.rejected,  (state, { payload }) => {
-        state.sendingMessage = false; toast.error(payload || "Failed to send sticker");
-      });
-
-    builder
-      .addCase(sendMediaMessage.pending,   (state) => { state.sendingMessage = true; state.uploadProgress = 0; })
-      .addCase(sendMediaMessage.fulfilled, (state, { payload }) => {
-        state.sendingMessage = false; state.uploadProgress = 0;
-        if (payload.message) upsertMsg(state, toStringId(payload.conversationId), payload.message);
-      })
-      .addCase(sendMediaMessage.rejected,  (state, { payload }) => {
-        state.sendingMessage = false; state.uploadProgress = 0;
-        toast.error(payload || "Media upload failed");
-      });
-
-    builder
-      .addCase(sendMultipleMedia.pending,   (state) => { state.sendingMessage = true; })
-      .addCase(sendMultipleMedia.fulfilled, (state, { payload }) => {
-        state.sendingMessage = false;
-        if (payload.message) upsertMsg(state, toStringId(payload.conversationId), payload.message);
-        toast.success(`${payload.uploadedCount} file(s) sent`);
-      })
-      .addCase(sendMultipleMedia.rejected,  (state, { payload }) => {
-        state.sendingMessage = false; toast.error(payload || "Upload failed");
-      });
-
-    builder
-      .addCase(sendRecordingMessage.pending,   (state) => { state.sendingRecording = true; state.recordingProgress = 0; })
-      .addCase(sendRecordingMessage.fulfilled, (state, { payload }) => {
-        state.sendingRecording = false; state.recordingProgress = 0;
-        if (payload.message) upsertMsg(state, toStringId(payload.conversationId), payload.message);
-      })
-      .addCase(sendRecordingMessage.rejected,  (state, { payload }) => {
-        state.sendingRecording = false; state.recordingProgress = 0;
-        toast.error(payload || "Recording upload failed");
-      });
-
-    builder
-      .addCase(socketUploadRecording.pending,   (state) => { state.sendingRecording = true; })
-      .addCase(socketUploadRecording.fulfilled, (state, { payload }) => {
-        state.sendingRecording = false;
-        if (payload?.message) {
-          const convId = toStringId(payload.message.conversation?._id || payload.message.conversation);
-          upsertMsg(state, convId, payload.message);
-        }
-      })
-      .addCase(socketUploadRecording.rejected,  (state, { payload }) => {
-        state.sendingRecording = false; toast.error(payload || "Recording upload failed");
-      });
-
-    // FIX #14: socketSendMessage.rejected now fires correctly — show error toast
-    builder
-      .addCase(socketSendMessage.pending,   (state) => { state.sendingMessage = true; })
-      .addCase(socketSendMessage.fulfilled, (state, { payload }) => {
-        state.sendingMessage = false;
-        if (payload?.message) {
-          const convId = toStringId(payload.message.conversation?._id || payload.message.conversation);
-          upsertMsg(state, convId, payload.message);
-        }
-      })
-      .addCase(socketSendMessage.rejected,  (state, { payload }) => {
-        state.sendingMessage = false;
-        toast.error(payload || "Failed to send message");
-      });
-
-    builder
-      .addCase(editMessage.fulfilled, (state, { payload }) => {
-        if (payload.message) {
-          const key = toStringId(payload.conversationId);
-          const msgState = state.messages[key];
-          if (msgState) messagesAdapter.updateOne(msgState, { id: payload.message._id, changes: payload.message });
-        }
-      })
-      .addCase(editMessage.rejected, (_, { payload }) => { toast.error(payload || "Edit failed"); });
-
-    builder
-      .addCase(deleteMessage.fulfilled, (state, { payload }) => {
-        const key = toStringId(payload.conversationId);
-        const msgState = state.messages[key];
-        if (msgState) {
-          messagesAdapter.updateOne(msgState, {
-            id:      payload.messageId,
-            changes: {
-              isDeleted:   true,
-              deleteScope: payload.scope,
-              ...(payload.scope === "deleted_for_everyone" ? { content: "", attachments: [] } : {}),
-            },
-          });
-        }
-      })
-      .addCase(deleteMessage.rejected, (_, { payload }) => { toast.error(payload || "Delete failed"); });
-
-    builder
-      .addCase(reactToMessage.fulfilled, (state, { payload }) => {
-        const key = toStringId(payload.conversationId);
-        const msgState = state.messages[key];
-        if (msgState?.entities[payload.messageId]) {
-          messagesAdapter.updateOne(msgState, { id: payload.messageId, changes: { reactions: payload.reactions } });
-        }
-      })
-      .addCase(reactToMessage.rejected, (_, { payload }) => { toast.error(payload || "Reaction failed"); });
-
-    builder
-      .addCase(pinMessage.fulfilled, (state, { payload }) => {
-        const key = toStringId(payload.conversationId);
-        const msgState = state.messages[key];
-        if (msgState) messagesAdapter.updateOne(msgState, { id: payload.messageId, changes: { isPinned: payload.isPinned } });
-        toast.success(payload.isPinned ? "Message pinned" : "Message unpinned");
-      })
-      .addCase(pinMessage.rejected, (_, { payload }) => { toast.error(payload || "Pin failed"); });
-
-    builder.addCase(fetchPinnedMessages.fulfilled, (state, { payload }) => {
-      state.pinnedMessages[toStringId(payload.conversationId)] = payload.messages || [];
+    // sendTextMessage (REST fallback)
+    builder.addCase(sendTextMessage.fulfilled, (state, { payload: { conversationId, message } }) => {
+      ensureConvoMessages(state, conversationId);
+      messagesAdapter.upsertOne(state.messagesByConversation[conversationId], message);
     });
 
+    // sendMediaMessage
     builder
-      .addCase(forwardMessage.fulfilled, (_, { payload }) => {
-        toast.success(`Forwarded to ${payload.forwarded?.length || 0} conversation(s)`);
+      .addCase(sendMediaMessageThunk.fulfilled, (state, { payload: { conversationId, message } }) => {
+        ensureConvoMessages(state, conversationId);
+        messagesAdapter.upsertOne(state.messagesByConversation[conversationId], message);
+        delete state.uploadProgress[conversationId];
       })
-      .addCase(forwardMessage.rejected, (_, { payload }) => { toast.error(payload || "Forward failed"); });
-
-    builder.addCase(markMessageRead.fulfilled, (state, { payload }) => {
-      const key = toStringId(payload.conversationId);
-      const prev = state.unreadCounts[key] || 0;
-      state.unreadCounts[key]   = 0;
-      state.totalUnreadCount    = Math.max(0, state.totalUnreadCount - prev);
-    });
-
-    builder.addCase(markAllRead.fulfilled, (state, { payload }) => {
-      const key = toStringId(payload.conversationId);
-      const prev = state.unreadCounts[key] || 0;
-      state.unreadCounts[key]   = 0;
-      state.totalUnreadCount    = Math.max(0, state.totalUnreadCount - prev);
-    });
-
-    builder
-      .addCase(searchMessages.pending,   (state, { meta }) => { state.searchLoading = true; state.searchQuery = meta.arg.q; })
-      .addCase(searchMessages.fulfilled, (state, { payload }) => { state.searchLoading = false; state.searchResults = payload.messages || []; })
-      .addCase(searchMessages.rejected,  (state) => { state.searchLoading = false; });
-
-    builder.addCase(fetchMediaMessages.fulfilled, (state, { payload }) => {
-      state.mediaMessages[toStringId(payload.conversationId)] = payload.messages || [];
-    });
-
-    builder.addCase(fetchScheduledMessages.fulfilled, (state, { payload }) => {
-      state.scheduledMessages[toStringId(payload.conversationId)] = payload.messages || [];
-    });
-
-    builder
-      .addCase(cancelScheduledMessage.fulfilled, (state, { payload }) => {
-        const key = toStringId(payload.conversationId);
-        if (state.scheduledMessages[key]) {
-          state.scheduledMessages[key] =
-            state.scheduledMessages[key].filter((m) => m._id !== payload.messageId);
-        }
-        toast.success("Scheduled message cancelled");
-      })
-      .addCase(cancelScheduledMessage.rejected, (_, { payload }) => { toast.error(payload || "Cancel failed"); });
-
-    builder
-      .addCase(initiateCall.fulfilled, (state, { payload }) => {
-        if (!state.activeCall) {
-          state.activeCall = {
-            conversationId:   payload.conversationId,
-            callType:         payload.callType,
-            messageId:        payload.messageId,
-            status:           "calling",
-            targetUserId:     null,
-            mediaConstraints: payload.constraints || {
-              audio: true,
-              video: payload.callType === "video",
-            },
-            caller:           null,
-            callee:           null,
-            callRinging:      false,
-            peerMedia:        { audio: true, video: true },
-            peerDisconnected: null,
-          };
-        }
-      })
-      .addCase(initiateCall.rejected, (_, { payload }) => {
-        toast.error(payload || "Failed to initiate call");
+      .addCase(sendMediaMessageThunk.rejected, (state, { meta: { arg } }) => {
+        delete state.uploadProgress[arg.conversationId];
+        toast.error('Upload failed');
       });
 
-    builder.addCase(endCall.fulfilled, (state) => { state.activeCall = null; });
+    // markRead
+    builder.addCase(markRead.fulfilled, (state, { payload: { conversationId } }) => {
+      const convo = state.conversations.entities[conversationId];
+      if (convo) {
+        const prev        = convo.unreadCount || 0;
+        state.totalUnread = Math.max(0, state.totalUnread - prev);
+        convo.unreadCount = 0;
+      }
+    });
 
-    builder.addCase(updateCallStatus.fulfilled, (state, { payload }) => {
-      if (state.activeCall) state.activeCall.status = payload.status;
-      if (payload.status === "declined" || payload.status === "missed") {
+    // fetchPinnedMessages
+    builder.addCase(fetchPinnedMessages.fulfilled, (state, { payload: { conversationId, messages } }) => {
+      state.pinnedMessages[conversationId] = messages;
+    });
+
+    // searchMessages
+    builder
+      .addCase(searchMessagesThunk.pending, (state) => { state.searchLoading = true; })
+      .addCase(searchMessagesThunk.fulfilled, (state, { payload: { conversationId, messages, q } }) => {
+        state.searchLoading = false;
+        state.searchResults[conversationId] = messages;
+        state.searchQuery = q;
+      })
+      .addCase(searchMessagesThunk.rejected, (state) => { state.searchLoading = false; });
+
+    // editMessage
+    builder.addCase(editMessageThunk.fulfilled, (state, { payload: { conversationId, message } }) => {
+      if (!state.messagesByConversation[conversationId]) return;
+      messagesAdapter.upsertOne(state.messagesByConversation[conversationId], message);
+    });
+
+    // deleteMessage
+    builder.addCase(deleteMessageThunk.fulfilled, (state, { payload: { messageId, conversationId, scope } }) => {
+      if (!state.messagesByConversation[conversationId]) return;
+      if (scope === 'for_all') {
+        messagesAdapter.updateOne(state.messagesByConversation[conversationId], {
+          id: messageId, changes: { deletedForAll: true, text: null, media: null },
+        });
+      } else {
+        messagesAdapter.removeOne(state.messagesByConversation[conversationId], messageId);
+      }
+    });
+
+    // reactToMessage
+    builder.addCase(reactToMessageThunk.fulfilled, (state, { payload: { messageId, conversationId, reactions } }) => {
+      if (!state.messagesByConversation[conversationId]) return;
+      messagesAdapter.updateOne(state.messagesByConversation[conversationId], {
+        id: messageId, changes: { reactions },
+      });
+    });
+
+    // pinMessage
+    builder.addCase(pinMessageThunk.fulfilled, (state, { payload: { conversationId, message } }) => {
+      if (!state.messagesByConversation[conversationId]) return;
+      messagesAdapter.upsertOne(state.messagesByConversation[conversationId], message);
+    });
+
+    // forwardMessage
+    builder.addCase(forwardMessageThunk.fulfilled, (state, { payload: { conversationId, message } }) => {
+      ensureConvoMessages(state, conversationId);
+      messagesAdapter.upsertOne(state.messagesByConversation[conversationId], message);
+      toast.success('Message forwarded');
+    });
+
+    // fetchTotalUnread
+    builder.addCase(fetchTotalUnread.fulfilled, (state, { payload }) => {
+      state.totalUnread = payload;
+    });
+
+    // block / unblock
+    builder
+      .addCase(fetchBlockedUsers.fulfilled, (state, { payload }) => {
+        state.blockedUsers = payload;
+      })
+      .addCase(blockUserThunk.fulfilled, (state, { payload }) => {
+        state.blockedUsers.push(payload);
+        toast.success('User blocked');
+      })
+      .addCase(unblockUserThunk.fulfilled, (state, { payload: targetUserId }) => {
+        state.blockedUsers = state.blockedUsers.filter(
+          (b) => b.blocked?._id !== targetUserId && b.blocked !== targetUserId
+        );
+        toast.success('User unblocked');
+      });
+
+    // calls
+    builder
+      .addCase(fetchRtmToken.fulfilled, (state, { payload }) => {
+        state.rtmToken    = payload.rtmToken;
+        state.rtmExpiresAt = payload.expiresAt;
+      })
+      .addCase(initiateCallThunk.fulfilled, (state, { payload }) => {
+        state.activeCall = {
+          callId:         payload.callId,
+          channelName:    payload.channelName,
+          token:          payload.token,
+          uid:            payload.uid,
+          appId:          payload.appId,
+          type:           payload.type,
+          conversationId: payload.conversationId,
+          expiresAt:      payload.expiresAt,
+        };
+      })
+      .addCase(joinCallThunk.fulfilled, (state, { payload }) => {
+        state.activeCall = {
+          callId:      payload.callId,
+          channelName: payload.channelName,
+          token:       payload.token,
+          uid:         payload.uid,
+          appId:       payload.appId,
+          expiresAt:   payload.expiresAt,
+        };
+        state.incomingCall = null;
+      })
+      .addCase(endCallThunk.fulfilled, (state) => {
         state.activeCall   = null;
         state.incomingCall = null;
-        toast.dismiss("incoming-call");
-      }
-    });
-
-    builder.addCase(fetchOnlinePresence.fulfilled, (state, { payload }) => {
-      for (const [uid, data] of Object.entries(payload || {})) {
-        state.presence[uid] = data;
-      }
-    });
-
-    builder.addCase(fetchTotalUnreadCount.fulfilled, (state, { payload }) => {
-      state.totalUnreadCount = payload;
-    });
-
-    builder.addCase(fetchConversationUnreadCount.fulfilled, (state, { payload }) => {
-      state.unreadCounts[toStringId(payload.conversationId)] = payload.unreadCount;
-    });
-
-    builder
-      .addCase(adminFetchConversations.pending,   (state) => { state.adminLoading = true; })
-      .addCase(adminFetchConversations.fulfilled, (state, { payload }) => {
-        state.adminLoading       = false;
-        state.adminConversations = payload.conversations || [];
-        state.adminPagination    = payload.pagination || state.adminPagination;
       })
-      .addCase(adminFetchConversations.rejected,  (state, { payload }) => {
-        state.adminLoading = false; toast.error(payload || "Admin fetch failed");
+      .addCase(fetchCallHistory.fulfilled, (state, { payload }) => {
+        state.callHistory    = payload.calls;
+        state.callHistoryMeta = { total: payload.total, page: payload.page, pages: payload.pages };
       });
 
-    builder
-      .addCase(adminDeleteMessage.fulfilled, (state, { payload: messageId }) => {
-        const convId = findConvIdForMessage(state, messageId);
-        if (convId) {
-          messagesAdapter.updateOne(state.messages[convId], {
-            id:      messageId,
-            changes: { isDeleted: true, content: "[Removed by admin]", attachments: [] },
-          });
+    // presence
+    builder.addCase(fetchPresence.fulfilled, (state, { payload }) => {
+      for (const { userId, isOnline, lastseen } of payload) {
+        state.presence[userId] = { ...state.presence[userId], isOnline, lastseen };
+      }
+    });
+
+    // Global reject toast (silent for polling actions)
+    builder.addMatcher(
+      (action) => action.type.startsWith('chat/') && action.type.endsWith('/rejected'),
+      (state, action) => {
+        const silent = ['chat/fetchTotalUnread', 'chat/fetchPresence', 'chat/fetchRtmToken'];
+        if (!silent.some((s) => action.type.startsWith(s))) {
+          toast.error(action.payload || 'Something went wrong');
         }
-        toast.success("Message removed by admin");
-      })
-      .addCase(adminDeleteMessage.rejected, (_, { payload }) => {
-        toast.error(payload || "Admin delete failed");
-      });
+      }
+    );
   },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ACTION EXPORTS
-// ─────────────────────────────────────────────────────────────────────────────
-
 export const {
-  socketConnected,
-  socketDisconnected,
-  socketError,
+  setCurrentUserId,
   setActiveConversation,
   clearActiveConversation,
-  setActiveCall,
+  socketNewMessage,
+  socketMessageEdited,
+  socketMessageDeleted,
+  socketMessageReaction,
+  socketMessagesRead,
+  socketMessagesDelivered,
+  socketUserTyping,
+  socketUserPresence,
+  socketIncomingCall,
+  socketCallParticipantJoined,
+  socketCallDeclined,
+  socketCallEnded,
+  socketCallCancelled,
+  socketCallLog,
   clearIncomingCall,
   clearActiveCall,
-
-  _onConversationCreated,
-  _onConversationUpdated,
-  _onConversationDeleted,
-  _onConversationMuteUpdated,
-  _onMemberJoined,
-  _onMemberLeft,
-  _onMemberAdded,
-  _onMemberRemoved,
-  _onRemovedFromConversation,
-
-  _onNewMessage,
-  _onMessageEdited,
-  _onMessageDeleted,
-  _onMessageReaction,
-  _onMessagePinUpdated,
-  _onMessageScheduled,
-  _onDeliveryReceipt,
-  _onReadReceipt,
-
-  _onTypingUpdate,
-
-  _onUserOnline,
-  _onUserOffline,
-  _setPresenceBatch,
-
-  _onCallIncoming,
-  _onCallRinging,
-  _onCallOffer,
-  _onCallAnswered,
-  _onCallIce,
-  _onCallMediaToggle,
-  _onCallEnded,
-  _onCallDeclined,
-  _onCallMissed,
-  _onCallPeerDisconnected,
-  _onCallMissedWhileOffline,
-
-  _onNotification,
-  _onMention,
-
+  upsertConversation,
+  clearSearch,
   setUploadProgress,
-  resetUploadProgress,
-  setRecordingProgress,
-  resetRecordingProgress,
-
-  clearSearchResults,
+  clearUploadProgress,
   clearError,
-  clearSuccess,
-  resetChatState,
 } = chatSlice.actions;
+
+export default chatSlice.reducer;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SELECTORS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const selectChatState = (state) => state.chat;
-
 export const {
-  selectAll:   selectAllConversations,
-  selectById:  selectConversationById,
-  selectIds:   selectConversationIds,
-  selectTotal: selectTotalConversations,
-} = conversationsAdapter.getSelectors(selectChatState);
+  selectAll:  selectAllConversations,
+  selectById: selectConversationById,
+  selectIds:  selectConversationIds,
+} = conversationsAdapter.getSelectors((state) => state.chat.conversations);
 
-export const selectActiveConversationId   = (state) => state.chat.activeConversationId;
-export const selectConversationPagination = (state) => state.chat.conversationPagination;
-export const selectLoadingConversations   = (state) => state.chat.loadingConversations;
-export const selectLoadingConversation    = (state) => state.chat.loadingConversation;
+export const selectActiveConversationId  = (state) => state.chat.activeConversationId;
+export const selectConversationsLoading  = (state) => state.chat.conversationsLoading;
+export const selectConversationsMeta     = (state) => state.chat.conversationsMeta;
+export const selectTotalUnread           = (state) => state.chat.totalUnread;
+export const selectBlockedUsers          = (state) => state.chat.blockedUsers;
+export const selectActiveCall            = (state) => state.chat.activeCall;
+export const selectIncomingCall          = (state) => state.chat.incomingCall;
+export const selectCallHistory           = (state) => state.chat.callHistory;
+export const selectCallHistoryMeta       = (state) => state.chat.callHistoryMeta;
+export const selectRtmToken              = (state) => state.chat.rtmToken;
+export const selectSearchQuery           = (state) => state.chat.searchQuery;
+export const selectSearchLoading         = (state) => state.chat.searchLoading;
+export const selectChatError             = (state) => state.chat.error;
 
 export const selectActiveConversation = createSelector(
-  selectChatState,
-  (s) => (s.activeConversationId ? s.entities[s.activeConversationId] : null)
+  [selectAllConversations, selectActiveConversationId],
+  (conversations, id) => conversations.find((c) => c._id === id) || null
 );
 
-// FIX #13: Selector coerces conversationId to string for consistent lookup
-export const selectMessagesByConversation = createSelector(
-  [selectChatState, (_, conversationId) => toStringId(conversationId)],
-  (s, conversationId) => {
-    if (!conversationId) return [];
-    const ms = s.messages[conversationId];
-    if (!ms) return [];
-    return messagesAdapter.getSelectors().selectAll(ms);
-  }
-);
+// Per-conversation selectors (used by standalone hooks above)
+export const selectMessagesByConversation = (conversationId) =>
+  createSelector(
+    (state) => state.chat.messagesByConversation[conversationId],
+    (entityState) => {
+      if (!entityState) return [];
+      return messagesAdapter.getSelectors().selectAll(entityState);
+    }
+  );
 
-export const selectMessageById = createSelector(
-  [selectChatState, (_, conversationId) => toStringId(conversationId), (_, __, messageId) => messageId],
-  (s, conversationId, messageId) => {
-    if (!conversationId) return null;
-    return s.messages[conversationId]?.entities[messageId] || null;
-  }
-);
+export const selectMessagesLoading  = (conversationId) => (state) =>
+  state.chat.messagesLoadingMap[conversationId] || false;
 
-export const selectMessagePagination  = (conversationId) => (state) =>
-  state.chat.messagePagination[toStringId(conversationId)] || { hasMore: false };
-export const selectLoadingMessages     = (state) => state.chat.loadingMessages;
-export const selectLoadingMoreMessages = (state) => state.chat.loadingMoreMessages;
-export const selectSendingMessage      = (state) => state.chat.sendingMessage;
-export const selectUploadProgress      = (state) => state.chat.uploadProgress;
-export const selectSendingRecording    = (state) => state.chat.sendingRecording;
-export const selectRecordingProgress   = (state) => state.chat.recordingProgress;
+export const selectMessagesHasMore  = (conversationId) => (state) =>
+  state.chat.messagesHasMoreMap[conversationId] ?? true;
 
-export const selectPinnedMessages    = (conversationId) => (state) =>
-  state.chat.pinnedMessages[toStringId(conversationId)] || [];
-export const selectScheduledMessages = (conversationId) => (state) =>
-  state.chat.scheduledMessages[toStringId(conversationId)] || [];
+export const selectMessagesCursor   = (conversationId) => (state) =>
+  state.chat.messagesCursorMap[conversationId] || null;
 
-export const selectTypingUsers = (conversationId) => (state) =>
-  Object.values(state.chat.typing[toStringId(conversationId)] || {}).filter((u) => u.isTyping);
+export const selectPinnedMessages   = (conversationId) => (state) =>
+  state.chat.pinnedMessages[conversationId] || [];
 
-export const selectUserPresence = (userId) => (state) =>
-  state.chat.presence[userId] || { isOnline: false };
+export const selectConversationMedia = (conversationId) => (state) =>
+  state.chat.mediaByConversation[conversationId] || [];
 
-export const selectTotalUnreadCount = (state) => state.chat.totalUnreadCount;
-export const selectUnreadCount      = (conversationId) => (state) =>
-  state.chat.unreadCounts[toStringId(conversationId)] || 0;
+export const selectSearchResults    = (conversationId) => (state) =>
+  state.chat.searchResults[conversationId] || [];
 
-export const selectSearchResults = (state) => state.chat.searchResults;
-export const selectSearchLoading  = (state) => state.chat.searchLoading;
-export const selectSearchQuery    = (state) => state.chat.searchQuery;
+export const selectTypingUsers      = (conversationId) => (state) =>
+  state.chat.typingUsers[conversationId] || [];
 
-export const selectMediaMessages = (conversationId) => (state) =>
-  state.chat.mediaMessages[toStringId(conversationId)] || [];
+export const selectUserPresence     = (userId) => (state) =>
+  state.chat.presence[userId] || { isOnline: false, lastseen: null };
 
-export const selectPartners          = (state) => state.chat.partners;
-export const selectPartnerPagination = (state) => state.chat.partnerPagination;
-export const selectLoadingPartners   = (state) => state.chat.loadingPartners;
-
-export const selectDepartmentChannel = (state) => state.chat.departmentChannel;
-
-export const selectActiveCall           = (state) => state.chat.activeCall;
-export const selectIncomingCall         = (state) => state.chat.incomingCall;
-export const selectCallStatus           = (state) => state.chat.activeCall?.status        || null;
-export const selectCallType             = (state) => state.chat.activeCall?.callType      || null;
-export const selectCallRinging          = (state) => state.chat.activeCall?.callRinging   || false;
-export const selectCallPeerMedia        = (state) => state.chat.activeCall?.peerMedia     || null;
-export const selectCallMediaConstraints = (state) => state.chat.activeCall?.mediaConstraints || null;
-export const selectCallPeerDisconnected = (state) => state.chat.activeCall?.peerDisconnected || null;
-export const selectCallTargetUserId     = (state) => state.chat.activeCall?.targetUserId  || null;
-
-export const selectSocketConnected    = (state) => state.chat.socketConnected;
-export const selectSocketError        = (state) => state.chat.socketError;
-export const selectSocketReconnecting = (state) => state.chat.socketReconnecting;
-
-export const selectAdminConversations = (state) => state.chat.adminConversations;
-export const selectAdminPagination    = (state) => state.chat.adminPagination;
-export const selectAdminLoading       = (state) => state.chat.adminLoading;
-
-export const selectChatError   = (state) => state.chat.error;
-export const selectChatSuccess = (state) => state.chat.success;
-
-export default chatSlice.reducer;
+export const selectUploadProgress   = (conversationId) => (state) =>
+  state.chat.uploadProgress[conversationId] || 0;

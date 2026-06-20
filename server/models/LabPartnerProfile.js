@@ -401,7 +401,12 @@ const labPartnerProfileSchema = new Schema(
     bankDetails:     { type: bankDetailsSchema },
     payoutFrequency: { type: String, enum: PAYOUT_FREQUENCIES, default: 'Monthly' },
     commissionRate:  { type: Number, min: 0, max: 100, default: 0 },
-
+earnings: {
+  pendingPayoutPaise: { type: Number, default: 0, min: 0 }, // Unsettled balance
+  totalPaidPaise: { type: Number, default: 0, min: 0 },     // Lifetime successfully transferred
+  lifetimeEarningsPaise: { type: Number, default: 0, min: 0 }, // pending + total
+  lastPayoutAt: { type: Date }
+},
     // ── Status & Workflow ────────────────────────────────────────────────────
     status:           { type: String, enum: LAB_STATUS, default: 'pending', index: true },
     statusLog:        [statusLogSchema],

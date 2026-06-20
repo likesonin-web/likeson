@@ -338,9 +338,22 @@ export const fetchWallet = createAsyncThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INITIAL STATE
+// §19  TOP EARNERS (THIS WEEK) — cross-platform leaderboard
 // ─────────────────────────────────────────────────────────────────────────────
 
+export const fetchTopEarners = createAsyncThunk(
+  'adminAnalytics/fetchTopEarners',
+  async (params = {}, thunkAPI) => {
+    try {
+      const { data } = await API.get('/admin/analytics/top-earners', { params });
+      return data;
+    } catch (err) { return handleError(err, thunkAPI); }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INITIAL STATE
+// ─────────────────────────────────────────────────────────────────────────────
 const initialState = {
   // §1
   overview:           buildSection(),
@@ -382,8 +395,10 @@ const initialState = {
   ads:                buildSection(),
   // §17
   bloodBank:          buildSection(),
-  // §18
+// §18
   wallet:             buildSection(),
+  // §19
+  topEarners:         buildSection(),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -418,8 +433,9 @@ const adminAnalyticsSlice = createSlice({
     resetPharmacy:          (state) => { state.pharmacy          = buildSection(); },
     resetLabs:              (state) => { state.labs              = buildSection(); },
     resetAds:               (state) => { state.ads               = buildSection(); },
-    resetBloodBank:         (state) => { state.bloodBank         = buildSection(); },
+resetBloodBank:         (state) => { state.bloodBank         = buildSection(); },
     resetWallet:            (state) => { state.wallet            = buildSection(); },
+    resetTopEarners:        (state) => { state.topEarners        = buildSection(); },
     resetAll:               ()      => initialState,
   },
 
@@ -557,11 +573,17 @@ const adminAnalyticsSlice = createSlice({
       .addCase(fetchBloodBank.rejected,  (s, a) => rejected(s, 'bloodBank', a))
       .addCase(fetchBloodBank.fulfilled, (s, a) => fulfilled(s, 'bloodBank', a));
 
-    // ── §18 WALLET ────────────────────────────────────────────────────────────
+// ── §18 WALLET ────────────────────────────────────────────────────────────
     builder
       .addCase(fetchWallet.pending,   (s) => pending(s,  'wallet'))
       .addCase(fetchWallet.rejected,  (s, a) => rejected(s, 'wallet', a))
       .addCase(fetchWallet.fulfilled, (s, a) => fulfilled(s, 'wallet', a));
+
+    // ── §19 TOP EARNERS ───────────────────────────────────────────────────────
+    builder
+      .addCase(fetchTopEarners.pending,   (s) => pending(s,  'topEarners'))
+      .addCase(fetchTopEarners.rejected,  (s, a) => rejected(s, 'topEarners', a))
+      .addCase(fetchTopEarners.fulfilled, (s, a) => fulfilled(s, 'topEarners', a));
   },
 });
 
@@ -590,6 +612,7 @@ export const {
   resetAds,
   resetBloodBank,
   resetWallet,
+  resetTopEarners,
   resetAll,
 } = adminAnalyticsSlice.actions;
 
@@ -829,3 +852,18 @@ export const selectPendingWithdrawals = (s) => s.adminAnalytics.wallet.data?.pen
 export const selectDailyTxnVolume    = (s) => s.adminAnalytics.wallet.data?.dailyTxnVolume;
 export const selectTopWallets        = (s) => s.adminAnalytics.wallet.data?.topWallets;
 export const selectWalletList        = (s) => s.adminAnalytics.wallet.data?.list;
+
+// §19 Top Earners (This Week)
+export const selectTopEarners            = sel('topEarners');
+export const selectTopEarnersData        = (s) => s.adminAnalytics.topEarners.data;
+export const selectTopEarnersLoading     = (s) => s.adminAnalytics.topEarners.loading;
+export const selectTopEarnersError       = (s) => s.adminAnalytics.topEarners.error;
+export const selectTopEarnersUnified     = (s) => s.adminAnalytics.topEarners.data?.topEarnersThisWeek;
+export const selectTopEarnersByCategory  = (s) => s.adminAnalytics.topEarners.data?.byCategory;
+export const selectTopEarnersDoctors     = (s) => s.adminAnalytics.topEarners.data?.byCategory?.doctors;
+export const selectTopEarnersAgencyDrivers = (s) => s.adminAnalytics.topEarners.data?.byCategory?.agencyDrivers;
+export const selectTopEarnersAgencies    = (s) => s.adminAnalytics.topEarners.data?.byCategory?.transportAgencies;
+export const selectTopEarnersSoloDrivers = (s) => s.adminAnalytics.topEarners.data?.byCategory?.soloDrivers;
+export const selectTopEarnersLabPartners = (s) => s.adminAnalytics.topEarners.data?.byCategory?.labPartners;
+export const selectTopEarnersPharmacyStores = (s) => s.adminAnalytics.topEarners.data?.byCategory?.pharmacyStores;
+export const selectTopEarnersLifetime    = (s) => s.adminAnalytics.topEarners.data?.lifetimeLeaderboards;

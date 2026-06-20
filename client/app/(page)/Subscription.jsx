@@ -1,27 +1,6 @@
 "use client";
 
-/**
- * SubscriptionPage.jsx — Likeson.in
- *
- * FIXES vs original:
- * [F1]  Transport: slabIndex (dropdown index) vs ridesPerMonth (qty) kept separate in state.
- * handleSave sends { slabIndex, quantity: ridesQty } correctly.
- * resolveOptionPrice receives slabIndex, NOT ridesQty, for slab lookup.
- * [F2]  priceBreakdown passes { careAssistantTierIndex, slabIndex } extras correctly per option.
- * [F3]  BreakdownRow uses opt.optionKey || opt.key safely everywhere.
- * [F4]  formatCustomPlanOption: single resolver, no duplicate switch, no field mismatch.
- * [F5]  Trial Razorpay effect guarded by ref — no duplicate open on re-render.
- * [F6]  handleSave sends slabIndex from separate state, not from quantities.transport.
- * [F7]  CustomPlanOptionChip renders correct display per service (%, bundle, qty).
- * [F8]  InlineComparisonTable transport column shows bundle price from lineTotal (not qty*unit).
- * [F9]  homeCollectionUsedOnce surfaced in active subscription banner.
- * [F10] All enum guards (Standard Care included) complete.
- * [F11] Field-level notes (FieldNote) on every builder option + plan card benefit.
- * [F12] Missing null-guards on optionPricing throughout.
- * [F13] Total in custom plan card sums saved lineTotals (not recomputed).
- * [F14] Empty string plan name blocked at save time.
- * [F15] Upgrade plan opens Razorpay checkout modal.
- */
+ 
 
 import React, {
   useEffect, useState, useMemo, useCallback, useRef, memo,
@@ -1236,19 +1215,13 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
     return Object.fromEntries(OPTION_CONFIG.map((o) => [o.key, 0]));
   });
 
-  /**
-   * [F1] transportSlabIndex — separate from rides qty.
-   * Restored from saved plan if editing (need to look at saved unitPrice to reverse-match slab).
-   */
-  const [transportSlabIndex, setTransportSlabIndex] = useState(() => {
-    if (existingCustomPlan?.customOptions) {
-      const tOpt = existingCustomPlan.customOptions.find((o) => o.optionKey === "transport");
-      // slabIndex was stored as extra field on the saved option if backend passes it through,
-      // otherwise we default to 0 (first slab).
-      return tOpt?.slabIndex ?? 0;
-    }
-    return 0;
-  });
+const [transportSlabIndex, setTransportSlabIndex] = useState(() => {
+  if (existingCustomPlan?.customOptions) {
+    const tOpt = existingCustomPlan.customOptions.find((o) => o.optionKey === "transport");
+    return tOpt?.slabIndex ?? -1;
+  }
+  return -1; // -1 = not selected
+});
 
   const [careAssistantTierIndex, setCareAssistantTierIndex] = useState(() => {
     if (existingCustomPlan?.customOptions) {
@@ -1473,47 +1446,38 @@ const CustomPlanBuilder = memo(function CustomPlanBuilder({ onClose, existingCus
                     <div className="flex items-center justify-between mt-3 ml-[42px] sm:ml-[46px] gap-2">
                       <div className="flex-1 min-w-0">
                         {/* [F1] Transport: rides stepper + separate slab dropdown */}
-                        {opt.key === "transport" ? (
-                          <div className="space-y-2">
-                            {/* Rides per month stepper */}
-                            <div>
-                              <p className="text-[10px] font-bold text-base-content/50 mb-1">Rides / month</p>
-                              <div className="inline-flex items-center rounded-xl overflow-hidden border border-base-300"
-                                role="group" aria-label="Rides per month">
-                                <button onClick={() => handleSetQty("transport", qty - 1)}
-                                  className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center bg-base-200 hover:bg-base-300"
-                                  aria-label="Decrease rides" disabled={qty === 0}>
-                                  <Minus size={13} aria-hidden="true" />
-                                </button>
-                                <span className="w-12 sm:w-10 text-center text-base sm:text-sm font-black bg-base-100 select-none"
-                                  aria-label={`${qty} rides/month`}>{qty}</span>
-                                <button onClick={() => handleSetQty("transport", qty + 1)}
-                                  className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center bg-base-200 hover:bg-base-300"
-                                  aria-label="Increase rides" disabled={qty >= max}>
-                                  <Plus size={13} aria-hidden="true" />
-                                </button>
-                              </div>
-                              <FieldNote text={`Max ${max} rides/month. Each ride billed at the per-km rate of your chosen slab.`} />
-                            </div>
-                            {/* Slab dropdown — [F1] separate from qty */}
-                            {kmSlabs.length > 0 && qty > 0 && (
-                              <div>
-                                <p className="text-[10px] font-bold text-base-content/50 mb-1">Per-km rate slab</p>
-                                <select value={transportSlabIndex}
-                                  onChange={(e) => setTransportSlabIndex(Number(e.target.value))}
-                                  className="input-field text-sm py-2 px-3 pr-7 rounded-xl w-full"
-                                  aria-label="Select transport km-rate slab">
-                                  {kmSlabs.map((s, i) => (
-                                    <option key={i} value={i}>
-                                      {formatCurrency(s.pricePerKm)}/km · Bundle {formatCurrency(s.packagePrice)}/mo
-                                    </option>
-                                  ))}
-                                </select>
-                                <FieldNote text="Bundle price is a flat monthly add-on regardless of ride count. Actual ride cost = km × rate above." />
-                              </div>
-                            )}
-                          </div>
-                        ) : useDropdown && slabOpts.length > 0 ? (
+                       {opt.key === "transport" ? (
+  <div className="space-y-2">
+    {kmSlabs.length > 0 && (
+      <div>
+        <p className="text-[10px] font-bold text-base-content/50 mb-1">Select transport slab</p>
+        <select
+          value={transportSlabIndex === -1 ? "" : transportSlabIndex}
+          onChange={(e) => {
+            const val = e.target.value;
+            if (val === "") {
+              setTransportSlabIndex(-1);
+              handleSetQty("transport", 0);
+            } else {
+              setTransportSlabIndex(Number(val));
+              handleSetQty("transport", 1); // mark active
+            }
+          }}
+          className="input-field text-sm py-2 px-3 pr-7 rounded-xl w-full"
+          aria-label="Select transport km-rate slab"
+        >
+          <option value="">— Not included —</option>
+          {kmSlabs.map((s, i) => (
+            <option key={i} value={i}>
+              {formatCurrency(s.pricePerKm)}/km · Bundle {formatCurrency(s.packagePrice)}/mo
+            </option>
+          ))}
+        </select>
+        <FieldNote text="Bundle = flat monthly add-on. Actual ride billed at per-km rate on top." />
+      </div>
+    )}
+  </div>
+) : useDropdown && slabOpts.length > 0 ? (
                           <div>
                             <select value={qty}
                               onChange={(e) => handleSetQty(opt.key, Number(e.target.value))}

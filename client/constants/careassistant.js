@@ -39,7 +39,7 @@ export const CARE_ASSISTANT_DASHBOARD_LINKS = [
   // ── 1. Overview ──────────────────────────────────────────────────────────
   {
     title: "Overview",
-    icons: <LayoutDashboard size={18} />,
+    icons: <LayoutDashboard />,
     links: [
       { name: "Dashboard",            href: "/care-assistant/dashboard",               icon: <LayoutDashboard size={16} /> },
       { name: "Performance & Earnings", href: "/care-assistant/performance",           icon: <TrendingUp size={16} />      },
@@ -52,7 +52,7 @@ export const CARE_ASSISTANT_DASHBOARD_LINKS = [
   // Mirrors: GET /clinical/care/bookings/pending & /clinical/care/bookings
   {
     title: "Booking Management",
-    icons: <ClipboardList size={18} />,
+    icons: <ClipboardList />,
     links: [
       { name: "New Requests",         href: "/care-assistant/bookings/pending",        icon: <UserPlus size={16} />        },
       { name: "My Bookings",          href: "/care-assistant/bookings",                icon: <ClipboardList size={16} />   },
@@ -73,7 +73,7 @@ export const CARE_ASSISTANT_DASHBOARD_LINKS = [
   // ── 4. My Profile ────────────────────────────────────────────────────────
   {
     title: "My Profile",
-    icons: <UserCog size={18} />,
+    icons: <UserCog />,
     links: [
       { name: "Profile Overview",     href: "/care-assistant/profile",                 icon: <UserRound size={16} />       },
       { name: "Personal Information", href: "/care-assistant/profile/personal",        icon: <UserCog size={16} />         },
@@ -98,7 +98,7 @@ export const CARE_ASSISTANT_DASHBOARD_LINKS = [
   // ── 6. Training & Certifications ─────────────────────────────────────────
   {
     title: "Training & Certifications",
-    icons: <Briefcase size={18} />,
+    icons: <Briefcase />,
     links: [
       { name: "My Certifications",    href: "/care-assistant/training/certificates",   icon: <Star size={16} />            },
       { name: "Add Certificate",      href: "/care-assistant/training/certificates/add", icon: <FileText size={16} />      },
@@ -109,7 +109,7 @@ export const CARE_ASSISTANT_DASHBOARD_LINKS = [
   // ── 7. Finance & Payouts ─────────────────────────────────────────────────
   {
     title: "Finance & Payouts",
-    icons: <Landmark size={18} />,
+    icons: <Landmark />,
     links: [
       { name: "Earnings Summary",     href: "/care-assistant/performance",             icon: <Wallet size={16} />          },
       { name: "Bank Account",         href: "/care-assistant/bank",                    icon: <CreditCard size={16} />      },
@@ -120,7 +120,7 @@ export const CARE_ASSISTANT_DASHBOARD_LINKS = [
   // ── 8. KYC & Identity Verification ──────────────────────────────────────
   {
     title: "KYC & Identity Verification",
-    icons: <ShieldCheck size={18} />,
+    icons: <ShieldCheck />,
     links: [
       { name: "Verification Status",  href: "/care-assistant/kyc/status",              icon: <ShieldCheck size={16} />     },
       { name: "Submit KYC Documents", href: "/care-assistant/kyc/submit",              icon: <ScanLine size={16} />        },
@@ -140,7 +140,7 @@ export const CARE_ASSISTANT_DASHBOARD_LINKS = [
   // ── 10. Settings & Preferences ────────────────────────────────────────────
   {
     title: "Settings & Preferences",
-    icons: <Settings2 size={18} />,
+    icons: <Settings2 />,
     links: [
       { name: "Notification Preferences", href: "/care-assistant/settings/notifications", icon: <Bell size={16} />         },
       { name: "Service Area",          href: "/care-assistant/settings/service-area",  icon: <MapPin size={16} />          },
@@ -151,7 +151,7 @@ export const CARE_ASSISTANT_DASHBOARD_LINKS = [
   // ── 11. Account Security ───────────────────────────────────────────────────
   {
     title: "Account Security",
-    icons: <KeyRound size={18} />,
+    icons: <KeyRound />,
     links: [
       { name: "Change Password",      href: "/care-assistant/security/change-password", icon: <KeyRound size={16} />       },
       { name: "Active Sessions",      href: "/care-assistant/security/sessions",        icon: <History size={16} />        },
@@ -163,7 +163,7 @@ export const CARE_ASSISTANT_DASHBOARD_LINKS = [
   // ── 12. Sign Out ──────────────────────────────────────────────────────────
   {
     title: "Account",
-    icons: <LogOut size={18} />,
+    icons: <LogOut />,
     links: [
       { name: "Sign Out",             href: "/care-assistant/logout",                  icon: <LogOut size={16} />          },
     ],
@@ -172,7 +172,7 @@ export const CARE_ASSISTANT_DASHBOARD_LINKS = [
   // ── 13. Help & Support ────────────────────────────────────────────────────
   {
     title: "Help & Support",
-    icons: <LifeBuoy size={18} />,
+    icons: <LifeBuoy />,
     links: [
       { name: "Help Centre",          href: "/care-assistant/support",                 icon: <LifeBuoy size={16} />        },
       { name: "Raise a Support Ticket", href: "/care-assistant/support/ticket",        icon: <MessageSquare size={16} />   },

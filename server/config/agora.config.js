@@ -9,8 +9,8 @@ const agoraConfig = {
 
   // Role constants (maps to agora-token RtcRole)
   roles: {
-    PUBLISHER:   1,   // doctor / patient who can publish AV
-    SUBSCRIBER:  2,   // observer / interpreter (view only)
+    PUBLISHER:   1,    
+    SUBSCRIBER:  2,   
   },
 
   // RTM token also uses appId + appCert (same keys, different builder)

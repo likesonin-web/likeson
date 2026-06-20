@@ -5,12 +5,12 @@
  * Admin / Superadmin — Solo Driver Partners Management
  *
  * Uses:
- *  - Redux: soloDriverSlice (all admin thunks)
- *  - selectUser from userSlice
- *  - Next.js (app router)
- *  - Tailwind CSS + project CSS vars
- *  - Lucide React icons
- *  - Framer Motion
+ * - Redux: soloDriverSlice (all admin thunks)
+ * - selectUser from userSlice
+ * - Next.js (app router)
+ * - Tailwind CSS + project CSS vars
+ * - Lucide React icons
+ * - Framer Motion
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -24,7 +24,7 @@ import {
   RefreshCw, Download, AlertTriangle, Clock, Star,
   MoreVertical, Edit3, Trash2, Activity, Wallet, BadgeCheck,
   UserCheck, UserX, Settings, X, Check, ExternalLink,
-  ClipboardList, Truck, Zap, BarChart3, PieChart, Hash,
+  ClipboardList, Truck, Zap, BarChart3, PieChart, Hash, Info,
 } from 'lucide-react';
 
 // ── Redux selectors & thunks ──────────────────────────────────────────────────
@@ -95,10 +95,14 @@ const VERIFIED_COLORS = {
 };
 
 const KYC_STATUS_LABELS = {
+  Verified:       '✅ Verified',
+  Pending:        '⏳ Pending',
+  Rejected:       '❌ Rejected',
+  'not-submitted': '— Not Submitted',
+  'Under-Review': '🔍 Under Review',
   verified:       '✅ Verified',
   pending:        '⏳ Pending',
   rejected:       '❌ Rejected',
-  'not-submitted': '— Not Submitted',
   'under-review': '🔍 Under Review',
 };
 
@@ -120,56 +124,53 @@ function StatusBadge({ status }) {
 function DocViewer({ url, label, onClose }) {
   return (
     <AnimatePresence>
-      <motion.div
-        className="fixed inset-0 z-[200] flex items-center justify-center p-4"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-      >
-        <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose} />
+      {url && (
         <motion.div
-          className="relative w-full max-w-4xl max-h-[90vh] bg-base-100 rounded-[var(--r-box)] overflow-hidden shadow-2xl z-10 flex flex-col"
-          variants={scaleIn}
-          initial="hidden"
-          animate="show"
-          exit="exit"
+          className="fixed inset-0 z-[200] flex items-center justify-center p-4"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
         >
-          <div className="flex items-center justify-between px-5 py-4 border-b border-base-300">
-            <div className="flex items-center gap-3">
-              <FileText className="w-5 h-5 text-primary" />
-              <span className="font-semibold text-base-content">{label}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <a
-                href={url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn btn-ghost btn-sm gap-2"
-              >
-                <ExternalLink className="w-4 h-4" /> Open in new tab
-              </a>
-              <button onClick={onClose} className="btn btn-ghost btn-sm btn-circle">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-          <div className="flex-1 overflow-auto p-2 bg-base-200">
-            {url?.match(/\.(jpg|jpeg|png|webp|gif)$/i) ? (
-              <img src={url} alt={label} className="w-full h-auto rounded-lg object-contain max-h-[75vh]" />
-            ) : url?.match(/\.pdf$/i) ? (
-              <iframe src={url} title={label} className="w-full h-[75vh] rounded-lg border-0" />
-            ) : (
-              <div className="flex flex-col items-center justify-center h-60 gap-4 text-base-content/50">
-                <FileText className="w-12 h-12" />
-                <p className="text-sm">Preview not available for this file type.</p>
-                <a href={url} target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm">
-                  Open Document
-                </a>
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose} />
+          <motion.div
+            className="relative w-full max-w-4xl max-h-[90vh] bg-base-100 rounded-[var(--r-box)] overflow-hidden shadow-2xl z-10 flex flex-col"
+            variants={scaleIn}
+            initial="hidden"
+            animate="show"
+            exit="exit"
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-base-300">
+              <div className="flex items-center gap-3">
+                <FileText className="w-5 h-5 text-primary" />
+                <span className="font-semibold text-sm text-base-content">{label}</span>
               </div>
-            )}
-          </div>
+              <div className="flex items-center gap-2">
+                <a href={url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm gap-2">
+                  <ExternalLink className="w-4 h-4" /> Open in new tab
+                </a>
+                <button onClick={onClose} className="btn btn-ghost btn-sm btn-circle">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-2 bg-base-200">
+              {url?.match(/\.(jpg|jpeg|png|webp|gif)$/i) ? (
+                <img src={url} alt={label} className="w-full h-auto rounded-lg object-contain max-h-[75vh] mx-auto" />
+              ) : url?.match(/\.pdf$/i) ? (
+                <iframe src={url} title={label} className="w-full h-[75vh] rounded-lg border-0" />
+              ) : (
+                <div className="flex flex-col items-center justify-center h-60 gap-4 text-base-content/50">
+                  <FileText className="w-12 h-12" />
+                  <p className="text-sm">Preview not available for this file type.</p>
+                  <a href={url} target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm">
+                    Open Document
+                  </a>
+                </div>
+              )}
+            </div>
+          </motion.div>
         </motion.div>
-      </motion.div>
+      )}
     </AnimatePresence>
   );
 }
@@ -180,12 +181,12 @@ function DocField({ label, value, docUrl, onView }) {
     <div className="flex items-start justify-between py-2.5 border-b border-base-300/50 last:border-0 gap-2">
       <div className="min-w-0 flex-1">
         <p className="text-xs text-base-content/50 font-medium uppercase tracking-wider mb-0.5">{label}</p>
-        <p className="text-sm text-base-content font-semibold truncate">{value || '—'}</p>
+        <p className="text-sm text-base-content font-semibold text-sm truncate">{value || '—'}</p>
       </div>
       {docUrl && (
         <button
           onClick={() => onView(docUrl, label)}
-          className="flex-shrink-0 flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 font-semibold border border-primary/30 rounded-lg px-2.5 py-1 hover:bg-primary/5 transition-all"
+          className="flex-shrink-0 flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 font-semibold text-sm border border-primary/30 rounded-lg px-2.5 py-1 hover:bg-primary/5 transition-all"
         >
           <Eye className="w-3.5 h-3.5" /> View
         </button>
@@ -250,8 +251,8 @@ function ConfirmModal({ title, message, onConfirm, onCancel, loading, danger = f
 function InfoRow({ label, value, className = '' }) {
   return (
     <div className={`flex flex-col gap-0.5 ${className}`}>
-      <span className="text-xs text-base-content/40 font-semibold uppercase tracking-wider">{label}</span>
-      <span className="text-sm text-base-content font-medium">{value || '—'}</span>
+      <span className="text-xs text-base-content/40 font-semibold text-sm uppercase tracking-wider">{label}</span>
+      <span className="text-sm text-base-content font-medium">{value ?? '—'}</span>
     </div>
   );
 }
@@ -340,11 +341,9 @@ export default function SoloDriversManagement() {
   // ── Modal helpers ──────────────────────────────────────────────────────────
   const openModal = (type, extra = {}) => { setModal(type); setModalData(extra); };
   const closeModal = () => { setModal(null); setModalData({}); };
-
   const viewDoc = (url, label) => setDocViewer({ url, label });
 
   // ── Actions ────────────────────────────────────────────────────────────────
-
   const handleVerifyKyc = async (action) => {
     await dispatch(adminVerifyKyc({
       partnerId: selected._id,
@@ -457,7 +456,7 @@ export default function SoloDriversManagement() {
   };
 
   // ── Stats cards ────────────────────────────────────────────────────────────
-  const stats = [
+  const statsCardsData = [
     { label: 'Total Partners',  value: pagination?.total  || 0, icon: Users,       color: 'text-primary' },
     { label: 'Active',          value: partners.filter(p => p.partnershipStatus === 'active').length, icon: CheckCircle, color: 'text-success' },
     { label: 'Pending Review',  value: partners.filter(p => p.partnershipStatus === 'pending').length, icon: Clock, color: 'text-warning' },
@@ -473,7 +472,7 @@ export default function SoloDriversManagement() {
 
       {/* Stats Row */}
       <motion.div variants={fadeUp} className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((s, i) => (
+        {statsCardsData.map((s, i) => (
           <motion.div
             key={s.label}
             variants={fadeUp}
@@ -492,74 +491,68 @@ export default function SoloDriversManagement() {
       </motion.div>
 
       {/* Toolbar */}
-      <motion.div variants={fadeUp} className="card p-4">
-        <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center justify-between">
-          {/* Search */}
-          <div className="relative flex-1 w-full lg:max-w-sm">
+      <motion.div variants={fadeUp} className="flex gap-3  items-center">
+          <div className="relative flex w-full max-w-xs">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-base-content/40" />
             <input
               type="text"
               value={searchInput}
               onChange={handleSearchChange}
-              placeholder="Search name, code, phone, email..."
+              placeholder="Search name, phone, email..."
               className="input-field w-full pl-9"
             />
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Filters */}
-            <select
-              value={filters.status}
-              onChange={(e) => setFilters(f => ({ ...f, status: e.target.value, page: 1 }))}
-              className="input-field text-sm py-2 pr-8 min-w-[130px]"
-            >
-              <option value="">All Statuses</option>
-              {['pending','under-review','active','suspended','rejected'].map(s => (
-                <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-              ))}
-            </select>
+          <select
+            value={filters.status}
+            onChange={(e) => setFilters(f => ({ ...f, status: e.target.value, page: 1 }))}
+            className="input-field text-sm py-2 pr-8 min-w-[130px]"
+          >
+            <option value="">All Statuses</option>
+            {['pending','under-review','active','suspended','rejected'].map(s => (
+              <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+            ))}
+          </select>
 
-            <select
-              value={filters.kycStatus}
-              onChange={(e) => setFilters(f => ({ ...f, kycStatus: e.target.value, page: 1 }))}
-              className="input-field text-sm py-2 pr-8 min-w-[120px]"
-            >
-              <option value="">All KYC</option>
-              {['verified','pending','rejected','not-submitted','under-review'].map(s => (
-                <option key={s} value={s}>{s.replace(/-/g, ' ')}</option>
-              ))}
-            </select>
+          <select
+            value={filters.kycStatus}
+            onChange={(e) => setFilters(f => ({ ...f, kycStatus: e.target.value, page: 1 }))}
+            className="input-field text-sm py-2 pr-8 min-w-[120px]"
+          >
+            <option value="">All KYC</option>
+            {['verified','pending','rejected','not-submitted','under-review'].map(s => (
+              <option key={s} value={s}>{s.replace(/-/g, ' ')}</option>
+            ))}
+          </select>
 
-            <select
-              value={filters.isBlocked}
-              onChange={(e) => setFilters(f => ({ ...f, isBlocked: e.target.value, page: 1 }))}
-              className="input-field text-sm py-2 pr-8 min-w-[110px]"
-            >
-              <option value="">All Users</option>
-              <option value="false">Active</option>
-              <option value="true">Blocked</option>
-            </select>
+          <select
+            value={filters.isBlocked}
+            onChange={(e) => setFilters(f => ({ ...f, isBlocked: e.target.value, page: 1 }))}
+            className="input-field text-sm py-2 pr-8 min-w-[110px]"
+          >
+            <option value="">All Users</option>
+            <option value="false">Active</option>
+            <option value="true">Blocked</option>
+          </select>
 
-            <button onClick={loadList} className="btn btn-ghost btn-sm gap-2" title="Refresh">
-              <RefreshCw className={`w-4 h-4 ${loadingList ? 'animate-spin' : ''}`} />
-            </button>
+          <button onClick={loadList} className="btn btn-ghost btn-sm gap-2" title="Refresh">
+            <RefreshCw className={`w-4 h-4 ${loadingList ? 'animate-spin' : ''}`} />
+          </button>
 
-            <button
-              onClick={() => setView('compliance')}
-              className={`btn btn-sm gap-2 ${alertsTotal > 0 ? 'btn-error' : 'btn-ghost'}`}
-            >
-              <AlertTriangle className="w-4 h-4" />
-              Alerts {alertsTotal > 0 && <span className="badge badge-sm badge-error text-error-content">{alertsTotal}</span>}
-            </button>
+          <button
+            onClick={() => setView('compliance')}
+            className={`btn btn-sm gap-2 ml-auto ${alertsTotal > 0 ? 'btn-error' : 'btn-ghost'}`}
+          >
+            <AlertTriangle className="w-4 h-4" />
+            Alerts {alertsTotal > 0 && <span className="badge badge-sm badge-error text-error-content">{alertsTotal}</span>}
+          </button>
 
-            <button
-              onClick={() => setView('create')}
-              className="btn btn-primary btn-sm gap-2"
-            >
-              <Plus className="w-4 h-4" /> Add Partner
-            </button>
-          </div>
-        </div>
+          <button
+            onClick={() => setView('create')}
+            className="btn btn-primary btn-sm gap-2"
+          >
+            <Plus className="w-4 h-4" /> Add Partner
+          </button>
       </motion.div>
 
       {/* Table */}
@@ -600,81 +593,85 @@ export default function SoloDriversManagement() {
                     </td>
                   </tr>
                 ) : (
-                  partners.map((p, idx) => (
-                    <motion.tr
-                      key={p._id}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: idx * 0.03 }}
-                      className="border-b border-base-200 hover:bg-base-200/50 transition-colors cursor-pointer"
-                      onClick={() => selectPartner(p._id)}
-                    >
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-3">
-                          <div className="avatar placeholder">
-                            <div className="w-9 h-9 rounded-xl bg-primary/10 text-primary font-bold text-sm flex items-center justify-center">
-                              {(p.legalName || p.displayName || '?')[0].toUpperCase()}
+                  partners.map((p, idx) => {
+                    const dp = p.driverProfile || {};
+                    const vStatus = p.vehicleStatus || {};
+                    return (
+                      <motion.tr
+                        key={p._id}
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: idx * 0.03 }}
+                        className="border-b border-base-200 hover:bg-base-200/50 transition-colors cursor-pointer"
+                        onClick={() => selectPartner(p._id)}
+                      >
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-3">
+                            <div className="avatar placeholder">
+                              <div className="w-9 h-9 rounded-xl bg-primary/10 text-primary font-bold text-sm flex items-center justify-center">
+                                {(p.legalName || p.displayName || '?')[0].toUpperCase()}
+                              </div>
                             </div>
+                            <div>
+                              <p className="font-semibold text-sm text-sm text-base-content leading-tight">{p.legalName}</p>
+                              <p className="text-xs text-base-content/40">{p.email || p.user?.email}</p>
+                            </div>
+                            {p.user?.isBlocked && (
+                              <span className="badge badge-error badge-xs">Blocked</span>
+                            )}
                           </div>
-                          <div>
-                            <p className="font-semibold text-sm text-base-content leading-tight">{p.legalName}</p>
-                            <p className="text-xs text-base-content/40">{p.email || p.user?.email}</p>
+                        </td>
+                        <td className="py-3 px-4">
+                          <p className="text-xs font-mono font-bold text-primary">{p.partnerCode}</p>
+                          <p className="text-xs text-base-content/50">{p.phone}</p>
+                        </td>
+                        <td className="py-3 px-4"><StatusBadge status={p.partnershipStatus} /></td>
+                        <td className="py-3 px-4">
+                          <span className={`text-xs font-semibold text-sm ${VERIFIED_COLORS[p.kyc?.verificationStatus] || ''}`}>
+                            {KYC_STATUS_LABELS[p.kyc?.verificationStatus] || '—'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className={`text-xs font-semibold text-sm ${VERIFIED_COLORS[vStatus.verificationStatus] || ''}`}>
+                            {vStatus.registrationNumber || '—'}
+                            {vStatus.verificationStatus === 'verified' && ' ✅'}
+                            {vStatus.verificationStatus === 'rejected' && ' ❌'}
+                            {['pending', 'under-review'].includes(vStatus.verificationStatus) && ' ⏳'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          {p.bankDetails?.isVerified
+                            ? <span className="text-success text-xs font-bold">✅ Verified</span>
+                            : p.bankDetails?.accountLast4
+                            ? <span className="text-warning text-xs font-bold">⏳ Unverified</span>
+                            : <span className="text-base-content/30 text-xs">—</span>
+                          }
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className={`flex items-center gap-1.5 text-xs font-semibold text-sm ${
+                            dp.status === 'Available' ? 'text-success' :
+                            dp.status === 'On-Trip' ? 'text-info' :
+                            dp.status === 'On-Break' ? 'text-warning' : 'text-base-content/40'
+                          }`}>
+                            <span className={`status-dot ${
+                              dp.status === 'Available' ? 'status-dot-success' :
+                              dp.status === 'On-Trip' ? 'status-dot-info' :
+                              dp.status === 'On-Break' ? 'status-dot-warning' : 'bg-base-300'
+                            }`} />
+                            {dp.status || 'Offline'}
                           </div>
-                          {p.user?.isBlocked && (
-                            <span className="badge badge-error badge-xs">Blocked</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-3 px-4">
-                        <p className="text-xs font-mono font-bold text-primary">{p.partnerCode}</p>
-                        <p className="text-xs text-base-content/50">{p.phone}</p>
-                      </td>
-                      <td className="py-3 px-4"><StatusBadge status={p.partnershipStatus} /></td>
-                      <td className="py-3 px-4">
-                        <span className={`text-xs font-semibold ${VERIFIED_COLORS[p.kyc?.verificationStatus] || ''}`}>
-                          {KYC_STATUS_LABELS[p.kyc?.verificationStatus] || '—'}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className={`text-xs font-semibold ${VERIFIED_COLORS[p.vehicle?.verificationStatus] || ''}`}>
-                          {p.vehicle?.registrationNumber || '—'}
-                          {p.vehicle?.verificationStatus === 'verified' && ' ✅'}
-                          {p.vehicle?.verificationStatus === 'rejected' && ' ❌'}
-                          {p.vehicle?.verificationStatus === 'pending' && ' ⏳'}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4">
-                        {p.bankDetails?.isVerified
-                          ? <span className="text-success text-xs font-bold">✅ Verified</span>
-                          : p.bankDetails?.accountLast4
-                          ? <span className="text-warning text-xs font-bold">⏳ Unverified</span>
-                          : <span className="text-base-content/30 text-xs">—</span>
-                        }
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className={`flex items-center gap-1.5 text-xs font-semibold ${
-                          p.status === 'Available' ? 'text-success' :
-                          p.status === 'On-Trip' ? 'text-info' :
-                          p.status === 'On-Break' ? 'text-warning' : 'text-base-content/40'
-                        }`}>
-                          <span className={`status-dot ${
-                            p.status === 'Available' ? 'status-dot-success' :
-                            p.status === 'On-Trip' ? 'status-dot-info' :
-                            p.status === 'On-Break' ? 'status-dot-warning' : 'bg-base-300'
-                          }`} />
-                          {p.status}
-                        </div>
-                      </td>
-                      <td className="py-3 px-4 text-right">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); selectPartner(p._id); }}
-                          className="btn btn-ghost btn-xs gap-1"
-                        >
-                          <Eye className="w-3.5 h-3.5" /> View
-                        </button>
-                      </td>
-                    </motion.tr>
-                  ))
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); selectPartner(p._id); }}
+                            className="btn btn-ghost btn-xs gap-1"
+                          >
+                            <Eye className="w-3.5 h-3.5" /> View
+                          </button>
+                        </td>
+                      </motion.tr>
+                    );
+                  })
                 )}
               </AnimatePresence>
             </tbody>
@@ -695,7 +692,7 @@ export default function SoloDriversManagement() {
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <span className="text-xs font-semibold px-2">
+              <span className="text-xs font-semibold text-sm px-2">
                 Page {pagination.page} of {pagination.totalPages}
               </span>
               <button
@@ -719,11 +716,11 @@ export default function SoloDriversManagement() {
   const TABS = [
     { id: 'overview',    label: 'Overview',    icon: Activity },
     { id: 'kyc',         label: 'KYC',         icon: Shield },
-    { id: 'vehicle',     label: 'Vehicle',      icon: Car },
-    { id: 'bank',        label: 'Bank',         icon: CreditCard },
-    { id: 'performance', label: 'Performance',  icon: TrendingUp },
-    { id: 'rewards',     label: 'Rewards',      icon: Award },
-    { id: 'dispatch',    label: 'Dispatch',     icon: Zap },
+    { id: 'vehicle',     label: 'Vehicle',     icon: Car },
+    { id: 'bank',        label: 'Bank',        icon: CreditCard },
+    { id: 'performance', label: 'Performance', icon: TrendingUp },
+    { id: 'rewards',     label: 'Rewards',     icon: Award },
+    { id: 'dispatch',    label: 'Dispatch',    icon: Zap },
     { id: 'actions',     label: 'Admin Actions', icon: Settings },
   ];
 
@@ -739,6 +736,7 @@ export default function SoloDriversManagement() {
 
     const p = selected;
     const u = p.user || {};
+    const dp = p.driverProfile || {};
 
     return (
       <motion.div variants={stagger} initial="hidden" animate="show" className="space-y-5">
@@ -754,8 +752,8 @@ export default function SoloDriversManagement() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <h2 className="text-xl font-black text-base-content">{p.legalName}</h2>
                   <StatusBadge status={p.partnershipStatus} />
-                  {p.isBlocked && <span className="badge badge-error">Blocked</span>}
-                  {p.isPaused && <span className="badge badge-warning">Paused</span>}
+                  {u.isBlocked && <span className="badge badge-error">Blocked</span>}
+                  {dp.isPaused && <span className="badge badge-warning">Paused</span>}
                 </div>
                 <div className="flex items-center gap-3 mt-1 flex-wrap text-xs text-base-content/50">
                   <span className="font-mono font-bold text-primary">{p.partnerCode}</span>
@@ -776,11 +774,11 @@ export default function SoloDriversManagement() {
                 <Edit3 className="w-4 h-4" /> Update Status
               </button>
               <button
-                onClick={() => openModal(p.isBlocked ? 'unblock' : 'block')}
-                className={`btn btn-sm gap-2 ${p.isBlocked ? 'btn-success' : 'btn-error'}`}
+                onClick={() => openModal(u.isBlocked ? 'unblock' : 'block')}
+                className={`btn btn-sm gap-2 ${u.isBlocked ? 'btn-success' : 'btn-error'}`}
               >
-                {p.isBlocked ? <Unlock className="w-4 h-4" /> : <Ban className="w-4 h-4" />}
-                {p.isBlocked ? 'Unblock' : 'Block'}
+                {u.isBlocked ? <Unlock className="w-4 h-4" /> : <Ban className="w-4 h-4" />}
+                {u.isBlocked ? 'Unblock' : 'Block'}
               </button>
             </div>
           </div>
@@ -788,10 +786,10 @@ export default function SoloDriversManagement() {
           {/* Quick stats */}
           <div className="grid grid-cols-3 sm:grid-cols-5 gap-3 mt-5 pt-4 border-t border-base-300">
             {[
-              { label: 'Total Rides', value: p.performance?.totalRidesCompleted || 0 },
-              { label: 'Rating', value: `${(p.performance?.rating || 0).toFixed(1)} ⭐` },
-              { label: 'Earnings', value: fmtCurrency(p.performance?.totalEarnings) },
-              { label: 'Coins', value: p.rewards?.coinBalance || 0 },
+              { label: 'Total Rides', value: p.stats?.totalRidesCompleted || 0 },
+              { label: 'Rating', value: `${(p.rating?.averageRating || 0).toFixed(1)} ⭐` },
+              { label: 'Earnings', value: fmtCurrency(p.stats?.totalEarnings) },
+              { label: 'Coins', value: u.coins || 0 },
               { label: 'Profile %', value: `${p.profileCompletionPercent || 0}%` },
             ].map(s => (
               <div key={s.label} className="text-center">
@@ -829,7 +827,7 @@ export default function SoloDriversManagement() {
             animate="show"
             exit="exit"
           >
-            {activeTab === 'overview'    && <TabOverview p={p} u={u} onViewDoc={viewDoc} />}
+            {activeTab === 'overview'    && <TabOverview p={p} u={u} dp={dp} onViewDoc={viewDoc} />}
             {activeTab === 'kyc'         && <TabKyc p={p} onView={viewDoc} onApprove={() => openModal('approveKyc')} onReject={() => openModal('rejectKyc')} />}
             {activeTab === 'vehicle'     && <TabVehicle p={p} onView={viewDoc} onApprove={() => openModal('approveVehicle')} onReject={() => openModal('rejectVehicle')} />}
             {activeTab === 'bank'        && <TabBank p={p} onView={viewDoc} onVerify={() => openModal('verifyBank')} />}
@@ -842,7 +840,7 @@ export default function SoloDriversManagement() {
                 onFee={() => openModal('platformFee')}
                 onNotes={() => openModal('notes')}
                 onStatus={() => openModal('status')}
-                onBlock={() => openModal(p.isBlocked ? 'unblock' : 'block')}
+                onBlock={() => openModal(u.isBlocked ? 'unblock' : 'block')}
               />
             )}
           </motion.div>
@@ -879,12 +877,12 @@ export default function SoloDriversManagement() {
                 { name:'dateOfBirth', label:'Date of Birth',      type:'date' },
               ].map(f => (
                 <div key={f.name}>
-                  <label className="label py-1"><span className="label-text text-xs font-semibold">{f.label}</span></label>
+                  <label className="label py-1"><span className="label-text text-xs font-semibold text-sm">{f.label}</span></label>
                   <input name={f.name} type={f.type || 'text'} placeholder={f.placeholder} className="input-field w-full text-sm" />
                 </div>
               ))}
               <div>
-                <label className="label py-1"><span className="label-text text-xs font-semibold">Gender</span></label>
+                <label className="label py-1"><span className="label-text text-xs font-semibold text-sm">Gender</span></label>
                 <select name="gender" className="input-field w-full text-sm">
                   <option value="">Select gender</option>
                   {['Male','Female','Other','Prefer Not to Say'].map(g => <option key={g} value={g}>{g}</option>)}
@@ -906,7 +904,7 @@ export default function SoloDriversManagement() {
                 { name:'pinCode', label:'PIN Code', placeholder:'520001' },
               ].map(f => (
                 <div key={f.name}>
-                  <label className="label py-1"><span className="label-text text-xs font-semibold">{f.label}</span></label>
+                  <label className="label py-1"><span className="label-text text-xs font-semibold text-sm">{f.label}</span></label>
                   <input name={f.name} type="text" placeholder={f.placeholder} className="input-field w-full text-sm" />
                 </div>
               ))}
@@ -926,14 +924,14 @@ export default function SoloDriversManagement() {
                 { name:'panNumber',            label:'PAN Number', placeholder:'ABCDE1234F' },
               ].map(f => (
                 <div key={f.name}>
-                  <label className="label py-1"><span className="label-text text-xs font-semibold">{f.label}</span></label>
+                  <label className="label py-1"><span className="label-text text-xs font-semibold text-sm">{f.label}</span></label>
                   <input name={f.name} type={f.type || 'text'} placeholder={f.placeholder} maxLength={f.maxLength} className="input-field w-full text-sm" />
                 </div>
               ))}
               <div className="sm:col-span-2">
                 <label className="label py-1 flex items-center gap-2">
                   <input type="checkbox" name="autoVerifyKyc" value="true" className="checkbox checkbox-primary checkbox-sm" />
-                  <span className="label-text text-xs font-semibold">Auto-verify KYC (requires DL + Aadhaar)</span>
+                  <span className="label-text text-xs font-semibold text-sm">Auto-verify KYC (requires DL + Aadhaar)</span>
                 </label>
                 <p className="text-xs text-base-content/40 ml-6">Skip manual KYC review — partner can go online immediately after vehicle + bank verification.</p>
               </div>
@@ -955,12 +953,12 @@ export default function SoloDriversManagement() {
                 { name:'seatingCapacity',    label:'Seating Capacity', type:'number', placeholder:'4' },
               ].map(f => (
                 <div key={f.name}>
-                  <label className="label py-1"><span className="label-text text-xs font-semibold">{f.label}</span></label>
+                  <label className="label py-1"><span className="label-text text-xs font-semibold text-sm">{f.label}</span></label>
                   <input name={f.name} type={f.type || 'text'} placeholder={f.placeholder} className="input-field w-full text-sm" />
                 </div>
               ))}
               <div>
-                <label className="label py-1"><span className="label-text text-xs font-semibold">Vehicle Type</span></label>
+                <label className="label py-1"><span className="label-text text-xs font-semibold text-sm">Vehicle Type</span></label>
                 <select name="vehicleType" className="input-field w-full text-sm">
                   <option value="">Select type</option>
                   {['Sedan','SUV','Van','Minivan','Wheelchair-Van','Tempo-Traveller','Hatchback','Auto'].map(t => (
@@ -971,7 +969,7 @@ export default function SoloDriversManagement() {
               <div className="sm:col-span-2">
                 <label className="label py-1 flex items-center gap-2">
                   <input type="checkbox" name="autoVerifyVehicle" value="true" className="checkbox checkbox-primary checkbox-sm" />
-                  <span className="label-text text-xs font-semibold">Auto-verify Vehicle (requires registration number)</span>
+                  <span className="label-text text-xs font-semibold text-sm">Auto-verify Vehicle (requires registration number)</span>
                 </label>
               </div>
             </div>
@@ -991,12 +989,12 @@ export default function SoloDriversManagement() {
                 { name:'upiId',             label:'UPI ID (optional)', placeholder:'ramesh@upi' },
               ].map(f => (
                 <div key={f.name}>
-                  <label className="label py-1"><span className="label-text text-xs font-semibold">{f.label}</span></label>
+                  <label className="label py-1"><span className="label-text text-xs font-semibold text-sm">{f.label}</span></label>
                   <input name={f.name} type="text" placeholder={f.placeholder} className="input-field w-full text-sm" />
                 </div>
               ))}
               <div>
-                <label className="label py-1"><span className="label-text text-xs font-semibold">Account Type</span></label>
+                <label className="label py-1"><span className="label-text text-xs font-semibold text-sm">Account Type</span></label>
                 <select name="accountType" className="input-field w-full text-sm">
                   <option value="Savings">Savings</option>
                   <option value="Current">Current</option>
@@ -1005,7 +1003,7 @@ export default function SoloDriversManagement() {
               <div className="sm:col-span-2">
                 <label className="label py-1 flex items-center gap-2">
                   <input type="checkbox" name="autoVerifyBank" value="true" className="checkbox checkbox-primary checkbox-sm" />
-                  <span className="label-text text-xs font-semibold">Auto-verify Bank (requires full bank details + valid IFSC)</span>
+                  <span className="label-text text-xs font-semibold text-sm">Auto-verify Bank (requires full bank details + valid IFSC)</span>
                 </label>
               </div>
             </div>
@@ -1018,20 +1016,20 @@ export default function SoloDriversManagement() {
             </legend>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="label py-1"><span className="label-text text-xs font-semibold">Business Type</span></label>
+                <label className="label py-1"><span className="label-text text-xs font-semibold text-sm">Business Type</span></label>
                 <select name="businessType" className="input-field w-full text-sm">
                   <option value="individual">Individual</option>
                   <option value="proprietorship">Proprietorship</option>
                 </select>
               </div>
               <div>
-                <label className="label py-1"><span className="label-text text-xs font-semibold">Settlement Cycle</span></label>
+                <label className="label py-1"><span className="label-text text-xs font-semibold text-sm">Settlement Cycle</span></label>
                 <select name="settlementCycle" className="input-field w-full text-sm">
                   {['Daily','Weekly','Bi-Weekly','Monthly'].map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
               <div>
-                <label className="label py-1"><span className="label-text text-xs font-semibold">Platform Fee Type</span></label>
+                <label className="label py-1"><span className="label-text text-xs font-semibold text-sm">Platform Fee Type</span></label>
                 <select name="platformFeeType" className="input-field w-full text-sm">
                   <option value="">Use Global Config</option>
                   <option value="percentage">Percentage (%)</option>
@@ -1040,11 +1038,11 @@ export default function SoloDriversManagement() {
                 <p className="text-xs text-base-content/40 mt-1">Leave blank to use global platform config.</p>
               </div>
               <div>
-                <label className="label py-1"><span className="label-text text-xs font-semibold">Platform Fee Value</span></label>
+                <label className="label py-1"><span className="label-text text-xs font-semibold text-sm">Platform Fee Value</span></label>
                 <input name="platformFeeValue" type="number" min="0" step="0.01" placeholder="e.g. 12 for 12% or 40 for ₹40" className="input-field w-full text-sm" />
               </div>
               <div className="sm:col-span-2">
-                <label className="label py-1"><span className="label-text text-xs font-semibold">Internal Notes (admin only)</span></label>
+                <label className="label py-1"><span className="label-text text-xs font-semibold text-sm">Internal Notes (admin only)</span></label>
                 <textarea name="internalNotes" rows={2} placeholder="Internal notes about this partner..." className="input-field w-full text-sm resize-none" />
               </div>
             </div>
@@ -1116,7 +1114,7 @@ export default function SoloDriversManagement() {
                   {a.expiringDocs?.map((doc) => (
                     <div
                       key={doc.label}
-                      className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-lg border ${
+                      className={`flex items-center gap-1.5 text-xs font-semibold text-sm px-2.5 py-1 rounded-lg border ${
                         doc.isExpired
                           ? 'bg-error/10 text-error border-error/30'
                           : doc.daysLeft <= 7
@@ -1461,7 +1459,7 @@ export default function SoloDriversManagement() {
               />
             </div>
             <p className="text-xs text-base-content/40">
-              Current balance: <strong>{selected?.rewards?.coinBalance || 0} coins</strong>
+              Current balance: <strong>{selected?.user?.coins || 0} coins</strong>
             </p>
           </div>
         </ConfirmModal>
@@ -1476,13 +1474,7 @@ export default function SoloDriversManagement() {
   return (
     <div className="min-h-screen bg-base-100">
       {/* Document Viewer Overlay */}
-      {docViewer && (
-        <DocViewer
-          url={docViewer.url}
-          label={docViewer.label}
-          onClose={() => setDocViewer(null)}
-        />
-      )}
+      <DocViewer url={docViewer?.url} label={docViewer?.label} onClose={() => setDocViewer(null)} />
 
       {/* Modals */}
       {renderModals()}
@@ -1545,7 +1537,7 @@ export default function SoloDriversManagement() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ── Overview Tab ──────────────────────────────────────────────────────────────
-function TabOverview({ p, u, onViewDoc }) {
+function TabOverview({ p, u, dp, onViewDoc }) {
   return (
     <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-1 lg:grid-cols-2 gap-5">
       <SectionCard title="Personal Details" icon={UserCheck}>
@@ -1568,7 +1560,7 @@ function TabOverview({ p, u, onViewDoc }) {
           <DocField label="WhatsApp" value={p.whatsappNumber} onView={onViewDoc} />
           <DocField label="Email" value={p.email} onView={onViewDoc} />
           <div className="pt-3 mt-3 border-t border-base-300/50">
-            <p className="text-xs text-base-content/40 font-semibold uppercase tracking-wider mb-2">Address</p>
+            <p className="text-xs text-base-content/40 font-semibold text-sm uppercase tracking-wider mb-2">Address</p>
             <p className="text-sm text-base-content">
               {[p.address?.street, p.address?.city, p.address?.state, p.address?.pinCode, p.address?.country]
                 .filter(Boolean).join(', ') || '—'}
@@ -1614,10 +1606,10 @@ function TabOverview({ p, u, onViewDoc }) {
           } />
           <InfoRow label="Partnership Status" value={p.partnershipStatus} />
           <InfoRow label="Partner Since" value={fmtDate(p.partnerSince)} />
-          <InfoRow label="Onboarding Complete" value={p.onboarding?.isComplete ? '✅ Yes' : '❌ No'} />
+          <InfoRow label="Onboarding Complete" value={p.isOnboardingComplete ? '✅ Yes' : '❌ No'} />
           <InfoRow label="Profile Completion" value={`${p.profileCompletionPercent || 0}%`} />
-          <InfoRow label="Is Blocked" value={p.isBlocked ? '🚫 Yes' : '✅ No'} />
-          <InfoRow label="Is Paused" value={p.isPaused ? `⏸️ Until ${fmtDate(p.pausedUntil)}` : '✅ No'} />
+          <InfoRow label="Is Blocked" value={u.isBlocked ? '🚫 Yes' : '✅ No'} />
+          <InfoRow label="Is Paused" value={dp.isPaused ? `⏸️ Until ${fmtDate(dp.pausedUntil)}` : '✅ No'} />
         </div>
       </SectionCard>
 
@@ -1627,7 +1619,7 @@ function TabOverview({ p, u, onViewDoc }) {
             {p.trainingCertificates.map((cert, i) => (
               <div key={i} className="flex items-center justify-between py-2 border-b border-base-300/50 last:border-0">
                 <div>
-                  <p className="text-sm font-semibold text-base-content">{cert.name}</p>
+                  <p className="text-sm font-semibold text-sm text-base-content">{cert.name}</p>
                   <p className="text-xs text-base-content/40">{cert.issuedBy} · {fmtDate(cert.issuedAt)} · Expires: {fmtDate(cert.expiresAt)}</p>
                 </div>
                 {cert.documentUrl && (
@@ -1650,9 +1642,9 @@ function TabOverview({ p, u, onViewDoc }) {
 // ── KYC Tab ───────────────────────────────────────────────────────────────────
 function TabKyc({ p, onView, onApprove, onReject }) {
   const kyc = p.kyc || {};
-  const verified = kyc.verificationStatus === 'verified';
-  const rejected = kyc.verificationStatus === 'rejected';
-  const pending  = ['pending', 'under-review'].includes(kyc.verificationStatus);
+  const verified = kyc.verificationStatus === 'verified' || kyc.verificationStatus === 'Verified';
+  const rejected = kyc.verificationStatus === 'rejected' || kyc.verificationStatus === 'Rejected';
+  const pending  = ['pending', 'under-review', 'Pending', 'Under-Review'].includes(kyc.verificationStatus);
 
   return (
     <motion.div variants={stagger} initial="hidden" animate="show" className="space-y-5">
@@ -1745,10 +1737,13 @@ function TabKyc({ p, onView, onApprove, onReject }) {
 
 // ── Vehicle Tab ───────────────────────────────────────────────────────────────
 function TabVehicle({ p, onView, onApprove, onReject }) {
-  const v = p.vehicle || {};
-  const verified = v.verificationStatus === 'verified';
-  const rejected = v.verificationStatus === 'rejected';
-  const pending  = ['pending', 'under-review'].includes(v.verificationStatus);
+  // Use p.vehicleStatus from SoloDriverPartner root, merging with driverProfile.assignedVehicleSnapshot
+  const vStatus = p.vehicleStatus || {};
+  const vSnap = p.driverProfile?.assignedVehicleSnapshot || {};
+  
+  const verified = vStatus.verificationStatus === 'verified';
+  const rejected = vStatus.verificationStatus === 'rejected';
+  const pending  = ['pending', 'under-review'].includes(vStatus.verificationStatus);
 
   return (
     <motion.div variants={stagger} initial="hidden" animate="show" className="space-y-5">
@@ -1770,17 +1765,17 @@ function TabVehicle({ p, onView, onApprove, onReject }) {
             </div>
             <div>
               <p className="font-bold text-base-content">
-                Vehicle {v.verificationStatus ? v.verificationStatus.charAt(0).toUpperCase() + v.verificationStatus.slice(1) : 'Not submitted'}
+                Vehicle {vStatus.verificationStatus ? vStatus.verificationStatus.charAt(0).toUpperCase() + vStatus.verificationStatus.slice(1) : 'Not submitted'}
               </p>
               <p className="text-xs text-base-content/40">
-                {verified ? `Verified · ${fmtDate(v.verifiedAt)}` :
-                 rejected ? `Rejected: ${v.rejectionReason}` : 'Awaiting verification'}
+                {verified ? `Verified (via Global Vehicles list)` :
+                 rejected ? `Rejected` : 'Awaiting verification'}
               </p>
             </div>
           </div>
           {!verified && (
             <div className="flex gap-2">
-              {(pending || v.registrationNumber) && (
+              {(pending || vStatus.registrationNumber) && (
                 <button onClick={onApprove} className="btn btn-success btn-sm gap-2">
                   <CheckCircle className="w-4 h-4" /> Approve
                 </button>
@@ -1793,64 +1788,25 @@ function TabVehicle({ p, onView, onApprove, onReject }) {
         </div>
       </motion.div>
 
+      <div className="alert alert-info text-sm mb-4 border-info/20 bg-info/5">
+        <Info className="w-4 h-4 shrink-0" />
+        <div>
+          <h3 className="font-semibold text-sm">Standalone Vehicle Data</h3>
+          <p className="text-base-content/70 text-sm mt-0.5">
+            Vehicles are now managed in a standalone, global collection. This tab shows the cached snapshot assigned to this driver. To view full vehicle documents (RC, Insurance, photos), please navigate to the global <strong>Vehicles Tab</strong>.
+          </p>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <SectionCard title="Vehicle Info" icon={Car}>
-          <DocField label="Registration Number" value={v.registrationNumber} onView={onView} />
-          <DocField label="Vehicle Code" value={v.vehicleCode} onView={onView} />
-          <DocField label="Make" value={v.make} onView={onView} />
-          <DocField label="Model" value={v.model} onView={onView} />
-          <DocField label="Year" value={v.year} onView={onView} />
-          <DocField label="Color" value={v.color} onView={onView} />
-          <DocField label="Vehicle Type" value={v.vehicleType} onView={onView} />
-          <DocField label="Seating Capacity" value={v.seatingCapacity} onView={onView} />
-          <DocField label="GPS Device ID" value={v.gpsDeviceId} onView={onView} />
-        </SectionCard>
-
-        <SectionCard title="Medical / Accessibility Features" icon={Activity}>
-          {[
-            ['Wheelchair Accessible', v.isWheelchairAccessible],
-            ['Stretcher Support',     v.hasStretcherSupport],
-            ['Oxygen Support',        v.hasOxygenSupport],
-            ['Medical Kit',           v.hasMedicalKit],
-            ['Air Conditioning',      v.hasAC],
-          ].map(([label, val]) => (
-            <div key={label} className="flex items-center justify-between py-2 border-b border-base-300/50 last:border-0">
-              <span className="text-sm text-base-content/70">{label}</span>
-              <span className={`font-bold text-sm ${val ? 'text-success' : 'text-base-content/30'}`}>
-                {val ? '✅ Yes' : '❌ No'}
-              </span>
-            </div>
-          ))}
-        </SectionCard>
-
-        <SectionCard title="Vehicle Documents" icon={FileText} className="lg:col-span-2">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-0">
-            <DocField label="RC Book" value={v.rcBookUrl ? 'Uploaded' : 'Not uploaded'} docUrl={v.rcBookUrl} onView={onView} />
-            <DocField label="Insurance Policy" value={v.insurancePolicyUrl ? 'Uploaded' : '—'} docUrl={v.insurancePolicyUrl} onView={onView} />
-            <DocField label="Insurance Expiry" value={fmtDate(v.insuranceExpiry)} onView={onView} />
-            <DocField label="Pollution Cert" value={v.pollutionCertUrl ? 'Uploaded' : '—'} docUrl={v.pollutionCertUrl} onView={onView} />
-            <DocField label="Pollution Expiry" value={fmtDate(v.pollutionCertExpiry)} onView={onView} />
-            <DocField label="Fitness Cert" value={v.fitnessCertUrl ? 'Uploaded' : '—'} docUrl={v.fitnessCertUrl} onView={onView} />
-            <DocField label="Fitness Expiry" value={fmtDate(v.fitnessCertExpiry)} onView={onView} />
-            <DocField label="Permit Type" value={v.permitType} onView={onView} />
-            <DocField label="Permit Expiry" value={fmtDate(v.permitExpiry)} onView={onView} />
-          </div>
-          {v.photos?.length > 0 && (
-            <div className="mt-4">
-              <p className="text-xs text-base-content/40 font-semibold uppercase tracking-wider mb-2">Vehicle Photos</p>
-              <div className="flex flex-wrap gap-2">
-                {v.photos.map((url, i) => (
-                  <button
-                    key={i}
-                    onClick={() => onView(url, `Vehicle Photo ${i + 1}`)}
-                    className="w-20 h-20 rounded-xl overflow-hidden border border-base-300 hover:border-primary/50 transition-all"
-                  >
-                    <img src={url} alt={`Vehicle ${i + 1}`} className="w-full h-full object-cover" />
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+        <SectionCard title="Cached Vehicle Snapshot" icon={Car}>
+          <DocField label="Registration Number" value={vStatus.registrationNumber || vSnap.registrationNumber} onView={onView} />
+          <DocField label="Vehicle Code" value={vSnap.vehicleCode} onView={onView} />
+          <DocField label="Make" value={vSnap.make} onView={onView} />
+          <DocField label="Model" value={vSnap.model} onView={onView} />
+          <DocField label="Type" value={vSnap.vehicleType} onView={onView} />
+          <DocField label="Color" value={vSnap.color} onView={onView} />
+          <DocField label="Is Active (Cache)" value={vStatus.isActive ? '✅ Yes' : '❌ No'} onView={onView} />
         </SectionCard>
       </div>
     </motion.div>
@@ -1906,9 +1862,9 @@ function TabBank({ p, onView, onVerify }) {
           <DocField label="Settlement Cycle" value={p.settlementCycle} onView={onView} />
           <DocField label="Preferred Method" value={p.settlement?.preferredMethod} onView={onView} />
           <div className="mt-3 pt-3 border-t border-base-300/50 space-y-2">
-            <InfoRow label="Total Earnings" value={fmtCurrency(p.performance?.totalEarnings)} />
-            <InfoRow label="Platform Fee Paid" value={fmtCurrency(p.performance?.totalPlatformFeePaid)} />
-            <InfoRow label="Net Earnings" value={fmtCurrency((p.performance?.totalEarnings || 0) - (p.performance?.totalPlatformFeePaid || 0))} />
+            <InfoRow label="Total Earnings" value={fmtCurrency(p.stats?.totalEarnings)} />
+            <InfoRow label="Platform Fee Paid" value={fmtCurrency(p.stats?.totalPlatformFeePaid)} />
+            <InfoRow label="Net Earnings" value={fmtCurrency((p.stats?.totalEarnings || 0) - (p.stats?.totalPlatformFeePaid || 0))} />
           </div>
         </SectionCard>
       </div>
@@ -1918,30 +1874,33 @@ function TabBank({ p, onView, onVerify }) {
 
 // ── Performance Tab ───────────────────────────────────────────────────────────
 function TabPerformance({ p }) {
-  const perf = p.performance || {};
-  const stats = [
-    { label: 'Total Rides',       value: perf.totalRidesCompleted  || 0, icon: Activity,   color: 'text-primary' },
-    { label: 'Cancelled',         value: perf.totalRidesCancelled  || 0, icon: XCircle,    color: 'text-error'   },
-    { label: 'Disputed',          value: perf.totalRidesDisputed   || 0, icon: AlertTriangle, color: 'text-warning' },
-    { label: 'Rating',            value: `${(perf.rating || 0).toFixed(1)} ⭐ (${perf.ratingCount || 0})`, icon: Star, color: 'text-accent' },
-    { label: 'Total Earnings',    value: fmtCurrency(perf.totalEarnings),       icon: Wallet,      color: 'text-success' },
-    { label: 'Platform Fee Paid', value: fmtCurrency(perf.totalPlatformFeePaid), icon: TrendingUp,  color: 'text-info'    },
-    { label: 'Total Distance',    value: `${(perf.totalDistanceKm || 0).toFixed(1)} km`, icon: MapPin, color: 'text-secondary' },
-    { label: 'Cancel Rate',       value: `${(perf.cancellationRate || 0).toFixed(1)}%`, icon: BarChart3, color: 'text-error'  },
-    { label: 'On-Time Arrival',   value: `${(perf.onTimeArrivalRate || 100).toFixed(1)}%`, icon: Clock, color: 'text-success' },
-    { label: 'Avg Pickup Time',   value: `${(perf.avgPickupTimeMinutes || 0).toFixed(1)} min`, icon: Zap, color: 'text-info'   },
-    { label: 'Monthly Rides',     value: perf.monthlyRides         || 0, icon: PieChart,   color: 'text-primary' },
-    { label: 'Last Ride',         value: fmtDate(perf.lastRideAt),      icon: Calendar,   color: 'text-base-content/60' },
+  const stats = p.stats || {};
+  const rating = p.rating || {};
+  const dPerf = p.driverProfile?.performance || {};
+
+  const metrics = [
+    { label: 'Total Rides',       value: stats.totalRidesCompleted  || 0, icon: Activity,    color: 'text-primary' },
+    { label: 'Cancelled',         value: stats.totalRidesCancelled  || 0, icon: XCircle,     color: 'text-error'   },
+    { label: 'Disputed',          value: stats.totalRidesDisputed   || 0, icon: AlertTriangle, color: 'text-warning' },
+    { label: 'Rating',            value: `${(rating.averageRating || 0).toFixed(1)} ⭐ (${rating.totalRatings || 0})`, icon: Star, color: 'text-accent' },
+    { label: 'Total Earnings',    value: fmtCurrency(stats.totalEarnings),       icon: Wallet,      color: 'text-success' },
+    { label: 'Platform Fee Paid', value: fmtCurrency(stats.totalPlatformFeePaid), icon: TrendingUp,  color: 'text-info'    },
+    { label: 'Total Distance',    value: `${(dPerf.totalDistanceKm || 0).toFixed(1)} km`, icon: MapPin, color: 'text-secondary' },
+    { label: 'Cancel Rate',       value: `${(dPerf.cancellationRate || 0).toFixed(1)}%`, icon: BarChart3, color: 'text-error'  },
+    { label: 'On-Time Arrival',   value: `${(stats.onTimeArrivalRate || 100).toFixed(1)}%`, icon: Clock, color: 'text-success' },
+    { label: 'Avg Pickup Time',   value: `${(stats.averagePickupTimeMinutes || 0).toFixed(1)} min`, icon: Zap, color: 'text-info'   },
+    { label: 'Monthly Rides',     value: dPerf.monthlyRides         || 0, icon: PieChart,   color: 'text-primary' },
+    { label: 'Last Ride',         value: fmtDate(stats.lastRideAt),      icon: Calendar,   color: 'text-base-content/60' },
   ];
 
   return (
     <motion.div variants={stagger} initial="hidden" animate="show" className="space-y-5">
       <motion.div variants={fadeUp} className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-        {stats.map((s) => (
+        {metrics.map((s) => (
           <motion.div key={s.label} variants={fadeUp} className="stat-card">
             <div className="flex items-center gap-2 mb-2">
               <s.icon className={`w-4 h-4 ${s.color}`} />
-              <span className="text-xs text-base-content/40 font-semibold uppercase tracking-wider">{s.label}</span>
+              <span className="text-xs text-base-content/40 font-semibold text-sm uppercase tracking-wider">{s.label}</span>
             </div>
             <p className={`text-xl font-black ${s.color}`}>{s.value}</p>
           </motion.div>
@@ -1951,10 +1910,10 @@ function TabPerformance({ p }) {
       <motion.div variants={fadeUp} className="card p-5">
         <h3 className="font-bold text-sm text-base-content/60 uppercase tracking-wider mb-4">Performance Metrics</h3>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <InfoRow label="Performance Tier" value={perf.performanceTier} />
-          <InfoRow label="Warning Count" value={perf.warningCount} />
-          <InfoRow label="Complaints" value={perf.complaintsCount} />
-          <InfoRow label="Compliments" value={perf.complimentsCount} />
+          <InfoRow label="Performance Tier" value={dPerf.performanceTier} />
+          <InfoRow label="Warning Count" value={dPerf.warningCount} />
+          <InfoRow label="Complaints" value={dPerf.complaintsCount} />
+          <InfoRow label="Compliments" value={dPerf.complimentsCount} />
         </div>
       </motion.div>
     </motion.div>
@@ -1963,20 +1922,20 @@ function TabPerformance({ p }) {
 
 // ── Rewards Tab ───────────────────────────────────────────────────────────────
 function TabRewards({ p, onAwardBadge, onAdjustCoins }) {
-  const r = p.rewards || {};
+  const r = p.driverProfile?.rewards || {};
   return (
     <motion.div variants={stagger} initial="hidden" animate="show" className="space-y-5">
       <motion.div variants={fadeUp} className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
-          { label: 'Coin Balance',   value: r.coinBalance        || 0, icon: Coins,   color: 'text-accent'   },
+          { label: 'Coin Balance',   value: p.user?.coins || 0, icon: Coins,    color: 'text-accent'   },
           { label: 'Total Earned',   value: r.totalCoinsEarned   || 0, icon: TrendingUp, color: 'text-success' },
-          { label: 'Total Redeemed', value: r.totalCoinsRedeemed || 0, icon: Wallet,  color: 'text-warning'  },
+          { label: 'Total Redeemed', value: r.totalCoinsRedeem || 0, icon: Wallet,  color: 'text-warning'  },
           { label: 'Reward Tier',    value: r.tier               || 'Bronze', icon: Award, color: 'text-primary' },
         ].map((s) => (
           <motion.div key={s.label} variants={fadeUp} className="stat-card">
             <div className="flex items-center gap-2 mb-2">
               <s.icon className={`w-4 h-4 ${s.color}`} />
-              <span className="text-xs text-base-content/40 font-semibold uppercase tracking-wider">{s.label}</span>
+              <span className="text-xs text-base-content/40 font-semibold text-sm uppercase tracking-wider">{s.label}</span>
             </div>
             <p className={`text-xl font-black ${s.color}`}>{s.value}</p>
           </motion.div>
@@ -2024,7 +1983,7 @@ function TabRewards({ p, onAwardBadge, onAdjustCoins }) {
             {r.coinTransactions.slice(-10).reverse().map((tx, i) => (
               <div key={i} className="flex items-center justify-between py-2 border-b border-base-300/50 last:border-0">
                 <div>
-                  <p className="text-sm font-semibold text-base-content">{tx.description}</p>
+                  <p className="text-sm font-semibold text-sm text-base-content">{tx.description}</p>
                   <p className="text-xs text-base-content/40">{tx.type} · {fmtDate(tx.createdAt)}</p>
                 </div>
                 <div className="text-right">
@@ -2044,6 +2003,8 @@ function TabRewards({ p, onAwardBadge, onAdjustCoins }) {
 
 // ── Dispatch Tab ──────────────────────────────────────────────────────────────
 function TabDispatch({ p }) {
+  const dp = p.driverProfile || {};
+
   return (
     <motion.div variants={stagger} initial="hidden" animate="show" className="space-y-5">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -2052,35 +2013,35 @@ function TabDispatch({ p }) {
             <div className="flex items-center justify-between py-2.5 border-b border-base-300/50">
               <span className="text-xs text-base-content/50 font-medium uppercase tracking-wider">Status</span>
               <span className={`font-bold text-sm ${
-                p.status === 'Available' ? 'text-success' :
-                p.status === 'On-Trip'   ? 'text-info'    :
-                p.status === 'On-Break'  ? 'text-warning' : 'text-base-content/40'
-              }`}>{p.status}</span>
+                dp.status === 'Available' ? 'text-success' :
+                dp.status === 'On-Trip'   ? 'text-info'    :
+                dp.status === 'On-Break'  ? 'text-warning' : 'text-base-content/40'
+              }`}>{dp.status || 'Offline'}</span>
             </div>
-            <DocField label="Current Ride" value={p.currentRide ? String(p.currentRide) : 'None'} onView={() => {}} />
-            <DocField label="Is Blocked" value={p.isBlocked ? '🚫 Yes' : '✅ No'} onView={() => {}} />
-            <DocField label="Is Paused" value={p.isPaused ? `⏸️ Until ${fmtDate(p.pausedUntil)}` : '✅ No'} onView={() => {}} />
-            <DocField label="Pause Reason" value={p.pauseReason} onView={() => {}} />
+            <DocField label="Current Ride" value={dp.currentRide ? String(dp.currentRide) : 'None'} onView={() => {}} />
+            <DocField label="Is Blocked" value={dp.isBlocked ? '🚫 Yes' : '✅ No'} onView={() => {}} />
+            <DocField label="Is Paused" value={dp.isPaused ? `⏸️ Until ${fmtDate(dp.pausedUntil)}` : '✅ No'} onView={() => {}} />
+            <DocField label="Pause Reason" value={dp.pauseReason} onView={() => {}} />
           </div>
         </SectionCard>
 
         <SectionCard title="Live Location" icon={MapPin}>
           <div className="space-y-0">
-            <DocField label="Longitude" value={p.location?.coordinates?.[0]} onView={() => {}} />
-            <DocField label="Latitude"  value={p.location?.coordinates?.[1]} onView={() => {}} />
-            <DocField label="Heading"   value={p.location?.heading !== undefined ? `${p.location.heading}°` : '—'} onView={() => {}} />
-            <DocField label="Speed"     value={p.location?.speedKmh !== undefined ? `${p.location.speedKmh} km/h` : '—'} onView={() => {}} />
-            <DocField label="Last Updated" value={fmtDate(p.location?.updatedAt)} onView={() => {}} />
+            <DocField label="Longitude" value={dp.location?.coordinates?.[0]} onView={() => {}} />
+            <DocField label="Latitude"  value={dp.location?.coordinates?.[1]} onView={() => {}} />
+            <DocField label="Heading"   value={dp.location?.heading !== undefined ? `${dp.location.heading}°` : '—'} onView={() => {}} />
+            <DocField label="Speed"     value={dp.location?.speedKmh !== undefined ? `${dp.location.speedKmh} km/h` : '—'} onView={() => {}} />
+            <DocField label="Last Updated" value={fmtDate(dp.location?.updatedAt)} onView={() => {}} />
           </div>
         </SectionCard>
 
         <SectionCard title="Shift Preferences" icon={Calendar}>
           <div className="space-y-0">
-            <DocField label="Shift Type"      value={p.shift?.shiftType}       onView={() => {}} />
-            <DocField label="Start Time"      value={p.shift?.startTime}       onView={() => {}} />
-            <DocField label="End Time"        value={p.shift?.endTime}         onView={() => {}} />
-            <DocField label="Days Available"  value={p.shift?.daysAvailable?.join(', ')} onView={() => {}} />
-            <DocField label="Next Available"  value={fmtDate(p.shift?.nextAvailableAt)} onView={() => {}} />
+            <DocField label="Shift Type"      value={dp.shift?.shiftType}       onView={() => {}} />
+            <DocField label="Start Time"      value={dp.shift?.startTime}       onView={() => {}} />
+            <DocField label="End Time"        value={dp.shift?.endTime}         onView={() => {}} />
+            <DocField label="Days Available"  value={dp.shift?.daysAvailable?.join(', ')} onView={() => {}} />
+            <DocField label="Next Available"  value={fmtDate(dp.shift?.nextAvailableAt)} onView={() => {}} />
           </div>
         </SectionCard>
 
@@ -2092,7 +2053,7 @@ function TabDispatch({ p }) {
               {p.serviceZones.map((z, i) => (
                 <div key={i} className="flex items-center justify-between py-2 border-b border-base-300/50 last:border-0">
                   <div>
-                    <p className="text-sm font-semibold text-base-content">{z.city}, {z.state}</p>
+                    <p className="text-sm font-semibold text-sm text-base-content">{z.city}, {z.state}</p>
                     <p className="text-xs text-base-content/40">{z.radiusKm}km radius · {z.pinCodes?.join(', ')}</p>
                   </div>
                   <span className={`text-xs font-bold ${z.isActive ? 'text-success' : 'text-base-content/40'}`}>
@@ -2131,6 +2092,8 @@ function TabDispatch({ p }) {
 
 // ── Actions Tab ───────────────────────────────────────────────────────────────
 function TabActions({ p, onFee, onNotes, onStatus, onBlock }) {
+  const isUserBlocked = p.user?.isBlocked;
+  
   const actions = [
     {
       title: 'Update Partnership Status',
@@ -2140,12 +2103,12 @@ function TabActions({ p, onFee, onNotes, onStatus, onBlock }) {
       onClick: onStatus,
     },
     {
-      title: p.isBlocked ? 'Unblock Account' : 'Block Account',
-      desc:  p.isBlocked
+      title: isUserBlocked ? 'Unblock Account' : 'Block Account',
+      desc:  isUserBlocked
         ? 'Restore the partner\'s ability to log in and accept rides.'
         : 'Block this account. The partner will be forced Offline immediately.',
-      icon:  p.isBlocked ? Unlock : Ban,
-      color: p.isBlocked ? 'btn-success' : 'btn-error',
+      icon:  isUserBlocked ? Unlock : Ban,
+      color: isUserBlocked ? 'btn-success' : 'btn-error',
       onClick: onBlock,
     },
     {
@@ -2169,14 +2132,14 @@ function TabActions({ p, onFee, onNotes, onStatus, onBlock }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {actions.map((a) => (
           <motion.div key={a.title} variants={fadeUp} whileHover={{ y: -3 }} className="card p-5">
-            <div className="flex items-start gap-4">
+            <div className="flex   items-start gap-4">
               <div className="p-3 rounded-2xl bg-base-200 flex-shrink-0">
-                <a.icon className="w-5 h-5 text-base-content/70" />
+                <a.icon className="w-5 h-5 text-base-content/70 text-sm" />
               </div>
               <div className="flex-1 min-w-0">
                 <h4 className="font-bold text-base-content text-sm mb-1">{a.title}</h4>
                 <p className="text-xs text-base-content/50 mb-3 leading-relaxed">{a.desc}</p>
-                <button onClick={a.onClick} className={`btn ${a.color} btn-sm gap-2`}>
+                <button onClick={a.onClick} className={`btn ${a.color}  btn-sm gap-2`}>
                   <a.icon className="w-3.5 h-3.5" /> {a.title}
                 </button>
               </div>
@@ -2190,17 +2153,17 @@ function TabActions({ p, onFee, onNotes, onStatus, onBlock }) {
         <h3 className="font-bold text-sm text-base-content/60 uppercase tracking-wider mb-4">Current Account Settings</h3>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
           <InfoRow label="Partnership Status" value={p.partnershipStatus} />
-          <InfoRow label="Is Blocked" value={p.isBlocked ? '🚫 Yes' : '✅ No'} />
-          <InfoRow label="Block Reason" value={p.blockReason} />
+          <InfoRow label="Is Blocked" value={isUserBlocked ? '🚫 Yes' : '✅ No'} />
+          <InfoRow label="Block Reason" value={p.user?.blockReason} />
           <InfoRow label="Settlement Cycle" value={p.settlementCycle} />
           <InfoRow label="Platform Fee" value={
             p.platformFeeOverride
               ? `${p.platformFeeOverride.type === 'percentage' ? p.platformFeeOverride.value + '%' : '₹' + p.platformFeeOverride.value}`
               : 'Global Config'
           } />
-          <InfoRow label="Onboarding" value={p.onboarding?.isComplete ? '✅ Complete' : '❌ Incomplete'} />
+          <InfoRow label="Onboarding" value={p.isOnboardingComplete ? '✅ Complete' : '❌ Incomplete'} />
           <InfoRow label="KYC Status" value={p.kyc?.verificationStatus} />
-          <InfoRow label="Vehicle Status" value={p.vehicle?.verificationStatus} />
+          <InfoRow label="Vehicle Status" value={(p.vehicleStatus || p.vehicle)?.verificationStatus} />
           <InfoRow label="Bank Verified" value={p.bankDetails?.isVerified ? '✅ Yes' : '❌ No'} />
           <InfoRow label="Created By" value={p.createdBy?.name || p.createdBy} />
           <InfoRow label="Last Updated" value={fmtDate(p.updatedAt)} />

@@ -207,7 +207,7 @@ const snapshotLimits = (plan) => {
         }
     }
 
-  return {
+return {
         consultationsPerMonth,
         transportRidesPerMonth,
         careAssistantVisitsPerMonth,
@@ -220,6 +220,7 @@ const snapshotLimits = (plan) => {
         transportRatePerKm,
         homeSampleCollection,
         homeCollectionUsedOnce:      false, // always reset on new sub / renewal
+        caStandardTierUsedOnce:      false, // always reset on new sub / renewal
     };
 };
 
@@ -2094,10 +2095,11 @@ router.post(
             const wallet        = await Wallet.findOne({ user: sub.user });
             const renewalAmount = sub.plan?.pricing?.monthly ?? 500;
 
-            if (wallet && wallet.balance >= renewalAmount) {
+if (wallet && wallet.balance >= renewalAmount) {
                 wallet.balance -= renewalAmount;
               sub.expiryDate                        = new Date(sub.expiryDate.getTime() + 30 * 24 * 60 * 60 * 1000);
                 sub.limits.homeCollectionUsedOnce     = false; // reset one-time benefit for new cycle
+                sub.limits.caStandardTierUsedOnce     = false; // reset CA standard-tier free use for new cycle
 
                 await wallet.save();
                 await sub.save();

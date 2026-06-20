@@ -18,7 +18,8 @@ import {
   CheckCircle2, XCircle, Play, Flag, AlertTriangle,
   Pause, RefreshCw, ChevronRight, Car, Route,
   ArrowLeft, Activity, TrendingUp, Shield, Star, Zap, MoreVertical,
-  Eye, Radio, Circle,
+Eye, Radio, Circle,
+  QrCode, DollarSign, Wallet,
 } from 'lucide-react';
 
 import {
@@ -32,6 +33,21 @@ import {
   selectLoading,
   selectActiveRide,
 } from '@/store/slices/operationsSlice';
+
+import toast from 'react-hot-toast';
+
+import {
+  generatePayAtServiceLink,
+  fetchPayAtServiceStatus,
+  markCollectedByPartner,
+  markServiceComplete,
+  paidFromSocket,
+  clearSession,
+  selectPayAtServiceSession,
+  selectPayAtServiceLoading,
+  selectCanMarkComplete,
+  selectNeedsNewLink,
+} from '@/store/slices/payAtServiceSlice';
 
 import {
   updateRideStatus,
@@ -194,7 +210,7 @@ function LocationRow({ icon: Icon, label, address, colorClass, iconColorClass })
 // RIDE CARD
 // ─────────────────────────────────────────────────────────────────────────────
 
-function RideCard({ ride, onAction, actionLoading }) {
+function RideCard({ ride, onAction, actionLoading, onPayAtService }) {
   const [expanded, setExpanded] = useState(false);
   const actions  = getActions(ride);
   const isActive = ACTIVE_STATUSES.includes(ride.status);
@@ -392,6 +408,22 @@ function RideCard({ ride, onAction, actionLoading }) {
             />
           ))}
 
+          {/* QR Pay button — active rides with non-zero amount, non-online */}
+          {isActive && booking?._id && booking?.bookingType !== 'doctor_online' && (
+            <motion.button
+              whileTap={{ scale: 0.95 }}
+              className="btn btn-sm bg-primary/10 border-primary/30 text-primary hover:bg-primary hover:text-primary-content gap-1.5"
+              onClick={() => onPayAtService({
+                bookingId:   booking._id,
+                bookingCode: booking.bookingCode,
+                amount:      booking.fareBreakdown?.totalAmount ?? booking.fareBreakdown?.transportFee ?? 0,
+              })}
+            >
+              <QrCode size={13} />
+              QR Pay
+            </motion.button>
+          )}
+
           {isActive && booking?._id && (
   <Link href={`/driver/tracking/${booking._id}/${ride._id}`} passHref legacyBehavior>
     <motion.a
@@ -572,6 +604,173 @@ function SkeletonCards() {
   );
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAY-AT-SERVICE PANEL
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PayAtServicePanel({ bookingId, bookingCode, amount, onClose }) {
+  const dispatch    = useDispatch();
+  const session     = useSelector(selectPayAtServiceSession(bookingId));
+  const loadFlags   = useSelector(selectPayAtServiceLoading);
+  const canComplete = useSelector(selectCanMarkComplete(bookingId));
+  const needsNew    = useSelector(selectNeedsNewLink(bookingId));
+
+  const [cashAmt,  setCashAmt]  = useState(String(amount ?? ''));
+  const [cashNote, setCashNote] = useState('');
+
+  // Poll every 5s while link active and unpaid
+  useEffect(() => {
+    if (!session?.shortUrl || session?.paid || session?.expired) return;
+    const id = setInterval(() => dispatch(fetchPayAtServiceStatus({ bookingId })), 5000);
+    return () => clearInterval(id);
+  }, [session?.shortUrl, session?.paid, session?.expired, bookingId, dispatch]);
+
+  // Cleanup on unmount
+  useEffect(() => () => dispatch(clearSession({ bookingId })), [bookingId, dispatch]);
+
+  const fmtAmt = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
+  const handleCashCollect = () => {
+    const n = parseFloat(cashAmt);
+    if (!n || n <= 0) { alert('Enter valid amount'); return; }
+    dispatch(markCollectedByPartner({ bookingId, amount: n, method: 'cash', note: cashNote }));
+  };
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-sm"
+        onClick={onClose}
+      >
+        <motion.div
+          initial={{ y: 80, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: 80, opacity: 0 }}
+          transition={{ type: 'spring', damping: 26, stiffness: 280 }}
+          className="w-full max-w-md bg-base-100 rounded-t-2xl border-t border-base-300 shadow-2xl overflow-hidden"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="px-5 py-4 border-b border-base-200 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center">
+                <QrCode size={17} className="text-primary" />
+              </div>
+              <div>
+                <p className="font-bold text-sm">Pay at Service</p>
+                <p className="text-xs text-base-content/50">#{bookingCode} · {fmtAmt(amount)}</p>
+              </div>
+            </div>
+            <button onClick={onClose} className="btn btn-ghost btn-xs btn-circle">✕</button>
+          </div>
+
+          <div className="p-5 space-y-4 pb-8">
+
+            {/* Paid */}
+            {session?.paid && (
+              <div className="flex items-center gap-2 p-3 bg-success/10 rounded-xl border border-success/20">
+                <CheckCircle2 size={16} className="text-success" />
+                <div>
+                  <p className="text-sm font-bold text-success">Payment Confirmed</p>
+                  <p className="text-xs text-base-content/60">{fmtAmt(session.amount)} received</p>
+                </div>
+              </div>
+            )}
+
+            {/* Awaiting */}
+            {session?.shortUrl && !session?.paid && !session?.expired && (
+              <div className="flex items-center gap-2 p-3 bg-warning/10 rounded-xl border border-warning/20">
+                <Clock size={16} className="text-warning" />
+                <div>
+                  <p className="text-sm font-semibold text-warning">Awaiting Payment</p>
+                  <p className="text-xs text-base-content/60 break-all">{session.shortUrl}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Generate QR */}
+            {(needsNew || !session?.shortUrl) && !session?.paid && (
+              <div className="space-y-2">
+                <p className="text-xs text-base-content/60">Generate Razorpay QR — show to patient</p>
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  className="btn btn-primary w-full gap-2"
+                  disabled={loadFlags.generateLink}
+                  onClick={() => dispatch(generatePayAtServiceLink({ bookingId }))}
+                >
+                  {loadFlags.generateLink
+                    ? <span className="loading loading-xs loading-spinner" />
+                    : <QrCode size={14} />}
+                  {needsNew ? 'Regenerate QR Link' : 'Generate QR Link'}
+                </motion.button>
+              </div>
+            )}
+
+            {/* Cash fallback */}
+            {!session?.paid && (
+              <div className="border border-base-300 rounded-xl p-4 space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-base-content/50 flex items-center gap-1.5">
+                  <DollarSign size={12} /> Cash / Manual Fallback
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    className="input input-bordered input-sm flex-1"
+                    placeholder="Amount (₹)"
+                    value={cashAmt}
+                    onChange={(e) => setCashAmt(e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    className="input input-bordered input-sm flex-1"
+                    placeholder="Note (optional)"
+                    value={cashNote}
+                    onChange={(e) => setCashNote(e.target.value)}
+                  />
+                </div>
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  className="btn btn-outline btn-sm w-full gap-2"
+                  disabled={loadFlags.markCollected}
+                  onClick={handleCashCollect}
+                >
+                  {loadFlags.markCollected
+                    ? <span className="loading loading-xs loading-spinner" />
+                    : <Wallet size={13} />}
+                  Mark Cash Collected
+                </motion.button>
+              </div>
+            )}
+
+            {/* Mark complete */}
+            {canComplete && (
+              <motion.button
+                whileTap={{ scale: 0.97 }}
+                className="btn btn-success w-full gap-2"
+                disabled={loadFlags.markComplete}
+                onClick={() => dispatch(markServiceComplete({ bookingId }))}
+              >
+                {loadFlags.markComplete
+                  ? <span className="loading loading-xs loading-spinner" />
+                  : <CheckCircle2 size={14} />}
+                Mark Service Complete
+              </motion.button>
+            )}
+
+            {session?.serviceCompleted && (
+              <p className="text-center text-xs text-success font-bold">✅ Service marked complete</p>
+            )}
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -584,8 +783,9 @@ export default function DriverBookings() {
   const loadingMap = useSelector(state => state.operations.loading);
   const isFetching = loadingMap['fetchDriverAssignedRides'] ?? false;
 
-  const [filter,        setFilter]        = useState('active');
+const [filter,        setFilter]        = useState('active');
   const [actionLoading, setActionLoading] = useState(null);
+  const [payTarget,     setPayTarget]     = useState(null); // { bookingId, bookingCode, amount }
 
   // Fetch on mount
   useEffect(() => {
@@ -719,10 +919,11 @@ export default function DriverBookings() {
                         exit={{ opacity: 0, y: -20 }}
                         transition={{ delay: i * 0.04 }}
                       >
-                        <RideCard
+                      <RideCard
                           ride={ride}
                           onAction={handleAction}
                           actionLoading={actionLoading}
+                          onPayAtService={setPayTarget}
                         />
                       </motion.div>
                     ))}
@@ -738,7 +939,16 @@ export default function DriverBookings() {
             </p>
           )}
         </div>
-      </div>
+    </div>
+
+      {payTarget && (
+        <PayAtServicePanel
+          bookingId={payTarget.bookingId}
+          bookingCode={payTarget.bookingCode}
+          amount={payTarget.amount}
+          onClose={() => setPayTarget(null)}
+        />
+      )}
     </>
   );
 }

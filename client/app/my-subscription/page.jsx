@@ -352,7 +352,7 @@ function LiveConsumptionTracker({ subscriptionState }) {
     { label: "Laboratory Diagnostic Tests",   consumed: currentUsageMatrix?.labTestsUsed ?? 0,           ceiling: dynamicLimits.labTestsPerMonth ?? 0,              icon: Microscope },
     { label: "Emergency Logistics Transports",consumed: currentUsageMatrix?.transportRidesUsed ?? 0,    ceiling: dynamicLimits.transportRidesPerMonth ?? null,     icon: Truck },
     { label: "Assigned Home Care Visits",     consumed: currentUsageMatrix?.careAssistantVisitsUsed ?? 0,ceiling: dynamicLimits.careAssistantVisitsPerMonth ?? null, icon: UserCheck },
-  ].filter((item) => item.ceiling !== null && item.ceiling > 0);
+].filter((item) => item.ceiling !== null && (item.ceiling === -1 || item.ceiling > 0));
 
   if (!operationalUsageVector.length) return null;
 
@@ -967,7 +967,7 @@ export default function MySubscriptionPage() {
 
       const activePlanTitle  = dataCore?.plan?.fixedTier || dataCore?.plan?.name || "System Base";
       const layoutTheme      = getTierTheme(activePlanTitle);
-      const structuralPaise  = checkoutToken.amount < 100000 ? Math.round(checkoutToken.amount * 100) : Math.round(checkoutToken.amount);
+const structuralPaise  = Math.round(checkoutToken.amount * 100);
 
       const transactionalParams = {
         key:         GATEWAY_KEY_ID,
@@ -1055,7 +1055,13 @@ export default function MySubscriptionPage() {
   const structuralExpiry = dataCore?.expiryDate ? new Date(dataCore.expiryDate) : null;
   const daysRemaining    = structuralExpiry ? Math.max(0, Math.ceil((structuralExpiry - Date.now()) / 86400000)) : 0;
   const expiryThreshold  = daysRemaining <= 7 && daysRemaining > 0;
-  const progressRatio    = structuralExpiry ? Math.min(100, Math.max(0, (1 - daysRemaining / 30) * 100)) : 0;
+const cycleTotalDays   = dataCore?.status === "Trial"
+    ? (dataCore?.plan?.freeTrial?.durationDays ?? 7)
+    : dataCore?.plan?.pricing?.billingCycle === "till_delivery"
+      ? 280
+      : 30;
+  const progressRatio    = structuralExpiry ? Math.min(100, Math.max(0, (1 - daysRemaining / cycleTotalDays) * 100)) : 0;
+  
   const validSubActive   = dataCore && (statusActive || evaluationState || isShared);
   const formattedExpiry  = structuralExpiry ? structuralExpiry.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" }) : "—";
 

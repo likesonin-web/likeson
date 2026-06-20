@@ -150,15 +150,15 @@ export const updateOperatingHours = createAsyncThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4  CONSULTATION PRICING
+// §4  DOCTOR PRICING MANAGEMENT (Updated)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** GET /hospital-manager/pricing */
-export const fetchPricing = createAsyncThunk(
-  'hospitalManager/fetchPricing',
-  async (_, { rejectWithValue }) => {
+/** GET /hospital-manager/doctors/:doctorProfileId/pricing */
+export const fetchDoctorPricing = createAsyncThunk(
+  'hospitalManager/fetchDoctorPricing',
+  async (doctorProfileId, { rejectWithValue }) => {
     try {
-      const { data } = await API.get('/hospital-manager/pricing');
+      const { data } = await API.get(`/hospital-manager/doctors/${doctorProfileId}/pricing`);
       return data.data;
     } catch (err) {
       return rejectWithValue(err.response?.data?.message || err.message);
@@ -166,12 +166,12 @@ export const fetchPricing = createAsyncThunk(
   }
 );
 
-/** PATCH /hospital-manager/pricing */
-export const updatePricing = createAsyncThunk(
-  'hospitalManager/updatePricing',
-  async (payload, { rejectWithValue }) => {
+/** PATCH /hospital-manager/doctors/:doctorProfileId/pricing */
+export const updateDoctorPricing = createAsyncThunk(
+  'hospitalManager/updateDoctorPricing',
+  async ({ doctorProfileId, payload }, { rejectWithValue }) => {
     try {
-      const { data } = await API.patch('/hospital-manager/pricing', payload);
+      const { data } = await API.patch(`/hospital-manager/doctors/${doctorProfileId}/pricing`, payload);
       return data.data;
     } catch (err) {
       return rejectWithValue(err.response?.data?.message || err.message);
@@ -228,14 +228,12 @@ export const searchUnlinkedDoctors = createAsyncThunk(
   }
 );
 
-/** POST /hospital-manager/doctors/link  Body: { doctorProfileId } */
+/** POST /hospital-manager/doctors/create-and-link */
 export const createAndOnboardDoctor = createAsyncThunk(
   'hospitalManager/createAndOnboardDoctor',
   async (doctorData, { rejectWithValue }) => {
     try {
-      // Note: Endpoint updated to match the professional router we just built
       const { data } = await API.post('/hospital-manager/doctors/create-and-link', doctorData);
-      
       return data; 
     } catch (err) {
       return rejectWithValue(err.response?.data?.message || 'Failed to onboard doctor');
@@ -341,7 +339,6 @@ export const fetchNotifications = createAsyncThunk(
 export const markNotificationsRead = createAsyncThunk(
   'hospitalManager/markNotificationsRead',
   async (notificationIds, { rejectWithValue }) => {
-    // pass undefined or [] to mark ALL as read
     try {
       const { data } = await API.patch('/hospital-manager/notifications/mark-read', {
         notificationIds: notificationIds ?? [],
@@ -422,7 +419,7 @@ export const removeDeviceToken = createAsyncThunk(
   }
 );
 
-/** PATCH /hospital-manager/security/change-password  Body: { currentPassword, newPassword, confirmPassword } */
+/** PATCH /hospital-manager/security/change-password */
 export const changePassword = createAsyncThunk(
   'hospitalManager/changePassword',
   async (payload, { rejectWithValue }) => {
@@ -435,7 +432,7 @@ export const changePassword = createAsyncThunk(
   }
 );
 
-/** PATCH /hospital-manager/security/notification-preferences  Body: { sms?, email?, push?, whatsapp? } */
+/** PATCH /hospital-manager/security/notification-preferences */
 export const updateNotificationPreferences = createAsyncThunk(
   'hospitalManager/updateNotificationPreferences',
   async (payload, { rejectWithValue }) => {
@@ -485,7 +482,7 @@ export const fetchAccountSettings = createAsyncThunk(
   }
 );
 
-/** PATCH /hospital-manager/settings/account  Body: { name?, phone? } */
+/** PATCH /hospital-manager/settings/account */
 export const updateAccountSettings = createAsyncThunk(
   'hospitalManager/updateAccountSettings',
   async (payload, { rejectWithValue }) => {
@@ -498,7 +495,7 @@ export const updateAccountSettings = createAsyncThunk(
   }
 );
 
-/** POST /hospital-manager/settings/avatar  (FormData: avatar) */
+/** POST /hospital-manager/settings/avatar */
 export const uploadAvatar = createAsyncThunk(
   'hospitalManager/uploadAvatar',
   async (formData, { rejectWithValue }) => {
@@ -523,7 +520,7 @@ export const fetchImageKitAuth = createAsyncThunk(
   async (_, { rejectWithValue }) => {
     try {
       const { data } = await API.get('/hospital-manager/imagekit-auth');
-      return data.data; // { token, expire, signature }
+      return data.data;
     } catch (err) {
       return rejectWithValue(err.response?.data?.message || err.message);
     }
@@ -541,8 +538,8 @@ const initialState = {
   // §3 Operating hours
   operatingHours: null,
 
-  // §4 Pricing
-  pricing: null,
+  // §4 Doctor Pricing
+  doctorPricing: null, // Specific to the currently viewed/edited doctor
 
   // §5 Doctors
   linkedDoctors:      [],
@@ -550,7 +547,7 @@ const initialState = {
   selectedDoctor:     null,
   searchResults:      [],
   doctorStats:        null,
-  doctorAvailability: null, // { doctorProfileId, availability, doctorName }
+  doctorAvailability: null,
 
   // §7 Onboarding
   onboarding: null,
@@ -583,7 +580,6 @@ const initialState = {
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Returns the last segment of a thunk's typePrefix as a short key. */
 const key = (action) => action.type.split('/')[1];
 
 const setPending  = (state, action) => { state.loading[key(action)] = true;  delete state.errors[key(action)]; };
@@ -599,11 +595,9 @@ const hospitalManagerSlice = createSlice({
   initialState,
 
   reducers: {
-    /** Manually clear a specific error by its thunk key (e.g. 'fetchProfile') */
     clearError(state, action) {
       delete state.errors[action.payload];
     },
-    /** Reset the entire slice (e.g. on logout) */
     resetHospitalManagerState() {
       return initialState;
     },
@@ -737,29 +731,29 @@ const hospitalManagerSlice = createSlice({
         toast.success('Operating hours updated.');
       });
 
-    // ── §4 Pricing ──────────────────────────────────────────────────────────
+    // ── §4 Doctor Pricing ───────────────────────────────────────────────────
 
     builder
-      .addCase(fetchPricing.pending,   setPending)
-      .addCase(fetchPricing.rejected,  (state, action) => {
+      .addCase(fetchDoctorPricing.pending,   setPending)
+      .addCase(fetchDoctorPricing.rejected,  (state, action) => {
         setRejected(state, action);
         toast.error(action.payload);
       })
-      .addCase(fetchPricing.fulfilled, (state, action) => {
+      .addCase(fetchDoctorPricing.fulfilled, (state, action) => {
         clearLoad(state, action);
-        state.pricing = action.payload;
+        state.doctorPricing = action.payload;
       });
 
     builder
-      .addCase(updatePricing.pending,   setPending)
-      .addCase(updatePricing.rejected,  (state, action) => {
+      .addCase(updateDoctorPricing.pending,   setPending)
+      .addCase(updateDoctorPricing.rejected,  (state, action) => {
         setRejected(state, action);
         toast.error(action.payload);
       })
-      .addCase(updatePricing.fulfilled, (state, action) => {
+      .addCase(updateDoctorPricing.fulfilled, (state, action) => {
         clearLoad(state, action);
-        state.pricing = action.payload;
-        toast.success('Pricing updated.');
+        state.doctorPricing = action.payload;
+        toast.success('Doctor pricing updated.');
       });
 
     // ── §5 Doctors ──────────────────────────────────────────────────────────
@@ -800,20 +794,19 @@ const hospitalManagerSlice = createSlice({
 
     builder
       .addCase(createAndOnboardDoctor.pending, (state) => {
-        state.loading = true;
-        state.error = null;
+        state.loading['createAndOnboardDoctor'] = true;
+        delete state.errors['createAndOnboardDoctor'];
       })
       .addCase(createAndOnboardDoctor.fulfilled, (state, action) => {
-        state.loading = false;
-        // Optional: If your API returns the new doctor object, push it to the list
+        state.loading['createAndOnboardDoctor'] = false;
         if (action.payload.doctor) {
           state.linkedDoctors.unshift(action.payload.doctor);
         }
         toast.success(action.payload.message || 'Doctor onboarded successfully');
       })
       .addCase(createAndOnboardDoctor.rejected, (state, action) => {
-        state.loading = false;
-        state.error = action.payload;
+        state.loading['createAndOnboardDoctor'] = false;
+        state.errors['createAndOnboardDoctor'] = action.payload;
         toast.error(action.payload || 'Failed to create doctor account');
       });
 
@@ -904,7 +897,6 @@ const hospitalManagerSlice = createSlice({
       .addCase(markNotificationsRead.fulfilled, (state, action) => {
         clearLoad(state, action);
         const ids = action.payload.notificationIds;
-        // Mark matching notifications as read in local state
         state.notifications = state.notifications.map((n) => {
           if (!ids?.length || ids.includes(n._id)) {
             return { ...n, isRead: true };
@@ -982,7 +974,6 @@ const hospitalManagerSlice = createSlice({
       })
       .addCase(changePassword.fulfilled, (state, action) => {
         clearLoad(state, action);
-        // Server revokes all other sessions — clear them locally too
         state.sessions = state.sessions.filter((s) => s.isCurrent);
         toast.success(action.payload || 'Password changed. All other sessions logged out.');
       });
@@ -1075,17 +1066,15 @@ export const { clearError, resetHospitalManagerState } = hospitalManagerSlice.ac
 // SELECTORS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Generic loading selector: pass the thunk action creator, e.g. isLoading(fetchDashboard) */
 export const isLoading  = (thunk) => (state) =>
   !!state.hospitalManager.loading[thunk.typePrefix.split('/')[1]];
 
-/** Generic error selector */
 export const getError   = (thunk) => (state) =>
   state.hospitalManager.errors[thunk.typePrefix.split('/')[1]] ?? null;
 
 export const selectHospital            = (s) => s.hospitalManager.hospital;
 export const selectOperatingHours      = (s) => s.hospitalManager.operatingHours;
-export const selectPricing             = (s) => s.hospitalManager.pricing;
+export const selectDoctorPricing       = (s) => s.hospitalManager.doctorPricing;
 export const selectLinkedDoctors       = (s) => s.hospitalManager.linkedDoctors;
 export const selectDoctorsPagination   = (s) => s.hospitalManager.doctorsPagination;
 export const selectSelectedDoctor      = (s) => s.hospitalManager.selectedDoctor;

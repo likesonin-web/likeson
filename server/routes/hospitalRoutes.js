@@ -1,24 +1,22 @@
-import express        from 'express';
-import mongoose       from 'mongoose';
-import multer         from 'multer';
-import ImageKit       from 'imagekit';
-import path           from 'path';
-import fs             from 'fs';
+import express from 'express';
+import mongoose from 'mongoose';
+import multer from 'multer';
+import ImageKit from 'imagekit';
+import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
-import Hospital       from '../models/Hospital.js';
-import DoctorProfile  from '../models/DoctorProfile.js';
-import User           from '../models/User.js';
-import SystemLog      from '../models/SystemLog.js';
-import sendEmail      from '../utils/sendEmail.js';
+import Hospital from '../models/Hospital.js';
+import DoctorProfile from '../models/DoctorProfile.js';
+import User from '../models/User.js';
+import SystemLog from '../models/SystemLog.js';
+import sendEmail from '../utils/sendEmail.js';
 import { protect, authorize } from '../middleware/authMiddleware.js';
-import cache          from '../middleware/cache.js';
+import cache from '../middleware/cache.js';
 import {
   invalidateUserCache,
   invalidatePattern,
 } from '../utils/cacheInvalidation.js';
 
- 
- 
 const router = express.Router();
 
 // ── ESM __dirname shim ────────────────────────────────────────────────────────
@@ -55,7 +53,7 @@ const hospitalUpload = upload.fields([
   { name: 'images', maxCount: 20 },
 ]);
 const doctorUpload = upload.single('photo');
-const signatureUpload = upload.single('signature'); // Added signature middleware
+const signatureUpload = upload.single('signature'); 
 
 const handleMulterError = (uploadMiddleware) => (req, res, next) => {
   uploadMiddleware(req, res, (err) => {
@@ -66,7 +64,6 @@ const handleMulterError = (uploadMiddleware) => (req, res, next) => {
     return res.status(400).json({ success: false, message: err.message || 'File upload failed' });
   });
 };
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -121,21 +118,9 @@ const DOCTOR_PUBLIC_EXCLUDE =
   '-kyc.aadhaarNumber -kyc.panNumber -adminNotes -bankDetails.accountNumber -contractUrl -platformFee -stats';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EMAIL HELPER: Credentials Email (used for both hospital manager & doctor)
+// EMAIL HELPER: Credentials Email
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Sends a professional credentials email.
- *
- * @param {object} opts
- * @param {string} opts.recipientEmail
- * @param {string} opts.recipientName
- * @param {string} opts.role           - 'doctor' | 'hospital'
- * @param {string} opts.plainPassword
- * @param {string} opts.entityName     - Hospital name or "Likeson.in"
- * @param {string} opts.managementModel - 'hospital-manager' | 'doctor-owner'
- * @param {string} opts.loginUrl
- */
 const sendCredentialsEmail = async ({
   recipientEmail,
   recipientName,
@@ -185,7 +170,6 @@ const sendCredentialsEmail = async ({
                     box-shadow:0 8px 30px rgba(0,0,0,.08);overflow:hidden;
                     border:1px solid #e2e8f0;">
 
-        <!-- HEADER -->
         <tr>
           <td style="background:linear-gradient(135deg,${themeColor} 0%,#1a1a2e 100%);
                      padding:36px 32px 28px;">
@@ -204,11 +188,9 @@ const sendCredentialsEmail = async ({
           </td>
         </tr>
 
-        <!-- BODY -->
         <tr>
           <td style="padding:32px;">
 
-            <!-- Model Note -->
             <div style="background:#f8fafc;border-left:4px solid ${accentColor};
                         border-radius:0 8px 8px 0;padding:12px 16px;
                         margin-bottom:24px;font-size:13px;color:#334155;line-height:1.6;">
@@ -220,7 +202,6 @@ const sendCredentialsEmail = async ({
               Use the credentials below to log in and complete your profile setup.
             </p>
 
-            <!-- Credentials Card -->
             <table width="100%" cellpadding="0" cellspacing="0"
                    style="background:#f8fafc;border:1px solid #e2e8f0;
                           border-radius:12px;margin-bottom:24px;">
@@ -266,7 +247,6 @@ const sendCredentialsEmail = async ({
               </tr>
             </table>
 
-            <!-- Warning -->
             <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;
                         padding:14px 18px;margin-bottom:28px;">
               <div style="font-size:12px;color:#92400e;line-height:1.6;">
@@ -276,7 +256,6 @@ const sendCredentialsEmail = async ({
               </div>
             </div>
 
-            <!-- Next Steps -->
             <div style="margin-bottom:28px;">
               <div style="font-size:13px;font-weight:700;color:#1e293b;margin-bottom:10px;">
                 📋 Next Steps After Login
@@ -297,7 +276,6 @@ const sendCredentialsEmail = async ({
               </table>
             </div>
 
-            <!-- CTA Button -->
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td align="center">
@@ -313,7 +291,6 @@ const sendCredentialsEmail = async ({
           </td>
         </tr>
 
-        <!-- FOOTER -->
         <tr>
           <td align="center"
               style="background:#f8fafc;border-top:1px solid #f1f5f9;padding:18px 32px;">
@@ -344,16 +321,10 @@ const sendCredentialsEmail = async ({
   });
 };
 
-
 // ═══════════════════════════════════════════════════════════════════════════════
 //  A. PUBLIC HOSPITAL CONTROLLERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * @route   GET /api/hospitals/nearby
- * @desc    Get hospitals near a location (0–100 km radius).
- * @access  Public
- */
 const getNearbyHospitals = asyncHandler(async (req, res) => {
   const lat      = parseFloat(req.query.lat);
   const lng      = parseFloat(req.query.lng);
@@ -369,10 +340,10 @@ const getNearbyHospitals = asyncHandler(async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
 
   const matchQuery = { isActive: true };
-  if (req.query.type)                    matchQuery.hospitalType     = req.query.type;
-  if (req.query.specialty)               matchQuery.specialties      = { $in: [req.query.specialty] };
-  if (req.query.is24x7 === 'true')       matchQuery.is24x7           = true;
-  if (req.query.hasICU  === 'true')      matchQuery.hasICU           = true;
+  if (req.query.type)                    matchQuery.hospitalType      = req.query.type;
+  if (req.query.specialty)               matchQuery.specialties       = { $in: [req.query.specialty] };
+  if (req.query.is24x7 === 'true')       matchQuery.is24x7            = true;
+  if (req.query.hasICU  === 'true')      matchQuery.hasICU            = true;
   if (req.query.hasEmergency === 'true') matchQuery.isEmergencyReady = true;
   if (req.query.scheme)                  matchQuery.acceptedSchemes  = { $in: [req.query.scheme] };
 
@@ -402,7 +373,6 @@ const getNearbyHospitals = asyncHandler(async (req, res) => {
         internalNotes:   0,
         createdBy:       0,
         updatedBy:       0,
-        platformFee:     0,
         settlementCycle: 0,
       },
     },
@@ -431,11 +401,6 @@ const getNearbyHospitals = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * @route   GET /api/hospitals
- * @desc    Get all hospitals (paginated, filterable).
- * @access  Public
- */
 const getAllHospitals = asyncHandler(async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
 
@@ -447,9 +412,9 @@ const getAllHospitals = asyncHandler(async (req, res) => {
   if (req.query.specialty)     filter.specialties      = { $in: [req.query.specialty] };
   if (req.query.accreditation) filter.accreditations   = { $in: [req.query.accreditation] };
   if (req.query.is24x7 === 'true')       filter.is24x7          = true;
-  if (req.query.hasICU === 'true')       filter.hasICU           = true;
+  if (req.query.hasICU === 'true')       filter.hasICU            = true;
   if (req.query.hasBloodBank === 'true') filter.hasBloodBank    = true;
-  if (req.query.hasPharmacy === 'true')  filter.hasPharmacy     = true;
+  if (req.query.hasPharmacy === 'true')  filter.hasPharmacy      = true;
   if (req.query.hasAmbulance === 'true') filter.hasAmbulance    = true;
   if (req.query.scheme)        filter.acceptedSchemes  = { $in: [req.query.scheme] };
   if (req.query.rating)        filter['rating.averageRating'] = { $gte: parseFloat(req.query.rating) };
@@ -473,7 +438,7 @@ const getAllHospitals = asyncHandler(async (req, res) => {
 
   const [hospitals, total] = await Promise.all([
     Hospital.find(filter)
-      .select('-internalNotes -createdBy -updatedBy -platformFee -settlementCycle')
+      .select('-internalNotes -createdBy -updatedBy -settlementCycle')
       .sort(sort)
       .skip(skip)
       .limit(limit)
@@ -491,18 +456,13 @@ const getAllHospitals = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * @route   GET /api/hospitals/:id
- * @desc    Get a single hospital by ID with linked doctors.
- * @access  Public
- */
 const getHospitalById = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) {
     return res.status(400).json({ success: false, message: 'Invalid hospital ID' });
   }
 
   const hospital = await Hospital.findOne({ _id: req.params.id, isActive: true })
-    .select('-internalNotes -platformFee -settlementCycle')
+    .select('-internalNotes -settlementCycle')
     .populate({
       path:   'linkedDoctors',
       select: 'user specialization qualifications experienceYears fees consultationTypes rating isVerified isOnline',
@@ -517,14 +477,9 @@ const getHospitalById = asyncHandler(async (req, res) => {
   res.json({ success: true, data: hospital });
 });
 
-/**
- * @route   GET /api/hospitals/slug/:slug
- * @desc    Get a single hospital by its URL slug.
- * @access  Public
- */
 const getHospitalBySlug = asyncHandler(async (req, res) => {
   const hospital = await Hospital.findOne({ slug: req.params.slug, isActive: true })
-    .select('-internalNotes -platformFee -settlementCycle')
+    .select('-internalNotes -settlementCycle')
     .populate({
       path:   'linkedDoctors',
       select: 'user specialization qualifications experienceYears fees consultationTypes rating isVerified isOnline',
@@ -539,11 +494,6 @@ const getHospitalBySlug = asyncHandler(async (req, res) => {
   res.json({ success: true, data: hospital });
 });
 
-/**
- * @route   GET /api/hospitals/search
- * @desc    Full-text hospital search.
- * @access  Public
- */
 const searchHospitals = asyncHandler(async (req, res) => {
   const q = req.query.q?.trim();
   if (!q || q.length < 2) {
@@ -555,12 +505,12 @@ const searchHospitals = asyncHandler(async (req, res) => {
   const filter = {
     isActive: true,
     $or: [
-      { name:           regex },
-      { description:    regex },
-      { specialties:    regex },
-      { facilities:     regex },
-      { hospitalType:   regex },
-      { 'address.city': regex },
+      { name:            regex },
+      { description:     regex },
+      { specialties:     regex },
+      { facilities:      regex },
+      { hospitalType:    regex },
+      { 'address.city':  regex },
     ],
   };
   if (req.query.city) filter['address.city'] = new RegExp(req.query.city, 'i');
@@ -584,15 +534,6 @@ const searchHospitals = asyncHandler(async (req, res) => {
     data:    hospitals,
   });
 });
-
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  A2. HOSPITAL FORM DOWNLOAD ROUTES
-// ═══════════════════════════════════════════════════════════════════════════════
-
- 
- 
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  B. PUBLIC DOCTOR CONTROLLERS
@@ -846,27 +787,10 @@ const searchDoctors = asyncHandler(async (req, res) => {
   });
 });
 
-
 // ═══════════════════════════════════════════════════════════════════════════════
 //  C. HOSPITAL ADMIN/MANAGEMENT CONTROLLERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * @route   POST /api/hospitals
- * @desc    Create a hospital AND auto-create the manager User account,
- *          then send login credentials via email.
- *
- *          Body must include:
- *            managerName    {string} - full name of the manager/owner
- *            managerEmail   {string} - email for credentials
- *            managerPhone?  {string} - optional phone
- *          Plus all standard hospital fields.
- *
- *          - hospital-manager type → creates User{ role:'hospital' }
- *          - doctor-owner type     → creates User{ role:'doctor' }
- *
- * @access  Admin, Superadmin
- */
 const createHospital = asyncHandler(async (req, res) => {
   const {
     name, hospitalType, description,
@@ -877,7 +801,6 @@ const createHospital = asyncHandler(async (req, res) => {
     hasPharmacy, hasDiagnostics, hasAmbulance,
     hasWheelchairAccess, is24x7, nabledLabAvailable,
     operatingHours, googleMapsUrl,
-    // Manager account fields
     managerName, managerEmail, managerPhone,
   } = req.body;
 
@@ -896,7 +819,6 @@ const createHospital = asyncHandler(async (req, res) => {
     });
   }
 
-  // Duplicate license check
   const existing = await Hospital.findOne({
     'registrationDetails.licenseNumber': registrationDetails.licenseNumber,
   });
@@ -907,7 +829,6 @@ const createHospital = asyncHandler(async (req, res) => {
     });
   }
 
-  // Duplicate manager email check
   const existingUser = await User.findOne({ email: managerEmail.toLowerCase().trim() });
   if (existingUser) {
     return res.status(409).json({
@@ -916,14 +837,12 @@ const createHospital = asyncHandler(async (req, res) => {
     });
   }
 
-  // Determine role from hospitalType
   const { MANAGED_HOSPITAL_TYPES } = await import('../models/Hospital.js');
   const managementModel = MANAGED_HOSPITAL_TYPES.includes(hospitalType)
     ? 'hospital-manager'
     : 'doctor-owner';
   const managerRole = managementModel === 'hospital-manager' ? 'hospital' : 'doctor';
 
-  // Generate password
   const generatePassword = () => {
     const upper   = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
     const lower   = 'abcdefghjkmnpqrstuvwxyz';
@@ -945,7 +864,6 @@ const createHospital = asyncHandler(async (req, res) => {
   const bcrypt         = await import('bcryptjs');
   const hashedPassword = await bcrypt.default.hash(plainPassword, 12);
 
-  // Create manager User
   const managerUser = await User.create({
     name:      managerName.trim(),
     email:     managerEmail.toLowerCase().trim(),
@@ -955,7 +873,6 @@ const createHospital = asyncHandler(async (req, res) => {
     createdBy: req.user._id,
   });
 
-  // Create hospital with managedBy set to new user
   const hospital = await Hospital.create({
     name, hospitalType, description,
     contact, address, registrationDetails,
@@ -969,7 +886,6 @@ const createHospital = asyncHandler(async (req, res) => {
     createdBy:  req.user._id,
   });
 
-  // If doctor-owner, also create a DoctorProfile stub
   let doctorProfile = null;
   if (managerRole === 'doctor') {
     doctorProfile = await DoctorProfile.create({
@@ -984,7 +900,6 @@ const createHospital = asyncHandler(async (req, res) => {
     });
   }
 
-  // Send credentials email
   try {
     await sendCredentialsEmail({
       recipientEmail:  managerUser.email,
@@ -1200,89 +1115,6 @@ const updateHospitalSecurity = asyncHandler(async (req, res) => {
   });
 });
 
-const updateHospitalPlatformFee = asyncHandler(async (req, res) => {
-  if (!mongoose.isValidObjectId(req.params.id)) {
-    return res.status(400).json({ success: false, message: 'Invalid hospital ID' });
-  }
-
-  const hospital = await Hospital.findById(req.params.id);
-  if (!hospital) {
-    return res.status(404).json({ success: false, message: 'Hospital not found' });
-  }
-
-  if (req.body.platformFee !== undefined) {
-    if (req.body.platformFee === null) {
-      hospital.platformFee = null;
-    } else {
-      const { type, value } = req.body.platformFee;
-      if (!['fixed', 'percentage'].includes(type)) {
-        return res.status(400).json({
-          success: false,
-          message: "platformFee.type must be 'fixed' or 'percentage'",
-        });
-      }
-      if (typeof value !== 'number' || value < 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'platformFee.value must be a non-negative number',
-        });
-      }
-      if (type === 'percentage' && value > 100) {
-        return res.status(400).json({
-          success: false,
-          message: 'platformFee.value cannot exceed 100 for percentage type',
-        });
-      }
-      hospital.platformFee = { type, value };
-    }
-  }
-
-  if (req.body.settlementCycle !== undefined) {
-    if (req.body.settlementCycle === null) {
-      hospital.settlementCycle = null;
-    } else {
-      if (!['weekly', 'biweekly', 'monthly'].includes(req.body.settlementCycle)) {
-        return res.status(400).json({
-          success: false,
-          message: "settlementCycle must be 'weekly', 'biweekly', or 'monthly'",
-        });
-      }
-      hospital.settlementCycle = req.body.settlementCycle;
-    }
-  }
-
-  hospital.updatedBy = req.user._id;
-  await hospital.save();
-
-  await SystemLog.createLog({
-    level:    'warning',
-    category: 'payment',
-    message:  `Hospital platform fee override updated: ${hospital.name}`,
-    actor:    { userId: req.user._id, name: req.user.name, role: req.user.role },
-    relatedEntity: { model: 'Hospital', entityId: hospital._id, label: hospital.name },
-    request:  { method: 'PUT', path: `/api/hospitals/${req.params.id}/platform-fee`, statusCode: 200 },
-    metadata: { platformFee: hospital.platformFee, settlementCycle: hospital.settlementCycle },
-  });
-
-  res.json({
-    success: true,
-    message: 'Hospital platform fee override updated',
-    data: {
-      platformFee:              hospital.platformFee,
-      settlementCycle:          hospital.settlementCycle,
-      hasCustomPlatformFee:     hospital.hasCustomPlatformFee,
-      hasCustomSettlementCycle: hospital.hasCustomSettlementCycle,
-    },
-  });
-});
-
-/**
- * @route   PUT /api/hospitals/:id/consultation-pricing
- * @desc    Update hospital consultation pricing (hospital-manager type only).
- *          Hospital manager can update fees/honorariums.
- *          platformFee inside is superadmin-only.
- * @access  Admin, Superadmin, Hospital (own)
- */
 const updateHospitalConsultationPricing = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) {
     return res.status(400).json({ success: false, message: 'Invalid hospital ID' });
@@ -1301,7 +1133,6 @@ const updateHospitalConsultationPricing = asyncHandler(async (req, res) => {
     });
   }
 
-  // Verify ownership for 'hospital' role
   if (req.user.role === 'hospital') {
     const isOwner = hospital.managedBy?.toString() === req.user._id.toString();
     if (!isOwner) {
@@ -1317,24 +1148,16 @@ const updateHospitalConsultationPricing = asyncHandler(async (req, res) => {
     'followUpFee', 'followUpDiscountPercent', 'followUpValidDays',
     'consultationTypes',
   ];
-  const adminOnlyFields = ['platformFee', 'lastUpdatedBy', 'lastUpdatedByRole'];
+
+  if (!hospital.consultationPricing) {
+    hospital.consultationPricing = {};
+  }
 
   allowedByHospitalManager.forEach((field) => {
     if (cp[field] !== undefined) {
       hospital.consultationPricing[field] = cp[field];
     }
   });
-
-  // platformFee inside consultationPricing → superadmin only
-  if (cp.platformFee !== undefined) {
-    if (!['admin', 'superadmin'].includes(req.user.role)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Only admins can update consultationPricing.platformFee',
-      });
-    }
-    hospital.consultationPricing.platformFee = cp.platformFee;
-  }
 
   hospital.consultationPricing.lastUpdatedBy   = req.user._id;
   hospital.consultationPricing.lastUpdatedByRole = req.user.role;
@@ -1350,11 +1173,6 @@ const updateHospitalConsultationPricing = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * @route   POST /api/hospitals/:id/resend-credentials
- * @desc    Re-send login credentials email to the hospital manager.
- * @access  Admin, Superadmin
- */
 const resendHospitalManagerCredentials = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) {
     return res.status(400).json({ success: false, message: 'Invalid hospital ID' });
@@ -1370,7 +1188,6 @@ const resendHospitalManagerCredentials = asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'Hospital manager account not found' });
   }
 
-  // Generate new password and update
   const plainPassword  = Math.random().toString(36).slice(-8).toUpperCase() + 'Hx@1';
   const bcrypt         = await import('bcryptjs');
   const hashedPassword = await bcrypt.default.hash(plainPassword, 12);
@@ -1721,7 +1538,6 @@ const deleteHospital = asyncHandler(async (req, res) => {
   res.json({ success: true, message: 'Hospital deleted permanently' });
 });
 
-
 // ═══════════════════════════════════════════════════════════════════════════════
 //  D. DOCTOR SELF-SERVICE CONTROLLERS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1732,9 +1548,9 @@ const getMyDoctorProfile = asyncHandler(async (req, res) => {
     .populate('primaryHospital', 'name address slug logo consultationPricing managementModel')
     .populate('otherHospitals',  'name address slug')
     .populate({
-  path: 'ownedHospitals',
-  select: 'name address slug isVerified'
-});
+      path: 'ownedHospitals',
+      select: 'name address slug isVerified'
+    });
 
   if (!profile) {
     return res.status(404).json({
@@ -1747,20 +1563,40 @@ const getMyDoctorProfile = asyncHandler(async (req, res) => {
 });
 
 export const getMyManagedHospitals = asyncHandler(async (req, res) => {
-  // 1. Populate standard fields + the virtual 'ownedHospitals'
+  // ── 1. Handle Hospital Manager Role ─────────────────────────────────────────
+  if (req.user.role === 'hospital') {
+    const managedHospitals = await Hospital.find({ managedBy: req.user._id })
+      .select('name address slug logo isVerified isActive bedCount rating managementModel')
+      .lean();
+
+    return res.json({
+      success: true,
+      data: {
+        primaryHospital: managedHospitals[0] || null, // Treat their first managed hospital as primary for UI compatibility
+        otherHospitals: [],
+        managedHospitals: managedHospitals,
+        ownedHospitals: [],
+        setupStatus: {
+          isPrimarySet: managedHospitals.length > 0,
+          hasLinkedHospitals: managedHospitals.length > 0,
+          needsAction: managedHospitals.length === 0
+        }
+      },
+    });
+  }
+
+  // ── 2. Handle Doctor Role ───────────────────────────────────────────────────
   const profile = await DoctorProfile.findOne({ user: req.user._id })
-    .select('managedHospitals primaryHospital otherHospitals')
+    .select('managedHospitals primaryHospital otherHospitals ownedHospitals')
     .populate('managedHospitals', 'name address slug logo isVerified isActive bedCount rating managementModel')
     .populate('primaryHospital',  'name address slug logo isVerified isActive managementModel')
     .populate('otherHospitals',   'name address slug logo isVerified isActive managementModel')
     .populate('ownedHospitals',   'name address slug logo isVerified isActive managementModel'); 
     
-
   if (!profile) {
     return res.status(404).json({ success: false, message: 'Doctor profile not found' });
   }
 
-  // 2. Determine if the setup is incomplete
   const hasPrimary = !!profile.primaryHospital;
   const hospitalsFound = 
     (profile.managedHospitals?.length > 0) || 
@@ -1772,9 +1608,7 @@ export const getMyManagedHospitals = asyncHandler(async (req, res) => {
       primaryHospital:  profile.primaryHospital,
       otherHospitals:   profile.otherHospitals,
       managedHospitals: profile.managedHospitals,
-      ownedHospitals:   profile.ownedHospitals || [], // Clinics the doctor owns
-      
-      // Meta-data to help the frontend trigger the "Contact Admin" or "Setup" warning
+      ownedHospitals:   profile.ownedHospitals || [], 
       setupStatus: {
         isPrimarySet: hasPrimary,
         hasLinkedHospitals: hospitalsFound,
@@ -1806,12 +1640,6 @@ const getDoctorStats = asyncHandler(async (req, res) => {
   res.json({ success: true, data: doctor });
 });
 
-/**
- * @route   GET /api/hospitals/doctors/me/pricing
- * @desc    Get the effective pricing for the logged-in doctor
- *          (resolves hospital-manager vs doctor-owner automatically).
- * @access  Doctor
- */
 const getMyEffectivePricing = asyncHandler(async (req, res) => {
   const profile = await DoctorProfile.findOne({ user: req.user._id }).lean();
   if (!profile) {
@@ -1822,18 +1650,10 @@ const getMyEffectivePricing = asyncHandler(async (req, res) => {
   res.json({ success: true, data: pricing });
 });
 
-
 // ═══════════════════════════════════════════════════════════════════════════════
 //  E. DOCTOR ADMIN CONTROLLERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * @route   POST /api/hospitals/doctors
- * @desc    Create a doctor account and send credentials email.
- *          If the doctor is being created for a hospital-manager hospital,
- *          managementModel context is auto-derived from the primaryHospital.
- * @access  Admin, Superadmin
- */
 const createDoctorProfile = asyncHandler(async (req, res) => {
   const {
     name, email, phone,
@@ -1861,7 +1681,6 @@ const createDoctorProfile = asyncHandler(async (req, res) => {
     return res.status(409).json({ success: false, message: 'A user with this email already exists' });
   }
 
-  // Determine management model from primaryHospital
   let managementModel = 'doctor-owner';
   let hospitalName    = 'Likeson.in';
   if (primaryHospital && mongoose.isValidObjectId(primaryHospital)) {
@@ -1960,23 +1779,18 @@ const createDoctorProfile = asyncHandler(async (req, res) => {
         role:  newUser.role,
       },
       profile: {
-        _id:               profile._id,
-        specialization:    profile.specialization,
-        experienceYears:   profile.experienceYears,
-        partnershipStatus: profile.partnershipStatus,
-        kycStatus:         profile.kycStatus,
-        primaryHospital:   profile.primaryHospital,
+        _id:                profile._id,
+        specialization:     profile.specialization,
+        experienceYears:    profile.experienceYears,
+        partnershipStatus:  profile.partnershipStatus,
+        kycStatus:          profile.kycStatus,
+        primaryHospital:    profile.primaryHospital,
         managementModel,
       },
     },
   });
 });
 
-/**
- * @route   POST /api/hospitals/doctors/:id/resend-credentials
- * @desc    Resend credentials email for a doctor (generates new password).
- * @access  Admin, Superadmin
- */
 const resendDoctorCredentials = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) {
     return res.status(400).json({ success: false, message: 'Invalid doctor ID' });
@@ -2001,7 +1815,7 @@ const resendDoctorCredentials = asyncHandler(async (req, res) => {
   });
 
   const managementModel = profile.primaryHospital?.managementModel || 'doctor-owner';
-  const entityName      = profile.primaryHospital?.name            || 'Likeson.in';
+  const entityName      = profile.primaryHospital?.name             || 'Likeson.in';
 
   try {
     await sendCredentialsEmail({
@@ -2053,14 +1867,14 @@ const updateDoctorProfile = asyncHandler(async (req, res) => {
     return res.status(403).json({ success: false, message: 'Access denied' });
   }
 
-const allowedFields = [
+  const allowedFields = [
     'specialization', 'qualifications', 'experienceYears',
     'registrationNumber', 'registrationCouncil',
     'biography', 'languagesSpoken', 'achievements',
     'fees', 'consultationTypes',
     'primaryHospital', 'otherHospitals',
     'notifPrefs',
-    'doctorSignature', // Added doctorSignature here
+    'doctorSignature', 
   ];
 
   allowedFields.forEach((field) => {
@@ -2376,7 +2190,6 @@ const uploadDoctorSignature = asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'Doctor not found' });
   }
 
-  // Ensure the doctor is only updating their own profile (unless admin)
   if (
     req.user.role === 'doctor' &&
     doctor.user.toString() !== req.user._id.toString()
@@ -2579,8 +2392,8 @@ const verifyDoctorKyc = asyncHandler(async (req, res) => {
       _id:                      updatedDoctor._id,
       kycStatus:                updatedDoctor.kycStatus,
       isVerified:               updatedDoctor.isVerified,
-      kycVerifiedAt:            updatedDoctor.kycVerifiedAt        ?? null,
-      kycVerifiedBy:            updatedDoctor.kycVerifiedBy        ?? null,
+      kycVerifiedAt:            updatedDoctor.kycVerifiedAt      ?? null,
+      kycVerifiedBy:            updatedDoctor.kycVerifiedBy      ?? null,
       kycRejectionReason:       updatedDoctor.kycRejectionReason   ?? null,
       partnershipStatus:        updatedDoctor.partnershipStatus,
       profileCompletionPercent: updatedDoctor.profileCompletionPercent,
@@ -2649,11 +2462,6 @@ const deleteDoctorProfile = asyncHandler(async (req, res) => {
   res.json({ success: true, message: 'Doctor profile deleted permanently' });
 });
 
-/**
- * @route   GET /api/hospitals/doctors/by-hospital/:hospitalId
- * @desc    Get all doctors linked to a specific hospital.
- * @access  Public
- */
 const getDoctorsByHospital = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.hospitalId)) {
     return res.status(400).json({ success: false, message: 'Invalid hospital ID' });
@@ -2694,18 +2502,13 @@ const getDoctorsByHospital = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * @route   GET /api/hospitals/:id/pricing
- * @desc    Get effective pricing for a hospital (resolves managementModel).
- * @access  Public
- */
 const getHospitalEffectivePricing = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) {
     return res.status(400).json({ success: false, message: 'Invalid hospital ID' });
   }
 
   const hospital = await Hospital.findById(req.params.id)
-    .select('name managementModel consultationPricing platformFee settlementCycle')
+    .select('name managementModel consultationPricing settlementCycle')
     .lean();
 
   if (!hospital) {
@@ -2724,20 +2527,15 @@ const getHospitalEffectivePricing = asyncHandler(async (req, res) => {
       consultationPricing: hospital.managementModel === 'hospital-manager'
         ? hospital.consultationPricing
         : null,
-      platformFee:     hospital.platformFee,
       settlementCycle: hospital.settlementCycle,
     },
   });
 });
 
-
 // ═══════════════════════════════════════════════════════════════════════════════
 //  F. ROUTE DEFINITIONS
-//
-//  RULE: Static / named paths MUST be declared BEFORE dynamic /:id paths.
 // ═══════════════════════════════════════════════════════════════════════════════
 
- 
 // ── A. PUBLIC HOSPITAL ROUTES ─────────────────────────────────────────────────
 router.get('/nearby', cache(120, () => 'hospitals:nearby'), getNearbyHospitals);
 router.get('/search', cache(60,  (req) => `hospitals:search:${req.query.q || ''}:${req.query.city || ''}:${req.query.page || 1}`), searchHospitals);
@@ -2752,12 +2550,16 @@ router.get('/doctors/specialization/:spec',     cache(180, (req) => `doctors:spe
 router.get('/doctors/by-hospital/:hospitalId',  cache(120, (req) => `doctors:hospital:${req.params.hospitalId}:${req.query.page || 1}`), getDoctorsByHospital);
 
 // ── C. AUTHENTICATED DOCTOR SELF-SERVICE ROUTES ───────────────────────────────
+// ── C. AUTHENTICATED DOCTOR / HOSPITAL SELF-SERVICE ROUTES ────────────────────
 router.get('/doctors/me',                protect, authorize('doctor'), getMyDoctorProfile);
-router.get('/doctors/me/hospitals',      protect, authorize('doctor'), getMyManagedHospitals);
-router.get('/doctors/me/pricing',        protect, authorize('doctor'), getMyEffectivePricing);
+// Added 'hospital' below to resolve the FORBIDDEN error
+router.get('/doctors/me/hospitals',      protect, authorize('doctor', 'hospital'), getMyManagedHospitals);
+// Added 'hospital' below so managers can view their effective pricing rules
+router.get('/doctors/me/pricing',        protect, authorize('doctor', 'hospital'), getMyEffectivePricing);
 
-// ── D. DOCTOR CREATE (Admin) ──────────────────────────────────────────────────
-router.post('/doctors', protect, authorize('admin', 'superadmin'), createDoctorProfile);
+// ── D. DOCTOR CREATE (Admin & Hospital Managers) ──────────────────────────────
+// Added 'hospital' below so managers can use the "Add New Doctor" UI button
+router.post('/doctors', protect, authorize('admin', 'superadmin', 'hospital'), createDoctorProfile);
 
 // ── E. DOCTOR PROFILE UPDATES (Doctor own + Admin) ───────────────────────────
 router.put('/doctors/:id/profile',      protect, authorize('doctor', 'admin', 'superadmin'), updateDoctorProfile);
@@ -2790,7 +2592,7 @@ router.put('/doctors/:id/partnership',        protect, authorize('admin', 'super
 router.put('/doctors/:id/kyc/verify',         protect, authorize('admin', 'superadmin'), verifyDoctorKyc);
 router.put('/doctors/:id/toggle',             protect, authorize('admin', 'superadmin'), toggleDoctorActive);
 router.post('/doctors/:id/resend-credentials',protect, authorize('admin', 'superadmin'), resendDoctorCredentials);
-router.delete('/doctors/:id',                 protect, authorize('superadmin'),           deleteDoctorProfile);
+router.delete('/doctors/:id',                 protect, authorize('superadmin'),          deleteDoctorProfile);
 
 // ── G. DYNAMIC DOCTOR PUBLIC ROUTE (MUST be last in /doctors group) ───────────
 router.get('/doctors/:id', cache(300, (req) => `doctors:single:${req.params.id}`), getDoctorById);
@@ -2800,7 +2602,6 @@ router.post('/',         protect, authorize('admin', 'superadmin'), createHospit
 router.put('/:id/profile',              protect, authorize('admin', 'superadmin'), updateHospitalProfile);
 router.put('/:id/settings',             protect, authorize('admin', 'superadmin'), updateHospitalSettings);
 router.put('/:id/security',             protect, authorize('admin', 'superadmin'), updateHospitalSecurity);
-router.put('/:id/platform-fee',         protect, authorize('admin', 'superadmin'), updateHospitalPlatformFee);
 router.put('/:id/consultation-pricing', protect, authorize('hospital', 'admin', 'superadmin'), updateHospitalConsultationPricing);
 router.post('/:id/resend-credentials',  protect, authorize('admin', 'superadmin'), resendHospitalManagerCredentials);
 
@@ -2818,7 +2619,7 @@ router.post('/:id/doctors/:doctorId',    protect, authorize('admin', 'superadmin
 router.delete('/:id/doctors/:doctorId',  protect, authorize('admin', 'superadmin'), unlinkDoctorFromHospital);
 router.put('/:id/verify',                protect, authorize('admin', 'superadmin'), verifyHospital);
 router.put('/:id/toggle',                protect, authorize('admin', 'superadmin'), toggleHospitalActive);
-router.delete('/:id',                    protect, authorize('superadmin'),           deleteHospital);
+router.delete('/:id',                    protect, authorize('superadmin'),          deleteHospital);
 
 // ── I. HOSPITAL PRICING (public read) ─────────────────────────────────────────
 router.get('/:id/pricing', cache(300, (req) => `hospitals:pricing:${req.params.id}`), getHospitalEffectivePricing);

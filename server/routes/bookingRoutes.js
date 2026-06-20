@@ -1,6 +1,6 @@
 import express from 'express';
 import Booking              from '../models/Booking.js';
-import Consultation         from '../models/Consultation.js';  // ← added
+import Consultation         from '../models/Consultation.js';
 import Ride                 from '../models/Ride.js';
 import RideTracking         from '../models/RideTracking.js';
 import User                 from '../models/User.js';
@@ -39,6 +39,7 @@ import {
   createNotification,
   buildRidePayload,
   calculateCanonicalRoute,
+  recoverSubscriptionUsageOnCancel, // ← FIX: was used below but never imported in the original file
   RADIUS_METERS,
   CARE_RIDE_RADIUS_M,
   TRANSPORT_RADIUS_M,
@@ -78,6 +79,7 @@ const invalidateBookingCache = async () => {
       'GET:/hospital/*',
       'GET:/doctor/ops*',
       'GET:/consultations*',
+      'GET:/tp/*',          // FIX: TP-facing cache wasn't invalidated before
     ];
     for (const pattern of patterns) {
       let cursor = 0;
@@ -89,8 +91,6 @@ const invalidateBookingCache = async () => {
     }
   } catch (e) { console.error('[Cache] invalidation error:', e.message); }
 };
-
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INTERNAL HELPERS
@@ -112,7 +112,7 @@ const getBookingCoords = (booking) => ({
 const sendOpZipEmail = async ({ op, booking, patient, followUps = [] }) => {
   try {
     const doctor = op.doctor
-      ? await DoctorProfile.findById(op.doctor).populate('user', 'name').lean()
+      ? await DoctorProfile.findById(op.doctor).populate('user', 'name email phone').lean()
       : null;
     const hospital = op.hospital
       ? await Hospital.findById(op.hospital).lean()
@@ -223,9 +223,9 @@ const emailCustomerStatusUpdate = async ({ booking, newStatus, customer }) => {
         billing:    booking.fareBreakdown
           ? {
               subTotal:       booking.fareBreakdown.totalAmount || 0,
-              gstAmount:      booking.fareBreakdown.taxes       || 0,   // fixed: was taxAmount
+              gstAmount:      booking.fareBreakdown.taxes       || 0,
               totalPayable:   booking.fareBreakdown.totalAmount || 0,
-              discountAmount: booking.fareBreakdown.discount    || 0,   // fixed: was discountAmount
+              discountAmount: booking.fareBreakdown.discount    || 0,
             }
           : null,
         actionLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
@@ -345,8 +345,8 @@ router.get('/consultations/:bookingId',
 
       const consultation = await Consultation.findById(booking.consultationSessionId)
         .populate('patient', 'name phone email')
-        .populate({ path: 'doctor', populate: { path: 'user', select: 'name phone' } })
-        .populate('hospital', 'name address')
+        .populate({ path: 'doctor', populate: { path: 'user', select: 'name phone email' } })
+        .populate('hospital', 'name address contact')
         .lean();
 
       if (!consultation) {
@@ -850,7 +850,7 @@ router.get('/consultations/:consultationId/join-token',
   async (req, res) => {
     try {
       const consultation = await Consultation.findById(req.params.consultationId)
-        .select('roomId meetingId  provider status patient doctor')
+        .select('roomId meetingId provider status patient doctor')
         .lean();
       if (!consultation) return res.status(404).json({ success: false, message: 'Consultation not found' });
 
@@ -906,6 +906,13 @@ router.get('/consultations/:consultationId/join-token',
 
 // ═════════════════════════════════════════════════════════════════════════════
 // TRANSPORT PARTNER ROUTES
+// FLOW: Admin assigns a Booking to a TransportPartner (TP) only.
+// The TP then assigns one of ITS OWN fleet Drivers via /:id/tp/assign-driver.
+// Admin / superadmin NEVER assigns a normal (agency) Driver directly — only
+// a TP can do that for its own fleet. Admin's only "direct driver" path is
+// a SoloDriverPartner (an independently onboarded single-driver partner),
+// which is a different entity from an agency Driver. See assign/solo-driver
+// below in the ADMIN ROUTES section.
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.get('/tp/assigned',
@@ -917,8 +924,11 @@ router.get('/tp/assigned',
       if (!tp) return res.status(404).json({ success: false, message: 'Transport partner not found' });
 
       const bookings = await Booking.find({ transportPartner: tp._id })
-        .select('bookingCode bookingType scheduledAt patientInfo status fareBreakdown primaryRide patientLocation destinationLocation')
-        .populate('customer', 'name phone')
+        .select('bookingCode bookingType scheduledAt patientInfo status fareBreakdown primaryRide patientLocation destinationLocation doctor hospital')
+        .populate('customer', 'name phone email')
+        .populate({ path: 'doctor', select: 'specialization registrationNumber', populate: { path: 'user', select: 'name phone' } })
+        .populate('hospital', 'name address contact')
+        .populate('primaryRide', 'status driver driverSnapshot vehicleSnapshot estimatedDistanceKm estimatedDurationMin')
         .sort({ scheduledAt: -1 })
         .lean();
 
@@ -941,7 +951,8 @@ router.get('/tp/drivers/available', protect, authorize('transportpartner'), asyn
       isVerified:  true,
       isBlocked:   false,
     })
-      .select('legalName phone driverCode assignedVehicleSnapshot performance.rating status location')
+      .select('legalName phone driverCode assignedVehicleSnapshot performance.rating status location kyc.licenceClass')
+      .populate('user', 'name phone email')
       .sort({ 'performance.rating': -1, legalName: 1 })
       .lean();
 
@@ -953,14 +964,15 @@ router.get('/tp/drivers/available', protect, authorize('transportpartner'), asyn
 
 /**
  * PATCH /:id/tp/assign-driver
- * TP assigns one of their own drivers.
+ * TP assigns one of their own drivers. This is the ONLY route that links a
+ * Booking/Ride to an agency Driver — admin has no equivalent direct route.
  */
 router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), async (req, res) => {
   try {
     const { driverId } = req.body;
     if (!driverId) return res.status(400).json({ success: false, message: 'driverId required' });
 
-    const tp = await TransportPartner.findOne({ user: req.user._id }).select('_id').lean();
+    const tp = await TransportPartner.findOne({ user: req.user._id }).select('_id businessName').lean();
     if (!tp) return res.status(404).json({ success: false, message: 'Transport partner not found' });
 
     const driver = await Driver.findOne({ _id: driverId, ownerAgency: tp._id }).lean();
@@ -968,6 +980,9 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
 
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+    if (!booking.transportPartner || String(booking.transportPartner) !== String(tp._id)) {
+      return res.status(403).json({ success: false, message: 'This booking is not assigned to your fleet' });
+    }
 
     await Ride.updateMany(
       { booking: booking._id, status: { $in: ['requested', 'searching'] } },
@@ -1066,6 +1081,14 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
       },
     });
 
+    await SystemLog.createLog({
+      level: 'success', category: 'api',
+      message: `TP ${tp.businessName || tp._id} assigned driver to #${booking.bookingCode}`,
+      actor: { userId: req.user._id, role: req.user.role },
+      relatedEntity: { model: 'Booking', entityId: booking._id },
+      metadata: { driverId },
+    }).catch(() => {});
+
     await invalidateBookingCache();
     return res.json({
       success: true,
@@ -1087,6 +1110,7 @@ router.patch('/:id/tp/assign-driver', protect, authorize('transportpartner'), as
 
 /**
  * PATCH /:id/tp/reassign-driver
+ * TP swaps one of their own drivers for another, on their own fleet only.
  */
 router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), async (req, res) => {
   try {
@@ -1099,13 +1123,16 @@ router.patch('/:id/tp/reassign-driver', protect, authorize('transportpartner'), 
     const driver = await Driver.findOne({ _id: newDriverId, ownerAgency: tp._id }).lean();
     if (!driver) return res.status(403).json({ success: false, message: 'Driver not in your fleet' });
 
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+    if (!booking.transportPartner || String(booking.transportPartner) !== String(tp._id)) {
+      return res.status(403).json({ success: false, message: 'This booking is not assigned to your fleet' });
+    }
+
     await Ride.updateMany(
       { booking: req.params.id, status: { $in: ['driver_assigned', 'driver_accepted'] } },
       { status: 'cancelled', 'cancellation.cancelledBy': 'system', 'cancellation.cancelledAt': new Date() }
     );
-
-    const booking = await Booking.findById(req.params.id);
-    if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
     const coords = getBookingCoords(booking);
     const { distanceKm, durationMin, polyline } = await calculateCanonicalRoute(
@@ -1185,8 +1212,10 @@ router.get('/care/assigned',
       if (!profile) return res.status(404).json({ success: false, message: 'Care assistant profile not found' });
 
       const bookings = await Booking.find({ careAssistant: profile._id })
-        .select('bookingCode bookingType scheduledAt patientInfo status patientLocation careAssistantSnapshot fareBreakdown')
-        .populate('customer', 'name phone')
+        .select('bookingCode bookingType scheduledAt patientInfo status patientLocation careAssistantSnapshot fareBreakdown doctor hospital primaryRide')
+        .populate('customer', 'name phone email')
+        .populate({ path: 'doctor', select: 'specialization registrationNumber', populate: { path: 'user', select: 'name phone' } })
+        .populate('hospital', 'name address contact')
         .sort({ scheduledAt: -1 })
         .lean();
 
@@ -1381,9 +1410,11 @@ router.patch('/care/location',
         { new: true }
       ).select('_id').lean();
 
+      let activeRide = null;
+
       if (bookingId) {
         // Find active ride for this booking
-        const activeRide = await Ride.findOne({
+        activeRide = await Ride.findOne({
           booking: bookingId,
           status: { $in: ['driver_assigned', 'driver_accepted', 'driver_en_route',
                           'driver_arrived', 'otp_verified', 'in_progress', 'at_stop'] },
@@ -1420,7 +1451,6 @@ router.patch('/care/location',
     }
   }
 );
-
 
 // ═════════════════════════════════════════════════════════════════════════════
 // CARE ASSISTANT — RIDE SESSION PARTICIPATION
@@ -1892,11 +1922,12 @@ router.get('/hospital/upcoming', protect, authorize('hospital'), async (req, res
       .select('bookingCode patientInfo scheduledAt bookingType status consultationType doctorSnapshot careAssistantSnapshot fareBreakdown primaryRide consultationSessionId')
       .populate({
         path:     'doctor',
-        select:   'specialization registrationNumber',
-        populate: { path: 'user', select: 'name phone' },
+        select:   'specialization registrationNumber profilePhotoUrl',
+        populate: { path: 'user', select: 'name phone email' },
       })
-      .populate('careAssistant', 'fullName phone photoUrl experience')
-      .populate('customer', 'name phone')
+      .populate('careAssistant', 'fullName phone photoUrl experienceYears')
+      .populate('customer', 'name phone email')
+      .populate('primaryRide', 'status driverSnapshot vehicleSnapshot estimatedDistanceKm estimatedDurationMin')
       .sort({ scheduledAt: 1 })
       .lean();
 
@@ -2010,7 +2041,7 @@ router.get('/hospital/:hospitalId/ops',
       const skip = (parseInt(page) - 1) * parseInt(limit);
       const [ops, total] = await Promise.all([
         OutPatientRecord.find(filter)
-          .populate('doctor',   'user specialization registrationNumber')
+         .populate({ path: 'doctor', select: 'user specialization registrationNumber profilePhotoUrl', populate: { path: 'user', select: 'name phone email' } })
           .populate('patient',  'name phone email')
           .populate('booking',  'bookingCode bookingType fareBreakdown paymentStatus')
           .sort({ scheduledAt: -1 }).skip(skip).limit(parseInt(limit)).lean(),
@@ -2054,8 +2085,8 @@ router.get('/hospital/:hospitalId/valid-ops',
       const skip = (parseInt(page) - 1) * parseInt(limit);
       const [ops, total] = await Promise.all([
         OutPatientRecord.find(filter)
-          .populate('doctor',  'user specialization')
-          .populate('patient', 'name phone')
+          .populate('doctor',  'user specialization registrationNumber')
+          .populate('patient', 'name phone email')
           .populate('booking', 'bookingCode bookingType fareBreakdown paymentStatus')
           .sort({ scheduledAt: -1 }).skip(skip).limit(parseInt(limit)).lean(),
         OutPatientRecord.countDocuments(filter),
@@ -2263,7 +2294,7 @@ router.get('/op/:opNumber',
       }
 
       const op = await OutPatientRecord.findOne(filter)
-        .populate('doctor',   'user specialization registrationNumber profilePhotoUrl')
+        .populate({ path: 'doctor', select: 'user specialization registrationNumber profilePhotoUrl', populate: { path: 'user', select: 'name phone email' } })
         .populate('hospital', 'name address contact operatingHours is24x7')
         .populate('patient',  'name phone email')
         .populate('booking',  'bookingCode bookingType fareBreakdown status patientInfo consultationType documents consultationSessionId')
@@ -2295,7 +2326,7 @@ router.get('/op/:opNumber/follow-ups', protect, async (req, res) => {
 
     const followUps = await OutPatientRecord.find({ parentOp: parentOp._id })
       .sort({ scheduledAt: -1 })
-      .populate('doctor',   'user specialization')
+      .populate({ path: 'doctor', select: 'user specialization', populate: { path: 'user', select: 'name phone email' } })
       .populate('hospital', 'name address')
       .populate('booking',  'bookingCode status')
       .lean();
@@ -2367,7 +2398,12 @@ router.get('/admin/bookings',
       const [bookings, total] = await Promise.all([
         Booking.find(filter)
           .sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit))
-          .populate('customer', 'name phone email').lean(),
+          .populate('customer', 'name phone email')
+          .populate({ path: 'doctor', select: 'specialization registrationNumber', populate: { path: 'user', select: 'name phone' } })
+          .populate('hospital', 'name address contact')
+          .populate('careAssistant', 'fullName phone photoUrl')
+          .populate('transportPartner', 'businessName ownerPhone')
+          .lean(),
         Booking.countDocuments(filter),
       ]);
 
@@ -2440,9 +2476,9 @@ router.get('/admin/bookings/export', protect, authorize('admin', 'superadmin'), 
         b.patientInfo?.name, b.customer?.name, b.customer?.phone,
         b.fareBreakdown?.totalAmount, b.fareBreakdown?.amountPaid,
         b.paymentStatus,
-        b.consultationSessionId ? 'Yes' : 'No',   // extra useful column
+        b.consultationSessionId ? 'Yes' : 'No',
         new Date(b.createdAt).toLocaleString('en-IN'),
-      ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')  // proper CSV quoting
+      ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')
     );
 
     res.setHeader('Content-Type', 'text/csv');
@@ -2460,10 +2496,11 @@ router.get('/admin/bookings/:id',
     try {
       const booking = await Booking.findById(req.params.id)
         .populate('customer',      'name phone email')
-        .populate('doctor',        'user specialization profilePhotoUrl registrationNumber')
+        .populate({ path: 'doctor', select: 'user specialization profilePhotoUrl registrationNumber', populate: { path: 'user', select: 'name phone email' } })
         .populate('hospital',      'name address contact consultationPricing')
-        .populate('careAssistant', 'fullName phone photoUrl')
-        .populate('primaryRide',   'status liveLocation driverSnapshot vehicleSnapshot scheduledPickupAt pickup dropoff estimatedDistanceKm estimatedDurationMin trackingId')
+        .populate('careAssistant', 'fullName phone photoUrl specializations performance.averageRating')
+        .populate('transportPartner', 'businessName ownerName ownerPhone fleetInfo')
+        .populate('primaryRide',   'status liveLocation driverSnapshot vehicleSnapshot scheduledPickupAt pickup dropoff estimatedDistanceKm estimatedDurationMin trackingId driver')
         .populate('rides',         'status rideType driverSnapshot vehicleSnapshot estimatedDistanceKm')
         .populate('diagnosticDetails.labPartner', 'labName contact')
         .lean();
@@ -2487,6 +2524,20 @@ router.get('/admin/bookings/:id',
         }
       }
 
+      // Resolve underlying driver detail (could be agency driver via TP, or solo partner driver)
+      let driverDetail = null;
+      if (booking.primaryRide?.driver) {
+        const driverDoc = await Driver.findById(booking.primaryRide.driver)
+          .select('legalName phone driverCode assignedVehicleSnapshot ownerAgency soloPartner performance.rating')
+          .lean();
+        if (driverDoc) {
+          driverDetail = {
+            ...driverDoc,
+            assignmentType: driverDoc.ownerAgency ? 'transport_partner_fleet' : (driverDoc.soloPartner ? 'solo_driver_partner' : 'unknown'),
+          };
+        }
+      }
+
       const opRecord = booking.doctor
         ? await OutPatientRecord.findOne({ booking: booking._id })
             .populate('doctor', 'user specialization').populate('hospital', 'name address').lean()
@@ -2503,7 +2554,7 @@ router.get('/admin/bookings/:id',
           .lean();
       }
 
-      return res.json({ success: true, data: { booking, opRecord, followUps, mapRoute, consultation } });
+      return res.json({ success: true, data: { booking, opRecord, followUps, mapRoute, consultation, driverDetail } });
     } catch (err) {
       return res.status(500).json({ success: false, message: err.message });
     }
@@ -2542,10 +2593,10 @@ router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadm
     await booking.save();
 
     if (status === 'cancelled') {
-  await recoverSubscriptionUsageOnCancel(booking).catch(e =>
-    console.error('[admin/status] recovery failed:', e.message)
-  );
-}
+      await recoverSubscriptionUsageOnCancel(booking).catch(e =>
+        console.error('[admin/status] recovery failed:', e.message)
+      );
+    }
 
     // ── AUTO-CREATE CONSULTATION on confirm for online booking types ──────────
     if (
@@ -2554,11 +2605,11 @@ router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadm
       booking.doctor &&
       !booking.consultationSessionId
     ) {
-    try {
+      try {
         const { createAgoraRoom, generateAgoraToken } = await import('../services/agoraService.js');
 
-        const scheduledStartTime              = booking.scheduledAt;
-        const { roomId, meetingId,  } = createAgoraRoom(
+        const scheduledStartTime    = booking.scheduledAt;
+        const { roomId, meetingId } = createAgoraRoom(
           booking.bookingCode,
           booking._id.toString()
         );
@@ -2597,7 +2648,6 @@ router.patch('/admin/bookings/:id/status', protect, authorize('admin', 'superadm
         booking.consultationSessionId = consultation._id;
       } catch (consultErr) {
         console.error('[admin/status] Agora room creation failed:', consultErr.message);
-        
       }
     }
 
@@ -2675,6 +2725,7 @@ router.get('/admin/bookings/:id/nearby/care-assistants',
         location: { $geoWithin: { $centerSphere: [[lng, lat], careRideRadiusRad] } },
       })
         .select('fullName phone specializations performance maxServiceRadiusKm availability location workType user')
+        .populate('user', 'name phone email')
         .limit(20).lean();
 
       const results = careAssistants
@@ -2722,6 +2773,7 @@ router.get('/admin/bookings/:id/nearby/solo-drivers',
         driverProfile: { $ne: null }, $or: zoneOrClauses,
       })
         .select('legalName phone vehicle serviceZones rating driverProfile isOnboardingComplete partnershipStatus platformFeeOverride')
+        .populate('user', 'name phone email')
         .limit(30).lean();
 
       const results = await Promise.all(soloPartners.map(async sp => {
@@ -2796,6 +2848,7 @@ router.get('/admin/bookings/:id/nearby/transport-partners',
         partnershipStatus: 'active', isAvailable: true, isOnboardingComplete: true, $or: zoneOrClauses,
       })
         .select('businessName ownerName ownerPhone fleetInfo rating serviceZones isOnboardingComplete vehicles')
+        .populate('user', 'name phone email')
         .limit(30).lean();
 
       const results = await Promise.all(tps.map(async tp => {
@@ -2883,6 +2936,15 @@ router.get('/admin/bookings/:id/nearby/hospitals',
 );
 
 // ── Admin assignment routes ────────────────────────────────────────────────
+// IMPORTANT (business rule):
+// Admin / superadmin can assign a booking to:
+//   1) a SoloDriverPartner   → /assign/solo-driver   (independent single-driver partner)
+//   2) a TransportPartner    → /assign/transport-partner (a fleet/agency)
+// Admin does NOT assign a normal agency Driver directly. Once a TP is
+// assigned, only that TP (via /:id/tp/assign-driver) can pick a Driver from
+// its own fleet. There is intentionally no "/admin/.../assign/driver" or
+// "/admin/.../reassign/driver" route in this file.
+// ────────────────────────────────────────────────────────────────────────────
 
 /**
  * POST /admin/bookings/:id/assign/solo-driver
@@ -2906,17 +2968,17 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
     if (!soloPartner.driverProfile)
       return res.status(400).json({ success: false, message: 'Solo partner has no linked Driver profile' });
 
-   await Ride.updateMany(
+    await Ride.updateMany(
       { booking: booking._id, status: { $in: ['requested', 'searching'] } },
-      { 
-        $set: { 
+      {
+        $set: {
           status: 'cancelled',
           cancellation: {
             cancelledBy: 'admin',
             cancelledAt: new Date(),
-            reason: 'Admin reassignment' // Add a reason if necessary
-          }
-        } 
+            reason: 'Admin reassignment',
+          },
+        },
       }
     );
 
@@ -3018,6 +3080,8 @@ router.post('/admin/bookings/:id/assign/solo-driver', protect, authorize('admin'
 
 /**
  * POST /admin/bookings/:id/assign/transport-partner
+ * Admin assigns the booking to a TP fleet only — TP must then pick its own
+ * driver via PATCH /:id/tp/assign-driver. No driver is selected here.
  */
 router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('admin', 'superadmin'), async (req, res) => {
   try {
@@ -3100,7 +3164,7 @@ router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('
     await invalidateBookingCache();
     return res.json({
       success: true,
-      message: 'Transport partner assigned. Awaiting driver assignment.',
+      message: 'Transport partner assigned. Awaiting driver assignment by the TP.',
       data: { booking },
     });
   } catch (err) {
@@ -3112,7 +3176,7 @@ router.post('/admin/bookings/:id/assign/transport-partner', protect, authorize('
  * POST /admin/bookings/:id/assign/care-assistant
  */
 router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('admin', 'superadmin'), async (req, res) => {
-  try { // ⬅️ ADDED: Missing opening try block
+  try {
     const { careAssistantId } = req.body;
     if (!careAssistantId)
       return res.status(400).json({ success: false, message: 'careAssistantId required' });
@@ -3341,7 +3405,7 @@ router.post('/admin/bookings/:id/assign/care-assistant', protect, authorize('adm
           : null,
       },
     });
-  } catch (err) { // ⬅️ Matches the added try block
+  } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -3359,7 +3423,7 @@ router.post('/admin/bookings/:id/assign/hospital', protect, authorize('admin', '
 
     const hospital = await Hospital.findById(hospitalId)
       .populate('managedBy', 'name email phone')
-      .select('name isActive isVerified managedBy').lean();
+      .select('name isActive isVerified managedBy address contact').lean();
     if (!hospital?.isActive || !hospital?.isVerified)
       return res.status(400).json({ success: false, message: 'Hospital not operational' });
 
@@ -3395,103 +3459,6 @@ router.post('/admin/bookings/:id/assign/hospital', protect, authorize('admin', '
 
     await invalidateBookingCache();
     return res.json({ success: true, message: 'Hospital linked', data: { booking } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-/**
- * PATCH /admin/bookings/:id/reassign/driver
- */
-router.patch('/admin/bookings/:id/reassign/driver', protect, authorize('admin', 'superadmin'), async (req, res) => {
-  try {
-    const { newDriverId, reason } = req.body;
-    if (!newDriverId)
-      return res.status(400).json({ success: false, message: 'newDriverId (Driver._id) required' });
-
-    await Ride.updateMany(
-      { booking: req.params.id, status: { $in: ['driver_assigned', 'driver_accepted', 'driver_en_route'] } },
-      { status: 'cancelled', 'cancellation.cancelledBy': 'admin', 'cancellation.cancelledAt': new Date() }
-    );
-
-    const booking   = await Booking.findById(req.params.id);
-    if (!booking)   return res.status(404).json({ success: false, message: 'Booking not found' });
-    const driverDoc = await Driver.findById(newDriverId).lean();
-    if (!driverDoc) return res.status(404).json({ success: false, message: 'Driver not found' });
-
-    const coords = getBookingCoords(booking);
-    const { distanceKm, durationMin, polyline } = await calculateCanonicalRoute(
-      coords.pickupCoords, coords.dropoffCoords,
-    );
-
-    const ride = await Ride.create({
-      ...buildRidePayload({
-        bookingId:         booking._id,
-        rideType:          'patient',
-        vehicleClass:      'four_wheeler',
-        scheduledPickupAt: booking.scheduledAt,
-        ...coords,
-        createdBy:         req.user._id,
-      }),
-      driver:           newDriverId,
-      transportPartner: driverDoc.ownerAgency || undefined,
-      soloPartner:      driverDoc.soloPartner  || undefined,
-      status:               'driver_assigned',
-      estimatedDistanceKm:  distanceKm,
-      estimatedDurationMin: durationMin,
-      pickupOtp:            hashOtp(genOtp()),
-    });
-
-    const tracking = await RideTracking.create({
-      ride: ride._id, booking: booking._id, expectedRoutePolyline: polyline,
-    });
-    await Ride.findByIdAndUpdate(ride._id, { $set: { trackingId: tracking._id } });
-    await Booking.findByIdAndUpdate(booking._id, {
-      $push: { rides: ride._id },
-      $set:  { primaryRide: ride._id, updatedBy: req.user._id },
-    });
-
-    booking.statusLog.push({
-      fromStatus: booking.status, toStatus: booking.status,
-      changedBy: req.user._id,
-      reason: `Driver reassigned by admin. Reason: ${reason || 'N/A'}`,
-    });
-    await booking.save();
-
-    const driverUser = await User.findById(driverDoc.user).select('email phone name').lean();
-    const customer   = await User.findById(booking.customer).select('email phone name').lean();
-
-    await createNotification({
-      recipient: driverDoc.user,
-      title:     'Ride Assigned',
-      body:      `Booking #${booking.bookingCode} assigned by admin.`,
-      type:      'Ride_Request',
-      bookingId: booking._id,
-    });
-
-    emailDriverAssigned({ driverUser, booking, verb: 'reassigned' }).catch(() => {});
-
-    sendEmail({
-      email:   customer?.email,
-      subject: `Driver Updated — Booking #${booking.bookingCode} | Likeson Healthcare`,
-      html:    transactionalTemplate({
-        header:     'DRIVER UPDATED',
-        title:      `Your driver has been updated for Booking #${booking.bookingCode}`,
-        body:       `<b>New Driver:</b> ${driverUser?.name || 'N/A'}<br/>
-                     <b>Phone:</b> ${driverUser?.phone || 'N/A'}<br/>
-                     <b>Reason:</b> ${reason || 'Driver reassigned by operations team'}`,
-        buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/bookings/${booking._id}`,
-        buttonText: 'Track Booking',
-      }),
-    }).catch(e => console.error('[Admin reassign driver] customer email:', e.message));
-
-    joinBookingRoom(driverDoc.user, booking._id);
-    getBookingSocketService()?.emitToRoom(`booking:${booking._id}`, 'driver_assigned', {
-      bookingId: booking._id,
-    });
-
-    await invalidateBookingCache();
-    return res.json({ success: true, message: 'Driver reassigned', data: { ride } });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -3595,8 +3562,8 @@ router.post('/admin/bookings/:id/refund', protect, authorize('admin', 'superadmi
     booking.paymentStatus              = 'refunded';
     booking.status                     = 'refunded';
     await recoverSubscriptionUsageOnCancel(booking).catch(e =>
-  console.error('[admin/refund] recovery failed:', e.message)
-);
+      console.error('[admin/refund] recovery failed:', e.message)
+    );
     booking.statusLog.push({
       fromStatus: prevStatus, toStatus: 'refunded',
       changedBy: req.user._id, reason: reason || 'Admin initiated refund',
@@ -3657,8 +3624,8 @@ router.get('/admin/ops',
       const [ops, total] = await Promise.all([
         OutPatientRecord.find(filter)
           .sort({ scheduledAt: -1 }).skip(skip).limit(parseInt(limit))
-          .populate('doctor',   'user specialization')
-          .populate('hospital', 'name address')
+          .populate('doctor',   'user specialization registrationNumber')
+          .populate('hospital', 'name address contact')
           .populate('patient',  'name phone email').lean(),
         OutPatientRecord.countDocuments(filter),
       ]);

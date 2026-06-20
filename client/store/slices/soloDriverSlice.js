@@ -1134,12 +1134,21 @@ const soloDriverSlice = createSlice({
         state.vehicle          = action.payload;
       })
 
-      .addCase(updateVehicle.pending,   setLoading('updateVehicle'))
+.addCase(updateVehicle.pending,   setLoading('updateVehicle'))
       .addCase(updateVehicle.rejected,  setError('updateVehicle'))
       .addCase(updateVehicle.fulfilled, (state, action) => {
         state.loading.updateVehicle = false;
         state.vehicle               = action.payload;
-        if (state.profile) state.profile.vehicle = action.payload;
+        // CORRECTED: Sync the lightweight cache, not the whole document
+        if (state.profile) {
+          state.profile.vehicleStatus = {
+            ...state.profile.vehicleStatus,
+            hasVehicle: true,
+            registrationNumber: action.payload.registrationNumber,
+            verificationStatus: action.payload.verificationStatus,
+            isActive: action.payload.status === 'active'
+          };
+        }
       })
 
       .addCase(updateVehicleDocuments.pending,   setLoading('updateVehicleDocs'))
@@ -1151,8 +1160,7 @@ const soloDriverSlice = createSlice({
       .addCase(updateVehicleFeatures.fulfilled, (state, action) => {
         state.loading.updateVehicleFeatures = false;
         if (state.vehicle && action.payload) state.vehicle = { ...state.vehicle, ...action.payload };
-        if (state.profile?.vehicle && action.payload)
-          state.profile.vehicle = { ...state.profile.vehicle, ...action.payload };
+        // REMOVED: state.profile.vehicle sync (features aren't cached in vehicleStatus)
       })
 
       .addCase(updateVehicleLocation.pending,   setLoading('updateLocation'))
@@ -1160,13 +1168,12 @@ const soloDriverSlice = createSlice({
       .addCase(updateVehicleLocation.fulfilled, (state, action) => {
         state.loading.updateLocation = false;
         if (state.vehicle && action.payload) {
-          state.vehicle.lastKnownLocation = {
+          state.vehicle.location = { // CORRECTED: matched standalone schema ('location' not 'lastKnownLocation')
             type: 'Point',
             coordinates: [action.payload.lng, action.payload.lat],
           };
-          state.vehicle.lastLocationUpdatedAt = action.payload.updatedAt;
+          state.vehicle.locationUpdatedAt = action.payload.updatedAt;
         }
-        // Mirror onto dispatch so isDispatchable stays fresh
         if (state.dispatch) state.dispatch.lastLocationUpdate = action.payload?.updatedAt;
       })
 
@@ -1395,14 +1402,15 @@ const soloDriverSlice = createSlice({
         }
       })
 
-      .addCase(adminVerifyVehicle.pending,   setLoading('adminVerifyVehicle'))
+    .addCase(adminVerifyVehicle.pending,   setLoading('adminVerifyVehicle'))
       .addCase(adminVerifyVehicle.rejected,  setError('adminVerifyVehicle'))
       .addCase(adminVerifyVehicle.fulfilled, (state, action) => {
         state.loading.adminVerifyVehicle = false;
         const { vehicleStatus, autoActivated, partnershipStatus } = action.payload;
-        if (state.admin.selectedPartner) {
-          state.admin.selectedPartner.vehicle.verificationStatus = vehicleStatus;
-          state.admin.selectedPartner.vehicle.isActive           = vehicleStatus === 'verified';
+        // CORRECTED: Target vehicleStatus, not vehicle
+        if (state.admin.selectedPartner && state.admin.selectedPartner.vehicleStatus) {
+          state.admin.selectedPartner.vehicleStatus.verificationStatus = vehicleStatus;
+          state.admin.selectedPartner.vehicleStatus.isActive           = vehicleStatus === 'verified';
           if (autoActivated) state.admin.selectedPartner.partnershipStatus = partnershipStatus;
         }
       })
@@ -1536,8 +1544,9 @@ export const selectPartnershipStatus = (s) => sd(s).profile?.partnershipStatus ?
 export const selectProfileCompletion = (s) => sd(s).profile?.profileCompletionPercent ?? 0;
 export const selectKycStatus         = (s) =>
   sd(s).kyc?.kyc?.verificationStatus  ?? sd(s).profile?.kyc?.verificationStatus ?? null;
+ 
 export const selectVehicleStatus     = (s) =>
-  sd(s).vehicle?.verificationStatus   ?? sd(s).profile?.vehicle?.verificationStatus ?? null;
+  sd(s).vehicle?.verificationStatus   ?? sd(s).profile?.vehicleStatus?.verificationStatus ?? null;
 
 export const selectEffectivePlatformFee = (s) => {
   const override = sd(s).profile?.platformFeeOverride;

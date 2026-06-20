@@ -226,8 +226,16 @@ const userSubscriptionSchema = new Schema(
        * USAGE in renewal route:
        *   On new billing cycle start → set homeCollectionUsedOnce = false
        */
-      homeSampleCollection:   { type: Boolean, default: false },
+homeSampleCollection:   { type: Boolean, default: false },
       homeCollectionUsedOnce: { type: Boolean, default: false },
+
+      /**
+       * caStandardTierUsedOnce
+       * Fixed plans (non-dedicated): first/standard CA tier is free ONE TIME
+       * per billing cycle. true = already used this cycle.
+       * Reset to false on renewal, same as homeCollectionUsedOnce.
+       */
+      caStandardTierUsedOnce: { type: Boolean, default: false },
 
       // ── Pharmacy ──────────────────────────────────────────────────────────
       pharmacyDiscountPercent: { type: Number, default: 0 },

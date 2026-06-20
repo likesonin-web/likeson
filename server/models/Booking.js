@@ -46,6 +46,8 @@ export const PAYMENT_STATUSES = [
   "pending_cash",
   "partially_refunded",
   "waived",
+  "pay_at_service_pending",  // NEW: QR generated, awaiting scan
+  "pay_at_service_paid",     // NEW: scanned & paid via QR
 ];
 
 export const CANCELLATION_ACTORS = [
@@ -76,13 +78,14 @@ const geoPointSchema = new Schema(
 const fareBreakdownSchema = new Schema(
   {
     consultationFee: { type: Number, default: 0, min: 0 },
+    doctorShare: { type: Number, default: 0, min: 0 },     // NEW: Frozen doctor payout
+    hospitalShare: { type: Number, default: 0, min: 0 },   // NEW: Frozen hospital payout
     careAssistantFee: { type: Number, default: 0, min: 0 },
     transportFee: { type: Number, default: 0, min: 0 },
     diagnosticFee: { type: Number, default: 0, min: 0 },
     homeCollectionFee: { type: Number, default: 0, min: 0 },
     platformFee: { type: Number, default: 0, min: 0 },
     taxes: { type: Number, default: 0, min: 0 },
-    // Per-service GST breakdown (mixed rates: transport 5%, CA 18%, consult 0%, diag 5%)
     taxBreakdown: {
       consultationGst: { type: Number, default: 0 },
       transportGst: { type: Number, default: 0 },
@@ -539,7 +542,37 @@ const bookingSchema = new Schema(
       default: null,
     },
     internalNotes: { type: String, trim: true, select: false },
-    isTestBooking: { type: Boolean, default: false },
+    // ── Pay-at-Service / QR Payment ───────────────────────────────────────────
+payAtService: {
+  enabled:            { type: Boolean, default: false },
+  razorpayPaymentLinkId:  { type: String, default: null },
+  razorpayPaymentLinkUrl: { type: String, default: null },
+  qrCodeUrl:          { type: String, default: null },
+  shortUrl:           { type: String, default: null },
+  amount:             { type: Number, default: 0 },
+  generatedAt:        { type: Date,   default: null },
+  expiresAt:          { type: Date,   default: null },
+  paidAt:             { type: Date,   default: null },
+  paidByCustomer:     { type: Boolean, default: false },
+  generatedBy:        { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  notificationSentAt: { type: Date,   default: null },
+},
+
+// ── Collected by Partner (cash/manual) ───────────────────────────────────
+collectedByPartner: {
+  amount:      { type: Number, default: 0 },
+  collectedAt: { type: Date,   default: null },
+  collectedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  method:      { type: String, enum: ['cash', 'qr_razorpay', 'other'], default: null },
+  note:        { type: String, default: null },
+},
+   isTestBooking: { type: Boolean, default: false },
+
+// ── Settlement Tracking ───────────────────────────────────────────────────────
+settlementProcessed:      { type: Boolean, default: false, index: true },
+settlementProcessedAt:    { type: Date, default: null },
+settlementVersion:        { type: Number, default: null },
+settlementIdempotencyKey: { type: String, default: null },
 
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
     updatedBy: { type: Schema.Types.ObjectId, ref: "User" },

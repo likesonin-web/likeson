@@ -20,7 +20,7 @@ import {
   Terminal, Stethoscope, HeartPulse, Activity,
   PanelLeftClose, Sun, Moon, Monitor,
   Wifi, WifiOff, CalendarCheck, Hospital,
-  AreaChart, Clock, ShieldCheck,
+  AreaChart, Clock, ShieldCheck, IndianRupee,
 } from "lucide-react";
 
 // Local Imports
@@ -34,6 +34,7 @@ import {
   DOCTOR_SEARCH_LINKS,
   DOCTOR_PROFILE_LINKS,
 } from "../../constants/doctor";
+import WelcomeDoctorPage from "@/app/doctor/WelcomeDoctorPage"; // Added Welcome Page Import
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -177,8 +178,7 @@ const SidebarSection = memo(function SidebarSection({
             {section.icons}
           </span>
           {isSidebarOpen && (
-            <span               className="text-xs font-semibold whitespace-nowrap overflow-hidden"
->
+            <span className="text-xs font-semibold whitespace-nowrap overflow-hidden">
               {section.title}
             </span>
           )}
@@ -236,6 +236,16 @@ const DoctorDashboard = ({ children }) => {
 
   // Mock online status — replace with real selector
   const isOnline = user?.isOnline ?? true;
+
+  // ── FIX: Explicit check for the root/welcome paths ───────────────────────
+  const isWelcomeRoute = useMemo(
+    () => ["/", "/doctor", "/doctor/"].includes(pathname),
+    [pathname]
+  );
+
+  const breadcrumbLabel = isWelcomeRoute
+    ? "Welcome"
+    : pathname.split("/").filter(Boolean).pop()?.replace(/-/g, " ") || "Dashboard";
 
   useEffect(() => {
     if (window.innerWidth < 1024) setIsSidebarOpen(false);
@@ -501,6 +511,18 @@ const DoctorDashboard = ({ children }) => {
 
             <ThemeToggle />
 
+            {/* Partner Wallet */}
+            <Link href="/partner/wallet">
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                className="flex items-center gap-1.5 px-3 py-2 h-10 rounded-md border text-[10px] font-bold uppercase tracking-widest transition-all bg-success/10 border-success/30 text-success hover:bg-success/20"
+              >
+                <IndianRupee size={15} strokeWidth={2.5} />
+                <span className="hidden sm:inline">Wallet</span>
+              </motion.button>
+            </Link>
+
             {/* Online/Offline quick toggle */}
             <button
               className={cn(
@@ -545,12 +567,12 @@ const DoctorDashboard = ({ children }) => {
                 <img
                   src={doctorAvatar}
                   alt="Profile"
-                  className="w-full h-full rounded-md0px] object-cover bg-base-300"
+                  className="w-full h-full rounded-md object-cover bg-base-300"
                 />
               </div>
 
               <div className="absolute right-0 top-full pt-4 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 z-50">
-                <div className="w-64 bg-base-200 border border-base-300 rounded-mdl shadow-2xl p-2 backdrop-blur-2xl">
+                <div className="w-64 bg-base-200 border border-base-300 rounded-md shadow-2xl p-2 backdrop-blur-2xl">
                   {/* Header */}
                   <div className="px-4 py-4 border-b border-base-300 mb-2 bg-success/5 rounded-md">
                     <div className="flex items-center gap-2.5 mb-2">
@@ -608,8 +630,7 @@ const DoctorDashboard = ({ children }) => {
             </Link>
             <ChevronRight size={10} />
             <span className="text-success">
-              {pathname.split("/").filter(Boolean).pop()?.replace(/-/g, " ") ||
-                "Dashboard"}
+              {breadcrumbLabel}
             </span>
           </div>
 
@@ -617,11 +638,11 @@ const DoctorDashboard = ({ children }) => {
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3 }}
-            className="md:rounded-md.5rem] rounded-md border border-base-300 bg-base-200/40 min-h-screen shadow-inner relative overflow-hidden backdrop-blur-sm"
+            className="md:rounded-md rounded-md border border-base-300 bg-base-200/40 min-h-[75vh] shadow-inner relative overflow-hidden backdrop-blur-sm"
           >
             {/* Decorative medical-teal glow */}
-            <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-success/4 blur-[130px] rounded-mdll pointer-events-none" />
-            <div className="absolute bottom-0 left-0 w-[300px] h-[300px] bg-secondary/3 blur-[100px] rounded-mdll pointer-events-none" />
+            <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-success/4 blur-[130px] rounded-full pointer-events-none" />
+            <div className="absolute bottom-0 left-0 w-[300px] h-[300px] bg-secondary/3 blur-[100px] rounded-full pointer-events-none" />
 
             {/* ECG decorative line — top right */}
             <svg
@@ -641,15 +662,17 @@ const DoctorDashboard = ({ children }) => {
               />
             </svg>
 
-            {children}
+            {/* Render Welcome Page for root paths, otherwise render children */}
+            {isWelcomeRoute ? <WelcomeDoctorPage /> : children}
+            
           </motion.div>
         </section>
 
         {/* ── Footer ──────────────────────────────────────────────────────── */}
         <footer className="p-4 lg:p-6 mt-auto">
-          <div className="flex flex-col xl:flex-row items-center justify-between gap-4 p-5 border border-base-300 rounded-mdrem] bg-base-200/50">
+          <div className="flex flex-col xl:flex-row items-center justify-between gap-4 p-5 border border-base-300 rounded-md bg-base-200/50">
             <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-mdll bg-success/10 border border-success/20 flex items-center justify-center text-success">
+              <div className="w-10 h-10 rounded-full bg-success/10 border border-success/20 flex items-center justify-center text-success">
                 <Stethoscope size={20} />
               </div>
               <div>
@@ -718,7 +741,7 @@ const DoctorDashboard = ({ children }) => {
               initial={{ opacity: 0, y: -20, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -20, scale: 0.98 }}
-              className="relative w-full max-w-2xl bg-base-200 border border-base-300 rounded-md.5rem] shadow-[0_0_50px_-12px_rgba(0,0,0,0.5)] overflow-hidden"
+              className="relative w-full max-w-2xl bg-base-200 border border-base-300 rounded-md shadow-[0_0_50px_-12px_rgba(0,0,0,0.5)] overflow-hidden"
             >
               {/* Search input */}
               <div className="p-6 lg:p-8 border-b border-base-300 flex items-center gap-5 bg-base-100/60">
@@ -785,13 +808,13 @@ const DoctorDashboard = ({ children }) => {
               {/* Footer hint */}
               <div className="px-6 py-3 border-t border-base-300 flex items-center gap-4 bg-base-100/30">
                 <div className="flex items-center gap-1.5 text-[9px] font-bold text-base-content/25 uppercase tracking-widest">
-                  <kbd className="px-1.5 py-0.5 bg-base-300 rounded-mdxt-[8px]">
+                  <kbd className="px-1.5 py-0.5 bg-base-300 rounded-md">
                     ↵
                   </kbd>
                   to navigate
                 </div>
                 <div className="flex items-center gap-1.5 text-[9px] font-bold text-base-content/25 uppercase tracking-widest">
-                  <kbd className="px-1.5 py-0.5 bg-base-300 rounded-mdxt-[8px]">
+                  <kbd className="px-1.5 py-0.5 bg-base-300 rounded-md">
                     Esc
                   </kbd>
                   to close

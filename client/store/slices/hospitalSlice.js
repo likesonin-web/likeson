@@ -13,13 +13,9 @@ const toQueryString = (params = {}) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  A. FORM DOWNLOAD THUNKS  (GET /hospitals/forms/*)
+//  A. FORM DOWNLOAD THUNKS  (Note: Requires backend implementation)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * GET /hospitals/forms/list
- * Returns an array of available registration form descriptors with download URLs.
- */
 export const fetchAvailableForms = createAsyncThunk(
   'hospital/fetchAvailableForms',
   async (_, { rejectWithValue }) => {
@@ -32,11 +28,6 @@ export const fetchAvailableForms = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals/forms/hospital?type=hospital-manager|doctor-owner
- * Downloads the hospital onboarding PDF form as a Blob and triggers browser save.
- * @param {'hospital-manager'|'doctor-owner'} [type='hospital-manager']
- */
 export const downloadHospitalForm = createAsyncThunk(
   'hospital/downloadHospitalForm',
   async (type = 'hospital-manager', { rejectWithValue }) => {
@@ -45,8 +36,7 @@ export const downloadHospitalForm = createAsyncThunk(
         `/hospitals/forms/hospital${toQueryString({ type })}`,
         { responseType: 'blob' }
       );
-      const label =
-        type === 'doctor-owner' ? 'Doctor-Owner-Hospital' : 'Managed-Hospital';
+      const label = type === 'doctor-owner' ? 'Doctor-Owner-Hospital' : 'Managed-Hospital';
       const url = URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
       const a   = document.createElement('a');
       a.href     = url;
@@ -62,11 +52,6 @@ export const downloadHospitalForm = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals/forms/doctor?type=doctor-owner|hospital-manager
- * Downloads the doctor onboarding PDF form as a Blob and triggers browser save.
- * @param {'doctor-owner'|'hospital-manager'} [type='doctor-owner']
- */
 export const downloadDoctorForm = createAsyncThunk(
   'hospital/downloadDoctorForm',
   async (type = 'doctor-owner', { rejectWithValue }) => {
@@ -75,8 +60,7 @@ export const downloadDoctorForm = createAsyncThunk(
         `/hospitals/forms/doctor${toQueryString({ type })}`,
         { responseType: 'blob' }
       );
-      const label =
-        type === 'hospital-manager' ? 'Affiliated-Doctor' : 'Doctor-Owner';
+      const label = type === 'hospital-manager' ? 'Affiliated-Doctor' : 'Doctor-Owner';
       const url = URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
       const a   = document.createElement('a');
       a.href     = url;
@@ -96,11 +80,6 @@ export const downloadDoctorForm = createAsyncThunk(
 //  B. PUBLIC HOSPITAL THUNKS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * GET /hospitals/nearby
- * @param {{ lat, lng, distance?, type?, specialty?, is24x7?, hasICU?,
- *            hasEmergency?, scheme?, page?, limit? }} params
- */
 export const fetchNearbyHospitals = createAsyncThunk(
   'hospital/fetchNearbyHospitals',
   async (params = {}, { rejectWithValue }) => {
@@ -113,12 +92,6 @@ export const fetchNearbyHospitals = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals
- * @param {{ city?, state?, type?, specialty?, accreditation?, is24x7?, hasICU?,
- *            hasBloodBank?, hasPharmacy?, hasAmbulance?, scheme?, rating?,
- *            search?, sort?, page?, limit?, verified? }} params
- */
 export const fetchAllHospitals = createAsyncThunk(
   'hospital/fetchAllHospitals',
   async (params = {}, { rejectWithValue }) => {
@@ -131,10 +104,6 @@ export const fetchAllHospitals = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals/:id
- * @param {string} id
- */
 export const fetchHospitalById = createAsyncThunk(
   'hospital/fetchHospitalById',
   async (id, { rejectWithValue }) => {
@@ -147,10 +116,6 @@ export const fetchHospitalById = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals/slug/:slug
- * @param {string} slug
- */
 export const fetchHospitalBySlug = createAsyncThunk(
   'hospital/fetchHospitalBySlug',
   async (slug, { rejectWithValue }) => {
@@ -163,10 +128,6 @@ export const fetchHospitalBySlug = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals/search
- * @param {{ q, city?, page?, limit? }} params
- */
 export const searchHospitals = createAsyncThunk(
   'hospital/searchHospitals',
   async (params = {}, { rejectWithValue }) => {
@@ -179,11 +140,6 @@ export const searchHospitals = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals/:id/pricing
- * Returns effective consultation pricing for a hospital (resolves managementModel).
- * @param {string} id
- */
 export const fetchHospitalEffectivePricing = createAsyncThunk(
   'hospital/fetchHospitalEffectivePricing',
   async (id, { rejectWithValue }) => {
@@ -200,11 +156,6 @@ export const fetchHospitalEffectivePricing = createAsyncThunk(
 //  C. PUBLIC DOCTOR THUNKS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * GET /hospitals/doctors/nearby
- * @param {{ lat, lng, distance?, specialization?, consultationType?,
- *            rating?, language?, page?, limit? }} params
- */
 export const fetchNearbyDoctors = createAsyncThunk(
   'hospital/fetchNearbyDoctors',
   async (params = {}, { rejectWithValue }) => {
@@ -217,11 +168,6 @@ export const fetchNearbyDoctors = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals/doctors
- * @param {{ specialization?, language?, rating?, consultationType?,
- *            hospital?, search?, sort?, page?, limit? }} params
- */
 export const fetchAllDoctors = createAsyncThunk(
   'hospital/fetchAllDoctors',
   async (params = {}, { rejectWithValue }) => {
@@ -234,10 +180,6 @@ export const fetchAllDoctors = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals/doctors/:id
- * @param {string} id
- */
 export const fetchDoctorById = createAsyncThunk(
   'hospital/fetchDoctorById',
   async (id, { rejectWithValue }) => {
@@ -250,10 +192,6 @@ export const fetchDoctorById = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals/doctors/specialization/:spec
- * @param {{ spec, city?, rating?, consultationType?, page?, limit? }} params
- */
 export const fetchDoctorsBySpecialization = createAsyncThunk(
   'hospital/fetchDoctorsBySpecialization',
   async ({ spec, ...rest }, { rejectWithValue }) => {
@@ -268,10 +206,6 @@ export const fetchDoctorsBySpecialization = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals/doctors/search
- * @param {{ q, specialization?, page?, limit? }} params
- */
 export const searchDoctors = createAsyncThunk(
   'hospital/searchDoctors',
   async (params = {}, { rejectWithValue }) => {
@@ -284,11 +218,6 @@ export const searchDoctors = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals/doctors/by-hospital/:hospitalId
- * Get all doctors linked to a specific hospital (public).
- * @param {{ hospitalId, specialization?, consultationType?, page?, limit? }} params
- */
 export const fetchDoctorsByHospital = createAsyncThunk(
   'hospital/fetchDoctorsByHospital',
   async ({ hospitalId, ...rest }, { rejectWithValue }) => {
@@ -307,12 +236,6 @@ export const fetchDoctorsByHospital = createAsyncThunk(
 //  D. HOSPITAL ADMIN THUNKS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * POST /hospitals
- * Creates a hospital AND auto-creates the manager User account, sends credentials email.
- * @param {{ name, hospitalType, contact, address, registrationDetails,
- *            managerName, managerEmail, managerPhone?, ...rest }} body
- */
 export const createHospital = createAsyncThunk(
   'hospital/createHospital',
   async (body, { rejectWithValue }) => {
@@ -328,13 +251,6 @@ export const createHospital = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/:id/profile
- * Send plain JSON with CDN URL strings resolved by uploadSlice first.
- *   body.logo   {string|null}    — ImageKit CDN URL or null to clear
- *   body.images {string[]|null}  — Array of CDN URLs (max 20) or null/[] to clear
- * @param {{ id: string, logo?: string|null, images?: string[]|null, ...profileFields }} payload
- */
 export const updateHospitalProfile = createAsyncThunk(
   'hospital/updateHospitalProfile',
   async ({ id, ...body }, { rejectWithValue }) => {
@@ -350,12 +266,6 @@ export const updateHospitalProfile = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/:id/settings
- * @param {{ id: string, isEmergencyReady?, hasICU?, hasBloodBank?, hasPharmacy?,
- *            hasDiagnostics?, hasAmbulance?, hasWheelchairAccess?, is24x7?,
- *            nabledLabAvailable?, bedCount?, operatingHours?, acceptedSchemes? }} payload
- */
 export const updateHospitalSettings = createAsyncThunk(
   'hospital/updateHospitalSettings',
   async ({ id, ...body }, { rejectWithValue }) => {
@@ -371,11 +281,6 @@ export const updateHospitalSettings = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/:id/security
- * @param {{ id: string, licenseNumber?, gstNumber?, panNumber?,
- *            documentUrl?, licenseExpiry? }} payload
- */
 export const updateHospitalSecurity = createAsyncThunk(
   'hospital/updateHospitalSecurity',
   async ({ id, ...body }, { rejectWithValue }) => {
@@ -391,50 +296,6 @@ export const updateHospitalSecurity = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/:id/platform-fee
- * Set per-hospital platformFee and/or settlementCycle override.
- * Pass null to revert to global PlatformPricingConfig default.
- * @param {{
- *   id: string,
- *   platformFee?: { type: 'fixed'|'percentage', value: number } | null,
- *   settlementCycle?: 'weekly'|'biweekly'|'monthly' | null
- * }} payload
- */
-export const updateHospitalPlatformFee = createAsyncThunk(
-  'hospital/updateHospitalPlatformFee',
-  async ({ id, ...body }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.put(`/hospitals/${id}/platform-fee`, body);
-      toast.success('Hospital platform fee updated');
-      return { id, ...data.data };
-    } catch (err) {
-      const msg = err.response?.data?.message || 'Failed to update hospital platform fee';
-      toast.error(msg);
-      return rejectWithValue(err.response?.data || { message: msg });
-    }
-  }
-);
-
-/**
- * PUT /hospitals/:id/consultation-pricing
- * Update hospital-level consultation pricing (hospital-manager type only).
- * platformFee inside consultationPricing is superadmin-only.
- * @param {{
- *   id: string,
- *   inPersonFee?: number,
- *   videoFee?: number,
- *   homeVisitFee?: number,
- *   inPersonHonorarium?: number,
- *   videoHonorarium?: number,
- *   homeVisitHonorarium?: number,
- *   followUpFee?: number,
- *   followUpDiscountPercent?: number,
- *   followUpValidDays?: number,
- *   consultationTypes?: object,
- *   platformFee?: object   // superadmin only
- * }} payload
- */
 export const updateHospitalConsultationPricing = createAsyncThunk(
   'hospital/updateHospitalConsultationPricing',
   async ({ id, ...body }, { rejectWithValue }) => {
@@ -450,11 +311,6 @@ export const updateHospitalConsultationPricing = createAsyncThunk(
   }
 );
 
-/**
- * POST /hospitals/:id/resend-credentials
- * Re-sends login credentials email to the hospital manager (generates new password).
- * @param {string} id  — hospital ID
- */
 export const resendHospitalManagerCredentials = createAsyncThunk(
   'hospital/resendHospitalManagerCredentials',
   async (id, { rejectWithValue }) => {
@@ -470,16 +326,6 @@ export const resendHospitalManagerCredentials = createAsyncThunk(
   }
 );
 
-/**
- * POST /hospitals/:id/images
- * Upload hospital logo and/or gallery images via multipart/form-data.
- * Multer fields: `logo` (max 1 file), `images` (max 20 files).
- * @param {{
- *   id: string,
- *   logo?: File,
- *   images?: File | File[]
- * }} payload
- */
 export const uploadHospitalImages = createAsyncThunk(
   'hospital/uploadHospitalImages',
   async ({ id, logo, images }, { rejectWithValue }) => {
@@ -503,11 +349,6 @@ export const uploadHospitalImages = createAsyncThunk(
   }
 );
 
-/**
- * DELETE /hospitals/:id/images/:imageIndex
- * Remove a gallery image by its array index.
- * @param {{ id: string, imageIndex: number }} payload
- */
 export const deleteHospitalImage = createAsyncThunk(
   'hospital/deleteHospitalImage',
   async ({ id, imageIndex }, { rejectWithValue }) => {
@@ -523,11 +364,6 @@ export const deleteHospitalImage = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/:id/location
- * @param {{ id: string, lat: number, lng: number, googleMapsUrl?: string }
- *         | { id: string, coordinates: [number, number], googleMapsUrl?: string }} payload
- */
 export const updateHospitalLocation = createAsyncThunk(
   'hospital/updateHospitalLocation',
   async ({ id, ...body }, { rejectWithValue }) => {
@@ -543,10 +379,6 @@ export const updateHospitalLocation = createAsyncThunk(
   }
 );
 
-/**
- * POST /hospitals/:id/doctors/:doctorId
- * @param {{ hospitalId: string, doctorId: string }} payload
- */
 export const linkDoctorToHospital = createAsyncThunk(
   'hospital/linkDoctorToHospital',
   async ({ hospitalId, doctorId }, { rejectWithValue }) => {
@@ -562,10 +394,6 @@ export const linkDoctorToHospital = createAsyncThunk(
   }
 );
 
-/**
- * DELETE /hospitals/:id/doctors/:doctorId
- * @param {{ hospitalId: string, doctorId: string }} payload
- */
 export const unlinkDoctorFromHospital = createAsyncThunk(
   'hospital/unlinkDoctorFromHospital',
   async ({ hospitalId, doctorId }, { rejectWithValue }) => {
@@ -581,10 +409,6 @@ export const unlinkDoctorFromHospital = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/:id/verify
- * @param {{ id: string, isVerified: boolean }} payload
- */
 export const verifyHospital = createAsyncThunk(
   'hospital/verifyHospital',
   async ({ id, isVerified }, { rejectWithValue }) => {
@@ -600,10 +424,6 @@ export const verifyHospital = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/:id/toggle
- * @param {string} id
- */
 export const toggleHospitalActive = createAsyncThunk(
   'hospital/toggleHospitalActive',
   async (id, { rejectWithValue }) => {
@@ -619,10 +439,6 @@ export const toggleHospitalActive = createAsyncThunk(
   }
 );
 
-/**
- * DELETE /hospitals/:id
- * @param {string} id
- */
 export const deleteHospital = createAsyncThunk(
   'hospital/deleteHospital',
   async (id, { rejectWithValue }) => {
@@ -642,9 +458,6 @@ export const deleteHospital = createAsyncThunk(
 //  E. DOCTOR SELF / SHARED THUNKS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * GET /hospitals/doctors/me
- */
 export const fetchMyDoctorProfile = createAsyncThunk(
   'hospital/fetchMyDoctorProfile',
   async (_, { rejectWithValue }) => {
@@ -657,9 +470,6 @@ export const fetchMyDoctorProfile = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals/doctors/me/hospitals
- */
 export const fetchMyManagedHospitals = createAsyncThunk(
   'hospital/fetchMyManagedHospitals',
   async (_, { rejectWithValue }) => {
@@ -672,11 +482,6 @@ export const fetchMyManagedHospitals = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals/doctors/me/pricing
- * Returns the effective pricing for the logged-in doctor
- * (resolves hospital-manager vs doctor-owner automatically).
- */
 export const fetchMyEffectivePricing = createAsyncThunk(
   'hospital/fetchMyEffectivePricing',
   async (_, { rejectWithValue }) => {
@@ -689,10 +494,6 @@ export const fetchMyEffectivePricing = createAsyncThunk(
   }
 );
 
-/**
- * GET /hospitals/doctors/:id/stats
- * @param {string} id
- */
 export const fetchDoctorStats = createAsyncThunk(
   'hospital/fetchDoctorStats',
   async (id, { rejectWithValue }) => {
@@ -705,13 +506,6 @@ export const fetchDoctorStats = createAsyncThunk(
   }
 );
 
-/**
- * POST /hospitals/doctors
- * @param {{ name, email, phone?, specialization, experienceYears,
- *            qualifications?, registrationNumber?, registrationCouncil?,
- *            biography?, languagesSpoken?, fees?, consultationTypes?,
- *            primaryHospital? }} body
- */
 export const createDoctorProfile = createAsyncThunk(
   'hospital/createDoctorProfile',
   async (body, { rejectWithValue }) => {
@@ -727,13 +521,6 @@ export const createDoctorProfile = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/doctors/:id/profile
- * @param {{ id: string, specialization?, qualifications?, experienceYears?,
- *            registrationNumber?, registrationCouncil?, biography?,
- *            languagesSpoken?, achievements?, fees?, consultationTypes?,
- *            primaryHospital?, otherHospitals?, notifPrefs? }} payload
- */
 export const updateDoctorProfile = createAsyncThunk(
   'hospital/updateDoctorProfile',
   async ({ id, ...body }, { rejectWithValue }) => {
@@ -749,13 +536,6 @@ export const updateDoctorProfile = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/doctors/:id/settings
- * Doctor-accessible: notifPrefs, onboarding, isOnline.
- * Admin-only within same route: settlementCycle.
- * @param {{ id: string, notifPrefs?, onboarding?, isOnline?,
- *            settlementCycle?: 'weekly'|'biweekly'|'monthly' }} payload
- */
 export const updateDoctorSettings = createAsyncThunk(
   'hospital/updateDoctorSettings',
   async ({ id, ...body }, { rejectWithValue }) => {
@@ -771,10 +551,6 @@ export const updateDoctorSettings = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/doctors/:id/availability
- * @param {{ id: string, availability: Array<{ day, slots: Array<{ startTime, endTime, maxPatients }> }> }} payload
- */
 export const updateDoctorAvailability = createAsyncThunk(
   'hospital/updateDoctorAvailability',
   async ({ id, availability }, { rejectWithValue }) => {
@@ -790,11 +566,6 @@ export const updateDoctorAvailability = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/doctors/:id/bank
- * @param {{ id: string, accountHolderName?, accountNumber?, ifscCode?,
- *            bankName?, branchName?, upiId?, gstNumber?, cancelledChequeUrl? }} payload
- */
 export const updateDoctorBankDetails = createAsyncThunk(
   'hospital/updateDoctorBankDetails',
   async ({ id, ...body }, { rejectWithValue }) => {
@@ -810,11 +581,6 @@ export const updateDoctorBankDetails = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/doctors/:id/kyc
- * @param {{ id: string, aadhaarNumber?, aadhaarFrontUrl?, aadhaarBackUrl?,
- *            panNumber?, panCardUrl? }} payload
- */
 export const updateDoctorKyc = createAsyncThunk(
   'hospital/updateDoctorKyc',
   async ({ id, ...body }, { rejectWithValue }) => {
@@ -830,11 +596,6 @@ export const updateDoctorKyc = createAsyncThunk(
   }
 );
 
-/**
- * POST /hospitals/doctors/:id/photo
- * Sends multipart/form-data with a single `photo` file field (multer.single).
- * @param {{ id: string, photo: File }} payload
- */
 export const uploadDoctorPhoto = createAsyncThunk(
   'hospital/uploadDoctorPhoto',
   async ({ id, photo }, { rejectWithValue }) => {
@@ -854,11 +615,6 @@ export const uploadDoctorPhoto = createAsyncThunk(
   }
 );
 
-/**
- * POST /hospitals/doctors/:id/signature
- * Sends multipart/form-data with a single `signature` file field.
- * @param {{ id: string, signature: File }} payload
- */
 export const uploadDoctorSignature = createAsyncThunk(
   'hospital/uploadDoctorSignature',
   async ({ id, signature }, { rejectWithValue }) => {
@@ -882,16 +638,6 @@ export const uploadDoctorSignature = createAsyncThunk(
 //  F. ADMIN-ONLY DOCTOR THUNKS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * PUT /hospitals/doctors/:id/security
- * @param {{
- *   id: string,
- *   registrationNumber?: string,
- *   registrationCouncil?: string,
- *   contractUrl?: string,
- *   adminNotes?: string
- * }} payload
- */
 export const updateDoctorSecurity = createAsyncThunk(
   'hospital/updateDoctorSecurity',
   async ({ id, ...body }, { rejectWithValue }) => {
@@ -907,14 +653,6 @@ export const updateDoctorSecurity = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/doctors/:id/platform-fee
- * Pass null to revert to global PlatformPricingConfig default.
- * @param {{
- *   id: string,
- *   platformFee: { type: 'fixed'|'percentage', value: number } | null
- * }} payload
- */
 export const updateDoctorPlatformFee = createAsyncThunk(
   'hospital/updateDoctorPlatformFee',
   async ({ id, ...body }, { rejectWithValue }) => {
@@ -930,11 +668,6 @@ export const updateDoctorPlatformFee = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/doctors/:id/partnership
- * @param {{ id: string, partnershipStatus?, partnerSince?,
- *            contractUrl?, adminNotes? }} payload
- */
 export const updateDoctorPartnership = createAsyncThunk(
   'hospital/updateDoctorPartnership',
   async ({ id, ...body }, { rejectWithValue }) => {
@@ -950,10 +683,6 @@ export const updateDoctorPartnership = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/doctors/:id/kyc/verify
- * @param {{ id: string, action: 'approve'|'reject', rejectionReason?: string }} payload
- */
 export const verifyDoctorKyc = createAsyncThunk(
   'hospital/verifyDoctorKyc',
   async ({ id, action, rejectionReason }, { rejectWithValue }) => {
@@ -963,7 +692,6 @@ export const verifyDoctorKyc = createAsyncThunk(
         rejectionReason,
       });
       toast.success(data.message || `KYC ${action === 'approve' ? 'approved' : 'rejected'}`);
-      // API returns full data object: { _id, kycStatus, isVerified, kycVerifiedAt, ... }
       return { id, ...data.data };
     } catch (err) {
       const msg = err.response?.data?.message || 'KYC verification failed';
@@ -973,10 +701,6 @@ export const verifyDoctorKyc = createAsyncThunk(
   }
 );
 
-/**
- * PUT /hospitals/doctors/:id/toggle
- * @param {string} id
- */
 export const toggleDoctorActive = createAsyncThunk(
   'hospital/toggleDoctorActive',
   async (id, { rejectWithValue }) => {
@@ -992,11 +716,6 @@ export const toggleDoctorActive = createAsyncThunk(
   }
 );
 
-/**
- * POST /hospitals/doctors/:id/resend-credentials
- * Resend credentials email for a doctor (generates new password).
- * @param {string} id  — DoctorProfile ID
- */
 export const resendDoctorCredentials = createAsyncThunk(
   'hospital/resendDoctorCredentials',
   async (id, { rejectWithValue }) => {
@@ -1012,10 +731,6 @@ export const resendDoctorCredentials = createAsyncThunk(
   }
 );
 
-/**
- * DELETE /hospitals/doctors/:id
- * @param {string} id
- */
 export const deleteDoctorProfile = createAsyncThunk(
   'hospital/deleteDoctorProfile',
   async (id, { rejectWithValue }) => {
@@ -1092,7 +807,6 @@ const initialState = {
     updateHospitalProfile:              false,
     updateHospitalSettings:             false,
     updateHospitalSecurity:             false,
-    updateHospitalPlatformFee:          false,
     updateHospitalConsultationPricing:  false,
     resendHospitalManagerCredentials:   false,
     uploadHospitalImages:               false,
@@ -1119,10 +833,10 @@ const initialState = {
     updateDoctorProfile:      false,
     updateDoctorSettings:     false,
     updateDoctorAvailability: false,
-   updateDoctorBankDetails:  false,
+    updateDoctorBankDetails:  false,
     updateDoctorKyc:          false,
     uploadDoctorPhoto:        false,
-    uploadDoctorSignature:    false, // Added signature loading flag
+    uploadDoctorSignature:    false,
     // Doctor admin-only
     updateDoctorSecurity:    false,
     updateDoctorPlatformFee: false,
@@ -1145,7 +859,7 @@ const hospitalSlice = createSlice({
   name: 'hospital',
   initialState,
   reducers: {
-    clearSelectedHospital(state)      { state.selectedHospital      = null; },
+    clearSelectedHospital(state)      { state.selectedHospital       = null; },
     clearSelectedDoctor(state)        { state.selectedDoctor         = null; },
     clearHospitalSearchResults(state) { state.searchResults          = []; },
     clearDoctorSearchResults(state)   { state.doctorSearchResults    = []; },
@@ -1154,11 +868,6 @@ const hospitalSlice = createSlice({
     clearMyEffectivePricing(state)    { state.myEffectivePricing     = null; },
     clearError(state)                 { state.error                  = null; },
     resetHospitalState()              { return initialState; },
-    /**
-     * Optimistically update online status of a doctor in all lists.
-     * Called when a WebSocket event arrives.
-     * @param {{ doctorId: string, isOnline: boolean }} action.payload
-     */
     setDoctorOnlineStatus(state, { payload: { doctorId, isOnline } }) {
       const touch = (list) => {
         const d = list.find((doc) => doc._id === doctorId);
@@ -1192,7 +901,7 @@ const hospitalSlice = createSlice({
     // =========================================================================
 
     builder
-      .addCase(fetchAvailableForms.pending,   startLoading('fetchAvailableForms'))
+      .addCase(fetchAvailableForms.pending,    startLoading('fetchAvailableForms'))
       .addCase(fetchAvailableForms.fulfilled, (state, { payload }) => {
         state.loading.fetchAvailableForms = false;
         state.availableForms = payload.forms || [];
@@ -1200,12 +909,12 @@ const hospitalSlice = createSlice({
       .addCase(fetchAvailableForms.rejected, setError('fetchAvailableForms'));
 
     builder
-      .addCase(downloadHospitalForm.pending,   startLoading('downloadHospitalForm'))
+      .addCase(downloadHospitalForm.pending,    startLoading('downloadHospitalForm'))
       .addCase(downloadHospitalForm.fulfilled, stopLoading('downloadHospitalForm'))
       .addCase(downloadHospitalForm.rejected,  setError('downloadHospitalForm'));
 
     builder
-      .addCase(downloadDoctorForm.pending,   startLoading('downloadDoctorForm'))
+      .addCase(downloadDoctorForm.pending,    startLoading('downloadDoctorForm'))
       .addCase(downloadDoctorForm.fulfilled, stopLoading('downloadDoctorForm'))
       .addCase(downloadDoctorForm.rejected,  setError('downloadDoctorForm'));
 
@@ -1214,7 +923,7 @@ const hospitalSlice = createSlice({
     // =========================================================================
 
     builder
-      .addCase(fetchNearbyHospitals.pending,   startLoading('fetchNearbyHospitals'))
+      .addCase(fetchNearbyHospitals.pending,    startLoading('fetchNearbyHospitals'))
       .addCase(fetchNearbyHospitals.fulfilled, (state, { payload }) => {
         state.loading.fetchNearbyHospitals = false;
         state.nearbyHospitals = payload.data  || [];
@@ -1225,7 +934,7 @@ const hospitalSlice = createSlice({
       .addCase(fetchNearbyHospitals.rejected, setError('fetchNearbyHospitals'));
 
     builder
-      .addCase(fetchAllHospitals.pending,   startLoading('fetchAllHospitals'))
+      .addCase(fetchAllHospitals.pending,    startLoading('fetchAllHospitals'))
       .addCase(fetchAllHospitals.fulfilled, (state, { payload }) => {
         state.loading.fetchAllHospitals = false;
         state.hospitals     = payload.data  || [];
@@ -1236,7 +945,7 @@ const hospitalSlice = createSlice({
       .addCase(fetchAllHospitals.rejected, setError('fetchAllHospitals'));
 
     builder
-      .addCase(fetchHospitalById.pending,   startLoading('fetchHospitalById'))
+      .addCase(fetchHospitalById.pending,    startLoading('fetchHospitalById'))
       .addCase(fetchHospitalById.fulfilled, (state, { payload }) => {
         state.loading.fetchHospitalById = false;
         state.selectedHospital = payload.data || null;
@@ -1244,7 +953,7 @@ const hospitalSlice = createSlice({
       .addCase(fetchHospitalById.rejected, setError('fetchHospitalById'));
 
     builder
-      .addCase(fetchHospitalBySlug.pending,   startLoading('fetchHospitalBySlug'))
+      .addCase(fetchHospitalBySlug.pending,    startLoading('fetchHospitalBySlug'))
       .addCase(fetchHospitalBySlug.fulfilled, (state, { payload }) => {
         state.loading.fetchHospitalBySlug = false;
         state.selectedHospital = payload.data || null;
@@ -1252,7 +961,7 @@ const hospitalSlice = createSlice({
       .addCase(fetchHospitalBySlug.rejected, setError('fetchHospitalBySlug'));
 
     builder
-      .addCase(searchHospitals.pending,   startLoading('searchHospitals'))
+      .addCase(searchHospitals.pending,    startLoading('searchHospitals'))
       .addCase(searchHospitals.fulfilled, (state, { payload }) => {
         state.loading.searchHospitals = false;
         state.searchResults = payload.data  || [];
@@ -1263,7 +972,7 @@ const hospitalSlice = createSlice({
       .addCase(searchHospitals.rejected, setError('searchHospitals'));
 
     builder
-      .addCase(fetchHospitalEffectivePricing.pending,   startLoading('fetchHospitalEffectivePricing'))
+      .addCase(fetchHospitalEffectivePricing.pending,    startLoading('fetchHospitalEffectivePricing'))
       .addCase(fetchHospitalEffectivePricing.fulfilled, (state, { payload }) => {
         state.loading.fetchHospitalEffectivePricing = false;
         state.hospitalEffectivePricing = payload.data || null;
@@ -1275,7 +984,7 @@ const hospitalSlice = createSlice({
     // =========================================================================
 
     builder
-      .addCase(fetchNearbyDoctors.pending,   startLoading('fetchNearbyDoctors'))
+      .addCase(fetchNearbyDoctors.pending,    startLoading('fetchNearbyDoctors'))
       .addCase(fetchNearbyDoctors.fulfilled, (state, { payload }) => {
         state.loading.fetchNearbyDoctors = false;
         state.nearbyDoctors = payload.data  || [];
@@ -1286,7 +995,7 @@ const hospitalSlice = createSlice({
       .addCase(fetchNearbyDoctors.rejected, setError('fetchNearbyDoctors'));
 
     builder
-      .addCase(fetchAllDoctors.pending,   startLoading('fetchAllDoctors'))
+      .addCase(fetchAllDoctors.pending,    startLoading('fetchAllDoctors'))
       .addCase(fetchAllDoctors.fulfilled, (state, { payload }) => {
         state.loading.fetchAllDoctors = false;
         state.doctors     = payload.data  || [];
@@ -1297,7 +1006,7 @@ const hospitalSlice = createSlice({
       .addCase(fetchAllDoctors.rejected, setError('fetchAllDoctors'));
 
     builder
-      .addCase(fetchDoctorById.pending,   startLoading('fetchDoctorById'))
+      .addCase(fetchDoctorById.pending,    startLoading('fetchDoctorById'))
       .addCase(fetchDoctorById.fulfilled, (state, { payload }) => {
         state.loading.fetchDoctorById = false;
         state.selectedDoctor = payload.data || null;
@@ -1305,7 +1014,7 @@ const hospitalSlice = createSlice({
       .addCase(fetchDoctorById.rejected, setError('fetchDoctorById'));
 
     builder
-      .addCase(fetchDoctorsBySpecialization.pending,   startLoading('fetchDoctorsBySpecialization'))
+      .addCase(fetchDoctorsBySpecialization.pending,    startLoading('fetchDoctorsBySpecialization'))
       .addCase(fetchDoctorsBySpecialization.fulfilled, (state, { payload }) => {
         state.loading.fetchDoctorsBySpecialization = false;
         state.specializationDoctors = payload.data  || [];
@@ -1316,7 +1025,7 @@ const hospitalSlice = createSlice({
       .addCase(fetchDoctorsBySpecialization.rejected, setError('fetchDoctorsBySpecialization'));
 
     builder
-      .addCase(searchDoctors.pending,   startLoading('searchDoctors'))
+      .addCase(searchDoctors.pending,    startLoading('searchDoctors'))
       .addCase(searchDoctors.fulfilled, (state, { payload }) => {
         state.loading.searchDoctors = false;
         state.doctorSearchResults   = payload.data  || [];
@@ -1327,7 +1036,7 @@ const hospitalSlice = createSlice({
       .addCase(searchDoctors.rejected, setError('searchDoctors'));
 
     builder
-      .addCase(fetchDoctorsByHospital.pending,   startLoading('fetchDoctorsByHospital'))
+      .addCase(fetchDoctorsByHospital.pending,    startLoading('fetchDoctorsByHospital'))
       .addCase(fetchDoctorsByHospital.fulfilled, (state, { payload }) => {
         state.loading.fetchDoctorsByHospital = false;
         state.hospitalDoctors = payload.data  || [];
@@ -1342,7 +1051,7 @@ const hospitalSlice = createSlice({
     // =========================================================================
 
     builder
-      .addCase(createHospital.pending,   startLoading('createHospital'))
+      .addCase(createHospital.pending,    startLoading('createHospital'))
       .addCase(createHospital.fulfilled, (state, { payload }) => {
         state.loading.createHospital = false;
         if (payload.data?.hospital) state.hospitals.unshift(payload.data.hospital);
@@ -1350,7 +1059,7 @@ const hospitalSlice = createSlice({
       .addCase(createHospital.rejected, setError('createHospital'));
 
     builder
-      .addCase(updateHospitalProfile.pending,   startLoading('updateHospitalProfile'))
+      .addCase(updateHospitalProfile.pending,    startLoading('updateHospitalProfile'))
       .addCase(updateHospitalProfile.fulfilled, (state, { payload }) => {
         state.loading.updateHospitalProfile = false;
         const updated = payload.data;
@@ -1364,7 +1073,7 @@ const hospitalSlice = createSlice({
       .addCase(updateHospitalProfile.rejected, setError('updateHospitalProfile'));
 
     builder
-      .addCase(updateHospitalSettings.pending,   startLoading('updateHospitalSettings'))
+      .addCase(updateHospitalSettings.pending,    startLoading('updateHospitalSettings'))
       .addCase(updateHospitalSettings.fulfilled, (state, { payload, meta }) => {
         state.loading.updateHospitalSettings = false;
         const id      = meta.arg.id;
@@ -1379,11 +1088,10 @@ const hospitalSlice = createSlice({
       .addCase(updateHospitalSettings.rejected, setError('updateHospitalSettings'));
 
     builder
-      .addCase(updateHospitalSecurity.pending,   startLoading('updateHospitalSecurity'))
+      .addCase(updateHospitalSecurity.pending,    startLoading('updateHospitalSecurity'))
       .addCase(updateHospitalSecurity.fulfilled, (state, { payload, meta }) => {
         state.loading.updateHospitalSecurity = false;
         const id = meta.arg.id;
-        // payload.data is the registrationDetails sub-document
         const idx = state.hospitals.findIndex((h) => h._id === id);
         if (idx !== -1) state.hospitals[idx].registrationDetails = payload.data;
         if (state.selectedHospital?._id === id) {
@@ -1393,24 +1101,7 @@ const hospitalSlice = createSlice({
       .addCase(updateHospitalSecurity.rejected, setError('updateHospitalSecurity'));
 
     builder
-      .addCase(updateHospitalPlatformFee.pending,   startLoading('updateHospitalPlatformFee'))
-      .addCase(updateHospitalPlatformFee.fulfilled, (state, { payload }) => {
-        state.loading.updateHospitalPlatformFee = false;
-        const { id, platformFee, settlementCycle,
-                hasCustomPlatformFee, hasCustomSettlementCycle } = payload;
-        const patch = { platformFee, settlementCycle,
-                        hasCustomPlatformFee, hasCustomSettlementCycle };
-        const idx = state.hospitals.findIndex((h) => h._id === id);
-        if (idx !== -1) state.hospitals[idx] = { ...state.hospitals[idx], ...patch };
-        if (state.selectedHospital?._id === id) {
-          state.selectedHospital = { ...state.selectedHospital, ...patch };
-        }
-      })
-      .addCase(updateHospitalPlatformFee.rejected, setError('updateHospitalPlatformFee'));
-
-    // payload: { id, consultationPricing }
-    builder
-      .addCase(updateHospitalConsultationPricing.pending,   startLoading('updateHospitalConsultationPricing'))
+      .addCase(updateHospitalConsultationPricing.pending,    startLoading('updateHospitalConsultationPricing'))
       .addCase(updateHospitalConsultationPricing.fulfilled, (state, { payload: { id, consultationPricing } }) => {
         state.loading.updateHospitalConsultationPricing = false;
         const idx = state.hospitals.findIndex((h) => h._id === id);
@@ -1424,15 +1115,13 @@ const hospitalSlice = createSlice({
       })
       .addCase(updateHospitalConsultationPricing.rejected, setError('updateHospitalConsultationPricing'));
 
-    // fire-and-forget — no state change needed beyond loading flag
     builder
-      .addCase(resendHospitalManagerCredentials.pending,   startLoading('resendHospitalManagerCredentials'))
+      .addCase(resendHospitalManagerCredentials.pending,    startLoading('resendHospitalManagerCredentials'))
       .addCase(resendHospitalManagerCredentials.fulfilled, stopLoading('resendHospitalManagerCredentials'))
       .addCase(resendHospitalManagerCredentials.rejected,  setError('resendHospitalManagerCredentials'));
 
-    // ── uploadHospitalImages ──────────────────────────────────────────────────
     builder
-      .addCase(uploadHospitalImages.pending,   startLoading('uploadHospitalImages'))
+      .addCase(uploadHospitalImages.pending,    startLoading('uploadHospitalImages'))
       .addCase(uploadHospitalImages.fulfilled, (state, { payload }) => {
         state.loading.uploadHospitalImages = false;
         const { id, logo, images } = payload;
@@ -1449,9 +1138,8 @@ const hospitalSlice = createSlice({
       })
       .addCase(uploadHospitalImages.rejected, setError('uploadHospitalImages'));
 
-    // ── deleteHospitalImage ───────────────────────────────────────────────────
     builder
-      .addCase(deleteHospitalImage.pending,   startLoading('deleteHospitalImage'))
+      .addCase(deleteHospitalImage.pending,    startLoading('deleteHospitalImage'))
       .addCase(deleteHospitalImage.fulfilled, (state, { payload: { id, images } }) => {
         state.loading.deleteHospitalImage = false;
         const idx = state.hospitals.findIndex((h) => h._id === id);
@@ -1461,7 +1149,7 @@ const hospitalSlice = createSlice({
       .addCase(deleteHospitalImage.rejected, setError('deleteHospitalImage'));
 
     builder
-      .addCase(updateHospitalLocation.pending,   startLoading('updateHospitalLocation'))
+      .addCase(updateHospitalLocation.pending,    startLoading('updateHospitalLocation'))
       .addCase(updateHospitalLocation.fulfilled, (state, { payload: { id, location } }) => {
         state.loading.updateHospitalLocation = false;
         const idx = state.hospitals.findIndex((h) => h._id === id);
@@ -1471,7 +1159,7 @@ const hospitalSlice = createSlice({
       .addCase(updateHospitalLocation.rejected, setError('updateHospitalLocation'));
 
     builder
-      .addCase(linkDoctorToHospital.pending,   startLoading('linkDoctorToHospital'))
+      .addCase(linkDoctorToHospital.pending,    startLoading('linkDoctorToHospital'))
       .addCase(linkDoctorToHospital.fulfilled, (state, { payload }) => {
         state.loading.linkDoctorToHospital = false;
         const { hospitalId, linkedDoctors } = payload;
@@ -1484,7 +1172,7 @@ const hospitalSlice = createSlice({
       .addCase(linkDoctorToHospital.rejected, setError('linkDoctorToHospital'));
 
     builder
-      .addCase(unlinkDoctorFromHospital.pending,   startLoading('unlinkDoctorFromHospital'))
+      .addCase(unlinkDoctorFromHospital.pending,    startLoading('unlinkDoctorFromHospital'))
       .addCase(unlinkDoctorFromHospital.fulfilled, (state, { payload }) => {
         state.loading.unlinkDoctorFromHospital = false;
         const { hospitalId, linkedDoctors } = payload;
@@ -1497,7 +1185,7 @@ const hospitalSlice = createSlice({
       .addCase(unlinkDoctorFromHospital.rejected, setError('unlinkDoctorFromHospital'));
 
     builder
-      .addCase(verifyHospital.pending,   startLoading('verifyHospital'))
+      .addCase(verifyHospital.pending,    startLoading('verifyHospital'))
       .addCase(verifyHospital.fulfilled, (state, { payload: { id, isVerified, verifiedAt } }) => {
         state.loading.verifyHospital = false;
         const idx = state.hospitals.findIndex((h) => h._id === id);
@@ -1513,7 +1201,7 @@ const hospitalSlice = createSlice({
       .addCase(verifyHospital.rejected, setError('verifyHospital'));
 
     builder
-      .addCase(toggleHospitalActive.pending,   startLoading('toggleHospitalActive'))
+      .addCase(toggleHospitalActive.pending,    startLoading('toggleHospitalActive'))
       .addCase(toggleHospitalActive.fulfilled, (state, { payload: { id, isActive } }) => {
         state.loading.toggleHospitalActive = false;
         const idx = state.hospitals.findIndex((h) => h._id === id);
@@ -1523,7 +1211,7 @@ const hospitalSlice = createSlice({
       .addCase(toggleHospitalActive.rejected, setError('toggleHospitalActive'));
 
     builder
-      .addCase(deleteHospital.pending,   startLoading('deleteHospital'))
+      .addCase(deleteHospital.pending,    startLoading('deleteHospital'))
       .addCase(deleteHospital.fulfilled, (state, { payload: { id } }) => {
         state.loading.deleteHospital = false;
         state.hospitals = state.hospitals.filter((h) => h._id !== id);
@@ -1536,7 +1224,7 @@ const hospitalSlice = createSlice({
     // =========================================================================
 
     builder
-      .addCase(fetchMyDoctorProfile.pending,   startLoading('fetchMyDoctorProfile'))
+      .addCase(fetchMyDoctorProfile.pending,    startLoading('fetchMyDoctorProfile'))
       .addCase(fetchMyDoctorProfile.fulfilled, (state, { payload }) => {
         state.loading.fetchMyDoctorProfile = false;
         state.myDoctorProfile = payload.data || null;
@@ -1544,7 +1232,7 @@ const hospitalSlice = createSlice({
       .addCase(fetchMyDoctorProfile.rejected, setError('fetchMyDoctorProfile'));
 
     builder
-      .addCase(fetchMyManagedHospitals.pending,   startLoading('fetchMyManagedHospitals'))
+      .addCase(fetchMyManagedHospitals.pending,    startLoading('fetchMyManagedHospitals'))
       .addCase(fetchMyManagedHospitals.fulfilled, (state, { payload }) => {
         state.loading.fetchMyManagedHospitals = false;
         state.myManagedHospitals = payload.data || initialState.myManagedHospitals;
@@ -1552,7 +1240,7 @@ const hospitalSlice = createSlice({
       .addCase(fetchMyManagedHospitals.rejected, setError('fetchMyManagedHospitals'));
 
     builder
-      .addCase(fetchMyEffectivePricing.pending,   startLoading('fetchMyEffectivePricing'))
+      .addCase(fetchMyEffectivePricing.pending,    startLoading('fetchMyEffectivePricing'))
       .addCase(fetchMyEffectivePricing.fulfilled, (state, { payload }) => {
         state.loading.fetchMyEffectivePricing = false;
         state.myEffectivePricing = payload.data || null;
@@ -1560,7 +1248,7 @@ const hospitalSlice = createSlice({
       .addCase(fetchMyEffectivePricing.rejected, setError('fetchMyEffectivePricing'));
 
     builder
-      .addCase(fetchDoctorStats.pending,   startLoading('fetchDoctorStats'))
+      .addCase(fetchDoctorStats.pending,    startLoading('fetchDoctorStats'))
       .addCase(fetchDoctorStats.fulfilled, (state, { payload }) => {
         state.loading.fetchDoctorStats = false;
         state.doctorStats = payload.data || null;
@@ -1568,7 +1256,7 @@ const hospitalSlice = createSlice({
       .addCase(fetchDoctorStats.rejected, setError('fetchDoctorStats'));
 
     builder
-      .addCase(createDoctorProfile.pending,   startLoading('createDoctorProfile'))
+      .addCase(createDoctorProfile.pending,    startLoading('createDoctorProfile'))
       .addCase(createDoctorProfile.fulfilled, (state, { payload }) => {
         state.loading.createDoctorProfile = false;
         if (payload.data?.profile) state.doctors.unshift(payload.data.profile);
@@ -1576,7 +1264,7 @@ const hospitalSlice = createSlice({
       .addCase(createDoctorProfile.rejected, setError('createDoctorProfile'));
 
     builder
-      .addCase(updateDoctorProfile.pending,   startLoading('updateDoctorProfile'))
+      .addCase(updateDoctorProfile.pending,    startLoading('updateDoctorProfile'))
       .addCase(updateDoctorProfile.fulfilled, (state, { payload }) => {
         state.loading.updateDoctorProfile = false;
         const updated = payload.data;
@@ -1588,9 +1276,8 @@ const hospitalSlice = createSlice({
       })
       .addCase(updateDoctorProfile.rejected, setError('updateDoctorProfile'));
 
-    // payload.data: { notifPrefs, onboarding, isOnline, settlementCycle }
     builder
-      .addCase(updateDoctorSettings.pending,   startLoading('updateDoctorSettings'))
+      .addCase(updateDoctorSettings.pending,    startLoading('updateDoctorSettings'))
       .addCase(updateDoctorSettings.fulfilled, (state, { payload, meta }) => {
         state.loading.updateDoctorSettings = false;
         const id      = meta.arg.id;
@@ -1605,7 +1292,7 @@ const hospitalSlice = createSlice({
       .addCase(updateDoctorSettings.rejected, setError('updateDoctorSettings'));
 
     builder
-      .addCase(updateDoctorAvailability.pending,   startLoading('updateDoctorAvailability'))
+      .addCase(updateDoctorAvailability.pending,    startLoading('updateDoctorAvailability'))
       .addCase(updateDoctorAvailability.fulfilled, (state, { payload: { id, availability } }) => {
         state.loading.updateDoctorAvailability = false;
         const idx = state.doctors.findIndex((d) => d._id === id);
@@ -1615,9 +1302,8 @@ const hospitalSlice = createSlice({
       })
       .addCase(updateDoctorAvailability.rejected, setError('updateDoctorAvailability'));
 
-    // payload: { id, bankSummary } — never stores raw accountNumber
     builder
-      .addCase(updateDoctorBankDetails.pending,   startLoading('updateDoctorBankDetails'))
+      .addCase(updateDoctorBankDetails.pending,    startLoading('updateDoctorBankDetails'))
       .addCase(updateDoctorBankDetails.fulfilled, (state, { payload: { id, bankSummary } }) => {
         state.loading.updateDoctorBankDetails = false;
         if (state.myDoctorProfile?._id === id && bankSummary) {
@@ -1630,7 +1316,7 @@ const hospitalSlice = createSlice({
       .addCase(updateDoctorBankDetails.rejected, setError('updateDoctorBankDetails'));
 
     builder
-      .addCase(updateDoctorKyc.pending,   startLoading('updateDoctorKyc'))
+      .addCase(updateDoctorKyc.pending,    startLoading('updateDoctorKyc'))
       .addCase(updateDoctorKyc.fulfilled, (state, { payload: { id, kycStatus } }) => {
         state.loading.updateDoctorKyc = false;
         if (state.myDoctorProfile?._id === id) state.myDoctorProfile.kycStatus = kycStatus;
@@ -1639,8 +1325,8 @@ const hospitalSlice = createSlice({
       })
       .addCase(updateDoctorKyc.rejected, setError('updateDoctorKyc'));
 
-builder
-      .addCase(uploadDoctorSignature.pending,   startLoading('uploadDoctorSignature'))
+    builder
+      .addCase(uploadDoctorSignature.pending,    startLoading('uploadDoctorSignature'))
       .addCase(uploadDoctorSignature.fulfilled, (state, { payload: { id, doctorSignature } }) => {
         state.loading.uploadDoctorSignature = false;
         const patch = (d) => ({ ...d, doctorSignature });
@@ -1655,9 +1341,8 @@ builder
     //  F. ADMIN-ONLY DOCTOR
     // =========================================================================
 
-    // payload: { id, registrationNumber, registrationCouncil, contractUrl }
     builder
-      .addCase(updateDoctorSecurity.pending,   startLoading('updateDoctorSecurity'))
+      .addCase(updateDoctorSecurity.pending,    startLoading('updateDoctorSecurity'))
       .addCase(updateDoctorSecurity.fulfilled, (state, { payload }) => {
         state.loading.updateDoctorSecurity = false;
         const { id, registrationNumber, registrationCouncil, contractUrl } = payload;
@@ -1669,9 +1354,8 @@ builder
       })
       .addCase(updateDoctorSecurity.rejected, setError('updateDoctorSecurity'));
 
-    // payload: { id, platformFee, hasCustomPlatformFee, settlementCycle }
     builder
-      .addCase(updateDoctorPlatformFee.pending,   startLoading('updateDoctorPlatformFee'))
+      .addCase(updateDoctorPlatformFee.pending,    startLoading('updateDoctorPlatformFee'))
       .addCase(updateDoctorPlatformFee.fulfilled, (state, { payload }) => {
         state.loading.updateDoctorPlatformFee = false;
         const { id, platformFee, hasCustomPlatformFee, settlementCycle } = payload;
@@ -1684,7 +1368,7 @@ builder
       .addCase(updateDoctorPlatformFee.rejected, setError('updateDoctorPlatformFee'));
 
     builder
-      .addCase(updateDoctorPartnership.pending,   startLoading('updateDoctorPartnership'))
+      .addCase(updateDoctorPartnership.pending,    startLoading('updateDoctorPartnership'))
       .addCase(updateDoctorPartnership.fulfilled, (state, { payload }) => {
         state.loading.updateDoctorPartnership = false;
         const { id, partnershipStatus, partnerSince, contractUrl } = payload;
@@ -1695,9 +1379,8 @@ builder
       })
       .addCase(updateDoctorPartnership.rejected, setError('updateDoctorPartnership'));
 
-    // FIX: API returns full data.data object; spread it for kycStatus, isVerified, kyc, etc.
     builder
-      .addCase(verifyDoctorKyc.pending,   startLoading('verifyDoctorKyc'))
+      .addCase(verifyDoctorKyc.pending,    startLoading('verifyDoctorKyc'))
       .addCase(verifyDoctorKyc.fulfilled, (state, { payload }) => {
         state.loading.verifyDoctorKyc = false;
         const { id, kycStatus, isVerified, kycVerifiedAt, kycVerifiedBy,
@@ -1718,7 +1401,7 @@ builder
       .addCase(verifyDoctorKyc.rejected, setError('verifyDoctorKyc'));
 
     builder
-      .addCase(toggleDoctorActive.pending,   startLoading('toggleDoctorActive'))
+      .addCase(toggleDoctorActive.pending,    startLoading('toggleDoctorActive'))
       .addCase(toggleDoctorActive.fulfilled, (state, { payload: { id, isActive } }) => {
         state.loading.toggleDoctorActive = false;
         const idx = state.doctors.findIndex((d) => d._id === id);
@@ -1728,14 +1411,13 @@ builder
       })
       .addCase(toggleDoctorActive.rejected, setError('toggleDoctorActive'));
 
-    // fire-and-forget — no state change needed beyond loading flag
     builder
-      .addCase(resendDoctorCredentials.pending,   startLoading('resendDoctorCredentials'))
+      .addCase(resendDoctorCredentials.pending,    startLoading('resendDoctorCredentials'))
       .addCase(resendDoctorCredentials.fulfilled, stopLoading('resendDoctorCredentials'))
       .addCase(resendDoctorCredentials.rejected,  setError('resendDoctorCredentials'));
 
     builder
-      .addCase(deleteDoctorProfile.pending,   startLoading('deleteDoctorProfile'))
+      .addCase(deleteDoctorProfile.pending,    startLoading('deleteDoctorProfile'))
       .addCase(deleteDoctorProfile.fulfilled, (state, { payload: { id } }) => {
         state.loading.deleteDoctorProfile = false;
         state.doctors = state.doctors.filter((d) => d._id !== id);
@@ -1801,16 +1483,15 @@ export const selectIsLoadingHospitalEffectivePricing     = (s) => s.hospital.loa
 export const selectIsLoadingMyEffectivePricing           = (s) => s.hospital.loading.fetchMyEffectivePricing;
 export const selectIsUploadingHospitalImages             = (s) => s.hospital.loading.uploadHospitalImages;
 export const selectIsDeletingHospitalImage               = (s) => s.hospital.loading.deleteHospitalImage;
-export const selectIsUpdatingHospitalPlatformFee         = (s) => s.hospital.loading.updateHospitalPlatformFee;
 export const selectIsUpdatingHospitalConsultationPricing = (s) => s.hospital.loading.updateHospitalConsultationPricing;
 export const selectIsResendingHospitalCredentials        = (s) => s.hospital.loading.resendHospitalManagerCredentials;
 export const selectIsResendingDoctorCredentials          = (s) => s.hospital.loading.resendDoctorCredentials;
 export const selectIsUpdatingDoctorSecurity              = (s) => s.hospital.loading.updateDoctorSecurity;
-export const selectIsUpdatingDoctorPlatformFee    = (s) => s.hospital.loading.updateDoctorPlatformFee;
-export const selectIsUploadingDoctorPhoto         = (s) => s.hospital.loading.uploadDoctorPhoto;
-export const selectIsUploadingDoctorSignature     = (s) => s.hospital.loading.uploadDoctorSignature; // Added signature selector
-export const selectIsDownloadingHospitalForm      = (s) => s.hospital.loading.downloadHospitalForm;
-export const selectIsDownloadingDoctorForm        = (s) => s.hospital.loading.downloadDoctorForm;
+export const selectIsUpdatingDoctorPlatformFee           = (s) => s.hospital.loading.updateDoctorPlatformFee;
+export const selectIsUploadingDoctorPhoto                = (s) => s.hospital.loading.uploadDoctorPhoto;
+export const selectIsUploadingDoctorSignature            = (s) => s.hospital.loading.uploadDoctorSignature;
+export const selectIsDownloadingHospitalForm             = (s) => s.hospital.loading.downloadHospitalForm;
+export const selectIsDownloadingDoctorForm               = (s) => s.hospital.loading.downloadDoctorForm;
 
 // Error
 export const selectHospitalError = (s) => s.hospital.error;
